@@ -13,8 +13,8 @@ from sbi import utils as utils
 from sbi.inference import SNPE
 from sbi.analysis import pairplot
 
-from core.Helpers import fdt_helpers as fdt, gen_helpers as helpers, hair_model_helpers as model_helpers
-from core.Simulator import simulator, simulator_helpers
+from .Helpers import fdt_helpers as fdt, gen_helpers as helpers, hair_model_helpers as model_helpers
+from .Simulator import simulator, simulator_helpers
 
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda')
@@ -36,7 +36,7 @@ ITERATIONS = int(UNIQUE_FREQS / FPB)
 
 K_B = 1.380649e-23  # m^2 kg s^-2 K^-1
 
-if __name__ == '__main__':
+def run():
     # -------------------------- BEGIN SETUP -------------------------- #
     # construct OS dependent directory for model parameters directory
     if sys.platform == 'win32':

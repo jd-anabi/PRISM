@@ -38,9 +38,7 @@ class Simulator(torch.nn.Module):
         n_vars = self.inits.shape[-1] if isinstance(self.sde, steady_model.HairBundleSDE) else self.inits.shape[-1] - 1
         curr_inits = self.inits
         sol = torch.zeros((n_vars, self.batch_size, self.t.shape[0]), dtype=self.t.dtype, device=self.t.device)
-        overall_progress = tqdm(range(len(time_seg_ids) - 1), desc="Overall Progress")
-        for tid in overall_progress:
-            overall_progress.set_description(f"Running time segment {tid + 1}")
+        for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments"):
             curr_time = self.t[time_seg_ids[tid]:time_seg_ids[tid + 1]]
             results = self.__sols(curr_time, curr_inits)  # shape: (len(curr_time), BATCH_SIZE, number of variables)
 

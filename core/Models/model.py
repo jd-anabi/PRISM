@@ -8,7 +8,7 @@ class HairBundleSDE(torch.nn.Module):
                  c_min: torch.Tensor, s_min: torch.Tensor, s_max: torch.Tensor, ca2_m: torch.Tensor,
                  ca2_gs: torch.Tensor, u_gs_max: torch.Tensor, delta_e: torch.Tensor, k_gs_ratio: torch.Tensor,
                  chi_hb: torch.Tensor, chi_a: torch.Tensor, x_c: torch.Tensor, eta_hb: torch.Tensor,
-                 eta_a: torch.Tensor, force: torch.Tensor, batch_size: int, device: torch.device = 'cpu',
+                 eta_a: torch.Tensor, force: torch.Tensor, batch_size: int, device: torch.device = torch.device('cpu'),
                  dtype: torch.dtype = torch.float32):
         super().__init__()
         # sde model parameters
