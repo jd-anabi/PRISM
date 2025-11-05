@@ -30,7 +30,7 @@ class Simulator(torch.nn.Module):
     def simulate(self) -> torch.Tensor:
         """
         Simulates the model with the given constructor parameters
-        :return: simulated solution with shape (number of variables, frequencies per batch, ensemble size, length of time series)
+        :return: simulated solution with shape (N, FPB, B / FPB, T)
         """
         ensemble_size = self.batch_size // self.freqs_per_batch
         time_seg_ids = helpers.get_even_ids(self.t.shape[0], self.segs + 1)
@@ -38,7 +38,7 @@ class Simulator(torch.nn.Module):
         n_vars = self.inits.shape[-1] if isinstance(self.sde, steady_model.HairBundleSDE) else self.inits.shape[-1] - 1
         curr_inits = self.inits
         sol = torch.zeros((n_vars, self.batch_size, self.t.shape[0]), dtype=self.t.dtype, device=self.t.device)
-        for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments"):
+        for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments", leave=False):
             curr_time = self.t[time_seg_ids[tid]:time_seg_ids[tid + 1]]
             results = self.__sols(curr_time, curr_inits)  # shape: (len(curr_time), BATCH_SIZE, number of variables)
 

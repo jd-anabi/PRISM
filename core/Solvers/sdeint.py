@@ -35,7 +35,7 @@ class Solver:
             sqrt_dt = math.sqrt(dt)
 
             # recursively define x_{n+1}
-            for i in tqdm(range(0, n - 1),  desc=f"Simulating system (batch size = {batch_size})", mininterval=0.1, leave=False):
+            for i in tqdm(range(0, n - 1),  desc=f"Simulating system (batch size = {batch_size})", leave=False):
                 x_curr = xs[i, :, :]
                 # Wiener process
                 dW = torch.randn_like(x_curr) * sqrt_dt
@@ -74,7 +74,7 @@ class Solver:
             sqrt_dt = math.sqrt(dt)
 
             # recursively define x_{n+1}
-            for i in tqdm(range(0, n - 1),  desc=f"Simulating system (batch size = {batch_size})", mininterval=0.1, leave=False):
+            for i in tqdm(range(0, n - 1),  desc=f"Simulating system (batch size = {batch_size})", leave=False):
                 x_curr = xs[i, :, :]
                 # Wiener process
                 dW = torch.randn_like(x_curr) * sqrt_dt
