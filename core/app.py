@@ -10,8 +10,10 @@ import pint
 import torch
 import numpy as np
 from sbi import utils as utils
-from sbi.inference import SNPE
+from sbi.inference import NPE
 from sbi.analysis import pairplot
+from sbi.neural_nets import posterior_nn
+from sbi.neural_nets.embedding_nets import CNNEmbedding
 
 from .Helpers import fdt_helpers as fdt, gen_helpers as helpers, hair_model_helpers as model_helpers
 from .Simulator import simulator, simulator_helpers
@@ -26,7 +28,7 @@ else:
     DEVICE = torch.device('cpu')
 
 DTYPE = torch.float64 if DEVICE.type == 'cuda' or DEVICE.type == 'cpu' else torch.float32
-BATCH_SIZE = 2**9 if DEVICE.type == 'cuda' else 2**6
+BATCH_SIZE = 2**10 if DEVICE.type == 'cuda' else 2**6
 
 # ensemble variables needed
 UNIQUE_FREQS = 2**6 # number of unique frequencies
@@ -135,6 +137,7 @@ def run():
                               fdt.force(t_nd, 0, 0, 0, 0, 1),
                               inits_0.to(torch.device('cpu')), t_nd.to(torch.device('cpu')), segs=segs)
     x0 = sim.simulate()[0, 0, 0]
+    x0 = x0[steady_id:]
     t_dim = model_helpers.rescale_t(t_nd, *t_rescale_params).cpu().detach().numpy()
     x0_dim = model_helpers.rescale_x(x0, *x_rescale_params).cpu().detach().numpy()
     helpers.plot(units_rescale['time'] * t_dim[steady_id:], units_rescale['distance'] * x0_dim[steady_id:], labels=(r'Time (s)', r'$x_{0}$ (m)'))
@@ -146,12 +149,17 @@ def run():
     for i in range(BATCH_SIZE):
         thetas[i, 3] = 0
     print(f"Parameter samples: {thetas}")
+
     sim = simulator.Simulator(thetas, fdt.force(t_nd, 0, 1, 0, 0, BATCH_SIZE), inits, t_nd, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
     x = sim.simulate()[0, 0, :]
+    x = x[:, steady_id:]
     print(x)
-    inference = SNPE(prior=prior, device=str(DEVICE))
-    net = inference.append_simulations(thetas.to(dtype=torch.float32), x.to(dtype=torch.float32)).train()
-    posterior = inference.build_posterior()
-    posterior_theta = posterior.sample((100,), x=x0)
-    pairplot(posterior_theta)
+
+    embedding_net = CNNEmbedding(input_shape=(1, n))
+    neural_posterior = posterior_nn(model='nsf', embedding_net=embedding_net)
+    inference = NPE(prior=prior, device=str(DEVICE), density_estimator=neural_posterior)
+    density_estimator = inference.append_simulations(thetas.to(dtype=torch.float32), x.to(dtype=torch.float32)).train(training_batch_size=128, show_train_summary=True)
+    posterior = inference.build_posterior(density_estimator=density_estimator)
+    samples = posterior.sample((1000,), x=x0)
+    pairplot(samples)
     exit()
