@@ -2,7 +2,6 @@ import os
 import sys
 import math
 from typing import Dict
-import multiprocessing as mp
 
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
@@ -15,8 +14,8 @@ from sbi.analysis import pairplot
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import CNNEmbedding
 
-from .Helpers import fdt_helpers as fdt, gen_helpers as helpers, hair_model_helpers as model_helpers
-from .Simulator import simulator, simulator_helpers
+from .Helpers import fdt_helpers as fdt, gen_helpers as helpers, hair_model_helpers as model_helpers, stats_helpers as stats
+from .Simulator import simulator
 
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda')
@@ -137,7 +136,8 @@ def run():
                               fdt.force(t_nd, 0, 0, 0, 0, 1),
                               inits_0.to(torch.device('cpu')), t_nd.to(torch.device('cpu')), segs=segs)
     x0 = sim.simulate()[0, 0, 0]
-    x0 = x0[steady_id:]
+    print("Initial simulation")
+    print(x0)
     t_dim = model_helpers.rescale_t(t_nd, *t_rescale_params).cpu().detach().numpy()
     x0_dim = model_helpers.rescale_x(x0, *x_rescale_params).cpu().detach().numpy()
     helpers.plot(units_rescale['time'] * t_dim[steady_id:], units_rescale['distance'] * x0_dim[steady_id:], labels=(r'Time (s)', r'$x_{0}$ (m)'))
@@ -151,15 +151,17 @@ def run():
     print(f"Parameter samples: {thetas}")
 
     sim = simulator.Simulator(thetas, fdt.force(t_nd, 0, 1, 0, 0, BATCH_SIZE), inits, t_nd, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
-    x = sim.simulate()[0, 0, :]
+    x = sim.simulate()[0, 0, :, :]
     x = x[:, steady_id:]
+    print("Simulations")
     print(x)
 
+    summary_stats = stats.get_summary_statistics(x, dt)
     embedding_net = CNNEmbedding(input_shape=(1, n))
     neural_posterior = posterior_nn(model='nsf', embedding_net=embedding_net)
     inference = NPE(prior=prior, device=str(DEVICE), density_estimator=neural_posterior)
-    density_estimator = inference.append_simulations(thetas.to(dtype=torch.float32), x.to(dtype=torch.float32)).train(training_batch_size=128, show_train_summary=True)
+    density_estimator = inference.append_simulations(thetas.to(dtype=torch.float32), summary_stats.to(dtype=torch.float32)).train(training_batch_size=128, show_train_summary=True)
     posterior = inference.build_posterior(density_estimator=density_estimator)
-    samples = posterior.sample((1000,), x=x0)
+    samples = posterior.sample((1000,), x=stats.get_summary_statistics(x0[steady_id:], dt))
     pairplot(samples)
     exit()
