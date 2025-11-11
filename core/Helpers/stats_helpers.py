@@ -1,5 +1,8 @@
 import torch
-import statistics
+import antropy as ap
+import numpy as np
+from scipy import signal
+from pybispectra.general import Bispectrum as bispectrum
 
 import gen_helpers as helpers
 
@@ -73,13 +76,33 @@ def _crossing_stats(x: torch.Tensor, dt: float, boundary: float = 0) -> torch.Te
     crossing_stats = torch.zeros((x.shape[0], 2), dtype=x.dtype, device=x.device)
     x = x - boundary
     for i in range(x.shape[0]):
-        crossing_times = []
-        x_batch = x[i, :]
-        crossing_ids = (x_batch[:-1] * x_batch[1:] < 0).nonzero().squeeze(-1)
+        x_curr_batch = x[i, :]
+        crossing_ids = (x_curr_batch[:-1] * x_curr_batch[1:] < 0).nonzero().squeeze(-1)
         if crossing_ids.shape[0] < 2:
             crossing_stats[i, 0] = float('inf')
             crossing_stats[i, 1] = 0
-        x_batch = x_batch[crossing_ids]
+        t = crossing_ids * dt
+        t_next = (crossing_ids + 1.0) * dt
+        x_abs = torch.abs(x[crossing_ids])
+        x_abs_next = torch.abs(x[crossing_ids + 1])
+        crossing_time = (t * x_abs_next + t_next * x_abs) / (x_abs + x_abs_next)
+        dwell_time = crossing_time[1:] - crossing_time[:-1]
+        crossing_stats[i, 0] = torch.mean(dwell_time)
+        crossing_stats[i, 1] = torch.std(dwell_time)
+    return crossing_stats
+
+def __sample_entropy(x: torch.Tensor, m: int = 2, r: float = None) -> torch.Tensor:
+    """
+    Gets the sample entropy of an input signal x
+    :param x: the input signal (shape: batch size x time steps)
+    :return: the sample entropy of an input signal x
+    """
+    x_np = x.cpu().detach().numpy()
+    sampen = []
+    for i in range(x_np.shape[0]):
+        se = ap.sample_entropy(x_np[i], order=m, tolerance=r) if r is not None else ap.sample_entropy(x_np[i], order=m)
+        sampen.append(se)
+    return torch.tensor(sampen, dtype=x.dtype, device=x.device)
 
 # DYNAMIC STATISTICS (FREQUENCY DOMAIN)
 def _psd(x: torch.Tensor, dt: float) -> torch.Tensor:
@@ -143,3 +166,28 @@ def _psd_pwr(x: torch.Tensor, dt: float, id_bounds: tuple) -> torch.Tensor:
     n = id_bounds[-1] - id_bounds[0]
     pwr = torch.sum(psd[:, id_bounds[0]:id_bounds[-1]] / (n * dt), dim=d)
     return pwr
+
+# DYNAMIC STATISTICS (PHASE DOMAIN)
+def __analytic_signal_stats(x: torch.Tensor) -> torch.Tensor:
+    """
+    Calculates the mean and standard deviation of the amplitude and phase of the analytical signal S(t) = x + i H_x(t)
+    :param x: the input signal (shape: batch size x time steps)
+    :return: the mean and standard deviation of the amplitude and phase of the analytical signal S(t)
+    """
+    x_np = x.cpu().detach().numpy()
+    xa = signal.hilbert(x_np)
+    amps = np.abs(xa)
+    phases = np.angle(xa)
+    mean_amp = np.mean(amps, axis=-1)
+    mean_phase = np.mean(phases, axis=-1)
+    std_amp = np.std(amps, axis=-1)
+    std_phase = np.std(phases, axis=-1)
+    return torch.tensor([[mean_amp[i], mean_phase[i], std_amp[i], std_phase[i]] for i in range(x.shape[0])], dtype=x.dtype, device=x.device)
+
+def __bispectrum_peaks(x: torch.Tensor, dt: float) -> torch.Tensor:
+    """
+    Calculates the bispectrum peak frequencies and heights of the input signal x
+    :param x: the input signal (shape: batch size x time steps)
+    :param dt: the time step
+    :return: the bispectrum peak frequencies and heights of the input signal x
+    """
