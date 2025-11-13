@@ -1,4 +1,5 @@
 from typing import Union
+from tqdm import tqdm
 
 import torch
 import pybispectra as pyi
@@ -15,27 +16,38 @@ def get_summary_statistics(x: torch.Tensor, dt: float) -> torch.Tensor:
     :param dt: the time step
     :return: summary statistics
     """
+    progress_bar = tqdm(total=10, desc="Getting summary statistics", leave=False)
     n = 30
     if x.shape[-1] < 100:
         n = 1
 
     # static stats
     moments = _moments(x, 4)
+    progress_bar.update(1)
     pdf_features = _pdf_features(x, n)
+    progress_bar.update(2)
 
     # dynamic stats (time-domain)
     acf_at_lags = _acf_at_lags(x, n)
+    progress_bar.update(3)
     zero_crossing_stats = _crossing_stats(x, dt, 0)
+    progress_bar.update(4)
     cramer_crossing_stats = _crossing_stats(x, dt, pdf_features[:, 2])
+    progress_bar.update(5)
     sample_entropy = _sample_entropy(x)
+    progress_bar.update(6)
 
     # dynamic stats (frequency-domain)
     psd_peak_stats = _psd_peak_features(x, dt)
+    progress_bar.update(7)
     binned_psd_pwr = _binned_psd_pwr(x, n, dt)
+    progress_bar.update(8)
 
     # dynamic stats (phase-domain)
     analytic_signal_stats = _analytic_signal_stats(x)
+    progress_bar.update(9)
     bicoherence = _mean_bicoherence(x, dt)
+    progress_bar.update(10)
 
     summary_stats = [moments, pdf_features, acf_at_lags, zero_crossing_stats,
                    cramer_crossing_stats, sample_entropy, psd_peak_stats,
@@ -50,19 +62,20 @@ def _moments(x: torch.Tensor, order: int) -> torch.Tensor:
     :param order: number of moments to calculate; first moment = raw, second moment = central, third and higher moments = standardized
     :return: 2D tensor of moments from order 1 to n for each batch
     """
-    d = 1 if x.shape[0] > 1 else 0
+    d = 1
+    var = 0
     moments = torch.zeros((x.shape[0], order), dtype=x.dtype, device=x.device)
     if order < 1:
         return torch.tensor(1, dtype=x.dtype, device=x.device)
-    mean = torch.mean(x, dim=d)
-    moments[:, 0] = mean
+    mean = torch.mean(x, dim=d, keepdim=True)
+    moments[:, 0] = mean.squeeze(1)
     if order > 1:
         var = torch.var(x, dim=d, keepdim=True)
-        moments[:, 1] = var[:, 0]
-        if order > 2:
-            z_score = (x - torch.mean(x, dim=d, keepdim=True)) / torch.sqrt(var)
-            for i in range(3, order + 1):
-                moments[:, i - 1] = torch.mean(torch.pow(z_score, i), dim=d)
+        moments[:, 1] = var.squeeze(1)
+    if order > 2:
+        z_score = (x - mean) / (torch.sqrt(var) + 1e-6)
+        for i in range(3, order + 1):
+            moments[:, i - 1] = torch.mean(torch.pow(z_score, i), dim=d)
     return moments
 
 def _pdf_features(x: torch.Tensor, nbins: int) -> torch.Tensor:
@@ -75,6 +88,10 @@ def _pdf_features(x: torch.Tensor, nbins: int) -> torch.Tensor:
     pdf_features = torch.zeros((x.shape[0], 4), dtype=x.dtype, device=x.device)
     x_np = x.cpu().detach().numpy()
     for i in range(x.shape[0]):
+        # robustness check
+        if not np.all(np.isfinite(x_np[i])):
+            pdf_features[i, :] = torch.tensor([float('nan')] * 4, dtype=x.dtype, device=x.device)
+            continue
         counts, bin_edges = np.histogram(x_np[i], bins=nbins, density=True)
         bin_centers = (bin_edges[1:] + bin_edges[:-1]) / 2
         peaks, _ = signal.find_peaks(counts, height=0.01)
@@ -83,7 +100,7 @@ def _pdf_features(x: torch.Tensor, nbins: int) -> torch.Tensor:
             peak_heights = counts[peaks]
             valley_idx = np.argmin(counts[peaks[0]:peaks[1]]) + peaks[0]
             valley_depth = counts[valley_idx]
-            peak_ratio = peak_heights[0] / (peak_heights[1] + 1e-7) # offset added for stability
+            peak_ratio = peak_heights[0] / (peak_heights[1] + 1e-6) # offset added for stability
             pdf_features[i, :] = torch.tensor([peak_locs[0], peak_locs[1], valley_depth, peak_ratio])
         elif len(peaks) == 1:
             peak_loc = bin_centers[peaks[0]]
@@ -102,12 +119,12 @@ def _acf_at_lags(x: torch.Tensor, nlags: int) -> torch.Tensor:
     """
     if nlags > x.shape[1]:
         raise ValueError("n cannot be greater than the length of the time series")
-    d = 1 if x.shape[0] > 1 else 0
+    d = 1
     xf = torch.fft.rfft(x - torch.mean(x, dim=d, keepdim=True), n=2*x.shape[-1], dim=d)
-    acf_at_lags = torch.fft.irfft(torch.abs(xf)**2, dim=d)[:, :x.shape[-1]]
+    acf = torch.fft.irfft(torch.abs(xf)**2, dim=d)[:, :x.shape[-1]]
     lag_ids = torch.tensor(helpers.get_even_ids(x.shape[-1], nlags), dtype=torch.long, device=x.device)
-    acf_at_lags = torch.index_select(acf_at_lags, 1, lag_ids)
-    acf_at_lags = acf_at_lags / acf_at_lags[:, 0]
+    acf_at_lags = torch.index_select(acf, 1, lag_ids)
+    acf_at_lags = acf_at_lags / acf_at_lags[:, 0].unsqueeze(1)
     return acf_at_lags
 
 def _crossing_stats(x: torch.Tensor, dt: float, boundary: Union[float, torch.Tensor] = 0) -> torch.Tensor:
@@ -119,24 +136,36 @@ def _crossing_stats(x: torch.Tensor, dt: float, boundary: Union[float, torch.Ten
     :return: the mean and standard deviation of the zero crossing times
     """
     crossing_stats = torch.zeros((x.shape[0], 2), dtype=x.dtype, device=x.device)
-    if isinstance(boundary, float):
+    if isinstance(boundary, float) or isinstance(boundary, int):
         x = x - boundary
     else:
         x = x - boundary.unsqueeze(1)
     for i in range(x.shape[0]):
+        if not torch.all(torch.isfinite(x[i])):
+            crossing_stats[i, 0] = float('nan')
+            crossing_stats[i, 1] = float('nan')
+            continue
         x_curr_batch = x[i, :]
         crossing_ids = (x_curr_batch[:-1] * x_curr_batch[1:] < 0).nonzero().squeeze(-1)
         if crossing_ids.shape[0] < 2:
             crossing_stats[i, 0] = float('nan')
-            crossing_stats[i, 1] = 0
+            crossing_stats[i, 1] = float('nan')
+            continue
         t = crossing_ids * dt
         t_next = (crossing_ids + 1.0) * dt
         x_abs = torch.abs(x_curr_batch[crossing_ids])
         x_abs_next = torch.abs(x_curr_batch[crossing_ids + 1])
-        crossing_time = (t * x_abs_next + t_next * x_abs) / (x_abs + x_abs_next)
+        crossing_time = (t * x_abs_next + t_next * x_abs) / (x_abs + x_abs_next + 1e-6)
         dwell_time = crossing_time[1:] - crossing_time[:-1]
-        crossing_stats[i, 0] = torch.mean(dwell_time)
-        crossing_stats[i, 1] = torch.std(dwell_time)
+        if dwell_time.shape[0] == 0:
+            crossing_stats[i, 0] = float('nan')
+            crossing_stats[i, 1] = float('nan')
+        elif dwell_time.shape[0] == 1:
+            crossing_stats[i, 0] = dwell_time[0]
+            crossing_stats[i, 1] = 0
+        else:
+            crossing_stats[i, 0] = torch.mean(dwell_time)
+            crossing_stats[i, 1] = torch.std(dwell_time)
     return crossing_stats
 
 def _sample_entropy(x: torch.Tensor, m: int = 2, r: float = None) -> torch.Tensor:
@@ -148,6 +177,9 @@ def _sample_entropy(x: torch.Tensor, m: int = 2, r: float = None) -> torch.Tenso
     x_np = x.cpu().detach().numpy()
     sampen = []
     for i in range(x_np.shape[0]):
+        if not np.all(np.isfinite(x_np[i])):
+            sampen.append(float('nan'))
+            continue
         se = ap.sample_entropy(x_np[i], order=m, tolerance=r) if r is not None else ap.sample_entropy(x_np[i], order=m)
         sampen.append(se)
     return torch.tensor(sampen, dtype=x.dtype, device=x.device).unsqueeze(1)
@@ -160,7 +192,7 @@ def _psd(x: torch.Tensor, dt: float) -> torch.Tensor:
     :param dt: the time step to compute PSD
     :return: 2D tensor of the PSD
     """
-    d = 1 if x.shape[0] > 1 else 0
+    d = 1
     xf = torch.fft.rfft(x - torch.mean(x, dim=d, keepdim=True), dim=d)
     psd = torch.abs(xf) ** 2 * dt / (xf.shape[-1])
     return psd
@@ -172,12 +204,15 @@ def _psd_peak_features(x: torch.Tensor, dt: float) -> torch.Tensor:
     :param dt: time step to compute PSD
     :return: 1D tensor of the (peak frequency, height, q factor) for each batch
     """
-    d = 1 if x.shape[0] > 1 else 0
+    d = 1
     psd = _psd(x, dt)
     freqs = torch.fft.rfftfreq(x.shape[-1], d=dt, dtype=x.dtype, device=x.device)
     max_indices = torch.argmax(psd, dim=d)
     peaks = torch.zeros((x.shape[0], 3), dtype=x.dtype, device=x.device)
     for i in range(x.shape[0]):
+        if not torch.all(torch.isfinite(x[i])):
+            peaks[i] = torch.tensor([float('nan')] * 3, dtype=x.dtype, device=x.device)
+            continue
         peak_power = psd[i, max_indices[i]]
         peak_freq = freqs[max_indices[i]]
         q_factor = 0.0  # Default value
@@ -192,36 +227,28 @@ def _psd_peak_features(x: torch.Tensor, dt: float) -> torch.Tensor:
         peaks[i] = torch.tensor([peak_freq, peak_power, q_factor], dtype=x.dtype, device=x.device)
     return peaks
 
-def _binned_psd_pwr(x: torch.Tensor, nbins: int, dt: float) -> torch.Tensor:
+def _binned_psd_pwr(x: torch.Tensor, nbins: int, dt: float, norm: bool = False) -> torch.Tensor:
     """
     Calculate the PSD of an input signal x and return the power in n evenly distributed bins
     :param x: the input signal (shape: batch size x time steps)
     :param nbins: number of bins to compute power
     :param dt: time step to compute PSD
+    :param norm: if True, normalize the PSD
     :return: 2D tensor of the PSD of n frequency bins
     """
     if nbins > x.shape[1]:
         raise ValueError("n cannot be greater than the length of the time series")
     lag_ids = torch.tensor(helpers.get_even_ids(x.shape[-1], nbins + 1), dtype=torch.long, device=x.device)
-    binned_psd = torch.zeros((x.shape[0], nbins), dtype=x.dtype, device=x.device)
-    for i in range(nbins):
-        binned_psd[:, i] = _psd_pwr(x, dt, (lag_ids[i], lag_ids[i + 1]))
-    return binned_psd
-
-def _psd_pwr(x: torch.Tensor, dt: float, id_bounds: tuple, norm: bool = False) -> torch.Tensor:
-    """
-    Gets the total power of an input signal x
-    :param x: the input signal (shape: batch size x time steps)
-    :param dt: the time step to compute total power
-    :param id_bounds: the bounds to integrate the PSD over (in units of array indices)
-    :param norm: whether to normalize the PSD
-    :return: 2D tensor of the total power of each batch signal
-    """
-    d = 1 if x.shape[0] > 1 else 0
+    binned_psd_pwr = torch.zeros((x.shape[0], nbins), dtype=x.dtype, device=x.device)
     psd = _psd(x, dt)
-    norm_constant = (id_bounds[-1] - id_bounds[0]) * dt if norm else 1
-    pwr = torch.sum(psd[:, id_bounds[0]:id_bounds[-1]] / norm_constant, dim=d)
-    return pwr
+    norms_for_bins = [1] * nbins
+    if norm:
+        norms_for_bins = [(lag_ids[i + 1] - lag_ids[i]) * dt for i in range(nbins)]
+    for i in range(nbins):
+        start, end = lag_ids[i], lag_ids[i + 1]
+        psd_band = psd[:, start:end]
+        binned_psd_pwr[:, i] = torch.sum(psd_band / norms_for_bins[i], dim=-1)
+    return binned_psd_pwr
 
 # DYNAMIC STATISTICS (PHASE DOMAIN)
 def _analytic_signal_stats(x: torch.Tensor) -> torch.Tensor:
@@ -251,6 +278,9 @@ def _mean_bicoherence(x: torch.Tensor, dt: float, nperseg: int = 256, step: int 
     x_np = x.cpu().detach().numpy()
     results = []
     for i in range(x.shape[0]):
+        if not np.all(np.isfinite(x_np[i])):
+            results.append(float('nan'))
+            continue
         row = x_np[i, :]
         freqs, _, coeff = signal.stft(row, fs=(1/dt), nperseg=nperseg, noverlap=step, nfft=nfft)
         coeff = coeff.T
