@@ -8,13 +8,13 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 import pint
 import torch
 import numpy as np
-from sbi import utils as utils
+from sbi import utils
 from sbi.inference import NPE
 from sbi.analysis import pairplot
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import CNNEmbedding
 
-from .Helpers import fdt_helpers as fdt, gen_helpers as helpers, hair_model_helpers as model_helpers, stats_helpers as stats
+from .Helpers import fdt, helpers, model_helpers, stats
 from .Simulator import simulator
 
 if torch.cuda.is_available():
@@ -108,7 +108,6 @@ def run():
     t_nd = torch.linspace(ts[0], ts[-1], n, dtype=DTYPE, device=DEVICE)
     steady_id = int(0.7 * len(t_nd))
     segs = math.ceil(ts[-1] / 100)
-    time_seg_ids = helpers.get_even_ids(t_nd.shape[0], segs + 1)
 
     # rescale time to dimensional
     t = model_helpers.rescale_t(t_nd, *t_rescale_params)
@@ -122,7 +121,11 @@ def run():
     pos_freqs = torch.fft.rfftfreq(n_steady, dt)
     # ------------- END TIME AND FREQUENCY ARRAY CALCULATIONS ------------- #
 
-    # -------------------- BEGIN NATURAL FREQUENCY CALCULATION -------------------- #
+    # -------------------- BEGIN PRIOR CONSTRUCTION -------------------- #
+
+    # -------------------- END PRIOR CONSTRUCTION -------------------- #
+
+    ''''# -------------------- BEGIN NATURAL FREQUENCY CALCULATION -------------------- #
     # set up simulator for spontaneous oscillations
     # initial conditions
     init_pos = np.random.randint(0, 10, size=(BATCH_SIZE, 2))
@@ -170,5 +173,4 @@ def run():
     density_estimator = inference.append_simulations(thetas.to(dtype=torch.float32), summary_stats.to(dtype=torch.float32)).train(training_batch_size=128, show_train_summary=True)
     posterior = inference.build_posterior(density_estimator=density_estimator)
     samples = posterior.sample((1000,), x=x0_summary_stats)
-    pairplot(samples)
-    exit()
+    pairplot(samples)'''

@@ -7,7 +7,7 @@ import antropy as ap
 import numpy as np
 from scipy import signal
 
-from ..Helpers import gen_helpers as helpers
+from ..Helpers import helpers
 
 def get_summary_statistics(x: torch.Tensor, dt: float, n: int = 1) -> torch.Tensor:
     """

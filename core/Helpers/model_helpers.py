@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 
 def rescale_x(x_nd: torch.Tensor, gamma: float, d: float, x_sp: float, k_sp: float, alpha: float, chi_hb: float) -> torch.Tensor:
     """

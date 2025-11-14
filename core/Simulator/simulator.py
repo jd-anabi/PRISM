@@ -1,7 +1,7 @@
 import torch
 from tqdm import tqdm
 
-from core.Helpers import gen_helpers as helpers
+from core.Helpers import helpers
 from core.Models import model, steady_model
 from core.Solvers import sdeint
 
@@ -32,12 +32,12 @@ class Simulator(torch.nn.Module):
         Simulates the model with the given constructor parameters
         :return: simulated solution with shape (N, FPB, B / FPB, T)
         """
-        ensemble_size = self.batch_size // self.freqs_per_batch
+        ensemble_size = self._batch_size // self.freqs_per_batch
         time_seg_ids = helpers.get_even_ids(self.t.shape[0], self.segs + 1)
 
         n_vars = self.inits.shape[-1] if isinstance(self.sde, steady_model.HairBundleSDE) else self.inits.shape[-1] - 1
         curr_inits = self.inits
-        sol = torch.zeros((n_vars, self.batch_size, self.t.shape[0]), dtype=self.t.dtype, device=self.t.device)
+        sol = torch.zeros((n_vars, self._batch_size, self.t.shape[0]), dtype=self.t.dtype, device=self.t.device)
         for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments", leave=False):
             curr_time = self.t[time_seg_ids[tid]:time_seg_ids[tid + 1]]
             results = self.__sols(curr_time, curr_inits)  # shape: (len(curr_time), BATCH_SIZE, number of variables)
@@ -124,12 +124,12 @@ class Simulator(torch.nn.Module):
 
     def __set_up_model(self):
         try:
-            if not torch.any(self.params[:, 3]):
+            if not torch.any(self._params[:, 3]):
                 self.inits = self.inits[:, :4]
-                self.sde = steady_model.HairBundleSDE(*torch.unbind(self.params, dim=1), self.force, batch_size=self.batch_size, device=self._device, dtype=self._dtype)
+                self.sde = steady_model.HairBundleSDE(*torch.unbind(self._params, dim=1), self._force, batch_size=self._batch_size, device=self._device, dtype=self._dtype)
             else:
-                if torch.all(self.params[:, 3]):
-                    self.sde = model.HairBundleSDE(*torch.unbind(self.params, dim=1), self.force, batch_size=self.batch_size, device=self._device, dtype=self._dtype)
+                if torch.all(self._params[:, 3]):
+                    self.sde = model.HairBundleSDE(*torch.unbind(self._params, dim=1), self._force, batch_size=self._batch_size, device=self._device, dtype=self._dtype)
                 else:
                     raise ValueError("Can't not mix and match steady and non-steady models; finite time constant in the parameter batch must all be zero or all non-zero")
         except (Warning, Exception) as e:
