@@ -27,7 +27,7 @@ else:
     DEVICE = torch.device('cpu')
 
 DTYPE = torch.float64 if DEVICE.type == 'cuda' or DEVICE.type == 'cpu' else torch.float32
-BATCH_SIZE = 2**9 if DEVICE.type == 'cuda' else 2**6
+BATCH_SIZE = 2**10 if DEVICE.type == 'cuda' else 2**6
 
 # ensemble variables needed
 UNIQUE_FREQS = 2**6 # number of unique frequencies
@@ -78,14 +78,13 @@ def run():
 
     # ------------- BEGIN RESCALING CALCULATIONS ------------- #
     # set up dictionary for model parameters and rescaling parameters
-    parameters: Dict[str, float] = {'tau_hb': params[0], 'tau_m': params[1], 'tau_gs': params[2],
-                                    'tau_t': params[3],
-                                    'c_min': params[4], 's_min': params[5], 's_max': params[6], 'ca2_m': params[7],
-                                    'ca2_gs': params[8], 'u_gs_max': params[9], 'delta_e': params[10],
-                                    'k_gs_ratio': params[11],
-                                    'chi_hb': params[12], 'chi_a': params[13], 'x_c': params[14],
-                                    'eta_hb': params[15],
-                                    'eta_a': params[16]}
+    parameters_with_bounds: Dict[str, tuple] = {'tau_hb': (params[0], (0.01, 100)), 'tau_m': (params[1], (0, 1000)),
+                                                'tau_gs': (params[2], (0, 1000)), 'tau_t': (params[3], (0, 10)),
+                                                'c_min': (params[4], (0, 1)), 's_min': (params[5], (0, 1)), 's_max': (params[6], (0, 1)),
+                                                'ca2_m': (params[7], (0, 10)), 'ca2_gs': (params[8], (0, 1000)),
+                                                'u_gs_max': (params[9], (0, 1000)), 'delta_e': (params[10], (0, 10)), 'k_gs_ratio': (params[11], (0, 1)),
+                                                'chi_hb': (params[12], (0, 10)), 'chi_a': (params[13], (0, 10)), 'x_c': (params[14], (0, 100)),
+                                                'eta_hb': (params[15], (0.001, 0.05)), 'eta_a': (params[16], (0.001, 0.05))}
     hb_rescale_params: Dict[str, float] = {'gamma': rescale_params[0], 'd': rescale_params[1],
                                            'x_sp': rescale_params[2], 'k_sp': rescale_params[3],
                                            'k_gs_max': rescale_params[4], 's_max': rescale_params[5],
@@ -141,11 +140,15 @@ def run():
     helpers.plot(units_rescale['time'] * t_dim[steady_id:], units_rescale['distance'] * x0_dim[steady_id:], labels=(r'Time (s)', r'$x_{0}$ (m)'))
     x0 = x0[steady_id:]
     print(x0.unsqueeze(0))
-    x0_summary_stats = stats.get_summary_statistics(x0.unsqueeze(0), dt)
+    x0_summary_stats = stats.get_summary_statistics(x0.unsqueeze(0), dt, n=30)
     omega_center = 2 * np.pi * pos_freqs[torch.argmax(torch.abs(torch.fft.rfft(x0 - torch.mean(x0))))]
     print(f"Frequency of spontaneous oscillations: {omega_center / (2 * np.pi * units_rescale['time'])} Hz")
 
-    prior = utils.BoxUniform(low=torch.zeros(17), high=torch.ones(17) * 1000, device=str(DEVICE))
+    priors = []
+    for param_vals in parameters_with_bounds.values():
+        curr_prior = utils.BoxUniform(low=torch.ones(1) * param_vals[0] / 2, high=torch.ones(1) * 3 * param_vals[0] / 2)
+        priors.append(curr_prior)
+    prior = utils.MultipleIndependent(priors, device=str(DEVICE))
     thetas = prior.sample((BATCH_SIZE,)).to(dtype=DTYPE)
     for i in range(BATCH_SIZE):
         thetas[i, 3] = 0
@@ -155,7 +158,11 @@ def run():
     x = x[:, steady_id:]
 
     print(x)
-    summary_stats = stats.get_summary_statistics(x, dt)
+    summary_stats = torch.zeros((BATCH_SIZE, x0_summary_stats.shape[1]), dtype=torch.float32, device=torch.device('cpu'))
+    step = summary_stats.shape[0] // 4
+    for i in range(0, summary_stats.shape[0], step):
+        start, end = i, min(i + step, summary_stats.shape[0])
+        summary_stats[start:end] = stats.get_summary_statistics(x[start:end], dt, n=30)
     print(summary_stats)
     embedding_net = CNNEmbedding(input_shape=(1, n))
     neural_posterior = posterior_nn(model='nsf', embedding_net=embedding_net)

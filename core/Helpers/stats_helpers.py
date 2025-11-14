@@ -9,17 +9,15 @@ from scipy import signal
 
 from ..Helpers import gen_helpers as helpers
 
-def get_summary_statistics(x: torch.Tensor, dt: float) -> torch.Tensor:
+def get_summary_statistics(x: torch.Tensor, dt: float, n: int = 1) -> torch.Tensor:
     """
     Get the set of summary statistics
     :param x: the input signal (shape: batch size x time steps)
     :param dt: the time step
+    :param n: hyperparameter that controls how many lags/bins for acf and psd statistics
     :return: summary statistics
     """
-    progress_bar = tqdm(total=10, desc="Getting summary statistics", leave=False)
-    n = 30
-    if x.shape[-1] < 100:
-        n = 1
+    progress_bar = tqdm(total=10, desc="Getting summary statistics")
 
     # static stats
     moments = _moments(x, 4)
@@ -52,6 +50,7 @@ def get_summary_statistics(x: torch.Tensor, dt: float) -> torch.Tensor:
     summary_stats = [moments, pdf_features, acf_at_lags, zero_crossing_stats,
                    cramer_crossing_stats, sample_entropy, psd_peak_stats,
                    binned_psd_pwr, analytic_signal_stats, bicoherence]
+    progress_bar.close()
     return torch.cat(summary_stats, dim=1)
 
 # STATIC STATISTICS
@@ -168,19 +167,23 @@ def _crossing_stats(x: torch.Tensor, dt: float, boundary: Union[float, torch.Ten
             crossing_stats[i, 1] = torch.std(dwell_time)
     return crossing_stats
 
-def _sample_entropy(x: torch.Tensor, m: int = 2, r: float = None) -> torch.Tensor:
+def _sample_entropy(x: torch.Tensor, m: int = 2, r: float = None, downsample: int = 100) -> torch.Tensor:
     """
     Gets the sample entropy of an input signal x
     :param x: the input signal (shape: batch size x time steps)
+    :param m: the order
+    :param r: the tolerance
+    :param downsample: the downsampling scale
     :return: the sample entropy of an input signal x
     """
     x_np = x.cpu().detach().numpy()
+    x_np = np.ascontiguousarray(x_np[:, ::downsample])
     sampen = []
     for i in range(x_np.shape[0]):
         if not np.all(np.isfinite(x_np[i])):
             sampen.append(float('nan'))
             continue
-        se = ap.sample_entropy(x_np[i], order=m, tolerance=r) if r is not None else ap.sample_entropy(x_np[i], order=m)
+        se = ap.sample_entropy(x_np[i], order=m, tolerance=r)
         sampen.append(se)
     return torch.tensor(sampen, dtype=x.dtype, device=x.device).unsqueeze(1)
 
@@ -284,10 +287,14 @@ def _mean_bicoherence(x: torch.Tensor, dt: float, nperseg: int = 256, step: int 
         row = x_np[i, :]
         freqs, _, coeff = signal.stft(row, fs=(1/dt), nperseg=nperseg, noverlap=step, nfft=nfft)
         coeff = coeff.T
-        coeff = np.ascontiguousarray(coeff.reshape(coeff.shape[0], 1, coeff.shape[1]))
-        pac = pyi.cfc.PAC(data=coeff, freqs=freqs, sampling_freq=(1/dt))
-        pac.compute(indices=((0,),), norm=True)
-        vals = pac.results[0]
-        mean = np.nanmean(vals)
-        results.append(mean)
+        coeff = coeff[:, np.newaxis, :]
+        coeff = np.ascontiguousarray(coeff)
+        try:
+            bispectrum = pyi.Bispectrum(data=coeff, freqs=freqs, sampling_freq=(1/dt))
+            bispectrum.compute(indices=((0,), (0,)))
+            data = bispectrum.results.get_results()
+            abs_data0 = np.abs(data[0])
+            results.append(np.mean(abs_data0))
+        except Exception:
+            results.append(float('nan'))
     return torch.tensor(results, dtype=x.dtype, device=x.device).unsqueeze(1)
