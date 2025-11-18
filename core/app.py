@@ -16,6 +16,7 @@ from sbi.neural_nets.embedding_nets import CNNEmbedding
 
 from .Helpers import fdt, helpers, model_helpers, stats
 from .Simulator import simulator
+from .SBI import prior
 
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda')
@@ -122,7 +123,9 @@ def run():
     # ------------- END TIME AND FREQUENCY ARRAY CALCULATIONS ------------- #
 
     # -------------------- BEGIN PRIOR CONSTRUCTION -------------------- #
-
+    prior_dist = prior.Prior(DTYPE, DEVICE)
+    prior_dist = prior_dist.construct_prior(t_nd, 17, BATCH_SIZE, 500, True)
+    print(prior_dist)
     # -------------------- END PRIOR CONSTRUCTION -------------------- #
 
     ''''# -------------------- BEGIN NATURAL FREQUENCY CALCULATION -------------------- #

@@ -9,3 +9,4 @@ pint==0.25
 sbi==0.25.0
 antropy==0.1.9
 pybispectra==1.2.4
+sklearn==
