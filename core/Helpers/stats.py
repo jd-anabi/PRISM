@@ -21,31 +21,31 @@ def get_summary_statistics(x: torch.Tensor, dt: float, n: int = 1) -> torch.Tens
 
     # static stats
     moments = _moments(x, 4)
-    progress_bar.update(1)
+    progress_bar.update()
     pdf_features = _pdf_features(x, n)
-    progress_bar.update(2)
+    progress_bar.update()
 
     # dynamic stats (time-domain)
     acf_at_lags = _acf_at_lags(x, n)
-    progress_bar.update(3)
+    progress_bar.update()
     zero_crossing_stats = _crossing_stats(x, dt, 0)
-    progress_bar.update(4)
+    progress_bar.update()
     cramer_crossing_stats = _crossing_stats(x, dt, pdf_features[:, 2])
-    progress_bar.update(5)
+    progress_bar.update()
     sample_entropy = _sample_entropy(x)
-    progress_bar.update(6)
+    progress_bar.update()
 
     # dynamic stats (frequency-domain)
     psd_peak_stats = _psd_peak_features(x, dt)
-    progress_bar.update(7)
+    progress_bar.update()
     binned_psd_pwr = _binned_psd_pwr(x, n, dt)
-    progress_bar.update(8)
+    progress_bar.update()
 
     # dynamic stats (phase-domain)
     analytic_signal_stats = _analytic_signal_stats(x)
-    progress_bar.update(9)
+    progress_bar.update()
     bicoherence = _mean_bicoherence(x, dt)
-    progress_bar.update(10)
+    progress_bar.update()
 
     summary_stats = [moments, pdf_features, acf_at_lags, zero_crossing_stats,
                    cramer_crossing_stats, sample_entropy, psd_peak_stats,

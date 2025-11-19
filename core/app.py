@@ -124,7 +124,7 @@ def run():
 
     # -------------------- BEGIN PRIOR CONSTRUCTION -------------------- #
     prior_dist = prior.Prior(DTYPE, DEVICE)
-    prior_dist = prior_dist.construct_prior(t_nd, 17, BATCH_SIZE, 500, True)
+    prior_dist = prior_dist.construct_prior(t_nd, 17, 20 * BATCH_SIZE, BATCH_SIZE, segs, t_global_scale=200, num_iterations=3000)
     print(prior_dist)
     # -------------------- END PRIOR CONSTRUCTION -------------------- #
 

@@ -17,45 +17,36 @@ class Prior:
         self.device = device
 
     # ------------------ PUBLIC METHODS ------------------
-    def construct_prior(self, t: torch.Tensor, n_params, batch_size_limit, num_iterations, steady: bool) -> torch.distributions.Distribution:
-        segs = math.ceil(t[-1] / 100)
-        n_sims = batch_size_limit * num_iterations
+    def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int, segs: int,
+                        t_global_scale: int = 100, num_iterations: int = 500, steady: bool = True) -> torch.distributions.Distribution:
+        n_sims = global_batch_size * num_iterations
 
         # do global sweep and find number of "islands"
-        progress_bar = tqdm(total=4, desc="Doing global sweep for prior construction...")
-        stable_params = self.__global_map(t[:(t.shape[0] // 100)], n_params, (-1000, 1000), segs, n_sims, num_iterations, steady)
-        stable_params_arr = np.array(stable_params)
-        progress_bar.update(1)
+        stable_params = self.__global_map(t[:(t.shape[0] // t_global_scale)], n_params, (-500, 1000), segs, n_sims, num_iterations, steady)
+        stable_params_arr = np.array(torch.tensor(stable_params).detach().cpu().numpy())
         scaler = StandardScaler()
         stable_params_scaled = scaler.fit_transform(stable_params_arr)
-        progress_bar.update(2)
         db = DBSCAN(eps=2.5, min_samples=50).fit(stable_params_scaled)
-        progress_bar.update(3)
         labels = db.labels_
         n_clusters = len(labels) - (1 if -1 in labels else 0)
-        progress_bar.update(4)
-        progress_bar.close()
 
         # do local sweep
-        progress_bar = tqdm(total=1, desc="Doing local sweep for prior construction...")
-        accepted_params = np.array(self.__local_map(t, stable_params, batch_size_limit, n_params, int(2e5), 0.05, segs, steady))
-        progress_bar.update(1)
-        progress_bar.close()
+        accepted_params = np.array(self.__local_map(t, stable_params, local_batch_size, n_params, int(2e5), 0.05, segs, steady))
 
         # finally construct prior using Gaussian-Mixture Model'
         progress_bar = tqdm(total=5, desc="Constructing prior...")
         gmm = GaussianMixture(n_components=n_clusters, covariance_type='full').fit(accepted_params)
-        progress_bar.update(1)
+        progress_bar.update()
         means = torch.tensor(gmm.means_, dtype=self.dtype, device=self.device)
         cov = torch.tensor(gmm.covariances_, dtype=self.dtype, device=self.device)
         weights = torch.tensor(gmm.weights_, dtype=self.dtype, device=self.device)
-        progress_bar.update(2)
+        progress_bar.update()
         comp_dist = torch.distributions.MultivariateNormal(means, covariance_matrix=cov)
-        progress_bar.update(3)
+        progress_bar.update()
         mix_dist = torch.distributions.Categorical(probs=weights)
-        progress_bar.update(4)
+        progress_bar.update()
         prior = torch.distributions.MixtureSameFamily(mix_dist, comp_dist)
-        progress_bar.update(5)
+        progress_bar.update()
         progress_bar.close()
 
         return prior
@@ -68,7 +59,7 @@ class Prior:
         curr_batch_size = batch_size // num_iterations
 
         wide_prior = utils.BoxUniform(low=torch.ones(n_params) * prior_bounds[0], high=torch.ones(n_params) * prior_bounds[1], device=str(self.device))
-        thetas = wide_prior.sample((batch_size,))
+        thetas = wide_prior.sample((batch_size,)).to(dtype=self.dtype)
         if steady:
             for i in range(thetas.shape[0]):
                 thetas[i, 3] = 0
@@ -80,11 +71,20 @@ class Prior:
         force = torch.zeros((curr_batch_size, t.shape[0]), dtype=self.dtype, device=self.device)
         stable_params = []
 
+        num_added = 0
+        added_params_progress_bar = tqdm(total=(num_iterations - 1), desc=f"Added {num_added} sets to accepted parameters", leave=False)
         for i in range(num_iterations - 1):
-            sim = simulator.Simulator(thetas[i*curr_batch_size:(i+1)*curr_batch_size], force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
-            x = sim.simulate()[0, 0, :, :]
+            curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
+            sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
+            x = sim.simulate()[0, 0, :, :] # shape: (4, 1, curr_batch_size, len(t))
             is_valid = torch.isfinite(x).all(dim=1)
-            stable_params.append(thetas[is_valid])
+            valid_params = curr_thetas[is_valid]
+            if valid_params.shape[0] > 0:
+                num_added += 1
+            added_params_progress_bar.update()
+            added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters")
+            stable_params.append(valid_params)
+        added_params_progress_bar.close()
         return stable_params
 
     @staticmethod
@@ -112,12 +112,13 @@ class Prior:
         force = torch.zeros((batch_size, t.shape[0]), dtype=dtype, device=device)
 
         # begin algorithm
+        progress_bar = tqdm(total=1, desc="Performing local sweep for prior construction...")
         while len(queue) != 0 and len(accepted_params) <= n_max:
             thetas = torch.tensor(queue.pop(0), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * steps.unsqueeze(1)
             sim = simulator.Simulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
-            x = sim.simulate()[0, 0, :, :]
+            x = sim.simulate()[0, 0, :, :] # shape: (4, 1, batch_size, len(t))
             is_valid = torch.isfinite(x).all(dim=1)
-            for i in range(batch_size):
+            for i in tqdm(range(batch_size), desc='Adding to accepted parameters...', leave=False):
                 if is_valid[i]:
                     contains = False
                     stable_point = thetas[i]
@@ -128,5 +129,7 @@ class Prior:
                         accepted_params.add(stable_point)
                         queue.append(stable_point)
                         n_max += 1
+        progress_bar.update()
+        progress_bar.close()
 
         return accepted_params
