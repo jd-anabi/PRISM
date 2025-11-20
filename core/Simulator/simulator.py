@@ -124,7 +124,7 @@ class Simulator(torch.nn.Module):
 
     def __set_up_model(self):
         try:
-            if not torch.any(self._params[:, 3]):
+            if self._params.shape[-1] != 17:
                 self.inits = self.inits[:, :4]
                 self.sde = steady_model.HairBundleSDE(*torch.unbind(self._params, dim=1), self._force, batch_size=self._batch_size, device=self._device, dtype=self._dtype)
             else:

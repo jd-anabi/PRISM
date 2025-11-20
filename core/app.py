@@ -123,8 +123,11 @@ def run():
     # ------------- END TIME AND FREQUENCY ARRAY CALCULATIONS ------------- #
 
     # -------------------- BEGIN PRIOR CONSTRUCTION -------------------- #
+    prior_bounds = []
+    for bounds in parameters_with_bounds.values():
+        prior_bounds.append(bounds[1])
     prior_dist = prior.Prior(DTYPE, DEVICE)
-    prior_dist = prior_dist.construct_prior(t_nd, 17, 20 * BATCH_SIZE, BATCH_SIZE, segs, t_global_scale=200, num_iterations=3000)
+    prior_dist = prior_dist.construct_prior(t_nd, 17, 10 * BATCH_SIZE, BATCH_SIZE, segs, prior_bounds, t_global_scale=100, num_iterations=300)
     print(prior_dist)
     # -------------------- END PRIOR CONSTRUCTION -------------------- #
 

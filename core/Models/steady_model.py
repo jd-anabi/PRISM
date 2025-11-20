@@ -1,7 +1,7 @@
 import torch
 
 class HairBundleSDE(torch.nn.Module):
-    def __init__(self, tau_hb: torch.Tensor, tau_m: torch.Tensor, tau_gs: torch.Tensor, tau_t: torch.Tensor,
+    def __init__(self, tau_hb: torch.Tensor, tau_m: torch.Tensor, tau_gs: torch.Tensor,
                  c_min: torch.Tensor, s_min: torch.Tensor, s_max: torch.Tensor, ca2_m: torch.Tensor,
                  ca2_gs: torch.Tensor, u_gs_max: torch.Tensor, delta_e: torch.Tensor, k_gs_ratio: torch.Tensor,
                  chi_hb: torch.Tensor, chi_a: torch.Tensor, x_c: torch.Tensor, eta_hb: torch.Tensor,
@@ -17,7 +17,6 @@ class HairBundleSDE(torch.nn.Module):
         self.tau_hb = tau_hb.to(self.device)  # finite time constant for hair-bundle
         self.tau_m = tau_m.to(self.device)  # finite time constant for adaptation motor
         self.tau_gs = tau_gs.to(self.device)  # finite time constant for gating spring
-        self.tau_t = tau_t.to(self.device)  # finite time constant for open channel probability
         self.c_min = c_min.to(self.device)  # min climbing rate
         self.s_min = s_min.to(self.device)  # min slipping rate
         self.s_max = s_max.to(self.device)  # max slipping rate

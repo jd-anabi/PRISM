@@ -1,4 +1,4 @@
-import math
+from collections import deque
 
 import numpy as np
 import torch
@@ -17,18 +17,22 @@ class Prior:
         self.device = device
 
     # ------------------ PUBLIC METHODS ------------------
-    def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int, segs: int,
+    def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list[tuple],
                         t_global_scale: int = 100, num_iterations: int = 500, steady: bool = True) -> torch.distributions.Distribution:
         n_sims = global_batch_size * num_iterations
 
         # do global sweep and find number of "islands"
-        stable_params = self.__global_map(t[:(t.shape[0] // t_global_scale)], n_params, (-500, 1000), segs, n_sims, num_iterations, steady)
-        stable_params_arr = np.array(torch.tensor(stable_params).detach().cpu().numpy())
+        stable_params = self.__global_map(t[:(t.shape[0] // t_global_scale)], n_params, prior_bounds, segs, n_sims, num_iterations, steady)
+        stable_params_arr = np.array(stable_params)
+        print(stable_params_arr)
         scaler = StandardScaler()
         stable_params_scaled = scaler.fit_transform(stable_params_arr)
         db = DBSCAN(eps=2.5, min_samples=50).fit(stable_params_scaled)
         labels = db.labels_
         n_clusters = len(labels) - (1 if -1 in labels else 0)
+        if n_clusters < 1:
+            print('No clusters found. Defaulting to 1 cluster')
+            n_clusters = 1
 
         # do local sweep
         accepted_params = np.array(self.__local_map(t, stable_params, local_batch_size, n_params, int(2e5), 0.05, segs, steady))
@@ -52,17 +56,21 @@ class Prior:
         return prior
 
     # ------------------ PRIVATE METHODS ------------------
-    def __global_map(self, t: torch.Tensor, n_params: int, prior_bounds: tuple, segs: int, batch_size: int, num_iterations: int, steady: bool) -> list:
+    def __global_map(self, t: torch.Tensor, n_params: int, prior_bounds: list[tuple], segs: int, batch_size: int, num_iterations: int, steady: bool) -> list:
         t = t.to(dtype=self.dtype, device=self.device)
         if batch_size % num_iterations != 0:
             raise ValueError('batch_size must be divisible by num_iterations')
         curr_batch_size = batch_size // num_iterations
 
-        wide_prior = utils.BoxUniform(low=torch.ones(n_params) * prior_bounds[0], high=torch.ones(n_params) * prior_bounds[1], device=str(self.device))
+        priors = []
+        for curr_bounds in prior_bounds:
+            curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
+            priors.append(curr_prior)
+        wide_prior = utils.MultipleIndependent(priors, device=str(self.device))
         thetas = wide_prior.sample((batch_size,)).to(dtype=self.dtype)
         if steady:
-            for i in range(thetas.shape[0]):
-                thetas[i, 3] = 0
+            thetas = torch.cat((thetas[:, :3], thetas[:, 4:]), dim=1)
+            n_params -= 1
 
         init_pos = np.random.randint(0, 10, size=(curr_batch_size, 2))
         init_probs = np.random.randint(0, 1, size=(curr_batch_size, 3))
@@ -80,10 +88,10 @@ class Prior:
             is_valid = torch.isfinite(x).all(dim=1)
             valid_params = curr_thetas[is_valid]
             if valid_params.shape[0] > 0:
-                num_added += 1
+                num_added += valid_params.shape[0]
             added_params_progress_bar.update()
             added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters")
-            stable_params.append(valid_params)
+            stable_params.extend(valid_params.detach().cpu().tolist())
         added_params_progress_bar.close()
         return stable_params
 
@@ -95,14 +103,12 @@ class Prior:
         t = t.to(dtype=dtype, device=device)
 
         # algorithm variables
-        queue = list(stable_params)
-        accepted_params = set(stable_params)
+        queue = deque(stable_params)
+        accepted_params = set([tuple(p) for p in stable_params])
 
         # check if steady-state
-        steps = torch.full((batch_size,), step, dtype=dtype, device=device)
         if steady:
-            for i in range(steps.shape[0]):
-                steps[i] = 0
+            n_params -= 1
 
         # SDE variable
         init_pos = np.random.randint(0, 10, size=(batch_size, 2))
@@ -114,21 +120,16 @@ class Prior:
         # begin algorithm
         progress_bar = tqdm(total=1, desc="Performing local sweep for prior construction...")
         while len(queue) != 0 and len(accepted_params) <= n_max:
-            thetas = torch.tensor(queue.pop(0), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * steps.unsqueeze(1)
+            thetas = torch.tensor(queue.popleft(), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * step
             sim = simulator.Simulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
-            x = sim.simulate()[0, 0, :, :] # shape: (4, 1, batch_size, len(t))
+            x = sim.simulate()[0, 0, :, :] # shape: (batch_size, len(t))
             is_valid = torch.isfinite(x).all(dim=1)
             for i in tqdm(range(batch_size), desc='Adding to accepted parameters...', leave=False):
                 if is_valid[i]:
-                    contains = False
-                    stable_point = thetas[i]
-                    for theta in accepted_params:
-                        if torch.equal(theta, stable_point):
-                            contains = True
-                    if not contains:
+                    stable_point = tuple(thetas[i].tolist())
+                    if not stable_point in accepted_params:
                         accepted_params.add(stable_point)
                         queue.append(stable_point)
-                        n_max += 1
         progress_bar.update()
         progress_bar.close()
 
