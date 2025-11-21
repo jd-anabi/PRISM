@@ -15,9 +15,9 @@ from sbi.analysis import pairplot
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import CNNEmbedding
 
-from .Helpers import fdt, helpers, model_helpers, stats, visualizers, file_manager
+from .Helpers import helpers, model_helpers, visualizers, file_manager
+from .SBI import prior, statistics
 from .Simulator import simulator
-from .SBI import prior
 
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda')
@@ -146,3 +146,18 @@ def run():
     corner_plot_path = os.getcwd() + '\\Priors\\mixed_prior_dist.png' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.png'
     visualizers.visualize_dist(prior_dist, labels=[label for label in parameter_labels if label != r'$\tau_t$'], save_path=corner_plot_path)
     # -------------------- END PRIOR CONSTRUCTION -------------------- #
+
+    # -------------------- BEGIN SUMMARY STATISTICS -------------------- #
+    thetas = prior_dist.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
+    init_pos = np.random.randint(0, 10, size=(BATCH_SIZE, 2))
+    init_probs = np.random.randint(0, 1, size=(BATCH_SIZE, 3))
+    inits = helpers.concat(init_pos, init_probs)  # size: (BATCH_SIZE, 5)
+    inits = torch.tensor(inits, dtype=DTYPE, device=DEVICE)
+    force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE)
+
+    sim = simulator.Simulator(thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
+    x = sim.simulate()[0, 0, :, :]  # shape: (BATCH_SIZE, len(t))
+
+    stats = statistics.SummaryStatistics(x, dt)
+    print(stats.get_summary_statistics())
+    # -------------------- END SUMMARY STATISTICS -------------------- #

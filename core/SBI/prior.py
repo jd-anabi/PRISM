@@ -87,7 +87,7 @@ class Prior:
         for i in range(num_iterations - 1):
             curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
             sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
-            x = sim.simulate()[0, 0, :, :] # shape: (4, 1, curr_batch_size, len(t))
+            x = sim.simulate()[0, 0, :, :] # shape: (curr_batch_size, len(t))
             is_valid = torch.isfinite(x).all(dim=1)
             valid_params = curr_thetas[is_valid]
             if valid_params.shape[0] > 0:
