@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+import time
 from typing import Dict
 
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
@@ -14,7 +15,7 @@ from sbi.analysis import pairplot
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import CNNEmbedding
 
-from .Helpers import fdt, helpers, model_helpers, stats
+from .Helpers import fdt, helpers, model_helpers, stats, visualizers, file_manager
 from .Simulator import simulator
 from .SBI import prior
 
@@ -63,8 +64,9 @@ def run():
 
     # read in model parameters
     file_num = int(input('File number for model parameters: '))
+    helpers.clear_screen()
     file = os.getcwd() + model_params_dir + model_files[file_num - 1]
-    x0, params, rescale_params, forcing_params, units = helpers.read_model_file(file)
+    x0, params, rescale_params, forcing_params, units = file_manager.read_model_file(file)
     amp, phase, offset = forcing_params
 
     # need to construct dictionary now that converts current units to SI units
@@ -86,6 +88,10 @@ def run():
                                                 'u_gs_max': (params[9], (0, 1000)), 'delta_e': (params[10], (0, 10)), 'k_gs_ratio': (params[11], (0, 1)),
                                                 'chi_hb': (params[12], (0, 10)), 'chi_a': (params[13], (0, 10)), 'x_c': (params[14], (0, 100)),
                                                 'eta_hb': (params[15], (0.001, 0.05)), 'eta_a': (params[16], (0.001, 0.05))}
+    parameter_labels = [r'$\tau_{hb}$', r'$\tau_m$', r'$\tau_{gs}$', r'$\tau_t$',
+                        r'$C_{min}$', r'$S_{min}$', r'$S_{max}$', r'$Ca2_m$', r'$Ca2_{gs}$',
+                        r'$U_{gs,\ max}$', r'$\Delta E$', r'$k_{gs, \text{ ratio}}$',
+                        r'$\chi_{hb}$', r'$\chi_a$', r'$x_c$', r'$\eta_{hb}$', r'$\eta_{a}$']
     hb_rescale_params: Dict[str, float] = {'gamma': rescale_params[0], 'd': rescale_params[1],
                                            'x_sp': rescale_params[2], 'k_sp': rescale_params[3],
                                            'k_gs_max': rescale_params[4], 's_max': rescale_params[5],
@@ -104,6 +110,7 @@ def run():
     # non-dimensional time
     dt = 1e-3
     t_max = int(input("Max time: "))
+    helpers.clear_screen()
     ts = (0, t_max)
     n = int((ts[-1] - ts[0]) / dt)
     t_nd = torch.linspace(ts[0], ts[-1], n, dtype=DTYPE, device=DEVICE)
@@ -123,60 +130,19 @@ def run():
     # ------------- END TIME AND FREQUENCY ARRAY CALCULATIONS ------------- #
 
     # -------------------- BEGIN PRIOR CONSTRUCTION -------------------- #
-    prior_bounds = []
-    for bounds in parameters_with_bounds.values():
-        prior_bounds.append(bounds[1])
-    prior_dist = prior.Prior(DTYPE, DEVICE)
-    prior_dist = prior_dist.construct_prior(t_nd, 17, 10 * BATCH_SIZE, BATCH_SIZE, segs, prior_bounds, t_global_scale=100, num_iterations=300)
-    print(prior_dist)
+    prior_path = os.getcwd() + '\\Priors\\mixed_prior_dist.pt' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.pt'
+    try:
+        prior_dist = file_manager.load_mix_dist(prior_path)
+    except FileNotFoundError as e:
+        print(f"Error: {e}. Going to construct prior from scratch.")
+        time.sleep(5)
+        helpers.clear_screen()
+        prior_bounds = []
+        for bounds in parameters_with_bounds.values():
+            prior_bounds.append(bounds[1])
+        prior_dist = prior.Prior(DTYPE, DEVICE)
+        prior_dist = prior_dist.construct_prior(t_nd, 17, 10 * BATCH_SIZE, 10 * BATCH_SIZE, segs, prior_bounds, t_global_scale=1, num_iterations=50)
+        file_manager.save_mix_dist(prior_dist, "mixed_prior_dist.pt")
+    corner_plot_path = os.getcwd() + '\\Priors\\mixed_prior_dist.png' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.png'
+    visualizers.visualize_dist(prior_dist, labels=[label for label in parameter_labels if label != r'$\tau_t$'], save_path=corner_plot_path)
     # -------------------- END PRIOR CONSTRUCTION -------------------- #
-
-    ''''# -------------------- BEGIN NATURAL FREQUENCY CALCULATION -------------------- #
-    # set up simulator for spontaneous oscillations
-    # initial conditions
-    init_pos = np.random.randint(0, 10, size=(BATCH_SIZE, 2))
-    init_probs = np.random.randint(0, 1, size=(BATCH_SIZE, 3))
-    inits = helpers.concat(init_pos, init_probs)  # size: (BATCH_SIZE, 5)
-    inits = torch.tensor(inits, dtype=DTYPE, device=DEVICE)
-    inits_0 = inits[0, :].unsqueeze(0)
-
-    sim = simulator.Simulator(torch.tensor(params, dtype=DTYPE, device=torch.device('cpu')).unsqueeze(0),
-                              fdt.force(t_nd, 0, 0, 0, 0, 1),
-                              inits_0.to(torch.device('cpu')), t_nd.to(torch.device('cpu')), segs=segs)
-    x0 = sim.simulate()[0, 0, 0]
-    t_dim = model_helpers.rescale_t(t_nd, *t_rescale_params).cpu().detach().numpy()
-    x0_dim = model_helpers.rescale_x(x0, *x_rescale_params).cpu().detach().numpy()
-    helpers.plot(units_rescale['time'] * t_dim[steady_id:], units_rescale['distance'] * x0_dim[steady_id:], labels=(r'Time (s)', r'$x_{0}$ (m)'))
-    x0 = x0[steady_id:]
-    print(x0.unsqueeze(0))
-    x0_summary_stats = stats.get_summary_statistics(x0.unsqueeze(0), dt, n=30)
-    omega_center = 2 * np.pi * pos_freqs[torch.argmax(torch.abs(torch.fft.rfft(x0 - torch.mean(x0))))]
-    print(f"Frequency of spontaneous oscillations: {omega_center / (2 * np.pi * units_rescale['time'])} Hz")
-
-    priors = []
-    for param_vals in parameters_with_bounds.values():
-        curr_prior = utils.BoxUniform(low=torch.ones(1) * param_vals[0] / 2, high=torch.ones(1) * 3 * param_vals[0] / 2)
-        priors.append(curr_prior)
-    prior = utils.MultipleIndependent(priors, device=str(DEVICE))
-    thetas = prior.sample((BATCH_SIZE,)).to(dtype=DTYPE)
-    for i in range(BATCH_SIZE):
-        thetas[i, 3] = 0
-
-    sim = simulator.Simulator(thetas, fdt.force(t_nd, 0, 1, 0, 0, BATCH_SIZE), inits, t_nd, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
-    x = sim.simulate()[0, 0, :, :]
-    x = x[:, steady_id:]
-
-    print(x)
-    summary_stats = torch.zeros((BATCH_SIZE, x0_summary_stats.shape[1]), dtype=torch.float32, device=torch.device('cpu'))
-    step = summary_stats.shape[0] // 4
-    for i in range(0, summary_stats.shape[0], step):
-        start, end = i, min(i + step, summary_stats.shape[0])
-        summary_stats[start:end] = stats.get_summary_statistics(x[start:end], dt, n=30)
-    print(summary_stats)
-    embedding_net = CNNEmbedding(input_shape=(1, n))
-    neural_posterior = posterior_nn(model='nsf', embedding_net=embedding_net)
-    inference = NPE(prior=prior, device=str(DEVICE), density_estimator=neural_posterior)
-    density_estimator = inference.append_simulations(thetas.to(dtype=torch.float32), summary_stats.to(dtype=torch.float32)).train(training_batch_size=128, show_train_summary=True)
-    posterior = inference.build_posterior(density_estimator=density_estimator)
-    samples = posterior.sample((1000,), x=x0_summary_stats)
-    pairplot(samples)'''

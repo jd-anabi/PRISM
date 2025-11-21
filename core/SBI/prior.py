@@ -18,24 +18,27 @@ class Prior:
 
     # ------------------ PUBLIC METHODS ------------------
     def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list[tuple],
-                        t_global_scale: int = 100, num_iterations: int = 500, steady: bool = True) -> torch.distributions.Distribution:
+                        t_global_scale: int = 100, num_iterations: int = 500, steady: bool = True, n_max: int = 200000, step: float = 0.05) -> torch.distributions.MixtureSameFamily:
         n_sims = global_batch_size * num_iterations
 
         # do global sweep and find number of "islands"
         stable_params = self.__global_map(t[:(t.shape[0] // t_global_scale)], n_params, prior_bounds, segs, n_sims, num_iterations, steady)
         stable_params_arr = np.array(stable_params)
-        print(stable_params_arr)
         scaler = StandardScaler()
         stable_params_scaled = scaler.fit_transform(stable_params_arr)
         db = DBSCAN(eps=2.5, min_samples=50).fit(stable_params_scaled)
         labels = db.labels_
-        n_clusters = len(labels) - (1 if -1 in labels else 0)
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         if n_clusters < 1:
             print('No clusters found. Defaulting to 1 cluster')
             n_clusters = 1
 
         # do local sweep
-        accepted_params = np.array(self.__local_map(t, stable_params, local_batch_size, n_params, int(2e5), 0.05, segs, steady))
+        accepted_params = np.array(self.__local_map(t, stable_params, local_batch_size, n_params, n_max, step, segs, steady))
+
+        # safety check
+        if accepted_params.shape[0] < n_clusters:
+            raise ValueError(f"Not enough stable parameter sets ({accepted_params.shape[0]}) to fit {n_clusters} GMM components")
 
         # finally construct prior using Gaussian-Mixture Model'
         progress_bar = tqdm(total=5, desc="Constructing prior...")
@@ -80,7 +83,7 @@ class Prior:
         stable_params = []
 
         num_added = 0
-        added_params_progress_bar = tqdm(total=(num_iterations - 1), desc=f"Added {num_added} sets to accepted parameters", leave=False)
+        added_params_progress_bar = tqdm(total=(num_iterations - 1), desc=f"Added {num_added} sets to accepted parameters during global sweep", leave=False)
         for i in range(num_iterations - 1):
             curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
             sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
@@ -90,13 +93,13 @@ class Prior:
             if valid_params.shape[0] > 0:
                 num_added += valid_params.shape[0]
             added_params_progress_bar.update()
-            added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters")
+            added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters during global sweep")
             stable_params.extend(valid_params.detach().cpu().tolist())
         added_params_progress_bar.close()
         return stable_params
 
     @staticmethod
-    def __local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool) -> set:
+    def __local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool) -> list:
         # gpu variables
         dtype = torch.float32
         device = torch.device('cpu')
@@ -118,19 +121,23 @@ class Prior:
         force = torch.zeros((batch_size, t.shape[0]), dtype=dtype, device=device)
 
         # begin algorithm
-        progress_bar = tqdm(total=1, desc="Performing local sweep for prior construction...")
+        num_added = 0
+        added_params_progress_bar = tqdm(total=batch_size, desc=f"Added {num_added} sets to accepted parameters during local sweep. Total parameter sets: {len(accepted_params)}. Number of parameter sets to check: {len(queue)}", leave=False)
         while len(queue) != 0 and len(accepted_params) <= n_max:
             thetas = torch.tensor(queue.popleft(), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * step
             sim = simulator.Simulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
             x = sim.simulate()[0, 0, :, :] # shape: (batch_size, len(t))
             is_valid = torch.isfinite(x).all(dim=1)
-            for i in tqdm(range(batch_size), desc='Adding to accepted parameters...', leave=False):
+            for i in range(batch_size):
                 if is_valid[i]:
                     stable_point = tuple(thetas[i].tolist())
                     if not stable_point in accepted_params:
                         accepted_params.add(stable_point)
                         queue.append(stable_point)
-        progress_bar.update()
-        progress_bar.close()
+                        num_added += 1
+                added_params_progress_bar.update()
+            added_params_progress_bar.reset()
+            added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters during local sweep. Total parameter sets: {len(accepted_params)}. Number of parameter sets to check: {len(queue)}")
+        added_params_progress_bar.close()
 
-        return accepted_params
+        return list(accepted_params)
