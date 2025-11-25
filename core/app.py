@@ -159,5 +159,4 @@ def run():
     x = sim.simulate()[0, 0, :, :]  # shape: (BATCH_SIZE, len(t))
 
     stats = statistics.SummaryStatistics(x, dt)
-    print(stats.get_summary_statistics())
     # -------------------- END SUMMARY STATISTICS -------------------- #
