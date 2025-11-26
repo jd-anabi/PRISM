@@ -20,6 +20,25 @@ class SummaryStatistics:
         self.n = x.shape[1]
 
     # ----------------------- PRIVATE FUNCTIONS -----------------------
+    def __compute_stat_dist_features(self) -> torch.Tensor:
+        """
+        Computes the following statistical distribution features:
+            (1) Mean
+            (2) Variance
+            (3) Skewness
+            (4) Kurtosis
+            (5) Bimodality coefficient
+            (6-10) Quantiles (5%, 25%, 50%, 75%, 100%)
+        :return: statistical distribution features with shape: (batch_size, 10)
+        """
+        # first four moments
+        mean = torch.mean(self.x, dim=-1, keepdim=True)
+        var = torch.var(self.x, dim=-1, keepdim=True)
+        std = torch.sqrt(var)
+        z_score = (self.x - mean) / std
+        skew = torch.mean(torch.pow(z_score, 3), dim=-1, keepdim=True)
+        kurt = torch.mean(torch.pow(z_score, 4), dim=-1, keepdim=True)
+
     def __compute_spectral_stats(self, n_bands: int) -> torch.Tensor:
         """
         Computes the following spectral statistics:

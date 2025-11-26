@@ -6,7 +6,7 @@ SN_PATTERN = re.compile(r'[\s=]+([+-]?(?:0|[1-9]\d*)(?:\.\d*)?(?:[eE][+\-]?\d+)?
 PAR_PATTERN = re.compile(r'\((.*?)\)') # use pattern matching to extract value within parentheses
 UNIT_PATTERN = re.compile(r'[a-zA-Z]+') # use pattern matching to extract units
 
-def read_model_file(file: str) -> tuple[list[float], list[float], list[float], list[float], list[str]]:
+def read_model_file(file: str, invalid_lines: tuple = (0, 23, 24, 33, 34), section_line_breaks: tuple = (22, 32)) -> tuple[list[float], list[float], list[float], list[float], list[str]]:
     x0: list[float] = []
     params: list[float] = []
     rescale_params: list[float] = []
@@ -14,19 +14,18 @@ def read_model_file(file: str) -> tuple[list[float], list[float], list[float], l
     units: list[str] = []
 
     line = 0
-    invalid_lines = (0, 23, 24, 33, 34)
     with open(file, mode='r') as txtfile:
         for row in txtfile:
             if line not in invalid_lines:
                 # non-dimensional parameters
-                if line <= 22:
+                if line <= section_line_breaks[0]:
                     val = float(re.findall(SN_PATTERN, row.strip())[0])
                     if line <= 5:
                         x0.append(val)
                     else:
                         params.append(val)
                 # dimensional parameters
-                elif line <= 32:
+                elif line <= section_line_breaks[1]:
                     val = float(re.findall(SN_PATTERN, row.strip())[0])
                     curr_units = [unit for par in re.findall(PAR_PATTERN, row.strip()) for unit in
                                   re.findall(UNIT_PATTERN, par)]
