@@ -230,18 +230,18 @@ class SummaryStatistics:
             freq = np.diff(phase, axis=-1) / (2 * np.pi * self.dt) # 2 pi f = dphi / dt
 
             mean_amp = np.mean(amp, axis=-1, keepdims=True)
-            stats.append(mean_amp)
+            stats.append(torch.tensor(mean_amp, device=self.device, dtype=self.dtype))
             amp_var = np.var(amp, axis=-1, keepdims=True)
-            stats.append(amp_var)
+            stats.append(torch.tensor(amp_var, device=self.device, dtype=self.dtype))
             amp_cv = np.sqrt(amp_var) / np.clip(mean_amp, a_min=1e-9, a_max=None)
-            stats.append(amp_cv)
+            stats.append(torch.tensor(amp_cv, device=self.device, dtype=self.dtype))
 
             mean_freq = np.mean(freq, axis=-1, keepdims=True)
-            stats.append(mean_freq)
+            stats.append(torch.tensor(mean_freq, device=self.device, dtype=self.dtype))
             freq_var = np.mean(freq, axis=-1, keepdims=True)
-            stats.append(freq_var)
+            stats.append(torch.tensor(freq_var, device=self.device, dtype=self.dtype))
             freq_cv = np.sqrt(freq_var) / np.clip(mean_freq, a_min=1e-9, a_max=None)
-            stats.append(freq_cv)
+            stats.append(torch.tensor(freq_cv, device=self.device, dtype=self.dtype))
 
             # amplitude-frequency correlation
             amp_trimmed = amp[:, :-1] # need to trim amplitude array because freq array is shape (batch_size, n - 1)
@@ -251,10 +251,96 @@ class SummaryStatistics:
             num = np.sum(amp_centered * freq_centered, axis=-1, keepdims=True)
             den = np.sqrt(np.sum(amp_centered ** 2, axis=-1, keepdims=True) * np.sum(freq_centered ** 2, axis=-1, keepdims=True))
             af_corr = num / np.clip(den, a_min=1e-9, a_max=None)
-            stats.append(af_corr)
+            stats.append(torch.tensor(af_corr, device=self.device, dtype=self.dtype))
         except Exception:
             nan_tensor = torch.full((self.batch_size, 1), np.nan, device=self.device, dtype=self.dtype)
             for i in range(7):
                 stats.append(nan_tensor)
 
         return torch.cat(stats, dim=-1)
+
+    def __compute_nonlinear_stats(self, downsample_factor: int = 1000, order: int = 2, tolerance: float = None,
+                                  nperseg: int = 256, noverlap: int = 128, nfft: int = 512) -> torch.Tensor:
+        """
+        Computes the following nonlinear statistics:
+            (1) Time irreversibility
+            (2) Sample entropy
+            (3) Correlation dimensions
+            (4) Hurst exponent
+            (5) Mean bicoherence
+        :param downsample_factor: the downsampling factor
+        :param order: the order to use for the sample entropy calculation
+        :param tolerance: the tolerance to use for the sample entropy calculation
+        :param nperseg: the number of segments to use for bicoherence calculation
+        :param noverlap: the overlap value to use for bicoherence calculation
+        :param nfft: the FFT size to use for bicoherence calculation
+        :return: the nonlinear statistics with shape: (batch_size, 4)
+        """
+        stats = []
+
+        # time irreversibility
+        lagged_signal = self.x[:, 1:] - self.x[:, :-1]
+        second_moment = torch.mean(torch.pow(lagged_signal, 2), dim=-1)
+        third_moment = torch.mean(torch.pow(lagged_signal, 3), dim=-1)
+        t_irrev = third_moment / torch.clamp(torch.pow(second_moment, 1.5), min=1e-9)
+        stats.append(t_irrev.unsqueeze(-1))
+
+        # for the rest of the statistics, move to cpu for specific libraries
+        x_to_cpu = self.x.detach().cpu().numpy()
+        step = max(1, self.n // downsample_factor)
+        x_downsampled = np.ascontiguousarray(x_to_cpu[:, ::step]) # downsample for high time-complexity calculations
+
+        samp_en_stats = []
+        corr_dim_stats = []
+        hurst_stats = []
+        mean_bicoherence_stats = []
+        for i in range(self.batch_size):
+            x_curr = x_to_cpu[i]
+            x_curr_downsampled = x_downsampled[i]
+            if not np.all(np.isfinite(x_curr)):
+                samp_en_stats.append(np.nan)
+                corr_dim_stats.append(np.nan)
+                hurst_stats.append(np.nan)
+                mean_bicoherence_stats.append(np.nan)
+                continue
+
+            try:
+                # sample entropy
+                samp_en_stats.append(ap.sample_entropy(x_curr_downsampled, order=order, tolerance=tolerance))
+
+                # correlation dimension
+                corr_dim_stats.append(ap.higuchi_fd(x_curr_downsampled))
+
+                # hurst exponent
+                lags = range(2, 20)
+                vars = [np.std(np.subtract(x_curr_downsampled[lag:], x_curr_downsampled[:-lag])) for lag in lags]
+                reg = np.polyfit(np.log(lags), np.log(vars), 1)
+                hurst_stats.append(reg[0])
+
+                # bicoherence
+                freqs, _, coeff = signal.stft(x_curr, fs=(1 / self.dt), nperseg=nperseg, noverlap=noverlap, nfft=nfft)
+                coeff = coeff.T
+                coeff = coeff[:, np.newaxis, :]
+                coeff = np.ascontiguousarray(coeff)
+                try:
+                    bispectrum = Bispectrum(data=coeff, freqs=freqs, sampling_freq=(1 / self.dt))
+                    bispectrum.compute(indices=((0,), (0,)))
+                    data = bispectrum.results.get_results()
+                    abs_data = np.abs(data[0])
+                    mean_bicoherence_stats.append(np.mean(abs_data))
+                except Exception:
+                    mean_bicoherence_stats.append(float('nan'))
+            except Exception:
+                samp_en_stats.append(np.nan)
+                corr_dim_stats.append(np.nan)
+                hurst_stats.append(np.nan)
+                mean_bicoherence_stats.append(np.nan)
+
+        stats.append(torch.tensor(samp_en_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
+        stats.append(torch.tensor(corr_dim_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
+        stats.append(torch.tensor(hurst_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
+        stats.append(torch.tensor(mean_bicoherence_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
+
+        return torch.cat(stats, dim=-1)
+
+    def __compute_phase_space_stats(self):
