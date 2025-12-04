@@ -29,7 +29,7 @@ else:
     DEVICE = torch.device('cpu')
 
 DTYPE = torch.float64 if DEVICE.type == 'cuda' or DEVICE.type == 'cpu' else torch.float32
-BATCH_SIZE = 2**10 if DEVICE.type == 'cuda' else 2**6
+BATCH_SIZE = 2**10 if DEVICE.type == 'cuda' else 2**7
 
 # ensemble variables needed
 UNIQUE_FREQS = 2**6 # number of unique frequencies
@@ -159,4 +159,5 @@ def run():
     x = sim.simulate()[0, 0, :, :]  # shape: (BATCH_SIZE, len(t))
 
     stats = statistics.SummaryStatistics(x, dt)
+    print(stats.compute_statistics(20, 20 ,20))
     # -------------------- END SUMMARY STATISTICS -------------------- #
