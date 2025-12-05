@@ -9,14 +9,16 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 import pint
 import torch
 import numpy as np
+from matplotlib import pyplot as plt
+from tqdm import tqdm
 from sbi import utils
-from sbi.inference import NPE
+from sbi.inference import SNPE
 from sbi.analysis import pairplot
 from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import CNNEmbedding
 
 from .Helpers import helpers, model_helpers, visualizers, file_manager
-from .SBI import prior, statistics
+from .SBI import prior, statistics, embedded_network
 from .Simulator import simulator
 
 if torch.cuda.is_available():
@@ -148,16 +150,53 @@ def run():
     # -------------------- END PRIOR CONSTRUCTION -------------------- #
 
     # -------------------- BEGIN SUMMARY STATISTICS -------------------- #
-    thetas = prior_dist.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
     init_pos = np.random.randint(0, 10, size=(BATCH_SIZE, 2))
     init_probs = np.random.randint(0, 1, size=(BATCH_SIZE, 3))
     inits = helpers.concat(init_pos, init_probs)  # size: (BATCH_SIZE, 5)
     inits = torch.tensor(inits, dtype=DTYPE, device=DEVICE)
     force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE)
 
-    sim = simulator.Simulator(thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
-    x = sim.simulate()[0, 0, :, :]  # shape: (BATCH_SIZE, len(t))
-
-    stats = statistics.SummaryStatistics(x, dt)
-    print(stats.compute_statistics(20, 20 ,20))
+    num_runs = 50
+    all_stats = []
+    all_thetas = []
+    for _ in tqdm(range(num_runs), desc=f"Calculating summary statistics for {num_runs} runs", leave=False):
+        curr_thetas = prior_dist.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
+        sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
+        x_sims = sim.simulate()[0, 0, :, steady_id:]  # shape: (BATCH_SIZE, len(t))
+        stats = statistics.SummaryStatistics(x_sims, dt)
+        all_stats.append(stats.compute_statistics(n_bands=20, n_lags=20, pacf_lags=10))
+        all_thetas.append(curr_thetas)
+    summary_stats = torch.cat(all_stats, dim=0)
+    thetas = torch.cat(all_thetas, dim=0)
     # -------------------- END SUMMARY STATISTICS -------------------- #
+
+    # -------------------- BEGIN SNPE -------------------- #
+    # set up embedded network
+    input_dim = summary_stats.shape[1]
+    output_dim = input_dim // 4
+    layer_dims = (3 * input_dim // 2, input_dim // 2)
+    embedded_net = embedded_network.EmbeddedNet(input_dim, output_dim, layer_dims)
+
+    # set up snpe with embedded network
+    neural_posterior = posterior_nn(model='maf', embedding_net=embedded_net)
+    inference = SNPE(prior=prior_dist, density_estimator=neural_posterior)
+
+    # train the density estimator
+    density_estimator = inference.append_simulations(thetas, summary_stats).train()
+
+    # build the posterior
+    posterior = inference.build_posterior(density_estimator)
+
+    # visualize the posterior
+    cpu_device = torch.device('cpu')
+    cpu_dtype = torch.float32
+    obs_params = torch.tensor([value[0] for value in parameters_with_bounds.values()], dtype=cpu_dtype, device=cpu_device).unsqueeze(-1)
+    sim_obs = simulator.Simulator(obs_params, force[0:1].to(dtype=cpu_dtype, device=cpu_device), inits[0:1].to(dtype=cpu_dtype, device=cpu_device),
+                                t.to(dtype=cpu_dtype, device=cpu_device), segs=segs, batch_size=1, device=cpu_device)
+
+    # visualize and validate posterior
+    x_obs = sim_obs.simulate()[0, 0, :, n_steady:].to(dtype=DTYPE, device=DEVICE)
+    samples = posterior.sample((1000,), x=x_obs)
+    fig, ax = pairplot(samples, points=obs_params.squeeze(-1), labels=parameter_labels)
+    plt.show()
+    # -------------------- END SNPE -------------------- #

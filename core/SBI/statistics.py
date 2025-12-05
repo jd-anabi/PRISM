@@ -124,7 +124,10 @@ class SummaryStatistics:
         # preliminary fft calculations
         xf = torch.fft.rfft(self.x - torch.mean(self.x, dim=-1, keepdim=True), dim=-1)
         freqs = torch.fft.rfftfreq(self.n, d=self.dt, device=self.device)
-        psd = torch.abs(xf) ** 2 * self.dt / self.n
+
+
+        abs_xf = torch.clamp(torch.abs(xf), max=1e15)
+        psd = abs_xf ** 2 * self.dt / self.n
 
         # peak frequency
         peak_pwr, peak_idx = torch.max(psd, dim=-1)
@@ -192,7 +195,8 @@ class SummaryStatistics:
 
         # lagged acf
         xf = torch.fft.rfft(self.x - torch.mean(self.x, dim=-1, keepdim=True), n=2*self.n, dim=-1)
-        psd = torch.abs(xf) ** 2 * self.dt / self.n
+        abs_xf = torch.clamp(torch.abs(xf), max=1e15)
+        psd = abs_xf ** 2 * self.dt / self.n
         acf = torch.fft.irfft(psd, n=2*self.n, dim=-1)[:, :self.n]
         acf = acf / torch.clamp(acf[:, 0].unsqueeze(-1), min=1e-9)
         lag_idx = torch.tensor(helpers.get_even_ids(self.n, n_lags), device=self.device, dtype=torch.long)
@@ -225,6 +229,13 @@ class SummaryStatistics:
                 mi_stats.append(0.0)
                 continue
 
+            row_std = np.std(row)
+            if row_std < 1e-9 or row_std > 1e10:
+                pacf_stats.append(np.zeros(pacf_lags))
+                mi_stats.append(0.0)
+                continue
+
+            row = (row - np.mean(row)) / row_std
             # PACF calculation
             try:
                 pacf_vals = pacf(row, nlags=pacf_lags, method='yw')[1:pacf_lags+1] # ignore the zeroth element
@@ -289,8 +300,9 @@ class SummaryStatistics:
             amp_centered = amp_trimmed - np.mean(amp_trimmed, axis=-1, keepdims=True)
             freq_centered = freq - np.mean(freq, axis=-1, keepdims=True)
 
-            num = np.sum(amp_centered * freq_centered, axis=-1, keepdims=True)
-            den = np.sqrt(np.sum(amp_centered ** 2, axis=-1, keepdims=True) * np.sum(freq_centered ** 2, axis=-1, keepdims=True))
+            num = np.mean(amp_centered * freq_centered, axis=-1, keepdims=True)
+            den = np.std(amp_trimmed, axis=-1, keepdims=True) * np.std(freq, axis=-1, keepdims=True)
+            #den = np.sqrt(np.sum(amp_centered ** 2, axis=-1, keepdims=True) * np.sum(freq_centered ** 2, axis=-1, keepdims=True))
             af_corr = num / np.clip(den, a_min=1e-9, a_max=None)
             full_stats.append(torch.tensor(af_corr, device=self.device, dtype=self.dtype))
         except Exception:
@@ -411,7 +423,7 @@ class SummaryStatistics:
 
         for i in range(self.batch_size):
             x_curr = x_downsampled[i]
-            if not np.all(np.isfinite(x_curr)):
+            if np.max(np.abs(x_curr)) > 1e30 or not np.all(np.isfinite(x_curr)):
                 rr_stats.append(np.nan)
                 det_stats.append(np.nan)
                 lam_stats.append(np.nan)
@@ -549,7 +561,7 @@ class SummaryStatistics:
 
         for i in range(self.batch_size):
             curr = centered_to_cpu[i]
-            if not np.all(np.isfinite(curr)):
+            if np.max(np.abs(curr)) > 1e30 or not np.all(np.isfinite(curr)):
                 threshold_stats.append(np.nan)
                 mbd_stats.append(np.nan)
                 return_time_stats.append(np.nan)
