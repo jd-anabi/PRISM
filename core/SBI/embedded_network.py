@@ -21,7 +21,7 @@ class EmbeddedNet(nn.Module):
             nn.ReLU(),
 
             # Layer 3: second layer dim -> output dim
-            nn.Linear(layer_dims[2], output_dim)
+            nn.Linear(layer_dims[1], output_dim)
         )
 
     def forward(self, x):

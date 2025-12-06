@@ -156,16 +156,18 @@ def run():
     inits = torch.tensor(inits, dtype=DTYPE, device=DEVICE)
     force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE)
 
-    num_runs = 50
+    num_runs = 1
     all_stats = []
     all_thetas = []
-    for _ in tqdm(range(num_runs), desc=f"Calculating summary statistics for {num_runs} runs", leave=False):
-        curr_thetas = prior_dist.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
-        sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
-        x_sims = sim.simulate()[0, 0, :, steady_id:]  # shape: (BATCH_SIZE, len(t))
-        stats = statistics.SummaryStatistics(x_sims, dt)
-        all_stats.append(stats.compute_statistics(n_bands=20, n_lags=20, pacf_lags=10))
-        all_thetas.append(curr_thetas)
+    with torch.no_grad():
+        for _ in tqdm(range(num_runs), desc=f"Calculating summary statistics for {num_runs} runs", leave=False):
+            curr_thetas = prior_dist.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
+            sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
+            x_sims = sim.simulate()[0, 0, :, steady_id:]  # shape: (BATCH_SIZE, len(t))
+            stats = statistics.SummaryStatistics(x_sims, dt)
+            del x_sims
+            all_stats.append(stats.compute_statistics(n_bands=20, n_lags=20, pacf_lags=10))
+            all_thetas.append(curr_thetas)
     summary_stats = torch.cat(all_stats, dim=0)
     thetas = torch.cat(all_thetas, dim=0)
     # -------------------- END SUMMARY STATISTICS -------------------- #
@@ -182,7 +184,7 @@ def run():
     inference = SNPE(prior=prior_dist, density_estimator=neural_posterior)
 
     # train the density estimator
-    density_estimator = inference.append_simulations(thetas, summary_stats).train()
+    density_estimator = inference.append_simulations(thetas.to(dtype=torch.float32), summary_stats.to(dtype=torch.float32)).train()
 
     # build the posterior
     posterior = inference.build_posterior(density_estimator)
@@ -195,8 +197,8 @@ def run():
                                 t.to(dtype=cpu_dtype, device=cpu_device), segs=segs, batch_size=1, device=cpu_device)
 
     # visualize and validate posterior
-    x_obs = sim_obs.simulate()[0, 0, :, n_steady:].to(dtype=DTYPE, device=DEVICE)
-    samples = posterior.sample((1000,), x=x_obs)
+    x_obs = sim_obs.simulate()[0, 0, :, n_steady:].to(dtype=DTYPE, device=DEVICE).unsqueeze(0)
+    stats_obs = statistics.SummaryStatistics(x_obs, dt).compute_statistics(n_bands=20, n_lags=20, pacf_lags=10)
+    samples = posterior.sample((1000,), x=stats_obs)
     fig, ax = pairplot(samples, points=obs_params.squeeze(-1), labels=parameter_labels)
-    plt.show()
-    # -------------------- END SNPE -------------------- #
+    plt.show()    # -------------------- END SNPE -------------------- #

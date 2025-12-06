@@ -13,7 +13,7 @@ from ..Helpers import helpers
 
 class SummaryStatistics:
     def __init__(self, x: torch.Tensor, dt: float):
-        self.x = x
+        self.x = x.detach()
         self.dt = dt
         self.fs = 1 / dt
         self.batch_size = x.shape[0]
@@ -351,7 +351,7 @@ class SummaryStatistics:
         for i in range(self.batch_size):
             x_curr = x_to_cpu[i]
             x_curr_downsampled = x_downsampled[i]
-            if not np.all(np.isfinite(x_curr)):
+            if np.max(np.abs(x_curr)) > 1e30 or not np.all(np.isfinite(x_curr)):
                 samp_en_stats.append(np.nan)
                 corr_dim_stats.append(np.nan)
                 hurst_stats.append(np.nan)
@@ -500,7 +500,7 @@ class SummaryStatistics:
 
         for i in range(self.batch_size):
             x_curr = x_downsampled[i]
-            if not np.all(np.isfinite(x_curr)):
+            if np.max(np.abs(x_curr)) > 1e30 or not np.all(np.isfinite(x_curr)):
                 p_ent_stats.append(np.nan)
                 app_ent_stats.append(np.nan)
                 complex_ent_stats.append(np.nan)
