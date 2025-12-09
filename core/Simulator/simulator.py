@@ -26,7 +26,7 @@ class Simulator(torch.nn.Module):
         self.sde = None
         self.__set_up_model()
 
-    # ------------- PUBLIC METHODS ------------- #
+    # --- PUBLIC METHODS --- #
     def simulate(self) -> torch.Tensor:
         """
         Simulates the model with the given constructor parameters
@@ -50,7 +50,7 @@ class Simulator(torch.nn.Module):
         sol = sol.reshape(n_vars, self.freqs_per_batch, ensemble_size, self.t.shape[0])  # shape: (number of variables, frequencies per batch, ensemble size, length of time series)
         return sol
 
-    # -------------------- GETTERS AND SETTERS -------------------- #
+    # --- GETTERS AND SETTERS --- #
     @property
     def device(self):
         return self._device
@@ -96,7 +96,7 @@ class Simulator(torch.nn.Module):
         self._force = force
         self.__set_up_model()
 
-    # ----------------- PRIVATE METHODS ----------------- #
+    # --- PRIVATE METHODS --- #
     def __sols(self, t: torch.Tensor, inits: torch.Tensor, explicit: bool = True) -> torch.Tensor:
         """
         Returns sde solution for a hair bundle given a set of parameters and initial conditions

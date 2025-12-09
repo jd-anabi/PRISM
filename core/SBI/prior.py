@@ -16,7 +16,7 @@ class Prior:
         self.dtype = dtype
         self.device = device
 
-    # ------------------ PUBLIC METHODS ------------------
+    # --- PUBLIC METHODS --- #
     def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list[tuple],
                         t_global_scale: int = 100, num_iterations: int = 500, steady: bool = True, n_max: int = 200000, step: float = 0.05) -> torch.distributions.MixtureSameFamily:
         n_sims = global_batch_size * num_iterations
@@ -58,7 +58,7 @@ class Prior:
 
         return prior
 
-    # ------------------ PRIVATE METHODS ------------------
+    # --- PRIVATE METHODS --- #
     def __global_map(self, t: torch.Tensor, n_params: int, prior_bounds: list[tuple], segs: int, batch_size: int, num_iterations: int, steady: bool) -> list:
         t = t.to(dtype=self.dtype, device=self.device)
         if batch_size % num_iterations != 0:
@@ -100,7 +100,7 @@ class Prior:
 
     @staticmethod
     def __local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool) -> list:
-        # gpu variables
+        # cpu variables
         dtype = torch.float32
         device = torch.device('cpu')
         t = t.to(dtype=dtype, device=device)

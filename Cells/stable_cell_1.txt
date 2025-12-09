@@ -1,0 +1,38 @@
+# Non-dimensional Initial Conditions
+xhb_init = 0.2
+xa_init = 1
+pm_init = 0.5
+pgs_init = 0.5
+pt_init = 0.5
+
+# Non-dimensional Parameters
+tau_hb = 1 in (0.01, 100)
+tau_m = 1.4627616407992918 in (0, 1000)
+tau_gs = 1 in (0, 1000)
+tau_t = 0 in (0, 10)
+c_min = 1 in (0, 1)
+s_min = 1e-9 in (0, 1)
+s_max = 0.5 in (0, 1)
+ca2_m = 1 in (0, 10)
+ca2_gs = 1000 in (0, 1000)
+u_gs_max = 45.881898998783775 in (0, 1000)
+delta_e = 0.0700723220991952 in (0, 10)
+k_gs = 0.8652377030050995 in (0, 1)
+chi_hb = 1 in (0, 10)
+chi_a = 0.1557522727445657 in (0, 10)
+x_c = 1e-9 in (0, 100)
+eta_hb = 0.05 in (0.001, 0.05)
+eta_a = 0.05 in (0.001, 0.05)
+
+# Dimensional Parameters
+x_offset (nm) = 10
+x_scale (nm) = 1
+t_offset (ms) = 0
+t_scale (ms) = 1
+y_offset (nm) = 0
+y_scale (nm) = 1
+
+# Forcing Parameters
+amp (mg nm ms^-2) = 100e-6
+phase = 0
+offset (mg nm ms^-2) = 0

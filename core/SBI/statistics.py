@@ -21,7 +21,7 @@ class SummaryStatistics:
         self.device = x.device
         self.dtype = x.dtype
 
-    # ----------------------- PUBLIC FUNCTIONS -----------------------
+    # --- PUBLIC FUNCTIONS --- #
     def compute_statistics(self, n_bands: int, n_lags: int, pacf_lags: int) -> torch.Tensor:
         """
         Compute all summary statistics
@@ -58,7 +58,7 @@ class SummaryStatistics:
 
         return all_stats
 
-    # ----------------------- PRIVATE FUNCTIONS -----------------------
+    # --- PRIVATE FUNCTIONS --- #
     def __compute_stat_dist_features(self) -> torch.Tensor:
         """
         Computes the following statistical distribution features:

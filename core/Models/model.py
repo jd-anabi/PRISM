@@ -1,16 +1,12 @@
-from typing import Union
-
-import numpy as np
 import torch
 
-class HairBundleSDE(torch.nn.Module):
+class HairBundleSDE:
     def __init__(self, tau_hb: torch.Tensor, tau_m: torch.Tensor, tau_gs: torch.Tensor, tau_t: torch.Tensor,
                  c_min: torch.Tensor, s_min: torch.Tensor, s_max: torch.Tensor, ca2_m: torch.Tensor,
                  ca2_gs: torch.Tensor, u_gs_max: torch.Tensor, delta_e: torch.Tensor, k_gs_ratio: torch.Tensor,
                  chi_hb: torch.Tensor, chi_a: torch.Tensor, x_c: torch.Tensor, eta_hb: torch.Tensor,
                  eta_a: torch.Tensor, force: torch.Tensor, batch_size: int, device: torch.device = torch.device('cpu'),
                  dtype: torch.dtype = torch.float32):
-        super().__init__()
         # sde model parameters
         self.batch_size = batch_size
         self.device = device
@@ -62,7 +58,7 @@ class HairBundleSDE(torch.nn.Module):
         dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
         return torch.diag_embed(dsigma)
 
-    # -------------------------------- PDEs (begin) ----------------------------------
+    # --- SDEs --- #
     def __x_hb_dot(self, x_hb, x_a, p_gs, p_t) -> torch.Tensor:
         x_gs = self.chi_hb * x_hb - self.chi_a * x_a + self.x_c
         k_gs = 1 - p_gs * self.k_gs_offset
@@ -89,8 +85,8 @@ class HairBundleSDE(torch.nn.Module):
         arg = -1 * self.u_gs_max * k_gs * (x_gs - 0.5)
         p_t0 = 1 / (1 + self.E_exp * torch.exp(arg))
         return (p_t0 - p_t) / self.tau_t
-    # -------------------------------- PDEs (end) ----------------------------------
-    # noise
+
+    # --- NOISE --- #
     def __hb_noise(self) -> torch.Tensor:
         return self.eta_hb / self.tau_hb
 
