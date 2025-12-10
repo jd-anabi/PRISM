@@ -18,7 +18,7 @@ class Prior:
 
     # --- PUBLIC METHODS --- #
     def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list[tuple],
-                        t_global_scale: int = 100, num_iterations: int = 500, steady: bool = True, n_max: int = 200000, step: float = 0.05) -> torch.distributions.MixtureSameFamily:
+                        t_global_scale: int = 1, num_iterations: int = 25, steady: bool = True, n_max: int = 200000, step: float = 0.01) -> torch.distributions.MixtureSameFamily:
         n_sims = global_batch_size * num_iterations
 
         # do global sweep and find number of "islands"
@@ -84,17 +84,19 @@ class Prior:
 
         num_added = 0
         added_params_progress_bar = tqdm(total=(num_iterations - 1), desc=f"Added {num_added} sets to accepted parameters during global sweep", leave=False)
-        for i in range(num_iterations - 1):
-            curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
-            sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
-            x = sim.simulate()[0, 0, :, :] # shape: (curr_batch_size, len(t))
-            is_valid = torch.isfinite(x).all(dim=1)
-            valid_params = curr_thetas[is_valid]
-            if valid_params.shape[0] > 0:
-                num_added += valid_params.shape[0]
-            added_params_progress_bar.update()
-            added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters during global sweep")
-            stable_params.extend(valid_params.detach().cpu().tolist())
+        with torch.no_grad():
+            for i in range(num_iterations - 1):
+                curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
+                sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
+                x = sim.simulate()[0, 0, :, :] # shape: (curr_batch_size, len(t))
+                is_valid = torch.isfinite(x).all(dim=1)
+                valid_params = curr_thetas[is_valid]
+                if valid_params.shape[0] > 0:
+                    num_added += valid_params.shape[0]
+                added_params_progress_bar.update()
+                added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters during global sweep")
+                del x
+                stable_params.extend(valid_params.detach().cpu().tolist())
         added_params_progress_bar.close()
         return stable_params
 
@@ -123,21 +125,23 @@ class Prior:
         # begin algorithm
         num_added = 0
         added_params_progress_bar = tqdm(total=batch_size, desc=f"Added {num_added} sets to accepted parameters during local sweep. Total parameter sets: {len(accepted_params)}. Number of parameter sets to check: {len(queue)}", leave=False)
-        while len(queue) != 0 and len(accepted_params) <= n_max:
-            thetas = torch.tensor(queue.popleft(), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * step
-            sim = simulator.Simulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
-            x = sim.simulate()[0, 0, :, :] # shape: (batch_size, len(t))
-            is_valid = torch.isfinite(x).all(dim=1)
-            for i in range(batch_size):
-                if is_valid[i]:
-                    stable_point = tuple(thetas[i].tolist())
-                    if not stable_point in accepted_params:
-                        accepted_params.add(stable_point)
-                        queue.append(stable_point)
-                        num_added += 1
-                added_params_progress_bar.update()
-            added_params_progress_bar.reset()
-            added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters during local sweep. Total parameter sets: {len(accepted_params)}. Number of parameter sets to check: {len(queue)}")
+        with torch.no_grad():
+            while len(queue) != 0 and len(accepted_params) <= n_max:
+                thetas = torch.tensor(queue.popleft(), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * step
+                sim = simulator.Simulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
+                x = sim.simulate()[0, 0, :, :] # shape: (batch_size, len(t))
+                is_valid = torch.isfinite(x).all(dim=1)
+                for i in range(batch_size):
+                    if is_valid[i]:
+                        stable_point = tuple(thetas[i].tolist())
+                        if not stable_point in accepted_params:
+                            accepted_params.add(stable_point)
+                            queue.append(stable_point)
+                            num_added += 1
+                    added_params_progress_bar.update()
+                added_params_progress_bar.reset()
+                added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters during local sweep. Total parameter sets: {len(accepted_params)}. Number of parameter sets to check: {len(queue)}")
+                del x
         added_params_progress_bar.close()
 
         return list(accepted_params)

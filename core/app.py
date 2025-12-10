@@ -113,7 +113,7 @@ def run():
             prior_bounds.append(bounds[1])
         prior_dist = prior.Prior(DTYPE, DEVICE)
         with torch.no_grad():
-            prior_dist = prior_dist.construct_prior(t_nd, 17, 2 * BATCH_SIZE, 2 * BATCH_SIZE, segs, prior_bounds, t_global_scale=1, num_iterations=25)
+            prior_dist = prior_dist.construct_prior(t_nd, 17, 2 * BATCH_SIZE, BATCH_SIZE // 2, segs, prior_bounds, t_global_scale=1, num_iterations=50)
         file_manager.save_mix_dist(prior_dist, "mixed_prior_dist.pt")
     corner_plot_path = os.getcwd() + '\\Priors\\mixed_prior_dist.png' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.png'
     parameter_labels = [r'$\tau_{hb}$', r'$\tau_m$', r'$\tau_{gs}$', r'$\tau_t$',
