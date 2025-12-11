@@ -25,6 +25,7 @@ class Prior:
         stable_params = self.__global_map(t[:(t.shape[0] // t_global_scale)], n_params, prior_bounds, segs, n_sims, num_iterations, steady)
         stable_params_arr = np.array(stable_params)
         scaler = StandardScaler()
+
         stable_params_scaled = scaler.fit_transform(stable_params_arr)
         db = DBSCAN(eps=2.5, min_samples=50).fit(stable_params_scaled)
         labels = db.labels_
@@ -98,7 +99,7 @@ class Prior:
                 del x
                 stable_params.extend(valid_params.detach().cpu().tolist())
         added_params_progress_bar.close()
-        return stable_params
+        return list(set(stable_params))
 
     @staticmethod
     def __local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool) -> list:
