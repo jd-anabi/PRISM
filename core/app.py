@@ -113,8 +113,9 @@ def run():
             prior_bounds.append(bounds[1])
         prior_dist = prior.Prior(DTYPE, DEVICE)
         with torch.no_grad():
-            prior_dist = prior_dist.construct_prior(t_nd, 17, 2 * BATCH_SIZE, BATCH_SIZE // 8, math.ceil(segs / 2), prior_bounds, t_global_scale=2, num_iterations=75)
-        file_manager.save_mix_dist(prior_dist, "mixed_prior_dist.pt")
+            prior_dist = prior_dist.construct_prior(t_nd, 17, 2 * BATCH_SIZE, BATCH_SIZE // 4, math.ceil(segs / 2), prior_bounds, t_global_scale=2, num_iterations=300, n_max=175000)
+        prior_file_path = os.getcwd() + '\\Priors\\mixed_prior_dist.pt' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.pt'
+        file_manager.save_mix_dist(prior_dist, prior_file_path)
     corner_plot_path = os.getcwd() + '\\Priors\\mixed_prior_dist.png' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.png'
     parameter_labels = [r'$\tau_{hb}$', r'$\tau_m$', r'$\tau_{gs}$', r'$\tau_t$',
                         r'$C_{min}$', r'$S_{min}$', r'$S_{max}$', r'$Ca^2_m$', r'$Ca^2_{gs}$',
@@ -129,17 +130,18 @@ def run():
     inits = torch.tensor(inits, dtype=DTYPE, device=DEVICE)
     force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE)
 
-    num_runs = 1
+    num_runs = 2
     all_stats = []
     all_thetas = []
     with torch.no_grad():
         for _ in tqdm(range(num_runs), desc=f"Calculating summary statistics for {num_runs} runs", leave=False):
             curr_thetas = prior_dist.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
             sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
-            x_sims = sim.simulate()[0, 0, :, steady_id:]  # shape: (BATCH_SIZE, len(t))
+            x_sims = sim.simulate()[0, 0, :, steady_id:] # shape: (BATCH_SIZE, len(t))
             stats = statistics.SummaryStatistics(x_sims, dt)
             del x_sims
-            all_stats.append(stats.compute_statistics(n_bands=20, n_lags=20, pacf_lags=10))
+            all_stats.append(stats.compute_statistics(n_bands=10, n_lags=10, pacf_lags=5, downsamples=(2000, 2000, 2000, 2000)))
+            del stats
             all_thetas.append(curr_thetas)
     summary_stats = torch.cat(all_stats, dim=0)
     thetas = torch.cat(all_thetas, dim=0)
@@ -153,7 +155,7 @@ def run():
 
     # set up snpe with embedded network
     neural_posterior = posterior_nn(model='maf', embedding_net=embedded_net)
-    inference = SNPE(prior=prior_dist, density_estimator=neural_posterior)
+    inference = SNPE(prior=prior_dist, density_estimator=neural_posterior, device=str(DEVICE))
 
     # train the density estimator
     density_estimator = inference.append_simulations(thetas.to(dtype=torch.float32), summary_stats.to(dtype=torch.float32)).train()
@@ -171,6 +173,7 @@ def run():
     # visualize and validate posterior
     x_obs = sim_obs.simulate()[0, 0, :, n_steady:].to(dtype=DTYPE, device=DEVICE).unsqueeze(0)
     stats_obs = statistics.SummaryStatistics(x_obs, dt).compute_statistics(n_bands=20, n_lags=20, pacf_lags=10)
+    del x_obs
     samples = posterior.sample((1000,), x=stats_obs)
     fig, ax = pairplot(samples, points=obs_params.squeeze(-1), labels=parameter_labels)
     plt.show()

@@ -22,39 +22,41 @@ class SummaryStatistics:
         self.dtype = x.dtype
 
     # --- PUBLIC FUNCTIONS --- #
-    def compute_statistics(self, n_bands: int, n_lags: int, pacf_lags: int) -> torch.Tensor:
+    def compute_statistics(self, n_bands: int, n_lags: int, pacf_lags: int, downsamples: tuple = (1000, 1000, 1000, 1000)) -> torch.Tensor:
         """
         Compute all summary statistics
         :param n_bands: number of frequency bands
         :param n_lags: number of lags
         :param pacf_lags: number of lags for PACF calculation
+        :param downsamples: downsampling factors for temporal, nonlinear, phase space, and information theoretic statistics
         :return: set of summary statistics with shape: (batch_size, 42 + n_bands + n_lags + pacf_lags)
         """
-        progress_bar = tqdm(total=9, desc="Getting summary statistics", leave=False)
-        dist_stats = self.__compute_stat_dist_features()
-        progress_bar.update()
-        spectral_stats = self.__compute_spectral_stats(n_bands)
-        progress_bar.update()
-        temporal_stats = self.__compute_temporal_stats(n_lags, pacf_lags)
-        progress_bar.update()
-        analytic_signal_stats = self.__compute_analytic_signal_stats()
-        progress_bar.update()
-        nonlinear_stats = self.__compute_nonlinear_stats()
-        progress_bar.update()
-        phase_space_stats = self.__compute_phase_space_stats()
-        progress_bar.update()
-        info_theoretic_stats = self.__compute_info_theoretic_stats()
-        progress_bar.update()
-        extreme_events_stats = self.__compute_extreme_events_stats()
-        progress_bar.update()
+        with torch.no_grad():
+            progress_bar = tqdm(total=9, desc="Getting summary statistics", leave=False)
+            dist_stats = self.__compute_stat_dist_features()
+            progress_bar.update()
+            spectral_stats = self.__compute_spectral_stats(n_bands)
+            progress_bar.update()
+            temporal_stats = self.__compute_temporal_stats(n_lags, pacf_lags, downsample_factor=downsamples[0])
+            progress_bar.update()
+            analytic_signal_stats = self.__compute_analytic_signal_stats()
+            progress_bar.update()
+            nonlinear_stats = self.__compute_nonlinear_stats(downsample_factor=downsamples[1])
+            progress_bar.update()
+            phase_space_stats = self.__compute_phase_space_stats(downsample_factor=downsamples[2])
+            progress_bar.update()
+            info_theoretic_stats = self.__compute_info_theoretic_stats(downsample_factor=downsamples[3])
+            progress_bar.update()
+            extreme_events_stats = self.__compute_extreme_events_stats()
+            progress_bar.update()
 
-        all_stats = torch.cat([dist_stats, spectral_stats, temporal_stats, analytic_signal_stats, nonlinear_stats,
-                               phase_space_stats, info_theoretic_stats, extreme_events_stats], dim=-1)
-        progress_bar.update()
+            all_stats = torch.cat([dist_stats, spectral_stats, temporal_stats, analytic_signal_stats, nonlinear_stats,
+                                   phase_space_stats, info_theoretic_stats, extreme_events_stats], dim=-1)
+            progress_bar.update()
 
-        # NaN check
-        all_stats = torch.nan_to_num(all_stats, nan=0.0)
-        progress_bar.close()
+            # NaN check
+            all_stats = torch.nan_to_num(all_stats, nan=0.0)
+            progress_bar.close()
 
         return all_stats
 
@@ -70,7 +72,7 @@ class SummaryStatistics:
             (6-10) Quantiles (5%, 25%, 50%, 75%, 95%)
             (11) Median
             (12) Median Absolute Deviation (MAD)
-        :return: statistical distribution features with shape: (batch_size, 10)
+        :return: statistical distribution features with shape: (batch_size, 12)
         """
         # statistical distribution features
         full_stats = []

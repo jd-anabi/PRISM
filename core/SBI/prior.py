@@ -99,7 +99,7 @@ class Prior:
                 del x
                 stable_params.extend(valid_params.detach().cpu().tolist())
         added_params_progress_bar.close()
-        return list(set(stable_params))
+        return stable_params
 
     @staticmethod
     def __local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool) -> list:
