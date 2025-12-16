@@ -107,7 +107,7 @@ def run():
     # --- PRIOR CONSTRUCTION --- #
     prior_path = os.getcwd() + '\\Resources\\Priors\\mixed_prior_dist.pt' if sys.platform == 'win32' else os.getcwd() + '/Resources/Priors/mixed_prior_dist.pt'
     try:
-        prior_dist = file_manager.load_mix_dist(prior_path)
+        prior_dist = file_manager.load_mix_dist(prior_path, device=DEVICE)
     except FileNotFoundError as e:
         print(f"Error: {e}. Going to construct prior from scratch.")
         time.sleep(5)
@@ -117,7 +117,7 @@ def run():
             prior_bounds.append(bounds[1])
         prior_dist = bp_prior.BpPrior(DTYPE, DEVICE)
         with torch.no_grad():
-            prior_dist = prior_dist.construct_prior(t_nd, 17, 2 * BATCH_SIZE, BATCH_SIZE // 4, math.ceil(segs / 2), prior_bounds, t_global_scale=2, num_iterations=300, n_max=175000)
+            prior_dist = prior_dist.construct_prior(t_nd, 17, BATCH_SIZE, BATCH_SIZE // (2**6), math.ceil(segs / 2), prior_bounds, t_global_scale=2, num_iterations=300, n_max=175000)
         file_manager.save_mix_dist(prior_dist, prior_path)
     corner_plot_path = os.getcwd() + '\\Resources\\Priors\\mixed_prior_dist.png' if sys.platform == 'win32' else os.getcwd() + '/Resources/Priors/mixed_prior_dist.png'
     parameter_labels = [r'$\tau_{hb}$', r'$\tau_m$', r'$\tau_{gs}$', r'$\tau_t$',
@@ -133,7 +133,7 @@ def run():
     inits = torch.tensor(inits, dtype=DTYPE, device=DEVICE)
     force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE)
 
-    num_runs = 2
+    num_runs = 1
     all_stats = []
     all_thetas = []
     with torch.no_grad():
@@ -148,7 +148,8 @@ def run():
             all_thetas.append(curr_thetas)
     summary_stats = torch.cat(all_stats, dim=0)
     thetas = torch.cat(all_thetas, dim=0)
-
+    print(summary_stats.shape)
+    print(thetas.shape)
     # --- SNPE --- #
     # set up embedded network
     input_dim = summary_stats.shape[1]
@@ -161,7 +162,7 @@ def run():
     inference = SNPE(prior=prior_dist, density_estimator=neural_posterior, device=str(DEVICE))
 
     # train the density estimator
-    density_estimator = inference.append_simulations(thetas.to(dtype=torch.float32), summary_stats.to(dtype=torch.float32)).train()
+    density_estimator = inference.append_simulations(thetas, summary_stats).train()
 
     # build the posterior
     posterior = inference.build_posterior(density_estimator)
