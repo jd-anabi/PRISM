@@ -1,14 +1,14 @@
 import torch
 from tqdm import tqdm
+from abc import ABC, abstractmethod
 
 from core.Helpers import helpers
-from core.Models import model, steady_model
+from core.Models import bp_model_steady
 from core.Solvers import sdeint
 
-class Simulator(torch.nn.Module):
+class Simulator(ABC):
     def __init__(self, params: torch.Tensor, force: torch.Tensor, inits: torch.Tensor, t: torch.Tensor,
                  freqs_per_batch: int = 1, segs: int = 1, batch_size: int = 1, device: torch.device = torch.device('cpu')):
-        super().__init__()
         # device initialization
         self._device = device
         self._dtype = inits.dtype
@@ -23,8 +23,7 @@ class Simulator(torch.nn.Module):
         self.segs = segs
 
         # check if we are using the steady-state solution (all zeros for the 4th parameter)
-        self.sde = None
-        self.__set_up_model()
+        self._set_up_model()
 
     # --- PUBLIC METHODS --- #
     def simulate(self) -> torch.Tensor:
@@ -35,7 +34,7 @@ class Simulator(torch.nn.Module):
         ensemble_size = self._batch_size // self.freqs_per_batch
         time_seg_ids = helpers.get_even_ids(self.t.shape[0], self.segs + 1)
 
-        n_vars = self.inits.shape[-1] if isinstance(self.sde, steady_model.HairBundleSDE) else self.inits.shape[-1] - 1
+        n_vars = self.inits.shape[-1] if isinstance(self.sde, bp_model_steady.BpModelSteady) else self.inits.shape[-1] - 1
         curr_inits = self.inits
         sol = torch.zeros((n_vars, self._batch_size, self.t.shape[0]), dtype=self.t.dtype, device=self.t.device)
         for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments", leave=False):
@@ -58,7 +57,7 @@ class Simulator(torch.nn.Module):
     @device.setter
     def device(self, device: torch.device):
         self._device = device
-        self.__set_up_model()
+        self._set_up_model()
 
     @property
     def dtype(self):
@@ -67,7 +66,7 @@ class Simulator(torch.nn.Module):
     @dtype.setter
     def dtype(self, dtype: torch.dtype):
         self._dtype = dtype
-        self.__set_up_model()
+        self._set_up_model()
 
     @property
     def batch_size(self):
@@ -76,7 +75,7 @@ class Simulator(torch.nn.Module):
     @batch_size.setter
     def batch_size(self, batch_size: int):
         self._batch_size = batch_size
-        self.__set_up_model()
+        self._set_up_model()
 
     @property
     def params(self):
@@ -85,7 +84,7 @@ class Simulator(torch.nn.Module):
     @params.setter
     def params(self, params: torch.Tensor):
         self._params = params
-        self.__set_up_model()
+        self._set_up_model()
 
     @property
     def force(self):
@@ -94,7 +93,7 @@ class Simulator(torch.nn.Module):
     @force.setter
     def force(self, force: torch.Tensor):
         self._force = force
-        self.__set_up_model()
+        self._set_up_model()
 
     # --- PRIVATE METHODS --- #
     def __sols(self, t: torch.Tensor, inits: torch.Tensor, explicit: bool = True) -> torch.Tensor:
@@ -122,16 +121,6 @@ class Simulator(torch.nn.Module):
                 exit()
         return sol
 
-    def __set_up_model(self):
-        try:
-            if self._params.shape[-1] != 17:
-                self.inits = self.inits[:, :4]
-                self.sde = steady_model.HairBundleSDE(*torch.unbind(self._params, dim=1), self._force, batch_size=self._batch_size, device=self._device, dtype=self._dtype)
-            else:
-                if torch.all(self._params[:, 3]):
-                    self.sde = model.HairBundleSDE(*torch.unbind(self._params, dim=1), self._force, batch_size=self._batch_size, device=self._device, dtype=self._dtype)
-                else:
-                    raise ValueError("Can't not mix and match steady and non-steady models; finite time constant in the parameter batch must all be zero or all non-zero")
-        except (Warning, Exception) as e:
-            print(f"{e}")
-            exit()
+    @abstractmethod
+    def _set_up_model(self):
+        self.sde = None

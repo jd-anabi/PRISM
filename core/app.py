@@ -2,7 +2,6 @@ import os
 import sys
 import math
 import time
-from typing import Dict
 
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
@@ -18,8 +17,8 @@ from sbi.neural_nets import posterior_nn
 from sbi.neural_nets.embedding_nets import CNNEmbedding
 
 from .Helpers import helpers, model_helpers, visualizers, file_manager
-from .SBI import prior, statistics, embedded_network
-from .Simulator import simulator
+from .SBI import bp_prior, statistics, embedded_network
+from .Simulator import bp_simulator
 
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda')
@@ -30,8 +29,13 @@ elif torch.backends.mps.is_available():
 else:
     DEVICE = torch.device('cpu')
 
-DTYPE = torch.float64 if DEVICE.type == 'cuda' or DEVICE.type == 'cpu' else torch.float32
-BATCH_SIZE = 2**10 if DEVICE.type == 'cuda' else 2**7
+DTYPE = torch.float32 if DEVICE.type == 'cuda' or DEVICE.type == 'cpu' else torch.float32
+if DEVICE.type == 'cuda' and DTYPE == torch.float32:
+    BATCH_SIZE = 2**12
+elif DEVICE.type == 'cuda' and DTYPE == torch.float64:
+    BATCH_SIZE = 2**10
+else:
+    BATCH_SIZE = 2**6
 
 # ensemble variables needed
 UNIQUE_FREQS = 2**6 # number of unique frequencies
@@ -45,14 +49,14 @@ def run():
     # --- SETUP --- #
     # construct OS dependent directory for model parameters directory
     if sys.platform == 'win32':
-        model_params_dir = '\\Cells\\'
+        model_params_dir = '\\Resources\\Cells\\'
     else:
-        model_params_dir = '/Cells/'
+        model_params_dir = '/Resources/Cells/'
 
     # list files in directory
     model_files = ['']
     file_num = 1
-    direct = os.getcwd() + '\\Cells' if sys.platform == 'win32' else os.getcwd() + '/Cells'
+    direct = os.getcwd() + '\\Resources\\Cells' if sys.platform == 'win32' else os.getcwd() + '/Resources/Cells'
     for root, dirs, files in os.walk(direct):
         level = root.replace(direct, '').count(os.sep)
         indent = ' ' * 2 * level
@@ -101,7 +105,7 @@ def run():
     pos_freqs = torch.fft.rfftfreq(n_steady, dt)
 
     # --- PRIOR CONSTRUCTION --- #
-    prior_path = os.getcwd() + '\\Priors\\mixed_prior_dist.pt' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.pt'
+    prior_path = os.getcwd() + '\\Resources\\Priors\\mixed_prior_dist.pt' if sys.platform == 'win32' else os.getcwd() + '/Resources/Priors/mixed_prior_dist.pt'
     try:
         prior_dist = file_manager.load_mix_dist(prior_path)
     except FileNotFoundError as e:
@@ -111,12 +115,11 @@ def run():
         prior_bounds = []
         for bounds in params.values():
             prior_bounds.append(bounds[1])
-        prior_dist = prior.Prior(DTYPE, DEVICE)
+        prior_dist = bp_prior.BpPrior(DTYPE, DEVICE)
         with torch.no_grad():
             prior_dist = prior_dist.construct_prior(t_nd, 17, 2 * BATCH_SIZE, BATCH_SIZE // 4, math.ceil(segs / 2), prior_bounds, t_global_scale=2, num_iterations=300, n_max=175000)
-        prior_file_path = os.getcwd() + '\\Priors\\mixed_prior_dist.pt' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.pt'
-        file_manager.save_mix_dist(prior_dist, prior_file_path)
-    corner_plot_path = os.getcwd() + '\\Priors\\mixed_prior_dist.png' if sys.platform == 'win32' else os.getcwd() + '/Priors/mixed_prior_dist.png'
+        file_manager.save_mix_dist(prior_dist, prior_path)
+    corner_plot_path = os.getcwd() + '\\Resources\\Priors\\mixed_prior_dist.png' if sys.platform == 'win32' else os.getcwd() + '/Resources/Priors/mixed_prior_dist.png'
     parameter_labels = [r'$\tau_{hb}$', r'$\tau_m$', r'$\tau_{gs}$', r'$\tau_t$',
                         r'$C_{min}$', r'$S_{min}$', r'$S_{max}$', r'$Ca^2_m$', r'$Ca^2_{gs}$',
                         r'$U_{gs,\ max}$', r'$\Delta E$', r'$k_{gs, \text{ ratio}}$',
@@ -136,7 +139,7 @@ def run():
     with torch.no_grad():
         for _ in tqdm(range(num_runs), desc=f"Calculating summary statistics for {num_runs} runs", leave=False):
             curr_thetas = prior_dist.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
-            sim = simulator.Simulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
+            sim = bp_simulator.BpSimulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
             x_sims = sim.simulate()[0, 0, :, steady_id:] # shape: (BATCH_SIZE, len(t))
             stats = statistics.SummaryStatistics(x_sims, dt)
             del x_sims
@@ -167,7 +170,7 @@ def run():
     cpu_device = torch.device('cpu')
     cpu_dtype = torch.float32
     obs_params = torch.tensor([value[0] for value in params.values()], dtype=cpu_dtype, device=cpu_device).unsqueeze(-1)
-    sim_obs = simulator.Simulator(obs_params, force[0:1].to(dtype=cpu_dtype, device=cpu_device), inits[0:1].to(dtype=cpu_dtype, device=cpu_device),
+    sim_obs = bp_simulator.BpSimulator(obs_params, force[0:1].to(dtype=cpu_dtype, device=cpu_device), inits[0:1].to(dtype=cpu_dtype, device=cpu_device),
                                 t.to(dtype=cpu_dtype, device=cpu_device), segs=segs, batch_size=1, device=cpu_device)
 
     # visualize and validate posterior

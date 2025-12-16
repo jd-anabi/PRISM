@@ -1,6 +1,6 @@
 import torch
 
-class HairBundleSDE:
+class BpModel:
     def __init__(self, tau_hb: torch.Tensor, tau_m: torch.Tensor, tau_gs: torch.Tensor, tau_t: torch.Tensor,
                  c_min: torch.Tensor, s_min: torch.Tensor, s_max: torch.Tensor, ca2_m: torch.Tensor,
                  ca2_gs: torch.Tensor, u_gs_max: torch.Tensor, delta_e: torch.Tensor, k_gs_ratio: torch.Tensor,
@@ -42,30 +42,30 @@ class HairBundleSDE:
         self.E_exp = torch.exp(self.u_gs_max * self.delta_e)
 
     def f(self, x, t) -> torch.Tensor:
-        dx_hb = self.__x_hb_dot(x[:, 0], x[:, 1], x[:, 3], x[:, 4])
-        dx_a = self.__x_a_dot(x[:, 0], x[:, 1], x[:, 2], x[:, 3], x[:, 4])
-        dp_m = self.__p_m_dot(x[:, 2], x[:, 4])
-        dp_gs = self.__p_gs_dot(x[:, 3], x[:, 4])
+        dx_hb = self._x_hb_dot(x[:, 0], x[:, 1], x[:, 3], x[:, 4])
+        dx_a = self._x_a_dot(x[:, 0], x[:, 1], x[:, 2], x[:, 3], x[:, 4])
+        dp_m = self._p_m_dot(x[:, 2], x[:, 4])
+        dp_gs = self._p_gs_dot(x[:, 3], x[:, 4])
         dp_t = self.__p_t_dot(x[:, 0], x[:, 1], x[:, 3], x[:, 4])
         dx_hb = dx_hb + self.force[:, t] / self.tau_hb
         dx = torch.stack((dx_hb, dx_a, dp_m, dp_gs, dp_t), dim=1)
         return dx
 
     def g(self) -> torch.Tensor:
-        hb_noise = self.__hb_noise()
-        a_noise = self.__a_noise()
+        hb_noise = self._hb_noise()
+        a_noise = self._a_noise()
         dsigma = torch.stack((hb_noise, a_noise, torch.zeros_like(hb_noise), torch.zeros_like(hb_noise), torch.zeros(hb_noise)), dim=0)
         dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
         return torch.diag_embed(dsigma)
 
     # --- SDEs --- #
-    def __x_hb_dot(self, x_hb, x_a, p_gs, p_t) -> torch.Tensor:
+    def _x_hb_dot(self, x_hb, x_a, p_gs, p_t) -> torch.Tensor:
         x_gs = self.chi_hb * x_hb - self.chi_a * x_a + self.x_c
         k_gs = 1 - p_gs * self.k_gs_offset
         f_gs = k_gs * (x_gs - p_t)
         return -1 * (f_gs + x_hb) / self.tau_hb
 
-    def __x_a_dot(self, x_hb, x_a, p_m, p_gs, p_t) -> torch.Tensor:
+    def _x_a_dot(self, x_hb, x_a, p_m, p_gs, p_t) -> torch.Tensor:
         c = 1 - p_m * self.c_offset
         s = self.s_min + p_m * self.s_offset
         x_gs = self.chi_hb * x_hb - self.chi_a * x_a + self.x_c
@@ -73,10 +73,10 @@ class HairBundleSDE:
         f_gs = k_gs * (x_gs - p_t)
         return self.s_max * s * (f_gs - x_a) - self.c_max * c
 
-    def __p_m_dot(self, p_m, p_t) -> torch.Tensor:
+    def _p_m_dot(self, p_m, p_t) -> torch.Tensor:
         return (self.ca2_m * p_t * (1 - p_m) - p_m) / self.tau_m
 
-    def __p_gs_dot(self, p_gs, p_t) -> torch.Tensor:
+    def _p_gs_dot(self, p_gs, p_t) -> torch.Tensor:
         return (self.ca2_gs * p_t * (1 - p_gs) - p_gs) / self.tau_gs
 
     def __p_t_dot(self, x_hb, x_a, p_gs, p_t) -> torch.Tensor:
@@ -87,8 +87,8 @@ class HairBundleSDE:
         return (p_t0 - p_t) / self.tau_t
 
     # --- NOISE --- #
-    def __hb_noise(self) -> torch.Tensor:
+    def _hb_noise(self) -> torch.Tensor:
         return self.eta_hb / self.tau_hb
 
-    def __a_noise(self) -> torch.Tensor:
+    def _a_noise(self) -> torch.Tensor:
         return -1 * self.s_max * self.s_min * self.eta_a
