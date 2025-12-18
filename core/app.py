@@ -2,6 +2,9 @@ import os
 import sys
 import math
 import time
+import warnings
+
+from dipy.segment.clusteringspeed import DTYPE
 
 os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
@@ -21,7 +24,7 @@ from .SBI import bp_prior, statistics, embedded_network
 from .Simulator import bp_simulator
 
 if torch.cuda.is_available():
-    DEVICE = torch.device('cuda')
+    DEVICE = torch.device('cuda:0')
     if (torch.cuda.get_device_properties(DEVICE).major, torch.cuda.get_device_properties(DEVICE).minor) < (8, 0):
         DEVICE = torch.device('cpu')
 elif torch.backends.mps.is_available():
@@ -29,7 +32,11 @@ elif torch.backends.mps.is_available():
 else:
     DEVICE = torch.device('cpu')
 
-DTYPE = torch.float32 if DEVICE.type == 'cuda' or DEVICE.type == 'cpu' else torch.float32
+if DEVICE.type == 'cuda':
+    DTYPE = torch.float32
+else:
+    DTYPE = torch.float32
+
 if DEVICE.type == 'cuda' and DTYPE == torch.float32:
     BATCH_SIZE = 2**12
 elif DEVICE.type == 'cuda' and DTYPE == torch.float64:
@@ -113,8 +120,8 @@ def run():
         time.sleep(5)
         helpers.clear_screen()
         prior_bounds = []
-        for bounds in params.values():
-            prior_bounds.append(bounds[1])
+        for vals in params.values():
+            prior_bounds.append(vals[1])
         prior_dist = bp_prior.BpPrior(DTYPE, DEVICE)
         with torch.no_grad():
             prior_dist = prior_dist.construct_prior(t_nd, 17, BATCH_SIZE, BATCH_SIZE // (2**6), math.ceil(segs / 2), prior_bounds, t_global_scale=2, num_iterations=300, n_max=175000)
@@ -141,16 +148,28 @@ def run():
             curr_thetas = prior_dist.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
             sim = bp_simulator.BpSimulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
             x_sims = sim.simulate()[0, 0, :, steady_id:] # shape: (BATCH_SIZE, len(t))
-            stats = statistics.SummaryStatistics(x_sims, dt)
-            del x_sims
-            all_stats.append(stats.compute_statistics(n_bands=10, n_lags=10, pacf_lags=5, downsamples=(2000, 2000, 2000, 2000)))
-            del stats
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                stats = statistics.SummaryStatistics(x_sims, dt)
+                all_stats.append(stats.compute_statistics(n_bands=10, n_lags=10, pacf_lags=5, downsamples=(2000, 2000, 2000, 2000)))
             all_thetas.append(curr_thetas)
+            del x_sims
+            del stats
     summary_stats = torch.cat(all_stats, dim=0)
     thetas = torch.cat(all_thetas, dim=0)
     print(summary_stats.shape)
     print(thetas.shape)
+
     # --- SNPE --- #
+    # filter data
+    nan_mask = torch.isfinite(summary_stats).all(dim=1)
+    safe_magnitude_mask = (torch.abs(summary_stats) < 1e15).all(dim=1)
+    valid_idx = nan_mask & safe_magnitude_mask
+    thetas = thetas[valid_idx]
+    summary_stats = summary_stats[valid_idx]
+    print(summary_stats.shape)
+    print(thetas.shape)
+
     # set up embedded network
     input_dim = summary_stats.shape[1]
     output_dim = input_dim // 4
@@ -158,26 +177,38 @@ def run():
     embedded_net = embedded_network.EmbeddedNet(input_dim, output_dim, layer_dims)
 
     # set up snpe with embedded network
+    priors = []
+    prior_bounds = []
+    for vals in params.values():
+        prior_bounds.append(vals[1])
+    for curr_bounds in prior_bounds:
+        curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
+        priors.append(curr_prior)
+    wide_prior = utils.MultipleIndependent(priors, device=str(DEVICE))
+
     neural_posterior = posterior_nn(model='maf', embedding_net=embedded_net)
-    inference = SNPE(prior=prior_dist, density_estimator=neural_posterior, device=str(DEVICE))
+    inference = SNPE(prior=wide_prior, density_estimator=neural_posterior, device=str(DEVICE))
 
     # train the density estimator
-    density_estimator = inference.append_simulations(thetas, summary_stats).train()
+    density_estimator = inference.append_simulations(thetas, summary_stats).train(training_batch_size=int(2**7))
 
     # build the posterior
     posterior = inference.build_posterior(density_estimator)
 
-    # visualize the posterior
+    # visualize and validate posterior
     cpu_device = torch.device('cpu')
     cpu_dtype = torch.float32
-    obs_params = torch.tensor([value[0] for value in params.values()], dtype=cpu_dtype, device=cpu_device).unsqueeze(-1)
-    sim_obs = bp_simulator.BpSimulator(obs_params, force[0:1].to(dtype=cpu_dtype, device=cpu_device), inits[0:1].to(dtype=cpu_dtype, device=cpu_device),
-                                t.to(dtype=cpu_dtype, device=cpu_device), segs=segs, batch_size=1, device=cpu_device)
+    obs_params = torch.tensor([value[0] for value in params.values()], dtype=cpu_dtype, device=cpu_device).unsqueeze(0)
+    steady_idx = [i for i in range(obs_params.shape[-1]) if i != 3]
+    obs_params = obs_params[:, steady_idx]
+    sim_obs = bp_simulator.BpSimulator(obs_params, force[0:1].to(dtype=cpu_dtype, device=cpu_device),
+                                       inits[0:1].to(dtype=cpu_dtype, device=cpu_device),
+                                       t.to(dtype=cpu_dtype, device=cpu_device), segs=segs, batch_size=1,
+                                       device=cpu_device)
 
-    # visualize and validate posterior
-    x_obs = sim_obs.simulate()[0, 0, :, n_steady:].to(dtype=DTYPE, device=DEVICE).unsqueeze(0)
-    stats_obs = statistics.SummaryStatistics(x_obs, dt).compute_statistics(n_bands=20, n_lags=20, pacf_lags=10)
+    x_obs = sim_obs.simulate()[0, 0, :, n_steady:].to(dtype=DTYPE, device=DEVICE).unsqueeze(0).repeat(2, 1)
+    stats_obs = statistics.SummaryStatistics(x_obs, dt).compute_statistics(n_bands=10, n_lags=10, pacf_lags=5)
     del x_obs
-    samples = posterior.sample((1000,), x=stats_obs)
+    samples = posterior.sample((1000,), x=stats_obs[0, :])
     fig, ax = pairplot(samples, points=obs_params.squeeze(-1), labels=parameter_labels)
     plt.show()
