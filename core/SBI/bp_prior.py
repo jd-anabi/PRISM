@@ -71,9 +71,7 @@ class BpPrior(prior.Prior):
             n_params -= 1
 
         # SDE variable
-        init_pos = np.random.randint(0, 10, size=(batch_size, 2))
-        init_probs = np.random.randint(0, 1, size=(batch_size, 3))
-        inits = helpers.concat(init_pos, init_probs)  # size: (BATCH_SIZE, 5)
+        inits = helpers.concat(np.random.randint(0, 10, size=(batch_size, 2)), np.random.randint(0, 1, size=(batch_size, 3)))  # size: (BATCH_SIZE, 5)
         inits = torch.tensor(inits, dtype=dtype, device=device)
         force = torch.zeros((batch_size, t.shape[0]), dtype=dtype, device=device)
 
