@@ -17,10 +17,10 @@ from sbi import utils
 from sbi.inference import SNPE
 from sbi.analysis import pairplot
 from sbi.neural_nets import posterior_nn
-from sbi.neural_nets.embedding_nets import CNNEmbedding
 
-from .Helpers import helpers, model_helpers, visualizers, file_manager
-from .SBI import bp_prior, statistics, embedded_network
+from .Helpers import helpers, visualizers, file_manager
+from .SBI import statistics, embedded_network
+from .SBI.Priors import bp_prior, sbi_prior_wrapper
 from .Simulator import bp_simulator
 
 if torch.cuda.is_available():
@@ -177,7 +177,7 @@ def run():
     embedded_net = embedded_network.EmbeddedNet(input_dim, output_dim, layer_dims)
 
     # set up snpe with embedded network
-    priors = []
+    '''priors = []
     prior_bounds = []
     for vals in params.values():
         prior_bounds.append(vals[1])
@@ -186,10 +186,11 @@ def run():
     for curr_bounds in prior_bounds:
         curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
         priors.append(curr_prior)
-    wide_prior = utils.MultipleIndependent(priors, device=str(DEVICE))
+    wide_prior = utils.MultipleIndependent(priors, device=str(DEVICE))'''
+    safe_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
 
     neural_posterior = posterior_nn(model='maf', embedding_net=embedded_net)
-    inference = SNPE(prior=wide_prior, density_estimator=neural_posterior, device=str(DEVICE))
+    inference = SNPE(prior=safe_prior, density_estimator=neural_posterior, device=str(DEVICE))
 
     # train the density estimator
     density_estimator = inference.append_simulations(thetas, summary_stats).train(training_batch_size=int(2**7))

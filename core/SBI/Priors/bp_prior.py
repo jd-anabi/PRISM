@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from core.Helpers import helpers
 from core.Simulator import bp_simulator
-from core.SBI import prior
+from core.SBI.Priors import prior
 
 class BpPrior(prior.Prior):
     def __init__(self, dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')):
