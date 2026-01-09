@@ -26,7 +26,7 @@ class Simulator(ABC):
         self._set_up_model()
 
     # --- PUBLIC METHODS --- #
-    def simulate(self) -> torch.Tensor:
+    def simulate(self, state_dep_drift: bool = False) -> torch.Tensor:
         """
         Simulates the model with the given constructor parameters
         :return: simulated solution with shape (N, FPB, B / FPB, T)
@@ -39,7 +39,7 @@ class Simulator(ABC):
         sol = torch.zeros((n_vars, self._batch_size, self.t.shape[0]), dtype=self.t.dtype, device=self.t.device)
         for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments", leave=False):
             curr_time = self.t[time_seg_ids[tid]:time_seg_ids[tid + 1]]
-            results = self.__sols(curr_time, curr_inits)  # shape: (len(curr_time), BATCH_SIZE, number of variables)
+            results = self.__sols(curr_time, curr_inits, state_dep_drift)  # shape: (len(curr_time), BATCH_SIZE, number of variables)
 
             # update initial conditions
             curr_inits = results[-1, :, :]
@@ -96,7 +96,7 @@ class Simulator(ABC):
         self._set_up_model()
 
     # --- PRIVATE METHODS --- #
-    def __sols(self, t: torch.Tensor, inits: torch.Tensor, explicit: bool = True) -> torch.Tensor:
+    def __sols(self, t: torch.Tensor, inits: torch.Tensor, state_dep_drift: bool, explicit: bool = True) -> torch.Tensor:
         """
         Returns sde solution for a hair bundle given a set of parameters and initial conditions
         :param t: time array
@@ -113,7 +113,7 @@ class Simulator(ABC):
         with torch.no_grad():
             try:
                 if explicit:
-                    sol = solver.euler(self.sde, inits, ts, n).to(device=sol.device)  # only keep the last solution
+                    sol = solver.euler(self.sde, inits, ts, n, state_dep_drift=state_dep_drift).to(device=sol.device)  # only keep the last solution
                 else:
                     sol = solver.implicit_euler(self.sde, inits, ts, n).to(device=sol.device)
             except (Warning, Exception) as e:

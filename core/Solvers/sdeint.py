@@ -1,18 +1,19 @@
 import math
-from typing import Any, Sequence
+from typing import Any
 
 import torch
 from tqdm import tqdm
 
 class Solver:
     def __init__(self):
-        def euler(sde: Any, x0: torch.Tensor, ts: tuple[float, float], n: int) -> torch.Tensor:
+        def euler(sde: Any, x0: torch.Tensor, ts: tuple[float, float], n: int, state_dep_drift: bool = False) -> torch.Tensor:
             """
             Explicit Euler-Maruyama SDE solver
             :param sde: SDE class containing drift and diffusion functions
             :param x0: initial conditions; shape: (batch size, d)
             :param ts: time span to solve SDEs for
             :param n: number of time steps
+            :param state_dep_drift: whether the drift function is state-dependent
             :return: tensor of the solution; shape: (n, batch size, d)
             """
             x0 = x0.to(sde.device)
@@ -29,19 +30,33 @@ class Solver:
             xs[0, :, :] = x0
 
             # drift
-            g = sde.g()
+            if not state_dep_drift:
+                g = sde.g()
+            else:
+                g = sde.g(x0)
 
             # pre-compute constants
             sqrt_dt = math.sqrt(dt)
 
             # recursively define x_{n+1}
-            for i in tqdm(range(0, n - 1),  desc=f"Simulating system (batch size = {batch_size})", leave=False):
-                x_curr = xs[i, :, :]
-                # Wiener process
-                dW = torch.randn_like(x_curr) * sqrt_dt
-                eta = torch.bmm(g, dW.unsqueeze(-1)).squeeze(-1)  # batch matrix multiplication; shape: (batch_size, d)
-                # update solution
-                xs[i + 1, :, :] = x_curr + sde.f(x_curr, i) * dt + eta
+            if not state_dep_drift:
+                for i in tqdm(range(0, n - 1),  desc=f"Simulating system (batch size = {batch_size})", leave=False):
+                    x_curr = xs[i, :, :]
+                    # Wiener process
+                    dW = torch.randn_like(x_curr) * sqrt_dt
+                    eta = torch.bmm(g, dW.unsqueeze(-1)).squeeze(-1)  # batch matrix multiplication; shape: (batch_size, d)
+                    # update solution
+                    xs[i + 1, :, :] = x_curr + sde.f(x_curr, i) * dt + eta
+            else:
+                for i in tqdm(range(0, n - 1),  desc=f"Simulating system (batch size = {batch_size})", leave=False):
+                    x_curr = xs[i, :, :]
+                    # Wiener process
+                    dW = torch.randn_like(x_curr) * sqrt_dt
+                    eta = torch.bmm(g, dW.unsqueeze(-1)).squeeze(-1)  # batch matrix multiplication; shape: (batch_size, d)
+                    # update solution
+                    xs[i + 1, :, :] = x_curr + sde.f(x_curr, i) * dt + eta
+                    # update drift
+                    g = sde.g(x_curr)
 
             return xs
 

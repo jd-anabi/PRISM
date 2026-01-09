@@ -21,7 +21,7 @@ from sbi.neural_nets import posterior_nn
 from .Helpers import helpers, visualizers, file_manager
 from .SBI import statistics, embedded_network
 from .SBI.Priors import bp_prior, sbi_prior_wrapper
-from .Simulator import bp_simulator
+from .Simulator import bp_simulator, nadrowski_simulator
 
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda:0')
