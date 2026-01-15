@@ -1,8 +1,8 @@
 import torch
 
-from core.Models import bp_model
+from core.Models import nd_model
 
-class BpModelSteady(bp_model.BpModel):
+class NDModelSteady(nd_model.NDModel):
     def __init__(self, tau_hb: torch.Tensor, tau_m: torch.Tensor, tau_gs: torch.Tensor,
                  c_min: torch.Tensor, s_min: torch.Tensor, s_max: torch.Tensor, ca2_m: torch.Tensor,
                  ca2_gs: torch.Tensor, u_gs_max: torch.Tensor, delta_e: torch.Tensor, k_gs_ratio: torch.Tensor,

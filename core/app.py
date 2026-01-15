@@ -20,8 +20,8 @@ from sbi.neural_nets import posterior_nn
 
 from .Helpers import helpers, visualizers, file_manager
 from .SBI import statistics, embedded_network
-from .SBI.Priors import bp_prior, sbi_prior_wrapper
-from .Simulator import bp_simulator, nadrowski_simulator
+from .SBI.Priors import nd_prior, sbi_prior_wrapper
+from .Simulator import nd_simulator, nadrowski_simulator
 
 if torch.cuda.is_available():
     DEVICE = torch.device('cuda:0')
@@ -116,7 +116,7 @@ def run():
     obs_force = force[0].unsqueeze(0).to(device=torch.device('cpu'))
     obs_inits = inits[0].unsqueeze(0).to(device=torch.device('cpu'))
 
-    obs_sim = bp_simulator.BpSimulator(obs_params, obs_force, obs_inits, t.to(device=torch.device('cpu')), segs=segs)
+    obs_sim = nd_simulator.NDSimulator(obs_params, obs_force, obs_inits, t.to(device=torch.device('cpu')), segs=segs)
     x_obs = obs_sim.simulate()[0, 0, :, n_steady:].to(dtype=DTYPE, device=DEVICE)
     stats_obs = statistics.SummaryStatistics(x_obs, dt).compute_statistics(n_bands=10, n_lags=10, pacf_lags=5)
     del x_obs
@@ -132,7 +132,7 @@ def run():
         prior_bounds = []
         for vals in params.values():
             prior_bounds.append(vals[1])
-        prior = bp_prior.BpPrior(DTYPE, DEVICE)
+        prior = nd_prior.NDPrior(DTYPE, DEVICE)
         with torch.no_grad():
             prior = prior.construct_prior(t, 17, BATCH_SIZE, BATCH_SIZE // (2**6), math.ceil(segs / 2), prior_bounds, t_global_scale=2, num_iterations=300, n_max=175000)
         file_manager.save_mix_dist(prior, prior_path)
@@ -150,7 +150,7 @@ def run():
     with torch.no_grad():
         for _ in tqdm(range(num_runs), desc=f"Calculating summary statistics for {num_runs} runs", leave=False):
             curr_thetas = prior.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
-            sim = bp_simulator.BpSimulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
+            sim = nd_simulator.NDSimulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
             x_sims = sim.simulate()[0, 0, :, steady_id:] # shape: (BATCH_SIZE, len(t))
             with warnings.catch_warnings():
                 warnings.simplefilter('ignore')

@@ -5,7 +5,7 @@ import torch
 K_B: float = 1.38e-23 # m^2 kg s^-2 K^-1
 Q: float = 1.6e-19 # C
 
-class FullBpModel:
+class BPModel:
     def __init__(self, lam_x: torch.Tensor, lam_y: torch.Tensor, lam_sf: torch.Tensor, k_sf: torch.Tensor, k_sp: torch.Tensor,
                  k_gs_min: torch.Tensor, k_gs_max: torch.Tensor, k_es: torch.Tensor, x_sf: torch.Tensor, x_es: torch.Tensor,
                  x_sp: torch.Tensor, x_c: torch.Tensor, d: torch.Tensor, n: torch.Tensor, gamma: torch.Tensor,

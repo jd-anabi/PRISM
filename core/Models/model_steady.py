@@ -2,12 +2,12 @@ from typing import Union
 
 import torch
 
-from core.Models import full_bp_model
+from core.Models import model
 
 K_B: float = 1.38e-23 # m^2 kg s^-2 K^-1
 Q: float = 1.6e-19 # C
 
-class FullBpModelSteady(full_bp_model.FullBpModel):
+class BPModelSteady(model.BPModel):
     def __init__(self, lam_x: torch.Tensor, lam_y: torch.Tensor, lam_sf: torch.Tensor, k_sf: torch.Tensor, k_sp: torch.Tensor,
                  k_gs_min: torch.Tensor, k_gs_max: torch.Tensor, k_es: torch.Tensor, x_sf: torch.Tensor, x_es: torch.Tensor,
                  x_sp: torch.Tensor, x_c: torch.Tensor, d: torch.Tensor, n: torch.Tensor, gamma: torch.Tensor,
@@ -24,7 +24,7 @@ class FullBpModelSteady(full_bp_model.FullBpModel):
                          force, batch_size, device, dtype)
 
     def f(self, x, t) -> torch.Tensor:
-        p_t_steady = self._p_t_steady(x[:, 0], x[:, 1], x[:, 3])
+        p_t_steady = self.__p_t_steady(x[:, 0], x[:, 1], x[:, 3])
         dx = self._x_dot(x[:, 0], x[:, 1], x[:, 3], p_t_steady)
         dy = self._y_dot(x[:, 0], x[:, 1], x[:, 2], x[:, 3], p_t_steady)
         dp_m = self._p_m_dot(x[:, 2])
@@ -40,7 +40,7 @@ class FullBpModelSteady(full_bp_model.FullBpModel):
         dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
         return torch.diag_embed(dsigma)
 
-    def _p_t_steady(self, x, y, p_r) -> torch.Tensor:
+    def __p_t_steady(self, x, y, p_r) -> torch.Tensor:
         k_gs = self.k_gs_min + self.delta_k_gs * p_r
         delta_x_t = K_B * self.temp / (k_gs * self.d)
         channel_disp = self.gamma * x - y + self.x_c - self.d / 2

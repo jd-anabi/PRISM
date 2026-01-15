@@ -1,36 +1,47 @@
-# Non-dimensional Initial Conditions
+# Initial Conditions
 xhb_init = 0.2
 xa_init = 1
 pm_init = 0.5
 pgs_init = 0.5
 pt_init = 0.5
 
-# Non-dimensional Parameters
-tau_hb = 1 in (0.01, 100)
-tau_m = 1.4627616407992918 in (0, 1000)
-tau_gs = 1 in (0, 1000)
-tau_t = 0 in (0, 10)
-c_min = 1 in (0, 1)
-s_min = 1e-9 in (0, 1)
-s_max = 0.5 in (0, 1)
-ca2_m = 1 in (0, 10)
-ca2_gs = 1000 in (0, 1000)
-u_gs_max = 45.881898998783775 in (0, 1000)
-delta_e = 0.0700723220991952 in (0, 10)
-k_gs = 0.8652377030050995 in (0, 1)
-chi_hb = 1 in (0, 10)
-chi_a = 0.1557522727445657 in (0, 10)
-x_c = 1e-9 in (0, 100)
-eta_hb = 0.05 in (0.001, 0.05)
-eta_a = 0.05 in (0.001, 0.05)
-
-# Dimensional Parameters
-x_offset (nm) = 10
-x_scale (nm) = 1
-t_offset (ms) = 0
-t_scale (ms) = 1
-y_offset (nm) = 0
-y_scale (nm) = 1
+# Parameters
+lam_x (kg s^-1) = 1
+lam_y (kg s^-1) = 1
+lam_sf (kg s^-1) = 1
+k_sf (N m^-1) = 1
+k_sp (N m^-1) = 1
+k_gs_min (N m^-1) = 1
+k_gs_max (N m^-1) = 1
+k_es (N m^-1) = 1
+x_sf (m) = 1
+x_es (m) = 1
+x_sp (m) = 1
+x_c (m) = 1
+d (m) = 1
+n = 1
+gamma = 1
+c_min (m s^-1) = 1
+s_min (m s^-1 N^-1) = 1
+c_max (m s^-1) = 1
+s_max (m s^-1 N^-1) = 1
+k_m_plus (s^-1 mol^-1) = 1
+k_r_plus (s^-1 mol^-1) = 1
+k_m_minus (s^-1) = 1
+k_r_minus (s^-1) = 1
+trans_perm (m^3 s^-1) = 1
+ca2_x_in (mol) = 1
+ca2_x_ex (mol) = 1
+v_m (V) = 1
+ref_pot (V) = 1
+diff_const (m^2 s^-1) = 1
+valence = 1
+r_m (m) = 1
+r_r (m) = 1
+delta_e (J) = 1
+tau_0 = 1
+temp (K) = 1
+epsilon = 1
 
 # Forcing Parameters
 amp (mg nm ms^-2) = 100e-6

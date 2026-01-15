@@ -8,7 +8,7 @@ SIMPLE_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*=\s*(?P<val>{FLOAT_REGEX})\s*
 BOUNDS_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*=\s*(?P<val>{FLOAT_REGEX})\s+in\s+\((?P<tup>.*?)\)\s*$') # pattern for: key = value in (min, max)
 UNIT_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*\(\s*(?P<units>[^)]+)\s*\)\s*=\s*(?P<val>{FLOAT_REGEX})\s*$') # pattern for: key (units) = value
 
-def parse_model_file(file_name: str) -> tuple:
+def parse_model_file(file_name: str, nd: bool = False) -> tuple:
     # --- Data Structures ---
     init_conditions = {}  # {str: float}
     non_dim_params = {}  # {str: (float, (float, float))}
@@ -33,15 +33,24 @@ def parse_model_file(file_name: str) -> tuple:
 
         # --- Section Detection ---
         if line.startswith('#'):
-            if 'Non-dimensional Initial Conditions' in line:
-                current_section = "INIT"
-            elif 'Non-dimensional Parameters' in line:
-                current_section = "NON_DIM"
-            elif 'Dimensional Parameters' in line:
-                current_section = "DIM"
-            elif 'Forcing Parameters' in line:
-                current_section = "FORCING"
-            continue
+            if nd:
+                if 'Non-dimensional Initial Conditions' in line:
+                    current_section = "INIT"
+                elif 'Non-dimensional Parameters' in line:
+                    current_section = "NON_DIM"
+                elif 'Dimensional Parameters' in line:
+                    current_section = "PARAMS"
+                elif 'Forcing Parameters' in line:
+                    current_section = "FORCING"
+                continue
+            else:
+                if 'Initial Conditions' in line:
+                    current_section = "INIT"
+                elif 'Parameters' in line:
+                    current_section = "PARAMS"
+                elif 'Forcing Parameters' in line:
+                    current_section = "FORCING"
+                continue
 
         # --- Section Processing ---
         match current_section:
