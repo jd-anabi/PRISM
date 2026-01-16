@@ -92,7 +92,7 @@ def parse_model_file(file_name: str, nd: bool = False) -> tuple:
                 if match:
                     target_dict[match.group('name')] = float(match.group('val'))
 
-    # Convert set to tuple as requested
+    # Convert set to tuple
     final_units = tuple(collected_units)
 
     return init_conditions, non_dim_params, dim_params, forcing_params, final_units
