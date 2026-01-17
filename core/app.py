@@ -19,7 +19,7 @@ from sbi.analysis import pairplot
 from sbi.neural_nets import posterior_nn
 
 from .Helpers import helpers, visualizers, file_manager
-from .SBI import statistics, embedded_network
+from .SBI import statistics, embedded_network, pipeline
 from .SBI.Priors import nd_prior, sbi_prior_wrapper
 from .Simulator import nd_simulator, nadrowski_simulator
 
@@ -79,7 +79,8 @@ def run():
     file_num = int(input('File number for model parameters: '))
     helpers.clear_screen()
     file = os.getcwd() + model_params_dir + model_files[file_num - 1]
-    inits, params, rescaling_params, force_params, units = file_manager.parse_model_file(file)
+    inits, params, force_params, units = file_manager.parse_model_file(file)
+    print(inits)
 
     # need to construct dictionary now that constructs factors to convert current units to SI units
     ureg = pint.UnitRegistry()
@@ -109,17 +110,10 @@ def run():
 
     force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE)
 
-    # "observation" data
-    obs_params = torch.tensor([value[0] for value in params.values()], dtype=DTYPE, device=torch.device('cpu')).unsqueeze(0) # shape: (1, 17)
-    steady_idx = [i for i in range(obs_params.shape[-1]) if i != 3]
-    obs_params = obs_params[:, steady_idx] # shape: (1, 16)
-    obs_force = force[0].unsqueeze(0).to(device=torch.device('cpu'))
-    obs_inits = inits[0].unsqueeze(0).to(device=torch.device('cpu'))
+    param_vals = list(params.values()[0, :])
+    init_vals = list(inits.values())
+    obs = pipeline.gen_obs(sim="Dimensional", params=param_vals, t=t, inits=init_vals, n_segs=segs, steady_idx=steady_id)
 
-    obs_sim = nd_simulator.NDSimulator(obs_params, obs_force, obs_inits, t.to(device=torch.device('cpu')), segs=segs)
-    x_obs = obs_sim.simulate()[0, 0, :, n_steady:].to(dtype=DTYPE, device=DEVICE)
-    stats_obs = statistics.SummaryStatistics(x_obs, dt).compute_statistics(n_bands=10, n_lags=10, pacf_lags=5)
-    del x_obs
 
     # --- PRIOR CONSTRUCTION --- #
     prior_path = os.getcwd() + '\\Resources\\Priors\\mixed_prior_dist.pt' if sys.platform == 'win32' else os.getcwd() + '/Resources/Priors/mixed_prior_dist.pt'
@@ -199,6 +193,6 @@ def run():
     posterior = inference.build_posterior(density_estimator)
 
     # visualize and validate posterior
-    samples = posterior.sample((1000,), x=stats_obs)
-    fig, ax = pairplot(samples.cpu().numpy(), points=obs_params.cpu().numpy(), labels=(parameter_labels[:3] + parameter_labels[4:]))
-    plt.show()
+    #samples = posterior.sample((1000,), x=obs_stats)
+    #fig, ax = pairplot(samples.cpu().numpy(), points=np.array(param_vals), labels=(parameter_labels[:3] + parameter_labels[4:]))
+    #plt.show()

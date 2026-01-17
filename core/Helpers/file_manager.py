@@ -3,18 +3,20 @@ import re
 import torch
 
 # --- Regex Definitions ---
-FLOAT_REGEX = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?' # pattern for: value
-SIMPLE_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*=\s*(?P<val>{FLOAT_REGEX})\s*$') # pattern for: key = value
-BOUNDS_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*=\s*(?P<val>{FLOAT_REGEX})\s+in\s+\((?P<tup>.*?)\)\s*$') # pattern for: key = value in (min, max)
-UNIT_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*\(\s*(?P<units>[^)]+)\s*\)\s*=\s*(?P<val>{FLOAT_REGEX})\s*$') # pattern for: key (units) = value
+# Float Value (Scientific Notation)
+FLOAT_REGEX = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
+# Flexible Assignment: name [opt_units] = val
+ASSIGNMENT_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\s*\))?\s*=\s*(?P<val>{FLOAT_REGEX})\s*$')
+# Flexible Bounds: name [opt_units] = val [opt_in] (bounds)
+BOUNDS_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\s*\))?\s*=\s*(?P<val>{FLOAT_REGEX})\s+(?:in\s+)?\((?P<tup>.*?)\)\s*$')
 
 def parse_model_file(file_name: str, nd: bool = False) -> tuple:
     # --- Data Structures ---
-    init_conditions = {}  # {str: float}
-    non_dim_params = {}  # {str: (float, (float, float))}
-    dim_params = {}  # {str: float}
-    forcing_params = {}  # {str: float}
-    collected_units = set() # we use a set initially to avoid duplicate units (e.g., 'nm' appearing twice)
+    init_conditions = {}
+    parameters = {}  # Format: {name: (val, (min, max))}
+    rescale_params = {}
+    forcing_params = {}
+    collected_units = set()
 
     # --- State/Section Management ---
     current_section = None
@@ -32,70 +34,54 @@ def parse_model_file(file_name: str, nd: bool = False) -> tuple:
             continue  # skip empty lines
 
         # --- Section Detection ---
-        if line.startswith('#'):
-            if nd:
-                if 'Non-dimensional Initial Conditions' in line:
-                    current_section = "INIT"
-                elif 'Non-dimensional Parameters' in line:
-                    current_section = "NON_DIM"
-                elif 'Dimensional Parameters' in line:
-                    current_section = "PARAMS"
-                elif 'Forcing Parameters' in line:
-                    current_section = "FORCING"
-                continue
-            else:
-                if 'Initial Conditions' in line:
-                    current_section = "INIT"
-                elif 'Parameters' in line:
-                    current_section = "PARAMS"
-                elif 'Forcing Parameters' in line:
-                    current_section = "FORCING"
-                continue
+        if line.startswith("#"):
+            if "Initial Conditions" in line:
+                current_section = "INIT"
+            elif "Parameters" in line and "Forcing" not in line:
+                if "Dimensional" not in line:
+                    current_section = "PARAM"
+                else:
+                    current_section = "RESCALE"
+            elif "Forcing Parameters" in line:
+                current_section = "FORCING"
+            continue
 
-        # --- Section Processing ---
-        match current_section:
-            # 1. Non-dimensional Initial Conditions (Simple floats)
-            case 'INIT':
-                match = SIMPLE_PATTERN.search(line)
-                if match:
-                    init_conditions[match.group('name')] = float(match.group('val'))
+        # --- Helper to process units ---
+        def process_units(match_obj):
+            if match_obj.group('units'):
+                raw_units = match_obj.group('units').split()
+                for u in raw_units:
+                    # Clean exponent: ms^-2 -> ms
+                    base_unit = u.split('^')[0]
+                    collected_units.add(base_unit)
 
-            # 2. Non-dimensional Parameters (Float + Tuple of Bounds)
-            case 'NON_DIM':
-                match = BOUNDS_PATTERN.search(line)
-                if match:
-                    name = match.group('name')
-                    val = float(match.group('val'))
-                    bounds_str = match.group('tup') # extract bounds from tuple string
-                    bounds = tuple(float(x) for x in re.findall(FLOAT_REGEX, bounds_str))
+        # 1. Initial Conditions & Forcing (Using ASSIGNMENT_PATTERN)
+        if current_section in ["INIT", "FORCING", "RESCALE"]:
+            match = ASSIGNMENT_PATTERN.search(line)
+            if match:
+                if current_section == "INIT":
+                    target_dict = init_conditions
+                elif current_section == "FORCING":
+                    target_dict = forcing_params
+                else:
+                    target_dict = rescale_params
+                target_dict[match.group('name')] = float(match.group('val'))
+                process_units(match)
 
-                    # store as value + bounds pair
-                    non_dim_params[name] = (val, bounds)
+        # 2. Parameters (Using BOUNDS_PATTERN)
+        elif current_section == "PARAM":
+            match = BOUNDS_PATTERN.search(line)
+            if match:
+                name = match.group('name')
+                val = float(match.group('val'))
+                # Extract bounds
+                bounds = tuple(float(x) for x in re.findall(FLOAT_REGEX, match.group('tup')))
+                parameters[name] = (val, bounds)
+                process_units(match)
 
-            # 3. Dimensional Parameters and Forcing Parameters. These sections are similar: they might have units (UNIT_PATTERN) or they might be simple assignments (SIMPLE_PATTERN)
-            case 'DIM' | 'FORCING':
-                target_dict = dim_params if current_section == 'DIM' else forcing_params
-
-                # unit pattern
-                match = UNIT_PATTERN.search(line)
-                if match:
-                    target_dict[match.group('name')] = float(match.group('val'))
-                    raw_units = match.group('units').split()  # e.g., ['mg', 'nm', 'ms^-2']
-                    for u in raw_units:
-                        # split on '^' and take the first part to remove exponents (e.g., 'ms^-2' -> 'ms')
-                        base_unit = u.split('^')[0]
-                        collected_units.add(base_unit)
-                    continue
-
-                # fallback to simple pattern (e.g., 'phase = 0')
-                match = SIMPLE_PATTERN.search(line)
-                if match:
-                    target_dict[match.group('name')] = float(match.group('val'))
-
-    # Convert set to tuple
-    final_units = tuple(collected_units)
-
-    return init_conditions, non_dim_params, dim_params, forcing_params, final_units
+    if not nd:
+        return init_conditions, parameters, forcing_params, tuple(collected_units)
+    return init_conditions, parameters, rescale_params, forcing_params, collected_units
 
 def save_mix_dist(dist: torch.distributions.MixtureSameFamily, filename: str):
     data_to_save = {'means': dist.component_distribution.loc, 'covariances': dist.component_distribution.covariance_matrix, 'weights': dist.mixture_distribution.probs}
