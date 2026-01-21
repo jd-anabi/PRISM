@@ -11,7 +11,7 @@ from core.Simulator import dim_simulator
 from core.SBI.Priors import prior
 
 class DimPrior(prior.Prior):
-    def __init__(self, simulator: Any, dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')):
+    def __init__(self, dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')):
         super().__init__(dtype, device)
 
     # --- PRIVATE METHODS --- #

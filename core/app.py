@@ -6,7 +6,7 @@ import warnings
 
 from dipy.segment.clusteringspeed import DTYPE
 
-os.environ['KMP_DUPLICATE_LIB_OK']='True'
+os.environ["KMP_DUPLICATE_LIB_OK"]="True"
 
 import pint
 import torch
@@ -24,29 +24,29 @@ from .SBI.Priors import nd_prior, sbi_prior_wrapper
 from .Simulator import nd_simulator, nadrowski_simulator
 
 if torch.cuda.is_available():
-    DEVICE = torch.device('cuda:0')
+    DEVICE = torch.device("cuda:0")
     if (torch.cuda.get_device_properties(DEVICE).major, torch.cuda.get_device_properties(DEVICE).minor) < (8, 0):
-        DEVICE = torch.device('cpu')
+        DEVICE = torch.device("cpu")
 elif torch.backends.mps.is_available():
-    DEVICE = torch.device('mps')
+    DEVICE = torch.device("mps")
 else:
-    DEVICE = torch.device('cpu')
+    DEVICE = torch.device("cpu")
 
-if DEVICE.type == 'cuda':
+if DEVICE.type == "cuda":
     DTYPE = torch.float32
 else:
     DTYPE = torch.float32
 
-if DEVICE.type == 'cuda' and DTYPE == torch.float32:
+if DEVICE.type == "cuda" and DTYPE == torch.float32:
     BATCH_SIZE = 2**12
-elif DEVICE.type == 'cuda' and DTYPE == torch.float64:
+elif DEVICE.type == "cuda" and DTYPE == torch.float64:
     BATCH_SIZE = 2**10
 else:
     BATCH_SIZE = 2**6
 
 # ensemble variables needed
 UNIQUE_FREQS = 2**6 # number of unique frequencies
-ENSEMBLE_SIZE = 2**7 if DEVICE.type == 'cuda' else 2**5 # ensemble size for each frequency
+ENSEMBLE_SIZE = 2**7 if DEVICE.type == "cuda" else 2**5 # ensemble size for each frequency
 FPB = BATCH_SIZE // ENSEMBLE_SIZE # number of frequencies per batch
 ITERATIONS = int(UNIQUE_FREQS / FPB)
 
@@ -54,21 +54,22 @@ K_B = 1.380649e-23  # m^2 kg s^-2 K^-1
 
 def run():
     # --- SETUP --- #
-    # construct OS dependent directory for model parameters directory
-    if sys.platform == 'win32':
-        model_params_dir = '\\Resources\\Cells\\'
+    # construct OS dependent directory paths
+    if sys.platform == "win32":
+        cell_path = os.getcwd() + "\\Resources\\Cells\\"
+        prior_path = os.getcwd() + "\\Resources\\Priors\\"
     else:
-        model_params_dir = '/Resources/Cells/'
+        cell_path = os.getcwd() + "/Resources/Cells/"
+        prior_path = os.getcwd() + "/Resources/Priors/"
 
     # list files in directory
-    model_files = ['']
+    model_files = [""]
     file_num = 1
-    direct = os.getcwd() + '\\Resources\\Cells' if sys.platform == 'win32' else os.getcwd() + '/Resources/Cells'
-    for root, dirs, files in os.walk(direct):
-        level = root.replace(direct, '').count(os.sep)
-        indent = ' ' * 2 * level
-        print(f"{indent}{os.path.basename(root)}/")
-        subindent = ' ' * 2 * (level + 1)
+    for root, dirs, files in os.walk(cell_path):
+        level = root.replace(cell_path, "").count(os.sep)
+        indent = " " * 2 * level
+        print(f"{indent}{os.path.basename(root)}")
+        subindent = " " * 2 * (level + 1)
         for file in files:
             model_files.append(file)
             print(f"{subindent}({file_num}) {file}")
@@ -76,11 +77,10 @@ def run():
     model_files.pop(0)
 
     # read in model parameters
-    file_num = int(input('File number for model parameters: '))
+    file_num = int(input("\nFile number for model parameters: "))
     helpers.clear_screen()
-    file = os.getcwd() + model_params_dir + model_files[file_num - 1]
+    file = cell_path + model_files[file_num - 1]
     inits, params, force_params, units = file_manager.parse_model_file(file)
-    print(inits)
 
     # need to construct dictionary now that constructs factors to convert current units to SI units
     ureg = pint.UnitRegistry()
@@ -90,64 +90,67 @@ def run():
         print(f"Error: {e}. Unrecognized units.")
         exit()
 
-    # --- SET UP VARIABLES --- #
-    t_max = int(input("Max time: ")) # get max time to run simulations for
+    # --- GENERATE "OBSERVABLE" DATA --- #
+    t_max = int(input("Max time: "))
+    dt = float(input("Time step: "))
+    steady_percentage = float(input("Percentage of data that is transient (%): ").replace("%", "")) / 100.0
+    segs = int(input("Number of segments to divide time series into: "))
     helpers.clear_screen()
 
-    dt = 1e-3 # time-step
-    ts = (0, t_max)
-    segs = math.ceil(ts[-1] / 100) # number of segments to divide simulation solver (needed for memory management)
-    n = int((ts[-1] - ts[0]) / dt)
+    t = torch.linspace(0, t_max, int(t_max / dt), dtype=DTYPE, device=DEVICE)
+    force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE) # no forcing
 
-    t = torch.linspace(ts[0], ts[-1], n, dtype=DTYPE, device=DEVICE) # time tensor
-
-    # steady-state index for analysis later
-    steady_id = int(0.7 * len(t))
-    n_steady = t[steady_id:].shape[0]
-
-    inits = helpers.concat(np.random.randint(0, 10, size=(BATCH_SIZE, 2)), np.random.randint(0, 1, size=(BATCH_SIZE, 3)))  # size: (BATCH_SIZE, 5)
-    inits = torch.tensor(inits, dtype=DTYPE, device=DEVICE)
-
-    force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE)
-
-    param_vals = list(params.values()[0, :])
+    param_list = list(params.values())
+    param_vals = [row[0] for row in param_list]
     init_vals = list(inits.values())
-    obs = pipeline.gen_obs(sim="Dimensional", params=param_vals, t=t, inits=init_vals, n_segs=segs, steady_idx=steady_id)
 
+    steady_idx = int(steady_percentage * len(t))
+    obs_data = pipeline.gen_obs(sim="Dimensional", params=param_vals, t=t, inits=init_vals, force=force[0].unsqueeze(0), n_segs=segs, steady_idx=steady_idx)
 
     # --- PRIOR CONSTRUCTION --- #
-    prior_path = os.getcwd() + '\\Resources\\Priors\\mixed_prior_dist.pt' if sys.platform == 'win32' else os.getcwd() + '/Resources/Priors/mixed_prior_dist.pt'
+    print("Checking for prior...")
+    time.sleep(1)
+    mixed_prior_path = prior_path + "mixed_prior_dist.pt"
     try:
-        prior = file_manager.load_mix_dist(prior_path, device=DEVICE)
+        helpers.clear_screen()
+        print("Prior found")
+        helpers.clear_screen()
+        mixed_prior = file_manager.load_mix_dist(mixed_prior_path, device=DEVICE)
     except FileNotFoundError as e:
         print(f"Error: {e}. Going to construct prior from scratch.")
         time.sleep(5)
         helpers.clear_screen()
-        prior_bounds = []
-        for vals in params.values():
-            prior_bounds.append(vals[1])
-        prior = nd_prior.NDPrior(DTYPE, DEVICE)
-        with torch.no_grad():
-            prior = prior.construct_prior(t, 17, BATCH_SIZE, BATCH_SIZE // (2**6), math.ceil(segs / 2), prior_bounds, t_global_scale=2, num_iterations=300, n_max=175000)
-        file_manager.save_mix_dist(prior, prior_path)
-    corner_plot_path = os.getcwd() + '\\Resources\\Priors\\mixed_prior_dist.png' if sys.platform == 'win32' else os.getcwd() + '/Resources/Priors/mixed_prior_dist.png'
-    parameter_labels = [r'$\tau_{hb}$', r'$\tau_m$', r'$\tau_{gs}$', r'$\tau_t$',
-                        r'$C_{min}$', r'$S_{min}$', r'$S_{max}$', r'$Ca^2_m$', r'$Ca^2_{gs}$',
-                        r'$U_{gs,\ max}$', r'$\Delta E$', r'$k_{gs, \text{ ratio}}$',
-                        r'$\chi_{hb}$', r'$\chi_a$', r'$x_c$', r'$\eta_{hb}$', r'$\eta_{a}$']
-    visualizers.visualize_dist(prior, labels=[label for label in parameter_labels if label != r'$\tau_t$'], save_path=corner_plot_path)
+        prior_bounds = [row[1] for row in param_list]
+        mixed_prior = pipeline.gen_prior(model="Dimensional", t=t, global_batch_size=BATCH_SIZE, local_batch_size=(BATCH_SIZE // (2**6)),
+                                         segs=math.ceil(segs / 2), prior_bounds=prior_bounds, dtype=DTYPE, device=DEVICE)
+        file_manager.save_mix_dist(mixed_prior, mixed_prior_path)
+    corner_plot_path = prior_path + "mixed_prior_dist.png"
 
+    dim_labels = [r"$\lambda_x$", r"$\lambda_y$", r"$\lambda_{sf}$", r"$k_{sf}", r"k_{sp}",
+                  r"$k_{gs, min}$", r"$k_{gs, max}$", r"$k_{es}", r"$x_{sf}$", r"$x_{es}$", r"$x_{sp}$", r"$x_c$",
+                  r"$d$", r"$n$", r"$\gamma$", r"$c_{min}$", r"$s_{min}$", r"$c_{max}$", r"$s_{max}$",
+                  r"$k_{m, +}$", r"$k_{r, +}", r"$k_{m, -}$", r"$k_{r, -}$", r"$Ca2_{x, in}$", r"$ca2_{x, ex}$",
+                  r"$v_m$", r"$v_{ref}$", r"$z$", r"$r_m$", r"$r_r$", r"$\Delta_e$", r"$\tau_0$", r"$T$", r"$\epsilon$"]
+    nd_labels = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
+                 r"$C_{min}$", r"$S_{min}$", r"$S_{max}$", r"$Ca^2_m$", r"$Ca^2_{gs}$",
+                 r"$U_{gs,\ max}$", r"$\Delta E$", r"$k_{gs, \text{ ratio}}$",
+                 r"$\chi_{hb}$", r"$\chi_a$", r"$x_c$", r"$\eta_{hb}$", r"$\eta_{a}$"]
+    visualizers.visualize_dist(mixed_prior, labels=dim_labels, save_path=corner_plot_path)
+
+    """
     # --- SUMMARY STATISTICS --- #
     num_runs = 15
     all_stats = []
     all_thetas = []
+    batch_inits = helpers.concat(np.random.randint(0, 10, size=(BATCH_SIZE, 2)), np.random.randint(0, 1, size=(BATCH_SIZE, 3)))  # size: (BATCH_SIZE, 5)
+    batch_inits = torch.tensor(batch_inits, dtype=DTYPE, device=DEVICE)
     with torch.no_grad():
         for _ in tqdm(range(num_runs), desc=f"Calculating summary statistics for {num_runs} runs", leave=False):
-            curr_thetas = prior.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
-            sim = nd_simulator.NDSimulator(curr_thetas, force, inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
-            x_sims = sim.simulate()[0, 0, :, steady_id:] # shape: (BATCH_SIZE, len(t))
+            curr_thetas = mixed_prior.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
+            sim = nd_simulator.NDSimulator(curr_thetas, force, batch_inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
+            x_sims = sim.simulate()[0, 0, :, steady_idx:] # shape: (BATCH_SIZE, len(t))
             with warnings.catch_warnings():
-                warnings.simplefilter('ignore')
+                warnings.simplefilter("ignore")
                 stats = statistics.SummaryStatistics(x_sims, dt)
                 all_stats.append(stats.compute_statistics(n_bands=10, n_lags=10, pacf_lags=5, downsamples=(2000, 2000, 2000, 2000)))
             all_thetas.append(curr_thetas)
@@ -169,9 +172,11 @@ def run():
     output_dim = input_dim // 4
     layer_dims = (3 * input_dim // 2, input_dim // 2)
     embedded_net = embedded_network.EmbeddedNet(input_dim, output_dim, layer_dims)
+    """
 
     # set up snpe with embedded network
-    '''priors = []
+    """
+    priors = []
     prior_bounds = []
     for vals in params.values():
         prior_bounds.append(vals[1])
@@ -180,10 +185,13 @@ def run():
     for curr_bounds in prior_bounds:
         curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
         priors.append(curr_prior)
-    wide_prior = utils.MultipleIndependent(priors, device=str(DEVICE))'''
-    safe_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
+    wide_prior = utils.MultipleIndependent(priors, device=str(DEVICE))
+    """
 
-    neural_posterior = posterior_nn(model='maf', embedding_net=embedded_net)
+    """
+    safe_prior = sbi_prior_wrapper.SBIPriorWrapper(mixed_prior)
+
+    neural_posterior = posterior_nn(model="maf", embedding_net=embedded_net)
     inference = SNPE(prior=safe_prior, density_estimator=neural_posterior, device=str(DEVICE))
 
     # train the density estimator
@@ -191,6 +199,7 @@ def run():
 
     # build the posterior
     posterior = inference.build_posterior(density_estimator)
+    """
 
     # visualize and validate posterior
     #samples = posterior.sample((1000,), x=obs_stats)

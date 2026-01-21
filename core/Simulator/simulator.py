@@ -3,7 +3,7 @@ from tqdm import tqdm
 from abc import ABC, abstractmethod
 
 from core.Helpers import helpers
-from core.Models import nd_model_steady
+from core.Models import model_steady, nd_model_steady
 from core.Solvers import sdeint
 
 class Simulator(ABC):
@@ -34,7 +34,9 @@ class Simulator(ABC):
         ensemble_size = self._batch_size // self.freqs_per_batch
         time_seg_ids = helpers.get_even_ids(self.t.shape[0], self.segs + 1)
 
-        n_vars = self.inits.shape[-1] if isinstance(self.sde, bp_model_steady.NDModelSteady) else self.inits.shape[-1] - 1
+        n_vars = self.inits.shape[-1]
+        if not (isinstance(self.sde, model_steady.BPModelSteady) or isinstance(self.sde, nd_model_steady.NDModelSteady)):
+            n_vars -= 1
         curr_inits = self.inits
         sol = torch.zeros((n_vars, self._batch_size, self.t.shape[0]), dtype=self.t.dtype, device=self.t.device)
         for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments", leave=False):
