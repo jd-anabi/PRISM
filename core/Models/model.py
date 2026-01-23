@@ -91,7 +91,7 @@ class BPModel:
     def g(self) -> torch.Tensor:
         x_noise = self._x_noise()
         y_noise = self._y_noise()
-        dsigma = torch.stack((x_noise, y_noise, torch.zeros_like(x_noise), torch.zeros_like(x_noise), torch.zeros(x_noise)), dim=0)
+        dsigma = torch.stack((x_noise, y_noise, torch.zeros_like(x_noise), torch.zeros_like(x_noise), torch.zeros_like(x_noise)), dim=0)
         dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
         return torch.diag_embed(dsigma)
 
@@ -128,7 +128,7 @@ class BPModel:
 
     # --- NOISE --- #
     def _x_noise(self) -> torch.Tensor:
-        return self.epsilon * torch.sqrt(2 * K_B * self.temp * self.lam / self.lam_x)
+        return self.epsilon * torch.sqrt(2 * K_B * self.temp * self.lam_x) / self.lam
 
     def _y_noise(self) -> torch.Tensor:
-        return self.epsilon * torch.sqrt(2 * K_B * self.temp * self.lam_y)
+        return self.epsilon * torch.sqrt(2 * K_B * self.temp / self.lam_y)

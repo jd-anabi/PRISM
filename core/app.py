@@ -113,9 +113,10 @@ def run():
     mixed_prior_path = prior_path + "mixed_prior_dist.pt"
     try:
         helpers.clear_screen()
-        print("Prior found")
-        helpers.clear_screen()
         mixed_prior = file_manager.load_mix_dist(mixed_prior_path, device=DEVICE)
+        print("Prior found")
+        time.sleep(1)
+        helpers.clear_screen()
     except FileNotFoundError as e:
         print(f"Error: {e}. Going to construct prior from scratch.")
         time.sleep(5)

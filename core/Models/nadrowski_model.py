@@ -74,10 +74,10 @@ class NadrowskiModel:
 
     # --- NOISE --- #
     def _x_noise(self) -> torch.Tensor:
-        return self.eta_x * torch.sqrt(2 * K_B * self.temp * self.lam)
+        return self.eta_x * torch.sqrt(2 * K_B * self.temp / self.lam)
 
     def _y_noise(self) -> torch.Tensor:
-        return self.eta_y * torch.sqrt(2 * K_B * self.temp_eff * self.lam_y)
+        return self.eta_y * torch.sqrt(2 * K_B * self.temp_eff / self.lam_y)
 
     def _c_noise(self, x, y) -> torch.Tensor:
         return self.eta_c * torch.sqrt(2 * self.__p0(x, y) * (1 - self.__p0(x, y)) * self.tau / self.n)
