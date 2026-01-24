@@ -21,7 +21,7 @@ from sbi.neural_nets import posterior_nn
 from .Helpers import helpers, visualizers, file_manager
 from .SBI import statistics, embedded_network, pipeline
 from .SBI.Priors import nd_prior, sbi_prior_wrapper
-from .Simulator import nd_simulator, nadrowski_simulator
+from .Simulator import nd_simulator, nadrowski_simulator, hopf_simulator
 
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda:0")
@@ -101,11 +101,13 @@ def run():
     force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE) # no forcing
 
     param_list = list(params.values())
-    param_vals = [row[0] for row in param_list]
-    init_vals = list(inits.values())
+    params_tensor = torch.tensor([row[0] for row in param_list], dtype=DTYPE).unsqueeze(0)
+    inits_tensor = torch.tensor(list(inits.values()), dtype=DTYPE).unsqueeze(0)
 
     steady_idx = int(steady_percentage * len(t))
-    obs_data = pipeline.gen_obs(sim="Dimensional", params=param_vals, t=t, inits=init_vals, force=force[0].unsqueeze(0), n_segs=segs, steady_idx=steady_idx)
+    obs_data = pipeline.gen_obs(sim="Hopf", params=params_tensor, t=t, inits=inits_tensor, force=force[0].unsqueeze(0), n_segs=segs, steady_idx=steady_idx)[0, :, :]
+    obs_stats = pipeline.gen_stats(obs_data, dt)
+    visualizers.plot(t[steady_idx:].cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy())
 
     # --- PRIOR CONSTRUCTION --- #
     print("Checking for prior...")
@@ -122,11 +124,12 @@ def run():
         time.sleep(5)
         helpers.clear_screen()
         prior_bounds = [row[1] for row in param_list]
-        mixed_prior = pipeline.gen_prior(model="Dimensional", t=t, global_batch_size=BATCH_SIZE, local_batch_size=(BATCH_SIZE // (2**6)),
+        mixed_prior = pipeline.gen_prior(model="Hopf", t=t, global_batch_size=BATCH_SIZE, local_batch_size=(BATCH_SIZE // (2**6)),
                                          segs=math.ceil(segs / 2), prior_bounds=prior_bounds, dtype=DTYPE, device=DEVICE)
         file_manager.save_mix_dist(mixed_prior, mixed_prior_path)
     corner_plot_path = prior_path + "mixed_prior_dist.png"
 
+    hopf_labels = [r"$\mu$", r"$\omega$", r"$\alpha$", r"$\beta$", r"$\epsilon_x$", r"$\epsilon_y$"]
     dim_labels = [r"$\lambda_x$", r"$\lambda_y$", r"$\lambda_{sf}$", r"$k_{sf}", r"k_{sp}",
                   r"$k_{gs, min}$", r"$k_{gs, max}$", r"$k_{es}", r"$x_{sf}$", r"$x_{es}$", r"$x_{sp}$", r"$x_c$",
                   r"$d$", r"$n$", r"$\gamma$", r"$c_{min}$", r"$s_{min}$", r"$c_{max}$", r"$s_{max}$",
@@ -136,29 +139,32 @@ def run():
                  r"$C_{min}$", r"$S_{min}$", r"$S_{max}$", r"$Ca^2_m$", r"$Ca^2_{gs}$",
                  r"$U_{gs,\ max}$", r"$\Delta E$", r"$k_{gs, \text{ ratio}}$",
                  r"$\chi_{hb}$", r"$\chi_a$", r"$x_c$", r"$\eta_{hb}$", r"$\eta_{a}$"]
-    visualizers.visualize_dist(mixed_prior, labels=dim_labels, save_path=corner_plot_path)
+    visualizers.visualize_dist(mixed_prior, labels=hopf_labels, save_path=corner_plot_path)
 
-    """
+
     # --- SUMMARY STATISTICS --- #
     num_runs = 15
-    all_stats = []
+    all_training_stats = []
     all_thetas = []
-    batch_inits = helpers.concat(np.random.randint(0, 10, size=(BATCH_SIZE, 2)), np.random.randint(0, 1, size=(BATCH_SIZE, 3)))  # size: (BATCH_SIZE, 5)
-    batch_inits = torch.tensor(batch_inits, dtype=DTYPE, device=DEVICE)
+    init_pos = torch.tensor(np.random.randint(0, 10, size=(BATCH_SIZE, 2)), dtype=DTYPE, device=DEVICE)
+    #batch_inits = helpers.concat(np.random.randint(0, 10, size=(BATCH_SIZE, 2)), np.random.randint(0, 1, size=(BATCH_SIZE, 3)))  # size: (BATCH_SIZE, 5)
+    #batch_inits = torch.tensor(batch_inits, dtype=DTYPE, device=DEVICE)
     with torch.no_grad():
         for _ in tqdm(range(num_runs), desc=f"Calculating summary statistics for {num_runs} runs", leave=False):
             curr_thetas = mixed_prior.sample((BATCH_SIZE,)).to(device=DEVICE, dtype=DTYPE)
-            sim = nd_simulator.NDSimulator(curr_thetas, force, batch_inits, t, segs=segs, batch_size=BATCH_SIZE, device=DEVICE)
-            x_sims = sim.simulate()[0, 0, :, steady_idx:] # shape: (BATCH_SIZE, len(t))
+            training_data = pipeline.gen_obs(sim="Hopf", params=curr_thetas, t=t, inits=init_pos,
+                                             force=force[0].unsqueeze(0), n_segs=segs, steady_idx=steady_idx,
+                                             batch_size=BATCH_SIZE, dtype=DTYPE, device=DEVICE)[0, :, :]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                stats = statistics.SummaryStatistics(x_sims, dt)
-                all_stats.append(stats.compute_statistics(n_bands=10, n_lags=10, pacf_lags=5, downsamples=(2000, 2000, 2000, 2000)))
+                training_stats = pipeline.gen_stats(training_data, dt)
+                all_training_stats.append(training_stats)
             all_thetas.append(curr_thetas)
-            del x_sims
-            del stats
-    summary_stats = torch.cat(all_stats, dim=0)
+            del training_stats
+            del training_stats
+    summary_stats = torch.cat(all_training_stats, dim=0)
     thetas = torch.cat(all_thetas, dim=0)
+
 
     # --- SNPE --- #
     # filter data
@@ -173,36 +179,32 @@ def run():
     output_dim = input_dim // 4
     layer_dims = (3 * input_dim // 2, input_dim // 2)
     embedded_net = embedded_network.EmbeddedNet(input_dim, output_dim, layer_dims)
-    """
 
     # set up snpe with embedded network
-    """
     priors = []
     prior_bounds = []
     for vals in params.values():
         prior_bounds.append(vals[1])
-    steady_idx = [i for i in range(len(prior_bounds)) if i != 3]
-    prior_bounds.pop(3)  # shape: (1, 16)
+    #steady_idx = [i for i in range(len(prior_bounds)) if i != 3]
+    #prior_bounds.pop(3)  # shape: (1, 16)
     for curr_bounds in prior_bounds:
         curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
         priors.append(curr_prior)
-    wide_prior = utils.MultipleIndependent(priors, device=str(DEVICE))
-    """
+    sbi_prior = utils.MultipleIndependent(priors, device=str(DEVICE))
 
-    """
-    safe_prior = sbi_prior_wrapper.SBIPriorWrapper(mixed_prior)
+    #safe_prior = sbi_prior_wrapper.SBIPriorWrapper(mixed_prior)
 
     neural_posterior = posterior_nn(model="maf", embedding_net=embedded_net)
-    inference = SNPE(prior=safe_prior, density_estimator=neural_posterior, device=str(DEVICE))
+    inference = SNPE(prior=sbi_prior, density_estimator=neural_posterior, device=str(DEVICE))
 
     # train the density estimator
     density_estimator = inference.append_simulations(thetas, summary_stats).train(training_batch_size=int(2**7))
 
     # build the posterior
     posterior = inference.build_posterior(density_estimator)
-    """
 
     # visualize and validate posterior
-    #samples = posterior.sample((1000,), x=obs_stats)
-    #fig, ax = pairplot(samples.cpu().numpy(), points=np.array(param_vals), labels=(parameter_labels[:3] + parameter_labels[4:]))
-    #plt.show()
+    ground_truth = [row[0] for row in params]
+    samples = posterior.sample((1000,), x=obs_stats)
+    fig, ax = pairplot(samples.cpu().numpy(), points=np.array(ground_truth), labels=hopf_labels)
+    plt.show()
