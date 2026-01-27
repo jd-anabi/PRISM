@@ -318,16 +318,14 @@ class SummaryStatistics:
         Computes the following nonlinear statistics:
             (1) Time irreversibility
             (2) Sample entropy
-            (3) Correlation dimensions
-            (4) Hurst exponent
-            (5) Mean bicoherence
+            (3) Hurst exponent
         :param downsample_factor: the downsampling factor
         :param order: the order to use for the sample entropy calculation
         :param tolerance: the tolerance to use for the sample entropy calculation
         :param nperseg: the number of segments to use for bicoherence calculation
         :param noverlap: the overlap value to use for bicoherence calculation
         :param nfft: the FFT size to use for bicoherence calculation
-        :return: the nonlinear statistics with shape: (batch_size, 4)
+        :return: the nonlinear statistics with shape: (batch_size, 3)
         """
         # nonlinear statistics
         full_stats = []
@@ -345,25 +343,18 @@ class SummaryStatistics:
         x_downsampled = np.ascontiguousarray(x_to_cpu[:, ::step]) # downsample for high time-complexity calculations
 
         samp_en_stats = []
-        corr_dim_stats = []
         hurst_stats = []
-        mean_bicoherence_stats = []
         for i in range(self.batch_size):
             x_curr = x_to_cpu[i]
             x_curr_downsampled = x_downsampled[i]
             if np.max(np.abs(x_curr)) > 1e30 or not np.all(np.isfinite(x_curr)):
                 samp_en_stats.append(np.nan)
-                corr_dim_stats.append(np.nan)
                 hurst_stats.append(np.nan)
-                mean_bicoherence_stats.append(np.nan)
                 continue
 
             try:
                 # sample entropy
                 samp_en_stats.append(ap.sample_entropy(x_curr_downsampled, order=order, tolerance=tolerance))
-
-                # correlation dimension
-                corr_dim_stats.append(ap.higuchi_fd(x_curr_downsampled))
 
                 # hurst exponent
                 lags = range(2, 20)
@@ -376,24 +367,12 @@ class SummaryStatistics:
                 coeff = coeff.T
                 coeff = coeff[:, np.newaxis, :]
                 coeff = np.ascontiguousarray(coeff)
-                try:
-                    bispectrum = Bispectrum(data=coeff, freqs=freqs, sampling_freq=(1 / self.dt))
-                    bispectrum.compute(indices=((0,), (0,)))
-                    data = bispectrum.results.get_results()
-                    abs_data = np.abs(data[0])
-                    mean_bicoherence_stats.append(np.mean(abs_data))
-                except Exception:
-                    mean_bicoherence_stats.append(float('nan'))
             except Exception:
                 samp_en_stats.append(np.nan)
-                corr_dim_stats.append(np.nan)
                 hurst_stats.append(np.nan)
-                mean_bicoherence_stats.append(np.nan)
 
         full_stats.append(torch.tensor(samp_en_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
-        full_stats.append(torch.tensor(corr_dim_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
         full_stats.append(torch.tensor(hurst_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
-        full_stats.append(torch.tensor(mean_bicoherence_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
 
         return torch.cat(full_stats, dim=-1)
 
@@ -481,17 +460,13 @@ class SummaryStatistics:
         """
         Computes the following information theoretic statistics:
             (1) Permutation entropy
-            (2) Approximate entropy
-            (3) Complexity entropy
         :param downsample_factor: the downsampling factor
         :param orders: the orders for the entropy calculations
-        :return: the information theoretic statistics with shape: (batch_size, 3)
+        :return: the information theoretic statistics with shape: (batch_size, 1)
         """
         # information theoretic stats
         full_stats = []
         p_ent_stats = []
-        app_ent_stats = []
-        complex_ent_stats = []
 
         # detach from gpu and downsample
         x_to_cpu = self.x.detach().cpu().numpy()
@@ -502,30 +477,16 @@ class SummaryStatistics:
             x_curr = x_downsampled[i]
             if np.max(np.abs(x_curr)) > 1e30 or not np.all(np.isfinite(x_curr)):
                 p_ent_stats.append(np.nan)
-                app_ent_stats.append(np.nan)
-                complex_ent_stats.append(np.nan)
                 continue
 
             try:
                 # permutation entropy
                 p_ent = ap.perm_entropy(x_curr, order=orders[0], normalize=True)
                 p_ent_stats.append(p_ent)
-
-                # approximate entropy
-                apr_ent = ap.app_entropy(x_curr, order=orders[1])
-                app_ent_stats.append(apr_ent)
-
-                # complexity entropy
-                svd_ent = ap.svd_entropy(x_curr, order=orders[2], delay=1, normalize=True)
-                complex_ent_stats.append(svd_ent)
             except Exception:
                 p_ent_stats.append(np.nan)
-                app_ent_stats.append(np.nan)
-                complex_ent_stats.append(np.nan)
 
         full_stats.append(torch.tensor(p_ent_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
-        full_stats.append(torch.tensor(app_ent_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
-        full_stats.append(torch.tensor(complex_ent_stats, dtype=self.dtype, device=self.device).unsqueeze(-1))
 
         return torch.cat(full_stats, dim=-1)
 
