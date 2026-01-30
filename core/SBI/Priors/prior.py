@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from sklearn.cluster import DBSCAN
+import hdbscan
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
@@ -18,23 +18,25 @@ class Prior(ABC):
 
         # do global sweep and find number of "islands"
         stable_params = self._global_map(t[:(t.shape[0] // t_global_scale)], n_params, prior_bounds, segs, n_sims, num_iterations, steady)
-        stable_params_arr = np.array(stable_params)
-        scaler = StandardScaler()
-
-        stable_params_scaled = scaler.fit_transform(stable_params_arr)
-        db = DBSCAN(eps=2.5, min_samples=50).fit(stable_params_scaled)
-        labels = db.labels_
-        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-        if n_clusters < 1:
-            print('No clusters found. Defaulting to 1 cluster')
-            n_clusters = 1
 
         # do local sweep
         accepted_params = np.array(self._local_map(t, stable_params, local_batch_size, n_params, n_max, step, segs, steady))
 
+        scaler = StandardScaler()
+        stable_params_scaled = scaler.fit_transform(accepted_params)
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=50, min_samples=10)
+        labels = clusterer.fit_predict(stable_params_scaled)
+        n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        if n_clusters < 1:
+            print('No clusters found. Defaulting to 1 cluster')
+            n_clusters = 1
+        else:
+            print(f'Found {n_clusters} clusters')
+
         # safety check
         if accepted_params.shape[0] < n_clusters:
-            raise ValueError(f"Not enough stable parameter sets ({accepted_params.shape[0]}) to fit {n_clusters} GMM components")
+            raise ValueError(
+                f"Not enough stable parameter sets ({accepted_params.shape[0]}) to fit {n_clusters} GMM components")
 
         # finally construct prior using Gaussian-Mixture Model'
         progress_bar = tqdm(total=5, desc="Constructing prior...")

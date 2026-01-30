@@ -36,14 +36,14 @@ class HopfModel:
     # --- SDEs --- #
     def _x_dot(self, x, y) -> torch.Tensor:
         linear_term = self.mu * x - self.omega * y
-        quadratic_term = self.beta * torch.pow(x, 2) * y - self.alpha * x * torch.pow(y, 2)
-        cubic_term = -1 * self.alpha * torch.pow(x, 3) + self.beta * torch.pow(y, 3)
+        quadratic_term = self.alpha * x * torch.pow(y, 2) -self.beta * torch.pow(x, 2) * y
+        cubic_term = self.alpha * torch.pow(x, 3) - self.beta * torch.pow(y, 3)
         return linear_term + quadratic_term + cubic_term
 
     def _y_dot(self, x, y) -> torch.Tensor:
         linear_term = self.omega * x + self.mu * y
-        quadratic_term = -1 * self.alpha * torch.pow(x, 2) * y - self.beta * x * torch.pow(y, 2)
-        cubic_term = -1 * self.beta * torch.pow(x, 3) - self.alpha * torch.pow(y, 3)
+        quadratic_term = self.alpha * torch.pow(x, 2) * y + self.beta * x * torch.pow(y, 2)
+        cubic_term = self.beta * torch.pow(x, 3) + self.alpha * torch.pow(y, 3)
         return linear_term + quadratic_term + cubic_term
 
     # --- NOISE --- #

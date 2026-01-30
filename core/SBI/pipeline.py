@@ -61,8 +61,7 @@ def gen_obs(sim: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor
     obs = simulator.simulate()[:, 0, :, steady_idx:]
     return obs
 
-def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20, downsamples: tuple = (2000, 2000, 2000, 2000),
-              comp_device: torch.device = torch.device('cpu'), device: torch.device = torch.device('cpu')) -> torch.Tensor:
+def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20, device: torch.device = torch.device('cpu')) -> torch.Tensor:
     """
     Generate statistical features from input data using the given parameters.
 
@@ -92,33 +91,39 @@ def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, p
     :return: A tensor containing the computed statistical features. Shape: (batch size, number of statistics).
     :rtype: torch.Tensor
     """
-    stats = statistics.SummaryStatistics(x.to(comp_device), dt)
-    return stats.compute_statistics(n_bands, n_lags, pacf_lags, downsamples=downsamples).to(device)
+    stats = statistics.SummaryStatistics(x.to(device), dt)
+    return stats.compute_statistics(n_bands, n_lags, pacf_lags)
 
 def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list,
-              dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')) -> torch.distributions.MixtureSameFamily:
+              num_iterations: int = 25, dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')) -> torch.distributions.MixtureSameFamily:
     """
-    Generates a prior distribution based on the specified model and parameters.
+    Generates a prior distribution based on the given model and parameters.
 
-    This function creates a prior distribution based on the selected `model` type, while considering
-    various input parameters such as time tensor, batch sizes, segmentation, boundary values, and
-    data types. Depending on the selected model, it uses specific prior logic provided by separate
-    modules.
+    The function constructs a prior distribution using the specified model type
+    and parameters. It supports different models, including "Dimensional",
+    "Non-dimensional", and "Hopf". For the "Nadrowski" model or any invalid model
+    input, it raises a ValueError. The prior generation process involves a series
+    of calculations and iterations executed without gradient computation.
 
-    :param model: The type of model to use for generating the prior. Must be one of "Dimensional",
-                  "Non-dimensional", or "Hopf".
-    :param t: A tensor representing the time steps for generating the prior.
-    :param global_batch_size: The size of the global batch for computations.
-    :param local_batch_size: The size of the local batch for computations.
-    :param segs: The number of segments to divide the calculations.
-    :param prior_bounds: A list specifying the boundary values for the prior parameters.
-    :param dtype: The data type for tensor computations. Default is ``torch.float32``.
-    :param device: The device for tensor computations. Default is ``torch.device('cpu')``.
+    :param model: Specifies the type of model to use for prior generation. Accepted
+                  values include "Dimensional", "Non-dimensional", and "Hopf".
+    :param t: A tensor representing the input time vector used in the prior
+              construction process.
+    :param global_batch_size: Global batch size to be considered during the prior
+                              generation.
+    :param local_batch_size: Local batch size to be used in the computation.
+    :param segs: Number of segmentation points for prior construction.
+    :param prior_bounds: A list of bounding values defining the range of the prior
+                         parameters.
+    :param num_iterations: Number of iterations to be performed in the process.
+                           Defaults to 25.
+    :param dtype: Data type to be used for tensor computations.
+                  Defaults to torch.float32.
+    :param device: Device on which the computation should run.
+                   Defaults to torch.device('cpu').
 
-    :return: A mixture distribution constructed based on the selected model and input parameters.
-    :rtype: MixtureSameFamily
-
-    :raises ValueError: If an invalid `model` type is provided.
+    :return: A torch.distributions.MixtureSameFamily object representing the
+             constructed prior distribution.
     """
     n_params = len(prior_bounds)
     prior = None
@@ -136,13 +141,13 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
             raise ValueError(f"Invalid model: {model}")
 
     with torch.no_grad():
-        prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size // (2 ** 6), segs, prior_bounds, t_global_scale=2, num_iterations=50, n_max=175000, steady=False)
+        prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size // (2 ** 6), segs, prior_bounds, t_global_scale=2, num_iterations=num_iterations, n_max=175000, steady=False)
 
     return prior
 
 def gen_training_data(sim: str, prior: torch.distributions.Distribution, t: torch.Tensor,
                       run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float,
-                      dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')) -> tuple:
+                      dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
     Generates synthetic training data for a dynamical system simulation using specified parameters
     and a probabilistic prior for generating initial conditions. This function supports different
@@ -195,7 +200,7 @@ def gen_training_data(sim: str, prior: torch.distributions.Distribution, t: torc
     thetas = []
 
     with torch.no_grad():
-        for _ in tqdm(range(n_runs), desc=f"Generating training data...", leave=False):
+        for _ in tqdm(range(n_runs), desc=f"Generating training data", leave=False):
             curr_thetas = prior.sample((run_size,)).to(device=device, dtype=dtype)
             data = gen_obs(sim=sim, params=curr_thetas, t=t, inits=inits,
                            force=torch.zeros((1, t.shape[0]), dtype=dtype, device=device), n_segs=n_segs, steady_idx=steady_idx,
@@ -203,6 +208,7 @@ def gen_training_data(sim: str, prior: torch.distributions.Distribution, t: torc
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 training_stats = gen_stats(data, dt, device=device)
+                del data
                 training_data.append(training_stats)
             thetas.append(curr_thetas)
             del training_stats

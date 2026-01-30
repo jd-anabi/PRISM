@@ -33,7 +33,7 @@ else:
     DTYPE = torch.float32
 
 if DEVICE.type == "cuda" and DTYPE == torch.float32:
-    BATCH_SIZE = 2**15
+    BATCH_SIZE = 2**12
 elif DEVICE.type == "cuda" and DTYPE == torch.float64:
     BATCH_SIZE = 2**10
 else:
@@ -103,7 +103,7 @@ def run():
 
     steady_idx = int(steady_percentage * len(t))
     obs_data = pipeline.gen_obs(sim="Hopf", params=params_tensor, t=t, inits=inits_tensor, force=force[0].unsqueeze(0), n_segs=segs, steady_idx=steady_idx)[0, :, :]
-    obs_stats = pipeline.gen_stats(obs_data, dt, device=DEVICE)
+    obs_stats = pipeline.gen_stats(obs_data, dt)
     visualizers.plot(t[steady_idx:].cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy())
 
     # --- PRIOR CONSTRUCTION --- #
@@ -141,13 +141,13 @@ def run():
     # --- GET TRAINING DATA --- #
     hopf_posterior_path = posterior_path + "hopf_posterior.pt"
     try:
-        posterior = torch.load(hopf_posterior_path, map_location=torch.device("cpu"))
+        posterior = torch.load(hopf_posterior_path, weights_only=False)
     except FileNotFoundError as e:
         training_data, thetas = pipeline.gen_training_data(sim="Hopf", prior=mixed_prior, t=t, run_size=BATCH_SIZE,
-                                                           n_runs=10, n_segs=segs, steady_idx=steady_idx,
+                                                           n_runs=300, n_segs=segs, steady_idx=steady_idx,
                                                            dt=dt, dtype=DTYPE, device=DEVICE)
 
-        # --- SNPE --- #
+        # --- NPE --- #
         # filter data
         nan_mask = torch.isfinite(training_data).all(dim=1)
         safe_magnitude_mask = (torch.abs(training_data) < 1e15).all(dim=1)
@@ -167,17 +167,17 @@ def run():
         for curr_bounds in prior_bounds:
             curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
             priors.append(curr_prior)
-        sbi_prior = utils.MultipleIndependent(priors, device=str(DEVICE))
+        #sbi_prior = utils.MultipleIndependent(priors, device=str(DEVICE))
 
-        #safe_prior = sbi_prior_wrapper.SBIPriorWrapper(mixed_prior)
+        sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(mixed_prior)
         posterior = pipeline.train_nn(thetas, training_data, model="maf", prior=sbi_prior, embedding_net=embedded_net, batch_size=int(2**7), device=DEVICE)
 
         # save the posterior
         torch.save(posterior, hopf_posterior_path)
 
     # visualize and validate posterior
-    posterior = torch.load(hopf_posterior_path, map_location=torch.device("cpu"))
-    ground_truth = [row[0] for row in params]
-    samples = posterior.sample((1000,), x=obs_stats)
-    fig, ax = pairplot(samples.cpu().numpy(), points=np.array(ground_truth), labels=hopf_labels)
+    posterior = torch.load(hopf_posterior_path, weights_only=False)
+    ground_truth = [row[0] for row in params.values()]
+    samples = posterior.sample((1000,), x=obs_stats.to(DEVICE))
+    fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth]), labels=hopf_labels)
     plt.show()

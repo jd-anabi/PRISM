@@ -11,3 +11,4 @@ antropy==0.1.9
 pybispectra==1.2.4
 sklearn==1.7.2
 corner==2.2.3
+hdbscan==0.8.41
