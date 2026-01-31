@@ -12,7 +12,7 @@ from .Priors import dim_prior, nd_prior, hopf_prior
 from core.Simulator import dim_simulator, nd_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics
 
-def gen_obs(sim: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor, n_segs: int, steady_idx: int,
+def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor, n_segs: int, steady_idx: int,
             batch_size: int = 1, dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu")):
     """
     Generates observations based on specified simulation type, parameters, and other input data.
@@ -22,7 +22,7 @@ def gen_obs(sim: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor
     The specified simulator is used to simulate observations, and the processed observation data
     is returned.
 
-    :param sim: The type of simulator to use. Must be one of ["Dimensional", "Non-dimensional", "Nadrowski", "Hopf"].
+    :param model: The type of model to use. Must be one of ["dimensional", "non-dimensional", "nadrowski", "hopf"].
     :param params: Tensor containing simulation parameters. The first dimension must match the given batch size.
     :param t: Tensor specifying the time points for the simulation. Its data type and device are set during processing.
     :param inits: Tensor containing initial conditions for the simulation. The first dimension must match the batch size.
@@ -34,29 +34,33 @@ def gen_obs(sim: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor
     :param device: The device on which simulations are run, such as "cpu" or "cuda". Default is "cpu".
 
     :return: Tensor containing simulated observations after processing using the selected simulator. Shape: (number of variables, batch size, steady state time points).
+    :rtype: torch.Tensor
+
+    :raises ValueError: If the batch size of input tensors does not match the first dimension of the parameters tensor or initial conditions tensor.
+    :raises ValueError: If the specified model is not supported.
     """
     if params.shape[0] != batch_size or inits.shape[0] != batch_size:
         raise ValueError(f"Batch size: {batch_size} cannot differ from dim 0 of parameters tensor or initial conditions tensor")
 
-    valid_sims = ["Dimensional", "Non-dimensional", "Nadrowski", "Hopf"]
-    if sim not in valid_sims:
-        raise ValueError(f"Invalid simulator: {sim}")
+    valid_models = ["dimensional", "non-dimensional", "nadrowski", "hopf"]
+    if model.lower() not in valid_models:
+        raise ValueError(f"Invalid simulator: {model}")
 
     # move to the specified device
     t = t.to(dtype=dtype, device=device)
 
     simulator = None
-    match sim:
-        case "Dimensional":
+    match model.lower():
+        case "dimensional":
             simulator = dim_simulator.DimSimulator(params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
-        case "Non-dimensional":
+        case "non-dimensional":
             simulator = nd_simulator.NDSimulator(params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
-        case "Hopf":
+        case "hopf":
             simulator = hopf_simulator.HopfSimulator(params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
-        case "Nadrowski":
+        case "nadrowski":
             simulator = nadrowski_simulator.NadrowskiSimulator(params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
         case _:
-            raise ValueError(f"Invalid simulator: {sim}")
+            raise ValueError(f"Invalid simulator: {model}")
 
     obs = simulator.simulate()[:, 0, :, steady_idx:]
     return obs
@@ -88,6 +92,7 @@ def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, p
     :type comp_device: torch.device
     :param device: The device on which the statistics should be moved to. Defaults to torch.device('cpu').
     :type device: torch.device
+
     :return: A tensor containing the computed statistical features. Shape: (batch size, number of statistics).
     :rtype: torch.Tensor
     """
@@ -124,18 +129,25 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
 
     :return: A torch.distributions.MixtureSameFamily object representing the
              constructed prior distribution.
+    :rtype: torch.distributions.MixtureSameFamily
+
+    :raises ValueError: If the specified model is not supported.
     """
+    valid_models = ["dimensional", "non-dimensional", "nadrowski", "hopf"]
+    if model.lower() not in valid_models:
+        raise ValueError(f"Invalid simulator: {model}")
+
     n_params = len(prior_bounds)
     prior = None
 
-    match model:
-        case "Dimensional":
+    match model.lower():
+        case "dimensional":
             prior = dim_prior.DimPrior(dtype, device)
-        case "Non-dimensional":
+        case "non-dimensional":
             prior = nd_prior.NDPrior(dtype, device)
-        case "Hopf":
+        case "hopf":
             prior = hopf_prior.HopfPrior(dtype, device)
-        case "Nadrowski":
+        case "nadrowski":
             raise ValueError(f"Invalid model (at the moment): {model}")
         case _:
             raise ValueError(f"Invalid model: {model}")
@@ -145,7 +157,7 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
 
     return prior
 
-def gen_training_data(sim: str, prior: torch.distributions.Distribution, t: torch.Tensor,
+def gen_training_data(model: str, prior: torch.distributions.Distribution, t: torch.Tensor,
                       run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float,
                       dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
@@ -154,8 +166,8 @@ def gen_training_data(sim: str, prior: torch.distributions.Distribution, t: torc
     types of simulators, handles device configuration, and computes training statistics for the
     simulated observations.
 
-    :param sim: The type of simulator to use. Supported options are "Dimensional",
-                "Non-dimensional", "Nadrowski", and "Hopf".
+    :param model: The type of model to use. Supported options are "dimensional",
+                "non-dimensional", "nadrowski", and "hopf".
     :param prior: A probabilistic distribution used for sampling initial parameters of
                   the system.
     :param t: A time tensor specifying the time points for the simulation.
@@ -173,25 +185,28 @@ def gen_training_data(sim: str, prior: torch.distributions.Distribution, t: torc
     :return: A tuple containing two elements:
              - A list of training data statistics computed for each simulation run.
              - A list of parameter tensors used for generating the simulated data.
+    :rtype: tuple
+
+    :raises ValueError: If the specified model is not supported.
     """
-    valid_sims = ["Dimensional", "Non-dimensional", "Nadrowski", "Hopf"]
-    if sim not in valid_sims:
-        raise ValueError(f"Invalid simulator: {sim}")
+    valid_models = ["dimensional", "non-dimensional", "nadrowski", "hopf"]
+    if model.lower() not in valid_models:
+        raise ValueError(f"Invalid simulator: {model}")
 
     inits = None
-    match sim:
-        case "Dimensional":
+    match model.lower():
+        case "dimensional":
             inits = helpers.concat(np.random.randint(0, 10, size=(run_size, 2)), np.random.randint(0, 1, size=(run_size, 3)))  # size: (run_size, 5)
             inits = torch.tensor(inits, dtype=dtype, device=device)
-        case "Non-dimensional":
+        case "non-dimensional":
             inits = helpers.concat(np.random.randint(0, 10, size=(run_size, 2)), np.random.randint(0, 1, size=(run_size, 3)))  # size: (run_size, 5)
             inits = torch.tensor(inits, dtype=dtype, device=device)
-        case "Hopf":
+        case "hopf":
             inits = torch.tensor(np.random.randint(0, 10, size=(run_size, 2)), dtype=dtype, device=device)
-        case "Nadrowski":
-            raise ValueError(f"Invalid simulator (at the moment): {sim}")
+        case "nadrowski":
+            raise ValueError(f"Invalid simulator (at the moment): {model}")
         case _:
-            raise ValueError(f"Invalid simulator: {sim}")
+            raise ValueError(f"Invalid simulator: {model}")
 
     # move to the specified device
     t = t.to(dtype=dtype, device=device)
@@ -202,7 +217,7 @@ def gen_training_data(sim: str, prior: torch.distributions.Distribution, t: torc
     with torch.no_grad():
         for _ in tqdm(range(n_runs), desc=f"Generating training data", leave=False):
             curr_thetas = prior.sample((run_size,)).to(device=device, dtype=dtype)
-            data = gen_obs(sim=sim, params=curr_thetas, t=t, inits=inits,
+            data = gen_obs(model=model, params=curr_thetas, t=t, inits=inits,
                            force=torch.zeros((1, t.shape[0]), dtype=dtype, device=device), n_segs=n_segs, steady_idx=steady_idx,
                            batch_size=run_size, dtype=dtype, device=device)[0, :, :]
             with warnings.catch_warnings():

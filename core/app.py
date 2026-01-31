@@ -11,13 +11,13 @@ import pint
 import torch
 import numpy as np
 from matplotlib import pyplot as plt
-from sbi import utils
 from sbi.analysis import pairplot
 
 from .Helpers import helpers, visualizers, file_manager
 from .SBI import embedded_network, pipeline
-from .SBI.Priors import nd_prior, sbi_prior_wrapper
+from .SBI.Priors import sbi_prior_wrapper
 
+# === PYTORCH INITIALIZATION ===
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda:0")
     if (torch.cuda.get_device_properties(DEVICE).major, torch.cuda.get_device_properties(DEVICE).minor) < (8, 0):
@@ -39,115 +39,109 @@ elif DEVICE.type == "cuda" and DTYPE == torch.float64:
 else:
     BATCH_SIZE = 2**6
 
-# ensemble variables needed
+# === PATHS ===
+if sys.platform == "win32":
+    CELL_PATH = os.getcwd() + "\\Resources\\Cells\\"
+    PRIOR_PATH = os.getcwd() + "\\Resources\\Priors\\"
+    POSTERIOR_PATH = os.getcwd() + "\\Resources\\Posteriors\\"
+    PLOT_PATH = os.getcwd() + "\\Resources\\Plots\\"
+else:
+    CELL_PATH = os.getcwd() + "/Resources/Cells/"
+    PRIOR_PATH = os.getcwd() + "/Resources/Priors/"
+    POSTERIOR_PATH = os.getcwd() + "/Resources/Posteriors/"
+    PLOT_PATH = os.getcwd() + "/Resources/Plots/"
+
+# === LABELS FOR PLOTTING ===
+HOPF_LABELS = [r"$\mu$", r"$\omega$", r"$\alpha$", r"$\beta$", r"$\epsilon_x$", r"$\epsilon_y$"]
+DIM_LABELS = [r"$\lambda_x$", r"$\lambda_y$", r"$\lambda_{sf}$", r"$k_{sf}", r"k_{sp}",
+              r"$k_{gs, min}$", r"$k_{gs, max}$", r"$k_{es}", r"$x_{sf}$", r"$x_{es}$", r"$x_{sp}$", r"$x_c$",
+              r"$d$", r"$n$", r"$\gamma$", r"$c_{min}$", r"$s_{min}$", r"$c_{max}$", r"$s_{max}$",
+              r"$k_{m, +}$", r"$k_{r, +}", r"$k_{m, -}$", r"$k_{r, -}$", r"$Ca2_{x, in}$", r"$ca2_{x, ex}$",
+              r"$v_m$", r"$v_{ref}$", r"$z$", r"$r_m$", r"$r_r$", r"$\Delta_e$", r"$\tau_0$", r"$T$", r"$\epsilon$"]
+ND_LABELS = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
+             r"$C_{min}$", r"$S_{min}$", r"$S_{max}$", r"$Ca^2_m$", r"$Ca^2_{gs}$",
+             r"$U_{gs,\ max}$", r"$\Delta E$", r"$k_{gs, \text{ ratio}}$",
+             r"$\chi_{hb}$", r"$\chi_a$", r"$x_c$", r"$\eta_{hb}$", r"$\eta_{a}$"]
+
+# === ENSEMBLE VARIABLES ===
 UNIQUE_FREQS = 2**6 # number of unique frequencies
 ENSEMBLE_SIZE = 2**7 if DEVICE.type == "cuda" else 2**5 # ensemble size for each frequency
 FPB = BATCH_SIZE // ENSEMBLE_SIZE # number of frequencies per batch
 ITERATIONS = int(UNIQUE_FREQS / FPB)
-
 K_B = 1.380649e-23  # m^2 kg s^-2 K^-1
 
 def run():
-    # --- SETUP --- #
-    # construct OS dependent directory paths
-    if sys.platform == "win32":
-        cell_path = os.getcwd() + "\\Resources\\Cells\\"
-        prior_path = os.getcwd() + "\\Resources\\Priors\\"
-        posterior_path = os.getcwd() + "\\Resources\\Posteriors\\"
-    else:
-        cell_path = os.getcwd() + "/Resources/Cells/"
-        prior_path = os.getcwd() + "/Resources/Priors/"
-        posterior_path = os.getcwd() + "/Resources/Posteriors/"
-
-    # list files in directory
-    model_files = [""]
-    file_num = 1
-    for root, dirs, files in os.walk(cell_path):
-        level = root.replace(cell_path, "").count(os.sep)
-        indent = " " * 2 * level
-        print(f"{indent}{os.path.basename(root)}")
-        subindent = " " * 2 * (level + 1)
-        for file in files:
-            model_files.append(file)
-            print(f"{subindent}({file_num}) {file}")
-            file_num += 1
-    model_files.pop(0)
+    # === SETUP ===
+    # list files in the cell directory
+    cell_files = file_manager.list_dir(CELL_PATH)
 
     # read in model parameters
     file_num = int(input("\nFile number for model parameters: "))
     helpers.clear_screen()
-    file = cell_path + model_files[file_num - 1]
-    inits, params, force_params, units = file_manager.parse_model_file(file)
+    cell_file = CELL_PATH + cell_files[file_num - 1]
+    inits_dict, params_dict, force_params_dict, units_dict = file_manager.parse_model_file(cell_file)
 
     # need to construct dictionary now that constructs factors to convert current units to SI units
     ureg = pint.UnitRegistry()
     try:
-        si_factors = [ureg(unit).to_base_units().magnitude for unit in units]
+        si_factors = [ureg(unit).to_base_units().magnitude for unit in units_dict]
     except pint.UndefinedUnitError as e:
         print(f"Error: {e}. Unrecognized units.")
         exit()
 
-    # --- GENERATE "OBSERVABLE" DATA --- #
+    # === GENERATE SYNTHETIC DATA ===
     t_max = int(input("Max time: "))
     dt = float(input("Time step: "))
+    t = torch.linspace(0, t_max, int(t_max / dt), dtype=DTYPE, device=DEVICE)
+
     steady_percentage = float(input("Percentage of data that is transient (%): ").replace("%", "")) / 100.0
+    steady_idx = int(steady_percentage * len(t))
+
     segs = int(input("Number of segments to divide time series into: "))
     helpers.clear_screen()
 
-    t = torch.linspace(0, t_max, int(t_max / dt), dtype=DTYPE, device=DEVICE)
     force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE) # no forcing
 
-    param_list = list(params.values())
-    params_tensor = torch.tensor([row[0] for row in param_list], dtype=DTYPE).unsqueeze(0)
-    inits_tensor = torch.tensor(list(inits.values()), dtype=DTYPE).unsqueeze(0)
+    param_vals = list(params_dict.values())
+    params = torch.tensor([row[0] for row in param_vals], dtype=DTYPE).unsqueeze(0)
+    inits = torch.tensor(list(inits_dict.values()), dtype=DTYPE).unsqueeze(0)
 
-    steady_idx = int(steady_percentage * len(t))
-    obs_data = pipeline.gen_obs(sim="Hopf", params=params_tensor, t=t, inits=inits_tensor, force=force[0].unsqueeze(0), n_segs=segs, steady_idx=steady_idx)[0, :, :]
+    obs_data = pipeline.gen_obs(model="Hopf", params=params, t=t, inits=inits, force=force[0].unsqueeze(0), n_segs=segs, steady_idx=steady_idx)[0, :, :]
     obs_stats = pipeline.gen_stats(obs_data, dt)
     visualizers.plot(t[steady_idx:].cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy())
 
-    # --- PRIOR CONSTRUCTION --- #
-    print("Checking for prior...")
-    time.sleep(1)
-    mixed_prior_path = prior_path + "mixed_prior_dist.pt"
-    try:
+    # === PRIOR CONSTRUCTION ===
+    print("Available priors: ")
+    saved_priors = file_manager.list_dir(PRIOR_PATH)
+    if len(saved_priors) > 0:
+        prior_idx = int(input(f"\nWhich prior would you like to use? Select an file number: ")) - 1
+        prior_path = PRIOR_PATH + saved_priors[prior_idx]
+        prior = file_manager.load_mix_dist(prior_path, device=DEVICE)
         helpers.clear_screen()
-        mixed_prior = file_manager.load_mix_dist(mixed_prior_path, device=DEVICE)
-        print("Prior found")
-        time.sleep(1)
-        helpers.clear_screen()
-    except FileNotFoundError as e:
-        print(f"Error: {e}. Going to construct prior from scratch.")
+    else:
+        print("No prior found. Going to construct prior from scratch.")
         time.sleep(5)
         helpers.clear_screen()
-        prior_bounds = [row[1] for row in param_list]
-        mixed_prior = pipeline.gen_prior(model="Hopf", t=t, global_batch_size=BATCH_SIZE, local_batch_size=(BATCH_SIZE // (2**6)),
+        prior_bounds = [row[1] for row in param_vals]
+        prior = pipeline.gen_prior(model="Hopf", t=t, global_batch_size=BATCH_SIZE, local_batch_size=(BATCH_SIZE // (2**6)),
                                          segs=math.ceil(segs / 2), prior_bounds=prior_bounds, dtype=DTYPE, device=DEVICE)
-        file_manager.save_mix_dist(mixed_prior, mixed_prior_path)
-    corner_plot_path = prior_path + "mixed_prior_dist.png"
+        prior_file_name = input("Enter a name for the prior file: ")
+        file_manager.save_mix_dist(prior, PRIOR_PATH + prior_file_name + ".pt")
+        corner_plot_path = PLOT_PATH + prior_file_name + ".png"
+        visualizers.visualize_dist(prior, labels=HOPF_LABELS, save_path=corner_plot_path)
 
-    hopf_labels = [r"$\mu$", r"$\omega$", r"$\alpha$", r"$\beta$", r"$\epsilon_x$", r"$\epsilon_y$"]
-    dim_labels = [r"$\lambda_x$", r"$\lambda_y$", r"$\lambda_{sf}$", r"$k_{sf}", r"k_{sp}",
-                  r"$k_{gs, min}$", r"$k_{gs, max}$", r"$k_{es}", r"$x_{sf}$", r"$x_{es}$", r"$x_{sp}$", r"$x_c$",
-                  r"$d$", r"$n$", r"$\gamma$", r"$c_{min}$", r"$s_{min}$", r"$c_{max}$", r"$s_{max}$",
-                  r"$k_{m, +}$", r"$k_{r, +}", r"$k_{m, -}$", r"$k_{r, -}$", r"$Ca2_{x, in}$", r"$ca2_{x, ex}$",
-                  r"$v_m$", r"$v_{ref}$", r"$z$", r"$r_m$", r"$r_r$", r"$\Delta_e$", r"$\tau_0$", r"$T$", r"$\epsilon$"]
-    nd_labels = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
-                 r"$C_{min}$", r"$S_{min}$", r"$S_{max}$", r"$Ca^2_m$", r"$Ca^2_{gs}$",
-                 r"$U_{gs,\ max}$", r"$\Delta E$", r"$k_{gs, \text{ ratio}}$",
-                 r"$\chi_{hb}$", r"$\chi_a$", r"$x_c$", r"$\eta_{hb}$", r"$\eta_{a}$"]
-    visualizers.visualize_dist(mixed_prior, labels=hopf_labels, save_path=corner_plot_path)
-
-    # --- GET TRAINING DATA --- #
-    hopf_posterior_path = posterior_path + "hopf_posterior.pt"
-    try:
-        posterior = torch.load(hopf_posterior_path, weights_only=False)
-    except FileNotFoundError as e:
-        training_data, thetas = pipeline.gen_training_data(sim="Hopf", prior=mixed_prior, t=t, run_size=BATCH_SIZE,
+    # === GET TRAINING DATA ===
+    print("Available posteriors: ")
+    saved_posteriors = file_manager.list_dir(POSTERIOR_PATH)
+    if len(saved_posteriors) > 0:
+        posterior_idx = int(input(f"\nWhich posterior would you like to use? Select an file number: ")) - 1
+        posterior_path = POSTERIOR_PATH + saved_posteriors[posterior_idx]
+        posterior = torch.load(posterior_path, weights_only=False)
+    else:
+        training_data, thetas = pipeline.gen_training_data(model="Hopf", prior=prior, t=t, run_size=BATCH_SIZE,
                                                            n_runs=300, n_segs=segs, steady_idx=steady_idx,
                                                            dt=dt, dtype=DTYPE, device=DEVICE)
-
-        # --- NPE --- #
+        # === NPE ===
         # filter data
         nan_mask = torch.isfinite(training_data).all(dim=1)
         safe_magnitude_mask = (torch.abs(training_data) < 1e15).all(dim=1)
@@ -159,25 +153,18 @@ def run():
         input_dim = training_data.shape[1]
         embedded_net = embedded_network.EmbeddedNet(input_dim, 3 * input_dim // 2, (5 * input_dim // 2, 2 * input_dim))
 
-        # set up NPE with embedded network
-        priors = []
-        prior_bounds = []
-        for vals in params.values():
-            prior_bounds.append(vals[1])
-        for curr_bounds in prior_bounds:
-            curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
-            priors.append(curr_prior)
-        #sbi_prior = utils.MultipleIndependent(priors, device=str(DEVICE))
+        # set up the SBI prior
+        sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
 
-        sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(mixed_prior)
+        # train the neural network
         posterior = pipeline.train_nn(thetas, training_data, model="maf", prior=sbi_prior, embedding_net=embedded_net, batch_size=int(2**7), device=DEVICE)
 
         # save the posterior
-        torch.save(posterior, hopf_posterior_path)
+        posterior_file_name = input("Enter a name for the posterior file: ")
+        torch.save(posterior, POSTERIOR_PATH + posterior_file_name + ".pt")
 
     # visualize and validate posterior
-    posterior = torch.load(hopf_posterior_path, weights_only=False)
-    ground_truth = [row[0] for row in params.values()]
+    ground_truth = [row[0] for row in params_dict.values()]
     samples = posterior.sample((1000,), x=obs_stats.to(DEVICE))
-    fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth]), labels=hopf_labels)
+    fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth]), labels=HOPF_LABELS)
     plt.show()

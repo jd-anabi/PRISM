@@ -70,13 +70,13 @@ class SummaryStatistics:
     def __compute_stat_dist_features(self) -> torch.Tensor:
         """
         Computes statistical distribution features:
-            (0) Mean
-            (1) Variance
-            (2) Skewness
-            (3) Kurtosis
-            (4) Bimodality coefficient
-            (5-9) Quantiles (5%, 25%, 50%, 75%, 95%)
-            (10) MAD
+            (1) Mean
+            (2) Variance
+            (3) Skewness
+            (4) Kurtosis
+            (5) Bimodality coefficient
+            (6-10) Quantiles (5%, 25%, 50%, 75%, 95%)
+            (11) MAD
         :return: statistical distribution features with shape: (batch_size, 11)
         """
         batch_size = self.x.shape[0]
@@ -114,12 +114,12 @@ class SummaryStatistics:
     def __compute_spectral_stats(self, n_bands: int) -> torch.Tensor:
         """
         Computes spectral statistics (fully GPU-accelerated):
-            (0) Peak frequency
-            (1) Quality factor
-            (2) Spectral centroid
-            (3) Spectral bandwidth
-            (4) Spectral entropy
-            (5 to 5+n_bands-1) Power in n_bands frequency bands
+            (1) Peak frequency
+            (2) Quality factor
+            (3) Spectral centroid
+            (4) Spectral bandwidth
+            (5) Spectral entropy
+            (6 to 5 + n_bands - 1) Power in n_bands frequency bands
         :param n_bands: the number of frequency bands
         :return: spectral statistics with shape: (batch_size, 5 + n_bands)
         """
@@ -127,7 +127,7 @@ class SummaryStatistics:
         n_features = 5 + n_bands
         features = torch.empty(batch_size, n_features, device=self.device, dtype=self.dtype)
 
-        # === FFT and PSD ===
+        # FFT and PSD
         x_centered = self.x - torch.mean(self.x, dim=-1, keepdim=True)
         xf = torch.fft.rfft(x_centered, dim=-1)
         freqs = torch.fft.rfftfreq(n, d=self.dt, device=self.device)
@@ -136,12 +136,12 @@ class SummaryStatistics:
 
         psd = torch.clamp(torch.abs(xf), max=1e15) ** 2 * self.dt / n
 
-        # === Peak Frequency ===
+        # Peak Frequency
         peak_pwr, peak_idx = torch.max(psd, dim=-1)
         peak_freqs = freqs[peak_idx]
         features[:, 0] = peak_freqs
 
-        # === Quality Factor ===
+        # Quality Factor
         # Find FWHM: frequency width where PSD > peak_pwr / 2
         half_max_pwr = peak_pwr / 2
         above_half = psd > half_max_pwr.unsqueeze(-1)
@@ -166,37 +166,34 @@ class SummaryStatistics:
         )
         features[:, 1] = q_factor
 
-        # === Spectral Centroid ===
+        # Spectral Centroid
         psd_sum = torch.sum(psd, dim=-1, keepdim=True)
         psd_sum_safe = torch.clamp(psd_sum, min=1e-9)
 
         spectral_centroid = torch.sum(freqs * psd, dim=-1) / psd_sum_safe.squeeze(-1)
         features[:, 2] = spectral_centroid
 
-        # === Spectral Bandwidth ===
+        # Spectral Bandwidth
         freq_deviation = freqs - spectral_centroid.unsqueeze(-1)
         spectral_bandwidth = torch.sqrt(
             torch.sum(freq_deviation ** 2 * psd, dim=-1) / psd_sum_safe.squeeze(-1)
         )
         features[:, 3] = spectral_bandwidth
 
-        # === Spectral Entropy ===
+        # Spectral Entropy
         psd_normalized = psd / psd_sum_safe
         log_psd = torch.log(torch.clamp(psd_normalized, min=1e-9))
         spectral_entropy = -torch.sum(psd_normalized * log_psd, dim=-1)
         features[:, 4] = spectral_entropy
 
-        # === Band Powers (Vectorized) ===
-        # Compute cumulative sum for efficient band power calculation
+        # Band Powers (Vectorized)
+        # Compute the cumulative sum for efficient band power calculation
         psd_cumsum = torch.cumsum(psd, dim=-1)
         # Prepend zero for easier indexing: cumsum[end] - cumsum[start]
-        psd_cumsum = torch.cat([
-            torch.zeros(batch_size, 1, device=self.device, dtype=self.dtype),
-            psd_cumsum
-        ], dim=-1)  # Shape: (batch_size, n_freqs + 1)
+        psd_cumsum = torch.cat([torch.zeros(batch_size, 1, device=self.device, dtype=self.dtype), psd_cumsum], dim=-1)  # Shape: (batch_size, n_freqs + 1)
 
         # Band edges as indices
-        band_edges = torch.linspace(0, n_freqs, n_bands + 1, device=self.device).long()
+        band_edges = torch.linspace(0, n_freqs, n_bands + 1, device=self.device, dtype=torch.long)
 
         # Extract cumsum values at band edges: shape (batch_size, n_bands + 1)
         edge_values = psd_cumsum[:, band_edges]
@@ -204,7 +201,7 @@ class SummaryStatistics:
         # Band power = cumsum[end] - cumsum[start], multiplied by frequency width
         band_powers = (edge_values[:, 1:] - edge_values[:, :-1])
 
-        # Multiply by band width in frequency units
+        # Multiply by bandwidth in frequency units
         band_widths = (band_edges[1:] - band_edges[:-1]).to(self.dtype) * df
         band_powers = band_powers * band_widths
 
@@ -215,10 +212,10 @@ class SummaryStatistics:
     def __compute_temporal_stats(self, n_lags: int, pacf_lags: int) -> torch.Tensor:
         """
         Computes temporal statistics (fully GPU-accelerated):
-            (0 to n_lags-1) Autocorrelation at n_lags evenly spaced lags
+            (1 to n_lags - 1) Autocorrelation at n_lags evenly spaced lags
             (n_lags) Decorrelation time
-            (n_lags+1 to n_lags+pacf_lags) Partial autocorrelation (PACF)
-            (n_lags+pacf_lags+1) Nonlinear dependence (ACF of x² at lag 1)
+            (n_lags + 1 to n_lags + pacf_lags) Partial autocorrelation (PACF)
+            (n_lags + pacf_lags + 1) Nonlinear dependence (ACF of x^2 at lag 1)
         :param n_lags: number of ACF lags to sample
         :param pacf_lags: number of PACF lags to compute
         :return: temporal statistics with shape: (batch_size, n_lags + pacf_lags + 2)
@@ -232,7 +229,7 @@ class SummaryStatistics:
         if pacf_lags > n or pacf_lags <= 1:
             raise ValueError("pacf_lags must be in (1, series_length]")
 
-        # === Autocorrelation via FFT (Wiener-Khinchin) ===
+        # Autocorrelation via FFT (Wiener-Khinchin)
         x_centered = self.x - torch.mean(self.x, dim=-1, keepdim=True)
         xf = torch.fft.rfft(x_centered, n=2 * n, dim=-1)
         psd = torch.abs(xf) ** 2
@@ -245,7 +242,7 @@ class SummaryStatistics:
         lag_idx = torch.linspace(0, n - 1, n_lags, device=self.device).long()
         features[:, :n_lags] = acf_normalized[:, lag_idx]
 
-        # === Decorrelation Time ===
+        # Decorrelation Time
         negative_mask = acf_normalized < 0
         has_negative = negative_mask.any(dim=-1)
         first_negative_idx = torch.argmax(negative_mask.int(), dim=-1)
@@ -254,14 +251,14 @@ class SummaryStatistics:
         decorrelation_time[~has_negative] = n * self.dt
         features[:, n_lags] = decorrelation_time
 
-        # === PACF via Levinson-Durbin (inlined) ===
-        # The PACF φ_kk measures direct correlation at lag k, removing intermediate effects
-        # Recursion: φ_kk = (ρ_k - Σ_{j=1}^{k-1} φ_{k-1,j} ρ_{k-j}) / (1 - Σ_{j=1}^{k-1} φ_{k-1,j} ρ_j)
+        # PACF via Levinson-Durbin (inlined)
+        # The PACF φ_{kk} measures direct correlation at lag k, removing intermediate effects
+        # Recursion: φ_{kk} = (ρ_k - Σ_{j = 1}^{k-1} φ_{k-1,j} ρ_{k-j}) / (1 - Σ_{j = 1}^{k-1} φ_{k-1,j} ρ_j)
 
         pacf_vals = torch.zeros(batch_size, pacf_lags, device=self.device, dtype=self.dtype)
         phi = torch.zeros(batch_size, pacf_lags, device=self.device, dtype=self.dtype)
 
-        # Base case: φ_11 = ρ_1
+        # Base case: φ_{1,1} = ρ_1
         pacf_vals[:, 0] = acf_normalized[:, 1]
         phi[:, 0] = acf_normalized[:, 1]
 
@@ -290,14 +287,13 @@ class SummaryStatistics:
 
             # Update AR coefficients: φ_{k,j} = φ_{k-1,j} - φ_{k,k} * φ_{k-1,k-j}
             # Vectorized update for all j in [0, k-1]
-            j_indices = torch.arange(k, device=self.device)
             phi_new = phi_coeffs - pacf_k.unsqueeze(-1) * phi_coeffs.flip(dims=[1])
             phi[:, :k] = phi_new
             phi[:, k] = pacf_k
 
         features[:, n_lags + 1:n_lags + 1 + pacf_lags] = pacf_vals
 
-        # === Nonlinear Dependence: ACF of x² at lag 1 ===
+        # Nonlinear Dependence: ACF of x² at lag 1
         x2_centered = x_centered ** 2
         x2_centered = x2_centered - torch.mean(x2_centered, dim=-1, keepdim=True)
 
@@ -313,22 +309,22 @@ class SummaryStatistics:
     def __compute_analytic_signal_stats(self) -> torch.Tensor:
         """
         Computes analytic signal statistics via Hilbert transform (fully GPU-accelerated):
-            (0) Mean amplitude
-            (1) Amplitude variance
-            (2) Mean frequency
-            (3) Frequency variance
-            (4) Amplitude-frequency correlation
+            (1) Mean amplitude
+            (2) Amplitude variance
+            (3) Mean frequency
+            (4) Frequency variance
+            (5) Amplitude-frequency correlation
         :return: analytic signal statistics with shape: (batch_size, 5)
         """
         batch_size, n = self.x.shape
         features = torch.empty(batch_size, 5, device=self.device, dtype=self.dtype)
 
-        # === Hilbert transform via FFT (GPU-native) ===
+        # Hilbert transform via FFT (GPU-native)
         # The analytic signal z(t) = x(t) + i*H[x(t)] can be computed as:
         # 1. Take FFT of x
         # 2. Create a filter: h[0] = 1, h[1:n//2] = 2, h[n//2] = 1 (if n even), h[n//2+1:] = 0
         # 3. Multiply FFT by filter
-        # 4. Inverse FFT gives analytic signal
+        # 4. Inverse FFT gives the analytic signal
 
         xf = torch.fft.fft(self.x, dim=-1)
 
@@ -364,19 +360,19 @@ class SummaryStatistics:
         # Instantaneous frequency: f = (1/2π) * dφ/dt
         inst_freq = torch.diff(phase_unwrapped, dim=-1) / (2 * torch.pi * self.dt)
 
-        # === Amplitude statistics ===
+        # Amplitude statistics
         mean_amp = torch.mean(amplitude, dim=-1)
         var_amp = torch.var(amplitude, dim=-1)
         features[:, 0] = mean_amp
         features[:, 1] = var_amp
 
-        # === Frequency statistics ===
+        # Frequency statistics
         mean_freq = torch.mean(inst_freq, dim=-1)
         var_freq = torch.var(inst_freq, dim=-1)
         features[:, 2] = mean_freq
         features[:, 3] = var_freq
 
-        # === Amplitude-frequency correlation ===
+        # Amplitude-frequency correlation
         # Trim amplitude to match frequency length (n-1)
         amp_trimmed = amplitude[:, :-1]
 
@@ -395,19 +391,19 @@ class SummaryStatistics:
                                   r_factor: float = 0.2, n_pairs: int = 5000) -> torch.Tensor:
         """
         Computes nonlinear statistics (fully GPU-accelerated):
-            (0) Time irreversibility
-            (1) Hurst exponent
-            (2) Approximate sample entropy
+            (1) Time irreversibility
+            (2) Hurst exponent
+            (3) Approximate sample entropy
         :param hurst_lags: maximum lag for Hurst exponent estimation
         :param m: embedding dimension for sample entropy
-        :param r_factor: tolerance as fraction of std for sample entropy
+        :param r_factor: tolerance as a fraction of std for sample entropy
         :param n_pairs: number of random pairs to sample for sample entropy
         :return: nonlinear statistics with shape: (batch_size, 3)
         """
         batch_size, n = self.x.shape
         features = torch.empty(batch_size, 3, device=self.device, dtype=self.dtype)
 
-        # === Time Irreversibility ===
+        # Time Irreversibility
         # Skewness of first differences: T = <Δx³> / <Δx²>^(3/2)
         dx = self.x[:, 1:] - self.x[:, :-1]
 
@@ -420,7 +416,7 @@ class SummaryStatistics:
         t_irrev = third_moment / torch.clamp(second_moment.pow(1.5), min=1e-9)
         features[:, 0] = t_irrev
 
-        # === Hurst Exponent (Vectorized) ===
+        # Hurst Exponent (Vectorized)
         # H is estimated from: std(x[t+lag] - x[t]) ∝ lag^H
         # Regress log(std) ~ log(lag)
 
@@ -451,8 +447,8 @@ class SummaryStatistics:
         hurst = cov / var_log_lag
         features[:, 1] = hurst
 
-        # === Approximate Sample Entropy ===
-        # Sample entropy measures complexity via template matching
+        # Approximate Sample Entropy
+        # This measures complexity via template matching
         # SampEn = -log(A/B) where:
         #   B = probability that two templates of length m match within tolerance r
         #   A = probability that two templates of length m+1 match within tolerance r
@@ -498,7 +494,7 @@ class SummaryStatistics:
         Only computes recurrence rate (other RQA stats require line structure analysis).
 
         :param n_pairs: number of random pairs to sample
-        :param epsilon_factor: threshold as fraction of std
+        :param epsilon_factor: threshold as a fraction of std
         :return: shape (batch_size, 1)
         """
         batch_size, n = self.x.shape
@@ -523,7 +519,7 @@ class SummaryStatistics:
     def __compute_info_theoretic_stats(self, order: int = 3) -> torch.Tensor:
         """
         Computes information theoretic statistics (fully GPU-accelerated):
-            (0) Permutation entropy (normalized)
+            (1) Permutation entropy (normalized)
         :param order: embedding dimension for permutation entropy (default 3)
         :return: information theoretic statistics with shape: (batch_size, 1)
         """
@@ -543,7 +539,7 @@ class SummaryStatistics:
         # Get ordinal patterns via argsort
         patterns = torch.argsort(windows, dim=-1)  # Shape: (batch_size, n_windows, order)
 
-        # === Lehmer Code Encoding (Correct Permutation Index) ===
+        # Lehmer Code Encoding (Correct Permutation Index)
         # The Lehmer code maps each permutation to a unique index in [0, m!-1]
         # For position i, count how many elements to the right are smaller than patterns[i]
         # Then: index = sum_{i=0}^{m-1} (count_i * (m-1-i)!)
@@ -600,34 +596,34 @@ class SummaryStatistics:
     def __compute_extreme_events_stats(self, threshold_factor: float = 1.5) -> torch.Tensor:
         """
         Computes extreme events statistics (fully GPU-accelerated):
-            (0) Maximum excursion (max - mean)
-            (1) Zero crossing rate
-            (2) Threshold crossing rate
-            (3) Mean burst duration
-            (4) Mean return time
+            (1) Maximum excursion (max - mean)
+            (2) Zero crossing rate
+            (3) Threshold crossing rate
+            (4) Mean burst duration
+            (5) Mean return time
         :param threshold_factor: multiplier of std for burst threshold (default 1.5)
         :return: extreme events statistics with shape: (batch_size, 5)
         """
         batch_size, n = self.x.shape
         features = torch.empty(batch_size, 5, device=self.device, dtype=self.dtype)
 
-        # === Centered signal ===
+        # Centered signal
         mean_x = torch.mean(self.x, dim=-1, keepdim=True)
         centered = self.x - mean_x
         std_x = torch.std(self.x, dim=-1, keepdim=True)
 
-        # === Maximum Excursion ===
+        # Maximum Excursion
         max_excursion = torch.max(centered, dim=-1).values
         features[:, 0] = max_excursion
 
-        # === Zero Crossing Rate ===
+        # Zero Crossing Rate
         # Count sign changes in centered signal
         signs = torch.sign(centered)
         sign_changes = torch.abs(torch.diff(signs, dim=-1)) > 0
         zcr = torch.mean(sign_changes.float(), dim=-1)
         features[:, 1] = zcr
 
-        # === Burst Detection (Threshold Crossings) ===
+        # Burst Detection (Threshold Crossings)
         threshold = threshold_factor * std_x
         is_burst = (centered > threshold).float()  # Shape: (batch_size, n)
 
@@ -641,22 +637,22 @@ class SummaryStatistics:
         burst_starts = (transitions == 1).float()
         burst_ends = (transitions == -1).float()
 
-        # === Threshold Crossing Rate ===
+        # Threshold Crossing Rate
         # Number of burst initiations per unit time
         n_bursts = torch.sum(burst_starts, dim=-1)
         total_time = n * self.dt
         threshold_rate = n_bursts / total_time
         features[:, 2] = threshold_rate
 
-        # === Mean Burst Duration ===
+        # Mean Burst Duration
         # Total time in burst state / number of bursts
         total_burst_time = torch.sum(is_burst, dim=-1) * self.dt
         mean_burst_duration = total_burst_time / torch.clamp(n_bursts, min=1.0)
         features[:, 3] = mean_burst_duration
 
-        # === Mean Return Time ===
+        # Mean Return Time
         # Average interval between burst starts
-        # Return time = total time / number of bursts (for stationary process)
+        # Return time = total time / number of bursts (for a stationary process)
         # This is an approximation; exact computation requires finding intervals
         mean_return_time = total_time / torch.clamp(n_bursts, min=1.0)
         features[:, 4] = mean_return_time
