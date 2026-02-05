@@ -635,7 +635,6 @@ class SummaryStatistics:
         # Burst starts: transition from 0 to 1 (diff == 1)
         # Burst ends: transition from 1 to 0 (diff == -1)
         burst_starts = (transitions == 1).float()
-        burst_ends = (transitions == -1).float()
 
         # Threshold Crossing Rate
         # Number of burst initiations per unit time

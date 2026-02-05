@@ -1,10 +1,11 @@
 import warnings
+from collections import OrderedDict
 
 import torch
 import numpy as np
 from tqdm import tqdm
 from sbi.inference.posteriors.base_posterior import NeuralPosterior
-from sbi.inference import NPE
+from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
 
 from core.Helpers import helpers
@@ -158,7 +159,7 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
     return prior
 
 def gen_training_data(model: str, prior: torch.distributions.Distribution, t: torch.Tensor,
-                      run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float,
+                      run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float, proposal: torch.distributions.Distribution = None,
                       dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
     Generates synthetic training data for a dynamical system simulation using specified parameters
@@ -178,6 +179,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
                        to reach a steady state.
     :param dt: The time discretization step used for generating statistics from simulated
                observations.
+    :param proposal: (Optional) A proposal distribution for sampling. Defaults to None.
     :param dtype: (Optional) The data type for tensors used during simulation. Defaults
                   to torch.float32.
     :param device: (Optional) The device on which tensors will be allocated and computations
@@ -214,9 +216,11 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
     training_data = []
     thetas = []
 
+    sampling_dist = prior if proposal is None else proposal
+
     with torch.no_grad():
         for _ in tqdm(range(n_runs), desc=f"Generating training data", leave=False):
-            curr_thetas = prior.sample((run_size,)).to(device=device, dtype=dtype)
+            curr_thetas = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
             data = gen_obs(model=model, params=curr_thetas, t=t, inits=inits,
                            force=torch.zeros((1, t.shape[0]), dtype=dtype, device=device), n_segs=n_segs, steady_idx=steady_idx,
                            batch_size=run_size, dtype=dtype, device=device)[0, :, :]
@@ -233,33 +237,59 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
 
     return training_data_tensor, thetas_tensor
 
-def train_nn(thetas: torch.Tensor, data: torch.Tensor, model: str,
-             prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
-             batch_size: int = 128, device: torch.device = torch.device('cpu')) -> NeuralPosterior:
+def train_nn(training_params: dict, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
+             x_obs: torch.Tensor = None, num_runs: int = 1, batch_size: int = 128, device: torch.device = torch.device('cpu')) -> NeuralPosterior:
     """
-    Trains a neural posterior estimation (NPE) model using the given simulation data, prior distribution,
-    and embedding network. This function constructs a neural posterior density estimator, trains it on
-    the simulation data, and returns the resulting posterior distribution object.
+    Trains a neural posterior distribution using either Neural Posterior Estimation (NPE) or Sequential Neural Posterior
+    Estimation (SNPE), depending on the number of training runs specified. The method automates simulation-based
+    learning by generating synthetic data, training a density estimator, and refining a posterior iteratively if multiple
+    training runs are performed.
 
-    :param thetas: Simulated parameter values, represented as a PyTorch tensor of shape
-        (num_simulations, parameter_dim).
-    :param data: Simulated observation data, represented as a PyTorch tensor of shape
-        (num_simulations, observation_dim).
-    :param model: A string specifying the type of neural network model to use for density estimation.
-        For example, 'maf', 'mdn', etc.
-    :param prior: The prior distribution over parameters, represented as an instance of PyTorch's
-        `torch.distributions.Distribution` class.
-    :param embedding_net: A PyTorch module that specifies the embedding network to process the observation
-        data before feeding it into the density estimator neural network.
-    :param batch_size: The size of each training batch used during density estimator training. Default is 128.
-    :param device: The computational device to be used (e.g., CPU or CUDA). Default is `torch.device('cpu')`.
-    :return: A trained neural posterior distribution, represented as an instance of the `NeuralPosterior` class.
+    :param training_params: A dictionary of parameters required to generate training data. These parameters are used as input
+        for the data generation function. Check @gen_training_data for details of the order of the parameters.
+    :param model: The type of neural density estimator to use, specified as a string. It determines the architecture of the
+        neural network approximating the posterior distribution.
+    :param prior: The prior distribution over parameters, given as a `torch.distributions.Distribution` object.
+    :param embedding_net: A neural network module that is used to compute embeddings of the data.
+    :param x_obs: Observed data given as a `torch.Tensor`. Required when performing SNPE (i.e., `num_runs > 1`). Defaults
+        to None.
+    :param num_runs: The number of sequential training runs. If greater than 1, Sequential Neural Posterior Estimation (SNPE)
+        is performed. Defaults to 1.
+    :param batch_size: Batch size for training the density estimator during each run. Defaults to 128.
+    :param device: Device on which the computations should be performed (e.g., 'cpu' or 'cuda'). Defaults to 'cpu'.
+    :return: A `NeuralPosterior` object representing the trained posterior distribution learned through the SNPE or
+        NPE procedure.
     """
+    if num_runs > 1 and x_obs is None:
+        raise ValueError("x_obs must be specified for SNPE algorithm")
+
     neural_posterior = posterior_nn(model=model, embedding_net=embedding_net)
-    infer = NPE(prior=prior, density_estimator=neural_posterior, device=str(device))
+    infer = SNPE(prior=prior, density_estimator=neural_posterior, device=str(device))
 
-    # train the density estimator
-    density_estimator = infer.append_simulations(thetas, data).train(training_batch_size=batch_size)
+    proposal = None # set up initial proposal distribution
+    posterior = None
+
+    for _ in tqdm(range(num_runs), desc=f"Training neural posterior", leave=False):
+        # train the density estimator
+        data, thetas = gen_training_data(training_params["model"], training_params["prior"], training_params["t"],
+                                         training_params["run_size"], training_params["num_runs"], training_params["n_segs"],
+                                         training_params["steady_idx"], training_params["dt"], proposal=proposal,
+                                         dtype=training_params["dtype"], device=training_params["device"])  # initial (data, thetas) training pairs
+
+        # filter data
+        nan_mask = torch.isfinite(data).all(dim=1)
+        safe_magnitude_mask = (torch.abs(data) < 1e15).all(dim=1)
+        valid_idx = nan_mask & safe_magnitude_mask
+        thetas = thetas[valid_idx]
+        data = data[valid_idx]
+
+        infer.append_simulations(thetas, data, proposal=proposal)
+        density_estimator = infer.train(training_batch_size=batch_size)
+        posterior = infer.build_posterior(density_estimator)
+
+        # need to now check if num_runs > 1: if so, then that is equivalent to SNPE, and if not, that is equivalent to NPE
+        if num_runs > 1:
+            proposal = posterior.set_default_x(x_obs.to(device)) # if SNPE, the user has to specify x_obs
 
     # build the posterior
-    return infer.build_posterior(density_estimator)
+    return posterior

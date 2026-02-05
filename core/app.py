@@ -134,30 +134,44 @@ def run():
     print("Available posteriors: ")
     saved_posteriors = file_manager.list_dir(POSTERIOR_PATH)
     if len(saved_posteriors) > 0:
-        posterior_idx = int(input(f"\nWhich posterior would you like to use? Select an file number: ")) - 1
+        posterior_idx = int(input(f"\nWhich posterior would you like to use? Select an file number (or '0' if you would like to make it from scratch): ")) - 1
+        if posterior_idx == -1:
+            hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 100,
+                                    "n_segs": segs,
+                                    "steady_idx": steady_idx, "dt": dt, "dtype": DTYPE, "device": DEVICE}
+            # === SNPE ===
+            # set up an embedded network
+            input_dim = obs_stats.shape[1]
+            embedded_net = embedded_network.EmbeddedNet(input_dim, 3 * input_dim // 2,
+                                                        (5 * input_dim // 2, 2 * input_dim))
+
+            # set up the SBI prior
+            sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
+
+            # train the neural network
+            posterior = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior,
+                                          embedding_net=embedded_net,
+                                          x_obs=obs_stats, num_runs=4, batch_size=int(2 ** 7), device=DEVICE)
+
+            # save the posterior
+            posterior_file_name = input("Enter a name for the posterior file: ")
+            torch.save(posterior, POSTERIOR_PATH + posterior_file_name + ".pt")
         posterior_path = POSTERIOR_PATH + saved_posteriors[posterior_idx]
         posterior = torch.load(posterior_path, weights_only=False)
     else:
-        training_data, thetas = pipeline.gen_training_data(model="Hopf", prior=prior, t=t, run_size=BATCH_SIZE,
-                                                           n_runs=300, n_segs=segs, steady_idx=steady_idx,
-                                                           dt=dt, dtype=DTYPE, device=DEVICE)
-        # === NPE ===
-        # filter data
-        nan_mask = torch.isfinite(training_data).all(dim=1)
-        safe_magnitude_mask = (torch.abs(training_data) < 1e15).all(dim=1)
-        valid_idx = nan_mask & safe_magnitude_mask
-        thetas = thetas[valid_idx]
-        training_data = training_data[valid_idx]
-
+        hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 100, "n_segs": segs,
+                                "steady_idx": steady_idx, "dt": dt, "dtype": DTYPE, "device": DEVICE}
+        # === SNPE ===
         # set up an embedded network
-        input_dim = training_data.shape[1]
+        input_dim = obs_stats.shape[1]
         embedded_net = embedded_network.EmbeddedNet(input_dim, 3 * input_dim // 2, (5 * input_dim // 2, 2 * input_dim))
 
         # set up the SBI prior
         sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
 
         # train the neural network
-        posterior = pipeline.train_nn(thetas, training_data, model="maf", prior=sbi_prior, embedding_net=embedded_net, batch_size=int(2**7), device=DEVICE)
+        posterior = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior, embedding_net=embedded_net,
+                                      x_obs=obs_stats, num_runs=4, batch_size=int(2**7), device=DEVICE)
 
         # save the posterior
         posterior_file_name = input("Enter a name for the posterior file: ")
