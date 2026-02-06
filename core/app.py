@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 from sbi.analysis import pairplot
 
 from .Helpers import helpers, visualizers, file_manager
-from .SBI import embedded_network, pipeline
+from .SBI import embedded_network, pipeline, analysis
 from .SBI.Priors import sbi_prior_wrapper
 
 # === PYTORCH INITIALIZATION ===
@@ -189,23 +189,9 @@ def run():
     fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth]), labels=HOPF_LABELS)
     plt.show()
 
-    plt.figure(figsize=(10, 4))
-
-    plt.subplot(1, 2, 1)
-    plt.plot(range(1, len(pos_diagnostics["log_prob_true"]) + 1), pos_diagnostics["log_prob_true"], 'o-')
-    plt.xlabel("Round")
-    plt.ylabel(r"$\log p(\theta^* | x_{\mathrm{obs}})$")
-    plt.title("Log-Probability of Ground Truth")
-
-    plt.subplot(1, 2, 2)
-    stds = torch.stack(pos_diagnostics["posterior_stds"])
-    for i, param_name in enumerate(
-            [r"$\mu$", r"$\omega$", r"$\alpha$", r"$\beta$", r"$\varepsilon_x$", r"$\varepsilon_y$"]):
-        plt.plot(range(1, stds.shape[0] + 1), stds[:, i], 'o-', label=param_name)
-    plt.xlabel("Round")
-    plt.ylabel("Posterior Std")
-    plt.title("Posterior Width per Round")
-    plt.legend()
-
-    plt.tight_layout()
-    plt.show()
+    x_sims = pipeline.gen_obs(model="hopf", params=samples, t=t, inits=inits.expand(samples.shape[0], -1),
+                              force=torch.zeros((samples.shape[0], t.shape[0]), dtype=DTYPE, device=DEVICE), n_segs=segs, steady_idx=steady_idx,
+                              batch_size=samples.shape[0], dtype=DTYPE, device=DEVICE)[0, :, :]
+    sim_stats = pipeline.gen_stats(x_sims, dt, device=DEVICE)
+    results = analysis.posterior_predictive_check(obs_stats.squeeze().to(DEVICE), sim_stats)
+    print(f"Posterior predictive check: {results}")

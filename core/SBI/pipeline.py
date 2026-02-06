@@ -1,5 +1,4 @@
 import warnings
-from collections import OrderedDict
 
 import torch
 import numpy as np
@@ -222,7 +221,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
         for _ in tqdm(range(n_runs), desc=f"Generating training data", leave=False):
             curr_thetas = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
             data = gen_obs(model=model, params=curr_thetas, t=t, inits=inits,
-                           force=torch.zeros((1, t.shape[0]), dtype=dtype, device=device), n_segs=n_segs, steady_idx=steady_idx,
+                           force=torch.zeros((run_size, t.shape[0]), dtype=dtype, device=device), n_segs=n_segs, steady_idx=steady_idx,
                            batch_size=run_size, dtype=dtype, device=device)[0, :, :]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
