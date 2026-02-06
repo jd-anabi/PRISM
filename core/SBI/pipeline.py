@@ -238,7 +238,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
     return training_data_tensor, thetas_tensor
 
 def train_nn(training_params: dict, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
-             x_obs: torch.Tensor = None, num_runs: int = 1, batch_size: int = 128, device: torch.device = torch.device('cpu')) -> NeuralPosterior:
+             x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_runs: int = 1, return_diagnostics: bool = False,
+             batch_size: int = 128, device: torch.device = torch.device('cpu')) -> NeuralPosterior | tuple[NeuralPosterior, dict]:
     """
     Trains a neural posterior distribution using either Neural Posterior Estimation (NPE) or Sequential Neural Posterior
     Estimation (SNPE), depending on the number of training runs specified. The method automates simulation-based
@@ -253,12 +254,14 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
     :param embedding_net: A neural network module that is used to compute embeddings of the data.
     :param x_obs: Observed data given as a `torch.Tensor`. Required when performing SNPE (i.e., `num_runs > 1`). Defaults
         to None.
+    :param theta_obs: Observed parameters given as a `torch.Tensor`. Required when returning diagnostics. Defaults to None.
     :param num_runs: The number of sequential training runs. If greater than 1, Sequential Neural Posterior Estimation (SNPE)
         is performed. Defaults to 1.
+    :param return_diagnostics: Whether to return additional diagnostics such as loss values during training. Defaults to False.
     :param batch_size: Batch size for training the density estimator during each run. Defaults to 128.
     :param device: Device on which the computations should be performed (e.g., 'cpu' or 'cuda'). Defaults to 'cpu'.
-    :return: A `NeuralPosterior` object representing the trained posterior distribution learned through the SNPE or
-        NPE procedure.
+    :return: A `NeuralPosterior` object representing the trained posterior distribution. If 'return_diagnostics = True', return a tuple containing
+        the posterior and diagnostics.
     """
     if num_runs > 1 and x_obs is None:
         raise ValueError("x_obs must be specified for SNPE algorithm")
@@ -268,6 +271,13 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
 
     proposal = None # set up initial proposal distribution
     posterior = None
+
+    # diagnostics storage
+    diagnostics = {
+        "log_prob_true": [],
+        "posterior_means": [],
+        "posterior_stds": [],
+    }
 
     for _ in tqdm(range(num_runs), desc=f"Training neural posterior", leave=False):
         # train the density estimator
@@ -287,9 +297,27 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
         density_estimator = infer.train(training_batch_size=batch_size)
         posterior = infer.build_posterior(density_estimator)
 
+        # compute diagnostics after each round
+        if return_diagnostics and x_obs is not None:
+            x_obs_device = x_obs.to(device)
+
+            # log probability of ground truth
+            if theta_obs is not None:
+                theta_true_device = theta_obs.to(device)
+                if theta_true_device.dim() == 1:
+                    theta_true_device = theta_true_device.unsqueeze(0)
+                log_prob = posterior.log_prob(theta_true_device, x=x_obs_device).item()
+                diagnostics["log_prob_true"].append(log_prob)
+
+            # posterior mean and std from samples
+            samples = posterior.sample((10000,), x=x_obs_device)
+            diagnostics["posterior_means"].append(samples.mean(dim=0).cpu())
+            diagnostics["posterior_stds"].append(samples.std(dim=0).cpu())
+
         # need to now check if num_runs > 1: if so, then that is equivalent to SNPE, and if not, that is equivalent to NPE
         if num_runs > 1:
             proposal = posterior.set_default_x(x_obs.to(device)) # if SNPE, the user has to specify x_obs
 
-    # build the posterior
+    if return_diagnostics:
+        return posterior, diagnostics
     return posterior

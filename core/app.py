@@ -4,6 +4,7 @@ import math
 import time
 
 from dipy.segment.clusteringspeed import DTYPE
+from pyro.infer.mcmc.util import diagnostics
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="True"
 
@@ -131,12 +132,15 @@ def run():
         visualizers.visualize_dist(prior, labels=HOPF_LABELS, save_path=corner_plot_path)
 
     # === GET TRAINING DATA ===
+    ground_truth = [row[0] for row in params_dict.values()]
+    ground_truth_tensor = torch.tensor(ground_truth, dtype=DTYPE, device=DEVICE)
+    pos_diagnostics = None
     print("Available posteriors: ")
     saved_posteriors = file_manager.list_dir(POSTERIOR_PATH)
     if len(saved_posteriors) > 0:
         posterior_idx = int(input(f"\nWhich posterior would you like to use? Select an file number (or '0' if you would like to make it from scratch): ")) - 1
         if posterior_idx == -1:
-            hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 100,
+            hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 15,
                                     "n_segs": segs,
                                     "steady_idx": steady_idx, "dt": dt, "dtype": DTYPE, "device": DEVICE}
             # === SNPE ===
@@ -149,9 +153,9 @@ def run():
             sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
 
             # train the neural network
-            posterior = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior,
-                                          embedding_net=embedded_net,
-                                          x_obs=obs_stats, num_runs=4, batch_size=int(2 ** 7), device=DEVICE)
+            posterior, pos_diagnostics = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior,
+                                          embedding_net=embedded_net, x_obs=obs_stats, theta_obs=ground_truth_tensor,
+                                          num_runs=3, return_diagnostics=True, batch_size=int(2 ** 7), device=DEVICE)
 
             # save the posterior
             posterior_file_name = input("Enter a name for the posterior file: ")
@@ -159,7 +163,7 @@ def run():
         posterior_path = POSTERIOR_PATH + saved_posteriors[posterior_idx]
         posterior = torch.load(posterior_path, weights_only=False)
     else:
-        hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 100, "n_segs": segs,
+        hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 15, "n_segs": segs,
                                 "steady_idx": steady_idx, "dt": dt, "dtype": DTYPE, "device": DEVICE}
         # === SNPE ===
         # set up an embedded network
@@ -170,15 +174,38 @@ def run():
         sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
 
         # train the neural network
-        posterior = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior, embedding_net=embedded_net,
-                                      x_obs=obs_stats, num_runs=4, batch_size=int(2**7), device=DEVICE)
+        posterior, pos_diagnostics = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior,
+                                                   embedding_net=embedded_net, x_obs=obs_stats,
+                                                   theta_obs=ground_truth_tensor,
+                                                   num_runs=3, return_diagnostics=True, batch_size=int(2 ** 7),
+                                                   device=DEVICE)
 
         # save the posterior
         posterior_file_name = input("Enter a name for the posterior file: ")
         torch.save(posterior, POSTERIOR_PATH + posterior_file_name + ".pt")
 
     # visualize and validate posterior
-    ground_truth = [row[0] for row in params_dict.values()]
     samples = posterior.sample((1000,), x=obs_stats.to(DEVICE))
     fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth]), labels=HOPF_LABELS)
+    plt.show()
+
+    plt.figure(figsize=(10, 4))
+
+    plt.subplot(1, 2, 1)
+    plt.plot(range(1, len(pos_diagnostics["log_prob_true"]) + 1), pos_diagnostics["log_prob_true"], 'o-')
+    plt.xlabel("Round")
+    plt.ylabel(r"$\log p(\theta^* | x_{\mathrm{obs}})$")
+    plt.title("Log-Probability of Ground Truth")
+
+    plt.subplot(1, 2, 2)
+    stds = torch.stack(pos_diagnostics["posterior_stds"])
+    for i, param_name in enumerate(
+            [r"$\mu$", r"$\omega$", r"$\alpha$", r"$\beta$", r"$\varepsilon_x$", r"$\varepsilon_y$"]):
+        plt.plot(range(1, stds.shape[0] + 1), stds[:, i], 'o-', label=param_name)
+    plt.xlabel("Round")
+    plt.ylabel("Posterior Std")
+    plt.title("Posterior Width per Round")
+    plt.legend()
+
+    plt.tight_layout()
     plt.show()
