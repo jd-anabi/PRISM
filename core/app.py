@@ -140,7 +140,7 @@ def run():
     if len(saved_posteriors) > 0:
         posterior_idx = int(input(f"\nWhich posterior would you like to use? Select an file number (or '0' if you would like to make it from scratch): ")) - 1
         if posterior_idx == -1:
-            hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 15,
+            hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 300,
                                     "n_segs": segs,
                                     "steady_idx": steady_idx, "dt": dt, "dtype": DTYPE, "device": DEVICE}
             # === SNPE ===
@@ -155,7 +155,7 @@ def run():
             # train the neural network
             posterior, pos_diagnostics = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior,
                                           embedding_net=embedded_net, x_obs=obs_stats, theta_obs=ground_truth_tensor,
-                                          num_runs=3, return_diagnostics=True, batch_size=int(2 ** 7), device=DEVICE)
+                                          num_runs=1, return_diagnostics=True, batch_size=int(2 ** 7), device=DEVICE)
 
             # save the posterior
             posterior_file_name = input("Enter a name for the posterior file: ")
@@ -195,3 +195,12 @@ def run():
     sim_stats = pipeline.gen_stats(x_sims, dt, device=DEVICE)
     results = analysis.posterior_predictive_check(obs_stats.squeeze().to(DEVICE), sim_stats)
     print(f"Posterior predictive check: {results}")
+
+    x_cal, theta_star = analysis.gen_cal_data(model="hopf", prior=prior, t=t, n_segs=segs, steady_idx=steady_idx, dt=dt, n_cal=1000, dtype=DTYPE, device=DEVICE)
+    ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, device=DEVICE)
+    alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, dtype=DTYPE, device=DEVICE)
+
+    param_names = [r'\mu', r'\omega', r'\alpha', r'\beta', r'\varepsilon_x', r'\varepsilon_y']
+    sbc_plot = visualizers.plot_sbc(ranks, param_names=param_names, m=1000, fig_size=(7, 12))
+    expected_cov_plot = visualizers.plot_expected_coverage(alphas, fig_size=(7, 20))
+    plt.show()

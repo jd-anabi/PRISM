@@ -1,4 +1,5 @@
 import torch
+from sbi.inference.posteriors import DirectPosterior
 
 from core.SBI import pipeline
 
@@ -71,3 +72,108 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution, t: torch.T
     valid = torch.isfinite(cal_data).all(dim=1) & (torch.abs(cal_data) < 1e15).all(dim=1)
 
     return cal_data[valid], theta_star[valid]
+
+
+def compute_sbc_ranks(posterior: DirectPosterior, theta_star: torch.Tensor, x_calibration: torch.Tensor,
+                      m: int, chunk_size: int = 50, dtype: torch.dtype = torch.long, device: torch.device = torch.device('cpu')) -> torch.Tensor:
+    """
+    Computes the Simulation-Based Calibration (SBC) ranks for a given posterior distribution. The SBC ranks
+    are determined by comparing samples from the posterior to the true parameter values (`theta_star`).
+
+    This function handles the computation in chunks, which allows for efficient memory usage, especially
+    when large data sets or a high number of posterior samples (`m`) need to be processed.
+
+    To determine the ranks, for each calibration input (`x_calibration`) in the provided chunk, samples are
+    generated from the posterior conditioned on that input. The ranks of the ground-truth parameter values
+    (`theta_star`) are then computed by counting the number of posterior samples less than the parameter values.
+
+    :param posterior: The trained neural posterior object used to draw samples conditioned on calibration inputs.
+    :type posterior: DirectPosterior
+    :param theta_star: The ground truth parameter values corresponding to the calibration inputs.
+                       Its shape is (n, d), where `n` is the number of calibration inputs and `d` is the
+                       dimensionality of the parameter space.
+    :type theta_star: torch.Tensor
+    :param x_calibration: Calibration inputs to condition the posterior samples. Its shape is (n, n_stats),
+                          where `n_stats` is the dimensionality of the input space.
+    :type x_calibration: torch.Tensor
+    :param m: The number of samples to draw from the posterior for each calibration input to estimate ranks.
+    :type m: int
+    :param chunk_size: The number of calibration inputs to process in each chunk to manage memory usage.
+                       Defaults to 50.
+    :type chunk_size: int
+    :param dtype: The data type used for the computed ranks tensor. Defaults to `torch.long`.
+    :type dtype: torch.dtype
+    :param device: The device on which computations will be performed. Defaults to `torch.device('cpu')`.
+    :type device: torch.device
+    :return: A tensor of ranks with shape (n, d), where each entry represents the rank of the corresponding
+             true parameter value (`theta_star`) among the posterior samples.
+    :rtype: torch.Tensor
+    """
+    n, d = theta_star.shape
+    ranks = torch.zeros((n, d), dtype=dtype)
+
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+
+        x_chunk = x_calibration[start:end].to(device)  # (chunk, n_stats)
+        theta_chunk = theta_star[start:end].to(device)  # (chunk, d)
+
+        samples = posterior.sample_batched((m,), x=x_chunk)  # (M, chunk, d)
+        ranks[start:end] = (samples < theta_chunk[None]).sum(dim=0).cpu()
+
+    return ranks
+
+def compute_expected_coverage(posterior: DirectPosterior, theta_star: torch.Tensor, x_calibration: torch.Tensor,
+                      m: int, chunk_size: int = 50, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> torch.Tensor:
+    """
+    Compute the expected coverage of a posterior distribution.
+
+    This function estimates the expected coverage probability of a posterior
+    distribution by comparing the log-probabilities of true parameter values
+    (theta_star) with the log-probabilities of posterior samples. The function
+    handles computations in chunks for efficiency.
+
+    The coverage is computed as the fraction of posterior samples that have a lower
+    density than the true parameter, averaged across all samples.
+
+    :param posterior: Neural posterior model providing the `sample` and `log_prob` methods.
+    :param theta_star: Tensor containing the true parameter values. Shape is (n, d),
+                       where `n` is the number of samples, and `d` is the dimensionality
+                       of the parameter space.
+    :param x_calibration: Tensor containing the calibration data associated with
+                          the parameters. Shape is (n, n_stats), where `n_stats`
+                          represents the number of features/statistics.
+    :param m: Number of posterior samples to draw per calibration data point.
+    :param chunk_size: Optional; size of chunks to split the computation for memory
+                       efficiency. Defaults to 50.
+    :param dtype: Optional; data type to use for intermediate computations. Defaults
+                  to torch.long.
+    :param device: Optional; device on which computations are performed. Defaults
+                   to CPU.
+
+    :return: A tensor containing the expected coverage probabilities for each
+             calibration point. Shape is (n,).
+    """
+    n = theta_star.shape[0]
+    alphas = torch.zeros((n,), dtype=dtype, device=device)
+
+    for start in range(0, n, chunk_size):
+        end = min(start + chunk_size, n)
+
+        x_chunk = x_calibration[start:end].to(device)  # (chunk, n_stats)
+        theta_chunk = theta_star[start:end].to(device)  # (chunk, d)
+
+        samples = posterior.sample_batched((m,), x=x_chunk)  # (M, chunk, d)
+
+        # log-prob of true parameters
+        log_prob_true = posterior.log_prob_batched(theta_chunk.unsqueeze(0), x=x_chunk).squeeze(0)  # (chunk,)
+
+        # log-prob of posterior samples
+        log_prob_samples = posterior.log_prob_batched(samples, x=x_chunk)  # (M, chunk)
+
+        # fraction of samples with lower density than true parameter
+        alpha_chunk = (log_prob_samples < log_prob_true[None, :]).float().mean(dim=0)  # (chunk,)
+
+        alphas[start:end] = alpha_chunk.cpu()
+
+    return alphas

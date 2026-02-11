@@ -3,7 +3,7 @@ import warnings
 import torch
 import numpy as np
 from tqdm import tqdm
-from sbi.inference.posteriors.base_posterior import NeuralPosterior
+from sbi.inference.posteriors import DirectPosterior
 from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
 
@@ -238,7 +238,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
 
 def train_nn(training_params: dict, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
              x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_runs: int = 1, return_diagnostics: bool = False,
-             batch_size: int = 128, device: torch.device = torch.device('cpu')) -> NeuralPosterior | tuple[NeuralPosterior, dict]:
+             batch_size: int = 128, device: torch.device = torch.device('cpu')) -> DirectPosterior | tuple[DirectPosterior, dict]:
     """
     Trains a neural posterior distribution using either Neural Posterior Estimation (NPE) or Sequential Neural Posterior
     Estimation (SNPE), depending on the number of training runs specified. The method automates simulation-based
@@ -316,6 +316,8 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
         # need to now check if num_runs > 1: if so, then that is equivalent to SNPE, and if not, that is equivalent to NPE
         if num_runs > 1:
             proposal = posterior.set_default_x(x_obs.to(device)) # if SNPE, the user has to specify x_obs
+
+    assert isinstance(posterior, DirectPosterior), f"Expected DirectPosterior, got {type(posterior)}"
 
     if return_diagnostics:
         return posterior, diagnostics
