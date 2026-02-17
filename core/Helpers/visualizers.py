@@ -206,3 +206,43 @@ def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = N
 
     plt.tight_layout()
     return fig
+
+
+def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray, x_map: np.ndarray,
+                           x_samples: np.ndarray = None, n_show: int = 10,
+                           fig_size: tuple = (14, 5)) -> plt.Figure:
+    """
+    Overlay posterior-simulated trajectories on top of ground truth data.
+
+    :param t: Time array (steady-state portion), shape (T,).
+    :param x_true: Ground truth x-position time series, shape (T,).
+    :param x_map: MAP estimate trajectory, shape (T,).
+    :param x_samples: Posterior sample trajectories, shape (N, T).
+    :param n_show: Number of individual sample trajectories to display.
+    :param fig_size: Figure size.
+    :return: matplotlib Figure.
+    """
+    fig, ax = plt.subplots(figsize=fig_size)
+
+    # confidence band from all samples
+    if x_samples is not None and len(x_samples) > 1:
+        mean = x_samples.mean(axis=0)
+        std = x_samples.std(axis=0)
+        ax.fill_between(t, mean - 2 * std, mean + 2 * std,
+                        alpha=0.15, color='steelblue', label=r'Posterior $\pm 2\sigma$')
+
+        # individual sample trajectories
+        show_idx = np.random.choice(len(x_samples), size=min(n_show, len(x_samples)), replace=False)
+        for i, idx in enumerate(show_idx):
+            ax.plot(t, x_samples[idx], color='steelblue', alpha=0.25, linewidth=0.5,
+                    label='Posterior samples' if i == 0 else None)
+
+    ax.plot(t, x_true, color='black', linewidth=1.2, label='Ground truth')
+    ax.plot(t, x_map, color='red', linewidth=1.0, linestyle='--', label='MAP estimate')
+
+    ax.set_xlabel('Time')
+    ax.set_ylabel('x(t)')
+    ax.set_title('Posterior vs Ground Truth')
+    ax.legend()
+    plt.tight_layout()
+    return fig

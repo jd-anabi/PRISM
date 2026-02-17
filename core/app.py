@@ -5,6 +5,7 @@ import time
 
 from dipy.segment.clusteringspeed import DTYPE
 from pyro.infer.mcmc.util import diagnostics
+from torch.distributions import MixtureSameFamily
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="True"
 
@@ -71,8 +72,7 @@ FPB = BATCH_SIZE // ENSEMBLE_SIZE # number of frequencies per batch
 ITERATIONS = int(UNIQUE_FREQS / FPB)
 K_B = 1.380649e-23  # m^2 kg s^-2 K^-1
 
-def run():
-    # === SETUP ===
+def setup() -> tuple:
     # list files in the cell directory
     cell_files = file_manager.list_dir(CELL_PATH)
 
@@ -89,6 +89,34 @@ def run():
     except pint.UndefinedUnitError as e:
         print(f"Error: {e}. Unrecognized units.")
         exit()
+
+    return inits_dict, params_dict, force_params_dict, units_dict, si_factors
+
+def construct_prior(prior_bounds, t, segs) -> MixtureSameFamily:
+    print("Available priors: ")
+    saved_priors = file_manager.list_dir(PRIOR_PATH)
+    if len(saved_priors) > 0:
+        prior_idx = int(input(f"\nWhich prior would you like to use? Select an file number: ")) - 1
+        prior_path = PRIOR_PATH + saved_priors[prior_idx]
+        prior = file_manager.load_mix_dist(prior_path, device=DEVICE)
+        helpers.clear_screen()
+    else:
+        helpers.clear_screen()
+        print("No prior found. Going to construct prior from scratch.")
+        time.sleep(5)
+        helpers.clear_screen()
+        prior = pipeline.gen_prior(model="Hopf", t=t, global_batch_size=BATCH_SIZE,
+                                   local_batch_size=(BATCH_SIZE // (2 ** 6)),
+                                   segs=math.ceil(segs / 2), prior_bounds=prior_bounds, dtype=DTYPE, device=DEVICE)
+        prior_file_name = input("Enter a name for the prior file: ")
+        file_manager.save_mix_dist(prior, PRIOR_PATH + prior_file_name + ".pt")
+        corner_plot_path = PLOT_PATH + prior_file_name + ".png"
+        visualizers.visualize_dist(prior, labels=HOPF_LABELS, save_path=corner_plot_path)
+    return prior
+
+def run():
+    # === SETUP ===
+    inits_dict, params_dict, force_params_dict, units_dict, si_factors = setup()
 
     # === GENERATE SYNTHETIC DATA ===
     t_max = int(input("Max time: "))
@@ -112,6 +140,7 @@ def run():
     visualizers.plot(t[steady_idx:].cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy())
 
     # === PRIOR CONSTRUCTION ===
+    prior = construct_prior(prior_bounds=[row[1] for row in param_vals], t=t, segs=math.ceil(segs / 2))
     print("Available priors: ")
     saved_priors = file_manager.list_dir(PRIOR_PATH)
     if len(saved_priors) > 0:
@@ -160,8 +189,9 @@ def run():
             # save the posterior
             posterior_file_name = input("Enter a name for the posterior file: ")
             torch.save(posterior, POSTERIOR_PATH + posterior_file_name + ".pt")
-        posterior_path = POSTERIOR_PATH + saved_posteriors[posterior_idx]
-        posterior = torch.load(posterior_path, weights_only=False)
+        else:
+            posterior_path = POSTERIOR_PATH + saved_posteriors[posterior_idx]
+            posterior = torch.load(posterior_path, weights_only=False)
     else:
         hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 15, "n_segs": segs,
                                 "steady_idx": steady_idx, "dt": dt, "dtype": DTYPE, "device": DEVICE}
@@ -203,4 +233,25 @@ def run():
     param_names = [r'\mu', r'\omega', r'\alpha', r'\beta', r'\varepsilon_x', r'\varepsilon_y']
     sbc_plot = visualizers.plot_sbc(ranks, param_names=param_names, m=1000, fig_size=(7, 12))
     expected_cov_plot = visualizers.plot_expected_coverage(alphas, fig_size=(7, 20))
+    plt.show()
+
+    # "eye test"
+    # get MAP parameters
+    log_probs = posterior.log_prob(samples, x=obs_stats.to(DEVICE))
+    map_params = samples[log_probs.argmax()].unsqueeze(0)
+
+    # Simulate from MAP
+    x_map = pipeline.gen_obs(model="hopf", params=map_params, t=t, inits=inits,
+                             force=force[0].unsqueeze(0), n_segs=segs,
+                             steady_idx=steady_idx)[0, 0, :]
+
+    # simulate from several posterior samples (reuse x_sims from PPC)
+    t_plot = t[steady_idx:].cpu().numpy()
+    fig = visualizers.plot_posterior_vs_truth(
+        t=t_plot,
+        x_true=obs_data[0, :].cpu().numpy(),
+        x_map=x_map.cpu().numpy(),
+        x_samples=x_sims.cpu().numpy(),  # shape (N, T)
+        n_show=10
+    )
     plt.show()
