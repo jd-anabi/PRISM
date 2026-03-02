@@ -24,8 +24,14 @@ class DimPrior(prior.Prior):
         for curr_bounds in prior_bounds:
             curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
             priors.append(curr_prior)
-        wide_prior = utils.MultipleIndependent(priors, device=str(self.device))
-        thetas = wide_prior.sample((batch_size,)).to(dtype=self.dtype)
+
+        # Sobol sampling scaled to prior bounds
+        lows = torch.tensor([b[0] for b in prior_bounds], dtype=self.dtype, device=self.device)
+        highs = torch.tensor([b[1] for b in prior_bounds], dtype=self.dtype, device=self.device)
+        engine = torch.quasirandom.SobolEngine(dimension=len(prior_bounds), scramble=True)
+        unit_samples = engine.draw(batch_size).to(dtype=self.dtype, device=self.device)
+        thetas = lows + unit_samples * (highs - lows)
+
         if steady:
             thetas = torch.cat((thetas[:, :3], thetas[:, 4:]), dim=1)
             n_params -= 1

@@ -2,15 +2,17 @@ import os
 import sys
 import math
 import time
+from typing import cast
 
 from dipy.segment.clusteringspeed import DTYPE
-from pyro.infer.mcmc.util import diagnostics
+from sbi.inference import DirectPosterior
 from torch.distributions import MixtureSameFamily
 
 os.environ["KMP_DUPLICATE_LIB_OK"]="True"
 
 import pint
 import torch
+import torch.distributions as dist
 import numpy as np
 from matplotlib import pyplot as plt
 from sbi.analysis import pairplot
@@ -21,7 +23,7 @@ from .SBI.Priors import sbi_prior_wrapper
 
 # === PYTORCH INITIALIZATION ===
 if torch.cuda.is_available():
-    DEVICE = torch.device("cuda:0")
+    DEVICE = torch.device("cuda")
     if (torch.cuda.get_device_properties(DEVICE).major, torch.cuda.get_device_properties(DEVICE).minor) < (8, 0):
         DEVICE = torch.device("cpu")
 elif torch.backends.mps.is_available():
@@ -67,12 +69,20 @@ ND_LABELS = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
 
 # === ENSEMBLE VARIABLES ===
 UNIQUE_FREQS = 2**6 # number of unique frequencies
-ENSEMBLE_SIZE = 2**7 if DEVICE.type == "cuda" else 2**5 # ensemble size for each frequency
+ENSEMBLE_SIZE = 2**7 if DEVICE.type == "cuda:0" else 2**5 # ensemble size for each frequency
 FPB = BATCH_SIZE // ENSEMBLE_SIZE # number of frequencies per batch
 ITERATIONS = int(UNIQUE_FREQS / FPB)
 K_B = 1.380649e-23  # m^2 kg s^-2 K^-1
 
 def setup() -> tuple:
+    """
+    Load model parameters from a cell file and compute SI unit conversion factors.
+
+    Prompts the user to select a cell file from Resources/Cells/, parses its initial conditions,
+    model parameters, forcing parameters, and units, then converts units to SI using pint.
+
+    :return: Tuple of (inits_dict, params_dict, force_params_dict, units_dict, si_factors).
+    """
     # list files in the cell directory
     cell_files = file_manager.list_dir(CELL_PATH)
 
@@ -92,32 +102,18 @@ def setup() -> tuple:
 
     return inits_dict, params_dict, force_params_dict, units_dict, si_factors
 
-def construct_prior(prior_bounds, t, segs) -> MixtureSameFamily:
-    print("Available priors: ")
-    saved_priors = file_manager.list_dir(PRIOR_PATH)
-    if len(saved_priors) > 0:
-        prior_idx = int(input(f"\nWhich prior would you like to use? Select an file number: ")) - 1
-        prior_path = PRIOR_PATH + saved_priors[prior_idx]
-        prior = file_manager.load_mix_dist(prior_path, device=DEVICE)
-        helpers.clear_screen()
-    else:
-        helpers.clear_screen()
-        print("No prior found. Going to construct prior from scratch.")
-        time.sleep(5)
-        helpers.clear_screen()
-        prior = pipeline.gen_prior(model="Hopf", t=t, global_batch_size=BATCH_SIZE,
-                                   local_batch_size=(BATCH_SIZE // (2 ** 6)),
-                                   segs=math.ceil(segs / 2), prior_bounds=prior_bounds, dtype=DTYPE, device=DEVICE)
-        prior_file_name = input("Enter a name for the prior file: ")
-        file_manager.save_mix_dist(prior, PRIOR_PATH + prior_file_name + ".pt")
-        corner_plot_path = PLOT_PATH + prior_file_name + ".png"
-        visualizers.visualize_dist(prior, labels=HOPF_LABELS, save_path=corner_plot_path)
-    return prior
+def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict: dict, si_factors: list):
+    """
+    Execute the full SBI pipeline: generate synthetic observations, construct or load a prior
+    and posterior, then validate the posterior with PPC, SBC, expected coverage, and a
+    posterior-vs-truth overlay plot.
 
-def run():
-    # === SETUP ===
-    inits_dict, params_dict, force_params_dict, units_dict, si_factors = setup()
-
+    :param inits_dict: Initial conditions for the model state variables.
+    :param params_dict: Model parameters; each value is [ground_truth, [lower_bound, upper_bound]].
+    :param force_params_dict: Forcing/stimulus parameters (unused when force is zero).
+    :param units_dict: Unit strings for each parameter (used for SI conversion).
+    :param si_factors: Precomputed SI conversion factors from setup().
+    """
     # === GENERATE SYNTHETIC DATA ===
     t_max = int(input("Max time: "))
     dt = float(input("Time step: "))
@@ -140,98 +136,52 @@ def run():
     visualizers.plot(t[steady_idx:].cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy())
 
     # === PRIOR CONSTRUCTION ===
-    prior = construct_prior(prior_bounds=[row[1] for row in param_vals], t=t, segs=math.ceil(segs / 2))
-    print("Available priors: ")
-    saved_priors = file_manager.list_dir(PRIOR_PATH)
-    if len(saved_priors) > 0:
-        prior_idx = int(input(f"\nWhich prior would you like to use? Select an file number: ")) - 1
-        prior_path = PRIOR_PATH + saved_priors[prior_idx]
-        prior = file_manager.load_mix_dist(prior_path, device=DEVICE)
-        helpers.clear_screen()
-    else:
-        print("No prior found. Going to construct prior from scratch.")
-        time.sleep(5)
-        helpers.clear_screen()
-        prior_bounds = [row[1] for row in param_vals]
-        prior = pipeline.gen_prior(model="Hopf", t=t, global_batch_size=BATCH_SIZE, local_batch_size=(BATCH_SIZE // (2**6)),
-                                         segs=math.ceil(segs / 2), prior_bounds=prior_bounds, dtype=DTYPE, device=DEVICE)
-        prior_file_name = input("Enter a name for the prior file: ")
-        file_manager.save_mix_dist(prior, PRIOR_PATH + prior_file_name + ".pt")
-        corner_plot_path = PLOT_PATH + prior_file_name + ".png"
-        visualizers.visualize_dist(prior, labels=HOPF_LABELS, save_path=corner_plot_path)
+    prior = _construct_prior(prior_bounds=[row[1] for row in param_vals], t=t, segs=math.ceil(segs / 2))
 
-    # === GET TRAINING DATA ===
+    # === POSTERIOR CONSTRUCTION ===
     ground_truth = [row[0] for row in params_dict.values()]
     ground_truth_tensor = torch.tensor(ground_truth, dtype=DTYPE, device=DEVICE)
-    pos_diagnostics = None
-    print("Available posteriors: ")
-    saved_posteriors = file_manager.list_dir(POSTERIOR_PATH)
-    if len(saved_posteriors) > 0:
-        posterior_idx = int(input(f"\nWhich posterior would you like to use? Select an file number (or '0' if you would like to make it from scratch): ")) - 1
-        if posterior_idx == -1:
-            hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 300,
-                                    "n_segs": segs,
-                                    "steady_idx": steady_idx, "dt": dt, "dtype": DTYPE, "device": DEVICE}
-            # === SNPE ===
-            # set up an embedded network
-            input_dim = obs_stats.shape[1]
-            embedded_net = embedded_network.EmbeddedNet(input_dim, 3 * input_dim // 2,
-                                                        (5 * input_dim // 2, 2 * input_dim))
 
-            # set up the SBI prior
-            sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
+    # fix alpha and condition new prior
+    alpha_idx = 2
+    alpha_fixed = ground_truth[alpha_idx]
+    ground_truth_alpha_fixed = ground_truth[:alpha_idx] + ground_truth[alpha_idx+1:]
+    ground_truth_alpha_fixed_tensor = torch.tensor(ground_truth_alpha_fixed, dtype=DTYPE, device=DEVICE)
 
-            # train the neural network
-            posterior, pos_diagnostics = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior,
-                                          embedding_net=embedded_net, x_obs=obs_stats, theta_obs=ground_truth_tensor,
-                                          num_runs=1, return_diagnostics=True, batch_size=int(2 ** 7), device=DEVICE)
+    comp_dist = cast(dist.MultivariateNormal, prior.component_distribution)
+    mix_weights = prior.mixture_distribution.probs
+    component_means, component_covs = comp_dist.loc, comp_dist.covariance_matrix
+    weights, means, covs = helpers.condition_gmm_on_param(mix_weights, component_means, component_covs, alpha_idx, alpha_fixed)
+    mixture = dist.Categorical(probs=weights.to(device=DEVICE))
+    comp = dist.MultivariateNormal(means.to(device=DEVICE), covariance_matrix=covs.to(device=DEVICE))
+    cond_prior = dist.MixtureSameFamily(mixture, comp)
 
-            # save the posterior
-            posterior_file_name = input("Enter a name for the posterior file: ")
-            torch.save(posterior, POSTERIOR_PATH + posterior_file_name + ".pt")
-        else:
-            posterior_path = POSTERIOR_PATH + saved_posteriors[posterior_idx]
-            posterior = torch.load(posterior_path, weights_only=False)
-    else:
-        hopf_training_params = {"model": "Hopf", "prior": prior, "t": t, "run_size": BATCH_SIZE, "num_runs": 15, "n_segs": segs,
-                                "steady_idx": steady_idx, "dt": dt, "dtype": DTYPE, "device": DEVICE}
-        # === SNPE ===
-        # set up an embedded network
-        input_dim = obs_stats.shape[1]
-        embedded_net = embedded_network.EmbeddedNet(input_dim, 3 * input_dim // 2, (5 * input_dim // 2, 2 * input_dim))
+    fixed_dict = {alpha_idx: alpha_fixed}
+    posterior, pos_diagnostics = _construct_posterior(sim_model="Hopf", prior=cond_prior, t=t, obs_stats=obs_stats, ground_truth_tensor=ground_truth_alpha_fixed_tensor,
+                                                      segs=math.ceil(segs / 2), steady_idx=steady_idx, dt=dt, net_model="maf", training_runs=300,
+                                                      num_rounds=1, fixed_dict=fixed_dict)
+    helpers.clear_screen()
 
-        # set up the SBI prior
-        sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
-
-        # train the neural network
-        posterior, pos_diagnostics = pipeline.train_nn(hopf_training_params, model="maf", prior=sbi_prior,
-                                                   embedding_net=embedded_net, x_obs=obs_stats,
-                                                   theta_obs=ground_truth_tensor,
-                                                   num_runs=3, return_diagnostics=True, batch_size=int(2 ** 7),
-                                                   device=DEVICE)
-
-        # save the posterior
-        posterior_file_name = input("Enter a name for the posterior file: ")
-        torch.save(posterior, POSTERIOR_PATH + posterior_file_name + ".pt")
-
-    # visualize and validate posterior
+    # === VALIDATION ===
+    # visualize posterior with corner plot
     samples = posterior.sample((1000,), x=obs_stats.to(DEVICE))
-    fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth]), labels=HOPF_LABELS)
+    fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth_alpha_fixed]), labels=(HOPF_LABELS[:alpha_idx] + HOPF_LABELS[alpha_idx+1:]),)
     plt.show()
 
+    # validate posterior with PPC, SBC, and expected coverage plots
     x_sims = pipeline.gen_obs(model="hopf", params=samples, t=t, inits=inits.expand(samples.shape[0], -1),
                               force=torch.zeros((samples.shape[0], t.shape[0]), dtype=DTYPE, device=DEVICE), n_segs=segs, steady_idx=steady_idx,
-                              batch_size=samples.shape[0], dtype=DTYPE, device=DEVICE)[0, :, :]
+                              fixed_dict=fixed_dict, batch_size=samples.shape[0], dtype=DTYPE, device=DEVICE)[0, :, :]
     sim_stats = pipeline.gen_stats(x_sims, dt, device=DEVICE)
     results = analysis.posterior_predictive_check(obs_stats.squeeze().to(DEVICE), sim_stats)
-    print(f"Posterior predictive check: {results}")
 
-    x_cal, theta_star = analysis.gen_cal_data(model="hopf", prior=prior, t=t, n_segs=segs, steady_idx=steady_idx, dt=dt, n_cal=1000, dtype=DTYPE, device=DEVICE)
+    x_cal, theta_star = analysis.gen_cal_data(model="hopf", prior=cond_prior, t=t, n_segs=segs, steady_idx=steady_idx, dt=dt, n_cal=1000,
+                                              fixed_dict=fixed_dict, dtype=DTYPE, device=DEVICE)
     ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, device=DEVICE)
     alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, dtype=DTYPE, device=DEVICE)
 
     param_names = [r'\mu', r'\omega', r'\alpha', r'\beta', r'\varepsilon_x', r'\varepsilon_y']
-    sbc_plot = visualizers.plot_sbc(ranks, param_names=param_names, m=1000, fig_size=(7, 12))
+    sbc_plot = visualizers.plot_sbc(ranks, param_names=(param_names[:alpha_idx] + param_names[alpha_idx+1:]), m=1000, fig_size=(7, 12))
     expected_cov_plot = visualizers.plot_expected_coverage(alphas, fig_size=(7, 20))
     plt.show()
 
@@ -243,7 +193,7 @@ def run():
     # Simulate from MAP
     x_map = pipeline.gen_obs(model="hopf", params=map_params, t=t, inits=inits,
                              force=force[0].unsqueeze(0), n_segs=segs,
-                             steady_idx=steady_idx)[0, 0, :]
+                             steady_idx=steady_idx, fixed_dict=fixed_dict)[0, 0, :]
 
     # simulate from several posterior samples (reuse x_sims from PPC)
     t_plot = t[steady_idx:].cpu().numpy()
@@ -255,3 +205,106 @@ def run():
         n_show=10
     )
     plt.show()
+
+# === PRIVATE FUNCTIONS ===
+def _construct_prior(prior_bounds, t, segs) -> MixtureSameFamily:
+    """
+    Load an existing prior from disk or construct one from scratch using a two-phase
+    sweep (global + local) over the parameter space.
+
+    :param prior_bounds: List of [lower, upper] bounds for each parameter.
+    :param t: Time tensor for simulation during prior construction.
+    :param segs: Number of time segments for stability filtering.
+    :return: MixtureSameFamily prior distribution over model parameters.
+    """
+    print("Available priors: ")
+    saved_priors = file_manager.list_dir(PRIOR_PATH)
+    try:
+        if len(saved_priors) > 0:
+            prior_idx = int(input(f"\nWhich prior would you like to use? Select an file number ('0' if you want to make from scratch): ")) - 1
+            if prior_idx == -1:
+                raise ValueError
+            prior_path = PRIOR_PATH + saved_priors[prior_idx]
+            prior = file_manager.load_mix_dist(prior_path, device=DEVICE)
+            helpers.clear_screen()
+        else:
+            raise ValueError
+    except ValueError:
+        helpers.clear_screen()
+        print("No prior found. Going to construct prior from scratch.")
+        time.sleep(5)
+        helpers.clear_screen()
+        prior = pipeline.gen_prior(model="Hopf", t=t, global_batch_size=BATCH_SIZE,
+                                   local_batch_size=(BATCH_SIZE // (2)),
+                                   segs=math.ceil(segs / 2), prior_bounds=prior_bounds,
+                                   num_iterations=50, dtype=DTYPE, device=DEVICE)
+        prior_file_name = input("Enter a name for the prior file: ")
+        file_manager.save_mix_dist(prior, PRIOR_PATH + prior_file_name + ".pt")
+        corner_plot_path = PLOT_PATH + prior_file_name + ".png"
+        visualizers.visualize_dist(prior, labels=HOPF_LABELS, save_path=corner_plot_path)
+    return prior
+
+def _construct_posterior(sim_model: str, prior: MixtureSameFamily, t: torch.Tensor, obs_stats: torch.Tensor,
+                         ground_truth_tensor: torch.Tensor, segs: int, steady_idx: int, dt: float, net_model: str = "maf",
+                         training_runs: int = 15, run_size: int = BATCH_SIZE, num_rounds: int = 1, fixed_dict: dict = None,
+                         dtype: torch.dtype = DTYPE, device: torch.device = DEVICE) -> tuple[DirectPosterior, dict]:
+    """
+    Load an existing posterior from disk or train a new one using SNPE.
+
+    Constructs an embedding network to compress summary statistics, wraps the prior for
+    sbi compatibility, and trains a neural density estimator (MAF by default). The trained
+    posterior is saved to Resources/Posteriors/.
+
+    :param sim_model: Name of the simulation model (e.g. "Hopf").
+    :param prior: Prior distribution over model parameters.
+    :param t: Time tensor for generating training simulations.
+    :param obs_stats: Observed summary statistics, shape (1, n_stats).
+    :param ground_truth_tensor: Ground truth parameter values, shape (n_params,).
+    :param segs: Number of time segments per simulation.
+    :param steady_idx: Index where transient ends and steady state begins.
+    :param dt: Simulation time step.
+    :param net_model: Density estimator architecture ("maf", "nsf", etc.).
+    :param training_runs: Number of simulation batches to generate for training.
+    :param run_size: Batch size for each training run.
+    :param num_rounds: Number of sequential SNPE rounds.
+    :param fixed_dict: Dictionary of fixed parameters for the model. Defaults to None.
+    :param dtype: Tensor data type.
+    :param device: Computation device.
+    :return: Tuple of (trained DirectPosterior, diagnostics dict or None if loaded from disk).
+    """
+    pos_diagnostics = None
+    print("Available posteriors: ")
+    saved_posteriors = file_manager.list_dir(POSTERIOR_PATH)
+    try:
+        if len(saved_posteriors) > 0:
+            posterior_idx = int(input(f"\nWhich posterior would you like to use? Select an file number (or '0' if you would like to make it from scratch): ")) - 1
+            if posterior_idx == -1:
+                raise ValueError
+            posterior_path = POSTERIOR_PATH + saved_posteriors[posterior_idx]
+            posterior = torch.load(posterior_path, weights_only=False)
+            helpers.clear_screen()
+        else:
+            raise ValueError
+    except ValueError:
+        helpers.clear_screen()
+        hopf_training_params = {"model": sim_model, "prior": prior, "t": t, "run_size": run_size, "num_runs": training_runs,
+                                "n_segs": segs, "steady_idx": steady_idx, "dt": dt, "dtype": dtype, "device": device}
+        # === SNPE ===
+        # set up an embedded network
+        input_dim = obs_stats.shape[1]
+        embedded_net = embedded_network.EmbeddedNet(input_dim, 3 * input_dim // 2, (5 * input_dim // 2, 2 * input_dim))
+
+        # set up the SBI prior
+        sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
+
+        # train the neural network
+        posterior, pos_diagnostics = pipeline.train_nn(hopf_training_params, model=net_model, prior=sbi_prior,
+                                                       embedding_net=embedded_net, x_obs=obs_stats,
+                                                       theta_obs=ground_truth_tensor, num_rounds=num_rounds,
+                                                       return_diagnostics=True, fixed_dict=fixed_dict, batch_size=int(2 ** 7),
+                                                       device=device)
+
+        # save the posterior
+        posterior_file_name = input("Enter a name for the posterior file: ")
+        torch.save(posterior, POSTERIOR_PATH + posterior_file_name + ".pt")
+    return posterior, pos_diagnostics

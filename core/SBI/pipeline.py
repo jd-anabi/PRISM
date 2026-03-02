@@ -8,12 +8,12 @@ from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
 
 from core.Helpers import helpers
-from .Priors import dim_prior, nd_prior, hopf_prior
+from .Priors import dim_prior, nd_prior, hopf_prior, nadrowski_prior
 from core.Simulator import dim_simulator, nd_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics
 
 def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor, n_segs: int, steady_idx: int,
-            batch_size: int = 1, dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu")):
+            fixed_dict: dict = None, batch_size: int = 1, dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu")):
     """
     Generates observations based on specified simulation type, parameters, and other input data.
 
@@ -29,6 +29,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     :param force: Tensor specifying the forces acting during the simulation.
     :param n_segs: The number of segments in the simulation. Used for configuration of the simulator.
     :param steady_idx: The index representing steady-state time points for slicing simulation results.
+    :param fixed_dict: Dictionary of fixed parameters for the model.
     :param batch_size: Number of simulation batches to process. Default is 1.
     :param dtype: Data type of tensors during processing. Default is `torch.float32`.
     :param device: The device on which simulations are run, such as "cpu" or "cuda". Default is "cpu".
@@ -46,19 +47,32 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     if model.lower() not in valid_models:
         raise ValueError(f"Invalid simulator: {model}")
 
+    full_params = params
+    if fixed_dict is not None:
+        n_full = params.shape[1] + len(fixed_dict)
+        full_params = torch.empty((params.shape[0], n_full), dtype=params.dtype, device=params.device)
+        free_idx = 0
+        for i in range(n_full):
+            if i in fixed_dict:
+                full_params[:, i] = fixed_dict[i]
+            else:
+                full_params[:, i] = params[:, free_idx]
+                free_idx += 1
+        del params
+
     # move to the specified device
     t = t.to(dtype=dtype, device=device)
 
     simulator = None
     match model.lower():
         case "dimensional":
-            simulator = dim_simulator.DimSimulator(params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
+            simulator = dim_simulator.DimSimulator(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
         case "non-dimensional":
-            simulator = nd_simulator.NDSimulator(params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
+            simulator = nd_simulator.NDSimulator(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
         case "hopf":
-            simulator = hopf_simulator.HopfSimulator(params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
+            simulator = hopf_simulator.HopfSimulator(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
         case "nadrowski":
-            simulator = nadrowski_simulator.NadrowskiSimulator(params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
+            simulator = nadrowski_simulator.NadrowskiSimulator(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
         case _:
             raise ValueError(f"Invalid simulator: {model}")
 
@@ -148,18 +162,18 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
         case "hopf":
             prior = hopf_prior.HopfPrior(dtype, device)
         case "nadrowski":
-            raise ValueError(f"Invalid model (at the moment): {model}")
+            prior = nadrowski_prior.NadrowskiPrior(dtype, device)
         case _:
             raise ValueError(f"Invalid model: {model}")
 
     with torch.no_grad():
-        prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size // (2 ** 6), segs, prior_bounds, t_global_scale=2, num_iterations=num_iterations, n_max=175000, steady=False)
+        prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size, segs, prior_bounds, t_global_scale=2, num_iterations=num_iterations, n_max=175000, steady=False)
 
     return prior
 
 def gen_training_data(model: str, prior: torch.distributions.Distribution, t: torch.Tensor,
                       run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float, proposal: torch.distributions.Distribution = None,
-                      dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
+                      fixed_dict: dict = None, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
     Generates synthetic training data for a dynamical system simulation using specified parameters
     and a probabilistic prior for generating initial conditions. This function supports different
@@ -179,6 +193,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
     :param dt: The time discretization step used for generating statistics from simulated
                observations.
     :param proposal: (Optional) A proposal distribution for sampling. Defaults to None.
+    :param fixed_dict: (Optional) Dictionary of fixed parameters for the model. Defaults to None.
     :param dtype: (Optional) The data type for tensors used during simulation. Defaults
                   to torch.float32.
     :param device: (Optional) The device on which tensors will be allocated and computations
@@ -205,7 +220,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
         case "hopf":
             inits = torch.tensor(np.random.randint(0, 10, size=(run_size, 2)), dtype=dtype, device=device)
         case "nadrowski":
-            raise ValueError(f"Invalid simulator (at the moment): {model}")
+            inits = helpers.concat(np.random.randint(0, 10, size=(run_size, 2)), np.random.randint(0, 1, size=(run_size, 1)))  # size: (run_size, 3)
+            inits = torch.tensor(inits, dtype=dtype, device=device)
         case _:
             raise ValueError(f"Invalid simulator: {model}")
 
@@ -222,7 +238,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
             curr_thetas = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
             data = gen_obs(model=model, params=curr_thetas, t=t, inits=inits,
                            force=torch.zeros((run_size, t.shape[0]), dtype=dtype, device=device), n_segs=n_segs, steady_idx=steady_idx,
-                           batch_size=run_size, dtype=dtype, device=device)[0, :, :]
+                           fixed_dict=fixed_dict, batch_size=run_size, dtype=dtype, device=device)[0, :, :]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 training_stats = gen_stats(data, dt, device=device)
@@ -237,8 +253,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
     return training_data_tensor, thetas_tensor
 
 def train_nn(training_params: dict, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
-             x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_runs: int = 1, return_diagnostics: bool = False,
-             batch_size: int = 128, device: torch.device = torch.device('cpu')) -> DirectPosterior | tuple[DirectPosterior, dict]:
+             x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_rounds: int = 1, return_diagnostics: bool = False,
+             fixed_dict: dict = None, batch_size: int = 128, device: torch.device = torch.device('cpu')) -> DirectPosterior | tuple[DirectPosterior, dict]:
     """
     Trains a neural posterior distribution using either Neural Posterior Estimation (NPE) or Sequential Neural Posterior
     Estimation (SNPE), depending on the number of training runs specified. The method automates simulation-based
@@ -254,15 +270,16 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
     :param x_obs: Observed data given as a `torch.Tensor`. Required when performing SNPE (i.e., `num_runs > 1`). Defaults
         to None.
     :param theta_obs: Observed parameters given as a `torch.Tensor`. Required when returning diagnostics. Defaults to None.
-    :param num_runs: The number of sequential training runs. If greater than 1, Sequential Neural Posterior Estimation (SNPE)
+    :param num_rounds: The number of sequential training runs. If greater than 1, Sequential Neural Posterior Estimation (SNPE)
         is performed. Defaults to 1.
     :param return_diagnostics: Whether to return additional diagnostics such as loss values during training. Defaults to False.
+    :param fixed_dict: Dictionary of fixed parameters for the model. Defaults to None.
     :param batch_size: Batch size for training the density estimator during each run. Defaults to 128.
     :param device: Device on which the computations should be performed (e.g., 'cpu' or 'cuda'). Defaults to 'cpu'.
     :return: A `NeuralPosterior` object representing the trained posterior distribution. If 'return_diagnostics = True', return a tuple containing
         the posterior and diagnostics.
     """
-    if num_runs > 1 and x_obs is None:
+    if num_rounds > 1 and x_obs is None:
         raise ValueError("x_obs must be specified for SNPE algorithm")
 
     neural_posterior = posterior_nn(model=model, embedding_net=embedding_net)
@@ -278,12 +295,12 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
         "posterior_stds": [],
     }
 
-    for _ in tqdm(range(num_runs), desc=f"Training neural posterior", leave=False):
+    for _ in tqdm(range(num_rounds), desc=f"Training neural posterior", leave=False):
         # train the density estimator
         data, thetas = gen_training_data(training_params["model"], training_params["prior"], training_params["t"],
                                          training_params["run_size"], training_params["num_runs"], training_params["n_segs"],
                                          training_params["steady_idx"], training_params["dt"], proposal=proposal,
-                                         dtype=training_params["dtype"], device=training_params["device"])  # initial (data, thetas) training pairs
+                                         fixed_dict=fixed_dict, dtype=training_params["dtype"], device=training_params["device"])  # initial (data, thetas) training pairs
 
         # filter data
         nan_mask = torch.isfinite(data).all(dim=1)
@@ -314,7 +331,7 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
             diagnostics["posterior_stds"].append(samples.std(dim=0).cpu())
 
         # need to now check if num_runs > 1: if so, then that is equivalent to SNPE, and if not, that is equivalent to NPE
-        if num_runs > 1:
+        if num_rounds > 1:
             proposal = posterior.set_default_x(x_obs.to(device)) # if SNPE, the user has to specify x_obs
 
     assert isinstance(posterior, DirectPosterior), f"Expected DirectPosterior, got {type(posterior)}"

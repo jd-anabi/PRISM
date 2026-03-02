@@ -24,11 +24,13 @@ class HopfPrior(prior.Prior):
         for curr_bounds in prior_bounds:
             curr_prior = utils.BoxUniform(low=torch.ones(1) * curr_bounds[0], high=torch.ones(1) * curr_bounds[1])
             priors.append(curr_prior)
-        wide_prior = utils.MultipleIndependent(priors, device=str(self.device))
-        thetas = wide_prior.sample((batch_size,)).to(dtype=self.dtype)
-        if steady:
-            thetas = torch.cat((thetas[:, :3], thetas[:, 4:]), dim=1)
-            n_params -= 1
+
+        # Sobol sampling scaled to prior bounds
+        lows = torch.tensor([b[0] for b in prior_bounds], dtype=self.dtype, device=self.device)
+        highs = torch.tensor([b[1] for b in prior_bounds], dtype=self.dtype, device=self.device)
+        engine = torch.quasirandom.SobolEngine(dimension=len(prior_bounds), scramble=True)
+        unit_samples = engine.draw(batch_size).to(dtype=self.dtype, device=self.device)
+        thetas = lows + unit_samples * (highs - lows)
 
         inits = np.random.randint(0, 10, size=(curr_batch_size, 2))
         inits_tensor = torch.tensor(inits, dtype=self.dtype, device=self.device)
@@ -36,9 +38,9 @@ class HopfPrior(prior.Prior):
         stable_params = []
 
         num_added = 0
-        added_params_progress_bar = tqdm(total=(num_iterations - 1), desc=f"Added {num_added} sets to accepted parameters during global sweep", leave=False)
+        added_params_progress_bar = tqdm(total=num_iterations, desc=f"Added {num_added} sets to accepted parameters during global sweep", leave=False)
         with torch.no_grad():
-            for i in range(num_iterations - 1):
+            for i in range(num_iterations):
                 curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
                 sim = hopf_simulator.HopfSimulator(curr_thetas, force, inits_tensor, t, segs=segs, batch_size=curr_batch_size, device=self.device)
                 x = sim.simulate()[0, 0, :, :] # shape: (curr_batch_size, len(t))
@@ -69,7 +71,7 @@ class HopfPrior(prior.Prior):
             n_params -= 1
 
         # SDE variable
-        inits = helpers.concat(np.random.randint(0, 10, size=(batch_size, 2)), np.random.randint(0, 1, size=(batch_size, 3)))  # size: (BATCH_SIZE, 5)
+        inits = np.random.randint(0, 10, size=(batch_size, 2))  # size: (BATCH_SIZE, 2)
         inits = torch.tensor(inits, dtype=dtype, device=device)
         force = torch.zeros((batch_size, t.shape[0]), dtype=dtype, device=device)
 

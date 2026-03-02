@@ -6,10 +6,10 @@ from sbi import utils
 from tqdm import tqdm
 
 from core.Helpers import helpers
-from core.Simulator import nd_simulator
+from core.Simulator import nadrowski_simulator
 from core.SBI.Priors import prior
 
-class NDPrior(prior.Prior):
+class NadrowskiPrior(prior.Prior):
     def __init__(self, dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')):
         super().__init__(dtype, device)
 
@@ -32,14 +32,8 @@ class NDPrior(prior.Prior):
         unit_samples = engine.draw(batch_size).to(dtype=self.dtype, device=self.device)
         thetas = lows + unit_samples * (highs - lows)
 
-        if steady:
-            thetas = torch.cat((thetas[:, :3], thetas[:, 4:]), dim=1)
-            n_params -= 1
-
-        init_pos = np.random.randint(0, 10, size=(curr_batch_size, 2))
-        init_probs = np.random.randint(0, 1, size=(curr_batch_size, 3))
-        inits = helpers.concat(init_pos, init_probs)  # size: (BATCH_SIZE, 5)
-        inits = torch.tensor(inits, dtype=self.dtype, device=self.device)
+        inits = np.random.randint(0, 10, size=(curr_batch_size, 2))
+        inits_tensor = torch.tensor(inits, dtype=self.dtype, device=self.device)
         force = torch.zeros((curr_batch_size, t.shape[0]), dtype=self.dtype, device=self.device)
         stable_params = []
 
@@ -48,7 +42,7 @@ class NDPrior(prior.Prior):
         with torch.no_grad():
             for i in range(num_iterations - 1):
                 curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
-                sim = nd_simulator.NDSimulator(curr_thetas, force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
+                sim = nadrowski_simulator.NadrowskiSimulator(curr_thetas, force, inits_tensor, t, segs=segs, batch_size=curr_batch_size, device=self.device)
                 x = sim.simulate()[0, 0, :, :] # shape: (curr_batch_size, len(t))
                 is_valid = torch.isfinite(x).all(dim=1)
                 valid_params = curr_thetas[is_valid]
@@ -77,7 +71,7 @@ class NDPrior(prior.Prior):
             n_params -= 1
 
         # SDE variable
-        inits = helpers.concat(np.random.randint(0, 10, size=(batch_size, 2)), np.random.randint(0, 1, size=(batch_size, 3)))  # size: (BATCH_SIZE, 5)
+        inits = helpers.concat(np.random.randint(0, 10, size=(batch_size, 2)), np.random.randint(0, 1, size=(batch_size, 1)))  # size: (BATCH_SIZE, 3)
         inits = torch.tensor(inits, dtype=dtype, device=device)
         force = torch.zeros((batch_size, t.shape[0]), dtype=dtype, device=device)
 
@@ -87,7 +81,7 @@ class NDPrior(prior.Prior):
         with torch.no_grad():
             while len(queue) != 0 and len(accepted_params) <= n_max:
                 thetas = torch.tensor(queue.popleft(), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * step
-                sim = nd_simulator.NDSimulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
+                sim = nadrowski_simulator.NadrowskiSimulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
                 x = sim.simulate()[0, 0, :, :] # shape: (batch_size, len(t))
                 is_valid = torch.isfinite(x).all(dim=1)
                 for i in range(batch_size):
