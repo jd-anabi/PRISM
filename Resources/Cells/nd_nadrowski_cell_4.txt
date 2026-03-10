@@ -1,0 +1,31 @@
+# Non-dimensional Initial Conditions
+x_init = -0.11
+xa_init = -1.32
+c_init = 0.5
+
+# Non-dimensional Parameters
+k = 0.8 in (0.01, 5.0)
+lam = 3.57 in (0.1, 50)
+f_max = 1.32 in (0.01, 5.0)
+tau = 0.027 in (1e-4, 2.0)
+tau_c = 0.268 in (0.01, 5.0)
+c_0 = 0 in (0, 1.0)
+s = 0.95 in (0, 3.0)
+delta_E = 10 in (0, 30)
+alpha = 705 in (10, 5000)
+n = 50 in (10, 300)
+temp = 1.5 in (1.0, 10.0)
+
+# Dimensional Parameters
+x_offset (nm) = 0
+x_scale (nm) = 62.14
+t_offset (ms) = 0
+t_scale (ms) = 3.73
+y_offset (nm) = 0
+y_scale (nm) = 62.14
+
+# Forcing Parameters
+amp (pN) = 0
+freq (Hz) = 0
+phase = 0
+offset (pN) = 0

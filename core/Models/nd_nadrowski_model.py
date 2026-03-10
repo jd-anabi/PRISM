@@ -12,7 +12,7 @@ class NDNadrowskiModel:
         # parameters
         self.k = k.to(self.device)
         self.lam = lam.to(self.device)
-        self.f = f.to(self.device)
+        self.f_max = f.to(self.device)
         self.tau = tau.to(self.device)
         self.tau_c = tau_c.to(self.device)
         self.c_0 = c_0.to(self.device)
@@ -37,9 +37,9 @@ class NDNadrowskiModel:
         return dx
 
     def g(self, x) -> torch.Tensor:
-        x_noise = self._x_noise()
-        y_noise = self._y_noise()
-        c_noise = self._c_noise(x[:, 0], x[:, 1])
+        x_noise = 0 * self._x_noise()
+        y_noise = 0 * self._y_noise()
+        c_noise = 0 * self._c_noise(x[:, 0], x[:, 1])
         dsigma = torch.stack((x_noise, y_noise, c_noise), dim=0)
         dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
         return torch.diag_embed(dsigma)
@@ -52,11 +52,11 @@ class NDNadrowskiModel:
 
     def _y_dot(self, x, y, c) -> torch.Tensor:
         x_gs = (x - y - self.__p_t0(x, y))
-        f_c = self.f * (1 - self.s * c)
+        f_c = self.f_max * (1 - self.s * c)
         return (x_gs - f_c) / self.lam
 
     def _c_dot(self, x, y, c) -> torch.Tensor:
-        return self.c_0 - c + self.__p_t0(x, y)
+        return (self.c_0 - c + self.__p_t0(x, y)) / self.tau
 
     # --- NOISE --- #
     def _x_noise(self) -> torch.Tensor:
@@ -70,4 +70,4 @@ class NDNadrowskiModel:
 
     # --- PRIVATE --- #
     def __p_t0(self, x, y):
-        return 1 / (1 + self.a * torch.exp(-1 * (x - y) / self.n))
+        return 1 / (1 + self.a * torch.exp(-1 * self.alpha * (x - y) / self.n))

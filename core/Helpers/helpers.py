@@ -19,7 +19,9 @@ def get_even_ids(l: int, n: int) -> list:
         return []
     elif n == 1:
         return [0]
-    return [round(i * (l - 1) / (n - 1)) for i in range(n)]
+    ids = [round(i * (l - 1) / (n - 1)) for i in range(n)]
+    ids[-1] = l
+    return ids
 
 def concat(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """
