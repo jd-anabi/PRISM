@@ -30,8 +30,9 @@ INIT_SHAPES: dict = {"dimensional":     (2, 3),
                      "nd nadrowski":    (2, 1),
                      "hopf":            (2, 0)}
 
-def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor, n_segs: int, steady_idx: int,
-            fixed_dict: dict = None, batch_size: int = 1, dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu")):
+def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor,
+            n_segs: int, steady_idx: int, fixed_dict: dict = None, state_dep_drift: bool = False,
+            batch_size: int = 1, dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu")):
     """
     Generates observations based on specified simulation type, parameters, and other input data.
 
@@ -48,6 +49,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     :param n_segs: The number of segments in the simulation. Used for configuration of the simulator.
     :param steady_idx: The index representing steady-state time points for slicing simulation results.
     :param fixed_dict: Dictionary of fixed parameters for the model.
+    :param state_dep_drift: Whether to use state-dependent drift for the simulator.
     :param batch_size: Number of simulation batches to process. Default is 1.
     :param dtype: Data type of tensors during processing. Default is `torch.float32`.
     :param device: The device on which simulations are run, such as "cpu" or "cuda". Default is "cpu".
@@ -83,7 +85,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     simulator_cls = VALID_SIMS[model.lower()]
     simulator = simulator_cls(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
 
-    obs = simulator.simulate()[:, 0, :, steady_idx:]
+    obs = simulator.simulate(state_dep_drift=state_dep_drift)[:, 0, :, steady_idx:]
     return obs
 
 def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20, device: torch.device = torch.device('cpu')) -> torch.Tensor:
@@ -121,7 +123,8 @@ def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, p
     return stats.compute_statistics(n_bands, n_lags, pacf_lags)
 
 def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list,
-              num_iterations: int = 25, dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')) -> torch.distributions.MixtureSameFamily:
+              state_dep_drift: bool = False, num_iterations: int = 25,
+              dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> torch.distributions.MixtureSameFamily:
     """
     Generates a prior distribution based on the given model and parameters.
 
@@ -141,6 +144,7 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
     :param segs: Number of segmentation points for prior construction.
     :param prior_bounds: A list of bounding values defining the range of the prior
                          parameters.
+    :param state_dep_drift: Boolean flag indicating whether to include state-dependent drift in the prior.
     :param num_iterations: Number of iterations to be performed in the process.
                            Defaults to 25.
     :param dtype: Data type to be used for tensor computations.
@@ -163,13 +167,15 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
     prior = prior_cls(dtype, device)
 
     with torch.no_grad():
-        prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size, segs, prior_bounds, t_global_scale=2, num_iterations=num_iterations, n_max=175000, steady=False)
+        prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size, segs, prior_bounds,
+                                      t_global_scale=2, num_iterations=num_iterations, n_max=175000, steady=False, state_dep_drift=state_dep_drift)
 
     return prior
 
 def gen_training_data(model: str, prior: torch.distributions.Distribution, t: torch.Tensor,
-                      run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float, proposal: torch.distributions.Distribution = None,
-                      fixed_dict: dict = None, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
+                      run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float,
+                      proposal: torch.distributions.Distribution = None, fixed_dict: dict = None, state_dep_drift: bool = False,
+                      dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
     Generates synthetic training data for a dynamical system simulation using specified parameters
     and a probabilistic prior for generating initial conditions. This function supports different
@@ -190,6 +196,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
                observations.
     :param proposal: (Optional) A proposal distribution for sampling. Defaults to None.
     :param fixed_dict: (Optional) Dictionary of fixed parameters for the model. Defaults to None.
+    :param state_dep_drift: (Optional) Whether to use state-dependent drift for the simulator. Defaults to False.
     :param dtype: (Optional) The data type for tensors used during simulation. Defaults
                   to torch.float32.
     :param device: (Optional) The device on which tensors will be allocated and computations
@@ -226,7 +233,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
             curr_thetas = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
             data = gen_obs(model=model, params=curr_thetas, t=t, inits=inits,
                            force=torch.zeros((run_size, t.shape[0]), dtype=dtype, device=device), n_segs=n_segs, steady_idx=steady_idx,
-                           fixed_dict=fixed_dict, batch_size=run_size, dtype=dtype, device=device)[0, :, :]
+                           fixed_dict=fixed_dict, state_dep_drift=state_dep_drift, batch_size=run_size, dtype=dtype, device=device)[0, :, :]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 training_stats = gen_stats(data, dt, device=device)

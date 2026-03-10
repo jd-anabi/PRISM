@@ -13,14 +13,15 @@ class Prior(ABC):
 
     # --- PUBLIC METHODS --- #
     def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list[tuple],
-                        t_global_scale: int = 1, num_iterations: int = 25, steady: bool = True, n_max: int = 200000, step: float = 0.01) -> torch.distributions.MixtureSameFamily:
+                        t_global_scale: int = 1, num_iterations: int = 25, steady: bool = True, n_max: int = 200000, step: float = 0.01,
+                        state_dep_drift: bool = False) -> torch.distributions.MixtureSameFamily:
         n_sims = global_batch_size * num_iterations
 
         # do global sweep and find number of "islands"
-        stable_params = self._global_map(t[:(t.shape[0] // t_global_scale)], n_params, prior_bounds, segs, n_sims, num_iterations, steady)
+        stable_params = self._global_map(t[:(t.shape[0] // t_global_scale)], n_params, prior_bounds, segs, n_sims, num_iterations, steady, state_dep_drift)
 
         # do local sweep
-        accepted_params = np.array(self._local_map(t, stable_params, local_batch_size, n_params, n_max, step, segs, steady))
+        accepted_params = np.array(self._local_map(t, stable_params, local_batch_size, n_params, n_max, step, segs, steady, state_dep_drift))
 
         scaler = StandardScaler()
         stable_params_scaled = scaler.fit_transform(accepted_params)
@@ -58,10 +59,10 @@ class Prior(ABC):
 
     # --- PRIVATE METHODS --- #
     @abstractmethod
-    def _global_map(self, t: torch.Tensor, n_params: int, prior_bounds: list[tuple], segs: int, batch_size: int, num_iterations: int, steady: bool) -> list:
+    def _global_map(self, t: torch.Tensor, n_params: int, prior_bounds: list[tuple], segs: int, batch_size: int, num_iterations: int, steady: bool, state_dep_drift: bool) -> list:
         pass
 
     @staticmethod
     @abstractmethod
-    def _local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool) -> list:
+    def _local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool, state_dep_drift: bool) -> list:
         pass

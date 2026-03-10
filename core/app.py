@@ -69,7 +69,11 @@ ND_LABELS = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
 NADROWSKI_LABELS = [r"$\lambda$", r"$\lambda_y$", r"$\tau$", r"$k_{gs}$", r"$k_{sp}$",
                     r"$d$", r"$f_{max}$", r"$c_0$", r"$c_m$", r"$S$",
                     r"$n$", r"$\Delta E$", r"$T$", r"$T_{eff}$", r"$\tau_c$"]
+ND_NADROWSKI_LABELS = [r"$k$", r"$\lambda$", r"$f_{\text{max}}$", r"$\tau$", r"$\tau_c$",
+                       r"$c_0$", r"$S$", r"$\Delta E$", r"$\alpha$", r"$n$", r"$T$"]
 
+# === VALID MODELS ===
+VALID_MODELS = ["DIMENSIONAL", "NON-DIMENSIONAL", "NADROWSKI", "ND NADROWSKI", "HOPF"]
 
 # === ENSEMBLE VARIABLES ===
 UNIQUE_FREQS = 2**6 # number of unique frequencies
@@ -87,7 +91,21 @@ def setup() -> tuple:
 
     :return: Tuple of (inits_dict, params_dict, force_params_dict, units_dict, si_factors).
     """
+    helpers.clear_screen()
+    print("Available models:")
+    for model_idx, model in enumerate(VALID_MODELS):
+        print(f"({model_idx + 1}) {model}")
+    model_num = int(input("\nWhich model would you like to run? Select a number: "))
+    model = VALID_MODELS[model_num - 1]
+    state_dep_drift = False
+    if "nadrowski" in model.lower():
+        state_dep_drift = True
+    if model not in VALID_MODELS:
+        raise ValueError(f"Invalid model selection. Please choose from {VALID_MODELS}.")
+    helpers.clear_screen()
+
     # list files in the cell directory
+    print("Available cell files:")
     cell_files = file_manager.list_dir(CELL_PATH)
 
     # read in model parameters
@@ -104,9 +122,9 @@ def setup() -> tuple:
         print(f"Error: {e}. Unrecognized units.")
         exit()
 
-    return inits_dict, params_dict, force_params_dict, units_dict, si_factors
+    return inits_dict, params_dict, force_params_dict, units_dict, si_factors, model, state_dep_drift
 
-def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict: dict, si_factors: list):
+def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict: dict, si_factors: list, model: str, state_dep_drift: bool):
     """
     Execute the full SBI pipeline: generate synthetic observations, construct or load a prior
     and posterior, then validate the posterior with PPC, SBC, expected coverage, and a
@@ -117,8 +135,9 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     :param force_params_dict: Forcing/stimulus parameters (unused when force is zero).
     :param units_dict: Unit strings for each parameter (used for SI conversion).
     :param si_factors: Precomputed SI conversion factors from setup().
+    :param model: Name of the model (e.g. "Hopf").
+    :param state_dep_drift: Whether the model has state-dependent drift.
     """
-
     # === GENERATE SYNTHETIC DATA ===
     t_max = int(input("Max time: "))
     dt = float(input("Time step: "))
@@ -136,12 +155,13 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     params = torch.tensor([row[0] for row in param_vals], dtype=DTYPE).unsqueeze(0)
     inits = torch.tensor(list(inits_dict.values()), dtype=DTYPE).unsqueeze(0)
 
-    obs_data = pipeline.gen_obs(model="Hopf", params=params, t=t, inits=inits, force=force[0].unsqueeze(0), n_segs=segs, steady_idx=steady_idx)[0, :, :]
+    obs_data = pipeline.gen_obs(model=model, params=params, t=t, inits=inits, force=force[0].unsqueeze(0),
+                                n_segs=segs, steady_idx=steady_idx, state_dep_drift=state_dep_drift)[0, :, :]
     obs_stats = pipeline.gen_stats(obs_data, dt)
     visualizers.plot(t[steady_idx:].cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy())
 
     # === PRIOR CONSTRUCTION ===
-    prior = _construct_prior(prior_bounds=[row[1] for row in param_vals], t=t, segs=math.ceil(segs / 2))
+    prior = _construct_prior(prior_bounds=[row[1] for row in param_vals], t=t, segs=math.ceil(segs / 2), model=model)
 
     # === POSTERIOR CONSTRUCTION ===
     ground_truth = [row[0] for row in params_dict.values()]
@@ -162,7 +182,7 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     cond_prior = dist.MixtureSameFamily(mixture, comp)
 
     fixed_dict = {alpha_idx: alpha_fixed}
-    posterior, pos_diagnostics = _construct_posterior(sim_model="Hopf", prior=cond_prior, t=t, obs_stats=obs_stats, ground_truth_tensor=ground_truth_alpha_fixed_tensor,
+    posterior, pos_diagnostics = _construct_posterior(sim_model=model, prior=cond_prior, t=t, obs_stats=obs_stats, ground_truth_tensor=ground_truth_alpha_fixed_tensor,
                                                       segs=math.ceil(segs / 2), steady_idx=steady_idx, dt=dt, net_model="maf", training_runs=300,
                                                       num_rounds=1, fixed_dict=fixed_dict)
     helpers.clear_screen()
@@ -174,13 +194,13 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     plt.show()
 
     # validate posterior with PPC, SBC, and expected coverage plots
-    x_sims = pipeline.gen_obs(model="hopf", params=samples, t=t, inits=inits.expand(samples.shape[0], -1),
+    x_sims = pipeline.gen_obs(model=model, params=samples, t=t, inits=inits.expand(samples.shape[0], -1),
                               force=torch.zeros((samples.shape[0], t.shape[0]), dtype=DTYPE, device=DEVICE), n_segs=segs, steady_idx=steady_idx,
                               fixed_dict=fixed_dict, batch_size=samples.shape[0], dtype=DTYPE, device=DEVICE)[0, :, :]
     sim_stats = pipeline.gen_stats(x_sims, dt, device=DEVICE)
     results = analysis.posterior_predictive_check(obs_stats.squeeze().to(DEVICE), sim_stats)
 
-    x_cal, theta_star = analysis.gen_cal_data(model="hopf", prior=cond_prior, t=t, n_segs=segs, steady_idx=steady_idx, dt=dt, n_cal=1000,
+    x_cal, theta_star = analysis.gen_cal_data(model=model, prior=cond_prior, t=t, n_segs=segs, steady_idx=steady_idx, dt=dt, n_cal=1000,
                                               fixed_dict=fixed_dict, dtype=DTYPE, device=DEVICE)
     ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, device=DEVICE)
     alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, dtype=DTYPE, device=DEVICE)
@@ -196,7 +216,7 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     map_params = samples[log_probs.argmax()].unsqueeze(0)
 
     # Simulate from MAP
-    x_map = pipeline.gen_obs(model="hopf", params=map_params, t=t, inits=inits,
+    x_map = pipeline.gen_obs(model=model, params=map_params, t=t, inits=inits,
                              force=force[0].unsqueeze(0), n_segs=segs,
                              steady_idx=steady_idx, fixed_dict=fixed_dict)[0, 0, :]
 
@@ -212,7 +232,7 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     plt.show()
 
 # === PRIVATE FUNCTIONS ===
-def _construct_prior(prior_bounds, t, segs) -> MixtureSameFamily:
+def _construct_prior(prior_bounds, t, segs, model) -> MixtureSameFamily:
     """
     Load an existing prior from disk or construct one from scratch using a two-phase
     sweep (global + local) over the parameter space.
@@ -220,6 +240,7 @@ def _construct_prior(prior_bounds, t, segs) -> MixtureSameFamily:
     :param prior_bounds: List of [lower, upper] bounds for each parameter.
     :param t: Time tensor for simulation during prior construction.
     :param segs: Number of time segments for stability filtering.
+    :param model: Name of the model (e.g. "Hopf").
     :return: MixtureSameFamily prior distribution over model parameters.
     """
     print("Available priors: ")
@@ -239,7 +260,7 @@ def _construct_prior(prior_bounds, t, segs) -> MixtureSameFamily:
         print("No prior found. Going to construct prior from scratch.")
         time.sleep(5)
         helpers.clear_screen()
-        prior = pipeline.gen_prior(model="Hopf", t=t, global_batch_size=BATCH_SIZE,
+        prior = pipeline.gen_prior(model=model, t=t, global_batch_size=BATCH_SIZE,
                                    local_batch_size=(BATCH_SIZE // (2)),
                                    segs=math.ceil(segs / 2), prior_bounds=prior_bounds,
                                    num_iterations=50, dtype=DTYPE, device=DEVICE)

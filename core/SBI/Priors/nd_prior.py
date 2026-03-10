@@ -14,7 +14,8 @@ class NDPrior(prior.Prior):
         super().__init__(dtype, device)
 
     # --- PRIVATE METHODS --- #
-    def _global_map(self, t: torch.Tensor, n_params: int, prior_bounds: list[tuple], segs: int, batch_size: int, num_iterations: int, steady: bool) -> list:
+    def _global_map(self, t: torch.Tensor, n_params: int, prior_bounds: list[tuple], segs: int,
+                    batch_size: int, num_iterations: int, steady: bool, state_dep_drift: bool) -> list:
         t = t.to(dtype=self.dtype, device=self.device)
         if batch_size % num_iterations != 0:
             raise ValueError('batch_size must be divisible by num_iterations')
@@ -49,7 +50,7 @@ class NDPrior(prior.Prior):
             for i in range(num_iterations - 1):
                 curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
                 sim = nd_simulator.NDSimulator(curr_thetas, force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
-                x = sim.simulate()[0, 0, :, :] # shape: (curr_batch_size, len(t))
+                x = sim.simulate(state_dep_drift=state_dep_drift)[0, 0, :, :] # shape: (curr_batch_size, len(t))
                 is_valid = torch.isfinite(x).all(dim=1)
                 valid_params = curr_thetas[is_valid]
                 if valid_params.shape[0] > 0:
@@ -62,7 +63,8 @@ class NDPrior(prior.Prior):
         return stable_params
 
     @staticmethod
-    def _local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool) -> list:
+    def _local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int,
+                   n_max: int, step: float, segs: int, steady: bool, state_dep_drift: bool) -> list:
         # cpu variables
         dtype = torch.float32
         device = torch.device('cpu')
@@ -88,7 +90,7 @@ class NDPrior(prior.Prior):
             while len(queue) != 0 and len(accepted_params) <= n_max:
                 thetas = torch.tensor(queue.popleft(), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * step
                 sim = nd_simulator.NDSimulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
-                x = sim.simulate()[0, 0, :, :] # shape: (batch_size, len(t))
+                x = sim.simulate(state_dep_drift=state_dep_drift)[0, 0, :, :] # shape: (batch_size, len(t))
                 is_valid = torch.isfinite(x).all(dim=1)
                 for i in range(batch_size):
                     if is_valid[i]:
