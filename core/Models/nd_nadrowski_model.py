@@ -66,7 +66,7 @@ class NDNadrowskiModel:
         return torch.sqrt(2 * self.temp / (self.alpha * self.lam))
 
     def _c_noise(self, x, y) -> torch.Tensor:
-        return torch.sqrt(2 * self.tau_c * self.__p_t0(x, y) * (1 - self.__p_t0(x, y)) / self.n)
+        return torch.sqrt(2 * self.tau_c * self.__p_t0(x, y) * (1 - self.__p_t0(x, y)) / self.n) / self.tau
 
     # --- PRIVATE --- #
     def __p_t0(self, x, y):

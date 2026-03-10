@@ -8,9 +8,27 @@ from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
 
 from core.Helpers import helpers
-from .Priors import dim_prior, nd_prior, hopf_prior, nadrowski_prior
-from core.Simulator import dim_simulator, nd_simulator, nadrowski_simulator, hopf_simulator
+from .Priors import dim_prior, nd_prior, hopf_prior, nadrowski_prior, nd_nadrowski_prior
+from core.Simulator import dim_simulator, nd_simulator, nadrowski_simulator, nd_nadrowski_simulator, hopf_simulator
 from core.SBI import statistics
+
+VALID_SIMS: dict = {"dimensional": dim_simulator.DimSimulator,
+                      "non-dimensional": nd_simulator.NDSimulator,
+                      "nadrowski": nadrowski_simulator.NadrowskiSimulator,
+                      "nd nadrowski": nd_nadrowski_simulator.NDNadrowskiSimulator,
+                      "hopf": hopf_simulator.HopfSimulator}
+
+VALID_PRIORS: dict = {"dimensional": dim_prior.DimPrior,
+                      "non-dimensional": nd_prior.NDPrior,
+                      "nadrowski": nadrowski_prior.NadrowskiPrior,
+                      "nd nadrowski": nd_nadrowski_prior.NDNadrowskiPrior,
+                      "hopf": hopf_prior.HopfPrior}
+
+INIT_SHAPES: dict = {"dimensional":     (2, 3),
+                     "non-dimensional": (2, 3),
+                     "nadrowski":       (2, 1),
+                     "nd nadrowski":    (2, 1),
+                     "hopf":            (2, 0)}
 
 def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor, n_segs: int, steady_idx: int,
             fixed_dict: dict = None, batch_size: int = 1, dtype: torch.dtype = torch.float32, device: torch.device = torch.device("cpu")):
@@ -43,8 +61,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     if params.shape[0] != batch_size or inits.shape[0] != batch_size:
         raise ValueError(f"Batch size: {batch_size} cannot differ from dim 0 of parameters tensor or initial conditions tensor")
 
-    valid_models = ["dimensional", "non-dimensional", "nadrowski", "hopf"]
-    if model.lower() not in valid_models:
+    if VALID_SIMS.get(model.lower()) is None:
         raise ValueError(f"Invalid simulator: {model}")
 
     full_params = params
@@ -63,18 +80,8 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     # move to the specified device
     t = t.to(dtype=dtype, device=device)
 
-    simulator = None
-    match model.lower():
-        case "dimensional":
-            simulator = dim_simulator.DimSimulator(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
-        case "non-dimensional":
-            simulator = nd_simulator.NDSimulator(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
-        case "hopf":
-            simulator = hopf_simulator.HopfSimulator(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
-        case "nadrowski":
-            simulator = nadrowski_simulator.NadrowskiSimulator(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
-        case _:
-            raise ValueError(f"Invalid simulator: {model}")
+    simulator_cls = VALID_SIMS[model.lower()]
+    simulator = simulator_cls(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
 
     obs = simulator.simulate()[:, 0, :, steady_idx:]
     return obs
@@ -147,24 +154,13 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
 
     :raises ValueError: If the specified model is not supported.
     """
-    valid_models = ["dimensional", "non-dimensional", "nadrowski", "hopf"]
-    if model.lower() not in valid_models:
+    if VALID_PRIORS.get(model.lower()) is None:
         raise ValueError(f"Invalid simulator: {model}")
 
     n_params = len(prior_bounds)
-    prior = None
 
-    match model.lower():
-        case "dimensional":
-            prior = dim_prior.DimPrior(dtype, device)
-        case "non-dimensional":
-            prior = nd_prior.NDPrior(dtype, device)
-        case "hopf":
-            prior = hopf_prior.HopfPrior(dtype, device)
-        case "nadrowski":
-            prior = nadrowski_prior.NadrowskiPrior(dtype, device)
-        case _:
-            raise ValueError(f"Invalid model: {model}")
+    prior_cls = VALID_PRIORS[model.lower()]
+    prior = prior_cls(dtype, device)
 
     with torch.no_grad():
         prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size, segs, prior_bounds, t_global_scale=2, num_iterations=num_iterations, n_max=175000, steady=False)
@@ -205,25 +201,17 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
 
     :raises ValueError: If the specified model is not supported.
     """
-    valid_models = ["dimensional", "non-dimensional", "nadrowski", "hopf"]
-    if model.lower() not in valid_models:
+    if model.lower() not in VALID_SIMS:
         raise ValueError(f"Invalid simulator: {model}")
 
-    inits = None
-    match model.lower():
-        case "dimensional":
-            inits = helpers.concat(np.random.randint(0, 10, size=(run_size, 2)), np.random.randint(0, 1, size=(run_size, 3)))  # size: (run_size, 5)
-            inits = torch.tensor(inits, dtype=dtype, device=device)
-        case "non-dimensional":
-            inits = helpers.concat(np.random.randint(0, 10, size=(run_size, 2)), np.random.randint(0, 1, size=(run_size, 3)))  # size: (run_size, 5)
-            inits = torch.tensor(inits, dtype=dtype, device=device)
-        case "hopf":
-            inits = torch.tensor(np.random.randint(0, 10, size=(run_size, 2)), dtype=dtype, device=device)
-        case "nadrowski":
-            inits = helpers.concat(np.random.randint(0, 10, size=(run_size, 2)), np.random.randint(0, 1, size=(run_size, 1)))  # size: (run_size, 3)
-            inits = torch.tensor(inits, dtype=dtype, device=device)
-        case _:
-            raise ValueError(f"Invalid simulator: {model}")
+    n_pos, n_prob = INIT_SHAPES[model.lower()]
+    if n_prob > 0:
+        inits = torch.tensor(
+            helpers.concat(np.random.randint(0, 10, size=(run_size, n_pos)),
+                           np.random.randint(0, 1, size=(run_size, n_prob))),
+            dtype=dtype, device=device)
+    else:
+        inits = torch.tensor(np.random.randint(0, 10, size=(run_size, n_pos)), dtype=dtype, device=device)
 
     # move to the specified device
     t = t.to(dtype=dtype, device=device)

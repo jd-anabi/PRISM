@@ -1,33 +1,71 @@
 from torch import nn
+import torch
 
 class EmbeddedNet(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int, layer_dims: tuple):
+    def __init__(self, input_dim: int, output_dim: int, layer_dims: tuple,
+                 forcing_dim: int = 0, forcing_layer_dims: tuple = None,
+                 merge_layer_dim: int = None):
         """
-        Embedded neural network to compress summary statistics to lower-dimensional space
-        :param input_dim: the input dimension (initial dimension of summary statistics)
-        :param output_dim: the output dimension (desired compressed dimension)
-        :param layer_dims: the dimensions of each intermediate layer in the neural network
+        Embedding network with optional conditioning on forcing parameters.
+
+        :param input_dim: dimension of summary statistics
+        :param output_dim: final output dimension
+        :param layer_dims: hidden layer dims for the summary pathway
+        :param forcing_dim: dimension of forcing parameters (0 = unconditioned)
+        :param forcing_layer_dims: hidden layer dims for the forcing pathway
+        :param merge_layer_dim: hidden layer dim for the merge pathway
         """
         super().__init__()
-        self.net = nn.Sequential(
-            # Layer 1: input dim -> first layer dim
-            nn.Linear(input_dim, layer_dims[0]), # standard sully connected layer, learns linear combination of inputs
-            nn.LayerNorm(layer_dims[0]), # stats have different scales, this forces stats to have a standard scale (mean = 0, variance = 1)
-            nn.ReLU(), # rectified linear unit, introduces non-linearity between statistics
 
-            # Layer 2: first layer dim -> second layer dim
+        self.input_dim = input_dim
+        self.forcing_dim = forcing_dim
+        self.conditioned = forcing_dim > 0
+
+        # Summary pathway
+        self.summary_net = nn.Sequential(
+            nn.Linear(input_dim, layer_dims[0]),
+            nn.LayerNorm(layer_dims[0]),
+            nn.ReLU(),
+
             nn.Linear(layer_dims[0], layer_dims[1]),
             nn.LayerNorm(layer_dims[1]),
             nn.ReLU(),
-
-            # Layer 3: second layer dim -> output dim
-            nn.Linear(layer_dims[1], output_dim)
         )
 
+        if self.conditioned:
+            if forcing_layer_dims is None or merge_layer_dim is None:
+                raise ValueError(
+                    "forcing_layer_dims and merge_layer_dim must be provided when forcing_dim > 0"
+                )
+
+            self.forcing_net = nn.Sequential(
+                nn.Linear(forcing_dim, forcing_layer_dims[0]),
+                nn.LayerNorm(forcing_layer_dims[0]),
+                nn.ReLU(),
+
+                nn.Linear(forcing_layer_dims[0], forcing_layer_dims[1]),
+                nn.LayerNorm(forcing_layer_dims[1]),
+                nn.ReLU(),
+            )
+
+            self.merge_net = nn.Sequential(
+                nn.Linear(layer_dims[1] + forcing_layer_dims[1], merge_layer_dim),
+                nn.LayerNorm(merge_layer_dim),
+                nn.ReLU(),
+
+                nn.Linear(merge_layer_dim, output_dim),
+            )
+        else:
+            # No forcing: just project summary output to final dimension
+            self.output_net = nn.Linear(layer_dims[1], output_dim)
+
     def forward(self, x):
-        """
-        Defines the forward pass of the embedded network
-        :param x: input
-        :return: output
-        """
-        return self.net(x)
+        if self.conditioned:
+            s = x[:, :self.input_dim]
+            f = x[:, self.input_dim:]
+            return self.merge_net(torch.cat([
+                self.summary_net(s),
+                self.forcing_net(f)
+            ], dim=-1))
+        else:
+            return self.output_net(self.summary_net(x))

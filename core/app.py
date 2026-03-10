@@ -66,6 +66,10 @@ ND_LABELS = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
              r"$C_{min}$", r"$S_{min}$", r"$S_{max}$", r"$Ca^2_m$", r"$Ca^2_{gs}$",
              r"$U_{gs,\ max}$", r"$\Delta E$", r"$k_{gs, \text{ ratio}}$",
              r"$\chi_{hb}$", r"$\chi_a$", r"$x_c$", r"$\eta_{hb}$", r"$\eta_{a}$"]
+NADROWSKI_LABELS = [r"$\lambda$", r"$\lambda_y$", r"$\tau$", r"$k_{gs}$", r"$k_{sp}$",
+                    r"$d$", r"$f_{max}$", r"$c_0$", r"$c_m$", r"$S$",
+                    r"$n$", r"$\Delta E$", r"$T$", r"$T_{eff}$", r"$\tau_c$"]
+
 
 # === ENSEMBLE VARIABLES ===
 UNIQUE_FREQS = 2**6 # number of unique frequencies
@@ -114,6 +118,7 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     :param units_dict: Unit strings for each parameter (used for SI conversion).
     :param si_factors: Precomputed SI conversion factors from setup().
     """
+
     # === GENERATE SYNTHETIC DATA ===
     t_max = int(input("Max time: "))
     dt = float(input("Time step: "))
