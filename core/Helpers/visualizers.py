@@ -34,7 +34,7 @@ def plot(x: np.ndarray, y: np.ndarray, scatter: bool = False, title: str = None,
     plt.show()
 
 # === DISTRIBUTION VISUALIZERS ===
-def visualize_dist(dist: torch.distributions.Distribution, labels: list, n_samples: int = 10000, save_path: str | PathLike[str] = 'prior_corner_plot.png') -> None:
+def visualize_dist(dist: torch.distributions.Distribution, labels: list, n_samples: int = 10000, save_path: str | PathLike[str] = None) -> None:
     # sample from distribution
     samples = dist.sample((n_samples,)).cpu().numpy()
 
@@ -42,7 +42,8 @@ def visualize_dist(dist: torch.distributions.Distribution, labels: list, n_sampl
     figure = corner.corner(samples, labels=labels, show_titles=True, title_fmt=".2f", plot_datapoints=False, plot_density=True, fill_contours=True, smooth=1.0)
 
     # save distribution visualization and show it
-    plt.savefig(save_path)
+    if save_path is not None:
+        plt.savefig(save_path)
     plt.show()
 
 # === POSTERIOR ANALYSIS VISUALIZERS ===

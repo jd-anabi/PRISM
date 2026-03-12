@@ -12,18 +12,14 @@ ASSIGNMENT_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\
 # Flexible Bounds: name [opt_units] = val [opt_in] (bounds)
 BOUNDS_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\s*\))?\s*=\s*(?P<val>{FLOAT_REGEX})\s+(?:in\s+)?[\[\(](?P<tup>.*?)[\]\)]\s*$')
 
-def parse_model_file(file_name: str, nd: bool = False) -> tuple:
+def parse_model_file(file_name: str) -> tuple:
     """
     Parses a model configuration file to extract initialization variables, parameters, rescaling values,
     forcing parameters, and associated unit types. The function processes a file with sections defined
     by specific headers, and categorizes the data into corresponding dictionaries or structures.
 
     :param file_name: The path to the model file to be parsed.
-    :param nd: Whether to include non-dimensional parameters in the output. If True, the `rescale_params`
-        dictionary and `collected_units` set are included in the returned tuple.
-    :type file_name: str
-    :type nd: bool
-    :return: A tuple containing extracted model data. If `nd` is False, the tuple includes:
+    :return: A tuple containing extracted model data.
         - ``init_conditions``: An ordered dictionary of initial conditions mapping variable names to their values.
         - ``parameters``: An ordered dictionary where each key is a parameter name, and the value is a tuple of
           its initial value and bounds.
@@ -64,10 +60,10 @@ def parse_model_file(file_name: str, nd: bool = False) -> tuple:
             if "Initial Conditions" in line:
                 current_section = "INIT"
             elif "Parameters" in line and "Forcing" not in line:
-                if "Dimensional" not in line:
-                    current_section = "PARAM"
-                else:
+                if line.startswith("# Dimensional"):
                     current_section = "RESCALE"
+                else:
+                    current_section = "PARAM"
             elif "Forcing Parameters" in line:
                 current_section = "FORCING"
             continue
@@ -105,9 +101,7 @@ def parse_model_file(file_name: str, nd: bool = False) -> tuple:
                 parameters[name] = (val, bounds)
                 process_units(match)
 
-    if not nd:
-        return init_conditions, parameters, forcing_params, tuple(collected_units)
-    return init_conditions, parameters, rescale_params, forcing_params, collected_units
+    return init_conditions, parameters, rescale_params, forcing_params, tuple(collected_units)
 
 def list_dir(files_dir: str, return_list: bool = True) -> list[str] | None:
     """

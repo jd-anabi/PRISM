@@ -33,7 +33,7 @@ class NDNadrowskiPrior(prior.Prior):
         unit_samples = engine.draw(batch_size).to(dtype=self.dtype, device=self.device)
         thetas = lows + unit_samples * (highs - lows)
 
-        inits = np.random.randint(0, 10, size=(curr_batch_size, 2))
+        inits = helpers.concat(np.random.randint(0, 10, size=(curr_batch_size, 2)), np.random.randint(0, 1, size=(curr_batch_size, 1)))
         inits_tensor = torch.tensor(inits, dtype=self.dtype, device=self.device)
         force = torch.zeros((curr_batch_size, t.shape[0]), dtype=self.dtype, device=self.device)
         stable_params = []

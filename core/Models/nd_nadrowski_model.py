@@ -37,9 +37,9 @@ class NDNadrowskiModel:
         return dx
 
     def g(self, x) -> torch.Tensor:
-        x_noise = 0 * self._x_noise()
-        y_noise = 0 * self._y_noise()
-        c_noise = 0 * self._c_noise(x[:, 0], x[:, 1])
+        x_noise = self._x_noise()
+        y_noise = self._y_noise()
+        c_noise = self._c_noise(x[:, 0], x[:, 1])
         dsigma = torch.stack((x_noise, y_noise, c_noise), dim=0)
         dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
         return torch.diag_embed(dsigma)

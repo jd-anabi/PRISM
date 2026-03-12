@@ -74,6 +74,7 @@ ND_NADROWSKI_LABELS = [r"$k$", r"$\lambda$", r"$f_{\text{max}}$", r"$\tau$", r"$
 
 # === VALID MODELS ===
 VALID_MODELS = ["DIMENSIONAL", "NON-DIMENSIONAL", "NADROWSKI", "ND NADROWSKI", "HOPF"]
+VALID_LABELS = [DIM_LABELS, ND_LABELS, NADROWSKI_LABELS, ND_NADROWSKI_LABELS, HOPF_LABELS]
 
 # === ENSEMBLE VARIABLES ===
 UNIQUE_FREQS = 2**6 # number of unique frequencies
@@ -91,12 +92,14 @@ def setup() -> tuple:
 
     :return: Tuple of (inits_dict, params_dict, force_params_dict, units_dict, si_factors).
     """
+    # figure out which model to run
     helpers.clear_screen()
     print("Available models:")
     for model_idx, model in enumerate(VALID_MODELS):
         print(f"({model_idx + 1}) {model}")
     model_num = int(input("\nWhich model would you like to run? Select a number: "))
     model = VALID_MODELS[model_num - 1]
+    labels = VALID_LABELS[model_num - 1]
     state_dep_drift = False
     if "nadrowski" in model.lower():
         state_dep_drift = True
@@ -112,7 +115,7 @@ def setup() -> tuple:
     file_num = int(input("\nFile number for model parameters: "))
     helpers.clear_screen()
     cell_file = CELL_PATH + cell_files[file_num - 1]
-    inits_dict, params_dict, force_params_dict, units_dict = file_manager.parse_model_file(cell_file)
+    inits_dict, params_dict, rescale_params, force_params_dict, units_dict = file_manager.parse_model_file(cell_file)
 
     # need to construct dictionary now that constructs factors to convert current units to SI units
     ureg = pint.UnitRegistry()
@@ -122,9 +125,11 @@ def setup() -> tuple:
         print(f"Error: {e}. Unrecognized units.")
         exit()
 
-    return inits_dict, params_dict, force_params_dict, units_dict, si_factors, model, state_dep_drift
+    return inits_dict, params_dict, rescale_params, force_params_dict, units_dict, si_factors, model, labels, state_dep_drift
 
-def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict: dict, si_factors: list, model: str, state_dep_drift: bool):
+def run(inits_dict: dict, params_dict: dict, rescale_params: dict,
+        force_params_dict: dict, units_dict: dict, si_factors: list,
+        model: str, labels: list, state_dep_drift: bool):
     """
     Execute the full SBI pipeline: generate synthetic observations, construct or load a prior
     and posterior, then validate the posterior with PPC, SBC, expected coverage, and a
@@ -132,10 +137,12 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
 
     :param inits_dict: Initial conditions for the model state variables.
     :param params_dict: Model parameters; each value is [ground_truth, [lower_bound, upper_bound]].
+    :param rescale_params: Rescaling parameters for non-dimensionalization.
     :param force_params_dict: Forcing/stimulus parameters (unused when force is zero).
     :param units_dict: Unit strings for each parameter (used for SI conversion).
     :param si_factors: Precomputed SI conversion factors from setup().
     :param model: Name of the model (e.g. "Hopf").
+    :param labels: List of parameter labels for plotting.
     :param state_dep_drift: Whether the model has state-dependent drift.
     """
     # === GENERATE SYNTHETIC DATA ===
@@ -161,13 +168,14 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     visualizers.plot(t[steady_idx:].cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy())
 
     # === PRIOR CONSTRUCTION ===
-    prior = _construct_prior(prior_bounds=[row[1] for row in param_vals], t=t, segs=math.ceil(segs / 2), model=model)
+    prior = _construct_prior(prior_bounds=[row[1] for row in param_vals], t=t, segs=math.ceil(segs / 2), model=model,
+                             labels=labels, state_dep_drift=state_dep_drift)
 
     # === POSTERIOR CONSTRUCTION ===
     ground_truth = [row[0] for row in params_dict.values()]
     ground_truth_tensor = torch.tensor(ground_truth, dtype=DTYPE, device=DEVICE)
 
-    # fix alpha and condition new prior
+    """"# fix alpha and condition new prior
     alpha_idx = 2
     alpha_fixed = ground_truth[alpha_idx]
     ground_truth_alpha_fixed = ground_truth[:alpha_idx] + ground_truth[alpha_idx+1:]
@@ -181,32 +189,31 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     comp = dist.MultivariateNormal(means.to(device=DEVICE), covariance_matrix=covs.to(device=DEVICE))
     cond_prior = dist.MixtureSameFamily(mixture, comp)
 
-    fixed_dict = {alpha_idx: alpha_fixed}
-    posterior, pos_diagnostics = _construct_posterior(sim_model=model, prior=cond_prior, t=t, obs_stats=obs_stats, ground_truth_tensor=ground_truth_alpha_fixed_tensor,
+    fixed_dict = {alpha_idx: alpha_fixed}"""
+    posterior, pos_diagnostics = _construct_posterior(sim_model=model, prior=prior, t=t, obs_stats=obs_stats, ground_truth_tensor=ground_truth_tensor,
                                                       segs=math.ceil(segs / 2), steady_idx=steady_idx, dt=dt, net_model="maf", training_runs=300,
-                                                      num_rounds=1, fixed_dict=fixed_dict)
+                                                      num_rounds=1, state_dep_drift=state_dep_drift)
     helpers.clear_screen()
 
     # === VALIDATION ===
     # visualize posterior with corner plot
     samples = posterior.sample((1000,), x=obs_stats.to(DEVICE))
-    fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth_alpha_fixed]), labels=(HOPF_LABELS[:alpha_idx] + HOPF_LABELS[alpha_idx+1:]),)
+    fig, ax = pairplot(samples.cpu().numpy(), points=np.array([ground_truth]), labels=labels,)
     plt.show()
 
     # validate posterior with PPC, SBC, and expected coverage plots
     x_sims = pipeline.gen_obs(model=model, params=samples, t=t, inits=inits.expand(samples.shape[0], -1),
                               force=torch.zeros((samples.shape[0], t.shape[0]), dtype=DTYPE, device=DEVICE), n_segs=segs, steady_idx=steady_idx,
-                              fixed_dict=fixed_dict, batch_size=samples.shape[0], dtype=DTYPE, device=DEVICE)[0, :, :]
+                              state_dep_drift=state_dep_drift, batch_size=samples.shape[0], dtype=DTYPE, device=DEVICE)[0, :, :]
     sim_stats = pipeline.gen_stats(x_sims, dt, device=DEVICE)
     results = analysis.posterior_predictive_check(obs_stats.squeeze().to(DEVICE), sim_stats)
 
-    x_cal, theta_star = analysis.gen_cal_data(model=model, prior=cond_prior, t=t, n_segs=segs, steady_idx=steady_idx, dt=dt, n_cal=1000,
-                                              fixed_dict=fixed_dict, dtype=DTYPE, device=DEVICE)
+    x_cal, theta_star = analysis.gen_cal_data(model=model, prior=prior, t=t, n_segs=segs, steady_idx=steady_idx, dt=dt, n_cal=1000,
+                                            dtype=DTYPE, device=DEVICE)
     ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, device=DEVICE)
     alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, dtype=DTYPE, device=DEVICE)
 
-    param_names = [r'\mu', r'\omega', r'\alpha', r'\beta', r'\varepsilon_x', r'\varepsilon_y']
-    sbc_plot = visualizers.plot_sbc(ranks, param_names=(param_names[:alpha_idx] + param_names[alpha_idx+1:]), m=1000, fig_size=(7, 12))
+    sbc_plot = visualizers.plot_sbc(ranks, param_names=labels, m=1000, fig_size=(7, 12))
     expected_cov_plot = visualizers.plot_expected_coverage(alphas, fig_size=(7, 20))
     plt.show()
 
@@ -218,7 +225,7 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     # Simulate from MAP
     x_map = pipeline.gen_obs(model=model, params=map_params, t=t, inits=inits,
                              force=force[0].unsqueeze(0), n_segs=segs,
-                             steady_idx=steady_idx, fixed_dict=fixed_dict)[0, 0, :]
+                             steady_idx=steady_idx, state_dep_drift=state_dep_drift)[0, 0, :]
 
     # simulate from several posterior samples (reuse x_sims from PPC)
     t_plot = t[steady_idx:].cpu().numpy()
@@ -232,7 +239,7 @@ def run(inits_dict: dict, params_dict: dict, force_params_dict: dict, units_dict
     plt.show()
 
 # === PRIVATE FUNCTIONS ===
-def _construct_prior(prior_bounds, t, segs, model) -> MixtureSameFamily:
+def _construct_prior(prior_bounds, t, segs, model, labels, state_dep_drift=False) -> MixtureSameFamily:
     """
     Load an existing prior from disk or construct one from scratch using a two-phase
     sweep (global + local) over the parameter space.
@@ -241,6 +248,7 @@ def _construct_prior(prior_bounds, t, segs, model) -> MixtureSameFamily:
     :param t: Time tensor for simulation during prior construction.
     :param segs: Number of time segments for stability filtering.
     :param model: Name of the model (e.g. "Hopf").
+    :param labels: Labels for the parameter space
     :return: MixtureSameFamily prior distribution over model parameters.
     """
     print("Available priors: ")
@@ -253,6 +261,7 @@ def _construct_prior(prior_bounds, t, segs, model) -> MixtureSameFamily:
             prior_path = PRIOR_PATH + saved_priors[prior_idx]
             prior = file_manager.load_mix_dist(prior_path, device=DEVICE)
             helpers.clear_screen()
+            visualizers.visualize_dist(prior, labels=labels)
         else:
             raise ValueError
     except ValueError:
@@ -261,19 +270,20 @@ def _construct_prior(prior_bounds, t, segs, model) -> MixtureSameFamily:
         time.sleep(5)
         helpers.clear_screen()
         prior = pipeline.gen_prior(model=model, t=t, global_batch_size=BATCH_SIZE,
-                                   local_batch_size=(BATCH_SIZE // (2)),
+                                   local_batch_size=(BATCH_SIZE // 2),
                                    segs=math.ceil(segs / 2), prior_bounds=prior_bounds,
+                                   state_dep_drift=state_dep_drift,
                                    num_iterations=50, dtype=DTYPE, device=DEVICE)
         prior_file_name = input("Enter a name for the prior file: ")
         file_manager.save_mix_dist(prior, PRIOR_PATH + prior_file_name + ".pt")
         corner_plot_path = PLOT_PATH + prior_file_name + ".png"
-        visualizers.visualize_dist(prior, labels=HOPF_LABELS, save_path=corner_plot_path)
+        visualizers.visualize_dist(prior, labels=labels, save_path=corner_plot_path)
     return prior
 
 def _construct_posterior(sim_model: str, prior: MixtureSameFamily, t: torch.Tensor, obs_stats: torch.Tensor,
                          ground_truth_tensor: torch.Tensor, segs: int, steady_idx: int, dt: float, net_model: str = "maf",
                          training_runs: int = 15, run_size: int = BATCH_SIZE, num_rounds: int = 1, fixed_dict: dict = None,
-                         dtype: torch.dtype = DTYPE, device: torch.device = DEVICE) -> tuple[DirectPosterior, dict]:
+                         state_dep_drift: bool = False, dtype: torch.dtype = DTYPE, device: torch.device = DEVICE) -> tuple[DirectPosterior, dict]:
     """
     Load an existing posterior from disk or train a new one using SNPE.
 
@@ -313,8 +323,9 @@ def _construct_posterior(sim_model: str, prior: MixtureSameFamily, t: torch.Tens
             raise ValueError
     except ValueError:
         helpers.clear_screen()
-        hopf_training_params = {"model": sim_model, "prior": prior, "t": t, "run_size": run_size, "num_runs": training_runs,
-                                "n_segs": segs, "steady_idx": steady_idx, "dt": dt, "dtype": dtype, "device": device}
+        training_params = {"model": sim_model, "prior": prior, "t": t, "run_size": run_size, "num_runs": training_runs,
+                                "n_segs": segs, "steady_idx": steady_idx, "dt": dt, "state_dep_drift": state_dep_drift,
+                                "dtype": dtype, "device": device}
         # === SNPE ===
         # set up an embedded network
         input_dim = obs_stats.shape[1]
@@ -324,7 +335,7 @@ def _construct_posterior(sim_model: str, prior: MixtureSameFamily, t: torch.Tens
         sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
 
         # train the neural network
-        posterior, pos_diagnostics = pipeline.train_nn(hopf_training_params, model=net_model, prior=sbi_prior,
+        posterior, pos_diagnostics = pipeline.train_nn(training_params, model=net_model, prior=sbi_prior,
                                                        embedding_net=embedded_net, x_obs=obs_stats,
                                                        theta_obs=ground_truth_tensor, num_rounds=num_rounds,
                                                        return_diagnostics=True, fixed_dict=fixed_dict, batch_size=int(2 ** 7),
