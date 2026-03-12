@@ -37,7 +37,7 @@ else:
     DTYPE = torch.float32
 
 if DEVICE.type == "cuda" and DTYPE == torch.float32:
-    BATCH_SIZE = 2**12
+    BATCH_SIZE = 2**11
 elif DEVICE.type == "cuda" and DTYPE == torch.float64:
     BATCH_SIZE = 2**10
 else:
