@@ -295,7 +295,8 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
         data, thetas = gen_training_data(training_params["model"], training_params["prior"], training_params["t"],
                                          training_params["run_size"], training_params["num_runs"], training_params["n_segs"],
                                          training_params["steady_idx"], training_params["dt"], proposal=proposal,
-                                         fixed_dict=fixed_dict, dtype=training_params["dtype"], device=training_params["device"])  # initial (data, thetas) training pairs
+                                         fixed_dict=fixed_dict, state_dep_drift=training_params.get("state_dep_drift", False),
+                                         dtype=training_params["dtype"], device=training_params["device"])  # initial (data, thetas) training pairs
 
         # filter data
         nan_mask = torch.isfinite(data).all(dim=1)
