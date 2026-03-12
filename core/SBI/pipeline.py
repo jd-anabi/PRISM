@@ -238,9 +238,11 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
                 warnings.simplefilter("ignore")
                 training_stats = gen_stats(data, dt, device=device)
                 del data
-                training_data.append(training_stats)
-            thetas.append(curr_thetas)
+                training_data.append(training_stats.cpu())
+            thetas.append(curr_thetas.cpu())
             del training_stats
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
 
     training_data_tensor = torch.cat(training_data, dim=0)
     thetas_tensor = torch.cat(thetas, dim=0)
