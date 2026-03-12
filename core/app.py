@@ -191,7 +191,7 @@ def run(inits_dict: dict, params_dict: dict, rescale_params: dict,
 
     fixed_dict = {alpha_idx: alpha_fixed}"""
     posterior, pos_diagnostics = _construct_posterior(sim_model=model, prior=prior, t=t, obs_stats=obs_stats, ground_truth_tensor=ground_truth_tensor,
-                                                      segs=math.ceil(segs / 2), steady_idx=steady_idx, dt=dt, net_model="maf", training_runs=300,
+                                                      segs=segs, steady_idx=steady_idx, dt=dt, net_model="maf", training_runs=300,
                                                       num_rounds=1, state_dep_drift=state_dep_drift)
     helpers.clear_screen()
 
