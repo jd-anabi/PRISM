@@ -88,17 +88,16 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     obs = simulator.simulate(state_dep_drift=state_dep_drift)[:, 0, :, steady_idx:].clone()
     return obs
 
-def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20, device: torch.device = torch.device('cpu')) -> torch.Tensor:
+def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20,
+              device: torch.device = torch.device('cpu'), stats_batch_size: int = 256) -> torch.Tensor:
     """
     Generate statistical features from input data using the given parameters.
 
-    This function computes a set of statistical features by utilizing the
-    `SummaryStatistics` facility. It supports options to partition data
-    into frequency bands, calculate lags, and apply partial autocorrelation
-    function (PACF). The final statistics are influenced by the specified
-    downsampling rates for efficiency.
+    Computes statistics in sub-batches on the target device to keep GPU FFT
+    performance while avoiding OOM on large datasets. Each sub-batch result
+    is moved to CPU immediately.
 
-    :param x: The input data tensor from which features will be computed.
+    :param x: The input data tensor from which features will be computed (on CPU).
     :type x: torch.Tensor
     :param dt: The time step resolution for the input data.
     :type dt: float
@@ -108,19 +107,26 @@ def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, p
     :type n_lags: int, optional
     :param pacf_lags: Number of lags for the partial autocorrelation function. Defaults to 20.
     :type pacf_lags: int, optional
-    :param downsamples: Tuple specifying downsample rates for different statistical features.
-     Defaults to (2000, 2000, 2000, 2000).
-    :type downsamples: tuple
-    :param comp_device: The device on which the computation should be performed for statistical features. Defaults to torch.device('cpu').
-    :type comp_device: torch.device
-    :param device: The device on which the statistics should be moved to. Defaults to torch.device('cpu').
+    :param device: The device on which to compute statistics. Defaults to torch.device('cpu').
     :type device: torch.device
+    :param stats_batch_size: Number of samples to process per sub-batch on GPU. Defaults to 256.
+    :type stats_batch_size: int
 
     :return: A tensor containing the computed statistical features. Shape: (batch size, number of statistics).
     :rtype: torch.Tensor
     """
-    stats = statistics.SummaryStatistics(x.to(device), dt)
-    return stats.compute_statistics(n_bands, n_lags, pacf_lags)
+    total = x.shape[0]
+    results = []
+    for start in range(0, total, stats_batch_size):
+        end = min(start + stats_batch_size, total)
+        x_sub = x[start:end].to(device)
+        stats = statistics.SummaryStatistics(x_sub, dt)
+        result = stats.compute_statistics(n_bands, n_lags, pacf_lags)
+        results.append(result.cpu())
+        del stats, x_sub, result
+        if device.type == 'cuda':
+            torch.cuda.empty_cache()
+    return torch.cat(results, dim=0)
 
 def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list,
               state_dep_drift: bool = False, num_iterations: int = 25,
@@ -236,7 +242,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
                            fixed_dict=fixed_dict, state_dep_drift=state_dep_drift, batch_size=run_size, dtype=dtype, device=device)[0, :, :]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                training_stats = gen_stats(data.cpu(), dt)
+                training_stats = gen_stats(data.cpu(), dt, device=device)
                 del data
                 training_data.append(training_stats)
             thetas.append(curr_thetas.cpu())
