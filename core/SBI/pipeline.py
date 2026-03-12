@@ -85,7 +85,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     simulator_cls = VALID_SIMS[model.lower()]
     simulator = simulator_cls(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
 
-    obs = simulator.simulate(state_dep_drift=state_dep_drift)[:, 0, :, steady_idx:]
+    obs = simulator.simulate(state_dep_drift=state_dep_drift)[:, 0, :, steady_idx:].clone()
     return obs
 
 def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20, device: torch.device = torch.device('cpu')) -> torch.Tensor:
@@ -236,9 +236,9 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
                            fixed_dict=fixed_dict, state_dep_drift=state_dep_drift, batch_size=run_size, dtype=dtype, device=device)[0, :, :]
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                training_stats = gen_stats(data, dt, device=device)
+                training_stats = gen_stats(data.cpu(), dt)
                 del data
-                training_data.append(training_stats.cpu())
+                training_data.append(training_stats)
             thetas.append(curr_thetas.cpu())
             del training_stats
             if device.type == "cuda":
