@@ -69,8 +69,8 @@ ND_LABELS = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
 NADROWSKI_LABELS = [r"$\lambda$", r"$\lambda_y$", r"$\tau$", r"$k_{gs}$", r"$k_{sp}$",
                     r"$d$", r"$f_{max}$", r"$c_0$", r"$c_m$", r"$S$",
                     r"$n$", r"$\Delta E$", r"$T$", r"$T_{eff}$", r"$\tau_c$"]
-ND_NADROWSKI_LABELS = [r"$k$", r"$\lambda$", r"$f_{\text{max}}$", r"$\tau$", r"$\tau_c$",
-                       r"$c_0$", r"$S$", r"$\Delta E$", r"$\alpha$", r"$n$", r"$T$"]
+ND_NADROWSKI_LABELS = [r"$\kappa$", r"$\lambda$", r"$f_{\text{max}}$", r"$\tau$", r"$\tau_c$",
+                       r"$c_0$", r"$S$", r"$\Delta E$", r"$\beta", r"$n$", r"$T$"]
 
 # === VALID MODELS ===
 VALID_MODELS = ["DIMENSIONAL", "NON-DIMENSIONAL", "NADROWSKI", "ND NADROWSKI", "HOPF"]
@@ -156,7 +156,7 @@ def run(inits_dict: dict, params_dict: dict, rescale_params: dict,
     segs = int(input("Number of segments to divide time series into: "))
     helpers.clear_screen()
 
-    force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE) # no forcing
+    force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE) # no forcing```````````````````````````
 
     param_vals = list(params_dict.values())
     params = torch.tensor([row[0] for row in param_vals], dtype=DTYPE).unsqueeze(0)
@@ -206,10 +206,10 @@ def run(inits_dict: dict, params_dict: dict, rescale_params: dict,
                               force=torch.zeros((samples.shape[0], t.shape[0]), dtype=DTYPE, device=DEVICE), n_segs=segs, steady_idx=steady_idx,
                               state_dep_drift=state_dep_drift, batch_size=samples.shape[0], dtype=DTYPE, device=DEVICE)[0, :, :]
     sim_stats = pipeline.gen_stats(x_sims, dt, device=DEVICE)
-    results = analysis.posterior_predictive_check(obs_stats.squeeze().to(DEVICE), sim_stats)
+    results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats)
 
     x_cal, theta_star = analysis.gen_cal_data(model=model, prior=prior, t=t, n_segs=segs, steady_idx=steady_idx, dt=dt, n_cal=1000,
-                                            dtype=DTYPE, device=DEVICE)
+                                            state_dep_drift=state_dep_drift, dtype=DTYPE, device=DEVICE)
     ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, device=DEVICE)
     alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, dtype=DTYPE, device=DEVICE)
 

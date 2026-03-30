@@ -18,6 +18,7 @@
       <excludeFolder url="file://$MODULE_DIR$/.venv" />
       <excludeFolder url="file://$MODULE_DIR$/archive" />
       <excludeFolder url="file://$MODULE_DIR$/sbi-logs" />
+      <excludeFolder url="file://$MODULE_DIR$/.claude" />
     </content>
     <orderEntry type="jdk" jdkName="biophys-env" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />

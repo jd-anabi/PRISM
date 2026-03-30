@@ -79,7 +79,7 @@ def plot_sbc(ranks: torch.Tensor, param_names: list, m: int, fig_size: tuple = N
                    label='99% CI')
         ax.set_xlabel('Rank')
         ax.set_ylabel('Count')
-        ax.set_title(f'${param_names[j]}$')
+        ax.set_title(param_names[j])
 
     plt.tight_layout()
     return fig

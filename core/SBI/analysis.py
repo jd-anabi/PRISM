@@ -49,6 +49,7 @@ def posterior_predictive_check(s_obs: torch.Tensor, s_simulated: torch.Tensor) -
 # === COVERAGE CHECKS ===
 def gen_cal_data(model: str, prior: torch.distributions.Distribution, t: torch.Tensor,
                  n_segs: int, steady_idx: int, dt: float, n_cal: int, fixed_dict: dict = None,
+                 state_dep_drift: bool = False,
                  dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generates calibration data and filtered parameters for model training based on the provided input parameters.
@@ -68,7 +69,8 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution, t: torch.T
     """
     # generate calibration data and parameters
     cal_data, theta_star = pipeline.gen_training_data(model, prior, t, n_cal, 1, n_segs, steady_idx, dt, proposal=None,
-                                                      fixed_dict=fixed_dict, dtype=dtype, device=device)
+                                                      fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+                                                      dtype=dtype, device=device)
 
     # filter out invalid simulations
     valid = torch.isfinite(cal_data).all(dim=1) & (torch.abs(cal_data) < 1e15).all(dim=1)

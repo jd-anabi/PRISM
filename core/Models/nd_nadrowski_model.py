@@ -2,7 +2,7 @@ import torch
 
 class NDNadrowskiModel:
     def __init__(self, k: torch.Tensor, lam: torch.Tensor, f: torch.Tensor, tau: torch.Tensor, tau_c: torch.Tensor,
-                 c_0: torch.Tensor, s: torch.Tensor, delta_E: torch.Tensor, alpha: torch.Tensor, n: torch.Tensor, temp: torch.Tensor,
+                 c_0: torch.Tensor, s: torch.Tensor, delta_e: torch.Tensor, beta: torch.Tensor, n: torch.Tensor, temp: torch.Tensor,
                  force: torch.Tensor, batch_size: int, device: torch.device = torch.device('cpu'), dtype: torch.dtype = torch.float32):
         # sde model parameters
         self.batch_size = batch_size
@@ -17,8 +17,8 @@ class NDNadrowskiModel:
         self.tau_c = tau_c.to(self.device)
         self.c_0 = c_0.to(self.device)
         self.s = s.to(self.device)
-        self.delta_E = delta_E.to(self.device)
-        self.alpha = alpha.to(self.device)
+        self.delta_e = delta_e.to(self.device)
+        self.beta = beta.to(self.device)
         self.n = n.to(self.device)
         self.temp = temp.to(self.device)
 
@@ -26,7 +26,7 @@ class NDNadrowskiModel:
         self.force = force.to(self.device)
 
         # subsuming parameters
-        self.a = torch.exp(self.delta_E + self.alpha / (2 * self.n))
+        self.a = torch.exp(self.delta_e + self.beta / 2)
 
     def f(self, x, t) -> torch.Tensor:
         dx = self._x_dot(x[:, 0], x[:, 1])
@@ -60,14 +60,14 @@ class NDNadrowskiModel:
 
     # --- NOISE --- #
     def _x_noise(self) -> torch.Tensor:
-        return torch.sqrt(2 / self.alpha)
+        return torch.sqrt(2 / (self.n * self.beta))
 
     def _y_noise(self) -> torch.Tensor:
-        return torch.sqrt(2 * self.temp / (self.alpha * self.lam))
+        return torch.sqrt(2 * self.temp / (self.n * self.beta * self.lam))
 
     def _c_noise(self, x, y) -> torch.Tensor:
         return torch.sqrt(2 * self.tau_c * self.__p_t0(x, y) * (1 - self.__p_t0(x, y)) / self.n) / self.tau
 
     # --- PRIVATE --- #
     def __p_t0(self, x, y):
-        return 1 / (1 + self.a * torch.exp(-1 * self.alpha * (x - y) / self.n))
+        return 1 / (1 + self.a * torch.exp(-1 * self.beta * (x - y)))
