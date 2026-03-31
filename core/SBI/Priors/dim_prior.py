@@ -10,11 +10,12 @@ from core.Simulator import dim_simulator
 from core.SBI.Priors import prior
 
 class DimPrior(prior.Prior):
-    def __init__(self, dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')):
+    def __init__(self, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')):
         super().__init__(dtype, device)
 
     # --- PRIVATE METHODS --- #
-    def _global_map(self, t: torch.Tensor, n_params: int, prior_bounds: list[tuple], segs: int, batch_size: int, num_iterations: int, steady: bool) -> list:
+    def _global_map(self, t: torch.Tensor, n_params: int, prior_bounds: list[tuple],
+                    segs: int, batch_size: int, num_iterations: int, steady: bool, state_dep_drift: bool) -> list:
         t = t.to(dtype=self.dtype, device=self.device)
         if batch_size % num_iterations != 0:
             raise ValueError('batch_size must be divisible by num_iterations')
@@ -62,7 +63,8 @@ class DimPrior(prior.Prior):
         return stable_params
 
     @staticmethod
-    def _local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int, n_max: int, step: float, segs: int, steady: bool) -> list:
+    def _local_map(t: torch.Tensor, stable_params: list, batch_size: int, n_params: int,
+                   n_max: int, step: float, segs: int, steady: bool, state_dep_drift: bool) -> list:
         # cpu variables
         dtype = torch.float32
         device = torch.device('cpu')

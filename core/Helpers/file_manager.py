@@ -103,7 +103,7 @@ def parse_model_file(file_name: str) -> tuple:
 
     return init_conditions, parameters, rescale_params, forcing_params, tuple(collected_units)
 
-def list_dir(files_dir: str, return_list: bool = True) -> list[str] | None:
+def list_dir(files_dir: str, return_list: bool = True) -> list[str] | list[None]:
     """
     Lists all files in the specified directory and its subdirectories, with an option to return a list of files.
 
@@ -133,7 +133,7 @@ def list_dir(files_dir: str, return_list: bool = True) -> list[str] | None:
     model_files.pop(0)
     if return_list:
         return model_files
-    return None
+    return []
 
 def save_mix_dist(dist: torch.distributions.MixtureSameFamily, filename: str):
     """

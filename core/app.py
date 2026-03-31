@@ -2,9 +2,7 @@ import os
 import sys
 import math
 import time
-from typing import cast
 
-from dipy.segment.clusteringspeed import DTYPE
 from sbi.inference import DirectPosterior
 from torch.distributions import MixtureSameFamily
 
@@ -12,7 +10,6 @@ os.environ["KMP_DUPLICATE_LIB_OK"]="True"
 
 import pint
 import torch
-import torch.distributions as dist
 import numpy as np
 from matplotlib import pyplot as plt
 from sbi.analysis import pairplot
@@ -156,7 +153,7 @@ def run(inits_dict: dict, params_dict: dict, rescale_params: dict,
     segs = int(input("Number of segments to divide time series into: "))
     helpers.clear_screen()
 
-    force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE) # no forcing```````````````````````````
+    force = torch.zeros((BATCH_SIZE, t.shape[0]), dtype=DTYPE, device=DEVICE) # no forcing
 
     param_vals = list(params_dict.values())
     params = torch.tensor([row[0] for row in param_vals], dtype=DTYPE).unsqueeze(0)
@@ -340,8 +337,9 @@ def _construct_posterior(sim_model: str, prior: MixtureSameFamily, t: torch.Tens
                                                        theta_obs=ground_truth_tensor, num_rounds=num_rounds,
                                                        return_diagnostics=True, fixed_dict=fixed_dict, batch_size=int(2 ** 7),
                                                        device=device)
-
         # save the posterior
         posterior_file_name = input("Enter a name for the posterior file: ")
         torch.save(posterior, POSTERIOR_PATH + posterior_file_name + ".pt")
+    assert isinstance(posterior, DirectPosterior)
+    assert isinstance(pos_diagnostics, dict)
     return posterior, pos_diagnostics
