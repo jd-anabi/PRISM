@@ -171,22 +171,6 @@ def run(inits_dict: dict, params_dict: dict, rescale_params: dict,
     # === POSTERIOR CONSTRUCTION ===
     ground_truth = [row[0] for row in params_dict.values()]
     ground_truth_tensor = torch.tensor(ground_truth, dtype=DTYPE, device=DEVICE)
-
-    """"# fix alpha and condition new prior
-    alpha_idx = 2
-    alpha_fixed = ground_truth[alpha_idx]
-    ground_truth_alpha_fixed = ground_truth[:alpha_idx] + ground_truth[alpha_idx+1:]
-    ground_truth_alpha_fixed_tensor = torch.tensor(ground_truth_alpha_fixed, dtype=DTYPE, device=DEVICE)
-
-    comp_dist = cast(dist.MultivariateNormal, prior.component_distribution)
-    mix_weights = prior.mixture_distribution.probs
-    component_means, component_covs = comp_dist.loc, comp_dist.covariance_matrix
-    weights, means, covs = helpers.condition_gmm_on_param(mix_weights, component_means, component_covs, alpha_idx, alpha_fixed)
-    mixture = dist.Categorical(probs=weights.to(device=DEVICE))
-    comp = dist.MultivariateNormal(means.to(device=DEVICE), covariance_matrix=covs.to(device=DEVICE))
-    cond_prior = dist.MixtureSameFamily(mixture, comp)
-
-    fixed_dict = {alpha_idx: alpha_fixed}"""
     posterior, pos_diagnostics = _construct_posterior(sim_model=model, prior=prior, t=t, obs_stats=obs_stats, ground_truth_tensor=ground_truth_tensor,
                                                       segs=segs, steady_idx=steady_idx, dt=dt, net_model="maf", training_runs=300,
                                                       num_rounds=1, state_dep_drift=state_dep_drift)
