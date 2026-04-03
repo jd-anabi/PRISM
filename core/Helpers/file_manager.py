@@ -50,6 +50,13 @@ def parse_model_file(file_name: str) -> tuple:
     except FileNotFoundError:
         raise FileNotFoundError("File not found")
 
+    def process_units(match_obj):
+        if match_obj.group('units'):
+            raw_units = match_obj.group('units').split()
+            for u in raw_units:
+                base_unit = u.split('^')[0]
+                collected_units.add(base_unit)
+
     for line in lines:
         line = line.strip()
         if not line:
@@ -68,37 +75,27 @@ def parse_model_file(file_name: str) -> tuple:
                 current_section = "FORCING"
             continue
 
-        # --- Helper to process units ---
-        def process_units(match_obj):
-            if match_obj.group('units'):
-                raw_units = match_obj.group('units').split()
-                for u in raw_units:
-                    # Clean exponent: ms^-2 -> ms
-                    base_unit = u.split('^')[0]
-                    collected_units.add(base_unit)
-
-        # 1. Initial Conditions & Forcing (Using ASSIGNMENT_PATTERN)
+        # 1. Initial Conditions (Using ASSIGNMENT_PATTERN)
         if current_section == "INIT":
             match = ASSIGNMENT_PATTERN.search(line)
             if match:
-                if current_section == "INIT":
-                    target_dict = init_conditions
-                elif current_section == "FORCING":
-                    target_dict = forcing_params
-                else:
-                    target_dict = rescale_params
-                target_dict[match.group('name')] = float(match.group('val'))
+                init_conditions[match.group('name')] = float(match.group('val'))
                 process_units(match)
 
-        # 2. Parameters (Using BOUNDS_PATTERN)
+        # 2. Parameters, Forcing, Rescale (Using BOUNDS_PATTERN)
         elif current_section in ["PARAM", "FORCING", "RESCALE"]:
             match = BOUNDS_PATTERN.search(line)
             if match:
                 name = match.group('name')
                 val = float(match.group('val'))
-                # Extract bounds
                 bounds = tuple(float(x) for x in re.findall(FLOAT_REGEX, match.group('tup')))
-                parameters[name] = (val, bounds)
+                if current_section == "PARAM":
+                    target_dict = parameters
+                elif current_section == "FORCING":
+                    target_dict = forcing_params
+                else:
+                    target_dict = rescale_params
+                target_dict[name] = (val, bounds)
                 process_units(match)
 
     return init_conditions, parameters, rescale_params, forcing_params, tuple(collected_units)

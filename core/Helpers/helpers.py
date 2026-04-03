@@ -4,6 +4,15 @@ import sys
 import numpy as np
 import torch
 
+def rescale(x: torch.Tensor, x_offset: float, x_scale: float) -> torch.Tensor:
+    """
+    Rescale a tensor by offset and scale
+    :param x: tensor to rescale
+    :param x_offset: offset to apply
+    :param x_scale: scale to apply
+    :return: rescaled tensor
+    """
+    return x_scale * x + x_offset
 
 def get_even_ids(l: int, n: int) -> list:
     """

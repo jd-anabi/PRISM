@@ -33,7 +33,6 @@ ProductPrior = _product_mod.ProductPrior
 
 
 # ── Pipeline entry point ────────────────────────────────────────────────────
-
 def run(cfg: SimConfig):
     """
     Execute the full SBI pipeline:
@@ -63,7 +62,6 @@ def run(cfg: SimConfig):
 
 
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
-
 def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Simulate ground-truth time series and compute summary statistics.
@@ -84,7 +82,6 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor]:
 
 
 # ── Step 2: Prior construction ──────────────────────────────────────────────
-
 def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> Distribution:
     """
     Load an existing prior from disk, or construct a new product prior:
@@ -111,7 +108,7 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> Distribu
         global_batch_size=cfg.hw.batch_size,
         local_batch_size=(cfg.hw.batch_size // 2),
         segs=math.ceil(cfg.n_segs / 2),
-        prior_bounds=cfg.prior_bounds,
+        prior_bounds=cfg.nd_params_bounds,
         state_dep_drift=cfg.state_dep_drift,
         num_iterations=50,
         dtype=cfg.hw.dtype, device=cfg.hw.device,
@@ -162,7 +159,6 @@ def _build_forcing_prior(cfg: SimConfig) -> Distribution:
 
 
 # ── Step 3: Posterior construction ──────────────────────────────────────────
-
 def build_posterior(
     cfg: SimConfig,
     prior: Distribution,
@@ -262,7 +258,6 @@ def _build_fixed_dict(cfg: SimConfig) -> dict | None:
 
 
 # ── Step 4: Validation ──────────────────────────────────────────────────────
-
 def validate(
     cfg: SimConfig,
     posterior: DirectPosterior,

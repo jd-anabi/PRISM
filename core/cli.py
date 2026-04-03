@@ -13,9 +13,7 @@ from .config import (
 )
 from .Helpers import helpers, file_manager
 
-
 # ── Model & cell file selection ──────────────────────────────────────────────
-
 def select_model() -> tuple[str, list[str], bool]:
     """
     Prompt the user to choose a model.

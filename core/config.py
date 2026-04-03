@@ -84,7 +84,7 @@ class SimConfig:
     state_dep_drift: bool
 
     # Parsed from cell file
-    inits_dict: OrderedDict
+    inits_dict: OrderedDict # {name: val}
     params_dict: OrderedDict # {name: (val, (lo, hi))}
     rescale_params: OrderedDict # {name: (val, (lo, hi))}
     force_params_dict: OrderedDict # {name: (val, (lo, hi))}
@@ -126,7 +126,7 @@ class SimConfig:
         return torch.tensor(self.ground_truth, dtype=self.hw.dtype, device=self.hw.device)
 
     @property
-    def prior_bounds(self) -> list[tuple]:
+    def nd_params_bounds(self) -> list[tuple]:
         """Parameter bounds for prior construction."""
         return [row[1] for row in self.params_dict.values()]
 
