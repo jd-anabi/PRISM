@@ -78,7 +78,7 @@ def parse_model_file(file_name: str) -> tuple:
                     collected_units.add(base_unit)
 
         # 1. Initial Conditions & Forcing (Using ASSIGNMENT_PATTERN)
-        if current_section in ["INIT", "FORCING", "RESCALE"]:
+        if current_section == "INIT":
             match = ASSIGNMENT_PATTERN.search(line)
             if match:
                 if current_section == "INIT":
@@ -91,7 +91,7 @@ def parse_model_file(file_name: str) -> tuple:
                 process_units(match)
 
         # 2. Parameters (Using BOUNDS_PATTERN)
-        elif current_section == "PARAM":
+        elif current_section in ["PARAM", "FORCING", "RESCALE"]:
             match = BOUNDS_PATTERN.search(line)
             if match:
                 name = match.group('name')

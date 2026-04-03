@@ -1,5 +1,6 @@
-import core.app as app
+from core.cli import build_sim_config
+from core.orchestrator import run
 
 if __name__ == '__main__':
-    inits_dict, params_dict, rescale_params, force_params_dict, units_dict, si_factors, model, labels, state_dep_drift = app.setup()
-    app.run(inits_dict, params_dict, rescale_params, force_params_dict, units_dict, si_factors, model, labels, state_dep_drift)
+    cfg = build_sim_config()
+    run(cfg)
