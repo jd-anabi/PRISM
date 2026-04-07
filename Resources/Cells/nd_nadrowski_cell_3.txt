@@ -23,8 +23,8 @@ t_offset (ms) = 0 in (0,0)
 t_scale (ms) = 3.73 in (0.05, 50)
 y_offset (nm) = 0 in (0,0)
 y_scale (nm) = 62.14 in (10, 100)
-force_offset (pN) = 0 in (0,0)
-force_scale (pN) = 100 in (1, 1000)
+f_offset (pN) = 0 in (0,0)
+f_scale (pN) = 10 in (1, 1000)
 
 # Forcing Parameters
 amp (pN) = 0 in (0, 500)

@@ -1,4 +1,5 @@
 import warnings
+from collections import OrderedDict
 
 import torch
 import numpy as np
@@ -29,6 +30,49 @@ INIT_SHAPES: dict = {"dimensional":     (2, 3),
                      "nadrowski":       (2, 1),
                      "nd nadrowski":    (2, 1),
                      "hopf":            (2, 0)}
+
+def build_nondim_sin_force_tensor(
+    forcing_params: torch.Tensor,
+    t_nd: torch.Tensor,
+    rescale_params: torch.Tensor,
+    forcing_idx: dict,
+    rescale_idx: dict,
+) -> torch.Tensor:
+    """
+    Build a batch of non-dimensional sinusoidal force tensors.
+
+    Constructs F_dim(t_dim) = amp * sin(2pi * freq * t_dim + phase) + offset
+    in dimensional space, then nondimensionalizes via
+    F_nd = (F_dim - f_offset) / f_scale.
+
+    :param forcing_params: Forcing parameter values, shape (batch, n_forcing).
+    :param t_nd: Non-dimensional time vector, shape (T,).
+    :param rescale_params: Rescaling parameter values, shape (batch, n_rescale).
+    :param forcing_idx: Maps forcing param names to column indices in forcing_params,
+                        e.g. {"amp": 0, "freq": 1, "phase": 2, "offset": 3}.
+    :param rescale_idx: Maps rescale param names to column indices in rescale_params,
+                        e.g. {"t_scale": 3, "t_offset": 2, "f_scale": 7, "f_offset": 6}.
+    :return: Non-dimensional force tensor, shape (batch, T).
+    """
+    # extract forcing params as (batch, 1) for broadcasting against (1, T)
+    amp    = forcing_params[:, forcing_idx["amp"]].unsqueeze(1)
+    freq   = forcing_params[:, forcing_idx["freq"]].unsqueeze(1)
+    phase  = forcing_params[:, forcing_idx["phase"]].unsqueeze(1)
+    offset = forcing_params[:, forcing_idx["offset"]].unsqueeze(1)
+
+    # extract rescale params as (batch, 1)
+    t_scale  = rescale_params[:, rescale_idx["t_scale"]].unsqueeze(1)
+    t_offset = rescale_params[:, rescale_idx["t_offset"]].unsqueeze(1)
+    f_scale  = rescale_params[:, rescale_idx["f_scale"]].unsqueeze(1)
+    f_offset = rescale_params[:, rescale_idx["f_offset"]].unsqueeze(1)
+
+    # t_nd is (T,) -> (1, T) for broadcasting
+    t = t_nd.unsqueeze(0)
+
+    # nd -> dim time, then evaluate dimensional force, then dim -> nd force
+    t_dim = helpers.rescale(t, t_scale, t_offset) # (batch, T)
+    f_dim = amp * torch.sin(2 * np.pi * freq * t_dim + phase) + offset  # (batch, T)
+    return (f_dim - f_offset) / f_scale # (batch, T)
 
 def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor,
             n_segs: int, steady_idx: int, fixed_dict: dict = None, state_dep_drift: bool = False,

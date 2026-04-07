@@ -139,3 +139,13 @@ class SimConfig:
     def params_tensor(self) -> torch.Tensor:
         """Ground-truth parameters as a (1, n_params) tensor."""
         return torch.tensor(self.ground_truth, dtype=self.hw.dtype).unsqueeze(0)
+
+    @property
+    def forcing_idx(self) -> dict[str, int]:
+        """Maps forcing param names to column indices, e.g. {"amp": 0, "freq": 1, ...}."""
+        return {name: i for i, name in enumerate(self.force_params_dict.keys())}
+
+    @property
+    def rescale_idx(self) -> dict[str, int]:
+        """Maps rescale param names to column indices, e.g. {"x_offset": 0, "x_scale": 1, ...}."""
+        return {name: i for i, name in enumerate(self.rescale_params.keys())}
