@@ -222,41 +222,43 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
 
     return prior
 
-def gen_training_data(model: str, prior: torch.distributions.Distribution, t: torch.Tensor,
-                      run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float,
-                      proposal: torch.distributions.Distribution = None, fixed_dict: dict = None, state_dep_drift: bool = False,
-                      dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
+def gen_training_data(model: str, prior: torch.distributions.Distribution, forcing_prior: torch.distributions.Distribution,
+                      t: torch.Tensor, run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float,
+                      nd_dim: int, forcing_idx: dict, rescale_idx: dict, proposal: torch.distributions.Distribution = None,
+                      fixed_dict: dict = None, state_dep_drift: bool = False, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
-    Generates synthetic training data for a dynamical system simulation using specified parameters
-    and a probabilistic prior for generating initial conditions. This function supports different
-    types of simulators, handles device configuration, and computes training statistics for the
-    simulated observations.
+    Generate synthetic training data for the SBI posterior.
 
-    :param model: The type of model to use. Supported options are "dimensional",
-                "non-dimensional", "nadrowski", and "hopf".
-    :param prior: A probabilistic distribution used for sampling initial parameters of
-                  the system.
-    :param t: A time tensor specifying the time points for the simulation.
-    :param run_size: The size of the batch to simulate for each run.
-    :param n_runs: The number of independent simulation runs to perform.
-    :param n_segs: The number of segments in the generated data for certain simulators.
-    :param steady_idx: The index within the time tensor from which the system is assumed
-                       to reach a steady state.
-    :param dt: The time discretization step used for generating statistics from simulated
-               observations.
-    :param proposal: (Optional) A proposal distribution for sampling. Defaults to None.
-    :param fixed_dict: (Optional) Dictionary of fixed parameters for the model. Defaults to None.
-    :param state_dep_drift: (Optional) Whether to use state-dependent drift for the simulator. Defaults to False.
-    :param dtype: (Optional) The data type for tensors used during simulation. Defaults
-                  to torch.float32.
-    :param device: (Optional) The device on which tensors will be allocated and computations
-                   will run. Defaults to torch.device('cpu').
-    :return: A tuple containing two elements:
-             - A list of training data statistics computed for each simulation run.
-             - A list of parameter tensors used for generating the simulated data.
-    :rtype: tuple
+    For each batch, samples inferred parameters (ND + rescale) from the prior or proposal,
+    samples forcing parameters independently from the forcing prior, builds a nondimensional
+    forcing tensor, simulates in ND space, redimensionalizes the output, computes summary
+    statistics on the dimensional data, and concatenates forcing parameters as conditioning input.
 
-    :raises ValueError: If the specified model is not supported.
+    :param model: Name of the simulation model (e.g. "nd nadrowski", "hopf").
+    :param prior: Prior distribution over inferred parameters (ND x rescale product prior).
+    :param forcing_prior: Prior distribution over dimensional forcing parameters, sampled
+                          independently every batch regardless of SNPE round.
+    :param t: Non-dimensional time tensor, shape (T,).
+    :param run_size: Number of simulations per batch.
+    :param n_runs: Number of batches to generate.
+    :param n_segs: Number of segments to divide each time series into.
+    :param steady_idx: Index where transient ends and steady-state begins.
+    :param dt: Non-dimensional time step.
+    :param nd_dim: Number of ND model parameters; used to split inferred params into
+                   theta_nd [:nd_dim] and theta_rescale [nd_dim:].
+    :param forcing_idx: Maps forcing param names to column indices,
+                        e.g. {"amp": 0, "freq": 1, "phase": 2, "offset": 3}.
+    :param rescale_idx: Maps rescale param names to column indices,
+                        e.g. {"t_scale": 3, "t_offset": 2, "f_scale": 7, "f_offset": 6}.
+    :param proposal: Proposal distribution for SNPE rounds 2+. If None, samples from prior.
+    :param fixed_dict: Optional dict mapping ND parameter indices to fixed values for
+                       conditional posterior estimation.
+    :param state_dep_drift: Whether the model uses state-dependent drift.
+    :param dtype: Tensor data type. Defaults to torch.float32.
+    :param device: Computation device. Defaults to CPU.
+    :return: Tuple of (training_data, thetas) where training_data has shape
+             (n_runs * run_size, n_stats + n_forcing) and thetas has shape
+             (n_runs * run_size, nd_dim + rescale_dim).
     """
     if model.lower() not in VALID_SIMS:
         raise ValueError(f"Invalid simulator: {model}")
@@ -264,8 +266,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
     n_pos, n_prob = INIT_SHAPES[model.lower()]
     if n_prob > 0:
         inits = torch.tensor(
-            helpers.concat(np.random.randint(0, 10, size=(run_size, n_pos)),
-                           np.random.randint(0, 1, size=(run_size, n_prob))),
+            helpers.concat(np.array(np.random.randint(0, 10, size=(run_size, n_pos))),
+                           np.array(np.random.randint(0, 1, size=(run_size, n_prob)))),
             dtype=dtype, device=device)
     else:
         inits = torch.tensor(np.random.randint(0, 10, size=(run_size, n_pos)), dtype=dtype, device=device)
@@ -280,17 +282,39 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, t: to
 
     with torch.no_grad():
         for _ in tqdm(range(n_runs), desc=f"Generating training data", leave=False):
+            # 1. Sample inferred params (ND + rescale) and forcing params
             curr_thetas = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
-            data = gen_obs(model=model, params=curr_thetas, t=t, inits=inits,
-                           force=torch.zeros((run_size, t.shape[0]), dtype=dtype, device=device), n_segs=n_segs, steady_idx=steady_idx,
-                           fixed_dict=fixed_dict, state_dep_drift=state_dep_drift, batch_size=run_size, dtype=dtype, device=device)[0, :, :]
+            curr_thetas_nd = curr_thetas[:, :nd_dim]
+            curr_thetas_rescale = curr_thetas[:, nd_dim:]
+            curr_thetas_forcing = forcing_prior.sample((run_size,)).to(device=device, dtype=dtype)
+
+            # 2. Build nondimensional force tensor
+            force = build_nondim_sin_force_tensor(curr_thetas_forcing, t, curr_thetas_rescale, forcing_idx, rescale_idx)
+
+            # 3. Simulate in ND space (only ND params go to the simulator)
+            x_nd = gen_obs(model=model, params=curr_thetas_nd, t=t, inits=inits,
+                           force=force, n_segs=n_segs, steady_idx=steady_idx,
+                           fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+                           batch_size=run_size, dtype=dtype, device=device)[0, :, :]
+            del force
+
+            # 4. Redimensionalize output
+            x_scale = curr_thetas_rescale[:, rescale_idx["x_scale"]].unsqueeze(1)
+            x_offset = curr_thetas_rescale[:, rescale_idx["x_offset"]].unsqueeze(1)
+            t_scale = curr_thetas_rescale[:, rescale_idx["t_scale"]].unsqueeze(1)
+            x_dim = helpers.rescale(x_nd, x_scale, x_offset)
+            dt_dim = helpers.rescale(dt, t_scale).squeeze(1)
+            del x_nd
+
+            # 5. Compute stats on dimensional data, concatenate with forcing params
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                training_stats = gen_stats(data.cpu(), dt, device=device)
-                del data
+                training_stats = gen_stats(x_dim.cpu(), dt_dim, device=device)
+                training_stats = torch.cat((training_stats, curr_thetas_forcing.cpu()), dim=-1)
                 training_data.append(training_stats)
+
+            # 6. Collect inferred params (ND + rescale) as targets
             thetas.append(curr_thetas.cpu())
-            del training_stats
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 

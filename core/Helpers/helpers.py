@@ -4,12 +4,14 @@ import sys
 import numpy as np
 import torch
 
-def rescale(x: torch.Tensor, x_scale: float, x_offset: float) -> torch.Tensor:
+def rescale(x: torch.Tensor | float, x_scale: torch.Tensor | float, x_offset: torch.Tensor | float = 0) -> torch.Tensor:
     """
-    Rescale a tensor by offset and scale
-    :param x: tensor to rescale
-    :param x_scale: scale to apply
-    :param x_offset: offset to apply
+    Rescale a tensor: x_dim = x_scale * x + x_offset.
+    Supports batched rescaling via broadcasting (e.g. x_scale shape (batch, 1) with x shape (batch, T) or (1, T)).
+
+    :param x: tensor or float to rescale
+    :param x_scale: scale factor (scalar or tensor)
+    :param x_offset: offset (scalar or tensor); default is 0
     :return: rescaled tensor
     """
     return x_scale * x + x_offset
