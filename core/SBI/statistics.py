@@ -4,10 +4,9 @@ from tqdm import tqdm
 import torch
 
 class SummaryStatistics:
-    def __init__(self, x: torch.Tensor, dt: float):
+    def __init__(self, x: torch.Tensor, dt: float | torch.Tensor):
         self.x = x.detach()
-        self.dt = dt
-        self.fs = 1 / dt
+        self.dt = dt.unsqueeze(-1) if isinstance(dt, torch.Tensor) else dt
         self.batch_size = x.shape[0]
         self.n = x.shape[1]
         self.device = x.device
@@ -122,7 +121,8 @@ class SummaryStatistics:
         # FFT and PSD
         x_centered = self.x - torch.mean(self.x, dim=-1, keepdim=True)
         xf = torch.fft.rfft(x_centered, dim=-1)
-        freqs = torch.fft.rfftfreq(n, d=self.dt, device=self.device)
+        mean_dt = torch.mean(self.dt, dim=0) if isinstance(self.dt, torch.Tensor) else self.dt
+        freqs = torch.fft.rfftfreq(n, d=mean_dt, device=self.device)
         n_freqs = freqs.shape[0]
         df = freqs[1] - freqs[0]  # Frequency resolution
 
@@ -239,8 +239,9 @@ class SummaryStatistics:
         has_negative = negative_mask.any(dim=-1)
         first_negative_idx = torch.argmax(negative_mask.int(), dim=-1)
 
-        decorrelation_time = first_negative_idx.to(self.dtype) * self.dt
-        decorrelation_time[~has_negative] = n * self.dt
+        dt_flat = self.dt.squeeze(-1) if isinstance(self.dt, torch.Tensor) else self.dt
+        decorrelation_time = first_negative_idx.to(self.dtype) * dt_flat
+        decorrelation_time[~has_negative] = n * dt_flat
         features[:, n_lags] = decorrelation_time
 
         # PACF via Levinson-Durbin (inlined)
@@ -630,14 +631,15 @@ class SummaryStatistics:
 
         # Threshold Crossing Rate
         # Number of burst initiations per unit time
+        dt_flat = self.dt.squeeze(-1) if isinstance(self.dt, torch.Tensor) else self.dt
         n_bursts = torch.sum(burst_starts, dim=-1)
-        total_time = n * self.dt
+        total_time = n * dt_flat
         threshold_rate = n_bursts / total_time
         features[:, 2] = threshold_rate
 
         # Mean Burst Duration
         # Total time in burst state / number of bursts
-        total_burst_time = torch.sum(is_burst, dim=-1) * self.dt
+        total_burst_time = torch.sum(is_burst, dim=-1) * dt_flat
         mean_burst_duration = total_burst_time / torch.clamp(n_bursts, min=1.0)
         features[:, 3] = mean_burst_duration
 

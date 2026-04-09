@@ -5,6 +5,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 from sbi.inference.posteriors import DirectPosterior
+from sbi.inference.posteriors.base_posterior import NeuralPosterior
 from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
 
@@ -132,7 +133,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     obs = simulator.simulate(state_dep_drift=state_dep_drift)[:, 0, :, steady_idx:].clone()
     return obs
 
-def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20,
+def gen_stats(x: torch.Tensor, dt: float | torch.Tensor, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20,
               device: torch.device = torch.device('cpu'), stats_batch_size: int = 512) -> torch.Tensor:
     """
     Generate statistical features from input data using the given parameters.
@@ -164,7 +165,10 @@ def gen_stats(x: torch.Tensor, dt: float, n_bands: int = 20, n_lags: int = 20, p
     for start in range(0, total, stats_batch_size):
         end = min(start + stats_batch_size, total)
         x_sub = x[start:end].to(device)
-        stats = statistics.SummaryStatistics(x_sub, dt)
+        dt_sub = dt
+        if isinstance(dt, torch.Tensor):
+            dt_sub = dt[start:end].to(device)
+        stats = statistics.SummaryStatistics(x_sub, dt_sub)
         result = stats.compute_statistics(n_bands, n_lags, pacf_lags)
         results.append(result.cpu())
         del stats, x_sub, result
@@ -224,7 +228,7 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
 
 def gen_training_data(model: str, prior: torch.distributions.Distribution, forcing_prior: torch.distributions.Distribution,
                       t: torch.Tensor, run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float,
-                      nd_dim: int, forcing_idx: dict, rescale_idx: dict, proposal: torch.distributions.Distribution = None,
+                      nd_dim: int, forcing_idx: dict, rescale_idx: dict, proposal: DirectPosterior = None,
                       fixed_dict: dict = None, state_dep_drift: bool = False, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
     Generate synthetic training data for the SBI posterior.
@@ -324,6 +328,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     return training_data_tensor, thetas_tensor
 
 def train_nn(training_params: dict, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
+             forcing_prior: torch.distributions.Distribution, nd_dim: int, forcing_idx: dict, rescale_idx: dict,
              x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_rounds: int = 1, return_diagnostics: bool = False,
              fixed_dict: dict = None, batch_size: int = 128, device: torch.device = torch.device('cpu')) -> DirectPosterior | tuple[DirectPosterior, dict]:
     """
@@ -368,10 +373,10 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
 
     for _ in tqdm(range(num_rounds), desc=f"Training neural posterior", leave=False):
         # train the density estimator
-        data, thetas = gen_training_data(training_params["model"], training_params["prior"], training_params["t"],
+        data, thetas = gen_training_data(training_params["model"], training_params["prior"], forcing_prior, training_params["t"],
                                          training_params["run_size"], training_params["num_runs"], training_params["n_segs"],
-                                         training_params["steady_idx"], training_params["dt"], proposal=proposal,
-                                         fixed_dict=fixed_dict, state_dep_drift=training_params.get("state_dep_drift", False),
+                                         training_params["steady_idx"], training_params["dt"], nd_dim, forcing_idx, rescale_idx,
+                                         proposal=proposal, fixed_dict=fixed_dict, state_dep_drift=training_params.get("state_dep_drift", False),
                                          dtype=training_params["dtype"], device=training_params["device"])  # initial (data, thetas) training pairs
 
         # filter data
@@ -384,6 +389,7 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
         infer.append_simulations(thetas, data, proposal=proposal)
         density_estimator = infer.train(training_batch_size=batch_size)
         posterior = infer.build_posterior(density_estimator)
+        assert isinstance(posterior, DirectPosterior), f"Expected DirectPosterior, got {type(posterior)}"
 
         # compute diagnostics after each round
         if return_diagnostics and x_obs is not None:
@@ -404,10 +410,10 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
 
         # need to now check if num_runs > 1: if so, then that is equivalent to SNPE, and if not, that is equivalent to NPE
         if num_rounds > 1:
+            assert x_obs is not None, "x_obs must be specified for SNPE algorithm"
             proposal = posterior.set_default_x(x_obs.to(device)) # if SNPE, the user has to specify x_obs
 
     assert isinstance(posterior, DirectPosterior), f"Expected DirectPosterior, got {type(posterior)}"
-
     if return_diagnostics:
         return posterior, diagnostics
     return posterior
