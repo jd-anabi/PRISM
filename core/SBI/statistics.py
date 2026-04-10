@@ -121,7 +121,7 @@ class SummaryStatistics:
         # FFT and PSD
         x_centered = self.x - torch.mean(self.x, dim=-1, keepdim=True)
         xf = torch.fft.rfft(x_centered, dim=-1)
-        mean_dt = torch.mean(self.dt, dim=0) if isinstance(self.dt, torch.Tensor) else self.dt
+        mean_dt = torch.mean(self.dt, dim=0)[0] if isinstance(self.dt, torch.Tensor) else self.dt
         freqs = torch.fft.rfftfreq(n, d=mean_dt, device=self.device)
         n_freqs = freqs.shape[0]
         df = freqs[1] - freqs[0]  # Frequency resolution

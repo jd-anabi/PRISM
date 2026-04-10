@@ -9,10 +9,15 @@ class ScalingPrior:
         self.device = device
 
     def construct_prior(self, bounds: list[tuple], types: tuple[str]) -> MultipleIndependent:
-        if len(types) != 3:
-            raise ValueError(f"types must be of length 3, got {len(types)}")
-        if len(bounds) != 3:
-            raise ValueError(f"bounds must be of length 3, got {len(bounds)}")
+        """
+        Construct a prior over rescaling parameters with uniform or log-uniform marginals.
+
+        :param bounds: List of (low, high) tuples, one per parameter.
+        :param types: Tuple of distribution types, one per parameter ("uniform" or "log-uni").
+        :return: A MultipleIndependent distribution over all rescaling parameters.
+        """
+        if len(bounds) != len(types):
+            raise ValueError(f"bounds length ({len(bounds)}) must match types length ({len(types)})")
 
         allowed = {"uniform", "log-uni"}
         for t in types:
@@ -20,9 +25,9 @@ class ScalingPrior:
                 raise ValueError(f"Invalid type '{t}'. Allowed types are: {allowed}")
 
         marginals = []
-        for i in range(3):
-            low = torch.tensor(bounds[i][0], dtype=self.dtype, device=self.device)
-            high = torch.tensor(bounds[i][1], dtype=self.dtype, device=self.device)
+        for i in range(len(bounds)):
+            low = torch.tensor([bounds[i][0]], dtype=self.dtype, device=self.device)
+            high = torch.tensor([bounds[i][1]], dtype=self.dtype, device=self.device)
 
             if types[i] == "uniform":
                 marginals.append(Uniform(low, high))

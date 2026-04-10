@@ -22,8 +22,8 @@ class SinPrior(ForcingPrior):
 
         marginals = []
         for i in range(4):
-            low = torch.tensor(bounds[i][0], dtype=self.dtype, device=self.device)
-            high = torch.tensor(bounds[i][1], dtype=self.dtype, device=self.device)
+            low = torch.tensor([bounds[i][0]], dtype=self.dtype, device=self.device)
+            high = torch.tensor([bounds[i][1]], dtype=self.dtype, device=self.device)
 
             if types[i] == "uniform":
                 marginals.append(Uniform(low, high))

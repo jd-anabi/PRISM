@@ -25,8 +25,8 @@ from .SBI.Priors import sbi_prior_wrapper
 _scaling_mod = importlib.import_module("core.SBI.Priors.Scaling Priors.scaling_prior")
 ScalingPrior = _scaling_mod.ScalingPrior
 
-_forcing_mod = importlib.import_module("core.SBI.Priors.Forcing Priors.sin_prior")
-SinPrior = _forcing_mod.SinPrior
+_forcing_mod = importlib.import_module("core.SBI.Priors.Forcing Priors.forcing_prior")
+ForcingPrior = _forcing_mod.ForcingPrior
 
 _product_mod = importlib.import_module("core.SBI.Priors.Product Prior.product_prior")
 ProductPrior = _product_mod.ProductPrior
@@ -170,7 +170,7 @@ def _build_forcing_prior(cfg: SimConfig) -> Distribution:
     bounds = [row[1] for row in cfg.force_params_dict.values()]
     types = tuple("uniform" for _ in cfg.force_params_dict)
 
-    forcing = SinPrior(cfg.hw.dtype, cfg.hw.device)
+    forcing = ForcingPrior(cfg.hw.dtype, cfg.hw.device)
     return forcing.construct_prior(bounds, types)
 
 
