@@ -42,27 +42,27 @@ def run(cfg: SimConfig):
       4. Validate (PPC, SBC, coverage, eye test)
     """
     # 1. Synthetic observations
-    obs_data, obs_stats = generate_observations(cfg)
+    x_dim, obs_stats, t_dim = generate_observations(cfg)
     visualizers.plot(
-        cfg.t[cfg.steady_idx:].cpu().detach().numpy(),
-        obs_data[0, :].cpu().detach().numpy(),
+        t_dim.squeeze(0).cpu().detach().numpy(),
+        x_dim[0, :].cpu().detach().numpy(),
     )
 
     # 2. Prior
     prior_choice, build_new = cli.select_or_build_prior()
-    prior = build_prior(cfg, prior_choice, build_new)
+    inf_prior, force_prior = build_prior(cfg, prior_choice, build_new)
 
     # 3. Posterior
     pos_choice, train_new = cli.select_or_train_posterior()
-    posterior, pos_diagnostics = build_posterior(cfg, prior, obs_stats, pos_choice, train_new)
+    posterior, pos_diagnostics = build_posterior(cfg, inf_prior, force_prior, obs_stats, pos_choice, train_new)
     helpers.clear_screen()
 
     # 4. Validate
-    validate(cfg, posterior, obs_data, obs_stats)
+    validate(cfg, posterior, x_dim, obs_stats, force_prior, t_dim)
 
 
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
-def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor]:
+def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Simulate ground-truth time series and compute summary statistics.
 
@@ -70,19 +70,36 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor]:
              and obs_stats has shape (1, n_stats).
     """
     t = cfg.t
-    force = torch.zeros((cfg.hw.batch_size, t.shape[0]), dtype=cfg.hw.dtype, device=cfg.hw.device)
 
-    obs_data = pipeline.gen_obs(
+    # Stack ground-truth forcing and rescale params as (1, n) tensors
+    forcing_gt = torch.tensor([[val for val, _ in cfg.force_params_dict.values()]], dtype=cfg.hw.dtype, device=cfg.hw.device)
+    rescale_gt = torch.tensor([[val for val, _ in cfg.rescale_params.values()]], dtype=cfg.hw.dtype, device=cfg.hw.device)
+
+    # Build ND force
+    force = pipeline.build_nondim_sin_force_tensor(forcing_gt, cfg.t, rescale_gt, cfg.forcing_idx, cfg.rescale_idx)
+
+    x_nd = pipeline.gen_obs(
         model=cfg.model, params=cfg.params_tensor, t=t, inits=cfg.inits_tensor,
-        force=force[0].unsqueeze(0), n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
+        force=force, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
         state_dep_drift=cfg.state_dep_drift,
+        dtype=cfg.hw.dtype, device=cfg.hw.device,
     )[0, :, :]
-    obs_stats = pipeline.gen_stats(obs_data, cfg.dt)
-    return obs_data, obs_stats
+
+    x_scale = rescale_gt[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
+    x_offset = rescale_gt[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
+    t_scale = rescale_gt[:, cfg.rescale_idx["t_scale"]]
+    t_offset = rescale_gt[:, cfg.rescale_idx["t_offset"]]
+    x_dim = helpers.rescale(x_nd, x_scale, x_offset)
+    t_dim = helpers.rescale(t[cfg.steady_idx:], t_scale, t_offset)
+    dt_dim = t_scale * cfg.dt
+
+    obs_stats = pipeline.gen_stats(x_dim, dt_dim)
+    obs_stats = torch.cat([obs_stats, forcing_gt.cpu()], dim=-1)
+    return x_dim, obs_stats, t_dim
 
 
 # ── Step 2: Prior construction ──────────────────────────────────────────────
-def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> Distribution:
+def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Distribution, Distribution]:
     """
     Load an existing prior from disk, or construct a new product prior:
         ProductPrior = ND parameter prior x rescaling prior x forcing prior
@@ -92,17 +109,23 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> Distribu
     :param build_new: True to construct from scratch.
     :return: A Distribution that can be sampled and scored.
     """
+    # 1. Forcing prior
+    force_prior = _build_forcing_prior(cfg)
+
+    # 2. Rescaling prior
+    rescale_prior = _build_rescale_prior(cfg)
+
     if not build_new and choice is not None:
         prior = file_manager.load_mix_dist(str(PRIOR_PATH / choice), device=cfg.hw.device)
         visualizers.visualize_dist(prior, labels=cfg.labels)
-        return prior
+        return prior, force_prior
 
     # --- Build from scratch ---
     print("No prior found. Going to construct prior from scratch.")
     time.sleep(5)
     helpers.clear_screen()
 
-    # 1. ND parameter prior (stability-filtered GMM)
+    # 3. ND parameter prior (stability-filtered GMM)
     nd_prior = pipeline.gen_prior(
         model=cfg.model, t=cfg.t,
         global_batch_size=cfg.hw.batch_size,
@@ -119,23 +142,16 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> Distribu
     file_manager.save_mix_dist(nd_prior, str(PRIOR_PATH / (nd_name + ".pt")))
     visualizers.visualize_dist(nd_prior, labels=cfg.labels, save_path=str(PLOT_PATH / (nd_name + ".png")))
 
-    # 2. Rescaling prior
-    rescale_prior = _build_rescale_prior(cfg)
-
-    # 3. Forcing prior
-    force_prior = _build_forcing_prior(cfg)
-
     # 4. Compose into product prior
     nd_dim = len(cfg.params_dict)
     rescale_dim = len(cfg.rescale_params)
-    force_dim = len(cfg.force_params_dict)
 
-    product = ProductPrior(
-        distributions=[nd_prior, rescale_prior, force_prior],
-        dims=[nd_dim, rescale_dim, force_dim],
+    inferred_prior = ProductPrior(
+        distributions=[nd_prior, rescale_prior],
+        dims=[nd_dim, rescale_dim],
     )
 
-    return product
+    return inferred_prior, force_prior
 
 
 def _build_rescale_prior(cfg: SimConfig) -> Distribution:
@@ -162,6 +178,7 @@ def _build_forcing_prior(cfg: SimConfig) -> Distribution:
 def build_posterior(
     cfg: SimConfig,
     prior: Distribution,
+    force_prior: Distribution,
     obs_stats: torch.Tensor,
     choice: str | None,
     train_new: bool,
@@ -195,8 +212,8 @@ def build_posterior(
     }
 
     # Set up embedded network (with optional forcing conditioning)
-    input_dim = obs_stats.shape[1]
     force_dim = len(cfg.force_params_dict) if "forcing" not in cfg.inferred_groups else 0
+    input_dim = obs_stats.shape[1] - force_dim
 
     if force_dim > 0:
         embedded_net = embedded_network.EmbeddedNet(
@@ -217,8 +234,9 @@ def build_posterior(
 
     posterior, pos_diagnostics = pipeline.train_nn(
         training_params, model="maf", prior=sbi_prior,
-        embedding_net=embedded_net, x_obs=obs_stats,
-        theta_obs=cfg.ground_truth_tensor, num_rounds=1,
+        embedding_net=embedded_net, forcing_prior=force_prior,
+        nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+        x_obs=obs_stats, theta_obs=cfg.ground_truth_tensor, num_rounds=1,
         return_diagnostics=True, fixed_dict=fixed_dict,
         batch_size=int(2 ** 7), device=cfg.hw.device,
     )
@@ -236,12 +254,9 @@ def _build_fixed_dict(cfg: SimConfig) -> dict | None:
     Build a dict mapping parameter indices to fixed ground-truth values
     for parameter groups that are NOT being inferred.
 
-    The product prior concatenates parameters as: [nd | rescale | forcing].
+    The product prior concatenates parameters as: [nd | rescale].
     """
     nd_dim = len(cfg.params_dict)
-    rescale_dim = len(cfg.rescale_params)
-    force_dim = len(cfg.force_params_dict)
-
     fixed = {}
 
     # If rescale params are NOT inferred, fix them at ground-truth values
@@ -249,21 +264,12 @@ def _build_fixed_dict(cfg: SimConfig) -> dict | None:
         for i, (val, _bounds) in enumerate(cfg.rescale_params.values()):
             fixed[nd_dim + i] = val
 
-    # If forcing params are NOT inferred, fix them at ground-truth values
-    if "forcing" not in cfg.inferred_groups:
-        for i, (val, _bounds) in enumerate(cfg.force_params_dict.values()):
-            fixed[nd_dim + rescale_dim + i] = val
-
     return fixed if fixed else None
 
 
 # ── Step 4: Validation ──────────────────────────────────────────────────────
-def validate(
-    cfg: SimConfig,
-    posterior: DirectPosterior,
-    obs_data: torch.Tensor,
-    obs_stats: torch.Tensor,
-):
+def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
+    obs_stats: torch.Tensor, force_prior: Distribution, t_dim: torch.Tensor) -> None:
     """
     Run all posterior validation steps:
       - Corner plot
@@ -281,51 +287,83 @@ def validate(
     fig, ax = pairplot(
         samples.cpu().numpy(),
         points=np.array([cfg.ground_truth]),
-        labels=cfg.labels,
+        labels=cfg.inferred_labels,
     )
     plt.show()
 
     # PPC
-    x_sims = pipeline.gen_obs(
-        model=cfg.model, params=samples, t=t, inits=cfg.inits_tensor.expand(samples.shape[0], -1),
-        force=torch.zeros((samples.shape[0], t.shape[0]), dtype=dtype, device=device),
-        n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
+    nd_dim = len(cfg.params_dict)
+    samples_nd = samples[:, :nd_dim]
+    samples_rescale = samples[:, nd_dim:]
+
+    forcing_gt = torch.tensor([[val for val, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
+    forcing_gt_expanded = forcing_gt.expand(samples.shape[0], -1)  # (n_samples, n_forcing)
+    force = pipeline.build_nondim_sin_force_tensor(
+        forcing_gt_expanded, t, samples_rescale, cfg.forcing_idx, cfg.rescale_idx
+    )
+
+    x_nd = pipeline.gen_obs(
+        model=cfg.model, params=samples_nd, t=t, inits=cfg.inits_tensor.expand(samples.shape[0], -1),
+        force=force, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
         state_dep_drift=cfg.state_dep_drift,
         batch_size=samples.shape[0], dtype=dtype, device=device,
     )[0, :, :]
-    sim_stats = pipeline.gen_stats(x_sims, cfg.dt, device=device)
+
+    x_scale = samples_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
+    x_offset = samples_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
+    t_scale = samples_rescale[:, cfg.rescale_idx["t_scale"]].unsqueeze(1)
+    x_dim = helpers.rescale(x_nd, x_scale, x_offset)
+    dt_dim = (t_scale * cfg.dt).squeeze(1)  # (n_samples,)
+    del x_nd, force
+
+    sim_stats = pipeline.gen_stats(x_dim, dt_dim, device=device)
+    sim_stats = torch.cat([sim_stats, forcing_gt_expanded.cpu()], dim=-1)
     results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats)
 
     # SBC + coverage
     x_cal, theta_star = analysis.gen_cal_data(
-        model=cfg.model, prior=posterior, t=t, n_segs=cfg.n_segs,
-        steady_idx=cfg.steady_idx, dt=cfg.dt, n_cal=1000,
+        model=cfg.model, prior=posterior, forcing_prior=force_prior,
+        t=t, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx, dt=cfg.dt, n_cal=1000,
+        nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
         state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
     )
     ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, device=device)
     alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, dtype=dtype, device=device)
 
-    sbc_plot = visualizers.plot_sbc(ranks, param_names=cfg.labels, m=1000, fig_size=(7, 12))
+    sbc_plot = visualizers.plot_sbc(ranks, param_names=cfg.inferred_labels, m=1000, fig_size=(7, 12))
     expected_cov_plot = visualizers.plot_expected_coverage(alphas, fig_size=(7, 20))
     plt.show()
 
     # Eye test: MAP vs ground truth vs posterior samples
     log_probs = posterior.log_prob(samples, x=obs_stats.to(device))
-    map_params = samples[log_probs.argmax()].unsqueeze(0)
+    map_params = samples[log_probs.argmax()].unsqueeze(0)  # (1, nd_dim + rescale_dim)
+    map_nd = map_params[:, :nd_dim]  # (1, nd_dim)
+    map_rescale = map_params[:, nd_dim:]  # (1, rescale_dim)
 
-    x_map = pipeline.gen_obs(
-        model=cfg.model, params=map_params, t=t, inits=cfg.inits_tensor,
-        force=torch.zeros(1, t.shape[0], dtype=dtype, device=device),
-        n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
+    # Build force from MAP rescale params and ground-truth forcing
+    forcing_gt_single = forcing_gt_expanded[:1]  # (1, n_forcing) — reuse from PPC
+    force_map = pipeline.build_nondim_sin_force_tensor(
+        forcing_gt_single, t, map_rescale, cfg.forcing_idx, cfg.rescale_idx
+    )
+
+    x_map_nd = pipeline.gen_obs(
+        model=cfg.model, params=map_nd, t=t, inits=cfg.inits_tensor,
+        force=force_map, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
         state_dep_drift=cfg.state_dep_drift,
-    )[0, 0, :]
+        dtype=dtype, device=device,
+    )[0, 0, :]  # (T_steady,)
 
-    t_plot = t[cfg.steady_idx:].cpu().numpy()
+    # Redimensionalize
+    map_x_scale = map_rescale[:, cfg.rescale_idx["x_scale"]]
+    map_x_offset = map_rescale[:, cfg.rescale_idx["x_offset"]]
+    x_map = helpers.rescale(x_map_nd, map_x_scale, map_x_offset)  # (T_steady,)
+
+    t_plot = t_dim.squeeze(0).cpu().numpy()
     fig = visualizers.plot_posterior_vs_truth(
         t=t_plot,
         x_true=obs_data[0, :].cpu().numpy(),
         x_map=x_map.cpu().numpy(),
-        x_samples=x_sims.cpu().numpy(),
+        x_samples=x_dim.cpu().numpy(),
         n_show=10,
     )
     plt.show()

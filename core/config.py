@@ -118,8 +118,10 @@ class SimConfig:
 
     @property
     def ground_truth(self) -> list[float]:
-        """Ground-truth parameter values from the cell file."""
-        return [row[0] for row in self.params_dict.values()]
+        """Ground-truth values for all inferred params (ND + rescale)."""
+        nd = [row[0] for row in self.params_dict.values()]
+        rescale = [row[0] for row in self.rescale_params.values()]
+        return nd + rescale
 
     @property
     def ground_truth_tensor(self) -> torch.Tensor:
@@ -133,12 +135,19 @@ class SimConfig:
     @property
     def inits_tensor(self) -> torch.Tensor:
         """Initial conditions as a (1, n_vars) tensor."""
-        return torch.tensor(list(self.inits_dict.values()), dtype=self.hw.dtype).unsqueeze(0)
+        return torch.tensor(list(self.inits_dict.values()), dtype=self.hw.dtype, device=self.hw.device).unsqueeze(0)
 
     @property
     def params_tensor(self) -> torch.Tensor:
-        """Ground-truth parameters as a (1, n_params) tensor."""
-        return torch.tensor(self.ground_truth, dtype=self.hw.dtype).unsqueeze(0)
+        """ND-only ground-truth parameters as a (1, n_params) tensor for the simulator."""
+        nd = [row[0] for row in self.params_dict.values()]
+        return torch.tensor(nd, dtype=self.hw.dtype, device=self.hw.device).unsqueeze(0)
+
+    @property
+    def inferred_labels(self) -> list[str]:
+        """Labels for all inferred params (ND + rescale) for plotting."""
+        rescale_labels = list(self.rescale_params.keys())
+        return self.labels + rescale_labels
 
     @property
     def forcing_idx(self) -> dict[str, int]:

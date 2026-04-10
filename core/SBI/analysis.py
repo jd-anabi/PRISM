@@ -47,10 +47,13 @@ def posterior_predictive_check(s_obs: torch.Tensor, s_simulated: torch.Tensor) -
     }
 
 # === COVERAGE CHECKS ===
-def gen_cal_data(model: str, prior: torch.distributions.Distribution, t: torch.Tensor,
-                 n_segs: int, steady_idx: int, dt: float, n_cal: int, fixed_dict: dict = None,
-                 state_dep_drift: bool = False,
-                 dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple[torch.Tensor, torch.Tensor]:
+def gen_cal_data(model: str, prior: torch.distributions.Distribution,
+                 forcing_prior: torch.distributions.Distribution,
+                 t: torch.Tensor, n_segs: int, steady_idx: int, dt: float, n_cal: int,
+                 nd_dim: int, forcing_idx: dict, rescale_idx: dict,
+                 fixed_dict: dict = None, state_dep_drift: bool = False,
+                 dtype: torch.dtype = torch.float32,
+                 device: torch.device = torch.device('cpu')) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generates calibration data and filtered parameters for model training based on the provided input parameters.
 
@@ -68,7 +71,8 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution, t: torch.T
              (torch.Tensor) that exclude invalid simulations.
     """
     # generate calibration data and parameters
-    cal_data, theta_star = pipeline.gen_training_data(model, prior, t, n_cal, 1, n_segs, steady_idx, dt, proposal=None,
+    cal_data, theta_star = pipeline.gen_training_data(model, prior, forcing_prior, t, n_cal, 1, n_segs, steady_idx, dt,
+                                                      nd_dim, forcing_idx, rescale_idx, proposal=None,
                                                       fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
                                                       dtype=dtype, device=device)
 
