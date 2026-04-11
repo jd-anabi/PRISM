@@ -241,7 +241,7 @@ class SummaryStatistics:
 
         dt_flat = self.dt.squeeze(-1) if isinstance(self.dt, torch.Tensor) else self.dt
         decorrelation_time = first_negative_idx.to(self.dtype) * dt_flat
-        decorrelation_time[~has_negative] = n * dt_flat
+        decorrelation_time[~has_negative] = (n * dt_flat)[~has_negative] if isinstance(dt_flat, torch.Tensor) else n * dt_flat
         features[:, n_lags] = decorrelation_time
 
         # PACF via Levinson-Durbin (inlined)

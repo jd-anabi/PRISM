@@ -116,9 +116,15 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Di
     rescale_prior = _build_rescale_prior(cfg)
 
     if not build_new and choice is not None:
-        prior = file_manager.load_mix_dist(str(PRIOR_PATH / choice), device=cfg.hw.device)
-        visualizers.visualize_dist(prior, labels=cfg.labels)
-        return prior, force_prior
+        nd_prior = file_manager.load_mix_dist(str(PRIOR_PATH / choice), device=cfg.hw.device)
+        visualizers.visualize_dist(nd_prior, labels=cfg.labels)
+        nd_dim = len(cfg.params_dict)
+        rescale_dim = len(cfg.rescale_params)
+        inferred_prior = ProductPrior(
+            distributions=[nd_prior, rescale_prior],
+            dims=[nd_dim, rescale_dim],
+        )
+        return inferred_prior, force_prior
 
     # --- Build from scratch ---
     print("No prior found. Going to construct prior from scratch.")

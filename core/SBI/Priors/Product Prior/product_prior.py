@@ -18,12 +18,18 @@ class ProductPrior(Distribution):
 
     def sample(self, sample_shape: torch.Size = torch.Size()) -> torch.Tensor:
         samples = [d.sample(sample_shape) for d in self.distributions]
+        # Align devices — some distributions (e.g. SBI's MultipleIndependent) may
+        # return CPU tensors even when their parameters are on GPU.
+        device = samples[0].device
+        samples = [s.to(device) for s in samples]
         return torch.cat(samples, dim=-1)
 
-    def log_prob(self, value: torch.Tensor) -> int:
+    def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         log_probs = []
         idx = 0
         for d, dim in zip(self.distributions, self.dims):
             log_probs.append(d.log_prob(value[..., idx:idx + dim]))
             idx += dim
-        return sum(log_probs)
+        # Align devices before summing
+        device = log_probs[0].device
+        return sum(lp.to(device) for lp in log_probs)
