@@ -8,6 +8,7 @@ import pint
 
 from .config import (
     SimConfig, detect_device,
+    DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S,
     VALID_MODELS, VALID_LABELS,
     CELL_PATH, PRIOR_PATH, POSTERIOR_PATH,
 )
@@ -46,18 +47,17 @@ def select_cell_file() -> str:
     return str(CELL_PATH / cell_files[file_num - 1])
 
 # ── Time / segmentation parameters ──────────────────────────────────────────
-def get_time_params() -> tuple[float, float, float, int]:
+def get_time_params() -> tuple[float, float, int]:
     """
-    Prompt for simulation time parameters.
+    Prompt for observation duration and segmentation parameters.
 
-    :return: (t_max, dt, steady_pct, n_segs)
+    :return: (T_obs_seconds, steady_pct, n_segs)
     """
-    t_max = int(input("Max time: "))
-    dt = float(input("Time step: "))
+    T_obs_s = float(input("Observation duration T_obs (seconds): "))
     steady_pct = float(input("Percentage of data that is transient (%): ").replace("%", "")) / 100.0
     n_segs = int(input("Number of segments to divide time series into: "))
     helpers.clear_screen()
-    return float(t_max), dt, steady_pct, n_segs
+    return T_obs_s, steady_pct, n_segs
 
 # ── Prior / posterior selection ──────────────────────────────────────────────
 def select_or_build_prior() -> tuple[str | None, bool]:
@@ -141,8 +141,27 @@ def build_sim_config() -> SimConfig:
         print(f"Error: {e}. Unrecognized units.")
         exit()
 
-    # time parameters
-    t_max, dt, steady_pct, n_segs = get_time_params()
+    # detect time unit from cell file (find which unit has time dimensionality)
+    time_unit = None
+    for unit_str in units_dict:
+        try:
+            if ureg.Quantity(1, unit_str).check("[time]"):
+                time_unit = unit_str
+                break
+        except pint.UndefinedUnitError:
+            continue
+    if time_unit is None:
+        raise ValueError("Could not detect time unit from cell file. Ensure t_scale has a time unit.")
+
+    # convert experimental constants from seconds to cell file time units
+    s_to_cell = ureg.Quantity(1, "s").to(time_unit).magnitude
+    dt_exp = DT_EXP_S * s_to_cell
+    t_min_exp = T_MIN_EXP_S * s_to_cell
+    t_max_exp = T_MAX_EXP_S * s_to_cell
+
+    # time / observation parameters
+    T_obs_s, steady_pct, n_segs = get_time_params()
+    T_obs = T_obs_s * s_to_cell
 
     return SimConfig(
         model=model,
@@ -154,9 +173,11 @@ def build_sim_config() -> SimConfig:
         force_params_dict=force_params_dict,
         units_dict=units_dict,
         si_factors=si_factors,
-        t_max=t_max,
-        dt=dt,
         steady_pct=steady_pct,
         n_segs=n_segs,
+        dt_exp=dt_exp,
+        t_min_exp=t_min_exp,
+        t_max_exp=t_max_exp,
+        T_obs=T_obs,
         hw=detect_device(),
     )

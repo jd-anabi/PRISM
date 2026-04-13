@@ -64,37 +64,62 @@ def run(cfg: SimConfig):
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
 def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Simulate ground-truth time series and compute summary statistics.
+    Simulate a ground-truth observation matching experimental conditions.
 
-    :return: (obs_data, obs_stats) where obs_data has shape (n_vars, T_steady)
-             and obs_stats has shape (1, n_stats).
+    Simulates at fine ND resolution (dt_nd_min, stable for EM), then downsamples
+    to match the physical sampling rate dt_exp and duration T_obs — exactly
+    mirroring what the training loop produces.
+
+    :return: (obs_data, obs_stats, t_dim) where obs_data has shape (1, N_obs),
+             obs_stats has shape (1, n_stats + n_forcing + 1), and t_dim is the
+             dimensional time vector.
     """
-    t = cfg.t
+    t = cfg.t  # full pre-simulated ND time vector at dt_nd_min
 
-    # Stack ground-truth forcing and rescale params as (1, n) tensors
+    # Ground-truth rescale and forcing params as (1, n) tensors
     forcing_gt = torch.tensor([[val for val, _ in cfg.force_params_dict.values()]], dtype=cfg.hw.dtype, device=cfg.hw.device)
     rescale_gt = torch.tensor([[val for val, _ in cfg.rescale_params.values()]], dtype=cfg.hw.dtype, device=cfg.hw.device)
 
-    # Build ND force
-    force = pipeline.build_nondim_sin_force_tensor(forcing_gt, cfg.t, rescale_gt, cfg.forcing_idx, cfg.rescale_idx)
+    # Ground-truth t_scale for this observation
+    t_scale_gt = rescale_gt[:, cfg.rescale_idx["t_scale"]].item()
 
-    x_nd = pipeline.gen_obs(
-        model=cfg.model, params=cfg.params_tensor, t=t, inits=cfg.inits_tensor,
+    # Compute ND quantities for this observation (same logic as training loop)
+    dt_nd_gt = cfg.dt_exp / t_scale_gt
+    T_nd_obs = cfg.T_obs / t_scale_gt
+    subsample_factor = max(1, round(dt_nd_gt / cfg.dt_nd_min))
+    N_obs = int(T_nd_obs / dt_nd_gt)
+
+    # Fine-resolution time vector: transient + enough to downsample into N_obs points
+    n_fine_total = cfg.steady_idx + N_obs * subsample_factor
+    t_fine = t[:n_fine_total]
+
+    # Build ND force at fine resolution
+    force = pipeline.build_nondim_sin_force_tensor(forcing_gt, t_fine, rescale_gt, cfg.forcing_idx, cfg.rescale_idx)
+
+    # Simulate at fine dt_nd_min (stable for EM), then downsample
+    x_nd_fine = pipeline.gen_obs(
+        model=cfg.model, params=cfg.params_tensor, t=t_fine, inits=cfg.inits_tensor,
         force=force, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
         state_dep_drift=cfg.state_dep_drift,
         dtype=cfg.hw.dtype, device=cfg.hw.device,
     )[0, :, :]
+    x_nd = x_nd_fine[:, ::subsample_factor][:, :N_obs]
+    del x_nd_fine, force
 
+    # Redimensionalize
     x_scale = rescale_gt[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
     x_offset = rescale_gt[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
-    t_scale = rescale_gt[:, cfg.rescale_idx["t_scale"]]
-    t_offset = rescale_gt[:, cfg.rescale_idx["t_offset"]]
+    t_offset = rescale_gt[:, cfg.rescale_idx["t_offset"]].item()
     x_dim = helpers.rescale(x_nd, x_scale, x_offset)
-    t_dim = helpers.rescale(t[cfg.steady_idx:], t_scale, t_offset)
-    dt_dim = t_scale * cfg.dt
 
-    obs_stats = pipeline.gen_stats(x_dim, dt_dim)
-    obs_stats = torch.cat([obs_stats, forcing_gt.cpu()], dim=-1)
+    # Dimensional time vector for plotting (N_obs points at dt_exp spacing)
+    t_dim = torch.arange(N_obs, dtype=cfg.hw.dtype) * cfg.dt_exp + t_offset
+    t_dim = t_dim.unsqueeze(0)  # (1, N_obs)
+
+    # Summary statistics + conditioning vector
+    obs_stats = pipeline.gen_stats(x_dim, cfg.dt_exp)
+    log_T_obs = torch.tensor([[math.log(cfg.T_obs)]])
+    obs_stats = torch.cat([obs_stats, forcing_gt.cpu(), log_T_obs], dim=-1)
     return x_dim, obs_stats, t_dim
 
 
@@ -211,14 +236,18 @@ def build_posterior(
         "num_runs": 300,
         "n_segs": cfg.n_segs,
         "steady_idx": cfg.steady_idx,
-        "dt": cfg.dt,
+        "dt_nd_min": cfg.dt_nd_min,
+        "dt_exp": cfg.dt_exp,
+        "t_min_exp": cfg.t_min_exp,
+        "t_max_exp": cfg.t_max_exp,
+        "t_scale_bounds": cfg.t_scale_bounds,
         "state_dep_drift": cfg.state_dep_drift,
         "dtype": cfg.hw.dtype,
         "device": cfg.hw.device,
     }
 
     # Set up embedded network (with optional forcing conditioning)
-    force_dim = len(cfg.force_params_dict) if "forcing" not in cfg.inferred_groups else 0
+    force_dim = (len(cfg.force_params_dict) + 1) if "forcing" not in cfg.inferred_groups else 0  # +1 for log(T)
     input_dim = obs_stats.shape[1] - force_dim
 
     if force_dim > 0:
@@ -287,6 +316,7 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
     t = cfg.t
     device = cfg.hw.device
     dtype = cfg.hw.dtype
+    T_obs = cfg.T_obs
 
     # Corner plot
     samples = posterior.sample((1000,), x=obs_stats.to(device))
@@ -317,20 +347,21 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
 
     x_scale = samples_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
     x_offset = samples_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
-    t_scale = samples_rescale[:, cfg.rescale_idx["t_scale"]].unsqueeze(1)
     x_dim = helpers.rescale(x_nd, x_scale, x_offset)
-    dt_dim = (t_scale * cfg.dt).squeeze(1)  # (n_samples,)
     del x_nd, force
 
-    sim_stats = pipeline.gen_stats(x_dim, dt_dim, device=device)
-    sim_stats = torch.cat([sim_stats, forcing_gt_expanded.cpu()], dim=-1)
+    sim_stats = pipeline.gen_stats(x_dim, cfg.dt_exp, device=device)  # scalar dt_exp
+    log_T_obs = torch.full((sim_stats.shape[0], 1), math.log(T_obs))
+    sim_stats = torch.cat([sim_stats, forcing_gt_expanded.cpu(), log_T_obs], dim=-1)
     results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats)
 
     # SBC + coverage
     x_cal, theta_star = analysis.gen_cal_data(
         model=cfg.model, prior=posterior, forcing_prior=force_prior,
-        t=t, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx, dt=cfg.dt, n_cal=1000,
+        t=t, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=1000,
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+        dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+        t_scale_bounds=cfg.t_scale_bounds,
         state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
     )
     ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, device=device)

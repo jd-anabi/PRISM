@@ -1,3 +1,4 @@
+import math
 import warnings
 from collections import OrderedDict
 
@@ -227,33 +228,43 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
     return prior
 
 def gen_training_data(model: str, prior: torch.distributions.Distribution, forcing_prior: torch.distributions.Distribution,
-                      t: torch.Tensor, run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt: float,
-                      nd_dim: int, forcing_idx: dict, rescale_idx: dict, proposal: DirectPosterior = None,
+                      t: torch.Tensor, run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt_nd_min: float,
+                      nd_dim: int, forcing_idx: dict, rescale_idx: dict,
+                      dt_exp: float = None, t_min_exp: float = None, t_max_exp: float = None,
+                      t_scale_bounds: tuple[float, float] = None,
+                      proposal: DirectPosterior = None,
                       fixed_dict: dict = None, state_dep_drift: bool = False, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
-    Generate synthetic training data for the SBI posterior.
+    Generate synthetic training data for the SBI posterior using batch-by-scale strategy.
 
-    For each batch, samples inferred parameters (ND + rescale) from the prior or proposal,
-    samples forcing parameters independently from the forcing prior, builds a nondimensional
-    forcing tensor, simulates in ND space, redimensionalizes the output, computes summary
-    statistics on the dimensional data, and concatenates forcing parameters as conditioning input.
+    Each batch shares a single (t_scale_k, T_k) pair sampled via Sobol sequence over the
+    2D space [t_scale_lo, t_scale_hi] x [t_min_exp, t_max_exp]. Within a batch, the 11 ND
+    parameters and (D, K_gs*D) vary per-simulation, but t_scale is overridden to the
+    batch-level value. The pre-simulated ND trajectory is subsampled to dt_nd_k = dt_exp / t_scale_k
+    and truncated to T_nd_k = T_k / t_scale_k points, so that after rescaling every simulation
+    has physical duration T_k at sampling rate 1/dt_exp. Summary statistics are computed with
+    the fixed dt_exp, and log(T_k) is appended to the conditioning vector.
 
     :param model: Name of the simulation model (e.g. "nd nadrowski", "hopf").
     :param prior: Prior distribution over inferred parameters (ND x rescale product prior).
     :param forcing_prior: Prior distribution over dimensional forcing parameters, sampled
                           independently every batch regardless of SNPE round.
-    :param t: Non-dimensional time tensor, shape (T,).
+    :param t: Pre-simulated ND time tensor at finest resolution (dt_nd_min), shape (T_full,).
     :param run_size: Number of simulations per batch.
     :param n_runs: Number of batches to generate.
     :param n_segs: Number of segments to divide each time series into.
-    :param steady_idx: Index where transient ends and steady-state begins.
-    :param dt: Non-dimensional time step.
+    :param steady_idx: Index where transient ends and steady-state begins (at full resolution).
+    :param dt_nd_min: Finest ND time step of the pre-simulated trajectory.
     :param nd_dim: Number of ND model parameters; used to split inferred params into
                    theta_nd [:nd_dim] and theta_rescale [nd_dim:].
     :param forcing_idx: Maps forcing param names to column indices,
                         e.g. {"amp": 0, "freq": 1, "phase": 2, "offset": 3}.
     :param rescale_idx: Maps rescale param names to column indices,
                         e.g. {"t_scale": 3, "t_offset": 2, "f_scale": 7, "f_offset": 6}.
+    :param dt_exp: Fixed experimental sampling interval (seconds).
+    :param t_min_exp: Shortest experimental recording duration (seconds).
+    :param t_max_exp: Longest experimental recording duration (seconds).
+    :param t_scale_bounds: (lo, hi) bounds on the t_scale rescaling parameter.
     :param proposal: Proposal distribution for SNPE rounds 2+. If None, samples from prior.
     :param fixed_dict: Optional dict mapping ND parameter indices to fixed values for
                        conditional posterior estimation.
@@ -261,7 +272,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     :param dtype: Tensor data type. Defaults to torch.float32.
     :param device: Computation device. Defaults to CPU.
     :return: Tuple of (training_data, thetas) where training_data has shape
-             (n_runs * run_size, n_stats + n_forcing) and thetas has shape
+             (n_runs * run_size, n_stats + n_forcing + 1) and thetas has shape
              (n_runs * run_size, nd_dim + rescale_dim).
     """
     if model.lower() not in VALID_SIMS:
@@ -284,43 +295,92 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 
     sampling_dist = prior if proposal is None else proposal
 
+    # --- Stratified sampling of batch-level (t_scale, T) pairs ---
+    t_scale_lo, t_scale_hi = t_scale_bounds
+    log_t_scale_lo, log_t_scale_hi = math.log(t_scale_lo), math.log(t_scale_hi)
+    log_T_lo, log_T_hi = math.log(t_min_exp), math.log(t_max_exp)
+
+    sobol = torch.quasirandom.SobolEngine(dimension=2, scramble=True)
+    sobol_points = sobol.draw(n_runs)  # (n_runs, 2) in [0, 1]^2
+    batch_log_t_scales = log_t_scale_lo + sobol_points[:, 0] * (log_t_scale_hi - log_t_scale_lo)
+    batch_log_Ts = log_T_lo + sobol_points[:, 1] * (log_T_hi - log_T_lo)
+    batch_t_scales = torch.exp(batch_log_t_scales)  # (n_runs,)
+    batch_Ts = torch.exp(batch_log_Ts)              # (n_runs,)
+
+    T_nd_max = t[-1].item()  # length of pre-simulated trajectory in ND time
+    cost_ceiling_count = 0
+
     with torch.no_grad():
-        for _ in tqdm(range(n_runs), desc=f"Generating training data", leave=False):
+        for batch_k in tqdm(range(n_runs), desc="Generating training data", leave=False):
+            # --- Batch-level scale and duration ---
+            t_scale_k = batch_t_scales[batch_k].item()
+            T_k = batch_Ts[batch_k].item()
+
+            # Derived ND quantities for this batch
+            T_nd_k = T_k / t_scale_k
+            dt_nd_k = dt_exp / t_scale_k
+
+            # Cost ceiling check: clip if T_nd exceeds pre-simulated length
+            if T_nd_k > T_nd_max:
+                cost_ceiling_count += 1
+                T_nd_k = T_nd_max
+                T_k = T_nd_max * t_scale_k
+
+            # Subsample factor and number of output points
+            subsample_factor = max(1, round(dt_nd_k / dt_nd_min))
+            N_points_k = int(T_nd_k / dt_nd_k)
+
+            # Fine-resolution time vector: enough points to cover transient + output
+            n_fine_total = steady_idx + N_points_k * subsample_factor
+            t_fine = t[:n_fine_total]
+
             # 1. Sample inferred params (ND + rescale) and forcing params
             curr_thetas = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
             curr_thetas_nd = curr_thetas[:, :nd_dim]
             curr_thetas_rescale = curr_thetas[:, nd_dim:]
             curr_thetas_forcing = forcing_prior.sample((run_size,)).to(device=device, dtype=dtype)
 
-            # 2. Build nondimensional force tensor
-            force = build_nondim_sin_force_tensor(curr_thetas_forcing, t, curr_thetas_rescale, forcing_idx, rescale_idx)
+            # Override t_scale to batch-level value (all sims in batch share same scale)
+            curr_thetas_rescale[:, rescale_idx["t_scale"]] = t_scale_k
 
-            # 3. Simulate in ND space (only ND params go to the simulator)
-            x_nd = gen_obs(model=model, params=curr_thetas_nd, t=t, inits=inits,
-                           force=force, n_segs=n_segs, steady_idx=steady_idx,
-                           fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-                           batch_size=run_size, dtype=dtype, device=device)[0, :, :]
-            del force
+            # 2. Build nondimensional force tensor at fine resolution
+            force = build_nondim_sin_force_tensor(curr_thetas_forcing, t_fine, curr_thetas_rescale, forcing_idx, rescale_idx)
+
+            # 3. Simulate at fine dt_nd_min (stable for EM), then downsample to batch resolution
+            x_nd_fine = gen_obs(model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
+                                force=force, n_segs=n_segs, steady_idx=steady_idx,
+                                fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+                                batch_size=run_size, dtype=dtype, device=device)[0, :, :]
+            x_nd = x_nd_fine[:, ::subsample_factor][:, :N_points_k]
+            del x_nd_fine, force
 
             # 4. Redimensionalize output
             x_scale = curr_thetas_rescale[:, rescale_idx["x_scale"]].unsqueeze(1)
             x_offset = curr_thetas_rescale[:, rescale_idx["x_offset"]].unsqueeze(1)
-            t_scale = curr_thetas_rescale[:, rescale_idx["t_scale"]].unsqueeze(1)
             x_dim = helpers.rescale(x_nd, x_scale, x_offset)
-            dt_dim = helpers.rescale(dt, t_scale).squeeze(1)
             del x_nd
 
-            # 5. Compute stats on dimensional data, concatenate with forcing params
+            # 5. Compute stats on dimensional data with fixed dt_exp, append conditioning
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                training_stats = gen_stats(x_dim.cpu(), dt_dim, device=device)
-                training_stats = torch.cat((training_stats, curr_thetas_forcing.cpu()), dim=-1)
+                training_stats = gen_stats(x_dim.cpu(), dt_exp, device=device)
+                log_T_k_tensor = torch.full((run_size, 1), math.log(T_k))
+                training_stats = torch.cat((training_stats, curr_thetas_forcing.cpu(), log_T_k_tensor), dim=-1)
                 training_data.append(training_stats)
 
             # 6. Collect inferred params (ND + rescale) as targets
             thetas.append(curr_thetas.cpu())
             if device.type == "cuda":
                 torch.cuda.empty_cache()
+
+    # Cost ceiling warning
+    if cost_ceiling_count > 0:
+        pct = 100 * cost_ceiling_count / n_runs
+        warnings.warn(
+            f"Simulation cost ceiling hit for {cost_ceiling_count}/{n_runs} batches ({pct:.1f}%). "
+            f"Consider widening t_scale prior or narrowing T_exp range.",
+            stacklevel=2,
+        )
 
     training_data_tensor = torch.cat(training_data, dim=0)
     thetas_tensor = torch.cat(thetas, dim=0)
@@ -375,9 +435,11 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
         # train the density estimator
         data, thetas = gen_training_data(training_params["model"], training_params["prior"], forcing_prior, training_params["t"],
                                          training_params["run_size"], training_params["num_runs"], training_params["n_segs"],
-                                         training_params["steady_idx"], training_params["dt"], nd_dim, forcing_idx, rescale_idx,
+                                         training_params["steady_idx"], training_params["dt_nd_min"], nd_dim, forcing_idx, rescale_idx,
+                                         dt_exp=training_params["dt_exp"], t_min_exp=training_params["t_min_exp"],
+                                         t_max_exp=training_params["t_max_exp"], t_scale_bounds=training_params["t_scale_bounds"],
                                          proposal=proposal, fixed_dict=fixed_dict, state_dep_drift=training_params.get("state_dep_drift", False),
-                                         dtype=training_params["dtype"], device=training_params["device"])  # initial (data, thetas) training pairs
+                                         dtype=training_params["dtype"], device=training_params["device"])
 
         # filter data
         nan_mask = torch.isfinite(data).all(dim=1)

@@ -49,8 +49,10 @@ def posterior_predictive_check(s_obs: torch.Tensor, s_simulated: torch.Tensor) -
 # === COVERAGE CHECKS ===
 def gen_cal_data(model: str, prior: torch.distributions.Distribution,
                  forcing_prior: torch.distributions.Distribution,
-                 t: torch.Tensor, n_segs: int, steady_idx: int, dt: float, n_cal: int,
+                 t: torch.Tensor, n_segs: int, steady_idx: int, dt_nd_min: float, n_cal: int,
                  nd_dim: int, forcing_idx: dict, rescale_idx: dict,
+                 dt_exp: float = None, t_min_exp: float = None, t_max_exp: float = None,
+                 t_scale_bounds: tuple[float, float] = None,
                  fixed_dict: dict = None, state_dep_drift: bool = False,
                  dtype: torch.dtype = torch.float32,
                  device: torch.device = torch.device('cpu')) -> tuple[torch.Tensor, torch.Tensor]:
@@ -59,11 +61,15 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
 
     :param model: Name of the model to evaluate. Must be provided as a string.
     :param prior: Distribution object representing the prior over the model parameters.
-    :param t: Time points for generating calibration data, provided as a tensor.
+    :param t: Pre-simulated ND time tensor at finest resolution, provided as a tensor.
     :param n_segs: Number of distinct segments to use for simulation.
     :param steady_idx: Index defining the steady-state position in the simulation points.
-    :param dt: Time step size used for numerical simulation.
+    :param dt_nd_min: Finest ND time step of the pre-simulated trajectory.
     :param n_cal: Number of calibration data samples to generate.
+    :param dt_exp: Fixed experimental sampling interval (seconds).
+    :param t_min_exp: Shortest experimental recording duration (seconds).
+    :param t_max_exp: Longest experimental recording duration (seconds).
+    :param t_scale_bounds: (lo, hi) bounds on the t_scale rescaling parameter.
     :param fixed_dict: Dictionary containing fixed parameter values for simulation (default is None).
     :param dtype: Data type for tensor computations (default is torch.float32).
     :param device: Device where computations will be performed (default is CPU).
@@ -71,8 +77,11 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
              (torch.Tensor) that exclude invalid simulations.
     """
     # generate calibration data and parameters
-    cal_data, theta_star = pipeline.gen_training_data(model, prior, forcing_prior, t, n_cal, 1, n_segs, steady_idx, dt,
-                                                      nd_dim, forcing_idx, rescale_idx, proposal=None,
+    cal_data, theta_star = pipeline.gen_training_data(model, prior, forcing_prior, t, n_cal, 1, n_segs, steady_idx, dt_nd_min,
+                                                      nd_dim, forcing_idx, rescale_idx,
+                                                      dt_exp=dt_exp, t_min_exp=t_min_exp,
+                                                      t_max_exp=t_max_exp, t_scale_bounds=t_scale_bounds,
+                                                      proposal=None,
                                                       fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
                                                       dtype=dtype, device=device)
 

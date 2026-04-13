@@ -71,6 +71,11 @@ VALID_LABELS = [DIM_LABELS, ND_LABELS, NADROWSKI_LABELS, ND_NADROWSKI_LABELS, HO
 UNIQUE_FREQS = 2 ** 6
 K_B = 1.380649e-23  # m^2 kg s^-2 K^-1
 
+# === EXPERIMENTAL CONSTANTS (in seconds, converted to cell file units during setup) ===
+DT_EXP_S = 1e-3        # 1000 FPS camera frame interval
+T_MIN_EXP_S = 10.0     # shortest expected recording (10 s)
+T_MAX_EXP_S = 300.0    # longest expected recording (5 min)
+
 # === SIMULATION CONFIG DATACLASS ===
 @dataclass
 class SimConfig:
@@ -97,6 +102,12 @@ class SimConfig:
     steady_pct: float = None
     n_segs: int = None
 
+    # Experimental observation parameters (in cell file time units, set during setup)
+    dt_exp: float = None          # camera frame interval
+    t_min_exp: float = None       # shortest expected recording
+    t_max_exp: float = None       # longest expected recording
+    T_obs: float = None           # ground-truth observation duration (user input)
+
     # Hardware
     hw: DeviceConfig = field(default_factory=detect_device)
 
@@ -106,15 +117,38 @@ class SimConfig:
 
     # --- Derived properties ---
     @property
+    def t_scale_bounds(self) -> tuple[float, float]:
+        """(lo, hi) bounds on the t_scale rescaling parameter (λ/K_gs)."""
+        _, (lo, hi) = self.rescale_params["t_scale"]
+        return lo, hi
+
+    @property
+    def dt_nd_min(self) -> float:
+        """Finest ND time step needed: dt_exp / t_scale_max."""
+        _, t_scale_hi = self.t_scale_bounds
+        return self.dt_exp / t_scale_hi
+
+    @property
+    def t_nd_max(self) -> float:
+        """Longest ND duration needed: t_max_exp / t_scale_min."""
+        t_scale_lo, _ = self.t_scale_bounds
+        return self.t_max_exp / t_scale_lo
+
+    @property
     def t(self) -> torch.Tensor:
-        """Time tensor on the configured device."""
+        """Pre-simulated ND time vector at finest resolution and longest duration."""
+        if self.dt_exp is not None:
+            n_steps = int(self.t_nd_max / self.dt_nd_min)
+            return torch.linspace(0, self.t_nd_max, n_steps,
+                                  dtype=self.hw.dtype, device=self.hw.device)
+        # fallback for legacy usage
         return torch.linspace(0, self.t_max, int(self.t_max / self.dt),
                               dtype=self.hw.dtype, device=self.hw.device)
 
     @property
     def steady_idx(self) -> int:
         """Index where transient ends and steady-state begins."""
-        return int(self.steady_pct * int(self.t_max / self.dt))
+        return int(self.steady_pct * len(self.t))
 
     @property
     def ground_truth(self) -> list[float]:
