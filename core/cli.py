@@ -117,6 +117,40 @@ def prompt_save_name(artifact_type: str) -> str:
     """
     return input(f"Enter a name for the {artifact_type} file: ")
 
+
+# ── Inference on real experimental data ────────────────────────────────────
+def select_or_skip_inference() -> bool:
+    """
+    Ask whether to run inference on a real experimental recording.
+
+    :return: True if user wants to run inference, False to skip.
+    """
+    response = input("\nRun inference on real experimental data? (y/N): ").strip().lower()
+    helpers.clear_screen()
+    return response in ("y", "yes")
+
+
+def get_inference_inputs() -> tuple[str, float, dict]:
+    """
+    Prompt for the inputs needed to run inference on real experimental data.
+
+    All inputs are in SI units; conversion to cell file units happens in the
+    caller via SimConfig.get_unit_conversion_factor().
+
+    :return: (data_file_path, T_obs_seconds, forcing_params_si)
+             forcing_params_si has keys "amp" (N), "freq" (Hz), "phase" (rad), "offset" (N).
+    """
+    data_path = input("Path to experimental data file (.csv or .npy): ").strip()
+    T_obs_s = float(input("Observation duration T_obs (seconds): "))
+    print("\nForcing parameters (in SI units):")
+    amp = float(input("  Amplitude (N): "))
+    freq = float(input("  Frequency (Hz): "))
+    phase = float(input("  Phase (rad): "))
+    offset = float(input("  Offset (N): "))
+    helpers.clear_screen()
+    forcing_params_si = {"amp": amp, "freq": freq, "phase": phase, "offset": offset}
+    return data_path, T_obs_s, forcing_params_si
+
 # ── Top-level config builder ────────────────────────────────────────────────
 def build_sim_config() -> SimConfig:
     """

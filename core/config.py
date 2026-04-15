@@ -192,3 +192,30 @@ class SimConfig:
     def rescale_idx(self) -> dict[str, int]:
         """Maps rescale param names to column indices, e.g. {"x_offset": 0, "x_scale": 1, ...}."""
         return {name: i for i, name in enumerate(self.rescale_params.keys())}
+
+    def get_unit_conversion_factor(self, si_unit: str) -> float:
+        """
+        SI unit -> cell file equivalent unit conversion factor.
+
+        Finds which unit in the cell file has the same dimensionality as si_unit,
+        and returns the multiplicative factor to convert from SI value to cell value.
+
+        Examples:
+          - get_unit_conversion_factor("s")  -> 1000.0 if cell uses ms
+          - get_unit_conversion_factor("N")  -> 1e12 if cell uses pN
+          - get_unit_conversion_factor("Hz") -> 1.0 if cell uses Hz
+
+        :param si_unit: SI unit string (e.g. "s", "N", "Hz", "rad").
+        :return: Conversion factor: cell_value = si_value * factor.
+        :raises ValueError: If no unit in the cell file matches the given dimensionality.
+        """
+        import pint
+        ureg = pint.UnitRegistry()
+        target_dim = ureg.Quantity(1, si_unit).dimensionality
+        for unit_str in self.units_dict:
+            try:
+                if ureg.Quantity(1, unit_str).dimensionality == target_dim:
+                    return ureg.Quantity(1, si_unit).to(unit_str).magnitude
+            except pint.UndefinedUnitError:
+                continue
+        raise ValueError(f"No unit with dimensionality {target_dim} found in cell file.")

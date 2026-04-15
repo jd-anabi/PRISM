@@ -7,6 +7,7 @@ This module owns the pipeline flow: observe -> prior -> posterior -> validate.
 import importlib
 import math
 import time
+import warnings
 
 import torch
 import numpy as np
@@ -40,6 +41,7 @@ def run(cfg: SimConfig):
       2. Build or load the prior (product prior: ND x rescale x forcing)
       3. Train or load the posterior
       4. Validate (PPC, SBC, coverage, eye test)
+      5. Optionally infer parameters from a real experimental recording
     """
     # 1. Synthetic observations
     x_dim, obs_stats, t_dim = generate_observations(cfg)
@@ -59,6 +61,20 @@ def run(cfg: SimConfig):
 
     # 4. Validate
     validate(cfg, posterior, x_dim, obs_stats, force_prior, t_dim)
+
+    # 5. Inference on real experimental data (optional)
+    if cli.select_or_skip_inference():
+        data_path, T_obs_s, forcing_params_si = cli.get_inference_inputs()
+        X_obs = file_manager.load_experimental_data(data_path, dtype=cfg.hw.dtype)
+        samples = infer_from_experiment(
+            cfg, posterior, X_obs, T_obs_s, forcing_params_si, n_samples=1000,
+        )
+        # Corner plot of inferred parameters
+        fig, ax = pairplot(
+            samples.cpu().numpy(),
+            labels=cfg.inferred_labels,
+        )
+        plt.show()
 
 
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
@@ -91,6 +107,17 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
 
     # Fine-resolution time vector: transient + enough to downsample into N_obs points
     n_fine_total = cfg.steady_idx + N_obs * subsample_factor
+
+    # Cost ceiling: ensure simulation fits within the pre-simulated grid
+    if n_fine_total > len(t):
+        warnings.warn(
+            f"Observation cost ceiling hit: requested T_obs requires more points than "
+            f"pre-simulated grid allows. Clipping N_obs from {N_obs} to fit.",
+            stacklevel=2,
+        )
+        N_obs = (len(t) - cfg.steady_idx) // subsample_factor
+        n_fine_total = cfg.steady_idx + N_obs * subsample_factor
+
     t_fine = t[:n_fine_total]
 
     # Build ND force at fine resolution
@@ -404,3 +431,62 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
         n_show=10,
     )
     plt.show()
+
+
+# ── Step 5: Inference on real experimental data ────────────────────────────
+def infer_from_experiment(
+    cfg: SimConfig,
+    posterior: DirectPosterior,
+    X_obs: torch.Tensor,
+    T_obs_s: float,
+    forcing_params_si: dict,
+    n_samples: int = 1000,
+) -> torch.Tensor:
+    """
+    Infer posterior over [ND params, rescale params] from a real experimental recording.
+
+    The recording must be sampled at 1/cfg.dt_exp (the camera frame rate the network
+    was trained on). The user provides T_obs and forcing parameters in SI units;
+    this function converts them to cell-file units, builds the conditioning vector
+    [S(X_obs), F_dim, log(T_obs)], and samples from the trained posterior.
+
+    :param cfg: Pipeline configuration (provides dt_exp, unit conversion, device).
+    :param posterior: Trained DirectPosterior loaded from disk or freshly trained.
+    :param X_obs: 1D experimental recording, shape (N_obs,), at 1/cfg.dt_exp sampling.
+    :param T_obs_s: Observation duration in SECONDS.
+    :param forcing_params_si: Dict with keys "amp" (N), "freq" (Hz), "phase" (rad), "offset" (N).
+    :param n_samples: Number of posterior samples to draw. Defaults to 1000.
+    :return: Posterior samples, shape (n_samples, nd_dim + rescale_dim), in cell-file units.
+    """
+    device = cfg.hw.device
+    dtype = cfg.hw.dtype
+
+    # Unit conversions: SI -> cell file units
+    s_to_cell = cfg.get_unit_conversion_factor("s")
+    n_to_cell = cfg.get_unit_conversion_factor("N")
+    hz_to_cell = cfg.get_unit_conversion_factor("Hz")
+
+    T_obs = T_obs_s * s_to_cell
+    amp = forcing_params_si["amp"] * n_to_cell
+    freq = forcing_params_si["freq"] * hz_to_cell
+    phase = forcing_params_si["phase"]                  # dimensionless
+    offset = forcing_params_si["offset"] * n_to_cell
+
+    # Build forcing tensor in the order expected by cfg.forcing_idx
+    forcing_t = torch.empty((1, len(cfg.force_params_dict)), dtype=dtype)
+    forcing_t[0, cfg.forcing_idx["amp"]] = amp
+    forcing_t[0, cfg.forcing_idx["freq"]] = freq
+    forcing_t[0, cfg.forcing_idx["phase"]] = phase
+    forcing_t[0, cfg.forcing_idx["offset"]] = offset
+
+    # Reshape X_obs to (1, N_obs) and compute summary statistics with dt_exp
+    X_obs_batched = X_obs.to(dtype=dtype).unsqueeze(0)
+    obs_stats = pipeline.gen_stats(X_obs_batched, cfg.dt_exp)
+
+    # Build conditioning vector: [S(X_obs), forcing, log(T_obs)]
+    log_T_obs = torch.tensor([[math.log(T_obs)]], dtype=dtype)
+    obs_stats = torch.cat([obs_stats, forcing_t, log_T_obs], dim=-1)
+
+    # Sample from the trained posterior
+    samples = posterior.sample((n_samples,), x=obs_stats.to(device))
+    return samples.cpu()

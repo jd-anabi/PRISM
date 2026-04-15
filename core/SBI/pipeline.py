@@ -307,7 +307,6 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     batch_t_scales = torch.exp(batch_log_t_scales)  # (n_runs,)
     batch_Ts = torch.exp(batch_log_Ts)              # (n_runs,)
 
-    T_nd_max = t[-1].item()  # length of pre-simulated trajectory in ND time
     cost_ceiling_count = 0
 
     with torch.no_grad():
@@ -320,18 +319,22 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             T_nd_k = T_k / t_scale_k
             dt_nd_k = dt_exp / t_scale_k
 
-            # Cost ceiling check: clip if T_nd exceeds pre-simulated length
-            if T_nd_k > T_nd_max:
-                cost_ceiling_count += 1
-                T_nd_k = T_nd_max
-                T_k = T_nd_max * t_scale_k
-
             # Subsample factor and number of output points
             subsample_factor = max(1, round(dt_nd_k / dt_nd_min))
             N_points_k = int(T_nd_k / dt_nd_k)
 
             # Fine-resolution time vector: enough points to cover transient + output
             n_fine_total = steady_idx + N_points_k * subsample_factor
+
+            # Cost ceiling: ensure simulation fits within the pre-simulated grid
+            if n_fine_total > len(t):
+                cost_ceiling_count += 1
+                # Reduce N_points_k to what actually fits, recompute T_k to match
+                N_points_k = (len(t) - steady_idx) // subsample_factor
+                T_nd_k = N_points_k * dt_nd_k
+                T_k = T_nd_k * t_scale_k
+                n_fine_total = steady_idx + N_points_k * subsample_factor
+
             t_fine = t[:n_fine_total]
 
             # 1. Sample inferred params (ND + rescale) and forcing params

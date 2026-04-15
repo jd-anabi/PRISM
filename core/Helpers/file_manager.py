@@ -2,6 +2,7 @@ import os
 import re
 from collections import OrderedDict
 
+import numpy as np
 import torch
 
 # --- Regex Definitions ---
@@ -145,6 +146,39 @@ def save_mix_dist(dist: torch.distributions.MixtureSameFamily, filename: str):
     """
     data_to_save = {'means': dist.component_distribution.loc, 'covariances': dist.component_distribution.covariance_matrix, 'weights': dist.mixture_distribution.probs}
     torch.save(data_to_save, filename)
+
+def load_experimental_data(file_path: str, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+    """
+    Load a 1D experimental time series from CSV or NPY.
+
+    Supported formats:
+      - .npy: NumPy binary, expects a 1D array of values.
+      - .csv: comma-separated. If single column, treated as values. If multiple
+              columns, the LAST column is treated as the values (assumes time is
+              in earlier columns and discarded since dt_exp is known).
+
+    :param file_path: Path to the data file.
+    :param dtype: Tensor data type. Defaults to torch.float32.
+    :return: 1D torch.Tensor of values.
+    :raises ValueError: If file extension is unsupported or data shape is invalid.
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+
+    if ext == ".npy":
+        arr = np.load(file_path)
+        if arr.ndim != 1:
+            arr = arr.squeeze()
+            if arr.ndim != 1:
+                raise ValueError(f"Expected 1D array in {file_path}, got shape {arr.shape}")
+    elif ext == ".csv":
+        arr = np.loadtxt(file_path, delimiter=",", ndmin=2)
+        # take last column (handles single-column or time+value layouts)
+        arr = arr[:, -1]
+    else:
+        raise ValueError(f"Unsupported file extension '{ext}'. Use .npy or .csv.")
+
+    return torch.tensor(arr, dtype=dtype)
+
 
 def load_mix_dist(filename: str, device: torch.device = torch.device('cpu')) -> torch.distributions.MixtureSameFamily:
     """
