@@ -11,6 +11,7 @@ from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
 
 from core.Helpers import helpers
+from core.config import CHUNK_LEN, N_ND_MAX
 from .Priors import dim_prior, nd_prior, hopf_prior, nadrowski_prior, nd_nadrowski_prior
 from core.Simulator import dim_simulator, nd_simulator, nadrowski_simulator, nd_nadrowski_simulator, hopf_simulator
 from core.SBI import statistics
@@ -228,7 +229,7 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
     return prior
 
 def gen_training_data(model: str, prior: torch.distributions.Distribution, forcing_prior: torch.distributions.Distribution,
-                      t: torch.Tensor, run_size: int, n_runs: int, n_segs: int, steady_idx: int, dt_nd_min: float,
+                      t: torch.Tensor, run_size: int, n_runs: int, steady_idx: int, dt_nd_min: float,
                       nd_dim: int, forcing_idx: dict, rescale_idx: dict,
                       dt_exp: float = None, t_min_exp: float = None, t_max_exp: float = None,
                       t_scale_bounds: tuple[float, float] = None,
@@ -252,7 +253,6 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     :param t: Pre-simulated ND time tensor at finest resolution (dt_nd_min), shape (T_full,).
     :param run_size: Number of simulations per batch.
     :param n_runs: Number of batches to generate.
-    :param n_segs: Number of segments to divide each time series into.
     :param steady_idx: Index where transient ends and steady-state begins (at full resolution).
     :param dt_nd_min: Finest ND time step of the pre-simulated trajectory.
     :param nd_dim: Number of ND model parameters; used to split inferred params into
@@ -295,19 +295,33 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 
     sampling_dist = prior if proposal is None else proposal
 
-    # --- Stratified sampling of batch-level (t_scale, T) pairs ---
+    # --- Stratified sampling of batch-level (t_scale, T) pairs with pre-filter ---
     t_scale_lo, t_scale_hi = t_scale_bounds
     log_t_scale_lo, log_t_scale_hi = math.log(t_scale_lo), math.log(t_scale_hi)
     log_T_lo, log_T_hi = math.log(t_min_exp), math.log(t_max_exp)
 
-    sobol = torch.quasirandom.SobolEngine(dimension=2, scramble=True)
-    sobol_points = sobol.draw(n_runs)  # (n_runs, 2) in [0, 1]^2
-    batch_log_t_scales = log_t_scale_lo + sobol_points[:, 0] * (log_t_scale_hi - log_t_scale_lo)
-    batch_log_Ts = log_T_lo + sobol_points[:, 1] * (log_T_hi - log_T_lo)
-    batch_t_scales = torch.exp(batch_log_t_scales)  # (n_runs,)
-    batch_Ts = torch.exp(batch_log_Ts)              # (n_runs,)
+    def _draw_and_filter(n_candidates: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Draw Sobol candidates, filter by N_ND_MAX, return (t_scales, Ts) that fit."""
+        pts = sobol.draw(n_candidates)
+        cand_t_scales = torch.exp(log_t_scale_lo + pts[:, 0] * (log_t_scale_hi - log_t_scale_lo))
+        cand_Ts = torch.exp(log_T_lo + pts[:, 1] * (log_T_hi - log_T_lo))
+        dt_nd_cand = dt_exp / cand_t_scales
+        subsample_cand = torch.clamp(torch.round(dt_nd_cand / dt_nd_min), min=1).long()
+        N_points_cand = (cand_Ts / dt_exp).long()
+        n_fine_cand = steady_idx + N_points_cand * subsample_cand
+        valid = n_fine_cand <= N_ND_MAX
+        return cand_t_scales[valid], cand_Ts[valid]
 
-    cost_ceiling_count = 0
+    sobol = torch.quasirandom.SobolEngine(dimension=2, scramble=True)
+    oversample = 3
+    valid_t_scales, valid_Ts = _draw_and_filter(n_runs * oversample)
+    # Fallback: keep drawing more candidates until we have enough valid ones
+    while valid_t_scales.shape[0] < n_runs:
+        more_t_scales, more_Ts = _draw_and_filter(n_runs * oversample)
+        valid_t_scales = torch.cat([valid_t_scales, more_t_scales])
+        valid_Ts = torch.cat([valid_Ts, more_Ts])
+    batch_t_scales = valid_t_scales[:n_runs]
+    batch_Ts = valid_Ts[:n_runs]
 
     with torch.no_grad():
         for batch_k in tqdm(range(n_runs), desc="Generating training data", leave=False):
@@ -324,18 +338,12 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             N_points_k = int(T_nd_k / dt_nd_k)
 
             # Fine-resolution time vector: enough points to cover transient + output
+            # (pre-filter guarantees n_fine_total <= N_ND_MAX, no clipping needed)
             n_fine_total = steady_idx + N_points_k * subsample_factor
-
-            # Cost ceiling: ensure simulation fits within the pre-simulated grid
-            if n_fine_total > len(t):
-                cost_ceiling_count += 1
-                # Reduce N_points_k to what actually fits, recompute T_k to match
-                N_points_k = (len(t) - steady_idx) // subsample_factor
-                T_nd_k = N_points_k * dt_nd_k
-                T_k = T_nd_k * t_scale_k
-                n_fine_total = steady_idx + N_points_k * subsample_factor
-
             t_fine = t[:n_fine_total]
+
+            # Per-batch segmentation: chunk the simulation into CHUNK_LEN-sized pieces
+            n_segs_k = max(1, math.ceil(n_fine_total / CHUNK_LEN))
 
             # 1. Sample inferred params (ND + rescale) and forcing params
             curr_thetas = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
@@ -351,7 +359,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 
             # 3. Simulate at fine dt_nd_min (stable for EM), then downsample to batch resolution
             x_nd_fine = gen_obs(model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
-                                force=force, n_segs=n_segs, steady_idx=steady_idx,
+                                force=force, n_segs=n_segs_k, steady_idx=steady_idx,
                                 fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
                                 batch_size=run_size, dtype=dtype, device=device)[0, :, :]
             x_nd = x_nd_fine[:, ::subsample_factor][:, :N_points_k]
@@ -375,15 +383,6 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             thetas.append(curr_thetas.cpu())
             if device.type == "cuda":
                 torch.cuda.empty_cache()
-
-    # Cost ceiling warning
-    if cost_ceiling_count > 0:
-        pct = 100 * cost_ceiling_count / n_runs
-        warnings.warn(
-            f"Simulation cost ceiling hit for {cost_ceiling_count}/{n_runs} batches ({pct:.1f}%). "
-            f"Consider widening t_scale prior or narrowing T_exp range.",
-            stacklevel=2,
-        )
 
     training_data_tensor = torch.cat(training_data, dim=0)
     thetas_tensor = torch.cat(thetas, dim=0)
@@ -437,7 +436,7 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
     for _ in tqdm(range(num_rounds), desc=f"Training neural posterior", leave=False):
         # train the density estimator
         data, thetas = gen_training_data(training_params["model"], training_params["prior"], forcing_prior, training_params["t"],
-                                         training_params["run_size"], training_params["num_runs"], training_params["n_segs"],
+                                         training_params["run_size"], training_params["num_runs"],
                                          training_params["steady_idx"], training_params["dt_nd_min"], nd_dim, forcing_idx, rescale_idx,
                                          dt_exp=training_params["dt_exp"], t_min_exp=training_params["t_min_exp"],
                                          t_max_exp=training_params["t_max_exp"], t_scale_bounds=training_params["t_scale_bounds"],

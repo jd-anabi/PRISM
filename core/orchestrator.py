@@ -15,8 +15,9 @@ from matplotlib import pyplot as plt
 from sbi.analysis import pairplot
 from sbi.inference import DirectPosterior
 from torch.distributions import Distribution, MixtureSameFamily
+from tqdm import tqdm
 
-from .config import SimConfig, PRIOR_PATH, POSTERIOR_PATH, PLOT_PATH
+from .config import SimConfig, PRIOR_PATH, POSTERIOR_PATH, PLOT_PATH, CHUNK_LEN, PPC_BIN_SIZE
 from . import cli
 from .Helpers import helpers, visualizers, file_manager
 from .SBI import embedded_network, pipeline, analysis
@@ -120,13 +121,16 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
 
     t_fine = t[:n_fine_total]
 
+    # Auto-derive n_segs based on CHUNK_LEN (per-chunk memory cap)
+    n_segs_gt = max(1, math.ceil(n_fine_total / CHUNK_LEN))
+
     # Build ND force at fine resolution
     force = pipeline.build_nondim_sin_force_tensor(forcing_gt, t_fine, rescale_gt, cfg.forcing_idx, cfg.rescale_idx)
 
     # Simulate at fine dt_nd_min (stable for EM), then downsample
     x_nd_fine = pipeline.gen_obs(
         model=cfg.model, params=cfg.params_tensor, t=t_fine, inits=cfg.inits_tensor,
-        force=force, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
+        force=force, n_segs=n_segs_gt, steady_idx=cfg.steady_idx,
         state_dep_drift=cfg.state_dep_drift,
         dtype=cfg.hw.dtype, device=cfg.hw.device,
     )[0, :, :]
@@ -184,11 +188,13 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Di
     helpers.clear_screen()
 
     # 3. ND parameter prior (stability-filtered GMM)
+    # Prior construction uses t_global_scale=2, so effective sim length is len(cfg.t)/2
+    prior_segs = max(1, math.ceil(len(cfg.t) / 2 / CHUNK_LEN))
     nd_prior = pipeline.gen_prior(
         model=cfg.model, t=cfg.t,
         global_batch_size=cfg.hw.batch_size,
         local_batch_size=(cfg.hw.batch_size // 2),
-        segs=math.ceil(cfg.n_segs / 2),
+        segs=prior_segs,
         prior_bounds=cfg.nd_params_bounds,
         state_dep_drift=cfg.state_dep_drift,
         num_iterations=50,
@@ -261,7 +267,6 @@ def build_posterior(
         "t": cfg.t,
         "run_size": cfg.hw.batch_size,
         "num_runs": 300,
-        "n_segs": cfg.n_segs,
         "steady_idx": cfg.steady_idx,
         "dt_nd_min": cfg.dt_nd_min,
         "dt_exp": cfg.dt_exp,
@@ -354,30 +359,80 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
     )
     plt.show()
 
-    # PPC
+    # PPC - Option B: sort posterior samples by t_scale, process in mini-batches
+    # Each sample gets its own subsample_factor based on its t_scale; all samples
+    # share physical duration T_obs at dt_exp sampling (matching the observation).
     nd_dim = len(cfg.params_dict)
     samples_nd = samples[:, :nd_dim]
     samples_rescale = samples[:, nd_dim:]
+    n_samples = samples.shape[0]
+    N_points_obs = int(cfg.T_obs / cfg.dt_exp)  # same for all samples
 
     forcing_gt = torch.tensor([[val for val, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
-    forcing_gt_expanded = forcing_gt.expand(samples.shape[0], -1)  # (n_samples, n_forcing)
-    force = pipeline.build_nondim_sin_force_tensor(
-        forcing_gt_expanded, t, samples_rescale, cfg.forcing_idx, cfg.rescale_idx
-    )
+    forcing_gt_expanded = forcing_gt.expand(n_samples, -1)  # (n_samples, n_forcing)
 
-    x_nd = pipeline.gen_obs(
-        model=cfg.model, params=samples_nd, t=t, inits=cfg.inits_tensor.expand(samples.shape[0], -1),
-        force=force, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
-        state_dep_drift=cfg.state_dep_drift,
-        batch_size=samples.shape[0], dtype=dtype, device=device,
-    )[0, :, :]
+    # Sort by t_scale (ascending) so each bin contains similar-scale samples
+    t_scales_all = samples_rescale[:, cfg.rescale_idx["t_scale"]]
+    sort_idx = torch.argsort(t_scales_all)
+    inv_sort_idx = torch.argsort(sort_idx)
+    samples_nd_sorted = samples_nd[sort_idx]
+    samples_rescale_sorted = samples_rescale[sort_idx]
 
-    x_scale = samples_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
-    x_offset = samples_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
-    x_dim = helpers.rescale(x_nd, x_scale, x_offset)
-    del x_nd, force
+    x_dim_sorted = torch.empty((n_samples, N_points_obs), dtype=dtype, device=device)
+    arange_out = torch.arange(N_points_obs, device=device, dtype=torch.long)
+    n_bins = math.ceil(n_samples / PPC_BIN_SIZE)
 
-    sim_stats = pipeline.gen_stats(x_dim, cfg.dt_exp, device=device)  # scalar dt_exp
+    with torch.no_grad():
+        for b in tqdm(range(n_bins), desc="PPC simulations", leave=False):
+            start = b * PPC_BIN_SIZE
+            end = min(start + PPC_BIN_SIZE, n_samples)
+            bs = end - start
+
+            bin_nd = samples_nd_sorted[start:end]
+            bin_rescale = samples_rescale_sorted[start:end]
+            bin_t_scales = bin_rescale[:, cfg.rescale_idx["t_scale"]]
+
+            # Smallest t_scale in the bin determines the finest resolution needed
+            # (largest subsample_factor, hence largest n_fine_total)
+            bin_t_scale_min = bin_t_scales.min().item()
+            max_subsample_bin = max(1, round((cfg.dt_exp / bin_t_scale_min) / cfg.dt_nd_min))
+            n_fine_bin = min(cfg.steady_idx + N_points_obs * max_subsample_bin, len(t))
+            t_fine_bin = t[:n_fine_bin]
+            n_segs_bin = max(1, math.ceil(n_fine_bin / CHUNK_LEN))
+
+            # Build ND force for this bin
+            force_bin = pipeline.build_nondim_sin_force_tensor(
+                forcing_gt.expand(bs, -1), t_fine_bin, bin_rescale, cfg.forcing_idx, cfg.rescale_idx
+            )
+
+            # Simulate the bin at fine resolution
+            x_nd_bin = pipeline.gen_obs(
+                model=cfg.model, params=bin_nd, t=t_fine_bin,
+                inits=cfg.inits_tensor.expand(bs, -1),
+                force=force_bin, n_segs=n_segs_bin, steady_idx=cfg.steady_idx,
+                state_dep_drift=cfg.state_dep_drift,
+                batch_size=bs, dtype=dtype, device=device,
+            )[0, :, :]  # (bs, n_fine_bin - steady_idx)
+
+            # Per-sample downsample via gather: each row uses its own subsample_factor
+            subsample_factors = torch.clamp(
+                torch.round((cfg.dt_exp / bin_t_scales) / cfg.dt_nd_min), min=1
+            ).long()  # (bs,)
+            idx = subsample_factors.unsqueeze(1) * arange_out.unsqueeze(0)  # (bs, N_points_obs)
+            idx = torch.clamp(idx, max=x_nd_bin.shape[1] - 1)  # safety for OOD samples
+            x_nd_ds = torch.gather(x_nd_bin, dim=1, index=idx)  # (bs, N_points_obs)
+
+            # Rescale per sample to dimensional units
+            x_scale_col = bin_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
+            x_offset_col = bin_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
+            x_dim_sorted[start:end] = x_scale_col * x_nd_ds + x_offset_col
+
+            del x_nd_bin, force_bin, x_nd_ds
+
+    # Restore original sample order
+    x_dim = x_dim_sorted[inv_sort_idx]
+
+    sim_stats = pipeline.gen_stats(x_dim, cfg.dt_exp, device=device)
     log_T_obs = torch.full((sim_stats.shape[0], 1), math.log(T_obs))
     sim_stats = torch.cat([sim_stats, forcing_gt_expanded.cpu(), log_T_obs], dim=-1)
     results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats)
@@ -385,7 +440,7 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
     # SBC + coverage
     x_cal, theta_star = analysis.gen_cal_data(
         model=cfg.model, prior=posterior, forcing_prior=force_prior,
-        t=t, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=1000,
+        t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=1000,
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
         dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
         t_scale_bounds=cfg.t_scale_bounds,
@@ -399,28 +454,11 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
     plt.show()
 
     # Eye test: MAP vs ground truth vs posterior samples
+    # MAP is just the posterior sample with highest log-prob — its simulated
+    # trajectory is already in x_dim (from the PPC step above), no need to re-simulate.
     log_probs = posterior.log_prob(samples, x=obs_stats.to(device))
-    map_params = samples[log_probs.argmax()].unsqueeze(0)  # (1, nd_dim + rescale_dim)
-    map_nd = map_params[:, :nd_dim]  # (1, nd_dim)
-    map_rescale = map_params[:, nd_dim:]  # (1, rescale_dim)
-
-    # Build force from MAP rescale params and ground-truth forcing
-    forcing_gt_single = forcing_gt_expanded[:1]  # (1, n_forcing) — reuse from PPC
-    force_map = pipeline.build_nondim_sin_force_tensor(
-        forcing_gt_single, t, map_rescale, cfg.forcing_idx, cfg.rescale_idx
-    )
-
-    x_map_nd = pipeline.gen_obs(
-        model=cfg.model, params=map_nd, t=t, inits=cfg.inits_tensor,
-        force=force_map, n_segs=cfg.n_segs, steady_idx=cfg.steady_idx,
-        state_dep_drift=cfg.state_dep_drift,
-        dtype=dtype, device=device,
-    )[0, 0, :]  # (T_steady,)
-
-    # Redimensionalize
-    map_x_scale = map_rescale[:, cfg.rescale_idx["x_scale"]]
-    map_x_offset = map_rescale[:, cfg.rescale_idx["x_offset"]]
-    x_map = helpers.rescale(x_map_nd, map_x_scale, map_x_offset)  # (T_steady,)
+    map_idx = log_probs.argmax().item()
+    x_map = x_dim[map_idx]  # (N_points_obs,)
 
     t_plot = t_dim.squeeze(0).cpu().numpy()
     fig = visualizers.plot_posterior_vs_truth(
@@ -458,6 +496,8 @@ def infer_from_experiment(
     :param n_samples: Number of posterior samples to draw. Defaults to 1000.
     :return: Posterior samples, shape (n_samples, nd_dim + rescale_dim), in cell-file units.
     """
+    from .config import N_ND_MAX
+
     device = cfg.hw.device
     dtype = cfg.hw.dtype
 
@@ -471,6 +511,22 @@ def infer_from_experiment(
     freq = forcing_params_si["freq"] * hz_to_cell
     phase = forcing_params_si["phase"]                  # dimensionless
     offset = forcing_params_si["offset"] * n_to_cell
+
+    # Out-of-distribution warning: compute the minimum feasible t_scale for this T_obs.
+    # The NN was only trained on batches where n_fine_total <= N_ND_MAX, i.e.
+    #   steady_idx + (T_k / dt_exp) * (t_scale_hi / t_scale_k) <= N_ND_MAX
+    # Solving for t_scale_k given T_k = T_obs:
+    t_scale_lo_prior, t_scale_hi = cfg.t_scale_bounds
+    budget = N_ND_MAX - cfg.steady_idx
+    if budget > 0:
+        t_scale_min_feasible = (T_obs / cfg.dt_exp) * t_scale_hi / budget
+        if t_scale_min_feasible > t_scale_lo_prior:
+            warnings.warn(
+                f"Inference out-of-distribution risk: for T_obs={T_obs_s:.2f}s, the NN was "
+                f"only trained on t_scale >= {t_scale_min_feasible:.3f} (in cell file units). "
+                f"If the true t_scale is below this, the posterior may extrapolate poorly.",
+                stacklevel=2,
+            )
 
     # Build forcing tensor in the order expected by cfg.forcing_idx
     forcing_t = torch.empty((1, len(cfg.force_params_dict)), dtype=dtype)

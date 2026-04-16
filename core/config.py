@@ -74,7 +74,13 @@ K_B = 1.380649e-23  # m^2 kg s^-2 K^-1
 # === EXPERIMENTAL CONSTANTS (in seconds, converted to cell file units during setup) ===
 DT_EXP_S = 1e-3        # 1000 FPS camera frame interval
 T_MIN_EXP_S = 10.0     # shortest expected recording (10 s)
-T_MAX_EXP_S = 300.0    # longest expected recording (5 min)
+T_MAX_EXP_S = 60.0     # longest expected recording (1 min)
+
+# === SIMULATION COST CONSTANTS ===
+CHUNK_LEN = 100_000    # fine integration steps per segment (per-chunk memory cap)
+N_ND_MAX = 300_000     # max total fine integration steps per batch (pre-filter ceiling)
+PPC_BIN_SIZE = 50      # samples per mini-batch for posterior-predictive-check simulation
+CAL_RUN_SIZE = 10      # samples per (t_scale, T) pair in SBC calibration data
 
 # === SIMULATION CONFIG DATACLASS ===
 @dataclass
@@ -100,7 +106,6 @@ class SimConfig:
     t_max: float = None
     dt: float = None
     steady_pct: float = None
-    n_segs: int = None
 
     # Experimental observation parameters (in cell file time units, set during setup)
     dt_exp: float = None          # camera frame interval
