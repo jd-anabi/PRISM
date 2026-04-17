@@ -17,7 +17,10 @@ from sbi.inference import DirectPosterior
 from torch.distributions import Distribution, MixtureSameFamily
 from tqdm import tqdm
 
-from .config import SimConfig, PRIOR_PATH, POSTERIOR_PATH, PLOT_PATH, CHUNK_LEN, PPC_BIN_SIZE
+from .config import (
+    SimConfig, PRIOR_PATH, POSTERIOR_PATH, PLOT_PATH,
+    CHUNK_LEN, N_ND_MAX, PPC_BIN_SIZE, STABILITY_SWEEP_ND_UNITS, TRAINING_NUM_RUNS,
+)
 from . import cli
 from .Helpers import helpers, visualizers, file_manager
 from .SBI import embedded_network, pipeline, analysis
@@ -61,7 +64,7 @@ def run(cfg: SimConfig):
     helpers.clear_screen()
 
     # 4. Validate
-    validate(cfg, posterior, x_dim, obs_stats, force_prior, t_dim)
+    validate(cfg, posterior, inf_prior, x_dim, obs_stats, force_prior, t_dim)
 
     # 5. Inference on real experimental data (optional)
     if cli.select_or_skip_inference():
@@ -109,15 +112,28 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
     # Fine-resolution time vector: transient + enough to downsample into N_obs points
     n_fine_total = cfg.steady_idx + N_obs * subsample_factor
 
-    # Cost ceiling: ensure simulation fits within the pre-simulated grid
-    if n_fine_total > len(t):
+    # OOD warning: NN was only trained on combinations with n_fine_total <= N_ND_MAX
+    if n_fine_total > N_ND_MAX:
         warnings.warn(
-            f"Observation cost ceiling hit: requested T_obs requires more points than "
-            f"pre-simulated grid allows. Clipping N_obs from {N_obs} to fit.",
+            f"Synthetic GT observation out-of-distribution: n_fine_total={n_fine_total} "
+            f"> N_ND_MAX={N_ND_MAX}. Network was trained only on combinations with "
+            f"n_fine_total <= {N_ND_MAX}. Posterior may extrapolate poorly.",
             stacklevel=2,
         )
+
+    # Cost ceiling: if simulation exceeds the pre-simulated grid, clip and update T_obs
+    # so that log(T_obs) conditioning matches the actual trajectory length downstream.
+    if n_fine_total > len(t):
         N_obs = (len(t) - cfg.steady_idx) // subsample_factor
         n_fine_total = cfg.steady_idx + N_obs * subsample_factor
+        actual_T_obs = N_obs * cfg.dt_exp
+        warnings.warn(
+            f"Observation cost ceiling hit: requested T_obs={cfg.T_obs:.4f} exceeds "
+            f"pre-simulated grid. Clipping N_obs to {N_obs} (actual T_obs={actual_T_obs:.4f}). "
+            f"cfg.T_obs updated so downstream code sees the consistent value.",
+            stacklevel=2,
+        )
+        cfg.T_obs = actual_T_obs  # keep log(T) conditioning consistent across pipeline
 
     t_fine = t[:n_fine_total]
 
@@ -149,7 +165,7 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
 
     # Summary statistics + conditioning vector
     obs_stats = pipeline.gen_stats(x_dim, cfg.dt_exp)
-    log_T_obs = torch.tensor([[math.log(cfg.T_obs)]])
+    log_T_obs = torch.tensor([[math.log(cfg.T_obs)]], dtype=cfg.hw.dtype)
     obs_stats = torch.cat([obs_stats, forcing_gt.cpu(), log_T_obs], dim=-1)
     return x_dim, obs_stats, t_dim
 
@@ -188,10 +204,14 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Di
     helpers.clear_screen()
 
     # 3. ND parameter prior (stability-filtered GMM)
-    # Prior construction uses t_global_scale=2, so effective sim length is len(cfg.t)/2
-    prior_segs = max(1, math.ceil(len(cfg.t) / 2 / CHUNK_LEN))
+    # Stability is a per-parameter property — screen on a short fixed-length trajectory
+    # (STABILITY_SWEEP_ND_UNITS) rather than the full master grid. Global sweep uses
+    # half this (t_global_scale=2 inside gen_prior), local sweep uses the full t_stab.
+    n_stab_fine = int(STABILITY_SWEEP_ND_UNITS / cfg.dt_nd_min)
+    t_stab = cfg.t[:n_stab_fine]
+    prior_segs = max(1, math.ceil(n_stab_fine / CHUNK_LEN))
     nd_prior = pipeline.gen_prior(
-        model=cfg.model, t=cfg.t,
+        model=cfg.model, t=t_stab,
         global_batch_size=cfg.hw.batch_size,
         local_batch_size=(cfg.hw.batch_size // 2),
         segs=prior_segs,
@@ -219,21 +239,36 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Di
 
 
 def _build_rescale_prior(cfg: SimConfig) -> Distribution:
-    """Construct the rescaling-parameter prior from cell file bounds."""
-    # rescale_params format: {name: (val, (lo, hi))}
-    bounds = [row[1] for row in cfg.rescale_params.values()]
-    types = tuple("uniform" for _ in cfg.rescale_params)
+    """
+    Construct the rescaling-parameter prior from cell file bounds.
 
+    Scale parameters (names containing 'scale') use log-uniform — they're positive
+    and span orders of magnitude, so uniform would over-weight the high end.
+    Offset parameters use uniform — they can be negative or zero.
+    """
+    bounds = [row[1] for row in cfg.rescale_params.values()]
+    types = tuple(
+        "log-uni" if "scale" in name else "uniform"
+        for name in cfg.rescale_params.keys()
+    )
     scaling = ScalingPrior(cfg.hw.dtype, cfg.hw.device)
     return scaling.construct_prior(bounds, types)
 
 
 def _build_forcing_prior(cfg: SimConfig) -> Distribution:
-    """Construct the forcing-parameter prior from cell file bounds."""
-    # force_params_dict format: {name: (val, (lo, hi))}
-    bounds = [row[1] for row in cfg.force_params_dict.values()]
-    types = tuple("uniform" for _ in cfg.force_params_dict)
+    """
+    Construct the forcing-parameter prior from cell file bounds.
 
+    'freq' uses log-uniform — hair bundle resonances span decades of Hz, and uniform
+    over-weights the high end. All other forcing params (amp, phase, offset) use
+    uniform — amp bound can include 0 (log-uniform would fail), phase is a bounded
+    angle, offset can be negative.
+    """
+    bounds = [row[1] for row in cfg.force_params_dict.values()]
+    types = tuple(
+        "log-uni" if name == "freq" else "uniform"
+        for name in cfg.force_params_dict.keys()
+    )
     forcing = ForcingPrior(cfg.hw.dtype, cfg.hw.device)
     return forcing.construct_prior(bounds, types)
 
@@ -258,15 +293,12 @@ def build_posterior(
         return posterior, None
 
     # --- Train from scratch ---
-    # Build fixed_dict for parameter groups that are NOT inferred
-    fixed_dict = _build_fixed_dict(cfg)
-
     training_params = {
         "model": cfg.model,
         "prior": prior,
         "t": cfg.t,
         "run_size": cfg.hw.batch_size,
-        "num_runs": 300,
+        "num_runs": TRAINING_NUM_RUNS,
         "steady_idx": cfg.steady_idx,
         "dt_nd_min": cfg.dt_nd_min,
         "dt_exp": cfg.dt_exp,
@@ -278,23 +310,17 @@ def build_posterior(
         "device": cfg.hw.device,
     }
 
-    # Set up embedded network (with optional forcing conditioning)
-    force_dim = (len(cfg.force_params_dict) + 1) if "forcing" not in cfg.inferred_groups else 0  # +1 for log(T)
+    # Set up embedded network: forcing + log(T) are always in the conditioning vector
+    force_dim = len(cfg.force_params_dict) + 1  # +1 for log(T)
     input_dim = obs_stats.shape[1] - force_dim
 
-    if force_dim > 0:
-        embedded_net = embedded_network.EmbeddedNet(
-            input_dim, 3 * input_dim // 2,
-            (5 * input_dim // 2, 2 * input_dim),
-            forcing_dim=force_dim,
-            forcing_layer_dims=(force_dim * 4, force_dim * 2),
-            merge_layer_dim=2 * input_dim,
-        )
-    else:
-        embedded_net = embedded_network.EmbeddedNet(
-            input_dim, 3 * input_dim // 2,
-            (5 * input_dim // 2, 2 * input_dim),
-        )
+    embedded_net = embedded_network.EmbeddedNet(
+        input_dim, 3 * input_dim // 2,
+        (5 * input_dim // 2, 2 * input_dim),
+        forcing_dim=force_dim,
+        forcing_layer_dims=(force_dim * 4, force_dim * 2),
+        merge_layer_dim=2 * input_dim,
+    )
 
     # Wrap prior for SBI compatibility
     sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
@@ -304,7 +330,7 @@ def build_posterior(
         embedding_net=embedded_net, forcing_prior=force_prior,
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
         x_obs=obs_stats, theta_obs=cfg.ground_truth_tensor, num_rounds=1,
-        return_diagnostics=True, fixed_dict=fixed_dict,
+        return_diagnostics=True,
         batch_size=int(2 ** 7), device=cfg.hw.device,
     )
 
@@ -316,27 +342,10 @@ def build_posterior(
     return posterior, pos_diagnostics
 
 
-def _build_fixed_dict(cfg: SimConfig) -> dict | None:
-    """
-    Build a dict mapping parameter indices to fixed ground-truth values
-    for parameter groups that are NOT being inferred.
-
-    The product prior concatenates parameters as: [nd | rescale].
-    """
-    nd_dim = len(cfg.params_dict)
-    fixed = {}
-
-    # If rescale params are NOT inferred, fix them at ground-truth values
-    if "rescale" not in cfg.inferred_groups:
-        for i, (val, _bounds) in enumerate(cfg.rescale_params.values()):
-            fixed[nd_dim + i] = val
-
-    return fixed if fixed else None
-
-
 # ── Step 4: Validation ──────────────────────────────────────────────────────
-def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
-    obs_stats: torch.Tensor, force_prior: Distribution, t_dim: torch.Tensor) -> None:
+def validate(cfg: SimConfig, posterior: DirectPosterior, inferred_prior: Distribution,
+    obs_data: torch.Tensor, obs_stats: torch.Tensor, force_prior: Distribution,
+    t_dim: torch.Tensor) -> None:
     """
     Run all posterior validation steps:
       - Corner plot
@@ -344,6 +353,10 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
       - Simulation-based calibration (SBC)
       - Expected coverage
       - Eye test (MAP vs ground truth vs posterior samples)
+
+    :param inferred_prior: The actual prior used to train the posterior (ND x rescale
+                           product prior). SBC requires drawing theta_star from the
+                           prior, not from the posterior itself.
     """
     t = cfg.t
     device = cfg.hw.device
@@ -428,18 +441,23 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, obs_data: torch.Tensor,
             x_dim_sorted[start:end] = x_scale_col * x_nd_ds + x_offset_col
 
             del x_nd_bin, force_bin, x_nd_ds
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
 
     # Restore original sample order
     x_dim = x_dim_sorted[inv_sort_idx]
 
     sim_stats = pipeline.gen_stats(x_dim, cfg.dt_exp, device=device)
-    log_T_obs = torch.full((sim_stats.shape[0], 1), math.log(T_obs))
+    log_T_obs = torch.full((sim_stats.shape[0], 1), math.log(T_obs), dtype=dtype)
     sim_stats = torch.cat([sim_stats, forcing_gt_expanded.cpu(), log_T_obs], dim=-1)
     results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats)
 
     # SBC + coverage
+    # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
+    # SBC tests whether posterior(theta | x_cal) correctly ranks theta_true when
+    # (theta_true, x_cal) is drawn from the joint used to train the posterior.
     x_cal, theta_star = analysis.gen_cal_data(
-        model=cfg.model, prior=posterior, forcing_prior=force_prior,
+        model=cfg.model, prior=inferred_prior, forcing_prior=force_prior,
         t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=1000,
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
         dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
@@ -496,21 +514,23 @@ def infer_from_experiment(
     :param n_samples: Number of posterior samples to draw. Defaults to 1000.
     :return: Posterior samples, shape (n_samples, nd_dim + rescale_dim), in cell-file units.
     """
-    from .config import N_ND_MAX
-
     device = cfg.hw.device
     dtype = cfg.hw.dtype
 
-    # Unit conversions: SI -> cell file units
+    # Unit conversions: SI -> cell file units.
+    # Known forcing param SI units; fall back to no conversion (dimensionless) if unknown.
     s_to_cell = cfg.get_unit_conversion_factor("s")
-    n_to_cell = cfg.get_unit_conversion_factor("N")
-    hz_to_cell = cfg.get_unit_conversion_factor("Hz")
-
     T_obs = T_obs_s * s_to_cell
-    amp = forcing_params_si["amp"] * n_to_cell
-    freq = forcing_params_si["freq"] * hz_to_cell
-    phase = forcing_params_si["phase"]                  # dimensionless
-    offset = forcing_params_si["offset"] * n_to_cell
+
+    # Consistency check: X_obs must be sampled at 1/dt_exp with duration T_obs.
+    expected_N = int(T_obs / cfg.dt_exp)
+    if abs(X_obs.shape[-1] - expected_N) > 1:
+        warnings.warn(
+            f"X_obs length ({X_obs.shape[-1]}) doesn't match expected from T_obs_s={T_obs_s:.4f}s "
+            f"at 1/dt_exp sampling (expected ~{expected_N} points). "
+            f"Check that X_obs is sampled at dt_exp={cfg.dt_exp:.6f} (cell units).",
+            stacklevel=2,
+        )
 
     # Out-of-distribution warning: compute the minimum feasible t_scale for this T_obs.
     # The NN was only trained on batches where n_fine_total <= N_ND_MAX, i.e.
@@ -528,12 +548,21 @@ def infer_from_experiment(
                 stacklevel=2,
             )
 
-    # Build forcing tensor in the order expected by cfg.forcing_idx
+    # Build forcing tensor generically: iterate cfg.force_params_dict and apply
+    # appropriate SI->cell conversion per parameter name. Unknown names raise.
+    _FORCING_SI_UNITS = {"amp": "N", "freq": "Hz", "phase": None, "offset": "N"}
     forcing_t = torch.empty((1, len(cfg.force_params_dict)), dtype=dtype)
-    forcing_t[0, cfg.forcing_idx["amp"]] = amp
-    forcing_t[0, cfg.forcing_idx["freq"]] = freq
-    forcing_t[0, cfg.forcing_idx["phase"]] = phase
-    forcing_t[0, cfg.forcing_idx["offset"]] = offset
+    for name in cfg.force_params_dict.keys():
+        if name not in forcing_params_si:
+            raise KeyError(f"forcing_params_si missing required key '{name}' "
+                           f"(cell file expects: {list(cfg.force_params_dict.keys())})")
+        if name not in _FORCING_SI_UNITS:
+            raise ValueError(f"Unknown forcing parameter '{name}'. Known: {list(_FORCING_SI_UNITS)}. "
+                             f"Add an entry to _FORCING_SI_UNITS in infer_from_experiment.")
+        si_unit = _FORCING_SI_UNITS[name]
+        si_val = forcing_params_si[name]
+        cell_val = si_val if si_unit is None else si_val * cfg.get_unit_conversion_factor(si_unit)
+        forcing_t[0, cfg.forcing_idx[name]] = cell_val
 
     # Reshape X_obs to (1, N_obs) and compute summary statistics with dt_exp
     X_obs_batched = X_obs.to(dtype=dtype).unsqueeze(0)

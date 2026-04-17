@@ -4,6 +4,7 @@ Configuration constants, device detection, and data carriers for the SBI pipelin
 import os
 from dataclasses import dataclass, field
 from collections import OrderedDict
+from functools import cached_property
 from pathlib import Path
 
 import torch
@@ -31,9 +32,9 @@ def detect_device() -> DeviceConfig:
     dtype = torch.float32
 
     if dev.type == "cuda" and dtype == torch.float32:
-        batch_size = 2 ** 11
-    elif dev.type == "cuda" and dtype == torch.float64:
         batch_size = 2 ** 10
+    elif dev.type == "cuda" and dtype == torch.float64:
+        batch_size = 2 ** 9
     else:
         batch_size = 2 ** 6
 
@@ -73,7 +74,7 @@ K_B = 1.380649e-23  # m^2 kg s^-2 K^-1
 
 # === EXPERIMENTAL CONSTANTS (in seconds, converted to cell file units during setup) ===
 DT_EXP_S = 1e-3        # 1000 FPS camera frame interval
-T_MIN_EXP_S = 10.0     # shortest expected recording (10 s)
+T_MIN_EXP_S = 1.0      # shortest expected recording (1 s)
 T_MAX_EXP_S = 60.0     # longest expected recording (1 min)
 
 # === SIMULATION COST CONSTANTS ===
@@ -81,6 +82,16 @@ CHUNK_LEN = 100_000    # fine integration steps per segment (per-chunk memory ca
 N_ND_MAX = 300_000     # max total fine integration steps per batch (pre-filter ceiling)
 PPC_BIN_SIZE = 50      # samples per mini-batch for posterior-predictive-check simulation
 CAL_RUN_SIZE = 10      # samples per (t_scale, T) pair in SBC calibration data
+TRAINING_NUM_RUNS = 700  # number of (t_scale_k, T_k) batches per training round
+
+# === TRANSIENT (Case A: clip initial conditions settling) ===
+TRANSIENT_ND_UNITS = 100  # ND time units of transient to discard; ~20 e-folds of the slowest
+                          # bounded mode (tau_c up to ~5.0) in ND Nadrowski cell files.
+
+# === PRIOR STABILITY SCREENING ===
+STABILITY_SWEEP_ND_UNITS = 100  # ND time units used to screen parameter stability during
+                                # prior construction (global + local sweeps). Short enough
+                                # to be cheap, long enough for instabilities to manifest.
 
 # === SIMULATION CONFIG DATACLASS ===
 @dataclass
@@ -102,10 +113,9 @@ class SimConfig:
     units_dict: tuple
     si_factors: list[float]
 
-    # Time / segmentation (set by CLI after model selection)
+    # Time / segmentation (legacy fallback fields; primary time setup uses dt_exp + T_obs)
     t_max: float = None
     dt: float = None
-    steady_pct: float = None
 
     # Experimental observation parameters (in cell file time units, set during setup)
     dt_exp: float = None          # camera frame interval
@@ -115,10 +125,6 @@ class SimConfig:
 
     # Hardware
     hw: DeviceConfig = field(default_factory=detect_device)
-
-    # Which parameter groups are inferred vs. fixed during posterior sampling
-    # Options: "nd", "rescale", "forcing"
-    inferred_groups: list[str] = field(default_factory=lambda: ["nd", "rescale"])
 
     # --- Derived properties ---
     @property
@@ -139,9 +145,14 @@ class SimConfig:
         t_scale_lo, _ = self.t_scale_bounds
         return self.t_max_exp / t_scale_lo
 
-    @property
+    @cached_property
     def t(self) -> torch.Tensor:
-        """Pre-simulated ND time vector at finest resolution and longest duration."""
+        """
+        Pre-simulated ND time vector at finest resolution and longest duration.
+
+        Cached: SimConfig is effectively immutable after build_sim_config(), so we
+        allocate the 2.4M-point tensor once per config lifetime.
+        """
         if self.dt_exp is not None:
             n_steps = int(self.t_nd_max / self.dt_nd_min)
             return torch.linspace(0, self.t_nd_max, n_steps,
@@ -152,8 +163,19 @@ class SimConfig:
 
     @property
     def steady_idx(self) -> int:
-        """Index where transient ends and steady-state begins."""
-        return int(self.steady_pct * len(self.t))
+        """
+        Index where transient ends and steady-state begins.
+
+        Fixed number of fine integration steps corresponding to TRANSIENT_ND_UNITS
+        ND time units — model-intrinsic, independent of prior bounds on T or t_scale.
+        """
+        steady_idx = int(TRANSIENT_ND_UNITS / self.dt_nd_min)
+        # Safety check: transient must leave budget for at least the minimum output batch
+        assert steady_idx < N_ND_MAX, (
+            f"TRANSIENT_ND_UNITS={TRANSIENT_ND_UNITS} produces steady_idx={steady_idx} "
+            f">= N_ND_MAX={N_ND_MAX}. Reduce TRANSIENT_ND_UNITS or raise N_ND_MAX."
+        )
+        return steady_idx
 
     @property
     def ground_truth(self) -> list[float]:

@@ -1,7 +1,9 @@
 import torch
-from torch.distributions import Uniform, TransformedDistribution, ExpTransform
+from torch.distributions import Uniform
 
 from sbi.utils import MultipleIndependent
+
+from core.SBI.Priors.log_uniform import LogUniform
 
 
 class ForcingPrior:
@@ -33,7 +35,6 @@ class ForcingPrior:
             if types[i] == "uniform":
                 marginals.append(Uniform(low, high))
             elif types[i] == "log-uni":
-                base = Uniform(torch.log(low), torch.log(high))
-                marginals.append(TransformedDistribution(base, ExpTransform()))
+                marginals.append(LogUniform(low, high))
 
         return MultipleIndependent(marginals)

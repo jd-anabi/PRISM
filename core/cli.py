@@ -4,6 +4,8 @@ Interactive CLI prompts for the SBI pipeline.
 This is the ONLY module that calls input() / print() for user interaction.
 To build a GUI, replace this module with one that provides the same function signatures.
 """
+import warnings
+
 import pint
 
 from .config import (
@@ -47,16 +49,15 @@ def select_cell_file() -> str:
     return str(CELL_PATH / cell_files[file_num - 1])
 
 # ── Time / segmentation parameters ──────────────────────────────────────────
-def get_time_params() -> tuple[float, float]:
+def get_time_params() -> float:
     """
-    Prompt for observation duration and transient fraction.
+    Prompt for observation duration.
 
-    :return: (T_obs_seconds, steady_pct)
+    :return: T_obs_seconds
     """
     T_obs_s = float(input("Observation duration T_obs (seconds): "))
-    steady_pct = float(input("Percentage of data that is transient (%): ").replace("%", "")) / 100.0
     helpers.clear_screen()
-    return T_obs_s, steady_pct
+    return T_obs_s
 
 # ── Prior / posterior selection ──────────────────────────────────────────────
 def select_or_build_prior() -> tuple[str | None, bool]:
@@ -193,8 +194,24 @@ def build_sim_config() -> SimConfig:
     t_max_exp = T_MAX_EXP_S * s_to_cell
 
     # time / observation parameters
-    T_obs_s, steady_pct = get_time_params()
+    T_obs_s = get_time_params()
     T_obs = T_obs_s * s_to_cell
+
+    # Check T_obs against training range (warn if out of distribution)
+    if T_obs_s < T_MIN_EXP_S:
+        warnings.warn(
+            f"T_obs={T_obs_s:.2f}s is below the training range minimum "
+            f"T_MIN_EXP_S={T_MIN_EXP_S:.2f}s. The network has not been trained "
+            f"on recordings this short and may extrapolate poorly.",
+            stacklevel=2,
+        )
+    elif T_obs_s > T_MAX_EXP_S:
+        warnings.warn(
+            f"T_obs={T_obs_s:.2f}s exceeds the training range maximum "
+            f"T_MAX_EXP_S={T_MAX_EXP_S:.2f}s. The network has not been trained "
+            f"on recordings this long and may extrapolate poorly.",
+            stacklevel=2,
+        )
 
     return SimConfig(
         model=model,
@@ -206,7 +223,6 @@ def build_sim_config() -> SimConfig:
         force_params_dict=force_params_dict,
         units_dict=units_dict,
         si_factors=si_factors,
-        steady_pct=steady_pct,
         dt_exp=dt_exp,
         t_min_exp=t_min_exp,
         t_max_exp=t_max_exp,

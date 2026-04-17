@@ -1,6 +1,6 @@
 # Non-dimensional Initial Conditions
-x_init = -0.89
-xa_init = -2.11
+x_init = 0
+xa_init = 0
 c_init = 0.5
 
 # Non-dimensional Parameters
