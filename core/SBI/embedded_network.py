@@ -25,11 +25,11 @@ class EmbeddedNet(nn.Module):
         self.summary_net = nn.Sequential(
             nn.Linear(input_dim, layer_dims[0]),
             nn.LayerNorm(layer_dims[0]),
-            nn.ReLU(),
+            nn.GELU(),
 
             nn.Linear(layer_dims[0], layer_dims[1]),
             nn.LayerNorm(layer_dims[1]),
-            nn.ReLU(),
+            nn.GELU(),
         )
 
         if self.conditioned:
@@ -41,17 +41,17 @@ class EmbeddedNet(nn.Module):
             self.forcing_net = nn.Sequential(
                 nn.Linear(forcing_dim, forcing_layer_dims[0]),
                 nn.LayerNorm(forcing_layer_dims[0]),
-                nn.ReLU(),
+                nn.GELU(),
 
                 nn.Linear(forcing_layer_dims[0], forcing_layer_dims[1]),
                 nn.LayerNorm(forcing_layer_dims[1]),
-                nn.ReLU(),
+                nn.GELU(),
             )
 
             self.merge_net = nn.Sequential(
                 nn.Linear(layer_dims[1] + forcing_layer_dims[1], merge_layer_dim),
                 nn.LayerNorm(merge_layer_dim),
-                nn.ReLU(),
+                nn.GELU(),
 
                 nn.Linear(merge_layer_dim, output_dim),
             )

@@ -464,8 +464,8 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, inferred_prior: Distrib
         t_scale_bounds=cfg.t_scale_bounds,
         state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
     )
-    ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, device=device)
-    alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, dtype=dtype, device=device)
+    ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=100000, chunk_size=1000, device=device)
+    alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=100000, chunk_size=1000, dtype=dtype, device=device)
 
     sbc_plot = visualizers.plot_sbc(ranks, param_names=cfg.inferred_labels, m=1000, fig_size=(7, 12))
     expected_cov_plot = visualizers.plot_expected_coverage(alphas, fig_size=(7, 20))

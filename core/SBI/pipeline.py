@@ -135,7 +135,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     obs = simulator.simulate(state_dep_drift=state_dep_drift)[:, 0, :, steady_idx:].clone()
     return obs
 
-def gen_stats(x: torch.Tensor, dt: float | torch.Tensor, n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20,
+def gen_stats(x: torch.Tensor, dt: float | torch.Tensor , n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20,
               device: torch.device = torch.device('cpu'), stats_batch_size: int = 512) -> torch.Tensor:
     """
     Generate statistical features from input data using the given parameters.
