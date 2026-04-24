@@ -25,6 +25,7 @@ from . import cli
 from .Helpers import helpers, visualizers, file_manager
 from .SBI import embedded_network, pipeline, analysis
 from .SBI.Priors import sbi_prior_wrapper
+from .SBI.reparam import build_inferred_bijection, TransformedPosterior, build_rescale_bijection, _transform_device
 
 # Directories have spaces in their names, so use importlib for these imports
 _scaling_mod = importlib.import_module("core.SBI.Priors.Scaling Priors.scaling_prior")
@@ -276,26 +277,48 @@ def _build_forcing_prior(cfg: SimConfig) -> Distribution:
 # ── Step 3: Posterior construction ──────────────────────────────────────────
 def build_posterior(
     cfg: SimConfig,
-    prior: Distribution,
+    prior: Distribution,                 # physical inferred prior from build_prior
     force_prior: Distribution,
     obs_stats: torch.Tensor,
     choice: str | None,
     train_new: bool,
-) -> tuple[DirectPosterior, dict | None]:
+) -> tuple[TransformedPosterior, dict | None]:
     """
-    Load an existing posterior from disk, or train a new one with SNPE.
+    Load an existing latent DirectPosterior from disk and wrap with T, or train a new one
+    via NPE in latent space. Returns a TransformedPosterior whose .sample/.log_prob operate
+    in physical-parameter coordinates for downstream code.
+    """
+    T = build_inferred_bijection(cfg)
 
-    :return: (posterior, diagnostics_dict_or_None)
-    """
     if not train_new and choice is not None:
-        posterior = torch.load(str(POSTERIOR_PATH / choice), weights_only=False)
-        assert isinstance(posterior, DirectPosterior)
-        return posterior, None
+        posterior_latent = torch.load(str(POSTERIOR_PATH / choice), weights_only=False)
+        assert isinstance(posterior_latent, DirectPosterior)
+        return TransformedPosterior(posterior_latent, T), None
 
-    # --- Train from scratch ---
+    # --- Build a LATENT product prior for SBI to train on ---
+    # Physical prior layout: ProductPrior([nd_prior_physical, rescale_prior_physical]).
+    # Extract latent ND (the MixtureSameFamily inside the TransformedDistribution):
+    nd_prior_physical      = prior.distributions[0]      # TransformedDistribution(latent_gmm, T_nd)
+    if not isinstance(nd_prior_physical, torch.distributions.TransformedDistribution):
+        raise ValueError(
+            "Loaded ND prior is not a TransformedDistribution — it was saved with the pre-reparameterization "
+            "pipeline. Regenerate the prior with the current `gen_prior` before training a new posterior."
+        )
+    rescale_prior_physical = prior.distributions[1]      # MultipleIndependent
+    latent_nd = nd_prior_physical.base_dist              # the raw latent MixtureSameFamily
+
+    # Pushforward the physical rescale prior through T_rescale.inv (Issue 2a).
+    T_rescale = build_rescale_bijection(cfg)
+    latent_rescale = torch.distributions.TransformedDistribution(rescale_prior_physical, T_rescale.inv)
+
+    latent_inferred_prior = ProductPrior(
+        distributions=[latent_nd, latent_rescale],
+        dims=[len(cfg.params_dict), len(cfg.rescale_params)],
+    )
+
     training_params = {
         "model": cfg.model,
-        "prior": prior,
+        "prior": latent_inferred_prior,               # <-- latent
         "t": cfg.t,
         "run_size": cfg.hw.batch_size,
         "num_runs": TRAINING_NUM_RUNS,
@@ -310,8 +333,7 @@ def build_posterior(
         "device": cfg.hw.device,
     }
 
-    # Set up embedded network: forcing + log(T) are always in the conditioning vector
-    force_dim = len(cfg.force_params_dict) + 1  # +1 for log(T)
+    force_dim = len(cfg.force_params_dict) + 1
     input_dim = obs_stats.shape[1] - force_dim
 
     embedded_net = embedded_network.EmbeddedNet(
@@ -322,28 +344,31 @@ def build_posterior(
         merge_layer_dim=2 * input_dim,
     )
 
-    # Wrap prior for SBI compatibility
-    sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(prior)
+    sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(latent_inferred_prior)
 
-    posterior, pos_diagnostics = pipeline.train_nn(
+    # theta_obs is the ground-truth PHYSICAL theta; for diagnostics we pass its latent form.
+    theta_obs_latent = T.inv(cfg.ground_truth_tensor.to(_transform_device(T)))
+
+    posterior_latent, pos_diagnostics = pipeline.train_nn(
         training_params, model="maf", prior=sbi_prior,
         embedding_net=embedded_net, forcing_prior=force_prior,
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
-        x_obs=obs_stats, theta_obs=cfg.ground_truth_tensor, num_rounds=1,
+        x_obs=obs_stats, theta_obs=theta_obs_latent, num_rounds=1,
         return_diagnostics=True,
+        theta_transform=T,
         batch_size=int(2 ** 7), device=cfg.hw.device,
     )
 
-    # Save
     name = cli.prompt_save_name("posterior")
-    torch.save(posterior, str(POSTERIOR_PATH / (name + ".pt")))
+    # Save the RAW latent DirectPosterior (not the wrapped one).
+    torch.save(posterior_latent, str(POSTERIOR_PATH / (name + ".pt")))
 
-    assert isinstance(posterior, DirectPosterior)
-    return posterior, pos_diagnostics
+    assert isinstance(posterior_latent, DirectPosterior)
+    return TransformedPosterior(posterior_latent, T), pos_diagnostics
 
 
 # ── Step 4: Validation ──────────────────────────────────────────────────────
-def validate(cfg: SimConfig, posterior: DirectPosterior, inferred_prior: Distribution,
+def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, inferred_prior: Distribution,
     obs_data: torch.Tensor, obs_stats: torch.Tensor, force_prior: Distribution,
     t_dim: torch.Tensor) -> None:
     """
@@ -362,6 +387,7 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, inferred_prior: Distrib
     device = cfg.hw.device
     dtype = cfg.hw.dtype
     T_obs = cfg.T_obs
+    T = build_inferred_bijection(cfg)
 
     # Corner plot
     samples = posterior.sample((1000,), x=obs_stats.to(device))
@@ -457,11 +483,13 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, inferred_prior: Distrib
     # SBC tests whether posterior(theta | x_cal) correctly ranks theta_true when
     # (theta_true, x_cal) is drawn from the joint used to train the posterior.
     x_cal, theta_star = analysis.gen_cal_data(
-        model=cfg.model, prior=inferred_prior, forcing_prior=force_prior,
+        model=cfg.model, prior=_build_latent_prior_for_validation(cfg, inferred_prior),  # see below
+        forcing_prior=force_prior,
         t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=1000,
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
         dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
         t_scale_bounds=cfg.t_scale_bounds,
+        theta_transform=T,  # <-- NEW
         state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
     )
     ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=100000, chunk_size=1000, device=device)
@@ -488,11 +516,27 @@ def validate(cfg: SimConfig, posterior: DirectPosterior, inferred_prior: Distrib
     )
     plt.show()
 
+def _build_latent_prior_for_validation(cfg, inferred_prior):
+    """Mirror of the latent-prior construction in build_posterior, for gen_cal_data in validate."""
+    nd_prior_physical = inferred_prior.distributions[0]
+    if not isinstance(nd_prior_physical, torch.distributions.TransformedDistribution):
+        raise ValueError(
+            "Loaded ND prior is not a TransformedDistribution — it was saved with the pre-reparameterization "
+            "pipeline. Regenerate the prior with the current `gen_prior` before running validate."
+        )
+    latent_nd = nd_prior_physical.base_dist
+    T_rescale = build_rescale_bijection(cfg)
+    latent_rescale = torch.distributions.TransformedDistribution(inferred_prior.distributions[1], T_rescale.inv)
+    return ProductPrior(
+        distributions=[latent_nd, latent_rescale],
+        dims=[len(cfg.params_dict), len(cfg.rescale_params)],
+    )
+
 
 # ── Step 5: Inference on real experimental data ────────────────────────────
 def infer_from_experiment(
     cfg: SimConfig,
-    posterior: DirectPosterior,
+    posterior: DirectPosterior | TransformedPosterior,
     X_obs: torch.Tensor,
     T_obs_s: float,
     forcing_params_si: dict,

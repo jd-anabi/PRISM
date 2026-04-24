@@ -133,20 +133,6 @@ def list_dir(files_dir: str, return_list: bool = True) -> list[str] | list[None]
         return model_files
     return []
 
-def save_mix_dist(dist: torch.distributions.MixtureSameFamily, filename: str):
-    """
-    Saves the parameters of a mixture of distributions to a file, including the
-    means, covariances, and weights of the mixture components. The data is saved
-    in a serialized format using PyTorch.
-
-    :param dist: A mixture distribution of type `torch.distributions.MixtureSameFamily`.
-    :param filename: The file path where the mixture distribution should be saved.
-    :type filename: str
-    :return: None
-    """
-    data_to_save = {'means': dist.component_distribution.loc, 'covariances': dist.component_distribution.covariance_matrix, 'weights': dist.mixture_distribution.probs}
-    torch.save(data_to_save, filename)
-
 def load_experimental_data(file_path: str, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     """
     Load a 1D experimental time series from CSV or NPY.
@@ -179,28 +165,69 @@ def load_experimental_data(file_path: str, dtype: torch.dtype = torch.float32) -
 
     return torch.tensor(arr, dtype=dtype)
 
-
-def load_mix_dist(filename: str, device: torch.device = torch.device('cpu')) -> torch.distributions.MixtureSameFamily:
+def save_mix_dist(dist, filename: str):
     """
-    Loads a pre-saved mixture distribution from a file and reconstructs it using
-    torch.distributions. The file is expected to include means, covariances, and weights
-    that define a `MixtureSameFamily` distribution. This utility ensures the loaded
-    distribution is ready for further computations or sampling.
+    Serializes a (possibly transformed) ND prior.
 
-    :param filename: The path to the file containing the serialized mixture distribution.
-    :param device: The device on which the loaded data should be placed. Defaults to CPU.
-    :return: A reconstructed torch.distributions.MixtureSameFamily object representing
-        the mixture distribution.
-    :rtype: torch.distributions.MixtureSameFamily
+    If dist is TransformedDistribution wrapping a MixtureSameFamily (post-reparam fix),
+    saves the base GMM's means/covariances/weights plus the (lows, highs) that define
+    the bijection. If dist is a bare MixtureSameFamily (legacy), saves GMM only.
+    load_mix_dist discriminates on the presence of 'lows'/'highs' keys.
+    """
+    from torch.distributions.transforms import AffineTransform, ComposeTransform
+    if isinstance(dist, torch.distributions.TransformedDistribution):
+        base = dist.base_dist
+
+        # dist.transforms is a list; entries may be atomic Transforms or ComposeTransforms.
+        # Walk one level deep to find the AffineTransform inside our box bijection.
+        affine = None
+        for t in dist.transforms:
+            if isinstance(t, AffineTransform):
+                affine = t
+                break
+            if isinstance(t, ComposeTransform):
+                for inner in t.parts:
+                    if isinstance(inner, AffineTransform):
+                        affine = inner
+                        break
+                if affine is not None:
+                    break
+
+        if affine is None:
+            raise ValueError("TransformedDistribution has no AffineTransform; can't extract bounds.")
+
+        data_to_save = {
+            'means':       base.component_distribution.loc,
+            'covariances': base.component_distribution.covariance_matrix,
+            'weights':     base.mixture_distribution.probs,
+            'lows':        affine.loc,
+            'highs':       affine.loc + affine.scale,
+        }
+    else:
+        # Legacy path: raw MixtureSameFamily
+        data_to_save = {
+            'means':       dist.component_distribution.loc,
+            'covariances': dist.component_distribution.covariance_matrix,
+            'weights':     dist.mixture_distribution.probs,
+        }
+    torch.save(data_to_save, filename)
+
+def load_mix_dist(filename: str, device: torch.device = torch.device('cpu')):
+    """
+    Loads a serialized ND prior. Returns a TransformedDistribution if bounds were saved
+    (post-reparam), otherwise a raw MixtureSameFamily (legacy).
     """
     data = torch.load(filename, map_location=device)
-    means = data['means']
-    covs = data['covariances']
+    means   = data['means']
+    covs    = data['covariances']
     weights = data['weights']
-
-    # reconstruct the distribution
     comp_dist = torch.distributions.MultivariateNormal(means, covariance_matrix=covs)
-    mix_dist = torch.distributions.Categorical(probs=weights)
-    prior = torch.distributions.MixtureSameFamily(mix_dist, comp_dist)
+    mix_dist  = torch.distributions.Categorical(probs=weights)
+    latent_prior = torch.distributions.MixtureSameFamily(mix_dist, comp_dist)
 
-    return prior
+    if 'lows' in data and 'highs' in data:
+        from core.SBI.reparam import build_box_bijection
+        T_nd = build_box_bijection(data['lows'].to(device), data['highs'].to(device))
+        return torch.distributions.TransformedDistribution(latent_prior, T_nd)
+    else:
+        return latent_prior  # legacy

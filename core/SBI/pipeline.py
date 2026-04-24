@@ -9,6 +9,7 @@ from sbi.inference.posteriors import DirectPosterior
 from sbi.inference.posteriors.base_posterior import NeuralPosterior
 from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
+from torch.distributions.transforms import Transform
 
 from core.Helpers import helpers
 from core.config import CHUNK_LEN, N_ND_MAX
@@ -233,7 +234,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                       nd_dim: int, forcing_idx: dict, rescale_idx: dict,
                       dt_exp: float = None, t_min_exp: float = None, t_max_exp: float = None,
                       t_scale_bounds: tuple[float, float] = None,
-                      proposal: DirectPosterior = None,
+                      proposal: DirectPosterior = None, theta_transform: Transform | None = None,
                       fixed_dict: dict = None, state_dep_drift: bool = False, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
     Generate synthetic training data for the SBI posterior using batch-by-scale strategy.
@@ -245,6 +246,14 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     and truncated to T_nd_k = T_k / t_scale_k points, so that after rescaling every simulation
     has physical duration T_k at sampling rate 1/dt_exp. Summary statistics are computed with
     the fixed dt_exp, and log(T_k) is appended to the conditioning vector.
+
+    If theta_transform is provided, `prior` is interpreted as a LATENT prior. Samples z
+    from it, applies theta_transform(z) to get physical θ for the simulator, and stores
+    the latent z as the training target. The override of t_scale to the batch-level value
+    is performed in physical space, after which the latent is recomputed via
+    theta_transform.inv so the stored z corresponds exactly to what the simulator saw.
+
+    If theta_transform is None, `prior` is physical and the legacy path is taken.
 
     :param model: Name of the simulation model (e.g. "nd nadrowski", "hopf").
     :param prior: Prior distribution over inferred parameters (ND x rescale product prior).
@@ -266,6 +275,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     :param t_max_exp: Longest experimental recording duration (seconds).
     :param t_scale_bounds: (lo, hi) bounds on the t_scale rescaling parameter.
     :param proposal: Proposal distribution for SNPE rounds 2+. If None, samples from prior.
+    :param theta_transform: Optional transformation function for physical parameters.
     :param fixed_dict: Optional dict mapping ND parameter indices to fixed values for
                        conditional posterior estimation.
     :param state_dep_drift: Whether the model uses state-dependent drift.
@@ -325,53 +335,60 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 
     with torch.no_grad():
         for batch_k in tqdm(range(n_runs), desc="Generating training data", leave=False):
-            # --- Batch-level scale and duration ---
+            # --- Batch-level scale and duration (unchanged) ---
             t_scale_k = batch_t_scales[batch_k].item()
             T_k = batch_Ts[batch_k].item()
-
-            # Derived ND quantities for this batch
             T_nd_k = T_k / t_scale_k
             dt_nd_k = dt_exp / t_scale_k
-
-            # Subsample factor and number of output points
             subsample_factor = max(1, round(dt_nd_k / dt_nd_min))
             N_points_k = int(T_nd_k / dt_nd_k)
-
-            # Fine-resolution time vector: enough points to cover transient + output
-            # (pre-filter guarantees n_fine_total <= N_ND_MAX, no clipping needed)
             n_fine_total = steady_idx + N_points_k * subsample_factor
             t_fine = t[:n_fine_total]
-
-            # Per-batch segmentation: chunk the simulation into CHUNK_LEN-sized pieces
             n_segs_k = max(1, math.ceil(n_fine_total / CHUNK_LEN))
 
-            # 1. Sample inferred params (ND + rescale) and forcing params
-            curr_thetas = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
-            curr_thetas_nd = curr_thetas[:, :nd_dim]
-            curr_thetas_rescale = curr_thetas[:, nd_dim:]
+            # 1. Sample inferred params. If theta_transform given, sampling_dist is latent.
+            curr_thetas_raw = sampling_dist.sample((run_size,)).to(device=device, dtype=dtype)
+            if theta_transform is not None:
+                # prior is latent; lift to physical for the simulator
+                curr_thetas_phys = theta_transform(curr_thetas_raw)
+            else:
+                curr_thetas_phys = curr_thetas_raw
+
+            curr_thetas_nd      = curr_thetas_phys[:, :nd_dim]
+            curr_thetas_rescale = curr_thetas_phys[:, nd_dim:]
             curr_thetas_forcing = forcing_prior.sample((run_size,)).to(device=device, dtype=dtype)
 
-            # Override t_scale to batch-level value (all sims in batch share same scale)
+            # Override t_scale to the batch-level value (in PHYSICAL space)
             curr_thetas_rescale[:, rescale_idx["t_scale"]] = t_scale_k
 
-            # 2. Build nondimensional force tensor at fine resolution
-            force = build_nondim_sin_force_tensor(curr_thetas_forcing, t_fine, curr_thetas_rescale, forcing_idx, rescale_idx)
+            # Recompute the latent to reflect the override; this is the training target.
+            if theta_transform is not None:
+                curr_thetas_latent = theta_transform.inv(curr_thetas_phys)
+            else:
+                curr_thetas_latent = curr_thetas_phys
 
-            # 3. Simulate at fine dt_nd_min (stable for EM), then downsample to batch resolution
-            x_nd_fine = gen_obs(model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
-                                force=force, n_segs=n_segs_k, steady_idx=steady_idx,
-                                fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-                                batch_size=run_size, dtype=dtype, device=device)[0, :, :]
+            # 2. Build nondimensional force tensor at fine resolution (uses PHYSICAL rescale)
+            force = build_nondim_sin_force_tensor(
+                curr_thetas_forcing, t_fine, curr_thetas_rescale, forcing_idx, rescale_idx
+            )
+
+            # 3. Simulate with physical ND params
+            x_nd_fine = gen_obs(
+                model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
+                force=force, n_segs=n_segs_k, steady_idx=steady_idx,
+                fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+                batch_size=run_size, dtype=dtype, device=device,
+            )[0, :, :]
             x_nd = x_nd_fine[:, ::subsample_factor][:, :N_points_k]
             del x_nd_fine, force
 
-            # 4. Redimensionalize output
-            x_scale = curr_thetas_rescale[:, rescale_idx["x_scale"]].unsqueeze(1)
+            # 4. Redimensionalize (uses PHYSICAL rescale)
+            x_scale  = curr_thetas_rescale[:, rescale_idx["x_scale"]].unsqueeze(1)
             x_offset = curr_thetas_rescale[:, rescale_idx["x_offset"]].unsqueeze(1)
             x_dim = helpers.rescale(x_nd, x_scale, x_offset)
             del x_nd
 
-            # 5. Compute stats on dimensional data with fixed dt_exp, append conditioning
+            # 5. Stats + conditioning (unchanged)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 training_stats = gen_stats(x_dim.cpu(), dt_exp, device=device)
@@ -379,19 +396,18 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 training_stats = torch.cat((training_stats, curr_thetas_forcing.cpu(), log_T_k_tensor), dim=-1)
                 training_data.append(training_stats)
 
-            # 6. Collect inferred params (ND + rescale) as targets
-            thetas.append(curr_thetas.cpu())
+            # 6. Collect LATENT targets (not physical)
+            thetas.append(curr_thetas_latent.cpu())
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 
     training_data_tensor = torch.cat(training_data, dim=0)
     thetas_tensor = torch.cat(thetas, dim=0)
-
     return training_data_tensor, thetas_tensor
 
 def train_nn(training_params: dict, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
              forcing_prior: torch.distributions.Distribution, nd_dim: int, forcing_idx: dict, rescale_idx: dict,
-             x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_rounds: int = 1, return_diagnostics: bool = False,
+             x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_rounds: int = 1, return_diagnostics: bool = False, theta_transform: Transform | None = None,
              fixed_dict: dict = None, batch_size: int = 128, device: torch.device = torch.device('cpu')) -> DirectPosterior | tuple[DirectPosterior, dict]:
     """
     Trains a neural posterior distribution using either Neural Posterior Estimation (NPE) or Sequential Neural Posterior
@@ -435,13 +451,19 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
 
     for _ in tqdm(range(num_rounds), desc=f"Training neural posterior", leave=False):
         # train the density estimator
-        data, thetas = gen_training_data(training_params["model"], training_params["prior"], forcing_prior, training_params["t"],
-                                         training_params["run_size"], training_params["num_runs"],
-                                         training_params["steady_idx"], training_params["dt_nd_min"], nd_dim, forcing_idx, rescale_idx,
-                                         dt_exp=training_params["dt_exp"], t_min_exp=training_params["t_min_exp"],
-                                         t_max_exp=training_params["t_max_exp"], t_scale_bounds=training_params["t_scale_bounds"],
-                                         proposal=proposal, fixed_dict=fixed_dict, state_dep_drift=training_params.get("state_dep_drift", False),
-                                         dtype=training_params["dtype"], device=training_params["device"])
+        data, thetas = gen_training_data(
+            training_params["model"], training_params["prior"], forcing_prior, training_params["t"],
+            training_params["run_size"], training_params["num_runs"],
+            training_params["steady_idx"], training_params["dt_nd_min"],
+            nd_dim, forcing_idx, rescale_idx,
+            dt_exp=training_params["dt_exp"], t_min_exp=training_params["t_min_exp"],
+            t_max_exp=training_params["t_max_exp"], t_scale_bounds=training_params["t_scale_bounds"],
+            proposal=proposal,
+            theta_transform=theta_transform,
+            fixed_dict=fixed_dict,
+            state_dep_drift=training_params.get("state_dep_drift", False),
+            dtype=training_params["dtype"], device=training_params["device"],
+        )
 
         # filter data
         nan_mask = torch.isfinite(data).all(dim=1)

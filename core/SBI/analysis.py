@@ -1,8 +1,10 @@
 import torch
 from sbi.inference.posteriors import DirectPosterior
+from torch.distributions.transforms import Transform
 
 from core.SBI import pipeline
 from core.config import CAL_RUN_SIZE
+from core.SBI.reparam import _transform_device
 
 # === POSTERIOR PREDICTIVE CHECK ===
 def posterior_predictive_check(s_obs: torch.Tensor, s_simulated: torch.Tensor) -> dict:
@@ -53,12 +55,17 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
                  t: torch.Tensor, steady_idx: int, dt_nd_min: float, n_cal: int,
                  nd_dim: int, forcing_idx: dict, rescale_idx: dict,
                  dt_exp: float = None, t_min_exp: float = None, t_max_exp: float = None,
-                 t_scale_bounds: tuple[float, float] = None,
+                 t_scale_bounds: tuple[float, float] = None, theta_transform: Transform | None = None,
                  fixed_dict: dict = None, state_dep_drift: bool = False,
                  dtype: torch.dtype = torch.float32,
                  device: torch.device = torch.device('cpu')) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Generates calibration data and filtered parameters for model training based on the provided input parameters.
+
+    If theta_transform is provided, `prior` is LATENT. Internally gen_training_data samples
+    z, simulates via T(z), and returns latent z as theta_star. This function then applies
+    theta_transform to convert theta_star back to physical coordinates, so SBC/coverage
+    can compare it directly against the physical-space TransformedPosterior.
 
     :param model: Name of the model to evaluate. Must be provided as a string.
     :param prior: Distribution object representing the prior over the model parameters.
@@ -76,26 +83,31 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
     :return: A tuple containing filtered calibration data (torch.Tensor) and corresponding parameters
              (torch.Tensor) that exclude invalid simulations.
     """
-    # Split calibration into many small batches so (t_scale, T) varies across samples.
-    # Each batch in gen_training_data shares one (t_scale_k, T_k) pair, so we want many
-    # batches to properly validate SBC/coverage across the joint (t_scale, T) prior.
     cal_run_size = min(CAL_RUN_SIZE, n_cal)
     cal_n_runs = max(1, n_cal // cal_run_size)
 
-    # generate calibration data and parameters
-    cal_data, theta_star = pipeline.gen_training_data(model, prior, forcing_prior, t, cal_run_size, cal_n_runs,
-                                                      steady_idx, dt_nd_min,
-                                                      nd_dim, forcing_idx, rescale_idx,
-                                                      dt_exp=dt_exp, t_min_exp=t_min_exp,
-                                                      t_max_exp=t_max_exp, t_scale_bounds=t_scale_bounds,
-                                                      proposal=None,
-                                                      fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-                                                      dtype=dtype, device=device)
+    cal_data, theta_star = pipeline.gen_training_data(
+        model, prior, forcing_prior, t, cal_run_size, cal_n_runs,
+        steady_idx, dt_nd_min, nd_dim, forcing_idx, rescale_idx,
+        dt_exp=dt_exp, t_min_exp=t_min_exp, t_max_exp=t_max_exp,
+        t_scale_bounds=t_scale_bounds, proposal=None,
+        theta_transform=theta_transform,  # <-- NEW
+        fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+        dtype=dtype, device=device,
+    )
 
-    # filter out invalid simulations
     valid = torch.isfinite(cal_data).all(dim=1) & (torch.abs(cal_data) < 1e15).all(dim=1)
+    cal_data = cal_data[valid]
+    theta_star_latent = theta_star[valid]
 
-    return cal_data[valid], theta_star[valid]
+    if theta_transform is not None:
+        # Convert latent theta_star to physical for downstream comparison.
+        # The transform lives on cfg.hw.device; move cpu tensor there, apply, move back.
+        t_device = _transform_device(theta_transform)
+        theta_star_phys = theta_transform(theta_star_latent.to(t_device)).cpu()
+        return cal_data, theta_star_phys
+    else:
+        return cal_data, theta_star_latent
 
 
 def compute_sbc_ranks(posterior: DirectPosterior, theta_star: torch.Tensor, x_calibration: torch.Tensor,

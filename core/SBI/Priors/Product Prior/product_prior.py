@@ -14,7 +14,7 @@ class ProductPrior(Distribution):
         self.distributions = distributions
         self.dims = dims
         self._total_dim = sum(dims)
-        super().__init__()
+        super().__init__(event_shape=torch.Size([self._total_dim]))
 
     def sample(self, sample_shape: torch.Size = torch.Size()) -> torch.Tensor:
         samples = [d.sample(sample_shape) for d in self.distributions]

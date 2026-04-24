@@ -1,10 +1,13 @@
 import numpy as np
 import torch
 import hdbscan
+
 from sklearn.mixture import GaussianMixture
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 from abc import ABC, abstractmethod
+from torch.distributions import TransformedDistribution
+from core.SBI.reparam import build_box_bijection
 
 class Prior(ABC):
     def __init__(self, dtype: torch.dtype = torch.float32,device: torch.device = torch.device('cpu')):
@@ -12,36 +15,73 @@ class Prior(ABC):
         self.device = device
 
     # --- PUBLIC METHODS --- #
-    def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list[tuple],
-                        t_global_scale: int = 1, num_iterations: int = 25, steady: bool = True, n_max: int = 200000, step: float = 0.01,
-                        state_dep_drift: bool = False) -> torch.distributions.MixtureSameFamily:
+    def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int,
+                        segs: int, prior_bounds: list[tuple], t_global_scale: int = 1, num_iterations: int = 25,
+                        steady: bool = True, n_max: int = 200000, step: float = 0.01,
+                        state_dep_drift: bool = False) -> TransformedDistribution:
+        """
+        Build a stability-screened prior over ND parameters.
+
+        Flood-fills the stable manifold (global Sobol sweep + local random-walk sweep),
+        clusters the resulting point cloud in LATENT space (via T.inv), fits a GMM on
+        those latent points, and returns a TransformedDistribution that pushes the latent
+        GMM forward into the physical box via per-parameter scaled sigmoid.
+
+        The resulting prior has support exactly the cell-file box — no tails leaking into
+        nonphysical θ. HDBSCAN's island topology and the GMM's covariance structure are
+        preserved; they just live in unbounded latent coordinates.
+        """
         n_sims = global_batch_size * num_iterations
 
-        # do global sweep and find number of "islands"
-        stable_params = self._global_map(t[:(t.shape[0] // t_global_scale)], n_params, prior_bounds, segs, n_sims, num_iterations, steady, state_dep_drift)
+        # Global sweep: broad Sobol census of the physical box
+        stable_params = self._global_map(
+            t[:(t.shape[0] // t_global_scale)], n_params, prior_bounds, segs,
+            n_sims, num_iterations, steady, state_dep_drift,
+        )
 
-        # do local sweep
-        accepted_params = np.array(self._local_map(t, stable_params, local_batch_size, n_params, n_max, step, segs, steady, state_dep_drift))
+        # Local sweep: random-walk flood-fill of the stable manifold
+        accepted_params = np.array(self._local_map(
+            t, stable_params, local_batch_size, n_params, n_max, step, segs,
+            steady, state_dep_drift,
+        ))
 
+        # --- Build the ND bijection from the same bounds the sweep used ---
+        lows = torch.tensor([b[0] for b in prior_bounds], dtype=self.dtype, device=self.device)
+        highs = torch.tensor([b[1] for b in prior_bounds], dtype=self.dtype, device=self.device)
+        T_nd = build_box_bijection(lows, highs)
+
+        # --- Map accepted physical points to latent space before clustering + GMM fit ---
+        # eps-clamp handles the degenerate case where a sweep produced a sample exactly on
+        # the box boundary: sigmoid^-1(0) = -inf and sigmoid^-1(1) = +inf would blow up.
+        accepted_t = torch.tensor(accepted_params, dtype=self.dtype, device=self.device)
+        eps = 1e-6
+        boxed = torch.clamp(
+            accepted_t,
+            min=lows + eps * (highs - lows),
+            max=highs - eps * (highs - lows),
+        )
+        latent_params = T_nd.inv(boxed).cpu().numpy()  # (N, d) unbounded
+
+        # --- Cluster in latent space (still StandardScaled for HDBSCAN's density metric) ---
         scaler = StandardScaler()
-        stable_params_scaled = scaler.fit_transform(accepted_params)
+        latent_scaled = scaler.fit_transform(latent_params)
         clusterer = hdbscan.HDBSCAN(min_cluster_size=50, min_samples=10)
-        labels = clusterer.fit_predict(stable_params_scaled)
+        labels = clusterer.fit_predict(latent_scaled)
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         if n_clusters < 1:
             print('No clusters found. Defaulting to 1 cluster')
             n_clusters = 1
         else:
-            print(f'Found {n_clusters} clusters')
+            print(f'Found {n_clusters} clusters (in latent space)')
 
-        # safety check
-        if accepted_params.shape[0] < n_clusters:
+        if latent_params.shape[0] < n_clusters:
             raise ValueError(
-                f"Not enough stable parameter sets ({accepted_params.shape[0]}) to fit {n_clusters} GMM components")
+                f"Not enough stable parameter sets ({latent_params.shape[0]}) to fit {n_clusters} GMM components"
+            )
 
-        # finally construct prior using Gaussian-Mixture Model'
-        progress_bar = tqdm(total=5, desc="Constructing prior...")
-        gmm = GaussianMixture(n_components=n_clusters, covariance_type='full').fit(accepted_params)
+        # --- Fit GMM on UNSCALED latent points (the GMM captures raw latent-space density) ---
+        progress_bar = tqdm(total=5, desc="Constructing latent prior...")
+        gmm = GaussianMixture(n_components=n_clusters, covariance_type='full').fit(latent_params)
         progress_bar.update()
         means = torch.tensor(gmm.means_, dtype=self.dtype, device=self.device)
         cov = torch.tensor(gmm.covariances_, dtype=self.dtype, device=self.device)
@@ -51,11 +91,12 @@ class Prior(ABC):
         progress_bar.update()
         mix_dist = torch.distributions.Categorical(probs=weights)
         progress_bar.update()
-        prior = torch.distributions.MixtureSameFamily(mix_dist, comp_dist)
+        latent_prior = torch.distributions.MixtureSameFamily(mix_dist, comp_dist)
         progress_bar.update()
         progress_bar.close()
 
-        return prior
+        # --- Wrap as physical-space prior: sample() returns physical θ in the box ---
+        return TransformedDistribution(latent_prior, T_nd)
 
     # --- PRIVATE METHODS --- #
     @abstractmethod

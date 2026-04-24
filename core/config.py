@@ -62,7 +62,7 @@ NADROWSKI_LABELS = [r"$\lambda$", r"$\lambda_y$", r"$\tau$", r"$k_{gs}$", r"$k_{
                     r"$d$", r"$f_{max}$", r"$c_0$", r"$c_m$", r"$S$",
                     r"$n$", r"$\Delta E$", r"$T$", r"$T_{eff}$", r"$\tau_c$"]
 ND_NADROWSKI_LABELS = [r"$\kappa$", r"$\lambda$", r"$f_{\text{max}}$", r"$\tau$", r"$\tau_c$",
-                       r"$c_0$", r"$S$", r"$\Delta E$", r"$\beta", r"$n$", r"$T$"]
+                       r"$c_0$", r"$S$", r"$\Delta E$", r"$\beta$", r"$n$", r"$T$"]
 
 VALID_MODELS = ["DIMENSIONAL", "NON-DIMENSIONAL", "NADROWSKI", "ND NADROWSKI", "HOPF"]
 VALID_LABELS = [DIM_LABELS, ND_LABELS, NADROWSKI_LABELS, ND_NADROWSKI_LABELS, HOPF_LABELS]
@@ -89,7 +89,7 @@ TRANSIENT_ND_UNITS = 100  # ND time units of transient to discard; ~20 e-folds o
                           # bounded mode (tau_c up to ~5.0) in ND Nadrowski cell files.
 
 # === PRIOR STABILITY SCREENING ===
-STABILITY_SWEEP_ND_UNITS = 100  # ND time units used to screen parameter stability during
+STABILITY_SWEEP_ND_UNITS = 1000  # ND time units used to screen parameter stability during
                                 # prior construction (global + local sweeps). Short enough
                                 # to be cheap, long enough for instabilities to manifest.
 
