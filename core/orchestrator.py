@@ -165,7 +165,7 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
     t_dim = t_dim.unsqueeze(0)  # (1, N_obs)
 
     # Summary statistics + conditioning vector
-    obs_stats = pipeline.gen_stats(x_dim, cfg.dt_exp)
+    obs_stats = pipeline.gen_stats(x_dim, cfg.dt_exp, device=cfg.hw.device)
     log_T_obs = torch.tensor([[math.log(cfg.T_obs)]], dtype=cfg.hw.dtype)
     obs_stats = torch.cat([obs_stats, forcing_gt.cpu(), log_T_obs], dim=-1)
     return x_dim, obs_stats, t_dim
@@ -350,7 +350,7 @@ def build_posterior(
     theta_obs_latent = T.inv(cfg.ground_truth_tensor.to(_transform_device(T)))
 
     posterior_latent, pos_diagnostics = pipeline.train_nn(
-        training_params, model="maf", prior=sbi_prior,
+        training_params, model="nsf", prior=sbi_prior,
         embedding_net=embedded_net, forcing_prior=force_prior,
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
         x_obs=obs_stats, theta_obs=theta_obs_latent, num_rounds=1,
@@ -492,8 +492,8 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
         theta_transform=T,  # <-- NEW
         state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
     )
-    ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=100000, chunk_size=1000, device=device)
-    alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=100000, chunk_size=1000, dtype=dtype, device=device)
+    ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, chunk_size=100, device=device)
+    alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, chunk_size=100, dtype=dtype, device=device)
 
     sbc_plot = visualizers.plot_sbc(ranks, param_names=cfg.inferred_labels, m=1000, fig_size=(7, 12))
     expected_cov_plot = visualizers.plot_expected_coverage(alphas, fig_size=(7, 20))
@@ -610,7 +610,7 @@ def infer_from_experiment(
 
     # Reshape X_obs to (1, N_obs) and compute summary statistics with dt_exp
     X_obs_batched = X_obs.to(dtype=dtype).unsqueeze(0)
-    obs_stats = pipeline.gen_stats(X_obs_batched, cfg.dt_exp)
+    obs_stats = pipeline.gen_stats(X_obs_batched, cfg.dt_exp, device=cfg.hw.device)
 
     # Build conditioning vector: [S(X_obs), forcing, log(T_obs)]
     log_T_obs = torch.tensor([[math.log(T_obs)]], dtype=dtype)

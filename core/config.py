@@ -82,7 +82,7 @@ CHUNK_LEN = 100_000    # fine integration steps per segment (per-chunk memory ca
 N_ND_MAX = 300_000     # max total fine integration steps per batch (pre-filter ceiling)
 PPC_BIN_SIZE = 50      # samples per mini-batch for posterior-predictive-check simulation
 CAL_RUN_SIZE = 10      # samples per (t_scale, T) pair in SBC calibration data
-TRAINING_NUM_RUNS = 500  # number of (t_scale_k, T_k) batches per training round
+TRAINING_NUM_RUNS = 2000  # number of (t_scale_k, T_k) batches per training round
 
 # === TRANSIENT (Case A: clip initial conditions settling) ===
 TRANSIENT_ND_UNITS = 100  # ND time units of transient to discard; ~20 e-folds of the slowest

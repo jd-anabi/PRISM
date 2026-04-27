@@ -392,7 +392,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 training_stats = gen_stats(x_dim.cpu(), dt_exp, device=device)
-                log_T_k_tensor = torch.full((run_size, 1), math.log(T_k))
+                log_T_k_tensor = torch.full((run_size, 1), math.log(T_k), dtype=dtype)
                 training_stats = torch.cat((training_stats, curr_thetas_forcing.cpu(), log_T_k_tensor), dim=-1)
                 training_data.append(training_stats)
 

@@ -456,8 +456,9 @@ class SummaryStatistics:
             features[:, 2] = torch.zeros(batch_size, device=self.device, dtype=self.dtype)
             return features
 
-        idx_i = torch.randint(0, max_idx, (n_pairs,), device=self.device)
-        idx_j = torch.randint(0, max_idx, (n_pairs,), device=self.device)
+        g = torch.Generator(device=self.device).manual_seed(int(1e6))
+        idx_i = torch.randint(0, max_idx, (n_pairs,), device=self.device, generator=g)
+        idx_j = torch.randint(0, max_idx, (n_pairs,), device=self.device, generator=g)
 
         # Build templates of length m and m+1
         # Shape: (batch_size, n_pairs, m) and (batch_size, n_pairs, m+1)
@@ -496,8 +497,9 @@ class SummaryStatistics:
         epsilon = epsilon_factor * torch.std(self.x, dim=-1, keepdim=True)
 
         # Random pairs
-        idx_i = torch.randint(0, n, (n_pairs,), device=self.device)
-        idx_j = torch.randint(0, n, (n_pairs,), device=self.device)
+        g = torch.Generator(device=self.device).manual_seed(int(2e6))
+        idx_i = torch.randint(0, n, (n_pairs,), device=self.device, generator=g)
+        idx_j = torch.randint(0, n, (n_pairs,), device=self.device, generator=g)
 
         # Values at random indices
         x_i = self.x[:, idx_i]  # Shape: (batch_size, n_pairs)
