@@ -69,7 +69,7 @@ def run(cfg: SimConfig):
 
     # 5. Inference on real experimental data (optional)
     if cli.select_or_skip_inference():
-        data_path, T_obs_s, forcing_params_si = cli.get_inference_inputs()
+        data_path, T_obs_s, forcing_params_si = cli.get_inference_inputs(list(cfg.force_params_dict.keys()))
         X_obs = file_manager.load_experimental_data(data_path, dtype=cfg.hw.dtype)
         samples = infer_from_experiment(
             cfg, posterior, X_obs, T_obs_s, forcing_params_si, n_samples=1000,
@@ -594,7 +594,7 @@ def infer_from_experiment(
 
     # Build forcing tensor generically: iterate cfg.force_params_dict and apply
     # appropriate SI->cell conversion per parameter name. Unknown names raise.
-    _FORCING_SI_UNITS = {"amp": "N", "freq": "Hz", "phase": None, "offset": "N"}
+    _FORCING_SI_UNITS = {"amp": "N", "amp_y": "N", "freq": "Hz", "phase": None, "offset": "N"}
     forcing_t = torch.empty((1, len(cfg.force_params_dict)), dtype=dtype)
     for name in cfg.force_params_dict.keys():
         if name not in forcing_params_si:

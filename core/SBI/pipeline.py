@@ -13,27 +13,21 @@ from torch.distributions.transforms import Transform
 
 from core.Helpers import helpers
 from core.config import CHUNK_LEN, N_ND_MAX
-from .Priors import dim_prior, nd_prior, hopf_prior, nadrowski_prior, nd_nadrowski_prior
-from core.Simulator import dim_simulator, nd_simulator, nadrowski_simulator, nd_nadrowski_simulator, hopf_simulator
+from .Priors import bp_prior, hopf_prior, nadrowski_prior
+from core.Simulator import bp_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics
 
-VALID_SIMS: dict = {"dimensional": dim_simulator.DimSimulator,
-                      "non-dimensional": nd_simulator.NDSimulator,
-                      "nadrowski": nadrowski_simulator.NadrowskiSimulator,
-                      "nd nadrowski": nd_nadrowski_simulator.NDNadrowskiSimulator,
-                      "hopf": hopf_simulator.HopfSimulator}
+VALID_SIMS: dict = {"bp":        bp_simulator.BPSimulator,
+                    "nadrowski": nadrowski_simulator.NadrowskiSimulator,
+                    "hopf":      hopf_simulator.HopfSimulator}
 
-VALID_PRIORS: dict = {"dimensional": dim_prior.DimPrior,
-                      "non-dimensional": nd_prior.NDPrior,
+VALID_PRIORS: dict = {"bp":        bp_prior.BPPrior,
                       "nadrowski": nadrowski_prior.NadrowskiPrior,
-                      "nd nadrowski": nd_nadrowski_prior.NDNadrowskiPrior,
-                      "hopf": hopf_prior.HopfPrior}
+                      "hopf":      hopf_prior.HopfPrior}
 
-INIT_SHAPES: dict = {"dimensional":     (2, 3),
-                     "non-dimensional": (2, 3),
-                     "nadrowski":       (2, 1),
-                     "nd nadrowski":    (2, 1),
-                     "hopf":            (2, 0)}
+INIT_SHAPES: dict = {"bp":        (2, 3),
+                     "nadrowski": (2, 1),
+                     "hopf":      (2, 0)}
 
 def build_nondim_sin_force_tensor(
     forcing_params: torch.Tensor,
@@ -53,10 +47,17 @@ def build_nondim_sin_force_tensor(
     :param t_nd: Non-dimensional time vector, shape (T,).
     :param rescale_params: Rescaling parameter values, shape (batch, n_rescale).
     :param forcing_idx: Maps forcing param names to column indices in forcing_params,
-                        e.g. {"amp": 0, "freq": 1, "phase": 2, "offset": 3}.
+                        e.g. {"amp": 0, "freq": 1, "phase": 2, "offset": 3}. If "amp_y"
+                        is present, a second forcing channel is built sharing freq, phase,
+                        and offset with the x-channel but using its own amplitude.
     :param rescale_idx: Maps rescale param names to column indices in rescale_params,
                         e.g. {"t_scale": 3, "t_offset": 2, "f_scale": 7, "f_offset": 6}.
-    :return: Non-dimensional force tensor, shape (batch, T).
+                        If "f_scale" is absent (Hopf-style nondim), f_scale is derived
+                        as x_scale / t_scale and f_offset is taken as 0 — both follow
+                        algebraically from F_ND = F_dim / (l * omega_0) with l = x_scale
+                        and 1/omega_0 = t_scale.
+    :return: Non-dimensional force tensor, shape (batch, n_force_channels, T) where
+             n_force_channels = 2 if "amp_y" in forcing_idx else 1.
     """
     # extract forcing params as (batch, 1) for broadcasting against (1, T)
     amp    = forcing_params[:, forcing_idx["amp"]].unsqueeze(1)
@@ -67,16 +68,36 @@ def build_nondim_sin_force_tensor(
     # extract rescale params as (batch, 1)
     t_scale  = rescale_params[:, rescale_idx["t_scale"]].unsqueeze(1)
     t_offset = rescale_params[:, rescale_idx["t_offset"]].unsqueeze(1)
-    f_scale  = rescale_params[:, rescale_idx["f_scale"]].unsqueeze(1)
-    f_offset = rescale_params[:, rescale_idx["f_offset"]].unsqueeze(1)
+    if "f_scale" in rescale_idx:
+        f_scale  = rescale_params[:, rescale_idx["f_scale"]].unsqueeze(1)
+        f_offset = rescale_params[:, rescale_idx["f_offset"]].unsqueeze(1)
+    else:
+        # Hopf-style nondim: F_ND = F_dim / (l * omega_0) -> f_scale = x_scale / t_scale,
+        # f_offset = 0. Cell file omits f_scale/f_offset from the rescale block since
+        # they're algebraic combinations of the inferred length and time scales, not
+        # independent inferred dimensions.
+        x_scale  = rescale_params[:, rescale_idx["x_scale"]].unsqueeze(1)
+        f_scale  = x_scale / t_scale
+        f_offset = torch.zeros_like(f_scale)
 
     # t_nd is (T,) -> (1, T) for broadcasting
     t = t_nd.unsqueeze(0)
 
-    # nd -> dim time, then evaluate dimensional force, then dim -> nd force
-    t_dim = helpers.rescale(t, t_scale, t_offset) # (batch, T)
-    f_dim = amp * torch.sin(2 * np.pi * freq * t_dim + phase) + offset  # (batch, T)
-    return (f_dim - f_offset) / f_scale # (batch, T)
+    # nd -> dim time, then evaluate the shared sinusoidal carrier
+    t_dim = helpers.rescale(t, t_scale, t_offset)             # (batch, T)
+    sin_term = torch.sin(2 * np.pi * freq * t_dim + phase)    # (batch, T)
+
+    # x-channel: dim -> nd force
+    f_x_nd = (amp * sin_term + offset - f_offset) / f_scale   # (batch, T)
+
+    if "amp_y" in forcing_idx:
+        # y-channel shares freq, phase, offset, f_scale, f_offset with x;
+        # only amp differs. Used by ND Hopf where the latent y also gets forcing.
+        amp_y = forcing_params[:, forcing_idx["amp_y"]].unsqueeze(1)
+        f_y_nd = (amp_y * sin_term + offset - f_offset) / f_scale
+        return torch.stack([f_x_nd, f_y_nd], dim=1)           # (batch, 2, T)
+
+    return f_x_nd.unsqueeze(1)                                # (batch, 1, T)
 
 def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor,
             n_segs: int, steady_idx: int, fixed_dict: dict = None, state_dep_drift: bool = False,
@@ -89,7 +110,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     The specified simulator is used to simulate observations, and the processed observation data
     is returned.
 
-    :param model: The type of model to use. Must be one of ["dimensional", "non-dimensional", "nadrowski", "hopf"].
+    :param model: The type of model to use. Must be one of ["bp", "nadrowski", "hopf"].
     :param params: Tensor containing simulation parameters. The first dimension must match the given batch size.
     :param t: Tensor specifying the time points for the simulation. Its data type and device are set during processing.
     :param inits: Tensor containing initial conditions for the simulation. The first dimension must match the batch size.
@@ -137,7 +158,7 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     return obs
 
 def gen_stats(x: torch.Tensor, dt: float | torch.Tensor , n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20,
-              device: torch.device = torch.device('cpu'), stats_batch_size: int = 512) -> torch.Tensor:
+              device: torch.device = torch.device('cpu'), stats_batch_size: int = 256) -> torch.Tensor:
     """
     Generate statistical features from input data using the given parameters.
 
@@ -186,13 +207,13 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
     Generates a prior distribution based on the given model and parameters.
 
     The function constructs a prior distribution using the specified model type
-    and parameters. It supports different models, including "Dimensional",
-    "Non-dimensional", and "Hopf". For the "Nadrowski" model or any invalid model
-    input, it raises a ValueError. The prior generation process involves a series
-    of calculations and iterations executed without gradient computation.
+    and parameters. It supports different models, including "BP", "Nadrowski",
+    and "Hopf". For any invalid model input, it raises a ValueError. The prior
+    generation process involves a series of calculations and iterations executed
+    without gradient computation.
 
     :param model: Specifies the type of model to use for prior generation. Accepted
-                  values include "Dimensional", "Non-dimensional", and "Hopf".
+                  values include "BP", "Nadrowski", and "Hopf".
     :param t: A tensor representing the input time vector used in the prior
               construction process.
     :param global_batch_size: Global batch size to be considered during the prior
@@ -255,7 +276,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 
     If theta_transform is None, `prior` is physical and the legacy path is taken.
 
-    :param model: Name of the simulation model (e.g. "nd nadrowski", "hopf").
+    :param model: Name of the simulation model (e.g. "nadrowski", "hopf").
     :param prior: Prior distribution over inferred parameters (ND x rescale product prior).
     :param forcing_prior: Prior distribution over dimensional forcing parameters, sampled
                           independently every batch regardless of SNPE round.

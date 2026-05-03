@@ -33,9 +33,12 @@ class NadrowskiPrior(prior.Prior):
         unit_samples = engine.draw(batch_size).to(dtype=self.dtype, device=self.device)
         thetas = lows + unit_samples * (highs - lows)
 
-        inits = np.random.randint(0, 10, size=(curr_batch_size, 2))
+        init_pos: np.ndarray = np.array(np.random.randint(0, 10, size=(curr_batch_size, 2)))
+        init_probs: np.ndarray = np.array(np.random.randint(0, 1, size=(curr_batch_size, 1)))
+        inits = helpers.concat(init_pos, init_probs)
         inits_tensor = torch.tensor(inits, dtype=self.dtype, device=self.device)
-        force = torch.zeros((curr_batch_size, t.shape[0]), dtype=self.dtype, device=self.device)
+        # Single-channel forcing: shape (batch, 1, T) per the unified force convention.
+        force = torch.zeros((curr_batch_size, 1, t.shape[0]), dtype=self.dtype, device=self.device)
         stable_params = []
 
         num_added = 0
@@ -73,9 +76,12 @@ class NadrowskiPrior(prior.Prior):
             n_params -= 1
 
         # SDE variable
-        inits = helpers.concat(np.random.randint(0, 10, size=(batch_size, 2)), np.random.randint(0, 1, size=(batch_size, 1)))  # size: (BATCH_SIZE, 3)
+        init_pos: np.ndarray = np.array(np.random.randint(0, 10, size=(batch_size, 2)))
+        init_probs: np.ndarray = np.array(np.random.randint(0, 1, size=(batch_size, 1)))
+        inits = helpers.concat(init_pos, init_probs)  # size: (BATCH_SIZE, 3)
         inits = torch.tensor(inits, dtype=dtype, device=device)
-        force = torch.zeros((batch_size, t.shape[0]), dtype=dtype, device=device)
+        # Single-channel forcing: shape (batch, 1, T) per the unified force convention.
+        force = torch.zeros((batch_size, 1, t.shape[0]), dtype=dtype, device=device)
 
         # begin algorithm
         num_added = 0

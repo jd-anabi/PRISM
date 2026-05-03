@@ -130,25 +130,38 @@ def select_or_skip_inference() -> bool:
     return response in ("y", "yes")
 
 
-def get_inference_inputs() -> tuple[str, float, dict]:
+# Display-only SI unit hints, indexed by forcing param name. Used to label the
+# CLI prompt; the authoritative SI-unit map lives in orchestrator._FORCING_SI_UNITS.
+_INFERENCE_PROMPT_UNITS = {
+    "amp":    "N",
+    "amp_y":  "N",   # Hopf y-channel amplitude (shares freq/phase/offset with x)
+    "freq":   "Hz",
+    "phase":  "rad",
+    "offset": "N",
+}
+
+def get_inference_inputs(force_param_names: list[str]) -> tuple[str, float, dict]:
     """
     Prompt for the inputs needed to run inference on real experimental data.
 
     All inputs are in SI units; conversion to cell file units happens in the
     caller via SimConfig.get_unit_conversion_factor().
 
-    :return: (data_file_path, T_obs_seconds, forcing_params_si)
-             forcing_params_si has keys "amp" (N), "freq" (Hz), "phase" (rad), "offset" (N).
+    :param force_param_names: Forcing parameter names from the cell file (e.g.
+                              ["amp", "freq", "phase", "offset"] for Nadrowski/BP, or
+                              ["amp", "amp_y", "freq", "phase", "offset"] for Hopf).
+    :return: (data_file_path, T_obs_seconds, forcing_params_si). The forcing dict has
+             one entry per name in force_param_names.
     """
     data_path = input("Path to experimental data file (.csv or .npy): ").strip()
     T_obs_s = float(input("Observation duration T_obs (seconds): "))
     print("\nForcing parameters (in SI units):")
-    amp = float(input("  Amplitude (N): "))
-    freq = float(input("  Frequency (Hz): "))
-    phase = float(input("  Phase (rad): "))
-    offset = float(input("  Offset (N): "))
+    forcing_params_si: dict = {}
+    for name in force_param_names:
+        unit = _INFERENCE_PROMPT_UNITS.get(name, "")
+        unit_str = f" ({unit})" if unit else ""
+        forcing_params_si[name] = float(input(f"  {name}{unit_str}: "))
     helpers.clear_screen()
-    forcing_params_si = {"amp": amp, "freq": freq, "phase": phase, "offset": offset}
     return data_path, T_obs_s, forcing_params_si
 
 # ── Top-level config builder ────────────────────────────────────────────────

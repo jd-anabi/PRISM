@@ -1,12 +1,8 @@
 import torch
 
-K_B: float = 1.38e-23 # m^2 kg s^-2 K^-1
-
 class NadrowskiModel:
-    def __init__(self, lam: torch.Tensor, lam_y: torch.Tensor, tau: torch.Tensor,
-                 k_gs: torch.Tensor, k_sp: torch.Tensor, d: torch.Tensor, f_max: torch.Tensor,
-                 c_0: torch.Tensor, c_m: torch.Tensor, s: torch.Tensor, n: torch.Tensor,
-                 delta_e: torch.Tensor, temp: torch.Tensor, temp_eff: torch.Tensor, tau_c: torch.Tensor,
+    def __init__(self, k: torch.Tensor, lam: torch.Tensor, f: torch.Tensor, tau: torch.Tensor, tau_c: torch.Tensor,
+                 c_0: torch.Tensor, s: torch.Tensor, delta_e: torch.Tensor, beta: torch.Tensor, n: torch.Tensor, temp: torch.Tensor,
                  force: torch.Tensor, batch_size: int, device: torch.device = torch.device('cpu'), dtype: torch.dtype = torch.float32):
         # sde model parameters
         self.batch_size = batch_size
@@ -14,34 +10,29 @@ class NadrowskiModel:
         self.dtype = dtype
 
         # parameters
+        self.k = k.to(self.device)
         self.lam = lam.to(self.device)
-        self.lam_y = lam_y.to(self.device)
+        self.f_max = f.to(self.device)
         self.tau = tau.to(self.device)
-        self.k_gs = k_gs.to(self.device)
-        self.k_sp = k_sp.to(self.device)
-        self.d = d.to(self.device)
-        self.f_max = f_max.to(self.device) # 429 and 352 pN
-        self.c_0 = c_0.to(self.device)
-        self.c_m = c_m.to(self.device)
-        self.s = s.to(self.device) # 0.95 and 0.65 work, 0 <= S <= 1
-        self.n = n.to(self.device)
-        self.delta_e = delta_e.to(self.device)
-        self.temp = temp.to(self.device)
-        self.temp_eff = temp_eff.to(self.device)
         self.tau_c = tau_c.to(self.device)
+        self.c_0 = c_0.to(self.device)
+        self.s = s.to(self.device)
+        self.delta_e = delta_e.to(self.device)
+        self.beta = beta.to(self.device)
+        self.n = n.to(self.device)
+        self.temp = temp.to(self.device)
 
         # force parameters
         self.force = force.to(self.device)
 
         # subsuming parameters
-        self.a = torch.exp((self.delta_e + self.k_gs * self.d**2 / (2 * self.n)) / (K_B * self.temp))
-        self.delta = self.n * K_B * self.temp / (self.k_gs * self.d)
+        self.a = torch.exp(self.delta_e + self.beta / 2)
 
     def f(self, x, t) -> torch.Tensor:
         dx = self._x_dot(x[:, 0], x[:, 1])
         dy = self._y_dot(x[:, 0], x[:, 1], x[:, 2])
         dc = self._c_dot(x[:, 0], x[:, 1], x[:, 2])
-        dx = dx + self.force[:, t] / self.lam
+        dx = dx + self.force[:, 0, t]
         dx = torch.stack((dx, dy, dc), dim=1)
         return dx
 
@@ -55,28 +46,28 @@ class NadrowskiModel:
 
     # --- SDEs --- #
     def _x_dot(self, x, y) -> torch.Tensor:
-        x_gs = -1 * self.k_gs * (x - y - self.d * self.__p0(x, y))
-        x_sp = -1 * self.k_sp * x
-        return (x_gs + x_sp) / self.lam
+        x_gs = (x - y - self.__p_t0(x, y))
+        x_sp = self.k * x
+        return -1 * (x_gs + x_sp)
 
     def _y_dot(self, x, y, c) -> torch.Tensor:
-        x_gs = self.k_gs * (x - y - self.d * self.__p0(x, y))
-        f = self.f_max * (1 - self.s * c / self.c_m)
-        return -1 * (x_gs + f) / self.lam_y
+        x_gs = (x - y - self.__p_t0(x, y))
+        f_c = self.f_max * (1 - self.s * c)
+        return (x_gs - f_c) / self.lam
 
     def _c_dot(self, x, y, c) -> torch.Tensor:
-        return self.c_0 - c + self.__p0(x, y)
+        return (self.c_0 - c + self.__p_t0(x, y)) / self.tau
 
     # --- NOISE --- #
     def _x_noise(self) -> torch.Tensor:
-        return torch.sqrt(2 * K_B * self.temp / self.lam)
+        return torch.sqrt(2 / (self.n * self.beta))
 
     def _y_noise(self) -> torch.Tensor:
-        return torch.sqrt(2 * K_B * self.temp_eff * self.temp / self.lam_y)
+        return torch.sqrt(2 * self.temp / (self.n * self.beta * self.lam))
 
     def _c_noise(self, x, y) -> torch.Tensor:
-        return torch.sqrt(2 * self.c_m**2 * self.__p0(x, y) * (1 - self.__p0(x, y)) * self.tau_c / self.n) / self.tau
+        return torch.sqrt(2 * self.tau_c * self.__p_t0(x, y) * (1 - self.__p_t0(x, y)) / self.n) / self.tau
 
     # --- PRIVATE --- #
-    def __p0(self, x, y):
-        return 1 / (1 + self.a * torch.exp(-1 * (x - y) / self.delta))
+    def __p_t0(self, x, y):
+        return 1 / (1 + self.a * torch.exp(-1 * self.beta * (x - y)))

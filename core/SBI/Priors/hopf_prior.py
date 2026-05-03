@@ -35,7 +35,8 @@ class HopfPrior(prior.Prior):
 
         inits = np.random.randint(0, 10, size=(curr_batch_size, 2))
         inits_tensor = torch.tensor(inits, dtype=self.dtype, device=self.device)
-        force = torch.zeros((curr_batch_size, t.shape[0]), dtype=self.dtype, device=self.device)
+        # Dual-channel forcing for ND Hopf: shape (batch, 2, T). Channel 0 -> x, channel 1 -> y.
+        force = torch.zeros((curr_batch_size, 2, t.shape[0]), dtype=self.dtype, device=self.device)
         stable_params = []
 
         num_added = 0
@@ -75,7 +76,8 @@ class HopfPrior(prior.Prior):
         # SDE variable
         inits = np.random.randint(0, 10, size=(batch_size, 2))  # size: (BATCH_SIZE, 2)
         inits = torch.tensor(inits, dtype=dtype, device=device)
-        force = torch.zeros((batch_size, t.shape[0]), dtype=dtype, device=device)
+        # Dual-channel forcing for ND Hopf: shape (batch, 2, T). Channel 0 -> x, channel 1 -> y.
+        force = torch.zeros((batch_size, 2, t.shape[0]), dtype=dtype, device=device)
 
         # begin algorithm
         num_added = 0
