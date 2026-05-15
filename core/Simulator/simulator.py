@@ -36,8 +36,15 @@ class Simulator(ABC):
         n_vars = self.inits.shape[-1]
         curr_inits = self.inits
         sol = torch.zeros((n_vars, self._batch_size, self.t.shape[0]), dtype=self.t.dtype, device=self.t.device)
+
+        # The SDE model indexes force with the solver's local step index (0..n_seg-1),
+        # not the absolute step across the full simulation. When segs > 1 with
+        # non-constant forcing, we slice force to the current segment so the local
+        # index lookup picks up the right values; restore the full reference after.
+        full_force = self._force
         for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments", leave=False):
             curr_time = self.t[time_seg_ids[tid]:time_seg_ids[tid + 1]]
+            self.sde.force = full_force[:, :, time_seg_ids[tid]:time_seg_ids[tid + 1]]
             results = self.__sols(curr_time, curr_inits, state_dep_drift)  # shape: (len(curr_time), BATCH_SIZE, number of variables)
 
             # update initial conditions
@@ -45,6 +52,7 @@ class Simulator(ABC):
 
             # extract position data
             sol[:, :, time_seg_ids[tid]:time_seg_ids[tid + 1]] = torch.transpose(results, 0, 2).to(device=sol.device)  # shape: (number of variables, BATCH_SIZE, len(curr_time))
+        self.sde.force = full_force
         sol = sol.reshape(n_vars, self.freqs_per_batch, ensemble_size, self.t.shape[0])  # shape: (number of variables, frequencies per batch, ensemble size, length of time series)
         return sol
 

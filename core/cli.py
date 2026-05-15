@@ -9,7 +9,7 @@ import warnings
 import pint
 
 from .config import (
-    SimConfig, detect_device,
+    SimConfig, FDTConfig, detect_device,
     DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S,
     VALID_MODELS, VALID_LABELS,
     CELL_PATH, PRIOR_PATH, POSTERIOR_PATH,
@@ -164,23 +164,47 @@ def get_inference_inputs(force_param_names: list[str]) -> tuple[str, float, dict
     helpers.clear_screen()
     return data_path, T_obs_s, forcing_params_si
 
-# ── Top-level config builder ────────────────────────────────────────────────
-def build_sim_config() -> SimConfig:
+# ── Mode selection (top-level) ──────────────────────────────────────────────
+def select_mode() -> str:
     """
-    Run the full interactive setup flow and return a populated SimConfig.
+    Top-level prompt: which analysis mode to run.
 
-    Steps:
-      1. Select model
-      2. Select cell file & parse parameters
-      3. Convert units to SI
-      4. Prompt for time / segmentation params
+    :return: "FDT" or "SBI".
     """
-    model, labels, state_dep_drift = select_model()
-    cell_file = select_cell_file()
+    helpers.clear_screen()
+    print("Available analysis modes:")
+    print("  (1) FDT analysis")
+    print("  (2) SBI parameter fitting")
+    choice_str = input("\nWhich mode? Select a number: ").strip()
+    helpers.clear_screen()
+    if choice_str == "1":
+        return "FDT"
+    if choice_str == "2":
+        return "SBI"
+    raise ValueError(f"Invalid mode selection: {choice_str}.")
 
+
+# ── Small input helpers ─────────────────────────────────────────────────────
+def _prompt_int(label: str, default: int) -> int:
+    ans = input(f"{label} [{default}]: ").strip()
+    return int(ans) if ans else default
+
+def _prompt_float(label: str, default: float) -> float:
+    ans = input(f"{label} [{default}]: ").strip()
+    return float(ans) if ans else default
+
+
+# ── Cell-file parsing (shared by SBI and FDT modes) ─────────────────────────
+def _parse_cell(cell_file: str):
+    """
+    Parse a cell file and run pint unit conversion.
+
+    :param cell_file: path to the cell file.
+    :return: (inits_dict, params_dict, rescale_params, force_params_dict,
+             units_dict, si_factors, s_to_cell)
+    """
     inits_dict, params_dict, rescale_params, force_params_dict, units_dict = file_manager.parse_model_file(cell_file)
 
-    # unit conversion
     ureg = pint.UnitRegistry()
     try:
         si_factors = [ureg(unit).to_base_units().magnitude for unit in units_dict]
@@ -188,7 +212,6 @@ def build_sim_config() -> SimConfig:
         print(f"Error: {e}. Unrecognized units.")
         exit()
 
-    # detect time unit from cell file (find which unit has time dimensionality)
     time_unit = None
     for unit_str in units_dict:
         try:
@@ -200,8 +223,28 @@ def build_sim_config() -> SimConfig:
     if time_unit is None:
         raise ValueError("Could not detect time unit from cell file. Ensure t_scale has a time unit.")
 
-    # convert experimental constants from seconds to cell file time units
     s_to_cell = ureg.Quantity(1, "s").to(time_unit).magnitude
+    return inits_dict, params_dict, rescale_params, force_params_dict, units_dict, si_factors, s_to_cell
+
+
+# ── Top-level config builder (SBI mode) ─────────────────────────────────────
+def build_sim_config() -> SimConfig:
+    """
+    Run the full interactive setup flow for SBI parameter fitting and return a populated SimConfig.
+
+    Steps:
+      1. Select model
+      2. Select cell file & parse parameters
+      3. Convert units to SI
+      4. Prompt for time / segmentation params
+    """
+    model, labels, state_dep_drift = select_model()
+    cell_file = select_cell_file()
+
+    (inits_dict, params_dict, rescale_params, force_params_dict,
+     units_dict, si_factors, s_to_cell) = _parse_cell(cell_file)
+
+    # convert experimental constants from seconds to cell file time units
     dt_exp = DT_EXP_S * s_to_cell
     t_min_exp = T_MIN_EXP_S * s_to_cell
     t_max_exp = T_MAX_EXP_S * s_to_cell
@@ -240,5 +283,41 @@ def build_sim_config() -> SimConfig:
         t_min_exp=t_min_exp,
         t_max_exp=t_max_exp,
         T_obs=T_obs,
+        hw=detect_device(),
+    )
+
+
+# ── Top-level config builder (FDT mode) ─────────────────────────────────────
+def build_fdt_config() -> FDTConfig:
+    """
+    Interactive setup for FDT analysis. Prompts for model and cell file like the
+    SBI mode, then for FDT-specific knobs (n_freqs, ensemble_M, F0, freqs_per_batch).
+    """
+    model, _labels, state_dep_drift = select_model()
+    cell_file = select_cell_file()
+
+    (inits_dict, params_dict, rescale_params, force_params_dict,
+     units_dict, si_factors, _) = _parse_cell(cell_file)
+
+    print("\nFDT knobs (press Enter to accept default):")
+    n_freqs = _prompt_int("  n_freqs", 60)
+    ensemble_M = _prompt_int("  ensemble_M", 256)
+    freqs_per_batch = _prompt_int("  freqs_per_batch (Campaign 2 packing)", 1)
+    F0 = _prompt_float("  F0 (ND forcing amplitude)", 0.05)
+    helpers.clear_screen()
+
+    return FDTConfig(
+        model=model,
+        state_dep_drift=state_dep_drift,
+        inits_dict=inits_dict,
+        params_dict=params_dict,
+        rescale_params=rescale_params,
+        force_params_dict=force_params_dict,
+        units_dict=units_dict,
+        si_factors=si_factors,
+        n_freqs=n_freqs,
+        ensemble_M=ensemble_M,
+        freqs_per_batch=freqs_per_batch,
+        F0=F0,
         hw=detect_device(),
     )

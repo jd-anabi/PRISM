@@ -2,7 +2,7 @@
 Configuration constants, device detection, and data carriers for the SBI pipeline.
 """
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from collections import OrderedDict
 from functools import cached_property
 from pathlib import Path
@@ -237,3 +237,79 @@ class SimConfig:
             except pint.UndefinedUnitError:
                 continue
         raise ValueError(f"No unit with dimensionality {target_dim} found in cell file.")
+
+
+# === FDT CONFIG DATACLASS ===
+@dataclass
+class FDTConfig:
+    """
+    Carries all state needed to run the FDT analysis pipeline.
+    Parallel to SimConfig but minimal: no prior/posterior/inference plumbing.
+    """
+    # Shared with SimConfig (model identity + parsed cell file)
+    model: str
+    state_dep_drift: bool
+    inits_dict: OrderedDict           # {name: val}
+    params_dict: OrderedDict          # {name: (val, (lo, hi))}
+    rescale_params: OrderedDict       # {name: (val, (lo, hi))}
+    force_params_dict: OrderedDict    # {name: (val, (lo, hi))}
+    units_dict: tuple
+    si_factors: list[float]
+
+    # FDT-specific knobs (sensible defaults; overrideable in build_fdt_config)
+    n_freqs: int = 60
+    freq_bounds: tuple = (0.1, 10.0)   # multiples of omega_0
+    ensemble_M: int = 256              # trajectories per Campaign-2 frequency
+    freqs_per_batch: int = 1           # frequencies packed per simulator call in Campaign 2
+    F0: float = 0.05                   # ND forcing amplitude (within linear regime)
+    burn_in_nd: float = 100.0
+    T_obs_periods: int = 30
+    dt_nd: float = 0.01
+    psd_T_obs_nd: float = 8000.0       # Campaign-1 steady-state duration
+
+    # Filled in by run_fdt after cfg is built (from params_dict["k"])
+    omega_0: float = None
+
+    # Hardware
+    hw: DeviceConfig = field(default_factory=detect_device)
+
+    # --- Derived ---
+    @property
+    def inits_tensor(self) -> torch.Tensor:
+        """(1, n_vars) tensor of initial conditions."""
+        return torch.tensor(list(self.inits_dict.values()),
+                            dtype=self.hw.dtype, device=self.hw.device).unsqueeze(0)
+
+    @property
+    def params_tensor(self) -> torch.Tensor:
+        """(1, n_params) Nadrowski ND params."""
+        nd = [row[0] for row in self.params_dict.values()]
+        return torch.tensor(nd, dtype=self.hw.dtype, device=self.hw.device).unsqueeze(0)
+
+    def params_for_M(self, M: int) -> torch.Tensor:
+        """Tile ND params to shape (M, n_params) for ensemble batching."""
+        return self.params_tensor.expand(M, -1).contiguous()
+
+    def inits_for_M(self, M: int) -> torch.Tensor:
+        """Tile initial conditions to shape (M, n_vars)."""
+        return self.inits_tensor.expand(M, -1).contiguous()
+
+    def with_overrides(self, **kwargs) -> "FDTConfig":
+        """
+        Return a shallow copy with overridden values.
+
+        Keys may be:
+          - ND parameter names from params_dict (overrides value, preserves bounds);
+            used by passive-baseline sanity check (temp=1.0, tau_c=0.0)
+          - any top-level FDTConfig field (n_freqs, F0, ensemble_M, ...)
+        """
+        nd_keys = set(self.params_dict.keys())
+        top_kwargs = {k: v for k, v in kwargs.items() if k not in nd_keys}
+        nd_kwargs = {k: v for k, v in kwargs.items() if k in nd_keys}
+
+        new_params = OrderedDict(self.params_dict)
+        for k, v in nd_kwargs.items():
+            _, bounds = new_params[k]
+            new_params[k] = (v, bounds)
+
+        return replace(self, params_dict=new_params, **top_kwargs)
