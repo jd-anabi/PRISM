@@ -18,7 +18,10 @@ from core.config import FDTConfig, PLOT_PATH
 from core.FDT.campaigns import run_campaign1_psd, run_campaign2_chi
 from core.FDT.spectral import gen_freqs_log, eff_temp_ratio, find_spectral_peak
 from core.FDT.sanity import run_all_sanity, _interp_log
-from core.FDT.plots import plot_eff_temp_ratio, plot_chi_components, plot_psd
+from core.FDT.plots import (
+    plot_eff_temp_ratio, plot_chi_components, plot_psd,
+    plot_spontaneous_trajectory,
+)
 
 
 def _estimate_omega_0(cfg: FDTConfig) -> tuple[float, str]:
@@ -64,40 +67,52 @@ def run_fdt(cfg: FDTConfig) -> None:
             print("Aborted by user.")
             return
 
-    # 3. Frequency grid
+    # 3. Campaign 1 first: spontaneous PSD gives us a data-driven estimate of the
+    #    natural oscillation frequency, which is then used to center the Campaign 2
+    #    drive-frequency grid. Without this, the grid would sit on the linearized
+    #    analytical estimate -- which can be orders of magnitude away from the actual
+    #    Hopf-shifted Omega_0 in the active regime.
+    print("\nCampaign 1: spontaneous fluctuations -> PSD")
+    freqs_psd, G, t_traj, x_mean_traj = run_campaign1_psd(cfg, return_trajectory=True)
+
+    # Save the ensemble-mean unforced trajectory as a diagnostic before moving on.
+    PLOT_PATH.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    traj_path = PLOT_PATH / f"spontaneous_trajectory_{timestamp}.png"
+    plot_spontaneous_trajectory(
+        t_traj.cpu().numpy(), x_mean_traj.cpu().numpy(),
+        save_path=traj_path,
+        title=f"Spontaneous trajectory (Campaign 1): ND {cfg.model}",
+        burn_in=cfg.burn_in_nd,
+    )
+    print(f"Saved spontaneous trajectory plot to: {traj_path}")
+
+    # 4. Find natural frequency from the PSD peak directly (no search band).
+    #    The PSD's argmax (skipping the DC bin) is robust because the peak is
+    #    orders of magnitude above the noise floor for any active oscillator.
+    omega_natural = find_spectral_peak(freqs_psd, G)
+    cfg.omega_0 = omega_natural   # use data-driven value for the Campaign 2 grid
+    print(f"Spontaneous-oscillation frequency from PSD peak: {omega_natural:.4f} (ND)")
+
+    # 5. Build production grid centered on the data-driven Omega_0.
+    #    freq_bounds default (0.1, 30) gives 1 decade below + 1.5 decades above,
+    #    so ~50% more drive frequencies above Omega_0 than below.
     omegas = gen_freqs_log(cfg.omega_0, cfg.n_freqs, cfg.freq_bounds,
                             cfg.hw.device, cfg.hw.dtype)
 
-    # 4. Campaign 1: spontaneous PSD
-    print("\nCampaign 1: spontaneous fluctuations -> PSD")
-    freqs_psd, G = run_campaign1_psd(cfg)
-
-    # Spontaneous-oscillation frequency from the PSD peak (model-agnostic).
-    # Search across the full production grid range, since active feedback can shift
-    # the actual resonance far from the linearized estimate (a tighter bracket like
-    # (omega_0/3, omega_0*3) silently clips peaks that lie below the linear estimate).
-    omega_natural = find_spectral_peak(
-        freqs_psd, G,
-        search_band=(cfg.omega_0 * cfg.freq_bounds[0],
-                      cfg.omega_0 * cfg.freq_bounds[1]),
-    )
-    print(f"Spontaneous-oscillation frequency from PSD peak: {omega_natural:.4f} (ND)")
-
-    # 5. Campaign 2: forced chi via lock-in
+    # 6. Campaign 2: forced chi via lock-in
     print("\nCampaign 2: forced response -> chi via lock-in")
     chis = run_campaign2_chi(cfg, omegas)
 
-    # 6. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y)
+    # 7. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y)
     G_at_omegas = _interp_log(omegas, freqs_psd, G)
 
-    # 7. T_eff/T
+    # 8. T_eff/T
     n = cfg.params_dict["n"][0]
     beta = cfg.params_dict["beta"][0]
     ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), n, beta)
 
-    # 8. Plot + save
-    PLOT_PATH.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # 9. Plot + save (PLOT_PATH and timestamp already set in step 3)
     ratio_path = PLOT_PATH / f"fdt_ratio_{timestamp}.png"
     chi_path = PLOT_PATH / f"chi_components_{timestamp}.png"
     psd_path = PLOT_PATH / f"psd_{timestamp}.png"

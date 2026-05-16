@@ -39,7 +39,7 @@ def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
         ratio = ratio[mask]
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(omegas, ratio, marker='o', linestyle='-', linewidth=1.0,
+    ax.plot(omegas, ratio, marker='o', linestyle='none',
             markersize=4, color='steelblue')
     ax.set_xscale('log')
     ax.set_yscale('symlog', linthresh=linthresh)
@@ -53,8 +53,48 @@ def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
     ax.set_xlabel(r'$\tilde\omega$ (ND), log scale')
     ax.set_ylabel(r'$T_{\rm eff}(\tilde\omega) / T$, symlog scale')
     ax.set_title(title)
-    ax.grid(True, which='both', alpha=0.3)
+    ax.grid(False)
     ax.legend()
+    plt.tight_layout()
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=150)
+    plt.show()
+
+
+def plot_spontaneous_trajectory(t: np.ndarray, x_mean: np.ndarray,
+                                  save_path: str | PathLike[str] = None,
+                                  title: str = "Spontaneous trajectory (Campaign 1)",
+                                  burn_in: float = None) -> None:
+    """
+    Plot the ensemble-mean unforced trajectory <X>(t) from Campaign 1.
+
+    For a stationary equilibrium system this should: (a) follow the deterministic
+    transient during burn-in, (b) decorrelate as independent noise averages out,
+    (c) settle to fluctuations of amplitude ~ sigma_x / sqrt(M) around the
+    equilibrium mean. Useful as a visual stationarity / burn-in check.
+
+    :param t: (T,) time axis in ND units.
+    :param x_mean: (T,) ensemble-mean bundle position trajectory.
+    :param save_path: optional path to save the figure.
+    :param title: plot title.
+    :param burn_in: optional ND time at which to draw a vertical line marking the
+                    transient/steady-state boundary (where PSD computation starts).
+    """
+    t = np.asarray(t)
+    x_mean = np.asarray(x_mean)
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.plot(t, x_mean, linewidth=0.8, color='steelblue')
+    ax.axhline(0.0, color='k', linestyle='--', linewidth=0.8)
+    if burn_in is not None:
+        ax.axvline(burn_in, color='darkorange', linestyle=':', linewidth=1.2,
+                    label=fr'burn-in ends: $\tilde t = {burn_in:.0f}$')
+        ax.legend()
+    ax.set_xlabel(r'$\tilde t$ (ND)')
+    ax.set_ylabel(r'$\langle \tilde X \rangle(\tilde t)$ (ND)')
+    ax.set_title(title)
+    ax.grid(False)
     plt.tight_layout()
 
     if save_path is not None:
@@ -100,7 +140,7 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
         omegas, G = omegas[in_band], G[in_band]
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.loglog(omegas, G, marker='.', linestyle='-', linewidth=1.0,
+    ax.loglog(omegas, G, marker='.', linestyle='none',
               markersize=3, color='steelblue')
     if omega_natural is not None:
         ax.axvline(omega_natural, color='darkorange', linestyle=':', linewidth=1.2,
@@ -109,7 +149,7 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
     ax.set_xlabel(r'$\tilde\omega$ (ND), log scale')
     ax.set_ylabel(r'$G(\tilde\omega)$, log scale')
     ax.set_title(title)
-    ax.grid(True, which='both', alpha=0.3)
+    ax.grid(False)
     plt.tight_layout()
 
     if save_path is not None:
@@ -144,7 +184,7 @@ def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
     fig, (ax_real, ax_imag) = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
 
     # chi' (real / in-phase)
-    ax_real.semilogx(omegas, chi_real, marker='o', linestyle='-', linewidth=1.0,
+    ax_real.semilogx(omegas, chi_real, marker='o', linestyle='none',
                      markersize=4, color='steelblue')
     ax_real.axhline(0.0, color='k', linestyle='--', linewidth=0.8)
     if omega_natural is not None:
@@ -153,17 +193,17 @@ def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
         ax_real.legend()
     ax_real.set_ylabel(r"$\chi'(\tilde\omega)$ (in-phase)")
     ax_real.set_title(title)
-    ax_real.grid(True, which='both', alpha=0.3)
+    ax_real.grid(False)
 
     # chi'' (imaginary / dissipative)
-    ax_imag.semilogx(omegas, chi_imag, marker='o', linestyle='-', linewidth=1.0,
+    ax_imag.semilogx(omegas, chi_imag, marker='o', linestyle='none',
                      markersize=4, color='steelblue')
     ax_imag.axhline(0.0, color='k', linestyle='--', linewidth=0.8)
     if omega_natural is not None:
         ax_imag.axvline(omega_natural, color='darkorange', linestyle=':', linewidth=1.2)
     ax_imag.set_xlabel(r"$\tilde\omega$ (ND), log scale")
     ax_imag.set_ylabel(r"$\chi''(\tilde\omega)$ (dissipative)")
-    ax_imag.grid(True, which='both', alpha=0.3)
+    ax_imag.grid(False)
 
     plt.tight_layout()
     if save_path is not None:

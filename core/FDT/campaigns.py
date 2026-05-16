@@ -28,11 +28,62 @@ VALID_SIMS = {
 # this budget; segs > 1 only shrinks the per-segment xs buffer.
 FDT_MAX_ELEMENTS_PER_SEG = 200_000_000
 
+# Fraction of currently-free CUDA memory to allocate as the per-batch budget. The
+# remaining headroom absorbs PyTorch internals, fragmentation, and intermediate
+# tensors during integration. 0.6 leaves ~40% buffer.
+FDT_CUDA_MEM_FRACTION = 0.6
+
 
 def _pick_n_segs(n_steps: int, batch_size: int) -> int:
     """Pick segs to keep the solver's per-segment xs buffer under the element budget."""
     max_steps_per_seg = max(1, FDT_MAX_ELEMENTS_PER_SEG // batch_size)
     return max(1, math.ceil(n_steps / max_steps_per_seg))
+
+
+def _memory_budget_elements(device: torch.device, dtype: torch.dtype) -> int:
+    """
+    Per-batch element budget for the simulator's major device-resident tensors
+    (sol + force). On CUDA, uses a fraction of currently-free GPU memory so we
+    adapt to whatever's actually available. On CPU/MPS, defaults conservatively.
+    """
+    bytes_per_elem = 4 if dtype == torch.float32 else 8
+    if device.type == "cuda":
+        free_bytes, _ = torch.cuda.mem_get_info(device)
+        budget_bytes = int(free_bytes * FDT_CUDA_MEM_FRACTION)
+    elif device.type == "cpu":
+        budget_bytes = 4 * 1024 ** 3   # 4 GB conservative cap for CPU
+    else:
+        budget_bytes = 1 * 1024 ** 3   # 1 GB for MPS / other
+    return max(1, budget_bytes // bytes_per_elem)
+
+
+def _plan_adaptive_batches(omegas_list: list, fpb_max: int, M: int, n_vars: int,
+                            n_force: int, dt: float, burn_idx: int, n_periods: int,
+                            budget_elements: int) -> list:
+    """
+    Walk omegas left-to-right, greedily packing as many consecutive frequencies into
+    each batch as the memory budget allows (up to fpb_max).
+
+    The per-group n_steps is determined by the LOWEST omega in the group (since that
+    one needs the longest t-grid). So memory cost = (n_vars + n_force) * fpb * M * n_steps.
+
+    :return: list of (start, count) tuples.
+    """
+    batches = []
+    start = 0
+    n = len(omegas_list)
+    while start < n:
+        omega_low = omegas_list[start]
+        T_target = n_periods * 2.0 * math.pi / omega_low
+        n_obs = int(round(T_target / dt))
+        n_steps = burn_idx + n_obs
+
+        elements_per_fpb_unit = (n_vars + n_force) * M * n_steps
+        max_fpb_by_memory = max(1, budget_elements // elements_per_fpb_unit)
+        actual_fpb = min(fpb_max, n - start, max_fpb_by_memory)
+        batches.append((start, actual_fpb))
+        start += actual_fpb
+    return batches
 
 
 def _get_simulator_cls(model: str):
@@ -51,7 +102,7 @@ def _n_force_channels(cfg: FDTConfig) -> int:
 
 
 def run_campaign1_psd(cfg: FDTConfig, M: int = None, T_obs_nd: float = None,
-                      nperseg: int = None) -> tuple[torch.Tensor, torch.Tensor]:
+                      nperseg: int = None, return_trajectory: bool = False):
     """
     Spontaneous-fluctuation PSD G(omega) of bundle deflection x.
 
@@ -60,7 +111,11 @@ def run_campaign1_psd(cfg: FDTConfig, M: int = None, T_obs_nd: float = None,
     :param T_obs_nd: PSD observation duration in ND time; default cfg.psd_T_obs_nd.
     :param nperseg: Welch segment length; default min(2**14, steady-state length)
                     rounded down to nearest power of 2.
-    :return: (omegas, G) -- both shape (nperseg//2 + 1,).
+    :param return_trajectory: if True, also returns the full time axis and the
+                              ensemble-mean trajectory (including burn-in) for
+                              diagnostic plotting.
+    :return: (omegas, G) if return_trajectory=False; otherwise
+             (omegas, G, t_full, x_mean_full).
     """
     M = M if M is not None else cfg.ensemble_M
     T_obs_nd = T_obs_nd if T_obs_nd is not None else cfg.psd_T_obs_nd
@@ -83,13 +138,19 @@ def run_campaign1_psd(cfg: FDTConfig, M: int = None, T_obs_nd: float = None,
                    freqs_per_batch=1, segs=n_segs, batch_size=M,
                    device=device)
     sol = sim.simulate(state_dep_drift=cfg.state_dep_drift)  # (n_vars, 1, M, n_steps)
-    x_steady = sol[0, 0, :, burn_idx:]  # (M, n_obs) -- always the first state variable (bundle position)
+    x_full = sol[0, 0, :, :]            # (M, n_steps) -- full trajectory including burn-in
+    x_steady = x_full[:, burn_idx:]      # (M, n_obs)   -- post-burn-in for PSD
 
     if nperseg is None:
         nperseg = min(2 ** 14, x_steady.shape[-1])
         nperseg = 1 << int(math.log2(nperseg))  # nearest power of 2 <= nperseg
 
-    return psd_welch(x_steady, dt=dt, nperseg=nperseg)
+    omegas, G = psd_welch(x_steady, dt=dt, nperseg=nperseg)
+
+    if return_trajectory:
+        x_mean_full = x_full.mean(dim=0)  # (n_steps,) -- ensemble-mean trajectory
+        return omegas, G, t, x_mean_full
+    return omegas, G
 
 
 def run_campaign2_chi(cfg: FDTConfig, omegas: torch.Tensor, M: int = None,
@@ -134,15 +195,26 @@ def run_campaign2_chi(cfg: FDTConfig, omegas: torch.Tensor, M: int = None,
     n_freqs = len(omegas)
     chis = torch.zeros(n_freqs, dtype=torch.complex128, device=device)
 
-    batch_starts = list(range(0, n_freqs, fpb_max))
-    iterator = batch_starts
-    if show_progress:
-        iterator = tqdm(batch_starts, desc=f"Campaign 2 (chi sweep, fpb={fpb_max})")
+    # Plan batches adaptively so each fits in the memory budget. Low-omega groups
+    # (long t-grid) may shrink to fpb=1; high-omega groups will use the requested fpb_max.
+    omegas_list = omegas.tolist()
+    n_force = _n_force_channels(cfg)
+    n_vars = cfg.inits_tensor.shape[1]
+    budget_elements = _memory_budget_elements(device, dtype)
+    batches = _plan_adaptive_batches(omegas_list, fpb_max, M, n_vars, n_force,
+                                       dt, burn_idx, n_periods, budget_elements)
 
-    for start in iterator:
-        end = min(start + fpb_max, n_freqs)
-        omegas_batch = omegas[start:end].tolist()
-        actual_fpb = len(omegas_batch)
+    reduced = [(s, c) for s, c in batches if c < fpb_max]
+    if reduced:
+        print(f"Adaptive batching: {len(reduced)}/{len(batches)} groups capped below fpb_max={fpb_max} "
+              f"due to memory budget. Smallest group: fpb={min(c for _, c in batches)}.")
+
+    iterator = batches
+    if show_progress:
+        iterator = tqdm(batches, desc=f"Campaign 2 (chi sweep, fpb<={fpb_max})")
+
+    for start, actual_fpb in iterator:
+        omegas_batch = omegas_list[start:start + actual_fpb]
 
         # Per-frequency integer-period window length
         n_obs_per_freq = [int(round(n_periods * 2.0 * math.pi / w / dt)) for w in omegas_batch]
@@ -151,7 +223,6 @@ def run_campaign2_chi(cfg: FDTConfig, omegas: torch.Tensor, M: int = None,
 
         t = torch.arange(n_steps, dtype=dtype, device=device) * dt
         batch_size = actual_fpb * M
-        n_force = _n_force_channels(cfg)
         force = torch.zeros((batch_size, n_force, n_steps), dtype=dtype, device=device)
         for k, omega in enumerate(omegas_batch):
             # Drive only channel 0 (bundle position); other channels stay zero
@@ -173,4 +244,9 @@ def run_campaign2_chi(cfg: FDTConfig, omegas: torch.Tensor, M: int = None,
             t_slice = t[burn_idx : burn_idx + n_obs_k]
             T_obs_used = n_obs_k * dt
             chis[start + k] = lock_in_chi(t_slice, x_mean, omega, F0, T_obs_used)
+
+        # Free fragmented allocations between batches; sol/force/t go out of scope here.
+        del sol, force, t, sim, inits, params
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
     return chis

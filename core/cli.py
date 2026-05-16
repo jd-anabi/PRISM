@@ -169,18 +169,21 @@ def select_mode() -> str:
     """
     Top-level prompt: which analysis mode to run.
 
-    :return: "FDT" or "SBI".
+    :return: "FDT", "SBI", or "REDUCTION".
     """
     helpers.clear_screen()
     print("Available analysis modes:")
     print("  (1) FDT analysis")
     print("  (2) SBI parameter fitting")
+    print("  (3) NWK→Hopf reduction map")
     choice_str = input("\nWhich mode? Select a number: ").strip()
     helpers.clear_screen()
     if choice_str == "1":
         return "FDT"
     if choice_str == "2":
         return "SBI"
+    if choice_str == "3":
+        return "REDUCTION"
     raise ValueError(f"Invalid mode selection: {choice_str}.")
 
 
@@ -318,6 +321,43 @@ def build_fdt_config() -> FDTConfig:
         n_freqs=n_freqs,
         ensemble_M=ensemble_M,
         freqs_per_batch=freqs_per_batch,
+        F0=F0,
+        hw=detect_device(),
+    )
+
+
+# ── Top-level config builder (Reduction-map mode) ────────────────────────────
+def build_reduction_config() -> FDTConfig:
+    """
+    Interactive setup for the NWK→Hopf analytical reduction map.
+
+    The reduction map is Nadrowski-specific by construction, so the model is
+    fixed to NADROWSKI. Only the cell file (which carries the ND parameters
+    and dimensional rescaling factors) and an optional forcing amplitude F0
+    need to be supplied — no FDT-specific simulation knobs are relevant here.
+    """
+    model = "NADROWSKI"
+    state_dep_drift = True
+    print("Reduction map: model fixed to NADROWSKI (NWK→Hopf reduction).")
+
+    cell_file = select_cell_file()
+
+    (inits_dict, params_dict, rescale_params, force_params_dict,
+     units_dict, si_factors, _) = _parse_cell(cell_file)
+
+    print("\nReduction-map knobs (press Enter to accept default):")
+    F0 = _prompt_float("  F0 (NWK forcing amplitude for Phase B1)", 0.05)
+    helpers.clear_screen()
+
+    return FDTConfig(
+        model=model,
+        state_dep_drift=state_dep_drift,
+        inits_dict=inits_dict,
+        params_dict=params_dict,
+        rescale_params=rescale_params,
+        force_params_dict=force_params_dict,
+        units_dict=units_dict,
+        si_factors=si_factors,
         F0=F0,
         hw=detect_device(),
     )

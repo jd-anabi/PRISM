@@ -258,7 +258,11 @@ class FDTConfig:
 
     # FDT-specific knobs (sensible defaults; overrideable in build_fdt_config)
     n_freqs: int = 60
-    freq_bounds: tuple = (0.1, 10.0)   # multiples of omega_0
+    # Multipliers of omega_0 for the Campaign-2 production grid.
+    # Asymmetric in log space by design: below = 1 decade, above = 1.5 decades
+    # (=> ~50% more drive frequencies above omega_0, to capture FDT recovery
+    # at the high-frequency end while still resolving the active band below).
+    freq_bounds: tuple = (0.1, 30.0)
     ensemble_M: int = 256              # trajectories per Campaign-2 frequency
     freqs_per_batch: int = 1           # frequencies packed per simulator call in Campaign 2
     F0: float = 0.05                   # ND forcing amplitude (within linear regime)
