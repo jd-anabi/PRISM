@@ -7,7 +7,8 @@ from core.Solvers import sdeint
 
 class Simulator(ABC):
     def __init__(self, params: torch.Tensor, force: torch.Tensor, inits: torch.Tensor, t: torch.Tensor,
-                 freqs_per_batch: int = 1, segs: int = 1, batch_size: int = 1, device: torch.device = torch.device('cpu')):
+                 freqs_per_batch: int = 1, segs: int = 1, batch_size: int = 1, device: torch.device = torch.device('cpu'),
+                 use_compile: bool | None = None):
         # device initialization
         self._device = device
         self._dtype = inits.dtype
@@ -20,6 +21,10 @@ class Simulator(ABC):
         self.t = t
         self.freqs_per_batch = freqs_per_batch
         self.segs = segs
+
+        # Auto-enable the torch.compile path on CUDA when the model exposes
+        # `compiled_step`. Explicitly pass False to force the eager loop.
+        self._use_compile = use_compile
 
         # check if we are using the steady-state solution (all zeros for the 4th parameter)
         self._set_up_model()
@@ -51,7 +56,7 @@ class Simulator(ABC):
             curr_inits = results[-1, :, :]
 
             # extract position data
-            sol[:, :, time_seg_ids[tid]:time_seg_ids[tid + 1]] = torch.transpose(results, 0, 2).to(device=sol.device)  # shape: (number of variables, BATCH_SIZE, len(curr_time))
+            sol[:, :, time_seg_ids[tid]:time_seg_ids[tid + 1]] = torch.transpose(results, 0, 2)  # shape: (number of variables, BATCH_SIZE, len(curr_time))
         self.sde.force = full_force
         sol = sol.reshape(n_vars, self.freqs_per_batch, ensemble_size, self.t.shape[0])  # shape: (number of variables, frequencies per batch, ensemble size, length of time series)
         return sol
@@ -116,13 +121,21 @@ class Simulator(ABC):
 
         # solving a system of SDEs
         solver = sdeint.Solver()
-        sol = torch.zeros((n, self.batch_size, inits.shape[1]), dtype=self.t.dtype, device=self.t.device)
+
+        # Pick eager vs compiled. Auto: CUDA + model exposes compiled_step.
+        use_compile = self._use_compile
+        if use_compile is None:
+            use_compile = (self._device.type == "cuda"
+                           and hasattr(self.sde, "compiled_step"))
+
         with torch.no_grad():
             try:
-                if explicit:
-                    sol = solver.euler(self.sde, inits, ts, n, state_dep_drift=state_dep_drift).to(device=sol.device)  # only keep the last solution
+                if not explicit:
+                    sol = solver.implicit_euler(self.sde, inits, ts, n)
+                elif use_compile:
+                    sol = solver.euler_compiled(self.sde, inits, ts, n, state_dep_drift=state_dep_drift)
                 else:
-                    sol = solver.implicit_euler(self.sde, inits, ts, n).to(device=sol.device)
+                    sol = solver.euler(self.sde, inits, ts, n, state_dep_drift=state_dep_drift)
             except (Warning, Exception) as e:
                 print(f'Warning or Exception occurred: {e}')
                 exit()

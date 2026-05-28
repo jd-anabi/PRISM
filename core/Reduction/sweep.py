@@ -22,7 +22,7 @@ _CONTINUITY_REL_TOL = 0.05
 
 
 def _nwk_params_from_cfg(cfg: FDTConfig) -> dict:
-    """Extract the 11 NWK ND params from cfg.params_dict using cell-file naming."""
+    """Extract the 10 NWK ND params from cfg.params_dict using cell-file naming."""
     return {k: cfg.params_dict[k][0] for k in NWK_KEYS}
 
 
@@ -88,7 +88,7 @@ def sweep_f_max(
             try:
                 fp = solve_fixed_point(
                     k=params["k"], f_max=params["f_max"], s=params["s"],
-                    beta=params["beta"], delta_E=params["delta_E"], c_0=params["c_0"],
+                    beta=params["beta"], delta_E=params["delta_E"],
                 )
                 row["P_o_star"] = fp.P_o_star
                 row["xi_star"] = fp.xi_star

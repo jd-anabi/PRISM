@@ -52,11 +52,11 @@ class BPModel:
         return dx
 
     def g(self) -> torch.Tensor:
+        # Diagonal noise as a (batch, d) vector; solver multiplies elementwise.
         hb_noise = self._hb_noise()
         a_noise = self._a_noise()
-        dsigma = torch.stack((hb_noise, a_noise, torch.zeros_like(hb_noise), torch.zeros_like(hb_noise), torch.zeros(hb_noise)), dim=0)
-        dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
-        return torch.diag_embed(dsigma)
+        z = torch.zeros_like(hb_noise)
+        return torch.stack((hb_noise, a_noise, z, z, z), dim=-1)
 
     # --- SDEs --- #
     def _x_hb_dot(self, x_hb, x_a, p_gs, p_t) -> torch.Tensor:

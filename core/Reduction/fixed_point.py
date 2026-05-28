@@ -40,18 +40,18 @@ def _residual(xi: float, beta: float, A_gate: float, rho_2: float, const: float)
 
 def solve_fixed_point(
     k: float, f_max: float, s: float,
-    beta: float, delta_E: float, c_0: float,
+    beta: float, delta_E: float,
 ) -> FixedPoint:
     """
     Solve the NWK fixed point and compute P_o derivatives at it.
 
     Inputs are the subset of NWK parameters that the deterministic fixed-point
-    depends on: k (pivot stiffness), f_max (φ), s (S), beta, delta_E (ΔG), c_0.
+    depends on: k (pivot stiffness), f_max (φ), s (S), beta, delta_E (ΔG).
     The drag ratio lam and time scales tau, tau_c do not enter at the fixed point.
     """
     A_gate = float(np.exp(delta_E + beta / 2.0))
     rho_2 = 1.0 - f_max * s
-    const = f_max * (1.0 - s * c_0)
+    const = f_max
 
     r_lo = _residual(_BRACKET_LO, beta, A_gate, rho_2, const)
     r_hi = _residual(_BRACKET_HI, beta, A_gate, rho_2, const)
@@ -70,10 +70,10 @@ def solve_fixed_point(
     P_o_ppp = (beta ** 3) * P_o_star * (1.0 - P_o_star) * (1.0 - 6.0 * P_o_star + 6.0 * P_o_star ** 2)
 
     # Auxiliary state variables (from NWK steady-state algebra):
-    #   ċ = 0  →  c* = c_0 + P_o*
+    #   ċ = 0  →  c* = P_o*
     #   ẋ = 0  →  k·x* = P_o* - ξ*   →  x* = (P_o* - ξ*)/k
     #   ξ ≡ x − y                    →  y* = x* - ξ*
-    c_star = c_0 + P_o_star
+    c_star = P_o_star
     x_star = (P_o_star - xi_star) / k
     y_star = x_star - xi_star
 

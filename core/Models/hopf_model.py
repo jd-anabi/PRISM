@@ -1,6 +1,26 @@
 import torch
 
+
+@torch.jit.script
+def _hopf_compiled_step(
+    x: torch.Tensor, force_step: torch.Tensor, dW: torch.Tensor,
+    mu: torch.Tensor, beta: torch.Tensor, g: torch.Tensor,
+    dt: float, sqrt_dt: float,
+) -> torch.Tensor:
+    """One Euler-Maruyama step for Hopf, JIT-scripted for Python-overhead removal."""
+    x0 = x[:, 0]
+    x1 = x[:, 1]
+    r2 = x0 * x0 + x1 * x1
+    dx = mu * x0 - x1 - (x0 - beta * x1) * r2 + force_step[:, 0]
+    dy = x0 + mu * x1 - (beta * x0 + x1) * r2 + force_step[:, 1]
+    drift = torch.stack((dx, dy), dim=1)
+    return x + drift * dt + g * dW * sqrt_dt
+
+
 class HopfModel:
+    # Module-level compiled step exposed for sdeint.euler_compiled.
+    compiled_step = staticmethod(_hopf_compiled_step)
+
     def __init__(self, mu: torch.Tensor, beta: torch.Tensor, sigma_x: torch.Tensor, sigma_y: torch.Tensor,
                  force: torch.Tensor, batch_size: int, device: torch.device = torch.device('cpu'), dtype: torch.dtype = torch.float32):
         # sde model parameters
@@ -18,30 +38,31 @@ class HopfModel:
         self.force = force.to(dtype=self.dtype, device=self.device)
 
     def f(self, x, t) -> torch.Tensor:
-        dx = self._x_dot(x[:, 0], x[:, 1])
-        dy = self._y_dot(x[:, 0], x[:, 1])
-        dx = dx + self.force[:, 0, t]   # x-channel forcing
-        dy = dy + self.force[:, 1, t]   # y-channel forcing (shared freq/phase/offset, distinct amp)
-        dx = torch.stack((dx, dy), dim=1)
-        return dx
+        return self.f_pure(x, self.force[:, :, t])
+
+    def f_pure(self, x: torch.Tensor, force_step: torch.Tensor) -> torch.Tensor:
+        """Drift as a pure function of state and a pre-sliced force vector."""
+        x0 = x[:, 0]
+        x1 = x[:, 1]
+        r2 = x0 * x0 + x1 * x1
+        dx = self._x_dot(x0, x1, r2) + force_step[:, 0]
+        dy = self._y_dot(x0, x1, r2) + force_step[:, 1]
+        return torch.stack((dx, dy), dim=1)
 
     def g(self) -> torch.Tensor:
-        x_noise = self._x_noise()
-        y_noise = self._y_noise()
-        dsigma = torch.stack((x_noise, y_noise), dim=0)
-        dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
-        return torch.diag_embed(dsigma)
+        # Diagonal noise as a (batch, d) vector; solver multiplies elementwise.
+        return torch.stack((self.sigma_x, self.sigma_y), dim=-1)
+
+    def compiled_params(self) -> tuple:
+        """Tuple of tensor params for `compiled_step` (after x, force_step, dW)."""
+        return (self.mu, self.beta, self.g())
 
     # --- SDEs --- #
-    def _x_dot(self, x, y) -> torch.Tensor:
-        linear_term = self.mu * x - y
-        cubic_term = (x - self.beta * y) * (torch.pow(x, 2) + torch.pow(y, 2))
-        return linear_term - cubic_term
+    def _x_dot(self, x, y, r2) -> torch.Tensor:
+        return self.mu * x - y - (x - self.beta * y) * r2
 
-    def _y_dot(self, x, y) -> torch.Tensor:
-        linear_term = x + self.mu * y
-        cubic_term = (self.beta * x + y) * (torch.pow(x, 2) + torch.pow(y, 2))
-        return linear_term - cubic_term
+    def _y_dot(self, x, y, r2) -> torch.Tensor:
+        return x + self.mu * y - (self.beta * x + y) * r2
 
     # --- NOISE --- #
     def _x_noise(self) -> torch.Tensor:

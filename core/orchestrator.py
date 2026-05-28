@@ -12,7 +12,8 @@ import warnings
 import torch
 import numpy as np
 from matplotlib import pyplot as plt
-from sbi.analysis import pairplot
+from sbi.analysis import pairplot, sbc_rank_plot, plot_tarp
+from sbi.diagnostics import run_sbc, check_sbc, run_tarp, check_tarp
 from sbi.inference import DirectPosterior
 from torch.distributions import Distribution, MixtureSameFamily
 from tqdm import tqdm
@@ -477,6 +478,13 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
     log_T_obs = torch.full((sim_stats.shape[0], 1), math.log(T_obs), dtype=dtype)
     sim_stats = torch.cat([sim_stats, forcing_gt_expanded.cpu(), log_T_obs], dim=-1)
     results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats)
+    visualizers.plot_ppc(
+        results,
+        ground_truth=cfg.ground_truth,
+        param_names=cfg.inferred_labels,
+        n_samples=n_samples,
+    )
+    plt.show()
 
     # SBC + coverage
     # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
@@ -489,14 +497,50 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
         dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
         t_scale_bounds=cfg.t_scale_bounds,
-        theta_transform=T,  # <-- NEW
+        theta_transform=T,
         state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
     )
-    ranks = analysis.compute_sbc_ranks(posterior, theta_star, x_cal, m=1000, chunk_size=100, device=device)
-    alphas = analysis.compute_expected_coverage(posterior, theta_star, x_cal, m=1000, chunk_size=100, dtype=dtype, device=device)
 
-    sbc_plot = visualizers.plot_sbc(ranks, param_names=cfg.inferred_labels, m=1000, fig_size=(7, 12))
-    expected_cov_plot = visualizers.plot_expected_coverage(alphas, fig_size=(7, 20))
+    # `gen_cal_data` returns CPU tensors; the posterior's embedding net is on
+    # CUDA after training. Sample_batched does not move x for us (see
+    # TransformedPosterior.sample_batched in reparam.py), so we need to match
+    # devices manually — mirroring the obs_stats.to(device) call above.
+    x_cal_dev = x_cal.to(device)
+    theta_star_dev = theta_star.to(device)
+
+    # --- SBC (Talts 2018, marginals) via sbi.diagnostics ---
+    ranks, dap_samples = run_sbc(
+        thetas=theta_star_dev, xs=x_cal_dev, posterior=posterior,
+        num_posterior_samples=1000, reduce_fns="marginals",
+        use_batched_sampling=True, show_progress_bar=True,
+    )
+    prior_samples = inferred_prior.sample((theta_star.shape[0],)).cpu()
+    sbc_stats = check_sbc(
+        ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
+        num_posterior_samples=1000,
+    )
+    print("SBC uniformity checks:")
+    for j, label in enumerate(cfg.inferred_labels):
+        print(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
+              f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
+              f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
+
+    sbc_rank_plot(ranks=ranks, num_posterior_samples=1000, plot_type="cdf",
+                  parameter_labels=cfg.inferred_labels)
+    sbc_rank_plot(ranks=ranks, num_posterior_samples=1000, plot_type="hist",
+                  parameter_labels=cfg.inferred_labels)
+    plt.show()
+
+    # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
+    ecp, alpha_grid = run_tarp(
+        thetas=theta_star_dev, xs=x_cal_dev, posterior=posterior,
+        num_posterior_samples=1000, use_batched_sampling=True,
+        z_score_theta=True, show_progress_bar=True,
+    )
+    atc, tarp_kspval = check_tarp(ecp.cpu(), alpha_grid.cpu())
+    print(f"TARP: ATC={atc:.3f}  KS p={tarp_kspval:.3f}")
+    plot_tarp(ecp.cpu(), alpha_grid.cpu(),
+              title=f"TARP (ATC={atc:.3f}, KS p={tarp_kspval:.3f})")
     plt.show()
 
     # Eye test: MAP vs ground truth vs posterior samples

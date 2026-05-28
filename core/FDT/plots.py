@@ -5,26 +5,42 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 
+def _normalized_freq_axis(omegas: np.ndarray, omega_natural: float):
+    """
+    Build a frequency axis normalized by the characteristic frequency Omega_0.
+
+    :param omegas: raw angular frequencies (ND).
+    :param omega_natural: characteristic frequency Omega_0 (PSD peak). If None or
+                          non-positive, the raw omega axis is returned instead.
+    :return: (x_values, x_label, resonance_x) where resonance_x is the x-position
+             of Omega_0 (1.0 when normalized, None otherwise).
+    """
+    if omega_natural is not None and omega_natural > 0:
+        return omegas / omega_natural, r'$\tilde\omega / \Omega_0$, log scale', 1.0
+    return omegas, r'$\tilde\omega$ (ND), log scale', None
+
+
 def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
                         save_path: str | PathLike[str] = None,
                         title: str = "FDT violation diagnostic",
                         omega_natural: float = None,
                         linthresh: float = 1.0) -> None:
     """
-    Plot T_eff/T vs angular frequency with symlog y-axis so the divergence is
-    visible on BOTH sides of zero (chi'' sign change manifests as a +inf -> -inf
-    crossing through y=0). The linear region |y| < linthresh keeps the equilibrium
-    reference y=1 readable.
+    Plot T_eff/T vs normalized driving frequency omega/Omega_0.
 
-    Non-finite values (NaN/inf) are dropped with a warning; negative ratios are
-    kept and displayed in the lower half of the symlog axis.
+    Linear x-axis (omega/Omega_0), symlog y-axis so the divergence is visible on
+    BOTH sides of zero (the chi'' sign change manifests as a +inf -> -inf crossing
+    through y=0 near omega/Omega_0 = 1). The linear region |y| < linthresh keeps the
+    equilibrium reference y=1 readable.
 
-    :param omegas: (n_freqs,) angular frequencies (ND).
-    :param ratio:  (n_freqs,) T_eff(omega) / T values.
+    Non-finite values (NaN/inf) are dropped with a warning; negative ratios are kept.
+
+    :param omegas: (n_freqs,) driving angular frequencies (ND).
+    :param ratio:  (n_freqs,) T_eff(omega)/T values.
     :param save_path: optional path to save the figure.
     :param title: plot title.
-    :param omega_natural: optional angular frequency at which to draw a vertical
-                          marker (e.g. spontaneous-oscillation peak from Campaign 1).
+    :param omega_natural: characteristic frequency Omega_0 (PSD peak). The x-axis is
+                          omega/Omega_0; if None, raw omega is used.
     :param linthresh: half-width of the linear region around y=0 in the symlog y-axis.
                       Defaults to 1.0 (the equilibrium value).
     """
@@ -35,22 +51,22 @@ def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
     if n_bad > 0:
         print(f"plot_eff_temp_ratio: dropping {n_bad}/{len(ratio)} non-finite (NaN/inf) points.")
         mask = np.isfinite(ratio)
-        omegas = omegas[mask]
-        ratio = ratio[mask]
+        omegas, ratio = omegas[mask], ratio[mask]
+
+    x, xlabel, x_res = _normalized_freq_axis(omegas, omega_natural)
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(omegas, ratio, marker='o', linestyle='none',
-            markersize=4, color='steelblue')
+    ax.plot(x, ratio, marker='o', linestyle='none', markersize=4, color='steelblue')
     ax.set_xscale('log')
     ax.set_yscale('symlog', linthresh=linthresh)
     ax.axhline(1.0, color='k', linestyle='--', linewidth=0.8,
                label=r'$T_{\rm eff}/T = 1$ (equilibrium)')
     ax.axhline(0.0, color='gray', linestyle=':', linewidth=0.6,
-                label=r'$T_{\rm eff}/T = 0$ ($\chi''=0$ crossing)')
-    if omega_natural is not None:
-        ax.axvline(omega_natural, color='darkorange', linestyle=':', linewidth=1.2,
-                    label=fr'$\Omega_0 \approx {omega_natural:.3f}$ (PSD peak)')
-    ax.set_xlabel(r'$\tilde\omega$ (ND), log scale')
+                label=r"$T_{\rm eff}/T = 0$ ($\chi''=0$ crossing)")
+    if x_res is not None:
+        ax.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
+                    label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
+    ax.set_xlabel(xlabel)
     ax.set_ylabel(r'$T_{\rm eff}(\tilde\omega) / T$, symlog scale')
     ax.set_title(title)
     ax.grid(False)
@@ -108,45 +124,48 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
              omega_natural: float = None,
              plot_band: tuple = None) -> None:
     """
-    Log-log plot of one-sided angular-frequency PSD G(omega) vs omega.
+    Linear plot of one-sided PSD G(omega) vs normalized frequency omega/Omega_0.
 
     Used to visually verify the spontaneous-oscillation frequency that
-    find_spectral_peak picks out. Negative or non-finite PSD values (numerical
-    artifacts) are dropped with a warning.
+    find_spectral_peak picks out (the peak lands at omega/Omega_0 = 1). Non-finite
+    PSD values (numerical artifacts) are dropped with a warning.
 
     :param omegas: (n_freqs,) angular frequencies (ND) from psd_welch.
     :param G: (n_freqs,) one-sided PSD values from psd_welch.
     :param save_path: optional path to save the figure.
     :param title: plot title.
-    :param omega_natural: optional vertical marker for the detected PSD peak.
-    :param plot_band: optional (lo, hi) to restrict the x-range, e.g. matching the
-                      production grid. Defaults to the full PSD range (minus DC).
+    :param omega_natural: characteristic frequency Omega_0; x-axis is omega/Omega_0.
+    :param plot_band: optional (lo, hi) in RAW omega units to restrict the x-range,
+                      e.g. matching the production grid. Applied before normalization.
     """
     omegas = np.asarray(omegas)
     G = np.asarray(G)
 
-    # Skip DC bin (omega = 0 plots at -inf on log scale)
+    # Skip DC bin
     mask = omegas > 0
     omegas, G = omegas[mask], G[mask]
 
-    n_bad = int((G <= 0).sum() + (~np.isfinite(G)).sum())
+    n_bad = int((~np.isfinite(G)).sum())
     if n_bad > 0:
-        print(f"plot_psd: dropping {n_bad}/{len(G)} non-positive or non-finite PSD points.")
-        good = np.isfinite(G) & (G > 0)
+        print(f"plot_psd: dropping {n_bad}/{len(G)} non-finite PSD points.")
+        good = np.isfinite(G)
         omegas, G = omegas[good], G[good]
 
     if plot_band is not None:
         in_band = (omegas >= plot_band[0]) & (omegas <= plot_band[1])
         omegas, G = omegas[in_band], G[in_band]
 
+    x, xlabel, x_res = _normalized_freq_axis(omegas, omega_natural)
+
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.loglog(omegas, G, marker='.', linestyle='none',
-              markersize=3, color='steelblue')
-    if omega_natural is not None:
-        ax.axvline(omega_natural, color='darkorange', linestyle=':', linewidth=1.2,
-                    label=fr'$\Omega_0 \approx {omega_natural:.3f}$ (peak)')
+    ax.plot(x, G, marker='.', linestyle='none', markersize=3, color='steelblue')
+    ax.set_xscale('log')
+    ax.set_yscale('log')
+    if x_res is not None:
+        ax.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
+                    label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
         ax.legend()
-    ax.set_xlabel(r'$\tilde\omega$ (ND), log scale')
+    ax.set_xlabel(xlabel)
     ax.set_ylabel(r'$G(\tilde\omega)$, log scale')
     ax.set_title(title)
     ax.grid(False)
@@ -162,46 +181,46 @@ def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
                         title: str = "Susceptibility components",
                         omega_natural: float = None) -> None:
     """
-    Two-panel plot of chi'(omega) and chi''(omega) vs angular frequency.
+    Two-panel plot of chi'(omega) and chi''(omega) vs normalized frequency omega/Omega_0.
 
-    Directly comparable to Martin et al. 2001 Fig 2: log-spaced x-axis, linear y,
-    horizontal line at zero in each panel. Negative chi'' below the natural
-    frequency indicates active force generation (energy gain from the drive);
-    positive chi'' indicates dissipation. chi' (in-phase) changes sign at the
-    effective resonance for a damped oscillator.
+    Linear axes, comparable to Martin et al. 2001 Fig 2. Negative chi'' below the
+    natural frequency indicates active force generation (energy gain from the drive);
+    positive chi'' indicates dissipation. chi' (in-phase) peaks at the effective
+    resonance.
 
-    :param omegas: (n_freqs,) angular frequencies (ND).
+    :param omegas: (n_freqs,) driving angular frequencies (ND).
     :param chis: (n_freqs,) complex chi values.
     :param save_path: optional path to save the figure.
     :param title: plot title (applied to the top panel).
-    :param omega_natural: optional vertical marker at the spontaneous-oscillation freq.
+    :param omega_natural: characteristic frequency Omega_0; x-axis is omega/Omega_0.
     """
     omegas = np.asarray(omegas)
     chis = np.asarray(chis)
     chi_real = chis.real
     chi_imag = chis.imag
 
+    x, xlabel, x_res = _normalized_freq_axis(omegas, omega_natural)
+
     fig, (ax_real, ax_imag) = plt.subplots(2, 1, figsize=(7, 8), sharex=True)
+    ax_real.set_xscale('log')   # shared with ax_imag via sharex=True
 
     # chi' (real / in-phase)
-    ax_real.semilogx(omegas, chi_real, marker='o', linestyle='none',
-                     markersize=4, color='steelblue')
+    ax_real.plot(x, chi_real, marker='o', linestyle='none', markersize=4, color='steelblue')
     ax_real.axhline(0.0, color='k', linestyle='--', linewidth=0.8)
-    if omega_natural is not None:
-        ax_real.axvline(omega_natural, color='darkorange', linestyle=':', linewidth=1.2,
-                         label=fr'$\Omega_0 \approx {omega_natural:.3f}$ (PSD peak)')
+    if x_res is not None:
+        ax_real.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
+                         label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
         ax_real.legend()
     ax_real.set_ylabel(r"$\chi'(\tilde\omega)$ (in-phase)")
     ax_real.set_title(title)
     ax_real.grid(False)
 
     # chi'' (imaginary / dissipative)
-    ax_imag.semilogx(omegas, chi_imag, marker='o', linestyle='none',
-                     markersize=4, color='steelblue')
+    ax_imag.plot(x, chi_imag, marker='o', linestyle='none', markersize=4, color='steelblue')
     ax_imag.axhline(0.0, color='k', linestyle='--', linewidth=0.8)
-    if omega_natural is not None:
-        ax_imag.axvline(omega_natural, color='darkorange', linestyle=':', linewidth=1.2)
-    ax_imag.set_xlabel(r"$\tilde\omega$ (ND), log scale")
+    if x_res is not None:
+        ax_imag.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2)
+    ax_imag.set_xlabel(xlabel)
     ax_imag.set_ylabel(r"$\chi''(\tilde\omega)$ (dissipative)")
     ax_imag.grid(False)
 

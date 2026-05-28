@@ -14,9 +14,9 @@ from core.Reduction.linear import jacobian_coeffs, solve_vieta_cubic, build_eige
 def test_biorthogonality_at_cell_params():
     # Nadrowski cell file values
     k = 0.8; lam = 3.57; f_max = 1.06; tau = 0.027
-    s = 0.65; beta = 14.1; delta_E = 10.0; c_0 = 0.0
+    s = 0.65; beta = 14.1; delta_E = 10.0
 
-    fp = solve_fixed_point(k=k, f_max=f_max, s=s, beta=beta, delta_E=delta_E, c_0=c_0)
+    fp = solve_fixed_point(k=k, f_max=f_max, s=s, beta=beta, delta_E=delta_E)
     poly = jacobian_coeffs(k=k, lam=lam, tau=tau, fp=fp)
     mu, Omega0, nu = solve_vieta_cubic(poly)
 

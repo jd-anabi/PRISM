@@ -5,8 +5,9 @@ from core.Simulator import simulator
 
 class BPSimulator(simulator.Simulator):
     def __init__(self, params: torch.Tensor, force: torch.Tensor, inits: torch.Tensor, t: torch.Tensor,
-                 freqs_per_batch: int = 1, segs: int = 1, batch_size: int = 1, device: torch.device = torch.device('cpu')):
-        super().__init__(params, force, inits, t, freqs_per_batch, segs, batch_size, device)
+                 freqs_per_batch: int = 1, segs: int = 1, batch_size: int = 1, device: torch.device = torch.device('cpu'),
+                 use_compile: bool | None = None):
+        super().__init__(params, force, inits, t, freqs_per_batch, segs, batch_size, device, use_compile=use_compile)
         self._set_up_model()
 
     # --- PRIVATE METHOD --- #

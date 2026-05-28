@@ -9,7 +9,7 @@ import warnings
 import pint
 
 from .config import (
-    SimConfig, FDTConfig, detect_device,
+    SimConfig, FDTConfig, detect_device, cpu_device,
     DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S,
     VALID_MODELS, VALID_LABELS,
     CELL_PATH, PRIOR_PATH, POSTERIOR_PATH,
@@ -169,13 +169,14 @@ def select_mode() -> str:
     """
     Top-level prompt: which analysis mode to run.
 
-    :return: "FDT", "SBI", or "REDUCTION".
+    :return: "FDT", "SBI", "REDUCTION", or "CROSSVAL".
     """
     helpers.clear_screen()
     print("Available analysis modes:")
     print("  (1) FDT analysis")
     print("  (2) SBI parameter fitting")
     print("  (3) NWK→Hopf reduction map")
+    print("  (4) FDT parameter-sweep study (S and T_a/T)")
     choice_str = input("\nWhich mode? Select a number: ").strip()
     helpers.clear_screen()
     if choice_str == "1":
@@ -184,6 +185,8 @@ def select_mode() -> str:
         return "SBI"
     if choice_str == "3":
         return "REDUCTION"
+    if choice_str == "4":
+        return "CROSSVAL"
     raise ValueError(f"Invalid mode selection: {choice_str}.")
 
 
@@ -322,7 +325,7 @@ def build_fdt_config() -> FDTConfig:
         ensemble_M=ensemble_M,
         freqs_per_batch=freqs_per_batch,
         F0=F0,
-        hw=detect_device(),
+        hw=cpu_device(),  # FDT: sequential SDE loop at M~256 is ~3.4x faster on CPU than GPU
     )
 
 
@@ -361,3 +364,105 @@ def build_reduction_config() -> FDTConfig:
         F0=F0,
         hw=detect_device(),
     )
+
+
+# ── Sweep-study resolution presets ───────────────────────────────────────────
+# Drive the FDT resolution knobs for the parameter-sweep study. The exploratory
+# preset is a fast/coarse pass to confirm the FDT-restoration trend before a full
+# overnight run; production is the publication-quality resolution. The dominant
+# cost is Campaign 2's low-frequency drive points (cost ~ 1/omega), so the
+# exploratory preset raises freq_bounds[0] and trims n_freqs / T_obs_periods /
+# psd_T_obs_nd while keeping ensemble_M=256 so the trend stays clean above noise.
+_SWEEP_PRESETS = {
+    "exploratory": dict(freq_bounds=(0.2, 30.0), n_freqs=30, T_obs_periods=20,
+                        psd_T_obs_nd=4000.0, ensemble_M=256, points=8),
+    "production":  dict(freq_bounds=(0.1, 30.0), n_freqs=60, T_obs_periods=30,
+                        psd_T_obs_nd=8000.0, ensemble_M=256, points=12),
+}
+
+def _select_sweep_preset() -> dict:
+    """
+    Prompt for the sweep-study resolution preset. Defaults to exploratory.
+
+    :return: the chosen preset's knob dict (a copy of the _SWEEP_PRESETS entry).
+    """
+    print("\nSweep preset:")
+    print("  (1) Exploratory — fast/coarse; confirm the restoration trend (~3-4x faster)")
+    print("  (2) Production  — full resolution")
+    choice = input("\nWhich preset? Select a number [1]: ").strip() or "1"
+    name = "production" if choice == "2" else "exploratory"
+    print(f"Using the {name} preset.")
+    return dict(_SWEEP_PRESETS[name])
+
+
+# ── Top-level config builder (FDT parameter-sweep study) ─────────────────────
+def build_param_sweep_config() -> tuple["FDTConfig", "np.ndarray", "np.ndarray"]:
+    """
+    Interactive setup for the FDT parameter-sweep study.
+
+    Two sweeps probe FDT restoration on the Nadrowski model:
+      - S sweep  (T_a/T = 1 held): vary S; FDT restored as S -> 0.
+      - T sweep  (S = 0 held):     vary T_a/T; FDT restored as T_a/T -> 1.
+
+    Returns (cfg, s_grid, temp_grid). cfg carries NWK params + FDT knobs.
+    """
+    import numpy as np  # local import — keep top-of-file lean
+    model = "NADROWSKI"
+    state_dep_drift = True
+    print("FDT parameter-sweep study: model fixed to NADROWSKI.")
+
+    cell_file = select_cell_file()
+    (inits_dict, params_dict, rescale_params, force_params_dict,
+     units_dict, si_factors, _) = _parse_cell(cell_file)
+
+    cell_s = params_dict["s"][0]
+    cell_temp = params_dict["temp"][0]
+    print(f"\nCell-file values: S = {cell_s:.4f},  T_a/T = {cell_temp:.4f}")
+
+    # Resolution preset (drives the FDT knobs + default grid density for BOTH sweeps).
+    preset = _select_sweep_preset()
+
+    print("\nS sweep grid (T_a/T held at 1; FDT restored as S -> 0):")
+    s_min = _prompt_float("  S_min", 0.0)
+    s_max = _prompt_float("  S_max", cell_s)
+    s_points = _prompt_int("  S n_points", preset["points"])
+    s_grid = np.linspace(s_min, s_max, s_points)
+
+    print("\nT_a/T sweep grid (S held at 0; FDT restored as T_a/T -> 1):")
+    t_min = _prompt_float("  T_min", 1.0)
+    t_max = _prompt_float("  T_max", cell_temp)
+    t_points = _prompt_int("  T n_points", preset["points"])
+    temp_grid = np.linspace(t_min, t_max, t_points)
+
+    print("\nFDT knobs (press Enter to accept preset default):")
+    n_freqs = _prompt_int("  n_freqs", preset["n_freqs"])
+    ensemble_M = _prompt_int("  ensemble_M", preset["ensemble_M"])
+    freqs_per_batch = _prompt_int("  freqs_per_batch (Campaign 2 packing)", 1)
+    F0 = _prompt_float("  F0 (ND forcing amplitude)", 0.05)
+    # Advanced resolution levers taken directly from the preset (not prompted).
+    freq_bounds = preset["freq_bounds"]
+    T_obs_periods = preset["T_obs_periods"]
+    psd_T_obs_nd = preset["psd_T_obs_nd"]
+    print(f"  freq_bounds={freq_bounds}, T_obs_periods={T_obs_periods}, "
+          f"psd_T_obs_nd={psd_T_obs_nd}  (from preset)")
+    helpers.clear_screen()
+
+    cfg = FDTConfig(
+        model=model,
+        state_dep_drift=state_dep_drift,
+        inits_dict=inits_dict,
+        params_dict=params_dict,
+        rescale_params=rescale_params,
+        force_params_dict=force_params_dict,
+        units_dict=units_dict,
+        si_factors=si_factors,
+        n_freqs=n_freqs,
+        freq_bounds=freq_bounds,
+        ensemble_M=ensemble_M,
+        freqs_per_batch=freqs_per_batch,
+        F0=F0,
+        T_obs_periods=T_obs_periods,
+        psd_T_obs_nd=psd_T_obs_nd,
+        hw=cpu_device(),  # sweep: sequential SDE loop at M~256 is ~3.4x faster on CPU than GPU
+    )
+    return cfg, s_grid, temp_grid

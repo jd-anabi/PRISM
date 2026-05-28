@@ -40,6 +40,20 @@ def detect_device() -> DeviceConfig:
 
     return DeviceConfig(device=dev, dtype=dtype, batch_size=batch_size)
 
+
+def cpu_device() -> DeviceConfig:
+    """
+    Force a CPU DeviceConfig.
+
+    Used by the FDT and parameter-sweep branches. Their Euler-Maruyama solver is a
+    sequential Python time loop over small ensembles (M ~ 256, state dim 3-5), so
+    each step is a handful of tiny tensor ops. On GPU this is kernel-launch-bound
+    (per-step time is ~constant regardless of M) and benchmarks ~3.4x SLOWER than
+    CPU at M=256; the CPU<->GPU crossover is near M ~ 4096, far above FDT ensemble
+    sizes. SBI (large batch_size, huge simulation volume) is left on detect_device().
+    """
+    return DeviceConfig(device=torch.device("cpu"), dtype=torch.float32, batch_size=2 ** 6)
+
 # === PATHS ===
 _ROOT = Path(os.getcwd()) / "Resources"
 CELL_PATH    = _ROOT / "Cells"
@@ -48,13 +62,13 @@ POSTERIOR_PATH = _ROOT / "Posteriors"
 PLOT_PATH    = _ROOT / "Plots"
 
 # === PARAMETER LABELS (for plotting) ===
-HOPF_LABELS = [r"$\mu$", r"$\beta$", r"$\sigma_x$", r"$\sigma_y"]
+HOPF_LABELS = [r"$\mu$", r"$\beta$", r"$\sigma_x$", r"$\sigma_y$"]
 BP_LABELS = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
              r"$C_{min}$", r"$S_{min}$", r"$S_{max}$", r"$Ca^2_m$", r"$Ca^2_{gs}$",
-             r"$U_{gs,\ max}$", r"$\Delta E$", r"$k_{gs, \text{ ratio}}$",
+             r"$U_{gs,\ max}$", r"$\Delta G$", r"$k_{gs, \text{ ratio}}$",
              r"$\chi_{hb}$", r"$\chi_a$", r"$x_c$", r"$\eta_{hb}$", r"$\eta_{a}$"]
-NADROWSKI_LABELS = [r"$\kappa$", r"$\lambda$", r"$f_{\text{max}}$", r"$\tau$", r"$\tau_c$",
-                    r"$c_0$", r"$S$", r"$\Delta E$", r"$\beta$", r"$n$", r"$T$"]
+NADROWSKI_LABELS = [r"$\kappa$", r"$\tilde{\lambda}$", r"$\phi$", r"$\tilde{\tau}$", r"$\tilde{\tau}_c$",
+                    r"$S$", r"$\Delta \tilde{G}$", r"$\beta$", r"$N$", r"$\tilde{T}$"]
 
 VALID_MODELS = ["BP", "NADROWSKI", "HOPF"]
 VALID_LABELS = [BP_LABELS, NADROWSKI_LABELS, HOPF_LABELS]
@@ -73,7 +87,7 @@ CHUNK_LEN = 100_000    # fine integration steps per segment (per-chunk memory ca
 N_ND_MAX = 300_000     # max total fine integration steps per batch (pre-filter ceiling)
 PPC_BIN_SIZE = 50      # samples per mini-batch for posterior-predictive-check simulation
 CAL_RUN_SIZE = 10      # samples per (t_scale, T) pair in SBC calibration data
-TRAINING_NUM_RUNS = 2000  # number of (t_scale_k, T_k) batches per training round
+TRAINING_NUM_RUNS = 500  # number of (t_scale_k, T_k) batches per training round
 
 # === TRANSIENT (Case A: clip initial conditions settling) ===
 TRANSIENT_ND_UNITS = 100  # ND time units of transient to discard; ~20 e-folds of the slowest

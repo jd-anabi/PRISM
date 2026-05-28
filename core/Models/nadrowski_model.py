@@ -1,8 +1,36 @@
 import torch
 
+
+@torch.jit.script
+def _nadrowski_compiled_step(
+    x: torch.Tensor, force_step: torch.Tensor, dW: torch.Tensor,
+    k: torch.Tensor, lam: torch.Tensor, f_max: torch.Tensor, tau: torch.Tensor,
+    tau_c: torch.Tensor, s: torch.Tensor, a: torch.Tensor, beta: torch.Tensor,
+    n: torch.Tensor, temp: torch.Tensor,
+    dt: float, sqrt_dt: float,
+) -> torch.Tensor:
+    """One Euler-Maruyama step for Nadrowski (state-dependent diffusion), JIT-scripted."""
+    x0 = x[:, 0]
+    x1 = x[:, 1]
+    x2 = x[:, 2]
+    p = 1.0 / (1.0 + a * torch.exp(-beta * (x0 - x1)))
+    x_gs = x0 - x1 - p
+    dx = -(x_gs + k * x0) + force_step[:, 0]
+    dy = (x_gs - f_max * (1 - s * x2)) / lam
+    dc = (p - x2) / tau
+    drift = torch.stack((dx, dy, dc), dim=1)
+    x_noise = torch.sqrt(2.0 / (n * beta))
+    y_noise = torch.sqrt(2.0 * temp / (n * beta * lam))
+    c_noise = torch.sqrt(2.0 * tau_c * p * (1 - p) / n) / tau
+    g = torch.stack((x_noise, y_noise, c_noise), dim=-1)
+    return x + drift * dt + g * dW * sqrt_dt
+
+
 class NadrowskiModel:
+    compiled_step = staticmethod(_nadrowski_compiled_step)
+
     def __init__(self, k: torch.Tensor, lam: torch.Tensor, f: torch.Tensor, tau: torch.Tensor, tau_c: torch.Tensor,
-                 c_0: torch.Tensor, s: torch.Tensor, delta_e: torch.Tensor, beta: torch.Tensor, n: torch.Tensor, temp: torch.Tensor,
+                 s: torch.Tensor, delta_e: torch.Tensor, beta: torch.Tensor, n: torch.Tensor, temp: torch.Tensor,
                  force: torch.Tensor, batch_size: int, device: torch.device = torch.device('cpu'), dtype: torch.dtype = torch.float32):
         # sde model parameters
         self.batch_size = batch_size
@@ -15,7 +43,6 @@ class NadrowskiModel:
         self.f_max = f.to(self.device)
         self.tau = tau.to(self.device)
         self.tau_c = tau_c.to(self.device)
-        self.c_0 = c_0.to(self.device)
         self.s = s.to(self.device)
         self.delta_e = delta_e.to(self.device)
         self.beta = beta.to(self.device)
@@ -29,34 +56,32 @@ class NadrowskiModel:
         self.a = torch.exp(self.delta_e + self.beta / 2)
 
     def f(self, x, t) -> torch.Tensor:
-        dx = self._x_dot(x[:, 0], x[:, 1])
-        dy = self._y_dot(x[:, 0], x[:, 1], x[:, 2])
-        dc = self._c_dot(x[:, 0], x[:, 1], x[:, 2])
-        dx = dx + self.force[:, 0, t]
-        dx = torch.stack((dx, dy, dc), dim=1)
-        return dx
+        return self.f_pure(x, self.force[:, :, t])
+
+    def f_pure(self, x: torch.Tensor, force_step: torch.Tensor) -> torch.Tensor:
+        """Drift as a pure function of state and a pre-sliced force vector."""
+        x0 = x[:, 0]
+        x1 = x[:, 1]
+        x2 = x[:, 2]
+        p = self.__p_t0(x0, x1)
+        x_gs = x0 - x1 - p
+        dx = -(x_gs + self.k * x0) + force_step[:, 0]
+        dy = (x_gs - self.f_max * (1 - self.s * x2)) / self.lam
+        dc = (p - x2) / self.tau
+        return torch.stack((dx, dy, dc), dim=1)
+
+    def compiled_params(self) -> tuple:
+        """Tuple of tensor params for `compiled_step` (after x, force_step, dW)."""
+        return (self.k, self.lam, self.f_max, self.tau, self.tau_c,
+                self.s, self.a, self.beta, self.n, self.temp)
 
     def g(self, x) -> torch.Tensor:
+        # Diagonal noise as a (batch, d) vector; solver multiplies elementwise.
+        p = self.__p_t0(x[:, 0], x[:, 1])
         x_noise = self._x_noise()
         y_noise = self._y_noise()
-        c_noise = self._c_noise(x[:, 0], x[:, 1])
-        dsigma = torch.stack((x_noise, y_noise, c_noise), dim=0)
-        dsigma = torch.atleast_2d(torch.transpose(dsigma, -1, 0))
-        return torch.diag_embed(dsigma)
-
-    # --- SDEs --- #
-    def _x_dot(self, x, y) -> torch.Tensor:
-        x_gs = (x - y - self.__p_t0(x, y))
-        x_sp = self.k * x
-        return -1 * (x_gs + x_sp)
-
-    def _y_dot(self, x, y, c) -> torch.Tensor:
-        x_gs = (x - y - self.__p_t0(x, y))
-        f_c = self.f_max * (1 - self.s * c)
-        return (x_gs - f_c) / self.lam
-
-    def _c_dot(self, x, y, c) -> torch.Tensor:
-        return (self.c_0 - c + self.__p_t0(x, y)) / self.tau
+        c_noise = torch.sqrt(2 * self.tau_c * p * (1 - p) / self.n) / self.tau
+        return torch.stack((x_noise, y_noise, c_noise), dim=-1)
 
     # --- NOISE --- #
     def _x_noise(self) -> torch.Tensor:
@@ -64,9 +89,6 @@ class NadrowskiModel:
 
     def _y_noise(self) -> torch.Tensor:
         return torch.sqrt(2 * self.temp / (self.n * self.beta * self.lam))
-
-    def _c_noise(self, x, y) -> torch.Tensor:
-        return torch.sqrt(2 * self.tau_c * self.__p_t0(x, y) * (1 - self.__p_t0(x, y)) / self.n) / self.tau
 
     # --- PRIVATE --- #
     def __p_t0(self, x, y):

@@ -13,7 +13,10 @@ from core.FDT.campaigns import (
     run_campaign1_psd, run_campaign2_chi,
     _get_simulator_cls, _n_force_channels, _pick_n_segs,
 )
-from core.FDT.spectral import psd_welch, lock_in_chi, eff_temp_ratio, gen_freqs_log
+from core.FDT.spectral import (
+    psd_welch, lock_in_chi, eff_temp_ratio, gen_freqs_log, find_spectral_peak,
+)
+from core.FDT.plots import plot_eff_temp_ratio
 
 
 def _interp_log(x_new: torch.Tensor, x_old: torch.Tensor, y_old: torch.Tensor) -> torch.Tensor:
@@ -30,26 +33,40 @@ def _interp_log(x_new: torch.Tensor, x_old: torch.Tensor, y_old: torch.Tensor) -
     return y0 + frac * (y1 - y0)
 
 
-def check_passive_baseline(cfg: FDTConfig) -> tuple[bool, dict]:
+def check_passive_baseline(cfg: FDTConfig, save_plot_path=None) -> tuple[bool, dict]:
     """
-    Pipeline with temp=1.0, tau_c=0.0, s=0.0: true thermal-equilibrium baseline.
-    Expect T_eff/T ~ 1 across the full grid.
+    Pipeline with temp=1.0, s=0.0 (tau_c left at its cell value): true
+    thermal-equilibrium baseline. Expect T_eff/T ~ 1 across the grid.
 
-    Setting s=0 removes the calcium -> motor feedback (f_c = f_max*(1 - s*c)).
-    Without this feedback, the (x, y) drift has a Boltzmann potential and FDT holds.
-    Temp=1 makes the motor noise thermal; tau_c=0 zeros the channel-gating noise.
-    This is the convention-correctness gate -- PSD/lock-in/noise prefactor bugs
-    all show up as a uniform deviation from 1.0.
+    Setting s=0 makes the motor force f_c = f_max*(1 - s*c) -> f_max (constant), so
+    _y_dot no longer depends on c. Calcium then decouples entirely: it becomes a
+    pure slave variable driven by (x, y) with zero back-action, so its noise (tau_c)
+    cannot reach the measured x. tau_c therefore does NOT need to be zeroed. temp=1
+    makes the motor noise thermal, leaving the (x, y) subsystem in genuine
+    equilibrium with a Boltzmann potential -> FDT holds.
+
+    This is the convention-correctness gate -- PSD/lock-in/noise prefactor bugs all
+    show up as a uniform deviation from 1.0. Optionally saves a passive FDT-ratio
+    plot (the Martin et al. 2001 Fig 3C control-bundle analogue: a flat line at 1).
 
     Pass criterion: median(|ratio - 1|) < 0.2 AND max(|ratio - 1|) < 0.4.
+
+    :param save_plot_path: if provided, save the passive FDT-ratio plot there.
     """
     M = min(128, cfg.ensemble_M)
-    passive = cfg.with_overrides(temp=1.0, tau_c=0.0, s=0.0, ensemble_M=M,
+    passive = cfg.with_overrides(temp=1.0, s=0.0, ensemble_M=M,
                                   psd_T_obs_nd=min(4000.0, cfg.psd_T_obs_nd))
 
-    omegas = gen_freqs_log(cfg.omega_0, 7, cfg.freq_bounds, cfg.hw.device, cfg.hw.dtype)
-
+    # The passive cell's resonance is near the linearized estimate (s=0 removes the
+    # Hopf shift), so derive its characteristic frequency from the passive PSD,
+    # searching near cfg.omega_0 to avoid latching onto the low-freq noise floor.
     freqs_psd, G = run_campaign1_psd(passive)
+    passive_omega_0 = find_spectral_peak(
+        freqs_psd, G, search_band=(cfg.omega_0 * 0.2, cfg.omega_0 * 5.0))
+
+    n_check = 20
+    omegas = gen_freqs_log(passive_omega_0, n_check, cfg.freq_bounds,
+                            cfg.hw.device, cfg.hw.dtype)
     chis = run_campaign2_chi(passive, omegas, show_progress=False)
 
     G_at_om = _interp_log(omegas, freqs_psd, G)
@@ -59,24 +76,43 @@ def check_passive_baseline(cfg: FDTConfig) -> tuple[bool, dict]:
     devs = np.abs(ratio - 1.0)
     med_dev, max_dev = float(np.median(devs)), float(np.max(devs))
     passed = (med_dev < 0.2) and (max_dev < 0.4)
+
+    if save_plot_path is not None:
+        plot_eff_temp_ratio(
+            omegas.cpu().numpy(), ratio,
+            save_path=save_plot_path,
+            title=fr"FDT ratio: PASSIVE baseline ($s=0$, $T_a=T$) -- ND {cfg.model}",
+            omega_natural=passive_omega_0,
+        )
+        print(f"Saved passive FDT-ratio plot to: {save_plot_path}")
+
     return passed, {"median_dev": med_dev, "max_dev": max_dev,
+                    "passive_omega_0": passive_omega_0,
                     "ratios": ratio.tolist(), "omegas": omegas.cpu().tolist()}
 
 
 def check_high_freq_fdt(cfg: FDTConfig) -> tuple[bool, dict]:
     """
-    Passive-noise baseline (temp=1, tau_c=0) but s != 0, evaluated only at the
-    top three frequencies of the production grid.
+    Natural cell at ambient motor temperature (temp=1) with the active feedback and
+    channel noise left at their cell values (s, tau_c unchanged), evaluated only at
+    the top three frequencies of the production grid.
 
-    At omega >> 1/tau_c, calcium can't follow the bundle, so the active feedback
-    loop is dynamically broken and FDT recovers. This validates that the calcium
-    adaptation timescale is the locus of FDT violation in the Nadrowski model
-    (as opposed to some other non-equilibrium source).
+    At omega >> 1/tau (tau is the calcium RELAXATION time in _c_dot = (P_t - c)/tau,
+    NOT the noise prefactor tau_c), calcium can't follow the bundle. Both the
+    deterministic feedback (s*c motor modulation) and the channel-noise injection then
+    become quasi-static and stop doing frequency-dependent work, so FDT recovers. This
+    validates that the calcium adaptation timescale is the locus of FDT violation in
+    the Nadrowski model (as opposed to some other non-equilibrium source).
+
+    temp=1 is required: with temp>1 the motor is a second, hotter thermostat, making
+    (x, y) a two-temperature non-equilibrium steady state whose T_eff/T would NOT
+    recover to 1 even at high omega. Channel noise (tau_c) is left at its cell value
+    so this tests the real cell's high-omega behavior, not an isolated mechanism.
 
     Pass criterion: median(|ratio - 1|) < 0.15 AND max(|ratio - 1|) < 0.3.
     """
     M = min(128, cfg.ensemble_M)
-    high_freq_cfg = cfg.with_overrides(temp=1.0, tau_c=0.0, ensemble_M=M,
+    high_freq_cfg = cfg.with_overrides(temp=1.0, ensemble_M=M,
                                         psd_T_obs_nd=min(4000.0, cfg.psd_T_obs_nd))
 
     all_omegas = gen_freqs_log(cfg.omega_0, 7, cfg.freq_bounds,
@@ -199,14 +235,20 @@ def check_psd_window(cfg: FDTConfig) -> tuple[bool, dict]:
                     "omegas_sampled": omegas1[sample_idx].cpu().tolist()}
 
 
-def run_all_sanity(cfg: FDTConfig) -> dict:
-    """Run all four checks; print summary; return dict[name -> (passed, metrics)]."""
+def run_all_sanity(cfg: FDTConfig, passive_plot_path=None) -> dict:
+    """
+    Run all five checks; print summary; return dict[name -> (passed, metrics)].
+
+    :param passive_plot_path: if provided, the passive-baseline check saves a
+                              passive FDT-ratio plot (Martin Fig 3C analogue) there.
+    """
     print("\n" + "=" * 60)
     print("FDT Sanity Checks")
     print("=" * 60)
 
     checks = [
-        ("passive_baseline",      check_passive_baseline,      "true equilibrium (s=0): T_eff/T ~ 1"),
+        ("passive_baseline",      lambda c: check_passive_baseline(c, save_plot_path=passive_plot_path),
+                                                               "true equilibrium (s=0): T_eff/T ~ 1"),
         ("high_freq_fdt",         check_high_freq_fdt,         "high omega (s != 0): T_eff/T ~ 1"),
         ("linearity",             check_linearity,             "|chi(omega_0)| F0-invariant"),
         ("ensemble_convergence",  check_ensemble_convergence,  "chi'' stable by M=256"),

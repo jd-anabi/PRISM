@@ -15,12 +15,12 @@ def test_fd_limit_tauc_equals_tau():
     # Use cell-file Nadrowski values
     k = 0.8; lam = 3.57; f_max = 1.06
     tau = 0.027
-    s = 0.65; beta = 14.1; delta_E = 10.0; c_0 = 0.0
+    s = 0.65; beta = 14.1; delta_E = 10.0
     n = 50; temp = 1.5
 
     tau_c = tau  # FD limit
 
-    fp = solve_fixed_point(k=k, f_max=f_max, s=s, beta=beta, delta_E=delta_E, c_0=c_0)
+    fp = solve_fixed_point(k=k, f_max=f_max, s=s, beta=beta, delta_E=delta_E)
     sigma_X_sq, sigma_Xa_sq, sigma_C_sq = nwk_noise_amplitudes_squared(
         fp, lam=lam, tau=tau, tau_c=tau_c, n=n, beta=beta, temp=temp,
     )

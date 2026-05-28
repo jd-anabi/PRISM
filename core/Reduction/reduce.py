@@ -19,7 +19,7 @@ from .rescaling import apply_stage2
 
 
 # NWK parameter keys expected from cfg.params_dict (cell-file naming).
-NWK_KEYS = ("k", "lam", "f_max", "tau", "tau_c", "c_0", "s",
+NWK_KEYS = ("k", "lam", "f_max", "tau", "tau_c", "s",
             "delta_E", "beta", "n", "temp")
 
 
@@ -97,7 +97,7 @@ def reduce_nwk_to_hopf(
     Run the full reduction pipeline at a single NWK operating point.
 
     :param nwk_params: dict containing every key in NWK_KEYS (cell-file naming:
-                       k, lam, f_max, tau, tau_c, c_0, s, delta_E, beta, n, temp).
+                       k, lam, f_max, tau, tau_c, s, delta_E, beta, n, temp).
     :param t_scale_nwk: cell-file λ/K_gs value (e.g. ms).
     :param x_scale_nwk: cell-file D value (e.g. nm).
     :param F_amplitude: NWK forcing amplitude F̃ entering Phase B1. Default 1.0;
@@ -116,7 +116,7 @@ def reduce_nwk_to_hopf(
     try:
         fp = solve_fixed_point(
             k=p["k"], f_max=p["f_max"], s=p["s"],
-            beta=p["beta"], delta_E=p["delta_E"], c_0=p["c_0"],
+            beta=p["beta"], delta_E=p["delta_E"],
         )
     except ValueError as e:
         raise ReductionFailure(f"Fixed-point solve failed: {e}") from e

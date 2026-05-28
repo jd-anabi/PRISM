@@ -54,12 +54,17 @@ def run_fdt(cfg: FDTConfig) -> None:
     cfg.omega_0, omega_0_desc = _estimate_omega_0(cfg)
     print(f"Cell file natural-frequency estimate: omega_0 ~= {omega_0_desc}")
 
+    # Single plot dir + timestamp for all outputs from this run (incl. sanity plots).
+    PLOT_PATH.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     # 2. Sanity checks (optional skip)
     skip_ans = input("Skip sanity checks? (y/N): ").strip().lower()
     if skip_ans in ("y", "yes"):
         print("Skipping sanity checks.")
     else:
-        results = run_all_sanity(cfg)
+        passive_plot_path = PLOT_PATH / f"fdt_ratio_passive_{timestamp}.png"
+        results = run_all_sanity(cfg, passive_plot_path=passive_plot_path)
         if not all(passed for passed, _ in results.values()):
             print("WARNING: one or more sanity checks failed (see metrics above).")
         ans = input("Proceed to production sweep? (y/N): ").strip().lower()
@@ -76,8 +81,7 @@ def run_fdt(cfg: FDTConfig) -> None:
     freqs_psd, G, t_traj, x_mean_traj = run_campaign1_psd(cfg, return_trajectory=True)
 
     # Save the ensemble-mean unforced trajectory as a diagnostic before moving on.
-    PLOT_PATH.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # (PLOT_PATH and timestamp set at the top of run_fdt.)
     traj_path = PLOT_PATH / f"spontaneous_trajectory_{timestamp}.png"
     plot_spontaneous_trajectory(
         t_traj.cpu().numpy(), x_mean_traj.cpu().numpy(),
@@ -112,7 +116,7 @@ def run_fdt(cfg: FDTConfig) -> None:
     beta = cfg.params_dict["beta"][0]
     ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), n, beta)
 
-    # 9. Plot + save (PLOT_PATH and timestamp already set in step 3)
+    # 9. Plot + save (PLOT_PATH and timestamp set at the top of run_fdt)
     ratio_path = PLOT_PATH / f"fdt_ratio_{timestamp}.png"
     chi_path = PLOT_PATH / f"chi_components_{timestamp}.png"
     psd_path = PLOT_PATH / f"psd_{timestamp}.png"
