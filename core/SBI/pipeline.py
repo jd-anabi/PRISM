@@ -157,7 +157,9 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     obs = simulator.simulate(state_dep_drift=state_dep_drift)[:, 0, :, steady_idx:].clone()
     return obs
 
-def gen_stats(x: torch.Tensor, dt: float | torch.Tensor , n_bands: int = 20, n_lags: int = 20, pacf_lags: int = 20,
+def gen_stats(x_spont: torch.Tensor, x_forced: torch.Tensor, dt: float | torch.Tensor,
+              drive_amp, drive_freq, drive_phase,
+              band_halfwidth: int = 2, bp_lo: float = 0.5, bp_hi: float = 1.5, slow_env_frac: float = 0.15,
               device: torch.device = torch.device('cpu'), stats_batch_size: int = 256) -> torch.Tensor:
     """
     Generate statistical features from input data using the given parameters.
@@ -166,16 +168,17 @@ def gen_stats(x: torch.Tensor, dt: float | torch.Tensor , n_bands: int = 20, n_l
     performance while avoiding OOM on large datasets. Each sub-batch result
     is moved to CPU immediately.
 
-    :param x: The input data tensor from which features will be computed (on CPU).
-    :type x: torch.Tensor
-    :param dt: The time step resolution for the input data.
+    :param x_spont: Unforced (spontaneous) trajectories for Groups A-F, shape (B, n), on CPU.
+    :param x_forced: Forced (driven) trajectories for Group G, shape (B, n), on CPU.
+    :param dt: The time step resolution for the input data (scalar, cell time units).
     :type dt: float
-    :param n_bands: Number of frequency bands for spectral features. Defaults to 20.
-    :type n_bands: int, optional
-    :param n_lags: Number of temporal lags for autocorrelation features. Defaults to 20.
-    :type n_lags: int, optional
-    :param pacf_lags: Number of lags for the partial autocorrelation function. Defaults to 20.
-    :type pacf_lags: int, optional
+    :param drive_amp: Per-sample drive amplitude (dimensional), scalar or (B,).
+    :param drive_freq: Per-sample drive frequency (dimensional), scalar or (B,).
+    :param drive_phase: Per-sample drive phase (dimensional), scalar or (B,).
+    :param band_halfwidth: Spectral band half-width in FFT bins (B7 / E2 harmonic powers). Default 2.
+    :param bp_lo: Envelope band-pass lower edge as a fraction of the centre frequency. Default 0.5.
+    :param bp_hi: Envelope band-pass upper edge as a fraction of the centre frequency. Default 1.5.
+    :param slow_env_frac: Slow-envelope low-pass cutoff as a fraction of f_peak. Default 0.15.
     :param device: The device on which to compute statistics. Defaults to torch.device('cpu').
     :type device: torch.device
     :param stats_batch_size: Number of samples to process per sub-batch on GPU. Defaults to 256.
@@ -184,18 +187,26 @@ def gen_stats(x: torch.Tensor, dt: float | torch.Tensor , n_bands: int = 20, n_l
     :return: A tensor containing the computed statistical features. Shape: (batch size, number of statistics).
     :rtype: torch.Tensor
     """
-    total = x.shape[0]
+    def _sub(v, s, e):
+        if torch.is_tensor(v) and v.dim() > 0:
+            return v[s:e].to(device)
+        return v
+
+    total = x_spont.shape[0]
     results = []
     for start in range(0, total, stats_batch_size):
         end = min(start + stats_batch_size, total)
-        x_sub = x[start:end].to(device)
-        dt_sub = dt
-        if isinstance(dt, torch.Tensor):
-            dt_sub = dt[start:end].to(device)
-        stats = statistics.SummaryStatistics(x_sub, dt_sub)
-        result = stats.compute_statistics(n_bands, n_lags, pacf_lags)
+        xs_sub = x_spont[start:end].to(device)
+        xf_sub = x_forced[start:end].to(device)
+        dt_sub = dt[start:end].to(device) if isinstance(dt, torch.Tensor) and dt.dim() > 0 else dt
+        stats = statistics.SummaryStatistics(
+            xs_sub, xf_sub, dt_sub,
+            _sub(drive_amp, start, end), _sub(drive_freq, start, end), _sub(drive_phase, start, end),
+            band_halfwidth=band_halfwidth, bp_lo=bp_lo, bp_hi=bp_hi, slow_env_frac=slow_env_frac,
+        )
+        result = stats.compute_statistics()
         results.append(result.cpu())
-        del stats, x_sub, result
+        del stats, xs_sub, xf_sub, result
         if device.type == 'cuda':
             torch.cuda.empty_cache()
     return torch.cat(results, dim=0)
@@ -393,7 +404,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 curr_thetas_forcing, t_fine, curr_thetas_rescale, forcing_idx, rescale_idx
             )
 
-            # 3. Simulate with physical ND params
+            # 3. Simulate the FORCED run (drive on) -> Group G
             x_nd_fine = gen_obs(
                 model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
                 force=force, n_segs=n_segs_k, steady_idx=steady_idx,
@@ -401,20 +412,38 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 batch_size=run_size, dtype=dtype, device=device,
             )[0, :, :]
             x_nd = x_nd_fine[:, ::subsample_factor][:, :N_points_k]
-            del x_nd_fine, force
+            del x_nd_fine
 
-            # 4. Redimensionalize (uses PHYSICAL rescale)
+            # 3b. Simulate the SPONTANEOUS run (zero force) -> Groups A-F
+            x_nd_spont_fine = gen_obs(
+                model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
+                force=torch.zeros_like(force), n_segs=n_segs_k, steady_idx=steady_idx,
+                fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+                batch_size=run_size, dtype=dtype, device=device,
+            )[0, :, :]
+            x_nd_spont = x_nd_spont_fine[:, ::subsample_factor][:, :N_points_k]
+            del x_nd_spont_fine, force
+
+            # 4. Redimensionalize both runs (uses PHYSICAL rescale)
             x_scale  = curr_thetas_rescale[:, rescale_idx["x_scale"]].unsqueeze(1)
             x_offset = curr_thetas_rescale[:, rescale_idx["x_offset"]].unsqueeze(1)
             x_dim = helpers.rescale(x_nd, x_scale, x_offset)
-            del x_nd
+            x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
+            del x_nd, x_nd_spont
 
-            # 5. Stats + conditioning (unchanged)
+            # 5. Stats (A-F from spontaneous, G from forced) + conditioning
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                training_stats = gen_stats(x_dim.cpu(), dt_exp, device=device)
+                drive_amp = curr_thetas_forcing[:, forcing_idx["amp"]].cpu()
+                drive_freq = curr_thetas_forcing[:, forcing_idx["freq"]].cpu()
+                drive_phase = curr_thetas_forcing[:, forcing_idx["phase"]].cpu()
+                training_stats = gen_stats(x_spont_dim.cpu(), x_dim.cpu(), dt_exp, drive_amp, drive_freq, drive_phase, device=device)
                 log_T_k_tensor = torch.full((run_size, 1), math.log(T_k), dtype=dtype)
-                training_stats = torch.cat((training_stats, curr_thetas_forcing.cpu(), log_T_k_tensor), dim=-1)
+                # Canonical conditioning layout: [S(x_dim) | log(T) | theta_force].
+                # log(T) rides with the summary pathway; theta_force is a separate block.
+                # The embedding split in build_posterior depends on this exact order, so
+                # keep it in sync with generate_observations / validate / infer_from_experiment.
+                training_stats = torch.cat((training_stats, log_T_k_tensor, curr_thetas_forcing.cpu()), dim=-1)
                 training_data.append(training_stats)
 
             # 6. Collect LATENT targets (not physical)
@@ -429,7 +458,11 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 def train_nn(training_params: dict, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
              forcing_prior: torch.distributions.Distribution, nd_dim: int, forcing_idx: dict, rescale_idx: dict,
              x_obs: torch.Tensor = None, theta_obs: torch.Tensor = None, num_rounds: int = 1, return_diagnostics: bool = False, theta_transform: Transform | None = None,
-             fixed_dict: dict = None, batch_size: int = 128, device: torch.device = torch.device('cpu')) -> DirectPosterior | tuple[DirectPosterior, dict]:
+             fixed_dict: dict = None,
+             hidden_features: int = 50, num_transforms: int = 5, num_bins: int = 10,
+             learning_rate: float = 5e-4, stop_after_epochs: int = 20, max_num_epochs: int = 2_147_483_647,
+             show_train_summary: bool = False,
+             batch_size: int = 128, device: torch.device = torch.device('cpu')) -> DirectPosterior | tuple[DirectPosterior, dict]:
     """
     Trains a neural posterior distribution using either Neural Posterior Estimation (NPE) or Sequential Neural Posterior
     Estimation (SNPE), depending on the number of training runs specified. The method automates simulation-based
@@ -449,6 +482,13 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
         is performed. Defaults to 1.
     :param return_diagnostics: Whether to return additional diagnostics such as loss values during training. Defaults to False.
     :param fixed_dict: Dictionary of fixed parameters for the model. Defaults to None.
+    :param hidden_features: Hidden units per flow transform (density-estimator capacity).
+    :param num_transforms: Number of flow transforms / coupling layers (capacity).
+    :param num_bins: Spline bins per transform (NSF only).
+    :param learning_rate: Adam learning rate for training.
+    :param stop_after_epochs: Early-stopping patience in epochs.
+    :param max_num_epochs: Hard cap on the number of training epochs.
+    :param show_train_summary: If True, print sbi's per-epoch train/validation-loss summary.
     :param batch_size: Batch size for training the density estimator during each run. Defaults to 128.
     :param device: Device on which the computations should be performed (e.g., 'cpu' or 'cuda'). Defaults to 'cpu'.
     :return: A `NeuralPosterior` object representing the trained posterior distribution. If 'return_diagnostics = True', return a tuple containing
@@ -457,7 +497,9 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
     if num_rounds > 1 and x_obs is None:
         raise ValueError("x_obs must be specified for SNPE algorithm")
 
-    neural_posterior = posterior_nn(model=model, embedding_net=embedding_net)
+    neural_posterior = posterior_nn(model=model, embedding_net=embedding_net,
+                                    hidden_features=hidden_features, num_transforms=num_transforms,
+                                    num_bins=num_bins)
     infer = SNPE(prior=prior, density_estimator=neural_posterior, device=str(device))
 
     proposal = None # set up initial proposal distribution
@@ -494,7 +536,11 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
         data = data[valid_idx]
 
         infer.append_simulations(thetas, data, proposal=proposal)
-        density_estimator = infer.train(training_batch_size=batch_size)
+        density_estimator = infer.train(
+            training_batch_size=batch_size, learning_rate=learning_rate,
+            stop_after_epochs=stop_after_epochs, max_num_epochs=max_num_epochs,
+            show_train_summary=show_train_summary,
+        )
         posterior = infer.build_posterior(density_estimator)
         assert isinstance(posterior, DirectPosterior), f"Expected DirectPosterior, got {type(posterior)}"
 
@@ -521,6 +567,18 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
             proposal = posterior.set_default_x(x_obs.to(device)) # if SNPE, the user has to specify x_obs
 
     assert isinstance(posterior, DirectPosterior), f"Expected DirectPosterior, got {type(posterior)}"
+
+    # Capture the per-epoch train/validation loss curve from the sbi trainer so the
+    # convergence ("under-fit vs converged") check is reproducible. sbi keeps these in
+    # infer._summary; they are otherwise discarded when this function returns.
     if return_diagnostics:
+        summary = getattr(infer, "_summary", {}) or {}
+        diagnostics["training_loss"] = list(summary.get("training_loss", []))
+        diagnostics["validation_loss"] = list(summary.get("validation_loss", []))
+        best_val = summary.get("best_validation_loss", [])
+        diagnostics["best_validation_loss"] = best_val[-1] if len(best_val) else None
+        epochs = summary.get("epochs_trained", [])
+        diagnostics["epochs_trained"] = epochs[-1] if len(epochs) else None
+        diagnostics["stop_after_epochs"] = stop_after_epochs
         return posterior, diagnostics
     return posterior

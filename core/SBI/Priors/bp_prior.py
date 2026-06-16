@@ -46,9 +46,9 @@ class BPPrior(prior.Prior):
         stable_params = []
 
         num_added = 0
-        added_params_progress_bar = tqdm(total=(num_iterations - 1), desc=f"Added {num_added} sets to accepted parameters during global sweep", leave=False)
+        added_params_progress_bar = tqdm(total=num_iterations, desc=f"Added {num_added} sets to accepted parameters during global sweep", leave=False)
         with torch.no_grad():
-            for i in range(num_iterations - 1):
+            for i in range(num_iterations):
                 curr_thetas = thetas[i*curr_batch_size:(i+1)*curr_batch_size]
                 sim = bp_simulator.BPSimulator(curr_thetas, force, inits, t, segs=segs, batch_size=curr_batch_size, device=self.device)
                 x = sim.simulate(state_dep_drift=state_dep_drift)[0, 0, :, :] # shape: (curr_batch_size, len(t))

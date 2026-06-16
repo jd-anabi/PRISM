@@ -67,7 +67,7 @@ BP_LABELS = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",
              r"$C_{min}$", r"$S_{min}$", r"$S_{max}$", r"$Ca^2_m$", r"$Ca^2_{gs}$",
              r"$U_{gs,\ max}$", r"$\Delta G$", r"$k_{gs, \text{ ratio}}$",
              r"$\chi_{hb}$", r"$\chi_a$", r"$x_c$", r"$\eta_{hb}$", r"$\eta_{a}$"]
-NADROWSKI_LABELS = [r"$\kappa$", r"$\tilde{\lambda}$", r"$\phi$", r"$\tilde{\tau}$", r"$\tilde{\tau}_c$",
+NADROWSKI_LABELS = [r"$\kappa$", r"$\tilde{\lambda}$", r"$\varphi$", r"$\tilde{\tau}$", r"$\tilde{\tau}_c$",
                     r"$S$", r"$\Delta \tilde{G}$", r"$\beta$", r"$N$", r"$\tilde{T}$"]
 
 VALID_MODELS = ["BP", "NADROWSKI", "HOPF"]
@@ -87,7 +87,34 @@ CHUNK_LEN = 100_000    # fine integration steps per segment (per-chunk memory ca
 N_ND_MAX = 300_000     # max total fine integration steps per batch (pre-filter ceiling)
 PPC_BIN_SIZE = 50      # samples per mini-batch for posterior-predictive-check simulation
 CAL_RUN_SIZE = 10      # samples per (t_scale, T) pair in SBC calibration data
-TRAINING_NUM_RUNS = 500  # number of (t_scale_k, T_k) batches per training round
+SBC_N_CAL = 2000       # calibration datasets for SBC in validate(). n_cal=1000 was under-powered:
+                       # the K=10 repeat study (scripts/sbc_characterize.py) showed mild marginal
+                       # miscalibration only surfaces reliably at n_cal>=2000 (KS power grows with n_cal).
+TRAINING_NUM_RUNS = 5000  # number of (t_scale_k, T_k) batches per training round (data budget)
+
+# === NEURAL POSTERIOR & TRAINING HYPERPARAMETERS ===
+# Capacity / convergence knobs for the SBI posterior. Raise the flow capacity and/or the
+# training budget to address broad SBC under-calibration; defaults match sbi's own.
+DENSITY_ESTIMATOR = "nsf"                # flow family: "nsf" (neural spline flow) or "maf"
+NSF_HIDDEN_FEATURES = 128                 # hidden units per flow transform (sbi default 50)
+NSF_NUM_TRANSFORMS = 8                   # number of flow transforms (sbi default 5)
+NSF_NUM_BINS = 10                        # spline bins per transform, NSF only (sbi default 10)
+TRAINING_NUM_ROUNDS = 1                  # 1 = amortized NPE; >1 = sequential NPE near the observation
+TRAINING_BATCH_SIZE = 512                # density-estimator minibatch size
+TRAINING_LEARNING_RATE = 1e-3            # Adam learning rate (sbi default)
+TRAINING_STOP_AFTER_EPOCHS = 20          # early-stopping patience in epochs (sbi default)
+TRAINING_MAX_NUM_EPOCHS = 2_147_483_647  # hard epoch cap (sbi default: effectively unbounded)
+TRAINING_SHOW_SUMMARY = True             # print sbi's train/validation-loss summary (check convergence)
+
+# === DECORRELATING REPARAMETERIZATION (Track A: flow calibration via latent rotation) ===
+# When the inferred params are well-identified but strongly correlated (e.g. kappa~x_scale at
+# |cos|=0.95), the flow mis-calibrates the thin diagonal ridge. Rotating the flow's latent
+# coordinate into the simulation-based Fisher eigenbasis makes that posterior axis-aligned so the
+# flow can calibrate it -- no information loss, no model/stats change. REPARAM_ROTATE=False (V=I)
+# is exactly the current pipeline, so the rotation is fully optional and model-agnostic.
+REPARAM_ROTATE = True   # True = rotate into the Fisher eigenbasis; False = plain pipeline.
+REPARAM_FISHER_M = 48    # ensemble per latent-perturbation for the simulation-based Fisher estimate.
+REPARAM_FISHER_DZ = 0.1  # latent-space central-difference step for the Fisher Jacobian.
 
 # === TRANSIENT (Case A: clip initial conditions settling) ===
 TRANSIENT_ND_UNITS = 100  # ND time units of transient to discard; ~20 e-folds of the slowest

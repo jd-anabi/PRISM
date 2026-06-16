@@ -1,0 +1,184 @@
+"""
+Step 2 (sbi_calibration_handoff.txt): full characterization of the t_offset SBC anomaly.
+
+t_offset's SBC KS p-value swung 0.762 -> 0.001 between training runs, unlike the
+persistently-bad cluster (kappa/lambda/beta). This repeats SBC K times at a raised
+n_cal on a saved posterior and reports the run-to-run DISTRIBUTION of the per-parameter
+KS p-values plus a t_offset rank-histogram deep-dive, to disambiguate:
+
+  - sampling NOISE      : t_offset KS p is high/variable across repeats; pooled rank
+                          histogram is ~flat.
+  - REAL miscalibration : KS p stays low across repeats; pooled hist shows a systematic
+                          shape (cap = overconfident, U = underconfident, slope = biased).
+  - phase-wrap ARTIFACT : KS p low but the t_offset posterior is multimodal/periodic.
+                          t_offset enters ONLY through the drive phase (mod 1/f), so a
+                          wrapped posterior can break SBC's linear rank statistic without
+                          the posterior being miscalibrated in the usual sense.
+
+The training prior is extracted directly from the saved posterior
+(posterior.prior = SBIPriorWrapper(latent ProductPrior)), so the SBC proposal is
+guaranteed to match training and no separate (possibly mismatched) prior file is needed.
+
+Env knobs:
+  CELL   cell file                                  (default Resources/Cells/nadrowski_cell_2.txt)
+  POST   posterior filename under Resources/Posteriors (default posterior_3d.pt)
+  K      number of SBC repeats                      (default 10)
+  N_CAL  calibration datasets per repeat            (default 2000)
+  NPS    posterior samples per calibration point    (default 1000)
+  SEED   base RNG seed                              (default 0)
+
+Run:
+  & "C:\\Users\\J\\anaconda3\\envs\\biophys-env\\python.exe" scripts/sbc_characterize.py
+"""
+import math
+import os
+import sys
+import time
+import warnings; warnings.filterwarnings("ignore")
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import numpy as np
+import torch
+import matplotlib; matplotlib.use("Agg")          # headless: savefig only, no display
+from matplotlib import pyplot as plt
+from sbi.diagnostics import run_sbc, check_sbc
+
+from core import cli, orchestrator
+from core.config import (SimConfig, DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S, detect_device,
+                         NADROWSKI_LABELS, POSTERIOR_PATH, PLOT_PATH)
+from core.SBI import analysis
+from core.SBI.reparam import build_inferred_bijection, TransformedPosterior
+
+# ---- knobs ----
+CELL = os.environ.get("CELL", "Resources/Cells/nadrowski_cell_2.txt")
+POST = os.environ.get("POST", "posterior_3d.pt")
+K = int(os.environ.get("K", "10"))
+N_CAL = int(os.environ.get("N_CAL", "2000"))
+NPS = int(os.environ.get("NPS", "1000"))
+SEED = int(os.environ.get("SEED", "0"))
+print(f"[cfg] CELL={CELL}  POST={POST}  K={K}  N_CAL={N_CAL}  NPS={NPS}  SEED={SEED}", flush=True)
+
+# ---- build cfg non-interactively (mirror diagnose_fmax.py); T_obs is irrelevant for SBC ----
+inits, params, rescale, forcing, units, si, s2c = cli._parse_cell(CELL)
+cfg = SimConfig(model="NADROWSKI", labels=NADROWSKI_LABELS, state_dep_drift=True,
+                inits_dict=inits, params_dict=params, rescale_params=rescale,
+                force_params_dict=forcing, units_dict=units, si_factors=si,
+                dt_exp=DT_EXP_S * s2c, t_min_exp=T_MIN_EXP_S * s2c,
+                t_max_exp=T_MAX_EXP_S * s2c, T_obs=T_MIN_EXP_S * s2c, hw=detect_device())
+dtype, device = cfg.hw.dtype, cfg.hw.device
+nd_dim = len(cfg.params_dict)
+labels = cfg.inferred_labels
+t_off_idx = nd_dim + cfg.rescale_idx["t_offset"]
+print(f"[cfg] device={device}  nd_dim={nd_dim}  n_inferred={len(labels)}  "
+      f"t_offset global idx={t_off_idx} ('{labels[t_off_idx]}')", flush=True)
+
+# ---- load posterior + extract its EXACT training (latent) prior ----
+post_latent = torch.load(str(POSTERIOR_PATH / POST), weights_only=False)
+latent_inferred_prior = post_latent.prior.gen_dist          # ProductPrior([latent_nd_gmm, latent_rescale])
+T = build_inferred_bijection(cfg)
+posterior = TransformedPosterior(post_latent, T)            # physical-space posterior
+force_prior = orchestrator._build_forcing_prior(cfg)
+
+_z = latent_inferred_prior.sample((2,))
+assert _z.shape[-1] == len(labels), f"latent prior dim {_z.shape[-1]} != n_inferred {len(labels)}"
+print(f"[prior] extracted latent inferred prior from posterior.prior; sample dim={_z.shape[-1]}", flush=True)
+
+t = cfg.t
+csv_path = str(PLOT_PATH / "sbc_characterization_pvals.csv")
+npz_path = str(PLOT_PATH / "sbc_characterization_ranks.npz")
+
+# ---- SBC repeat loop ----
+ks_matrix = np.full((K, len(labels)), np.nan)               # (K, n_inferred) KS p-values
+c2st_matrix = np.full((K, len(labels)), np.nan)
+ranks_all = []                                              # list of (n_valid, n_inferred) per repeat
+
+for r in range(K):
+    torch.manual_seed(SEED + r)
+    t0 = time.time()
+    x_cal, theta_star = analysis.gen_cal_data(
+        model=cfg.model, prior=latent_inferred_prior, forcing_prior=force_prior,
+        t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=N_CAL,
+        nd_dim=nd_dim, forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+        dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+        t_scale_bounds=cfg.t_scale_bounds, theta_transform=T,
+        state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
+    )
+    n_valid = theta_star.shape[0]
+    ranks, dap = run_sbc(
+        thetas=theta_star.to(device), xs=x_cal.to(device), posterior=posterior,
+        num_posterior_samples=NPS, reduce_fns="marginals",
+        use_batched_sampling=True, show_progress_bar=False,
+    )
+    prior_samples = T(latent_inferred_prior.sample((n_valid,)).to(device)).cpu()
+    stats = check_sbc(ranks=ranks.cpu(), prior_samples=prior_samples,
+                      dap_samples=dap.cpu(), num_posterior_samples=NPS)
+    ks_matrix[r] = np.asarray(stats["ks_pvals"])
+    c2st_matrix[r] = np.asarray(stats["c2st_ranks"])
+    ranks_all.append(ranks.cpu().numpy())
+
+    # incremental saves so a killed background run still leaves usable results
+    np.savetxt(csv_path, ks_matrix, delimiter=",",
+               header=",".join(str(l) for l in labels), comments="")
+    np.savez(npz_path, ks=ks_matrix, c2st=c2st_matrix, t_off_idx=t_off_idx,
+             labels=np.array([str(l) for l in labels]),
+             ranks=np.concatenate(ranks_all, axis=0), nps=NPS)
+    print(f"[run {r+1}/{K}] n_valid={n_valid}  t_offset KS p={ks_matrix[r, t_off_idx]:.4f}  "
+          f"({time.time() - t0:.1f}s)", flush=True)
+
+# ---- aggregate report ----
+def col_summary(j):
+    col = ks_matrix[:, j][np.isfinite(ks_matrix[:, j])]
+    if col.size == 0:
+        return np.nan, np.nan, np.nan, np.nan
+    return float(np.median(col)), float(col.min()), float(col.max()), float((col < 0.05).mean())
+
+print("\n=== KS p-value distribution over K repeats (sorted by median; low = miscalibrated) ===")
+print(f"{'param':16s} {'median':>8s} {'min':>8s} {'max':>8s} {'frac<.05':>9s}")
+for j in sorted(range(len(labels)), key=lambda k: col_summary(k)[0]):
+    med, lo, hi, frac = col_summary(j)
+    mark = "   <== t_offset (target)" if j == t_off_idx else ""
+    print(f"{str(labels[j]):16s} {med:8.3f} {lo:8.3f} {hi:8.3f} {frac:9.2f}{mark}")
+
+# ---- t_offset deep-dive: pooled rank histogram + ECDF ----
+toff_pooled = np.concatenate([rk[:, t_off_idx] for rk in ranks_all])
+fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
+axes[0].hist(toff_pooled, bins=30, density=True, color="steelblue", alpha=0.85)
+axes[0].axhline(1.0 / NPS, color="k", ls="--", label="uniform")
+axes[0].set_title(f"t_offset pooled rank histogram (K={K}, n={toff_pooled.size})")
+axes[0].set_xlabel("rank"); axes[0].set_ylabel("density"); axes[0].legend()
+xs = np.sort(toff_pooled); ecdf = np.arange(1, xs.size + 1) / xs.size
+axes[1].plot(xs, ecdf, color="steelblue", label="empirical")
+axes[1].plot([0, NPS], [0, 1], color="k", ls="--", label="uniform")
+axes[1].set_title("t_offset rank ECDF vs uniform")
+axes[1].set_xlabel("rank"); axes[1].set_ylabel("CDF"); axes[1].legend()
+fig.tight_layout()
+hist_png = str(PLOT_PATH / "sbc_toffset_characterization.png")
+fig.savefig(hist_png, dpi=130); print("\nsaved:", hist_png, flush=True)
+
+# ---- phase-wrap diagnostic: t_offset posterior marginals for a few calibration points ----
+n_show = min(6, x_cal.shape[0])
+sel = np.random.default_rng(SEED).choice(x_cal.shape[0], size=n_show, replace=False)
+figm, axm = plt.subplots(2, 3, figsize=(13, 7))
+for ax, i in zip(axm.ravel(), sel):
+    s = posterior.sample((2000,), x=x_cal[i:i + 1].to(device))
+    ax.hist(s[:, t_off_idx].cpu().numpy(), bins=40, color="darkorange", alpha=0.85)
+    ax.axvline(theta_star[i, t_off_idx].item(), color="k", ls="--")
+    ax.set_title(f"cal #{int(i)}"); ax.set_xlabel(str(labels[t_off_idx]))
+figm.suptitle("t_offset posterior marginals (dashed = truth) — multimodal/periodic => phase-wrap artifact")
+figm.tight_layout()
+marg_png = str(PLOT_PATH / "sbc_toffset_marginals.png")
+figm.savefig(marg_png, dpi=130); print("saved:", marg_png, flush=True)
+
+# ---- verdict heuristic ----
+med, lo, hi, frac = col_summary(t_off_idx)
+print("\n=== VERDICT (t_offset) ===")
+print(f"  KS p over {K} repeats: median={med:.3f}  range=[{lo:.3f}, {hi:.3f}]  frac<0.05={frac:.2f}")
+if med > 0.05 and frac < 0.5:
+    print("  => Consistent with SAMPLING NOISE (high/variable KS p; the 0.001 was likely an unlucky draw).")
+elif med < 0.05 and frac > 0.8:
+    print("  => Looks REAL (KS p stays low). Read the pooled rank histogram shape:")
+    print("     cap=overconfident, U=underconfident, slope=biased, multimodal=phase-wrap artifact.")
+else:
+    print("  => BORDERLINE: raise K and/or N_CAL, and inspect the histogram shape.")
+print("SBC_CHARACTERIZE_DONE", flush=True)

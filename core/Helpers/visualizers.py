@@ -136,7 +136,8 @@ def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = N
     return fig
 
 
-def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray, x_map: np.ndarray,
+def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray,
+                           x_mean: np.ndarray = None, x_median: np.ndarray = None,
                            x_samples: np.ndarray = None, n_show: int = 10,
                            fig_size: tuple = (14, 5)) -> plt.Figure:
     """
@@ -144,7 +145,8 @@ def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray, x_map: np.ndarray
 
     :param t: Time array (steady-state portion), shape (T,).
     :param x_true: Ground truth x-position time series, shape (T,).
-    :param x_map: MAP estimate trajectory, shape (T,).
+    :param x_mean: Posterior-mean-parameter trajectory, shape (T,). Optional.
+    :param x_median: Posterior-median-parameter trajectory, shape (T,). Optional.
     :param x_samples: Posterior sample trajectories, shape (N, T).
     :param n_show: Number of individual sample trajectories to display.
     :param fig_size: Figure size.
@@ -166,11 +168,63 @@ def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray, x_map: np.ndarray
                     label='Posterior samples' if i == 0 else None)
 
     ax.plot(t, x_true, color='black', linewidth=1.2, label='Ground truth')
-    ax.plot(t, x_map, color='red', linewidth=1.0, linestyle='--', label='MAP estimate')
+    if x_median is not None:
+        ax.plot(t, x_median, color='red', linewidth=1.0, linestyle='--', label='Posterior median')
+    if x_mean is not None:
+        ax.plot(t, x_mean, color='darkorange', linewidth=1.0, linestyle='-.', label='Posterior mean')
 
     ax.set_xlabel('Time')
     ax.set_ylabel('x(t)')
     ax.set_title('Posterior vs Ground Truth')
     ax.legend()
     plt.tight_layout()
+    return fig
+
+
+def plot_training_loss(diagnostics: dict, save_path: str | PathLike[str] = None,
+                       fig_size: tuple = (10, 5)) -> plt.Figure | None:
+    """
+    Plot the NPE per-epoch training/validation loss curve for a convergence check.
+
+    Distinguishes "under-fit" (validation loss still descending near the best epoch ->
+    train longer / raise capacity) from "converged" (clean plateau well before the best
+    epoch -> remaining wide marginals are a data/identifiability limit, not under-fit).
+
+    :param diagnostics: dict from train_nn carrying 'training_loss', 'validation_loss',
+                        and optionally 'best_validation_loss', 'epochs_trained',
+                        'stop_after_epochs'.
+    :param save_path: optional path to save the figure.
+    :param fig_size: figure size.
+    :return: the matplotlib Figure, or None if no validation curve is present.
+    """
+    val = diagnostics.get("validation_loss") or []
+    train = diagnostics.get("training_loss") or []
+    if len(val) == 0:
+        print("plot_training_loss: no validation_loss curve in diagnostics; nothing to plot.")
+        return None
+
+    fig, ax = plt.subplots(figsize=fig_size)
+    if len(train):
+        ax.plot(np.arange(1, len(train) + 1), train, color='steelblue', label='training loss')
+    ax.plot(np.arange(1, len(val) + 1), val, color='darkorange', label='validation loss')
+
+    best_epoch = int(np.argmin(val)) + 1
+    ax.axvline(best_epoch, color='green', linestyle='--', linewidth=1.0,
+               label=f'best epoch ({best_epoch})')
+    sae = diagnostics.get("stop_after_epochs")
+    if sae:
+        ax.axvspan(best_epoch, len(val), alpha=0.08, color='red',
+                   label=f'early-stop window ({sae}-epoch patience)')
+
+    ax.set_xlabel('epoch')
+    ax.set_ylabel('loss (lower = better)')
+    title = 'NPE training / validation loss'
+    et, bvl = diagnostics.get("epochs_trained"), diagnostics.get("best_validation_loss")
+    if et is not None and bvl is not None:
+        title += f'  (epochs={et}, best val={bvl:.4f})'
+    ax.set_title(title)
+    ax.legend()
+    plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path)
     return fig

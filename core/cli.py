@@ -140,7 +140,7 @@ _INFERENCE_PROMPT_UNITS = {
     "offset": "N",
 }
 
-def get_inference_inputs(force_param_names: list[str]) -> tuple[str, float, dict]:
+def get_inference_inputs(force_param_names: list[str]) -> tuple[str, str, float, dict]:
     """
     Prompt for the inputs needed to run inference on real experimental data.
 
@@ -150,10 +150,11 @@ def get_inference_inputs(force_param_names: list[str]) -> tuple[str, float, dict
     :param force_param_names: Forcing parameter names from the cell file (e.g.
                               ["amp", "freq", "phase", "offset"] for Nadrowski/BP, or
                               ["amp", "amp_y", "freq", "phase", "offset"] for Hopf).
-    :return: (data_file_path, T_obs_seconds, forcing_params_si). The forcing dict has
-             one entry per name in force_param_names.
+    :return: (spont_path, forced_path, T_obs_seconds, forcing_params_si). The forcing dict
+             has one entry per name in force_param_names.
     """
-    data_path = input("Path to experimental data file (.csv or .npy): ").strip()
+    spont_path = input("Path to SPONTANEOUS (unforced) recording (.csv or .npy): ").strip()
+    forced_path = input("Path to FORCED (driven) recording (.csv or .npy): ").strip()
     T_obs_s = float(input("Observation duration T_obs (seconds): "))
     print("\nForcing parameters (in SI units):")
     forcing_params_si: dict = {}
@@ -162,7 +163,7 @@ def get_inference_inputs(force_param_names: list[str]) -> tuple[str, float, dict
         unit_str = f" ({unit})" if unit else ""
         forcing_params_si[name] = float(input(f"  {name}{unit_str}: "))
     helpers.clear_screen()
-    return data_path, T_obs_s, forcing_params_si
+    return spont_path, forced_path, T_obs_s, forcing_params_si
 
 # ── Mode selection (top-level) ──────────────────────────────────────────────
 def select_mode() -> str:

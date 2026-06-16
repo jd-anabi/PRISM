@@ -8,10 +8,12 @@ class EmbeddedNet(nn.Module):
         """
         Embedding network with optional conditioning on forcing parameters.
 
-        :param input_dim: dimension of summary statistics
+        :param input_dim: width of the leading conditioning block routed to the summary
+            pathway (summary statistics; in this pipeline log(T) is grouped here too)
         :param output_dim: final output dimension
         :param layer_dims: hidden layer dims for the summary pathway
-        :param forcing_dim: dimension of forcing parameters (0 = unconditioned)
+        :param forcing_dim: width of the trailing conditioning block routed to the forcing
+            pathway, e.g. the forcing parameters (0 = unconditioned)
         :param forcing_layer_dims: hidden layer dims for the forcing pathway
         :param merge_layer_dim: hidden layer dim for the merge pathway
         """

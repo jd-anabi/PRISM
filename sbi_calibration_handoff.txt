@@ -1,0 +1,157 @@
+================================================================================
+GFDT / SBI HANDOFF  —  Nadrowski hair-cell parameter inference
+Updated 2026-06-15. Self-contained context for a new chat to continue the SBI work.
+================================================================================
+
+PROJECT & GOAL
+  Simulation-based inference (amortized NPE via the `sbi` package, neural spline flow)
+  to recover 16 parameters of the Nadrowski hair-bundle model from a single observable
+  x(t): 10 nondimensional (ND) model params + 6 rescale params. Goal: a well-CALIBRATED
+  and (where possible) precise posterior, assessed by SBC / TARP / PPC / eye-test.
+
+  Parameter meanings (all defined from dimensional biophysical quantities):
+    ND (10):     kappa=k_sp/k_gs, lambda=lambda_a/lambda_hb, phi=f_max, tau, tau_c, S,
+                 dG, beta, N, temp(=T_a/T).        (order = NADROWSKI_LABELS in config.py)
+    rescale (6): t_scale=lambda_hb/k_gs (relaxation time), t_offset, x_scale=D (gating
+                 swing), x_offset, f_scale, f_offset.
+  NOTE: the Reduction / NWK->Hopf branch is being reworked and is IRRELEVANT to SBI.
+  Do not invoke or reason about the reduction map for this work.
+
+ENVIRONMENT / HOW TO RUN
+  - conda env "biophys-env":  C:\Users\J\anaconda3\envs\biophys-env\python.exe
+  - Full pipeline (interactive):
+        python -m core  ->  SBI mode  ->  NADROWSKI  ->  Resources/Cells/nadrowski_cell_2.txt
+        ->  choose/build prior  ->  TRAIN-NEW or load posterior  ->  validate  ->  (optional) infer.
+  - Tools (non-interactive; env knobs documented in each file's docstring). Run as:
+        & "C:\Users\J\anaconda3\envs\biophys-env\python.exe" scripts/<name>.py
+        scripts/sbc_characterize.py        repeated SBC (K x n_cal) on a saved posterior -> KS-p
+                                           distribution + t_offset rank-hist/marginals (POST/K/N_CAL).
+        scripts/degeneracy_map.py          16-param feature-Jacobian |cos|/SVD/unique-handle at GT.
+        scripts/feature_candidate_test.py  Laplace marginal-SD: does a candidate feature shrink a
+                                           param's posterior? (16-param Fisher, prior-range-scaled).
+        scripts/identifiability_offgt.py   Laplace SD at GT + prior samples (is info prior-wide?).
+        scripts/retrain_convergence.py     non-interactive retrain + saves loss curve (DRY=1 = wiring).
+        scripts/reparam_selftest.py        validate the reparam machinery (no retrain).
+        scripts/reparam_wiring_smoke.py    tiny rotated train end-to-end (no real retrain).
+        scripts/diagnose_fmax.py           older f_max feature-sensitivity + Part-B degeneracy probe.
+  - Syntax check:  py -3 -m py_compile <path>
+  - GIT: make LOCAL changes only; the user handles all git / remote operations.
+
+KEY FILES
+  core/SBI/statistics.py   41-feature summary stats (Groups A-G); FEATURE_LABELS = order.
+  core/SBI/pipeline.py     gen_obs; gen_stats; gen_training_data (Sobol (t_scale,T) batches);
+                           train_nn (sbi NPE/SNPE; now also captures the per-epoch train/val loss).
+  core/SBI/reparam.py      latent<->physical box bijection T + TransformedPosterior; AND the optional
+                           decorrelating rotation (OrthogonalTransform, fisher_eigenbasis,
+                           build_rotated_bijection, RotatedLatentPrior).
+  core/SBI/decorrelate.py  build_latent_fisher_rotation(cfg) -> V (Fisher eigenbasis; simulations only).
+  core/SBI/analysis.py     posterior_predictive_check; gen_cal_data (SBC calibration data).
+  core/SBI/Priors/         stability-filtered GMM ND prior + rescale/forcing priors + ProductPrior.
+  core/orchestrator.py     run(): generate_observations -> build_prior -> build_posterior ->
+                           validate (PPC/SBC/TARP/eye-test) -> infer_from_experiment (real data).
+  core/config.py           constants + hyperparams: capacity (NSF_*), training (TRAINING_*),
+                           SBC_N_CAL, reparam flags (REPARAM_ROTATE, REPARAM_FISHER_M/DZ).
+
+PIPELINE DESIGN (orienting notes)
+  - LATENT reparameterization: the flow trains in an unbounded latent z; T: z->theta maps to the
+    physical box (per-param scaled sigmoid). TransformedPosterior wraps the trained latent
+    DirectPosterior so .sample/.log_prob speak physical coords. The ND prior is stored as
+    TransformedDistribution(latent_GMM, T_nd); build_posterior extracts the latent GMM to train on.
+    A trained posterior carries its exact training prior at posterior.prior.gen_dist (a ProductPrior)
+    -> the SBC/reparam tools extract it; no separate prior file is needed.
+  - TWO-trajectory stats: per sample, simulate a spontaneous (zero-drive) run -> Groups A-F and a
+    forced run -> Group G (lock-in to the known drive). A1 (absolute mean) is the only non-demeaned
+    feature; everything else is shape/scale-invariant-ish.
+  - Conditioning layout = [ S(41) | log(T_obs) | forcing ]; log(T) rides the summary pathway, forcing
+    is a separate EmbeddedNet pathway. Keep this order in sync across generate_observations /
+    gen_training_data / validate / infer_from_experiment.
+  - Scale-batched training: each batch shares a Sobol-sampled (t_scale, T); simulate at fine ND dt
+    then downsample to dt_exp; pre-filter by N_ND_MAX.
+  - GOTCHA: the latent prior is MIXED-DEVICE (cpu rescale bijection + cuda nd GMM). The pipeline only
+    ever SAMPLES it, never .log_prob -- keep it that way (the reparam path also only samples it).
+
+CURRENT POSTERIOR / CALIBRATION STATE
+  posterior_3d.pt = the current ("run-2") posterior, trained on nadrowski_cell_2.txt with
+  REPARAM_ROTATE=False (plain pipeline; it predates the reparam work below).
+
+  Calibration: TRUST the K=10 x n_cal=2000 repeat study (scripts/sbc_characterize.py). A single
+  n_cal=1000 SBC is UNDER-POWERED and hides the mild miscalibration (KS power grows with n_cal).
+    Repeat-study KS-p median (frac of 10 runs with p<0.05), worst first:
+      lambda 0.000(1.0)  tau_c 0.002(0.9)  x_scale 0.003(0.9)  t_offset 0.005(0.8)
+      tau 0.007(0.8)  kappa 0.024(0.6)  phi 0.060(0.5)  beta 0.082(0.4)
+      PASS: t_scale, f_offset, N, dG, S, temp, x_offset, f_scale.
+    PPC clean (mean|z|=0.35); TARP excellent (ATC -0.064). Both are less sensitive than marginal
+    SBC, so they coexist with the mild marginal biases above (no contradiction).
+
+KEY FINDING (the diagnosis driving the current fix)
+  The SBC failures are NOT an information / degeneracy deficit -- they are FLOW CALIBRATION.
+  Evidence chain:
+    - CONVERGED, not under-fit: a convergence retrain plateaued (val loss flat through the full
+      early-stop window; small train-val gap) -> more training/capacity won't help.
+      (scripts/retrain_convergence.py; the script's auto "under-fit" line is a noise-spike artifact.)
+    - DEGENERACY is real but not fatal: dominant aliases kappa~x_scale |cos|=0.94 (amplitude: x(t)
+      sees the product D*A_nd) and lambda~t_scale |cos|=0.96 (timescale), in a broadly sloppy
+      manifold. (scripts/degeneracy_map.py)
+    - BUT identifiability is SUFFICIENT prior-wide: a Laplace marginal-SD analysis (Fisher F=J^TJ from
+      sims) shows every param pinned to ~0.3-7% of its prior range, holding across GT + prior samples
+      (kappa/lambda/x_scale/t_scale identified in 100% of K=6 points), EXCEPT t_offset & f_scale which
+      are genuinely uninformative (SD~1). (scripts/feature_candidate_test.py, identifiability_offgt.py)
+  => The params are well-identified, but their joint posterior is a thin, 0.95-correlated ridge that
+     the flow mis-calibrates (tight posteriors are hypersensitive to small flow biases in SBC).
+     t_offset's mild failure = the flow not perfectly reverting to the prior on an uninformative dim;
+     f_scale passes because the flow reverts to prior well there.
+
+THE FIX (Track A) -- IMPLEMENTED + VALIDATED; the retrain is IN PROGRESS (user)
+  Decorrelating reparameterization: rotate the flow's latent coordinate into the simulation-based
+  Fisher eigenbasis V so the correlated posterior becomes axis-aligned and the flow can calibrate it.
+    - V = decorrelate.build_latent_fisher_rotation(cfg): from the latent feature-Fisher (sims only,
+      NO trained posterior) -> generalizes to any model. V=I (REPARAM_ROTATE=False) = plain pipeline.
+    - Wired into build_posterior (computes V, trains rotated, saves <name>.rot.pt beside the .pt),
+      and the load path + validate reuse the saved V (read from posterior.T).
+    - Keeps ALL 16 params individually -- orthogonal/invertible, log-det 0; no information loss, no
+      model/stats change. Validated by reparam_selftest.py + reparam_wiring_smoke.py (decorrelation
+      Fisher off-diag 0.77 -> ~0; bijection round-trip, in-box, log-det preserved; rotated train +
+      save/load/sample all pass) -- no retrain needed to confirm correctness.
+
+  TO RUN:  set config.REPARAM_ROTATE = True  ->  python -m core (SBI, NADROWSKI, nadrowski_cell_2,
+           TRAIN-NEW)  ->  re-check:  $env:POST="<new>.pt"; ...python.exe scripts/sbc_characterize.py
+  The retrain is the end-to-end scientific test: does the mild miscalibration shrink? Prediction:
+  yes (the info is there; rotation just lets the flow calibrate the correlated geometry).
+
+STEP STATUS (original handoff plan)
+  1. [DONE] Eye test overlays the posterior MEAN + MEDIAN parameter trajectories (not the MAP).
+  2. [DONE] t_offset = real MILD high-bias, not noise (it's flow-reversion on an uninformative dim).
+  3. [DONE] Convergence check -> CONVERGED, not under-fit.
+  4. [DONE] Degeneracy map -> kappa~x_scale (0.94), lambda~t_scale (0.96) + sloppy core.
+  5. [READY/RUNNING] Flow-calibration fix = the decorrelating reparam (implemented + validated).
+     User is retraining with REPARAM_ROTATE=True, then will re-check SBC.
+
+WHAT'S NEXT (after the reparam retrain)
+  - If SBC improves: success -> document, and the rotation generalizes to other cell files/models.
+  - If only partial: the info is present, so it's still a flow problem -> options: average V over more
+    prior points (currently V is computed at GT), post-hoc calibration, or a modest capacity bump.
+  - Track B (add chi(omega) / waveform-shape features) is LOW-VALUE for kappa/lambda (info already
+    present, ~5-7% SD gain). The first candidate batch (feature_candidate_test.py) DID tighten
+    N/temp/tau/tau_c/beta by 19-36%, so revisit only to pin THOSE tighter. (rise_fall candidate dead.)
+  - To pin kappa/lambda/x_scale/t_scale *individually* much tighter needs new INFORMATION: a single
+    passive trace only sees the products D*A_nd (amplitude) and (lambda_hb/k_gs)*tau_nd (timescale).
+    The strong separator is the FORCED susceptibility chi(omega) SHAPE over multiple drive frequencies
+    (reuse the FDT machinery) -- but it needs a multi-frequency drive in BOTH training and experiment.
+
+THIS-SESSION CHANGES (all local; code only unless noted)
+  - Step 1 eye-test (orchestrator.validate, visualizers.plot_posterior_vs_truth).
+  - train_nn captures the loss curve; build_posterior saves <name>.loss.npz + <name>_loss.png.
+  - validate() SBC hardened: n_cal -> config.SBC_N_CAL=2000 (1000 was under-powered).
+  - Prior global-sweep off-by-one fixed: Nadrowski/BP _global_map ran range(num_iterations-1) (dropped
+    the last Sobol chunk, ~2% at num_iterations=50); now range(num_iterations) like Hopf. REBUILD a
+    prior to benefit -- saved priors on disk are unchanged.
+  - Reparam (Track A) machinery + wiring + flag (REPARAM_ROTATE, default False) + validation scripts.
+
+CONVENTIONS / GOTCHAS
+  - Cell file: nadrowski_cell_2.txt. Its param bounds define the bijection and MUST match training.
+  - Trust SBC KS p-values, not c2st_ranks (~0.58 is the c2st finite-sample floor, ~uniform across params).
+  - SBC power: use n_cal >= 2000 (validate uses config.SBC_N_CAL=2000); a single n_cal=1000 under-reports.
+  - Signal generally improves with longer T_obs recordings (esp. for the weakly-imprinted params).
+  - Mixed-device latent prior: SAMPLE only, never .log_prob (see PIPELINE DESIGN gotcha).
+  - Reduction / NWK->Hopf branch is irrelevant to SBI (being reworked) -- ignore it here.
+================================================================================

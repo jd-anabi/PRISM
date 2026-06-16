@@ -1,655 +1,412 @@
+"""
+Hand-crafted summary statistics for SBI on hair-bundle trajectories.
+
+Design (two trajectories per sample):
+  * Groups A-F describe the SPONTANEOUS dynamics and are computed on a dedicated
+    UNFORCED (zero-drive) trajectory -- no notching needed, the driven line is simply
+    absent.
+  * Group G describes the FORCED response and is computed by lock-in to the KNOWN drive
+    (amp, freq, phase) on the separate forced trajectory.
+
+Conventions (per the spec NOTES):
+  * Exactly ONE mean-retaining feature (A1, the absolute mean -> x_offset); every other
+    feature is computed on the demeaned signal.
+  * Positive / unbounded quantities (frequencies, Q, variance, decay times, gains, ratios)
+    are emitted log-transformed, so sbi's per-feature z-scoring standardizes the log.
+  * Phase-valued features (G2, G5, the G7 orientation) are emitted as (cos, sin) pairs to
+    avoid 2*pi wrap discontinuities.
+  * Output dimensionality is FIXED regardless of the input (a missing secondary peak etc.
+    falls back to a sentinel), so the conditioning-vector width is constant across
+    training and inference.
+
+Units: x is the dimensional trajectory sampled at dt (cell time units); the drive
+(amp, freq, phase) is dimensional. f*dt and the local time axis t_j = j*dt are therefore
+dimensionless / consistent. Group G locks in against LOCAL time (sample 0 = t=0), so
+G2 = arg(R_1) - phase carries t_offset modulo the drive period, as the identifiability
+notes require.
+
+Two-run notes:
+  * The spontaneous run is fully unforced (zero drive, including any DC force offset), so
+    A1-A4 read the natural operating point; the DC offset shifts only the forced run.
+  * With both a spontaneous (A2 -> x_scale) and a forced (G1 -> x_scale/f_scale) trajectory,
+    x_scale and f_scale are separately identifiable.
+"""
 import math
 
-from tqdm import tqdm
 import torch
 
+_EPS = 1e-12
+
+# Order matches compute_statistics(); length is asserted against the output width.
+FEATURE_LABELS = [
+    # Group A -- dimensional anchors
+    "A1_mean", "A2_log_var", "A3_log_fpeak", "A4_log_acf_decay",
+    # Group B -- spectral shape
+    "B1_log_Q", "B2_log_peak_floor", "B3_log_centroid_ratio", "B4_spec_entropy",
+    "B5_pow_frac_peakband", "B6_low_freq_frac", "B6_log_rolloff_ratio",
+    "B7_log_sec_freq_ratio", "B7_sec_height_ratio",
+    # Group C -- amplitude envelope
+    "C1_log_norm_env", "C2_log_env_cv", "C3_env_onset", "C4_mode_ratio",
+    "C5_env_skew", "C6_log_slowenv_corrtime", "C7_log_slowenv_relvar",
+    # Group D -- marginal distribution
+    "D1_excess_kurt", "D2_skew", "D3_bimodality",
+    # Group E -- multi-timescale / waveform
+    "E1_log_tau_fast", "E1_log_tau_slow", "E1_w_fast", "E2_log_h2", "E2_log_h3",
+    # Group F -- phase-amplitude coupling
+    "F1_noniso_slope", "F2_corr_omega_A2",
+    # Group G -- forced response
+    "G1_log_gain", "G2_cos", "G2_sin", "G3_log_h2_ratio", "G4_log_h3_ratio",
+    "G5_cos", "G5_sin", "G6_plv", "G7_log_amp", "G7_orient_cos", "G7_orient_sin",
+]
+
+
+def _logp(x: torch.Tensor) -> torch.Tensor:
+    """Log of a strictly-positive quantity, clamped for safety."""
+    return torch.log(torch.clamp(x, min=_EPS))
+
+
+def _cossin(theta: torch.Tensor) -> torch.Tensor:
+    """(B,) angle -> (B, 2) of (cos, sin)."""
+    return torch.stack([torch.cos(theta), torch.sin(theta)], dim=-1)
+
+
 class SummaryStatistics:
-    def __init__(self, x: torch.Tensor, dt: float | torch.Tensor):
-        self.x = x.detach()
-        self.dt = dt.unsqueeze(-1) if isinstance(dt, torch.Tensor) else dt
-        self.batch_size = x.shape[0]
-        self.n = x.shape[1]
-        self.device = x.device
-        self.dtype = x.dtype
-
-    # --- PUBLIC FUNCTIONS --- #
-    def compute_statistics(self, n_bands: int, n_lags: int, pacf_lags: int) -> torch.Tensor:
+    def __init__(self, x_spont: torch.Tensor, x_forced: torch.Tensor, dt: float | torch.Tensor,
+                 drive_amp, drive_freq, drive_phase,
+                 band_halfwidth: int = 2,
+                 bp_lo: float = 0.5, bp_hi: float = 1.5, slow_env_frac: float = 0.15):
         """
-        Compute a comprehensive set of summary statistics from various mathematical and statistical domains.
+        :param x_spont: unforced (spontaneous) trajectory for Groups A-F, shape (B, n).
+        :param x_forced: forced (driven) trajectory for Group G, shape (B, n). Same shape as x_spont.
+        :param dt: sampling interval (scalar; a per-sample tensor is collapsed to its mean
+                   for the shared frequency grid).
+        :param drive_amp/drive_freq/drive_phase: dimensional drive params, scalar or (B,).
+        :param band_halfwidth: spectral band half-width in FFT bins (B7 / E2 harmonic powers).
+        :param bp_lo, bp_hi: envelope band-pass edges as fractions of the centre frequency.
+        :param slow_env_frac: slow-envelope low-pass cutoff as a fraction of f_peak.
+        """
+        x_spont = x_spont.detach()
+        x_forced = x_forced.detach()
+        assert x_spont.shape == x_forced.shape, "spontaneous and forced trajectories must share shape"
+        self.B, self.n = x_spont.shape
+        self.device = x_spont.device
+        self.dtype = x_spont.dtype
+        self.dt = float(dt.float().mean().item()) if torch.is_tensor(dt) else float(dt)
 
-        This function aggregates statistics related to distribution features, spectral properties, temporal
-        dependencies, analytic signal characteristics, nonlinear dynamics, phase space reconstructions,
-        information theory, and extreme event analysis. The final set of features is returned as a tensor,
-        ensuring that any NaN values are replaced with zeros.
+        self.amp = self._as_col(drive_amp)      # (B, 1)
+        self.f = self._as_col(drive_freq)       # (B, 1)
+        self.phase = self._as_col(drive_phase)  # (B, 1)
 
-        :param n_bands: The number of frequency bands to consider for computing spectral statistics.
-        :param n_lags: The number of lags to analyze for temporal statistics.
-        :param pacf_lags: The number of lags to compute for partial autocorrelation statistics.
-        :return: A tensor containing the concatenated statistics. NaN values are replaced with zeros.
-        :rtype: torch.Tensor
+        self.hw = band_halfwidth
+        self.bp_lo, self.bp_hi = bp_lo, bp_hi
+        self.slow_env_frac = slow_env_frac
+
+        self.rfreqs = torch.fft.rfftfreq(self.n, d=self.dt, device=self.device).to(self.dtype)  # (nfr,)
+        self.ffreqs = torch.fft.fftfreq(self.n, d=self.dt, device=self.device).to(self.dtype)   # (n,)
+        self.df = (self.rfreqs[1] - self.rfreqs[0]).item() if self.rfreqs.numel() > 1 else 1.0
+
+        # A1 (the one mean-retaining feature) comes from the spontaneous run -> x_offset.
+        self.mean = x_spont.mean(dim=-1)                                 # (B,)
+        self.x_spont = x_spont - self.mean.unsqueeze(-1)                 # demeaned spontaneous (Groups A-F)
+        self.x0_forced = x_forced - x_forced.mean(dim=-1, keepdim=True)  # demeaned forced (Group G)
+        self._build_spectral()
+
+    # --- helpers ---------------------------------------------------------------
+    def _as_col(self, v) -> torch.Tensor:
+        """scalar / (B,) -> (B, 1) on the right device/dtype."""
+        if not torch.is_tensor(v):
+            return torch.full((self.B, 1), float(v), device=self.device, dtype=self.dtype)
+        v = v.to(device=self.device, dtype=self.dtype)
+        if v.dim() == 0:
+            return v.view(1, 1).expand(self.B, 1)
+        return v.reshape(self.B, 1)
+
+    def _acf(self, sig: torch.Tensor) -> torch.Tensor:
+        """Normalised autocorrelation (acf[:, 0] == 1) via Wiener-Khinchin."""
+        s = sig - sig.mean(dim=-1, keepdim=True)
+        sf = torch.fft.rfft(s, n=2 * self.n, dim=-1)
+        ac = torch.fft.irfft(sf.abs() ** 2, n=2 * self.n, dim=-1)[:, :self.n]
+        return ac / torch.clamp(ac[:, :1], min=_EPS)
+
+    def _corr_time(self, sig: torch.Tensor) -> torch.Tensor:
+        """1/e decay time (s) of the normalised ACF, falling back to the record length."""
+        ac = self._acf(sig)
+        below = ac < math.exp(-1.0)
+        has = below.any(dim=-1)
+        idx = torch.argmax(below.int(), dim=-1)
+        tau = idx.to(self.dtype) * self.dt
+        return torch.where(has, tau, torch.full_like(tau, self.n * self.dt))
+
+    @staticmethod
+    def _unwrap(phase: torch.Tensor) -> torch.Tensor:
+        d = torch.diff(phase, dim=-1)
+        adj = torch.zeros_like(phase)
+        adj[:, 1:] = torch.cumsum(-2 * math.pi * torch.round(d / (2 * math.pi)), dim=-1)
+        return phase + adj
+
+    def _analytic_bandpass(self, sig: torch.Tensor, f_lo: torch.Tensor, f_hi: torch.Tensor) -> torch.Tensor:
+        """Analytic signal of `sig` band-passed to [f_lo, f_hi] (per-sample, (B,1)). Complex (B, n)."""
+        xf = torch.fft.fft(sig, dim=-1)
+        ff = self.ffreqs.unsqueeze(0)                                  # (1, n)
+        keep = (ff > 0) & (ff >= f_lo) & (ff <= f_hi)                  # (B, n)
+        h = keep.to(self.dtype) * 2.0
+        return torch.fft.ifft(xf * h, dim=-1)
+
+    def _lowpass(self, sig: torch.Tensor, fc: torch.Tensor) -> torch.Tensor:
+        """Zero-phase low-pass below fc (per-sample, (B,1))."""
+        xf = torch.fft.rfft(sig, dim=-1)
+        keep = self.rfreqs.unsqueeze(0) <= fc                         # (B, nfr)
+        return torch.fft.irfft(xf * keep.to(self.dtype), n=self.n, dim=-1)
+
+    @staticmethod
+    def _corr(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+        am = a - a.mean(dim=-1, keepdim=True)
+        bm = b - b.mean(dim=-1, keepdim=True)
+        num = (am * bm).mean(dim=-1)
+        den = torch.sqrt((am * am).mean(dim=-1) * (bm * bm).mean(dim=-1)).clamp(min=_EPS)
+        return num / den
+
+    @staticmethod
+    def _slope(xv: torch.Tensor, yv: torch.Tensor) -> torch.Tensor:
+        """OLS slope d<y>/dx = cov(x, y) / var(x)."""
+        xm = xv - xv.mean(dim=-1, keepdim=True)
+        ym = yv - yv.mean(dim=-1, keepdim=True)
+        return (xm * ym).mean(dim=-1) / (xm * xm).mean(dim=-1).clamp(min=_EPS)
+
+    def _band_power(self, center: torch.Tensor) -> torch.Tensor:
+        """PSD power inside +-hw bins of `center` ((B,1)), summed -> (B,)."""
+        mask = (self.rfreqs.unsqueeze(0) - center).abs() <= (self.hw * self.df)
+        return (self.psd * mask).sum(dim=-1)
+
+    def _build_spectral(self):
+        """Cache PSD / peak frequency from the demeaned SPONTANEOUS trajectory (no notch)."""
+        xf = torch.fft.rfft(self.x_spont, dim=-1)                    # (B, nfr)
+        self.psd = (xf.abs().clamp(max=1e15) ** 2) * self.dt / self.n
+        psd_nodc = self.psd.clone()
+        psd_nodc[:, 0] = 0.0
+        self.psd_nodc = psd_nodc
+        peak_idx = psd_nodc.argmax(dim=-1)                           # (B,)
+        self.peak_idx = peak_idx
+        self.f_peak = self.rfreqs[peak_idx].clamp(min=self.df)       # (B,)
+        self.peak_pwr = psd_nodc.gather(1, peak_idx.unsqueeze(1)).squeeze(1)  # (B,)
+
+    # --- GROUP A: dimensional anchors -----------------------------------------
+    def _group_a(self) -> torch.Tensor:
+        var = self.x_spont.var(dim=-1)
+        a4 = _logp(self._corr_time(self.x_spont))
+        return torch.stack([
+            self.mean,                       # A1 absolute mean (NOT demeaned) -> x_offset
+            _logp(var),                      # A2 log variance -> x_scale
+            _logp(self.f_peak),              # A3 log peak frequency -> t_scale
+            a4,                              # A4 log ACF decay time -> t_scale
+        ], dim=-1)
+
+    # --- GROUP B: spectral shape ----------------------------------------------
+    def _group_b(self) -> torch.Tensor:
+        psd, fr = self.psd, self.rfreqs
+        fpk = self.f_peak.unsqueeze(1)                               # (B, 1)
+
+        # B1 quality factor from FWHM of the spontaneous peak
+        half = (self.peak_pwr / 2).unsqueeze(1)
+        above = psd > half
+        idxs = torch.arange(fr.numel(), device=self.device)
+        first = torch.where(above, idxs, torch.full_like(idxs, fr.numel())).min(dim=-1).values
+        last = torch.where(above, idxs, torch.full_like(idxs, -1)).max(dim=-1).values
+        fwhm = (last - first).clamp(min=0).to(self.dtype) * self.df
+        q = torch.where(fwhm > 0, self.f_peak / fwhm, torch.zeros_like(self.f_peak))
+
+        # B2 peak-to-floor ratio (median over positive frequencies as the floor)
+        floor = torch.median(psd[:, 1:], dim=-1).values
+        b2 = self.peak_pwr / floor.clamp(min=_EPS)
+
+        psd_sum = psd.sum(dim=-1, keepdim=True).clamp(min=_EPS)
+        centroid = (fr.unsqueeze(0) * psd).sum(dim=-1) / psd_sum.squeeze(-1)
+
+        pn = psd / psd_sum
+        entropy = -(pn * _logp(pn)).sum(dim=-1) / math.log(max(fr.numel(), 2))
+
+        in_peak = (fr.unsqueeze(0) >= self.bp_lo * fpk) & (fr.unsqueeze(0) <= self.bp_hi * fpk)
+        b5 = (psd * in_peak).sum(dim=-1) / psd_sum.squeeze(-1)
+
+        low = fr.unsqueeze(0) < 0.5 * fpk
+        b6_low = (psd * low).sum(dim=-1) / psd_sum.squeeze(-1)
+        # 95%-power spectral rolloff frequency
+        cdf = torch.cumsum(psd, dim=-1) / psd_sum
+        roll_idx = torch.argmax((cdf >= 0.95).int(), dim=-1)
+        rolloff = fr[roll_idx]
+
+        # B7 secondary spectral peak (highest interior local max away from f_peak)
+        left = self.psd_nodc[:, 1:-1]
+        is_max = (left > self.psd_nodc[:, :-2]) & (left > self.psd_nodc[:, 2:])
+        near_peak = (fr[1:-1].unsqueeze(0) - fpk).abs() <= (self.hw * self.df)
+        cand = torch.where(is_max & ~near_peak, left, torch.zeros_like(left))
+        sec_pwr, sec_off = cand.max(dim=-1)
+        sec_freq = fr[sec_off + 1]
+        has_sec = sec_pwr > (0.05 * self.peak_pwr)
+        sec_freq_ratio = torch.where(has_sec, sec_freq / self.f_peak, torch.ones_like(sec_freq))
+        sec_height = torch.where(has_sec, sec_pwr / self.peak_pwr.clamp(min=_EPS), torch.zeros_like(sec_pwr))
+
+        return torch.stack([
+            _logp(q),                                   # B1
+            _logp(b2),                                  # B2
+            _logp(centroid / self.f_peak),              # B3
+            entropy,                                    # B4 (already 0-1)
+            b5,                                         # B5 (fraction)
+            b6_low,                                     # B6 low-frequency fraction
+            _logp(rolloff / self.f_peak),               # B6 rolloff ratio
+            _logp(sec_freq_ratio),                      # B7 secondary freq ratio
+            sec_height,                                 # B7 secondary height ratio
+        ], dim=-1)
+
+    # --- GROUP C: amplitude envelope (band-passed Hilbert) --------------------
+    def _group_c(self) -> torch.Tensor:
+        fpk = self.f_peak.unsqueeze(1)
+        z = self._analytic_bandpass(self.x_spont, self.bp_lo * fpk, self.bp_hi * fpk)
+        amp = z.abs()                                               # (B, n)
+        mean_a = amp.mean(dim=-1)
+        mean_a2 = (amp * amp).mean(dim=-1)
+        std_a = amp.std(dim=-1)
+        sqrt_var_x = torch.sqrt(self.x_spont.var(dim=-1).clamp(min=_EPS))
+
+        za = (amp - mean_a.unsqueeze(-1)) / std_a.clamp(min=_EPS).unsqueeze(-1)
+        env_skew = (za ** 3).mean(dim=-1)
+
+        a_slow = self._lowpass(amp, self.slow_env_frac * fpk)
+        c6 = self._corr_time(a_slow) * self.f_peak
+        c7 = a_slow.var(dim=-1) / mean_a.clamp(min=_EPS) ** 2
+
+        return torch.stack([
+            _logp(mean_a / sqrt_var_x),                 # C1 normalised mean envelope
+            _logp(std_a / mean_a.clamp(min=_EPS)),      # C2 envelope CV
+            mean_a ** 2 / mean_a2.clamp(min=_EPS),      # C3 onset ratio in [pi/4, 1]
+            self._mode(amp) / mean_a.clamp(min=_EPS),   # C4 mode / <A>
+            env_skew,                                   # C5 envelope skewness
+            _logp(c6),                                  # C6 slow-envelope corr time * f_peak
+            _logp(c7),                                  # C7 slow-envelope relative variance
+        ], dim=-1)
+
+    def _mode(self, a: torch.Tensor, nb: int = 64) -> torch.Tensor:
+        """Histogram-peak estimate of the per-sample mode of `a` (B, n) -> (B,)."""
+        amin = a.min(dim=-1, keepdim=True).values
+        amax = a.max(dim=-1, keepdim=True).values
+        rng = (amax - amin).clamp(min=_EPS)
+        idx = ((a - amin) / rng * (nb - 1)).long().clamp(0, nb - 1)
+        hist = torch.zeros(self.B, nb, device=self.device, dtype=self.dtype)
+        hist.scatter_add_(1, idx, torch.ones_like(a))
+        mbin = hist.argmax(dim=-1).to(self.dtype)
+        return amin.squeeze(-1) + (mbin + 0.5) / nb * rng.squeeze(-1)
+
+    # --- GROUP D: marginal distribution of x ----------------------------------
+    def _group_d(self) -> torch.Tensor:
+        s = self.x_spont
+        mu = s.mean(dim=-1, keepdim=True)
+        std = s.std(dim=-1, keepdim=True).clamp(min=_EPS)
+        z = (s - mu) / std
+        skew = (z ** 3).mean(dim=-1)
+        kurt = (z ** 4).mean(dim=-1)
+        bimod = (skew ** 2 + 1.0) / kurt.clamp(min=_EPS)            # Sarle's coefficient
+        return torch.stack([kurt - 3.0, skew, bimod], dim=-1)      # D1, D2, D3
+
+    # --- GROUP E: multi-timescale / waveform ----------------------------------
+    def _group_e(self) -> torch.Tensor:
+        ac = self._acf(self.x_spont)                               # (B, n)
+        n = self.n
+
+        def first_below(thr):
+            below = ac < thr
+            idx = torch.argmax(below.int(), dim=-1)
+            idx = torch.where(below.any(dim=-1), idx, torch.full_like(idx, n - 1))
+            return idx.clamp(min=2)
+
+        l1 = first_below(0.5)
+        l2 = torch.maximum(first_below(0.1), l1 + 1).clamp(max=n - 1)
+        log_ac = _logp(ac.clamp(min=_EPS))
+        a1 = log_ac.gather(1, l1.unsqueeze(1)).squeeze(1)
+        a2v = log_ac.gather(1, l2.unsqueeze(1)).squeeze(1)
+        # two-window log-ACF slopes -> fast/slow decay times (approximation, not an NLS fit)
+        slope_fast = a1 / (l1.to(self.dtype) - 1.0).clamp(min=1.0)         # log_ac[1] ~ 0
+        slope_slow = (a2v - a1) / (l2 - l1).to(self.dtype).clamp(min=1.0)
+        tau_fast = (-1.0 / slope_fast.clamp(max=-1e-6)) * self.dt
+        tau_slow = (-1.0 / slope_slow.clamp(max=-1e-6)) * self.dt
+        w_fast = (1.0 - ac.gather(1, l1.unsqueeze(1)).squeeze(1)).clamp(0.0, 1.0)
+
+        p1 = self._band_power(self.f_peak.unsqueeze(1))
+        e2_h2 = self._band_power(2 * self.f_peak.unsqueeze(1)) / p1.clamp(min=_EPS)
+        e2_h3 = self._band_power(3 * self.f_peak.unsqueeze(1)) / p1.clamp(min=_EPS)
+
+        return torch.stack([
+            _logp(tau_fast), _logp(tau_slow), w_fast,  # E1
+            _logp(e2_h2), _logp(e2_h3),                # E2
+        ], dim=-1)
+
+    # --- GROUP F: phase-amplitude coupling / nonisochronicity -----------------
+    def _group_f(self) -> torch.Tensor:
+        fpk = self.f_peak.unsqueeze(1)
+        z = self._analytic_bandpass(self.x_spont, self.bp_lo * fpk, self.bp_hi * fpk)
+        amp2 = (z.abs() ** 2)[:, :-1]                              # align with omega (n-1)
+        phi = self._unwrap(torch.angle(z))
+        omega = torch.diff(phi, dim=-1) / self.dt                 # rad/s
+        # F1: slope of <omega | A^2>, normalised to (A^2/<A^2>) and 2*pi*f_peak
+        slope = self._slope(amp2, omega) * amp2.mean(dim=-1)
+        f1 = slope / (2 * math.pi * self.f_peak).clamp(min=_EPS)
+        f2 = self._corr(omega, amp2)
+        return torch.stack([f1, f2], dim=-1)
+
+    # --- GROUP G: forced response (lock-in to the known drive) ----------------
+    def _group_g(self) -> torch.Tensor:
+        t = torch.arange(self.n, device=self.device, dtype=self.dtype) * self.dt   # (n,)
+        t = t.unsqueeze(0)                                          # (1, n)
+        two_pi_ft = 2 * math.pi * self.f * t                       # (B, n)
+
+        r = []
+        for k in (1, 2, 3):
+            cexp = torch.exp(torch.complex(torch.zeros_like(two_pi_ft), -k * two_pi_ft))
+            r.append((2.0 / self.n) * (self.x0_forced * cexp).sum(dim=-1))   # (B,) complex
+        r1, r2, r3 = r
+        mag1, mag2, mag3 = r1.abs(), r2.abs(), r3.abs()
+        ang1, ang3 = torch.angle(r1), torch.angle(r3)
+
+        g1 = _logp(mag1 / self.amp.squeeze(-1).clamp(min=_EPS))
+        g2 = _cossin(ang1 - self.phase.squeeze(-1))
+        g3 = _logp(mag2 / mag1.clamp(min=_EPS))
+        g4 = _logp(mag3 / mag1.clamp(min=_EPS))
+        g5 = _cossin(ang3 - 3 * ang1)
+
+        # G6 phase-locking value of the response band around the drive to the drive phase
+        zr = self._analytic_bandpass(self.x0_forced, self.bp_lo * self.f, self.bp_hi * self.f)
+        phi_resp = torch.angle(zr)
+        plv = torch.exp(torch.complex(torch.zeros_like(phi_resp), phi_resp - two_pi_ft)).mean(dim=-1).abs()
+
+        # G7 drive-phase-binned residual variance (residual = signal minus locked harmonics)
+        locked = torch.zeros_like(self.x0_forced)
+        for k, rk in zip((1, 2, 3), (r1, r2, r3)):
+            ang = (2 * math.pi * k) * (self.f * t)
+            locked = locked + (rk.real.unsqueeze(-1) * torch.cos(ang) - rk.imag.unsqueeze(-1) * torch.sin(ang))
+        resid2 = (self.x0_forced - locked) ** 2
+        phi_d = two_pi_ft + self.phase                            # drive phase at each sample
+        a0 = resid2.mean(dim=-1)
+        a2c = 2 * (resid2 * torch.cos(2 * phi_d)).mean(dim=-1)
+        b2c = 2 * (resid2 * torch.sin(2 * phi_d)).mean(dim=-1)
+        g7_amp = _logp(torch.sqrt(a2c ** 2 + b2c ** 2) / a0.clamp(min=_EPS))
+        g7_orient = _cossin(0.5 * torch.atan2(b2c, a2c))
+
+        return torch.cat([
+            g1.unsqueeze(-1), g2, g3.unsqueeze(-1), g4.unsqueeze(-1), g5,
+            plv.unsqueeze(-1), g7_amp.unsqueeze(-1), g7_orient,
+        ], dim=-1)
+
+    # --- PUBLIC ----------------------------------------------------------------
+    def compute_statistics(self) -> torch.Tensor:
+        """
+        Assemble Groups A-G into a fixed-width feature tensor of shape
+        (B, len(FEATURE_LABELS)). NaN/Inf are mapped to 0.
         """
         with torch.no_grad():
-            progress_bar = tqdm(total=9, desc="Getting summary statistics", leave=False)
-            dist_stats = self.__compute_stat_dist_features()
-            progress_bar.update()
-            spectral_stats = self.__compute_spectral_stats(n_bands)
-            progress_bar.update()
-            temporal_stats = self.__compute_temporal_stats(n_lags, pacf_lags)
-            progress_bar.update()
-            analytic_signal_stats = self.__compute_analytic_signal_stats()
-            progress_bar.update()
-            nonlinear_stats = self.__compute_nonlinear_stats()
-            progress_bar.update()
-            phase_space_stats = self.__compute_phase_space_stats()
-            progress_bar.update()
-            info_theoretic_stats = self.__compute_info_theoretic_stats()
-            progress_bar.update()
-            extreme_events_stats = self.__compute_extreme_events_stats()
-            progress_bar.update()
-
-            all_stats = torch.cat([dist_stats, spectral_stats, temporal_stats, analytic_signal_stats,
-                                   phase_space_stats, nonlinear_stats, info_theoretic_stats, extreme_events_stats], dim=-1)
-            progress_bar.update()
-
-            # NaN check
-            all_stats = torch.nan_to_num(all_stats, nan=0.0)
-            progress_bar.close()
-
-        return all_stats
-
-    # --- PRIVATE FUNCTIONS --- #
-    def __compute_stat_dist_features(self) -> torch.Tensor:
-        """
-        Computes statistical distribution features:
-            (1) Mean
-            (2) Variance
-            (3) Skewness
-            (4) Kurtosis
-            (5) Bimodality coefficient
-            (6-10) Quantiles (5%, 25%, 50%, 75%, 95%)
-            (11) MAD
-        :return: statistical distribution features with shape: (batch_size, 11)
-        """
-        batch_size = self.x.shape[0]
-        features = torch.empty(batch_size, 11, device=self.device, dtype=self.dtype)
-
-        # Mean and variance
-        mean = torch.mean(self.x, dim=-1)
-        var = torch.var(self.x, dim=-1)
-        features[:, 0] = mean
-        features[:, 1] = var
-
-        # Standardized moments
-        std = torch.sqrt(torch.clamp(var, min=1e-9))
-        z = (self.x - mean.unsqueeze(-1)) / std.unsqueeze(-1)
-
-        z2 = z * z
-        skew = torch.mean(z2 * z, dim=-1)
-        kurt = torch.mean(z2 * z2, dim=-1)
-
-        features[:, 2] = skew
-        features[:, 3] = kurt
-        features[:, 4] = (skew * skew + 1.0) / torch.clamp(kurt, min=1e-9)
-
-        # Quantiles
-        q_vals = torch.tensor([0.05, 0.25, 0.5, 0.75, 0.95], device=self.device, dtype=self.dtype)
-        quantiles = torch.quantile(self.x, q_vals, dim=-1)  # Shape: (5, batch_size)
-        features[:, 5:10] = quantiles.T
-
-        # MAD (using median = 50th percentile)
-        median = quantiles[2, :]
-        features[:, 10] = torch.median(torch.abs(self.x - median.unsqueeze(-1)), dim=-1).values
-
-        return features
-
-    def __compute_spectral_stats(self, n_bands: int) -> torch.Tensor:
-        """
-        Computes spectral statistics (fully GPU-accelerated):
-            (1) Peak frequency
-            (2) Quality factor
-            (3) Spectral centroid
-            (4) Spectral bandwidth
-            (5) Spectral entropy
-            (6 to 5 + n_bands - 1) Power in n_bands frequency bands
-        :param n_bands: the number of frequency bands
-        :return: spectral statistics with shape: (batch_size, 5 + n_bands)
-        """
-        batch_size, n = self.x.shape
-        n_features = 5 + n_bands
-        features = torch.empty(batch_size, n_features, device=self.device, dtype=self.dtype)
-
-        # FFT and PSD
-        x_centered = self.x - torch.mean(self.x, dim=-1, keepdim=True)
-        xf = torch.fft.rfft(x_centered, dim=-1)
-        mean_dt = torch.mean(self.dt, dim=0)[0] if isinstance(self.dt, torch.Tensor) else self.dt
-        freqs = torch.fft.rfftfreq(n, d=mean_dt, device=self.device)
-        n_freqs = freqs.shape[0]
-        df = freqs[1] - freqs[0]  # Frequency resolution
-
-        psd = torch.clamp(torch.abs(xf), max=1e15) ** 2 * self.dt / n
-
-        # Peak Frequency
-        peak_pwr, peak_idx = torch.max(psd, dim=-1)
-        peak_freqs = freqs[peak_idx]
-        features[:, 0] = peak_freqs
-
-        # Quality Factor
-        # Find FWHM: frequency width where PSD > peak_pwr / 2
-        half_max_pwr = peak_pwr / 2
-        above_half = psd > half_max_pwr.unsqueeze(-1)
-
-        # Find first and last indices above half-max
-        freq_indices = torch.arange(n_freqs, device=self.device)
-
-        # Mask invalid positions with extreme values
-        indices_for_min = torch.where(above_half, freq_indices, n_freqs)
-        indices_for_max = torch.where(above_half, freq_indices, -1)
-
-        first_idx = torch.min(indices_for_min, dim=-1).values
-        last_idx = torch.max(indices_for_max, dim=-1).values
-
-        bandwidth_fwhm = (last_idx - first_idx).to(self.dtype) * df
-
-        # Q = f_peak / bandwidth, with protection against division by zero
-        q_factor = torch.where(
-            bandwidth_fwhm > 0,
-            peak_freqs / bandwidth_fwhm,
-            torch.zeros_like(peak_freqs)
-        )
-        features[:, 1] = q_factor
-
-        # Spectral Centroid
-        psd_sum = torch.sum(psd, dim=-1, keepdim=True)
-        psd_sum_safe = torch.clamp(psd_sum, min=1e-9)
-
-        spectral_centroid = torch.sum(freqs * psd, dim=-1) / psd_sum_safe.squeeze(-1)
-        features[:, 2] = spectral_centroid
-
-        # Spectral Bandwidth
-        freq_deviation = freqs - spectral_centroid.unsqueeze(-1)
-        spectral_bandwidth = torch.sqrt(
-            torch.sum(freq_deviation ** 2 * psd, dim=-1) / psd_sum_safe.squeeze(-1)
-        )
-        features[:, 3] = spectral_bandwidth
-
-        # Spectral Entropy
-        psd_normalized = psd / psd_sum_safe
-        log_psd = torch.log(torch.clamp(psd_normalized, min=1e-9))
-        spectral_entropy = -torch.sum(psd_normalized * log_psd, dim=-1)
-        features[:, 4] = spectral_entropy
-
-        # Band Powers (Vectorized)
-        # Compute the cumulative sum for efficient band power calculation
-        psd_cumsum = torch.cumsum(psd, dim=-1)
-        # Prepend zero for easier indexing: cumsum[end] - cumsum[start]
-        psd_cumsum = torch.cat([torch.zeros(batch_size, 1, device=self.device, dtype=self.dtype), psd_cumsum], dim=-1)  # Shape: (batch_size, n_freqs + 1)
-
-        # Band edges as indices
-        band_edges = torch.linspace(0, n_freqs, n_bands + 1, device=self.device, dtype=torch.long)
-
-        # Extract cumsum values at band edges: shape (batch_size, n_bands + 1)
-        edge_values = psd_cumsum[:, band_edges]
-
-        # Band power = cumsum[end] - cumsum[start], multiplied by frequency width
-        band_powers = (edge_values[:, 1:] - edge_values[:, :-1])
-
-        # Multiply by bandwidth in frequency units
-        band_widths = (band_edges[1:] - band_edges[:-1]).to(self.dtype) * df
-        band_powers = band_powers * band_widths
-
-        features[:, 5:] = band_powers
-
-        return features
-
-    def __compute_temporal_stats(self, n_lags: int, pacf_lags: int) -> torch.Tensor:
-        """
-        Computes temporal statistics (fully GPU-accelerated):
-            (1 to n_lags - 1) Autocorrelation at n_lags evenly spaced lags
-            (n_lags) Decorrelation time
-            (n_lags + 1 to n_lags + pacf_lags) Partial autocorrelation (PACF)
-            (n_lags + pacf_lags + 1) Nonlinear dependence (ACF of x^2 at lag 1)
-        :param n_lags: number of ACF lags to sample
-        :param pacf_lags: number of PACF lags to compute
-        :return: temporal statistics with shape: (batch_size, n_lags + pacf_lags + 2)
-        """
-        batch_size, n = self.x.shape
-        n_features = n_lags + pacf_lags + 2
-        features = torch.empty(batch_size, n_features, device=self.device, dtype=self.dtype)
-
-        if n_lags > n or n_lags <= 1:
-            raise ValueError("n_lags must be in (1, series_length]")
-        if pacf_lags > n or pacf_lags <= 1:
-            raise ValueError("pacf_lags must be in (1, series_length]")
-
-        # Autocorrelation via FFT (Wiener-Khinchin)
-        x_centered = self.x - torch.mean(self.x, dim=-1, keepdim=True)
-        xf = torch.fft.rfft(x_centered, n=2 * n, dim=-1)
-        psd = torch.abs(xf) ** 2
-        acf_full = torch.fft.irfft(psd, n=2 * n, dim=-1)[:, :n]
-
-        # Normalize so acf[:, 0] = 1
-        acf_normalized = acf_full / torch.clamp(acf_full[:, 0:1], min=1e-9)
-
-        # Sample ACF at evenly spaced lags
-        lag_idx = torch.linspace(0, n - 1, n_lags, device=self.device).long()
-        features[:, :n_lags] = acf_normalized[:, lag_idx]
-
-        # Decorrelation Time
-        negative_mask = acf_normalized < 0
-        has_negative = negative_mask.any(dim=-1)
-        first_negative_idx = torch.argmax(negative_mask.int(), dim=-1)
-
-        dt_flat = self.dt.squeeze(-1) if isinstance(self.dt, torch.Tensor) else self.dt
-        decorrelation_time = first_negative_idx.to(self.dtype) * dt_flat
-        decorrelation_time[~has_negative] = (n * dt_flat)[~has_negative] if isinstance(dt_flat, torch.Tensor) else n * dt_flat
-        features[:, n_lags] = decorrelation_time
-
-        # PACF via Levinson-Durbin (inlined)
-        # The PACF φ_{kk} measures direct correlation at lag k, removing intermediate effects
-        # Recursion: φ_{kk} = (ρ_k - Σ_{j = 1}^{k-1} φ_{k-1,j} ρ_{k-j}) / (1 - Σ_{j = 1}^{k-1} φ_{k-1,j} ρ_j)
-
-        pacf_vals = torch.zeros(batch_size, pacf_lags, device=self.device, dtype=self.dtype)
-        phi = torch.zeros(batch_size, pacf_lags, device=self.device, dtype=self.dtype)
-
-        # Base case: φ_{1,1} = ρ_1
-        pacf_vals[:, 0] = acf_normalized[:, 1]
-        phi[:, 0] = acf_normalized[:, 1]
-
-        for k in range(1, pacf_lags):
-            # φ_{k-1,j} for j = 1, ..., k-1 are in phi[:, :k]
-            phi_coeffs = phi[:, :k].clone()  # Need clone since we'll modify phi
-
-            # ρ_{k-j} for j = 1, ..., k-1 → indices k-1, k-2, ..., 1 (reversed)
-            rho_reversed = acf_normalized[:, 1:k + 1].flip(dims=[1])
-
-            # ρ_j for j = 1, ..., k-1 → indices 1, 2, ..., k-1
-            rho_forward = acf_normalized[:, 1:k + 1]
-
-            # Numerator: ρ_k - Σ φ_{k-1,j} ρ_{k-j}
-            numer = acf_normalized[:, k + 1] - torch.sum(phi_coeffs * rho_reversed, dim=1)
-
-            # Denominator: 1 - Σ φ_{k-1,j} ρ_j
-            denom = 1.0 - torch.sum(phi_coeffs * rho_forward, dim=1)
-
-            # Safe division
-            denom_safe = torch.where(denom.abs() < 1e-9, torch.ones_like(denom), denom)
-            pacf_k = numer / denom_safe
-            pacf_k = torch.where(denom.abs() < 1e-9, torch.zeros_like(pacf_k), pacf_k)
-
-            pacf_vals[:, k] = pacf_k
-
-            # Update AR coefficients: φ_{k,j} = φ_{k-1,j} - φ_{k,k} * φ_{k-1,k-j}
-            # Vectorized update for all j in [0, k-1]
-            phi_new = phi_coeffs - pacf_k.unsqueeze(-1) * phi_coeffs.flip(dims=[1])
-            phi[:, :k] = phi_new
-            phi[:, k] = pacf_k
-
-        features[:, n_lags + 1:n_lags + 1 + pacf_lags] = pacf_vals
-
-        # Nonlinear Dependence: ACF of x² at lag 1
-        x2_centered = x_centered ** 2
-        x2_centered = x2_centered - torch.mean(x2_centered, dim=-1, keepdim=True)
-
-        x2f = torch.fft.rfft(x2_centered, n=2 * n, dim=-1)
-        psd_x2 = torch.abs(x2f) ** 2
-        acf_x2 = torch.fft.irfft(psd_x2, n=2 * n, dim=-1)[:, :n]
-        acf_x2_normalized = acf_x2 / torch.clamp(acf_x2[:, 0:1], min=1e-9)
-
-        features[:, -1] = acf_x2_normalized[:, 1]
-
-        return features
-
-    def __compute_analytic_signal_stats(self) -> torch.Tensor:
-        """
-        Computes analytic signal statistics via Hilbert transform (fully GPU-accelerated):
-            (1) Mean amplitude
-            (2) Amplitude variance
-            (3) Mean frequency
-            (4) Frequency variance
-            (5) Amplitude-frequency correlation
-        :return: analytic signal statistics with shape: (batch_size, 5)
-        """
-        batch_size, n = self.x.shape
-        features = torch.empty(batch_size, 5, device=self.device, dtype=self.dtype)
-
-        # Hilbert transform via FFT (GPU-native)
-        # The analytic signal z(t) = x(t) + i*H[x(t)] can be computed as:
-        # 1. Take FFT of x
-        # 2. Create a filter: h[0] = 1, h[1:n//2] = 2, h[n//2] = 1 (if n even), h[n//2+1:] = 0
-        # 3. Multiply FFT by filter
-        # 4. Inverse FFT gives the analytic signal
-
-        xf = torch.fft.fft(self.x, dim=-1)
-
-        # Construct the Hilbert filter
-        h = torch.zeros(n, device=self.device, dtype=self.dtype)
-        if n % 2 == 0:
-            h[0] = 1.0
-            h[1:n // 2] = 2.0
-            h[n // 2] = 1.0
-            # h[n//2+1:] remains 0
-        else:
-            h[0] = 1.0
-            h[1:(n + 1) // 2] = 2.0
-            # h[(n+1)//2:] remains 0
-
-        # Apply filter and inverse FFT to get analytic signal
-        analytic = torch.fft.ifft(xf * h.unsqueeze(0), dim=-1)
-
-        # Instantaneous amplitude and phase
-        amplitude = torch.abs(analytic)
-        phase = torch.angle(analytic)
-
-        # Unwrap phase (vectorized)
-        phase_diff = torch.diff(phase, dim=-1)
-        # Detect jumps greater than pi and correct
-        jumps = torch.zeros_like(phase)
-        jumps[:, 1:] = torch.cumsum(
-            -2 * torch.pi * torch.round(phase_diff / (2 * torch.pi)),
-            dim=-1
-        )
-        phase_unwrapped = phase + jumps
-
-        # Instantaneous frequency: f = (1/2π) * dφ/dt
-        inst_freq = torch.diff(phase_unwrapped, dim=-1) / (2 * torch.pi * self.dt)
-
-        # Amplitude statistics
-        mean_amp = torch.mean(amplitude, dim=-1)
-        var_amp = torch.var(amplitude, dim=-1)
-        features[:, 0] = mean_amp
-        features[:, 1] = var_amp
-
-        # Frequency statistics
-        mean_freq = torch.mean(inst_freq, dim=-1)
-        var_freq = torch.var(inst_freq, dim=-1)
-        features[:, 2] = mean_freq
-        features[:, 3] = var_freq
-
-        # Amplitude-frequency correlation
-        # Trim amplitude to match frequency length (n-1)
-        amp_trimmed = amplitude[:, :-1]
-
-        amp_centered = amp_trimmed - torch.mean(amp_trimmed, dim=-1, keepdim=True)
-        freq_centered = inst_freq - mean_freq.unsqueeze(-1)
-
-        numerator = torch.mean(amp_centered * freq_centered, dim=-1)
-        denominator = torch.std(amp_trimmed, dim=-1) * torch.std(inst_freq, dim=-1)
-
-        af_corr = numerator / torch.clamp(denominator, min=1e-9)
-        features[:, 4] = af_corr
-
-        return features
-
-    def __compute_nonlinear_stats(self, hurst_lags: int = 20, m: int = 2,
-                                  r_factor: float = 0.2, n_pairs: int = 5000) -> torch.Tensor:
-        """
-        Computes nonlinear statistics (fully GPU-accelerated):
-            (1) Time irreversibility
-            (2) Hurst exponent
-            (3) Approximate sample entropy
-        :param hurst_lags: maximum lag for Hurst exponent estimation
-        :param m: embedding dimension for sample entropy
-        :param r_factor: tolerance as a fraction of std for sample entropy
-        :param n_pairs: number of random pairs to sample for sample entropy
-        :return: nonlinear statistics with shape: (batch_size, 3)
-        """
-        batch_size, n = self.x.shape
-        features = torch.empty(batch_size, 3, device=self.device, dtype=self.dtype)
-
-        # Time Irreversibility
-        # Skewness of first differences: T = <Δx³> / <Δx²>^(3/2)
-        dx = self.x[:, 1:] - self.x[:, :-1]
-
-        dx2 = dx * dx
-        dx3 = dx2 * dx
-
-        second_moment = torch.mean(dx2, dim=-1)
-        third_moment = torch.mean(dx3, dim=-1)
-
-        t_irrev = third_moment / torch.clamp(second_moment.pow(1.5), min=1e-9)
-        features[:, 0] = t_irrev
-
-        # Hurst Exponent (Vectorized)
-        # H is estimated from: std(x[t+lag] - x[t]) ∝ lag^H
-        # Regress log(std) ~ log(lag)
-
-        lags = torch.arange(2, hurst_lags + 1, device=self.device, dtype=self.dtype)
-        n_lags = len(lags)
-
-        # Compute std of lagged differences for all lags
-        lagged_stds = torch.empty(batch_size, n_lags, device=self.device, dtype=self.dtype)
-
-        for idx, lag in enumerate(lags.int().tolist()):
-            diff = self.x[:, lag:] - self.x[:, :-lag]
-            lagged_stds[:, idx] = torch.std(diff, dim=-1)
-
-        # Linear regression: log(std) = H * log(lag) + c
-        log_lags = torch.log(lags)
-        log_stds = torch.log(torch.clamp(lagged_stds, min=1e-9))
-
-        # Batched linear regression: H = Cov(log_lag, log_std) / Var(log_lag)
-        mean_log_lag = torch.mean(log_lags)
-        mean_log_std = torch.mean(log_stds, dim=-1)
-
-        log_lags_centered = log_lags - mean_log_lag
-        log_stds_centered = log_stds - mean_log_std.unsqueeze(-1)
-
-        cov = torch.mean(log_lags_centered.unsqueeze(0) * log_stds_centered, dim=-1)
-        var_log_lag = torch.mean(log_lags_centered ** 2)
-
-        hurst = cov / var_log_lag
-        features[:, 1] = hurst
-
-        # Approximate Sample Entropy
-        # This measures complexity via template matching
-        # SampEn = -log(A/B) where:
-        #   B = probability that two templates of length m match within tolerance r
-        #   A = probability that two templates of length m+1 match within tolerance r
-
-        # Tolerance based on signal std
-        r = r_factor * torch.std(self.x, dim=-1, keepdim=True)  # Shape: (batch_size, 1)
-
-        # Random indices for pairs (same across batch for efficiency)
-        max_idx = n - m - 1
-        if max_idx < 1:
-            # Time series too short for sample entropy
-            features[:, 2] = torch.zeros(batch_size, device=self.device, dtype=self.dtype)
-            return features
-
-        g = torch.Generator(device=self.device).manual_seed(int(1e6))
-        idx_i = torch.randint(0, max_idx, (n_pairs,), device=self.device, generator=g)
-        idx_j = torch.randint(0, max_idx, (n_pairs,), device=self.device, generator=g)
-
-        # Build templates of length m and m+1
-        # Shape: (batch_size, n_pairs, m) and (batch_size, n_pairs, m+1)
-        templates_m_i = torch.stack([self.x[:, idx_i + k] for k in range(m)], dim=-1)
-        templates_m_j = torch.stack([self.x[:, idx_j + k] for k in range(m)], dim=-1)
-        templates_m1_i = torch.stack([self.x[:, idx_i + k] for k in range(m + 1)], dim=-1)
-        templates_m1_j = torch.stack([self.x[:, idx_j + k] for k in range(m + 1)], dim=-1)
-
-        # Chebyshev distance (L-infinity norm)
-        dist_m = torch.max(torch.abs(templates_m_i - templates_m_j), dim=-1).values
-        dist_m1 = torch.max(torch.abs(templates_m1_i - templates_m1_j), dim=-1).values
-
-        # Count matches (probability of match)
-        B = torch.mean((dist_m < r).float(), dim=-1)
-        A = torch.mean((dist_m1 < r).float(), dim=-1)
-
-        # Sample entropy: -log(A/B) = log(B) - log(A)
-        samp_en = torch.log(torch.clamp(B, min=1e-9)) - torch.log(torch.clamp(A, min=1e-9))
-        features[:, 2] = samp_en
-
-        return features
-
-    def __compute_phase_space_stats(self, n_pairs: int = 10000,
-                                            epsilon_factor: float = 0.1) -> torch.Tensor:
-        """
-        Approximate RQA statistics via random pair sampling (GPU-accelerated).
-        Only computes recurrence rate (other RQA stats require line structure analysis).
-
-        :param n_pairs: number of random pairs to sample
-        :param epsilon_factor: threshold as a fraction of std
-        :return: shape (batch_size, 1)
-        """
-        batch_size, n = self.x.shape
-
-        # Threshold
-        epsilon = epsilon_factor * torch.std(self.x, dim=-1, keepdim=True)
-
-        # Random pairs
-        g = torch.Generator(device=self.device).manual_seed(int(2e6))
-        idx_i = torch.randint(0, n, (n_pairs,), device=self.device, generator=g)
-        idx_j = torch.randint(0, n, (n_pairs,), device=self.device, generator=g)
-
-        # Values at random indices
-        x_i = self.x[:, idx_i]  # Shape: (batch_size, n_pairs)
-        x_j = self.x[:, idx_j]
-
-        # Recurrence: |x_i - x_j| < epsilon
-        recurrent = (torch.abs(x_i - x_j) < epsilon).float()
-        rr = torch.mean(recurrent, dim=-1, keepdim=True)
-
-        return rr
-
-    def __compute_info_theoretic_stats(self, order: int = 3) -> torch.Tensor:
-        """
-        Computes information theoretic statistics (fully GPU-accelerated):
-            (1) Permutation entropy (normalized)
-        :param order: embedding dimension for permutation entropy (default 3)
-        :return: information theoretic statistics with shape: (batch_size, 1)
-        """
-        batch_size, n = self.x.shape
-        features = torch.empty(batch_size, 1, device=self.device, dtype=self.dtype)
-
-        n_windows = n - order + 1
-        n_patterns = math.factorial(order)
-
-        if n_windows < order:
-            features[:, 0] = torch.zeros(batch_size, device=self.device, dtype=self.dtype)
-            return features
-
-        # Extract sliding windows: shape (batch_size, n_windows, order)
-        windows = self.x.unfold(dimension=-1, size=order, step=1)
-
-        # Get ordinal patterns via argsort
-        patterns = torch.argsort(windows, dim=-1)  # Shape: (batch_size, n_windows, order)
-
-        # Lehmer Code Encoding (Correct Permutation Index)
-        # The Lehmer code maps each permutation to a unique index in [0, m!-1]
-        # For position i, count how many elements to the right are smaller than patterns[i]
-        # Then: index = sum_{i=0}^{m-1} (count_i * (m-1-i)!)
-
-        # Compute factorial coefficients: [(m-1)!, (m-2)!, ..., 1!, 0!]
-        factorials = torch.tensor(
-            [math.factorial(order - 1 - i) for i in range(order)],
-            device=self.device, dtype=torch.long
-        )
-
-        # For each position, count elements to the right that are smaller
-        # patterns shape: (batch_size, n_windows, order)
-        # We need to compare patterns[:, :, i] with patterns[:, :, j] for all j > i
-
-        # Expand for pairwise comparison
-        # patterns_expanded: (batch_size, n_windows, order, 1)
-        # patterns_compare: (batch_size, n_windows, 1, order)
-        patterns_expanded = patterns.unsqueeze(-1)
-        patterns_compare = patterns.unsqueeze(-2)
-
-        # Create mask for "to the right": only compare j > i
-        idx = torch.arange(order, device=self.device)
-        right_mask = idx.unsqueeze(0) > idx.unsqueeze(1)  # Shape: (order, order)
-
-        # Count smaller elements to the right
-        smaller = (patterns_compare < patterns_expanded) & right_mask
-        counts_smaller = smaller.sum(dim=-1)  # Shape: (batch_size, n_windows, order)
-
-        # Compute Lehmer code
-        pattern_indices = torch.sum(counts_smaller * factorials, dim=-1)  # Shape: (batch_size, n_windows)
-
-        # Ensure indices are in valid range (should be guaranteed, but safety check)
-        pattern_indices = pattern_indices.clamp(0, n_patterns - 1)
-
-        # Count pattern frequencies
-        counts = torch.zeros(batch_size, n_patterns, device=self.device, dtype=self.dtype)
-        counts.scatter_add_(
-            dim=1,
-            index=pattern_indices,
-            src=torch.ones(batch_size, n_windows, device=self.device, dtype=self.dtype)
-        )
-
-        # Compute probabilities and entropy
-        probs = counts / n_windows
-        log_probs = torch.log(torch.clamp(probs, min=1e-10))
-        entropy = -torch.sum(probs * log_probs, dim=-1)
-
-        # Normalize by maximum entropy
-        max_entropy = math.log(n_patterns)
-        features[:, 0] = entropy / max_entropy
-
-        return features
-
-    def __compute_extreme_events_stats(self, threshold_factor: float = 1.5) -> torch.Tensor:
-        """
-        Computes extreme events statistics (fully GPU-accelerated):
-            (1) Maximum excursion (max - mean)
-            (2) Zero crossing rate
-            (3) Threshold crossing rate
-            (4) Mean burst duration
-            (5) Mean return time
-        :param threshold_factor: multiplier of std for burst threshold (default 1.5)
-        :return: extreme events statistics with shape: (batch_size, 5)
-        """
-        batch_size, n = self.x.shape
-        features = torch.empty(batch_size, 5, device=self.device, dtype=self.dtype)
-
-        # Centered signal
-        mean_x = torch.mean(self.x, dim=-1, keepdim=True)
-        centered = self.x - mean_x
-        std_x = torch.std(self.x, dim=-1, keepdim=True)
-
-        # Maximum Excursion
-        max_excursion = torch.max(centered, dim=-1).values
-        features[:, 0] = max_excursion
-
-        # Zero Crossing Rate
-        # Count sign changes in centered signal
-        signs = torch.sign(centered)
-        sign_changes = torch.abs(torch.diff(signs, dim=-1)) > 0
-        zcr = torch.mean(sign_changes.float(), dim=-1)
-        features[:, 1] = zcr
-
-        # Burst Detection (Threshold Crossings)
-        threshold = threshold_factor * std_x
-        is_burst = (centered > threshold).float()  # Shape: (batch_size, n)
-
-        # Detect burst starts and ends via diff
-        # Prepend 0 and append 0 to detect edges at boundaries
-        padded = torch.nn.functional.pad(is_burst, (1, 1), value=0)  # Shape: (batch_size, n+2)
-        transitions = torch.diff(padded, dim=-1)  # Shape: (batch_size, n+1)
-
-        # Burst starts: transition from 0 to 1 (diff == 1)
-        # Burst ends: transition from 1 to 0 (diff == -1)
-        burst_starts = (transitions == 1).float()
-
-        # Threshold Crossing Rate
-        # Number of burst initiations per unit time
-        dt_flat = self.dt.squeeze(-1) if isinstance(self.dt, torch.Tensor) else self.dt
-        n_bursts = torch.sum(burst_starts, dim=-1)
-        total_time = n * dt_flat
-        threshold_rate = n_bursts / total_time
-        features[:, 2] = threshold_rate
-
-        # Mean Burst Duration
-        # Total time in burst state / number of bursts
-        total_burst_time = torch.sum(is_burst, dim=-1) * dt_flat
-        mean_burst_duration = total_burst_time / torch.clamp(n_bursts, min=1.0)
-        features[:, 3] = mean_burst_duration
-
-        # Mean Return Time
-        # Average interval between burst starts
-        # Return time = total time / number of bursts (for a stationary process)
-        # This is an approximation; exact computation requires finding intervals
-        mean_return_time = total_time / torch.clamp(n_bursts, min=1.0)
-        features[:, 4] = mean_return_time
-
-        return features
+            out = torch.cat([
+                self._group_a(), self._group_b(), self._group_c(), self._group_d(),
+                self._group_e(), self._group_f(), self._group_g(),
+            ], dim=-1)
+            assert out.shape[-1] == len(FEATURE_LABELS), (
+                f"feature count {out.shape[-1]} != len(FEATURE_LABELS) {len(FEATURE_LABELS)}"
+            )
+            return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)

@@ -12,8 +12,9 @@ CONVENTION:
 from __future__ import annotations
 
 import torch
+from torch.distributions import constraints
 from torch.distributions.transforms import (
-    AffineTransform, SigmoidTransform, ComposeTransform,
+    AffineTransform, SigmoidTransform, ComposeTransform, Transform,
 )
 
 def build_box_bijection(lows: torch.Tensor, highs: torch.Tensor) -> ComposeTransform:
@@ -116,3 +117,84 @@ class TransformedPosterior:
     def set_default_x(self, x):
         self.latent.set_default_x(x)
         return self
+
+
+# ── Decorrelating reparameterization (optional Fisher-eigenbasis rotation) ────────
+# The flow struggles to calibrate the near-degenerate (e.g. 0.95-correlated kappa~x_scale)
+# posterior. Rotating the flow's latent coordinate into the Fisher eigenbasis makes that
+# posterior axis-aligned, so the flow calibrates it -> tighter, correct marginals, with NO
+# loss of information (the rotation is orthogonal/invertible) and NO model change. V = I
+# recovers the exact current pipeline, so the rotation is fully optional.
+class OrthogonalTransform(Transform):
+    """
+    Fixed orthogonal rotation in the flow's latent space (row-vector convention):
+        forward:  w -> w @ M      inverse:  z -> z @ M^T
+    Orthogonal M => volume-preserving => log|det J| = 0.
+    """
+    domain = constraints.real_vector
+    codomain = constraints.real_vector
+    bijective = True
+
+    def __init__(self, M: torch.Tensor, cache_size: int = 0):
+        super().__init__(cache_size=cache_size)
+        self.M = M
+
+    def __eq__(self, other):
+        return (isinstance(other, OrthogonalTransform) and self.M.shape == other.M.shape
+                and bool(torch.equal(self.M, other.M)))
+
+    def _call(self, x):
+        return x @ self.M
+
+    def _inverse(self, y):
+        return y @ self.M.transpose(-1, -2)
+
+    def log_abs_det_jacobian(self, x, y):
+        return torch.zeros(x.shape[:-1], dtype=x.dtype, device=x.device)
+
+
+def fisher_eigenbasis(F: torch.Tensor) -> torch.Tensor:
+    """
+    Eigenvectors V (columns) of a symmetric Fisher matrix F, descending by eigenvalue.
+    The map w = V^T z sends the (Laplace) posterior covariance F^{-1} to a diagonal in w,
+    i.e. decorrelates the flow's coordinates. F is computed from SIMULATIONS (the standardized
+    feature-Jacobian J: F = J^T J) — no trained posterior is needed.
+    """
+    F = 0.5 * (F + F.transpose(-1, -2))
+    evals, evecs = torch.linalg.eigh(F)
+    return evecs[:, torch.argsort(evals, descending=True)]
+
+
+def build_rotated_bijection(box_transform: ComposeTransform, V: torch.Tensor) -> ComposeTransform:
+    """
+    Compose the decorrelating rotation with the per-parameter box bijection:
+        T_new(w) = box_transform(w @ V^T)      # flow coord w -> physical θ
+    so the flow operates on the rotated coordinate w = z @ V, z = box_transform.inv(θ).
+    V orthogonal => the rotation adds 0 to the log-det. V = I recovers box_transform.
+    """
+    return ComposeTransform([OrthogonalTransform(V.transpose(-1, -2))] + list(box_transform.parts))
+
+
+class RotatedLatentPrior:
+    """
+    Prior over the rotated flow coordinate w = z @ V, with z ~ base (the latent inferred
+    prior) and V orthogonal. sample()/log_prob() only — the minimal interface the SBI training
+    path and SBIPriorWrapper need. log|det V| = 0, so no Jacobian correction.
+    """
+    def __init__(self, base, V: torch.Tensor):
+        self.base = base
+        self.V = V
+
+    @property
+    def batch_shape(self):
+        return self.base.batch_shape
+
+    @property
+    def event_shape(self):
+        return self.base.event_shape
+
+    def sample(self, sample_shape=torch.Size()):
+        return self.base.sample(sample_shape) @ self.V
+
+    def log_prob(self, w):
+        return self.base.log_prob(w @ self.V.transpose(-1, -2))
