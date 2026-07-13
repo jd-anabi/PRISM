@@ -48,7 +48,7 @@ from core import cli, orchestrator
 from core.config import (SimConfig, DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S, detect_device,
                          NADROWSKI_LABELS, POSTERIOR_PATH, PLOT_PATH)
 from core.SBI import analysis
-from core.SBI.reparam import build_inferred_bijection, TransformedPosterior
+from core.SBI.reparam import TransformedPosterior, load_eval_bijection, UnitToBoxTransform, OrthogonalTransform
 
 # ---- knobs ----
 CELL = os.environ.get("CELL", "Resources/Cells/nadrowski_cell_2.txt")
@@ -69,15 +69,27 @@ cfg = SimConfig(model="NADROWSKI", labels=NADROWSKI_LABELS, state_dep_drift=True
 dtype, device = cfg.hw.dtype, cfg.hw.device
 nd_dim = len(cfg.params_dict)
 labels = cfg.inferred_labels
-t_off_idx = nd_dim + cfg.rescale_idx["t_offset"]
-print(f"[cfg] device={device}  nd_dim={nd_dim}  n_inferred={len(labels)}  "
-      f"t_offset global idx={t_off_idx} ('{labels[t_off_idx]}')", flush=True)
+_has_toff = "t_offset" in cfg.rescale_idx
+t_off_idx = nd_dim + cfg.rescale_idx["t_offset"] if _has_toff else -1
+if _has_toff:
+    print(f"[cfg] device={device}  nd_dim={nd_dim}  n_inferred={len(labels)}  "
+          f"t_offset global idx={t_off_idx} ('{labels[t_off_idx]}')", flush=True)
+else:
+    print(f"[cfg] device={device}  nd_dim={nd_dim}  n_inferred={len(labels)}  "
+          f"(no t_offset in this cell; skipping t_offset-specific diagnostics)", flush=True)
 
 # ---- load posterior + extract its EXACT training (latent) prior ----
 post_latent = torch.load(str(POSTERIOR_PATH / POST), weights_only=False)
-latent_inferred_prior = post_latent.prior.gen_dist          # ProductPrior([latent_nd_gmm, latent_rescale])
-T = build_inferred_bijection(cfg)
-posterior = TransformedPosterior(post_latent, T)            # physical-space posterior
+latent_inferred_prior = post_latent.prior.gen_dist          # latent prior; RotatedLatentPrior if trained rotated
+# Reconstruct the EXACT training bijection from POST's sidecar (log box + optional rotation),
+# self-describing so eval is correct regardless of the current config.
+T_eval = load_eval_bijection(cfg, POST, POSTERIOR_PATH)
+_rot = any(isinstance(p, OrthogonalTransform) for p in T_eval.parts)
+_box = next((p for p in T_eval.parts if isinstance(p, UnitToBoxTransform)), None)
+_nlog = int(_box.log_mask.sum()) if _box is not None else 0
+print(f"[reparam] POST={POST}: rotation={'on' if _rot else 'off'}, log-box dims={_nlog}/{len(labels)}",
+      flush=True)
+posterior = TransformedPosterior(post_latent, T_eval)       # physical-space posterior
 force_prior = orchestrator._build_forcing_prior(cfg)
 
 _z = latent_inferred_prior.sample((2,))
@@ -101,7 +113,7 @@ for r in range(K):
         t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=N_CAL,
         nd_dim=nd_dim, forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
         dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
-        t_scale_bounds=cfg.t_scale_bounds, theta_transform=T,
+        t_scale_bounds=cfg.t_scale_bounds, theta_transform=T_eval,
         state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
     )
     n_valid = theta_star.shape[0]
@@ -110,7 +122,7 @@ for r in range(K):
         num_posterior_samples=NPS, reduce_fns="marginals",
         use_batched_sampling=True, show_progress_bar=False,
     )
-    prior_samples = T(latent_inferred_prior.sample((n_valid,)).to(device)).cpu()
+    prior_samples = T_eval(latent_inferred_prior.sample((n_valid,)).to(device)).cpu()
     stats = check_sbc(ranks=ranks.cpu(), prior_samples=prior_samples,
                       dap_samples=dap.cpu(), num_posterior_samples=NPS)
     ks_matrix[r] = np.asarray(stats["ks_pvals"])
@@ -123,8 +135,11 @@ for r in range(K):
     np.savez(npz_path, ks=ks_matrix, c2st=c2st_matrix, t_off_idx=t_off_idx,
              labels=np.array([str(l) for l in labels]),
              ranks=np.concatenate(ranks_all, axis=0), nps=NPS)
-    print(f"[run {r+1}/{K}] n_valid={n_valid}  t_offset KS p={ks_matrix[r, t_off_idx]:.4f}  "
-          f"({time.time() - t0:.1f}s)", flush=True)
+    if _has_toff:
+        print(f"[run {r+1}/{K}] n_valid={n_valid}  t_offset KS p={ks_matrix[r, t_off_idx]:.4f}  "
+              f"({time.time() - t0:.1f}s)", flush=True)
+    else:
+        print(f"[run {r+1}/{K}] n_valid={n_valid}  ({time.time() - t0:.1f}s)", flush=True)
 
 # ---- aggregate report ----
 def col_summary(j):
@@ -137,10 +152,15 @@ print("\n=== KS p-value distribution over K repeats (sorted by median; low = mis
 print(f"{'param':16s} {'median':>8s} {'min':>8s} {'max':>8s} {'frac<.05':>9s}")
 for j in sorted(range(len(labels)), key=lambda k: col_summary(k)[0]):
     med, lo, hi, frac = col_summary(j)
-    mark = "   <== t_offset (target)" if j == t_off_idx else ""
+    mark = "   <== t_offset (target)" if (_has_toff and j == t_off_idx) else ""
     print(f"{str(labels[j]):16s} {med:8.3f} {lo:8.3f} {hi:8.3f} {frac:9.2f}{mark}")
 
 # ---- t_offset deep-dive: pooled rank histogram + ECDF ----
+if not _has_toff:
+    print("\n(t_offset not in this cell's rescale params — skipping the t_offset deep-dive, "
+          "marginals, and verdict; the general KS study above still stands.)", flush=True)
+    print("SBC_CHARACTERIZE_DONE", flush=True)
+    sys.exit(0)
 toff_pooled = np.concatenate([rk[:, t_off_idx] for rk in ranks_all])
 fig, axes = plt.subplots(1, 2, figsize=(13, 4.5))
 axes[0].hist(toff_pooled, bins=30, density=True, color="steelblue", alpha=0.85)

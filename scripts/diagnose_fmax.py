@@ -53,7 +53,8 @@ n_segs = max(1, math.ceil(n_fine / CHUNK_LEN))
 rescale_gt = torch.tensor([[v for v, _ in cfg.rescale_params.values()]], dtype=dtype, device=device)
 forcing_gt = torch.tensor([[v for v, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
 x_scale = rescale_gt[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
-x_offset = rescale_gt[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
+x_offset = (rescale_gt[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
+            if "x_offset" in cfg.rescale_idx else torch.zeros((1, 1), dtype=dtype, device=device))
 amp_v = forcing_gt[:, cfg.forcing_idx["amp"]]
 freq_v = forcing_gt[:, cfg.forcing_idx["freq"]]
 phase_v = forcing_gt[:, cfg.forcing_idx["phase"]]

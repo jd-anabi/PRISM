@@ -33,7 +33,7 @@ from core import cli, orchestrator
 from core.config import (SimConfig, DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S, detect_device,
                          NADROWSKI_LABELS, CHUNK_LEN, POSTERIOR_PATH)
 from core.SBI import pipeline
-from core.SBI.reparam import build_inferred_bijection
+from core.SBI.reparam import build_inferred_bijection, load_eval_bijection
 
 CELL = os.environ.get("CELL", "Resources/Cells/nadrowski_cell_2.txt")
 POST = os.environ.get("POST", "posterior_3d.pt")
@@ -91,7 +91,8 @@ def _raw(nd, res, force, m, crn):
     if crn:
         torch.manual_seed(SS)
     xs = sim(torch.zeros_like(forcef))
-    xsc = res[cfg.rescale_idx["x_scale"]].double(); xof = res[cfg.rescale_idx["x_offset"]].double()
+    xsc = res[cfg.rescale_idx["x_scale"]].double()
+    xof = res[cfg.rescale_idx["x_offset"]].double() if "x_offset" in cfg.rescale_idx else 0.0
     xf_d, xs_d = xsc * xf.double() + xof, xsc * xs.double() + xof
     feats = pipeline.gen_stats(xs_d, xf_d, cfg.dt_exp, fv[:, amp_i].expand(m).double(),
                                fv[:, freq_i].expand(m).double(), fv[:, phase_i].expand(m).double(),
@@ -161,11 +162,14 @@ gt_res = torch.tensor([v for v, _ in cfg.rescale_params.values()], dtype=dtype, 
 gt_force = torch.tensor([v for v, _ in cfg.force_params_dict.values()], dtype=dtype, device=device)
 
 base = torch.load(str(POSTERIOR_PATH / POST), weights_only=False)
-latent_prior = base.prior.gen_dist
+latent_prior = base.prior.gen_dist                          # RotatedLatentPrior if trained rotated
 T = build_inferred_bijection(cfg)
+# Reconstruct POST's exact training bijection (log box + optional rotation) from its sidecar,
+# so latent draws map to physical θ consistently; falls back to plain linear T for legacy posteriors.
+T_eval = load_eval_bijection(cfg, POST, POSTERIOR_PATH)
 force_prior = orchestrator._build_forcing_prior(cfg)
 z = latent_prior.sample((K - 1,))
-theta = T(z.to(device))
+theta = T_eval(z.to(device))
 force_s = force_prior.sample((K - 1,)).to(device)
 
 points = [("GT", gt_nd, gt_res, gt_force)]

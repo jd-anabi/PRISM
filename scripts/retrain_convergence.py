@@ -83,6 +83,19 @@ dtype, device = cfg.hw.dtype, cfg.hw.device
 nd_dim = len(cfg.params_dict)
 
 # ---- inherit the EXACT training (latent) prior from the base posterior ----
+# This script retrains via the PLAIN latent path (theta_transform=T). A rotated base — one with
+# a <name>.rot.pt sidecar — lives in rotated coords w = z @ V; retraining it here would feed a
+# w-space prior through a plain box transform and produce an inconsistent posterior. Rotated-base
+# convergence checks need the rotated training path (RotatedLatentPrior + rotated theta_transform,
+# cf. orchestrator.build_posterior), which is not yet wired here — fail loudly instead.
+_rot = POSTERIOR_PATH / ((BASE_POST[:-3] if BASE_POST.endswith(".pt") else BASE_POST) + ".rot.pt")
+if _rot.exists():
+    raise SystemExit(
+        f"BASE_POST={BASE_POST} was trained with the decorrelating rotation ({_rot.name}); "
+        "retrain_convergence only supports a plain (non-rotated) base. Use a non-rotated base, or "
+        "extend this script to mirror orchestrator's rotated training path."
+    )
+
 base = torch.load(str(POSTERIOR_PATH / BASE_POST), weights_only=False)
 latent_inferred_prior = base.prior.gen_dist            # ProductPrior([latent_nd_gmm, latent_rescale])
 _z = latent_inferred_prior.sample((2,))

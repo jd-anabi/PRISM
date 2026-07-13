@@ -31,7 +31,8 @@ from .SBI import embedded_network, pipeline, analysis, decorrelate
 from .SBI.Priors import sbi_prior_wrapper
 from .SBI.reparam import (
     build_inferred_bijection, TransformedPosterior, build_rescale_bijection, _transform_device,
-    build_rotated_bijection, RotatedLatentPrior, OrthogonalTransform,
+    build_rotated_bijection, RotatedLatentPrior, OrthogonalTransform, load_eval_bijection,
+    nd_log_mask, resolved_log_params,
 )
 
 # Directories have spaces in their names, so use importlib for these imports
@@ -174,8 +175,8 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
 
     # Redimensionalize both runs
     x_scale = rescale_gt[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
-    x_offset = rescale_gt[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
-    t_offset = rescale_gt[:, cfg.rescale_idx["t_offset"]].item()
+    x_offset = rescale_gt[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
+    t_offset = rescale_gt[:, cfg.rescale_idx["t_offset"]].item() if "t_offset" in cfg.rescale_idx else 0.0
     x_dim = helpers.rescale(x_nd, x_scale, x_offset)
     x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
 
@@ -244,6 +245,7 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Di
         prior_bounds=cfg.nd_params_bounds,
         state_dep_drift=cfg.state_dep_drift,
         num_iterations=50,
+        log_mask=nd_log_mask(cfg),   # geometric/log box on the configured ND scale params (REPARAM_LOG_PARAMS)
         dtype=cfg.hw.dtype, device=cfg.hw.device,
     )
 
@@ -318,10 +320,10 @@ def build_posterior(
     if not train_new and choice is not None:
         posterior_latent = torch.load(str(POSTERIOR_PATH / choice), weights_only=False)
         assert isinstance(posterior_latent, DirectPosterior)
-        # If trained with a decorrelating rotation, load V (sidecar) and rebuild the rotated T.
-        rot_path = POSTERIOR_PATH / ((choice[:-3] if choice.endswith(".pt") else choice) + ".rot.pt")
-        T_load = (build_rotated_bijection(T, torch.load(str(rot_path), weights_only=False))
-                  if rot_path.exists() else T)
+        # Reconstruct the exact training box (+ rotation) from the <name>.rot.pt sidecar — log-mask
+        # and V are self-describing, so eval is correct regardless of the current config (single
+        # source of truth shared with the offline diagnostic scripts).
+        T_load = load_eval_bijection(cfg, choice, POSTERIOR_PATH)
         return TransformedPosterior(posterior_latent, T_load), None
 
     # --- Build a LATENT product prior for SBI to train on ---
@@ -335,6 +337,24 @@ def build_posterior(
         )
     rescale_prior_physical = prior.distributions[1]      # MultipleIndependent
     latent_nd = nd_prior_physical.base_dist              # the raw latent MixtureSameFamily
+
+    # The latent ND GMM was fit in its box's coordinate. If we now train with a different ND log
+    # box (REPARAM_LOG_PARAMS changed since this prior was built), physical training samples would
+    # be drawn from the wrong prior. Require the loaded prior's box mask to match the config mask.
+    from torch.distributions.transforms import ComposeTransform as _Compose
+    from .SBI.reparam import UnitToBoxTransform as _Box
+    _nd_box = next((inner for tr in nd_prior_physical.transforms
+                    for inner in (tr.parts if isinstance(tr, _Compose) else [tr])
+                    if isinstance(inner, _Box)), None)
+    if _nd_box is not None:
+        _want = nd_log_mask(cfg).to(_nd_box.log_mask.device)
+        if not torch.equal(_nd_box.log_mask, _want):
+            raise ValueError(
+                "Loaded ND prior's log-box mask does not match config.REPARAM_LOG_PARAMS "
+                f"(prior log dims={_nd_box.log_mask.tolist()}, config wants={_want.tolist()}). "
+                "The latent GMM was fit in a different coordinate — REBUILD the ND prior "
+                "(construct a new prior) before training a new posterior."
+            )
 
     # Pushforward the physical rescale prior through T_rescale.inv (Issue 2a).
     T_rescale = build_rescale_bijection(cfg)
@@ -350,7 +370,8 @@ def build_posterior(
     # is axis-aligned and the flow can calibrate it. REPARAM_ROTATE=False => V=None => plain.
     if REPARAM_ROTATE:
         print("Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)...")
-        V = decorrelate.build_latent_fisher_rotation(cfg, T)
+        # Average the Fisher over the prior (not just GT) so the linear rotation is valid prior-wide.
+        V = decorrelate.build_latent_fisher_rotation(cfg, T, latent_prior=latent_inferred_prior)
         T_train = build_rotated_bijection(T, V)
         train_prior = RotatedLatentPrior(latent_inferred_prior, V)
     else:
@@ -409,9 +430,13 @@ def build_posterior(
     name = cli.prompt_save_name("posterior")
     # Save the RAW latent DirectPosterior (not the wrapped one).
     torch.save(posterior_latent, str(POSTERIOR_PATH / (name + ".pt")))
-    # Persist the decorrelating rotation V beside it so the load path reproduces the rotated T.
-    if V is not None:
-        torch.save(V, str(POSTERIOR_PATH / (name + ".rot.pt")))
+    # Persist the reparameterization sidecar (self-describing) so eval reconstructs the exact
+    # training box: the decorrelating rotation V (or None) AND which params used the log box.
+    # Written whenever either is active; absence => legacy linear, no rotation. load_eval_bijection
+    # also accepts a bare-tensor V (older rotation-only saves) for backward compatibility.
+    log_params_used = resolved_log_params(cfg)
+    if V is not None or log_params_used:
+        torch.save({"V": V, "log_params": log_params_used}, str(POSTERIOR_PATH / (name + ".rot.pt")))
 
     # Persist the training/validation loss curve alongside the posterior so the
     # convergence ("under-fit vs converged") check for the hard-to-identify params
@@ -522,7 +547,7 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
             idx = subsample_factors.unsqueeze(1) * arange_out.unsqueeze(0)  # (bs, N_points_obs)
 
             x_scale_col = bin_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
-            x_offset_col = bin_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
+            x_offset_col = bin_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
 
             # Forced run (Group G) then spontaneous run (Groups A-F, zero force)
             for force_run, dest in ((force_bin, x_dim_sorted), (torch.zeros_like(force_bin), x_spont_sorted)):
@@ -664,7 +689,7 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
         )
         x_nd_c_ds = x_nd_c[:, idx_c]                                     # (1, N_points_obs)
         x_scale_c = central_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
-        x_offset_c = central_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1)
+        x_offset_c = central_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
         return (x_scale_c * x_nd_c_ds + x_offset_c)[0].cpu().numpy()     # (N_points_obs,)
 
     with torch.no_grad():

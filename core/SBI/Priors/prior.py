@@ -18,7 +18,7 @@ class Prior(ABC):
     def construct_prior(self, t: torch.Tensor, n_params: int, global_batch_size: int, local_batch_size: int,
                         segs: int, prior_bounds: list[tuple], t_global_scale: int = 1, num_iterations: int = 25,
                         steady: bool = True, n_max: int = 200000, step: float = 0.01,
-                        state_dep_drift: bool = False) -> TransformedDistribution:
+                        state_dep_drift: bool = False, log_mask: torch.Tensor | None = None) -> TransformedDistribution:
         """
         Build a stability-screened prior over ND parameters.
 
@@ -46,9 +46,14 @@ class Prior(ABC):
         ))
 
         # --- Build the ND bijection from the same bounds the sweep used ---
+        # log_mask (per-param) places selected dims in geometric/log coords; None => linear box.
+        # The latent GMM below is fit in T_nd's coordinate, so it is consistent with whatever box
+        # this is — but a saved prior MUST be reloaded with the SAME mask (file_manager persists it).
         lows = torch.tensor([b[0] for b in prior_bounds], dtype=self.dtype, device=self.device)
         highs = torch.tensor([b[1] for b in prior_bounds], dtype=self.dtype, device=self.device)
-        T_nd = build_box_bijection(lows, highs)
+        if log_mask is not None:
+            log_mask = log_mask.to(device=self.device)
+        T_nd = build_box_bijection(lows, highs, log_mask)
 
         # --- Map accepted physical points to latent space before clustering + GMM fit ---
         # eps-clamp handles the degenerate case where a sweep produced a sample exactly on

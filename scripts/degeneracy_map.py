@@ -99,7 +99,7 @@ def _raw(pvec, rescale_vec, m, crn):
         torch.manual_seed(SS)
     xs = sim(torch.zeros_like(force))
     xsc = rescale_vec[cfg.rescale_idx["x_scale"]].double()
-    xof = rescale_vec[cfg.rescale_idx["x_offset"]].double()
+    xof = rescale_vec[cfg.rescale_idx["x_offset"]].double() if "x_offset" in cfg.rescale_idx else 0.0
     xf_d, xs_d = xsc * xf.double() + xof, xsc * xs.double() + xof   # float64 redim
     feats = pipeline.gen_stats(xs_d, xf_d, cfg.dt_exp, amp_v.expand(m).double(),
                                freq_v.expand(m).double(), phase_v.expand(m).double(),

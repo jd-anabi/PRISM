@@ -10,9 +10,7 @@ sigma_y = 0.005 in [1e-3, 1]
 
 # Dimensional Parameters
 x_scale (nm) = 62.14 in (10, 100)
-x_offset (nm) = 0 in (-1e-6, 1e-6)
 t_scale (ms) = 3.73 in (1, 40)
-t_offset (ms) = 0 in (-1e-6, 1e-6)
 
 # Forcing Parameters
 amp (pN) = 0 in (0, 500)

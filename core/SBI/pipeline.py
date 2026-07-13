@@ -67,10 +67,11 @@ def build_nondim_sin_force_tensor(
 
     # extract rescale params as (batch, 1)
     t_scale  = rescale_params[:, rescale_idx["t_scale"]].unsqueeze(1)
-    t_offset = rescale_params[:, rescale_idx["t_offset"]].unsqueeze(1)
+    t_offset = rescale_params[:, rescale_idx["t_offset"]].unsqueeze(1) if "t_offset" in rescale_idx else 0.0
     if "f_scale" in rescale_idx:
         f_scale  = rescale_params[:, rescale_idx["f_scale"]].unsqueeze(1)
-        f_offset = rescale_params[:, rescale_idx["f_offset"]].unsqueeze(1)
+        f_offset = (rescale_params[:, rescale_idx["f_offset"]].unsqueeze(1)
+                    if "f_offset" in rescale_idx else torch.zeros_like(f_scale))
     else:
         # Hopf-style nondim: F_ND = F_dim / (l * omega_0) -> f_scale = x_scale / t_scale,
         # f_offset = 0. Cell file omits f_scale/f_offset from the rescale block since
@@ -212,7 +213,7 @@ def gen_stats(x_spont: torch.Tensor, x_forced: torch.Tensor, dt: float | torch.T
     return torch.cat(results, dim=0)
 
 def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_size: int, segs: int, prior_bounds: list,
-              state_dep_drift: bool = False, num_iterations: int = 25,
+              state_dep_drift: bool = False, num_iterations: int = 25, log_mask: torch.Tensor | None = None,
               dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> torch.distributions.MixtureSameFamily:
     """
     Generates a prior distribution based on the given model and parameters.
@@ -257,7 +258,8 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
 
     with torch.no_grad():
         prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size, segs, prior_bounds,
-                                      t_global_scale=2, num_iterations=num_iterations, n_max=175000, steady=False, state_dep_drift=state_dep_drift)
+                                      t_global_scale=2, num_iterations=num_iterations, n_max=175000, steady=False,
+                                      state_dep_drift=state_dep_drift, log_mask=log_mask)
 
     return prior
 
@@ -426,7 +428,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 
             # 4. Redimensionalize both runs (uses PHYSICAL rescale)
             x_scale  = curr_thetas_rescale[:, rescale_idx["x_scale"]].unsqueeze(1)
-            x_offset = curr_thetas_rescale[:, rescale_idx["x_offset"]].unsqueeze(1)
+            x_offset = curr_thetas_rescale[:, rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in rescale_idx else 0.0
             x_dim = helpers.rescale(x_nd, x_scale, x_offset)
             x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
             del x_nd, x_nd_spont

@@ -175,33 +175,37 @@ def save_mix_dist(dist, filename: str):
     load_mix_dist discriminates on the presence of 'lows'/'highs' keys.
     """
     from torch.distributions.transforms import AffineTransform, ComposeTransform
+    from core.SBI.reparam import UnitToBoxTransform
     if isinstance(dist, torch.distributions.TransformedDistribution):
         base = dist.base_dist
 
         # dist.transforms is a list; entries may be atomic Transforms or ComposeTransforms.
-        # Walk one level deep to find the AffineTransform inside our box bijection.
-        affine = None
+        # Walk one level deep to find the box bijection (UnitToBoxTransform; AffineTransform legacy).
+        box = None
         for t in dist.transforms:
-            if isinstance(t, AffineTransform):
-                affine = t
-                break
-            if isinstance(t, ComposeTransform):
-                for inner in t.parts:
-                    if isinstance(inner, AffineTransform):
-                        affine = inner
-                        break
-                if affine is not None:
+            for inner in (t.parts if isinstance(t, ComposeTransform) else [t]):
+                if isinstance(inner, (UnitToBoxTransform, AffineTransform)):
+                    box = inner
                     break
+            if box is not None:
+                break
 
-        if affine is None:
-            raise ValueError("TransformedDistribution has no AffineTransform; can't extract bounds.")
+        if box is None:
+            raise ValueError("TransformedDistribution has no box transform; can't extract bounds.")
+
+        if isinstance(box, UnitToBoxTransform):
+            lows, highs, log_mask = box.lows, box.highs, box.log_mask
+        else:  # legacy AffineTransform box (all-linear)
+            lows, highs = box.loc, box.loc + box.scale
+            log_mask = torch.zeros_like(box.loc, dtype=torch.bool)
 
         data_to_save = {
             'means':       base.component_distribution.loc,
             'covariances': base.component_distribution.covariance_matrix,
             'weights':     base.mixture_distribution.probs,
-            'lows':        affine.loc,
-            'highs':       affine.loc + affine.scale,
+            'lows':        lows,
+            'highs':       highs,
+            'log_mask':    log_mask,   # per-param linear/log flags; absent in pre-log saved priors
         }
     else:
         # Legacy path: raw MixtureSameFamily
@@ -227,7 +231,10 @@ def load_mix_dist(filename: str, device: torch.device = torch.device('cpu')):
 
     if 'lows' in data and 'highs' in data:
         from core.SBI.reparam import build_box_bijection
-        T_nd = build_box_bijection(data['lows'].to(device), data['highs'].to(device))
+        log_mask = data.get('log_mask', None)          # absent in pre-log saved priors => linear box
+        if log_mask is not None:
+            log_mask = log_mask.to(device)
+        T_nd = build_box_bijection(data['lows'].to(device), data['highs'].to(device), log_mask)
         return torch.distributions.TransformedDistribution(latent_prior, T_nd)
     else:
         return latent_prior  # legacy

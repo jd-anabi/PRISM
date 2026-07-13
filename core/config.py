@@ -115,6 +115,27 @@ TRAINING_SHOW_SUMMARY = True             # print sbi's train/validation-loss sum
 REPARAM_ROTATE = True   # True = rotate into the Fisher eigenbasis; False = plain pipeline.
 REPARAM_FISHER_M = 48    # ensemble per latent-perturbation for the simulation-based Fisher estimate.
 REPARAM_FISHER_DZ = 0.1  # latent-space central-difference step for the Fisher Jacobian.
+# Operating points (GT + prior draws) over which the simulation Fisher is AVERAGED to build the
+# rotation V. >1 makes the single linear rotation valid prior-wide, not just at GT (a GT-only V
+# re-correlates the curved degeneracies off-GT). 1 = GT-only (the original behavior).
+REPARAM_FISHER_POINTS = 8
+
+# === LOG-SPACE BOX (linearize the multiplicative degeneracies before rotating) ===
+# ND/rescale params (by cell-file key) whose box bijection is GEOMETRIC (log) instead of linear.
+# In log coords the products kappa*x_scale (amplitude) and lambda*t_scale (timescale) become SUMS,
+# so the single linear Fisher rotation can decorrelate them across the whole prior. Only params with
+# a strictly positive lower bound are eligible (others fall back to linear with a warning). Empty
+# list = pure linear box (legacy). The chosen mask is persisted beside each posterior (<name>.rot.pt)
+# so eval reconstructs the exact training box regardless of this setting. REBUILD the ND prior after
+# changing this (the latent GMM is fit in the box's coordinate).
+REPARAM_LOG_PARAMS = ["f_scale"]   # log ONLY f_scale (its natural 3-decade scale; a LINEAR box put GT=10
+                          # at box-fraction 0.009 = flat sigmoid tail -> the mild f_scale SBC tilt in the
+                          # 13-dim keeper posterior_07012026; see scripts/diagnose_fscale.py). Keep the
+                          # DEGENERACY params (k, lam, x_scale, t_scale) LINEAR -- log OVER-MIXED those in
+                          # posterior_6302026. f_scale is a RESCALE param, so this does NOT require an ND
+                          # prior rebuild: nd_log_mask stays all-False -> build_posterior guard passes on
+                          # the existing linear ND prior (prior_forcing_no_forcing.pt). Restore to [] to
+                          # reproduce the current keeper's all-linear box.
 
 # === TRANSIENT (Case A: clip initial conditions settling) ===
 TRANSIENT_ND_UNITS = 100  # ND time units of transient to discard; ~20 e-folds of the slowest
