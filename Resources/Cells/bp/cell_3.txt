@@ -1,0 +1,38 @@
+# Non-dimensional Initial Conditions
+xhb_init = 0.1
+xa_init = 1
+pm_init = 0.5
+pgs_init = 0.5
+pt_init = 0.5
+
+# Non-dimensional Parameters
+tau_hb = 1
+tau_m = 5.158849376957278
+tau_gs = 1
+tau_t = 0
+c_min = 1
+s_min = 1e-9
+s_max = 0.8535403153475086
+ca2_m = 1
+ca2_gs = 1000
+u_gs_max = 26.372563002269686
+delta_e = 0.11822429415603053
+k_gs = 0.8446290946640642
+chi_hb = 1
+chi_a = 1.1549428868706748
+x_c = 1e-9
+eta_hb = 0.03
+eta_a = 0.05
+
+# Dimensional Parameters
+x_offset = 10
+x_scale = 1
+t_offset = 0
+t_scale = 1
+y_offset = 0
+y_scale = 1
+
+# Forcing Parameters
+amp = 100e-6
+phase = 0
+offset = 0

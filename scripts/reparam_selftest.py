@@ -30,7 +30,7 @@ from core.SBI import pipeline
 from core.SBI.reparam import (build_inferred_bijection, build_rotated_bijection,
                               fisher_eigenbasis, RotatedLatentPrior)
 
-CELL = os.environ.get("CELL", "Resources/Cells/nadrowski_cell_2.txt")
+CELL = os.environ.get("CELL", "Resources/Cells/nadrowski/cell_2.txt")
 POST = os.environ.get("POST", "posterior_3d.pt")
 M = int(os.environ.get("M", "32"))
 M_NOISE = int(os.environ.get("M_NOISE", "128"))

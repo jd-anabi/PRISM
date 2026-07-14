@@ -1,0 +1,379 @@
+================================================================================
+GUI HANDOFF  —  PySide6 desktop front-end for the GFDT / SBI app
+Created 2026-07-14. Updated 2026-07-14 (progress fix + Phase 2 landed).
+Self-contained context for a new chat to continue the GUI work.
+(Companion doc: sbi_calibration_handoff.txt — the SCIENCE/pipeline handoff. This file is
+ strictly about the GUI front-end. Read that one only if you need pipeline semantics.)
+================================================================================
+
+GOAL
+  A PySide6 desktop GUI as an ADDITIONAL front-end to the existing CLI research app.
+  The CLI (`python -m core`) and the 10 diagnostic scripts in scripts/ MUST keep working
+  unchanged — every core refactor done for the GUI is non-breaking and defaults to the old
+  CLI behavior.
+
+DESIGN DECISIONS (already made + implemented; don't re-litigate)
+  - Toolkit: PySide6. matplotlib backend is forced to Agg before any core.* import.
+  - Style: a STAGED GUI that drives the already-decomposed orchestrator stage functions
+    directly (Config -> Prior -> Posterior -> Validate -> Infer), one button per stage.
+    NOT a modal-dialog port of the CLI prompts.
+  - Heavy work runs on a background QThreadPool worker; the UI never blocks.
+  - Figures are rendered to PNG on the worker and shown as images (see GOTCHA #2).
+  - Progress (tqdm) renders in its OWN widget, one row per live bar. It never touches the log.
+
+STATUS
+  [DONE + verified]  Phase 0 — enabling refactors in core/ (R1..R5 below). CLI + scripts intact.
+  [DONE + verified]  Phase 1 — GUI framework + the SBI panel.
+  [DONE + verified]  Progress-bar rewrite — the log-pane append storm is fixed. See "PROGRESS" below.
+  [DONE + verified]  Phase 2 — FDT / REDUCTION / CROSSVAL panels. All four tabs registered.
+  [DONE + verified]  Solver Performance meter + step strip + liveness spinner. See that section below.
+  [DONE + verified]  Phase 3 — cooperative cancellation, QSettings persistence, better error dialogs.
+                     See "PHASE 3" below.
+
+  Verified by tests/test_gui_progress.py (29 tests, all passing) plus a headless end-to-end run in
+  which the REDUCTION panel actually executed run_reduction_map, saved its PNG, and had it picked up
+  into the FigureStack with a clean log. An adversarial review then found 7 real defects (one of which
+  prevented the GUI from launching at all); all are fixed and pinned by tests — see the list below.
+
+  Still NOT exercised end-to-end on a real display (ask the user before assuming these work):
+  the SBI panel's Save prior / Save posterior buttons, Validate (SBC/TARP), Infer (simulated AND
+  experimental), and a full FDT / CrossVal run (both are long; Reduction is the fast one).
+
+================================================================================
+PROGRESS — how tqdm is handled (this was the top bug; it is fixed)
+================================================================================
+  THE BUG (was): tqdm bars appended hundreds of rows to the log pane instead of redrawing one line.
+
+  THE ACTUAL ROOT CAUSE (established from tqdm 4.67.1's source + a byte-capture of its writes; the
+  original handoff's five hypotheses were mostly wrong — (b) was outright refuted, and (a), the one
+  it called "most likely", was NOT the cause):
+    tqdm redraws a bar at pos>0 as THREE atomic writes (std.py:1493-1497, :451-460, :1441-1443):
+        write("\n" * pos)                 # moveto(pos)
+        write("\r" + frame + padding)     # print_status
+        write("\x1b[A" * pos)             # moveto(-pos)   <- colorama IS installed, so real ANSI
+    The third write has no terminator, so `frame + "\x1b[A"` stranded in the old reader's buffer, and
+    the NEXT redraw's leading "\n" flushed it through the NEWLINE branch — i.e. as a LOG LINE. Each
+    nested-bar redraw appended exactly one row and emitted ZERO progress signals. The pipeline nests
+    bars FOUR deep, so this fired constantly.
+
+  KEY INSIGHT OF THE FIX: every chunk tqdm writes is atomic and self-describing, so classify per
+  chunk, not by scanning for terminators. There is no cursor state and thus nothing to desync.
+  A paint's row index is NOT just "newlines in the preceding chunk" — moveto(+1) and close(leave=True)'s
+  trailing "\n" (std.py:1303) are byte-identical. The authority is the chunk that FOLLOWS:
+      a paint is at row n  <=>  it is followed by a pure up-move of n     (else row 0)
+  A paint with no preceding newline is unambiguously row 0 and is published at once; a paint with
+  preceding newlines is a guess and is held for exactly one chunk (its confirming up-move arrives
+  microseconds later, in the same display() call).
+
+  FILES
+    core/gui/vt.py                    NEW. The whole classifier. Qt-FREE and unit-testable by replaying
+                                      tqdm's literal chunks. RowState / parse_bar / StreamRouter.
+    core/gui/streams.py               REWRITTEN. _SignalStream feeds a StreamRouter (stdout and stderr
+                                      get SEPARATE routers). A _Pump daemon thread coalesces and emits
+                                      to Qt at 15 Hz.
+    core/gui/widgets/progress_pane.py NEW. One _BarRow per live bar + one overall QProgressBar.
+    core/gui/widgets/log_pane.py      append_lines(batch); replace_last_line/_last_was_progress DELETED.
+    core/gui/worker.py                progress=Signal(str) -> rows=Signal(object) + log_batch=Signal(object).
+
+  *** THINGS THAT WILL BITE YOU IF YOU TOUCH core/gui/vt.py OR streams.py ***
+   P1. DO NOT give _SignalStream a `fileno()` or an `encoding` attribute. Without them tqdm's
+       screen-shape probe fails, so ncols is None (frames are NEVER disp_trim'd, which the frame regex
+       relies on) and nrows is None (so every nested bar displays). Adding `encoding` also flips
+       `ascii` (std.py:1038) and changes the glyphs.
+   P2. A bare "\n" chunk is THREE different things: the terminator of a status line, the terminator of
+       a plain print() (print writes its text and its "\n" as two separate chunks!), or a real
+       moveto/finalizer. Only the last is cursor motion. Mistaking a print()'s terminator for a moveto
+       strands the line forever and shifts the next bar down a phantom row. There is a test for this.
+   P3. A bare "\r" is ALWAYS row 0 — tqdm only emits one when pos == 0 (std.py:1307).
+   P4. The pump's FINAL publish must happen ON THE PUMP THREAD (stop() sets a flag and joins). If you
+       emit inline from the caller's thread and that caller is the GUI thread, Qt resolves it as a
+       DirectConnection and those slots run AHEAD of ticks still queued in the event loop — which
+       silently scrambles the log into teardown-first order. This bit us once already.
+   P5. The 15 Hz pump is LOAD-BEARING, not a nicety. tqdm's `mininterval` does not bound the redraw
+       rate here: set_description() and reset() both call refresh() -> display() with NO time gate, and
+       core/SBI/Priors/{bp,hopf,nadrowski}_prior.py call both on EVERY sweep iteration.
+   P6. Rows are keyed by tqdm `pos`, NOT by desc. The prior sweeps rewrite desc with a live counter
+       every iteration; a desc-keyed row map would mint a row per iteration — the original bug, reborn
+       inside the new widget. A digit-normalised `ident` is used ONLY to detect "a different bar took
+       this slot".
+   P7. The overall bar tracks the DEEPEST live row whose total > 1. Not the outermost (the pos-0
+       "Training neural posterior" bar wraps range(TRAINING_NUM_ROUNDS) and that is 1, so it reads 0%
+       for the whole multi-hour build), and not a sticky first-seen driver (sbi's NN training emits NO
+       tqdm bar at all — only a printed epoch counter — so a sticky driver sits at 100% through the
+       longest phase). It falls back to indeterminate when nothing informative is live.
+   P8. close(leave=True) at pos 0 paints the final frame and then writes a bare "\n" — byte-identical
+       to a moveto(+1). If you just treat it as a moveto, the FINISHED bar stays in the pane at 100%
+       and (being `informative`) pegs the overall bar at 100% while the pipeline is still working.
+       StreamRouter._settle_closing() resolves the ambiguity on later evidence: assume moveto, but
+       remember row 0 may be dead, and retire it once a chunk arrives proving no moveto was coming.
+       BOTH real leave=True bars are pos 0 (prior.py:88, campaigns.py:214), so this is the common case.
+
+================================================================================
+SOLVER PERFORMANCE METER + LIVENESS  (core/gui/widgets/progress_pane.py)
+================================================================================
+  THE PROBLEM. A top-level iteration ("Generating training data") takes ~10 SECONDS, so the overall bar
+  sits still between ticks and the GUI reads as frozen. The thing that IS moving is the SDE solver
+  underneath it, and its it/s is the number the user wants to see.
+
+  THE PANE now renders:
+      Solver Performance: ++++  (13.3k it/s)   [▓▓▓▓▓▓▓░░░░░░]   <- rate meter + live step strip
+      [███████░░░░░░░░░░░░░  38%]  ⠹                             <- overall bar + spinner
+          Training neural posterior
+          Generating training data  —  1902/5000 [05:12<13:41]
+
+  *** FOUR THINGS THAT WILL BITE YOU HERE ***
+   S1. The solver bar is found by its DESC PREFIX (config.SOLVER_BAR_DESC -> "step (batch="), NEVER by
+       its row. Its tqdm `pos` is 0, 1 OR 2 depending on the phase and the panel: under a posterior build
+       it sits beneath two other bars; during FDT Campaign 1 it is the only bar there is. The prefix is
+       unique repo-wide (sdeint.py is the sole producer).
+   S2. The solver bar must NEVER become a progress row. A posterior build constructs 10k–30k of them —
+       one per time segment, each alive 1–10s — so a row would mean creating and destroying a widget
+       every few seconds. ProgressPane.set_rows() partitions it out into the fixed solver line.
+   S3. The solver bar must be EXCLUDED from _retarget(). Its total is in the tens of thousands and it is
+       the deepest bar, so it would win the "deepest informative row" election every time and drag the
+       overall bar through a full 0→100% sweep every second — instead of showing the top-level count.
+   S4. tqdm flips to `s/it` BELOW 1 it/s (std.py:557), so " 2.50s/it" means 0.4 it/s, NOT 2.5.
+       vt.parse_rate() inverts it. Read naively, a crawling solver would show MORE plus signs the slower
+       it got. Also: a bar shorter than mininterval=1.0 emits only "?it/s" and, with leave=False, there
+       is no final 100% frame — so rate samples arrive in GAPS and the last one is HELD (SOLVER_IDLE_S).
+
+  THE METER. plus_meter(rate) = one '+' per order of magnitude: 10_000 it/s -> "++++". Under 10 it/s
+  there is no order to show, so it renders '·' rather than an empty string. After SOLVER_IDLE_S (45s)
+  with no sample the meter reads "— (idle)" — during NN training the solver genuinely is not running, and
+  a stale "++++" would be a lie. The Reduction panel is purely analytical, so its meter is always idle.
+
+  THE SPINNER is a braille QLabel on a 100ms QTimer. It is NOT purely decorative: ProgressPane.heartbeat()
+  is stamped from every rows snapshot AND every log batch (BasePanel wires log_batch -> heartbeat), and
+  after STALL_S (45s) of total silence the spinner FREEZES and reads "⏳ no output for 62s". A spinner
+  that keeps twirling on a wedged run asserts progress that is not happening.
+
+================================================================================
+  DEFECTS FOUND BY AN ADVERSARIAL REVIEW AND FIXED (each has a regression test — don't undo them)
+   - A cell dropped into Resources/Cells/<model>/ with NO sibling Bounds/<model>/<same>.txt made
+     cli._parse_cell raise a BARE ValueError (not UnitParseError). CrossValPanel prefills from
+     _parse_cell in __init__, so it escaped MainWindow() -> build_app() and the WHOLE GUI failed to
+     launch — before app.py's excepthook was even installed. Panels now catch broadly
+     (BasePanel._config_error); cli's builders raise plain ValueErrors, so `except cli.UnitParseError`
+     is simply the wrong net.
+   - Every dispatch() pinned its Worker's ARGUMENTS (cfg, prior, posterior, CUDA tensors) forever:
+     QThreadPool.start() hands the QRunnable to C++ and setAutoDelete(False) means C++ never frees it,
+     and the _finished closure captures the worker in a cycle. _finished now clears fn/args/kwargs.
+   - streams._REDIRECT was acquired OUTSIDE the try/finally, so a _Pump() thread-start failure would
+     hold it for the whole process and every later run would silently lose ALL its output.
+   - Closing the window mid-run tore down the QApplication under the worker -> "RuntimeError: Signal
+     source has been deleted", plus a silent process-wide block until the run finished. The emits are
+     now guarded and MainWindow.closeEvent asks first (a run still cannot be cancelled — Phase 3).
+   - set_controls_enabled now locks the WHOLE left column, not just the run button: ArtifactPicker
+     .refresh() wraps list_dir in contextlib.redirect_stdout, which reassigns the PROCESS-WIDE
+     sys.stdout — i.e. the stream redirect_streams installed for the running worker. Clicking ⟳ or a
+     model combo mid-run would swallow the worker's output, and could permanently reinstate a dead
+     _SignalStream as the process's stdout.
+
+  CORE CHANGE (the only behavioural core change in this whole effort)
+    core/config.py: QUIET_SEGMENT_BAR = False.  core.gui.app.build_app() sets it True.
+    ONE call site passes `**({"disable": True} if config.QUIET_SEGMENT_BAR else {})`:
+      core/Simulator/simulator.py    (the per-time-segment bar — it wraps segs in {1,2,3}, useless)
+    Under the GUI this takes the Posterior nest from 4 deep to 3 (a disabled bar surrenders its
+    nesting slot — std.py:985-992 removes it from _instances).
+    !! Do NOT "simplify" this to `disable=config.QUIET_SEGMENT_BAR`. tqdm.__init__ is
+       @envwrap("TQDM_")-decorated (std.py:951) and a call kwarg OUTRANKS the environment, so an
+       explicit disable=False would shadow a TQDM_DISABLE override that reaches that site today.
+       The conditional splat means the CLI passes no `disable` kwarg at all — byte-identical.
+    Import it BY MODULE (`from core import config`), never `from core.config import QUIET_SEGMENT_BAR`
+    (that snapshots the value at import and freezes it False forever).
+
+    core/config.py: SOLVER_BAR_DESC = "step".  sdeint's bar is f"{SOLVER_BAR_DESC} (batch={n})".
+    The SOLVER's per-step bar (core/Solvers/sdeint.py) is NOT disabled — it runs under the GUI too.
+    See "SOLVER PERFORMANCE METER" below for why.
+
+ENVIRONMENT / HOW TO RUN
+  - conda env "biophys-env":  C:\Users\J\anaconda3\envs\biophys-env\python.exe
+  - GUI:  run.bat  /  run.sh   (both do `python -m core.gui`)
+          MUST be launched from the repo root — config.py builds paths from os.getcwd()/Resources.
+  - CLI (still works, unchanged):  python -m core
+  - Tests: python tests/test_gui_progress.py     (13 tests; also runs under pytest)
+  - Syntax check:  python -m py_compile <path>
+  - GIT: make LOCAL changes only; the user handles all git / remote operations.
+
+GUI PACKAGE LAYOUT (core/gui/)
+  __main__.py     entry (`python -m core.gui`). Forces matplotlib Agg BEFORE importing core.* (GOTCHA #3).
+  app.py          build_app() -> (QApplication, MainWindow); sets config.QUIET_SEGMENT_BAR = True;
+                  installs a sys.excepthook -> QMessageBox.
+  main_window.py  QMainWindow + QTabWidget. All four tabs: SBI / FDT / Reduction / Cross-validation.
+  session.py      SbiSession dataclass (cfg, inf_prior, force_prior, posterior, diagnostics,
+                  posterior_latent, V) + reset_downstream().
+  worker.py       Worker(QRunnable) + WorkerSignals(log, log_batch, rows, figure, result, error, finished).
+  streams.py      redirect_streams(signals) + _SignalStream + _Pump.   [see PROGRESS above]
+  vt.py           the tqdm chunk classifier (Qt-free).                 [see PROGRESS above]
+  plot_watcher.py NewPngWatcher: polls a plot dir and emits new PNGs.  [see PHASE 2 below]
+  panels/base_panel.py    BasePanel: left controls column + right (FigureStack over ProgressPane over
+                  LogPane); dispatch(fn, *args, provide_fig_sink=, watch_dir=, on_result=, on_finished=,
+                  **kwargs). ALL panels must use this. Also _png_fig_sink().
+  panels/sbi_panel.py       the 5 stage groups + the two inference runners.
+  panels/fdt_panel.py       FDT form + the two gating checkboxes.
+  panels/reduction_panel.py cell + F0. The fastest panel to test (pure-analytical, no simulation).
+  panels/crossval_panel.py  cell + preset + S/T grids + FDT knobs.
+  widgets/artifact_picker.py  ArtifactPicker(base_path, keep=, allow_new=)
+  widgets/figure_stack.py     FigureStack: add_figure(title, png_bytes) / add_png(title, path)
+  widgets/log_pane.py         LogPane: append_line(text, level) / append_lines(batch)
+  widgets/progress_pane.py    ProgressPane: begin() / set_rows(snapshot) / end()
+  widgets/labeled_inputs.py   FloatField / IntField / PathField
+
+PHASE 0 REFACTORS — the hooks the GUI depends on (all non-breaking; defaults = old CLI behavior)
+  R1  core/cli.py: class UnitParseError(ValueError). _parse_cell / _units_to_factors RAISE instead of
+      print()+exit(). core/__main__.py catches it and sys.exit(1), so the CLI is unchanged.
+  R2  core/orchestrator.py: build_prior / build_posterior gained keyword-only `save=True, save_name=None`.
+      save=False skips the prompt AND all disk writes (the GUI defers saving to explicit buttons). The
+      save bodies were extracted into save_prior_artifacts / save_posterior_artifacts.
+  R3  FIGURE SINK. The 4 stage fns gained keyword-only `fig_sink`. Contract:
+      fig_sink(title: str, fig: matplotlib Figure) -> None. orchestrator._emit(sink, title, fig) calls
+      the sink if given, else the legacy plt.show(). visualizers.plot(..., sink=) and
+      visualize_dist(..., title=, sink=) now BUILD AND RETURN a Figure.
+  R4  core/cli.py: pure, prompt-free config cores (the CLI builders now just prompt + delegate):
+        make_sim_config(model, labels, state_dep_drift, bounds_file) -> SimConfig
+        make_fdt_config(model, state_dep_drift, cell_file, *, n_freqs, ensemble_M, freqs_per_batch, F0)
+        make_reduction_config(cell_file, *, F0)                       # model fixed NADROWSKI
+        make_param_sweep_config(cell_file, *, preset, s_spec, t_spec, n_freqs, ensemble_M,
+                                freqs_per_batch, F0) -> (FDTConfig, s_grid, temp_grid)
+      s_spec/t_spec are (min, max, n_points). preset comes from cli._SWEEP_PRESETS.
+  R5  core/FDT/fdt_pipeline.py: run_fdt(cfg, *, skip_sanity=None, confirm_production=None). Both default
+      None => the old inline input() prompts (CLI unchanged); a GUI passes explicit bools so no input()
+      ever fires.
+  Also: file_manager.list_dir(dir, return_list=True, keep=None) — `keep` is a predicate on the file's
+      path RELATIVE to dir, applied INSIDE the walk so the printed numbering stays in sync.
+
+*** GOTCHAS — READ THESE BEFORE TOUCHING THE THREADING/FIGURE CODE ***
+  1. WORKER LIFETIME (cost hours to find). A Worker created as a local in dispatch() gets garbage
+     collected as soon as run() returns, and Qt then PURGES that sender's still-queued result/finished
+     events — the slots never fire and the panel stays busy=True forever.
+     FIX (in BasePanel.dispatch): worker.setAutoDelete(False) AND keep it in self._workers until the
+     finished slot discards it. NEVER start a raw Worker outside BasePanel.dispatch.
+  2. NEVER PAINT A WORKER-CREATED MATPLOTLIB FIGURE. Wrapping a figure a worker thread made with pyplot
+     in a live FigureCanvasQTAgg and letting a *shown* widget paint it DEADLOCKS on matplotlib's global
+     lock (silent hang, no traceback).
+     FIX: BasePanel._png_fig_sink renders the Figure to PNG bytes ON THE WORKER THREAD and emits the
+     bytes; FigureStack shows a QPixmap. Figures are therefore STATIC images (no zoom/pan). Accepted.
+  3. Agg BACKEND is forced in core/gui/__main__.py BEFORE any core.* import. That is what makes it safe
+     to run the runners on a worker thread: every un-refactored plt.show() becomes a harmless no-op.
+     Do not move/remove that matplotlib.use("Agg") line.
+  4. redirect_streams swaps sys.stdout/stderr PROCESS-WIDE. Therefore ONLY ONE PANEL MAY RUN AT A TIME,
+     app-wide — BasePanel._running is a CLASS attribute for exactly this reason (a per-panel guard would
+     let the FDT tab start while SBI is training and the two would fight over the console).
+     streams._REDIRECT is the backstop: a second redirect declines and warns rather than corrupting
+     sys.stdout permanently.
+  5. Resources/ layout is per-model subfolders:
+       Resources/Cells/<model>/<cell>.txt, Resources/Bounds/<model>/<cell>.txt (one bounds file PER
+       CELL), Resources/Units/<model>/units.txt. cli._parse_cell derives the model from the cell's
+       PARENT FOLDER. Pickers are repointed when a model combo changes.
+
+SBI PANEL — how it works (core/gui/panels/sbi_panel.py)
+  Holds an SbiSession. Buttons gate the next stage (_refresh_gates).
+   1 Config     model combo + bounds ArtifactPicker -> cli.make_sim_config(...). Runs SYNCHRONOUSLY.
+   2 Prior      ArtifactPicker(PRIOR_PATH, keep=*.pt, allow_new) -> dispatch(orchestrator.build_prior,
+                cfg, entry, is_new, save=False, provide_fig_sink=True). Loading short-circuits gen_prior.
+   3 Posterior  ArtifactPicker(POSTERIOR_PATH, keep=*.pt and not *.rot.pt, allow_new) ->
+                dispatch(build_posterior, ..., save=False, provide_fig_sink=True). "from scratch" is
+                the DOMINANT cost (train_nn). On result the panel stashes posterior.latent and V.
+   4 Validate   dispatch(validate_calibration, ..., provide_fig_sink=True) -> SBC + TARP figures.
+   5 Infer      Simulated: cell picker + T_obs. Experimental: 2 PathFields + T_obs + one FloatField per
+                forcing param.
+
+PHASE 2 PANELS — FDT / REDUCTION / CROSSVAL
+  HOW THEIR FIGURES GET IN. None of the three runners returns its figure paths, and the handoff used to
+  claim they "return None" — WRONG:
+      run_fdt(cfg, *, skip_sanity, confirm_production) -> None      (saves ~5 PNGs, shared timestamp)
+      run_reduction_map(cfg) -> ReductionRecord                     (saves a .parquet + 1 PNG)
+      run_param_study_cli(cfg, s_grid, temp_grid) -> (Path, Path)   <- HDF5 DATA paths, NOT PNGs
+  All three save PNGs to Resources/Plots and only print() the paths. So BasePanel.dispatch takes a
+  `watch_dir=` and core/gui/plot_watcher.py snapshots that directory at dispatch time and picks up
+  whatever appears. Zero core changes, and it delivers figures INCREMENTALLY — the FDT sanity plot lands
+  before the production sweep starts, and the S-sweep plot lands at the study's midpoint (which
+  cross_validation.py:283 saves early on purpose). It also still shows whatever a half-failed run made.
+
+  FDT        model + cell + n_freqs[60] / ensemble_M[256] / freqs_per_batch[1] / F0[0.05] + TWO CHECKBOXES
+             (skip_sanity, confirm_production). The checkboxes are LOAD-BEARING: run_fdt's None default
+             means "ask via input()", which would block the worker forever. Always pass explicit bools.
+             run_fdt is Nadrowski-coupled and KeyErrors on hopf/bp (params_dict["n"] / ["beta"]). That is
+             a PRE-EXISTING pipeline bug — _run_fdt_guarded turns it into a readable RuntimeError. Don't
+             chase the underlying bug.
+  REDUCTION  cell + F0. Model fixed NADROWSKI. Prompt-free and pure-analytical (NO simulation), so this
+             is the FASTEST panel to test — start here when verifying anything.
+  CROSSVAL   cell + preset radio (cli._SWEEP_PRESETS) + S grid + T grid + FDT knobs. Selecting a cell
+             prefills S_max / T_max from cli._parse_cell (params_dict["s"][0] / ["temp"][0]), and both
+             grids start at the FDT-restoring limit (S=0, T_a/T=1) — same as cli.py:532-548.
+
+================================================================================
+PHASE 3 — cancellation, QSettings, better error dialogs  (DONE)
+================================================================================
+  CANCELLATION is COOPERATIVE and needs ZERO core changes. The handoff used to say a mid-train kill was
+  impossible without a subprocess — that was WRONG. Every print() and tqdm redraw funnels through
+  _SignalStream.write() on the worker thread, and sbi prints an epoch counter INSIDE its fit loop
+  (npe_base.py:437, show_progress_bars defaults True), so a flag checked in write() is a checkpoint
+  reaching even inside sbi's training loop.
+    - streams.CancelToken (requested: Event, fired: bool) + WorkerCancelled(BaseException). BaseException
+      so it sails through the pipeline's many `except Exception`; caught by name only in Worker.run.
+    - _SignalStream.write() calls cancel.check() BEFORE feeding the router; check() LATCHES (raises once)
+      so tqdm's teardown writes can finish and the final bar frames still reach the log.
+    - BasePanel: a per-dispatch token, a Cancel button (hidden until a run), the class attr _active_cancel
+      + request_cancel_all() for MainWindow.closeEvent's "Cancel task & quit".
+    - Worker.run catches WorkerCancelled -> emits `cancelled` (NOT `error`; a cancel is not a failure) and
+      plt.close("all") on the way out.
+    Latency: ~1s almost everywhere (the solver bar's mininterval=1.0), but up to ONE NN-training epoch
+    (~10-60s) or the check_sbc C2ST block (~46s) — those are silent, so the button says "Cancelling…".
+
+  *** TWO TQDM GOTCHAS (each cost real time; each has a regression test) ***
+   C1. tqdm's refresh() (tqdm/std.py:1346-1349) does a MANUAL self._lock.acquire()/display()/release(),
+       NOT a `with`. Our cancel raises from inside display()'s write(), so the release is SKIPPED and
+       tqdm's global write lock LEAKS. The next tqdm.__new__ then DEADLOCKS acquiring it — i.e. cancel a
+       run, start another, hang. redirect_streams' finally calls streams.reset_tqdm_lock() when
+       cancel.fired (on the worker thread, always) to abandon the leaked lock and install a fresh one.
+       Do NOT remove that. test_cancel_token_latches_and_leaves_tqdm_usable pins it (it HANGS without).
+   C2. tqdm runs a TMonitor DAEMON thread that force-refreshes a bar gone quiet for >=maxinterval (10s),
+       writing to our stream FROM ITS THREAD. If that write consumed the cancel latch it would raise
+       where nobody catches it (killing the monitor) and leave the worker to sail past a fired latch —
+       silently LOSING the cancel for the whole run. So CancelToken.check() only raises on the OWNER
+       thread: redirect_streams calls cancel.arm() (on the worker thread) to record the owner, and a
+       write from any other thread does not consume the latch. test_cancel_is_not_consumed_by_a_non_
+       worker_thread pins it.
+
+  QSETTINGS — core/gui/settings.py (one store; app.py sets BOTH org + app name, required on Windows).
+    Each panel has save_settings(qs)/restore_settings(qs); MainWindow saves all + window geometry on an
+    ACCEPTED close only (never on a cancelled close), and each panel restores at the END of its __init__.
+   *** RESTORE-ORDER TRAPS ***
+    - SBI/FDT: restore model FIRST and call _on_model_changed(model) explicitly (currentTextChanged does
+      NOT fire if the value already equals the default), THEN the pickers — a picker restored first gets
+      wiped by the model's refresh().
+    - CrossVal: restore preset + cell first; DO NOT persist the cell-derived s/t grid lo/hi (they are
+      re-derived from the cell file; a saved value from a DIFFERENT cell is a stale, wrong bound). Only
+      the free knobs persist (preset, cell, f0, freqs_per_batch, grid points).
+    - Pickers: persist combo.currentData() (the model-namespaced relpath); restore via findData with a
+      -1 guard (file gone -> leave at default, never setCurrentIndex(-1)). ArtifactPicker.key()/restore_key().
+
+  ERROR DIALOGS: app.py installs the excepthook BEFORE MainWindow() (a panel-construction failure now
+    shows a dialog, not a bare console traceback) and wraps construction in a startup-failure dialog.
+    BasePanel._on_error puts the traceback in setDetailedText() (collapsible), not pasted into the body;
+    _config_error uses a Warning icon + "Check your inputs" (a bad file pick is input, not a crash).
+
+WHAT'S NEXT
+  All three planned phases are done. Remaining loose ends:
+    - requirements.txt does NOT pin PySide6, even though run.bat/run.sh launch a PySide6 app (spun off as
+      its own task).
+    - A true INSTANT/hard cancel (QProcess subprocess) was explicitly declined — cooperative was chosen.
+    - torch.save/HDF5 writes are not atomic against a cancel (narrow window; worst case a partial-but-
+      valid sweep file, not corruption).
+    - Figures are static PNGs (GOTCHA #2). A "pop out interactive" button could re-plot on the MAIN thread.
+    - Still never run FOR REAL on a display: the SBI Save buttons, Validate, Infer/experimental, a full
+      FDT/CrossVal run, and a cancel DURING live NN training (only the solver-phase cancel was exercised).
+
+KEY FILES
+  core/gui/**                       the GUI (see layout above)
+  tests/test_gui_progress.py        13 tests: the tqdm classifier, the Qt stack, the panels
+  core/orchestrator.py              the 4 stage fns + save_*_artifacts + _emit/fig_sink
+  core/cli.py                       UnitParseError, make_* cores, _SWEEP_PRESETS, _parse_cell
+  core/config.py                    VALID_MODELS/VALID_LABELS, *_PATH consts, TRAINING_*,
+                                    QUIET_SEGMENT_BAR, SOLVER_BAR_DESC
+  core/FDT/fdt_pipeline.py          run_fdt(skip_sanity=, confirm_production=)
+  core/Reduction/sweep.py           run_reduction_map(cfg)            (prompt-free)
+  core/FDT/cross_validation.py      run_param_study_cli(cfg, s, t)    (prompt-free)
+  run.bat / run.sh                  launch `python -m core.gui`
+================================================================================

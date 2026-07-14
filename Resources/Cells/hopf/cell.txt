@@ -1,0 +1,20 @@
+# Initial Conditions
+x_init = 0.1
+y_init = 0
+
+# Parameters
+mu = 1.5
+beta = 0.5
+sigma_x = 0.005
+sigma_y = 0.005
+
+# Dimensional Parameters
+x_scale = 62.14
+t_scale = 3.73
+
+# Forcing Parameters
+amp = 0
+amp_y = 0
+freq = 0
+phase = 0
+offset = 0

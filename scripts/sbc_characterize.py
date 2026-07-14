@@ -20,7 +20,7 @@ The training prior is extracted directly from the saved posterior
 guaranteed to match training and no separate (possibly mismatched) prior file is needed.
 
 Env knobs:
-  CELL   cell file                                  (default Resources/Cells/nadrowski_cell_2.txt)
+  CELL   cell file                                  (default Resources/Cells/nadrowski/cell_2.txt)
   POST   posterior filename under Resources/Posteriors (default posterior_3d.pt)
   K      number of SBC repeats                      (default 10)
   N_CAL  calibration datasets per repeat            (default 2000)
@@ -51,7 +51,7 @@ from core.SBI import analysis
 from core.SBI.reparam import TransformedPosterior, load_eval_bijection, UnitToBoxTransform, OrthogonalTransform
 
 # ---- knobs ----
-CELL = os.environ.get("CELL", "Resources/Cells/nadrowski_cell_2.txt")
+CELL = os.environ.get("CELL", "Resources/Cells/nadrowski/cell_2.txt")
 POST = os.environ.get("POST", "posterior_3d.pt")
 K = int(os.environ.get("K", "10"))
 N_CAL = int(os.environ.get("N_CAL", "2000"))

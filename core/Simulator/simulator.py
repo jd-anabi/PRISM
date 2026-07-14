@@ -2,6 +2,7 @@ import torch
 from tqdm import tqdm
 from abc import ABC, abstractmethod
 
+from core import config
 from core.Helpers import helpers
 from core.Solvers import sdeint
 
@@ -47,7 +48,12 @@ class Simulator(ABC):
         # non-constant forcing, we slice force to the current segment so the local
         # index lookup picks up the right values; restore the full reference after.
         full_force = self._force
-        for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments", leave=False):
+        # `disable` is passed only under the GUI (config.QUIET_SEGMENT_BAR). It must be a conditional
+        # splat, not `disable=config.QUIET_SEGMENT_BAR`: tqdm.__init__ is @envwrap("TQDM_")-decorated
+        # (tqdm/std.py:951) and a call kwarg outranks the environment, so an explicit False would shadow
+        # a TQDM_DISABLE override that reaches this call today. Omitting it keeps the CLI byte-identical.
+        for tid in tqdm(range(len(time_seg_ids) - 1), desc="Running time segments", leave=False,
+                        **({"disable": True} if config.QUIET_SEGMENT_BAR else {})):
             curr_time = self.t[time_seg_ids[tid]:time_seg_ids[tid + 1]]
             self.sde.force = full_force[:, :, time_seg_ids[tid]:time_seg_ids[tid + 1]]
             results = self.__sols(curr_time, curr_inits, state_dep_drift)  # shape: (len(curr_time), BATCH_SIZE, number of variables)

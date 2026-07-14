@@ -1,6 +1,7 @@
 import os
 import re
 from collections import OrderedDict
+from typing import Callable
 
 import numpy as np
 import torch
@@ -12,6 +13,8 @@ FLOAT_REGEX = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?'
 ASSIGNMENT_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\s*\))?\s*=\s*(?P<val>{FLOAT_REGEX})\s*$')
 # Flexible Bounds: name [opt_units] = val [opt_in] (bounds)
 BOUNDS_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\s*\))?\s*=\s*(?P<val>{FLOAT_REGEX})\s+(?:in\s+)?[\[\(](?P<tup>.*?)[\]\)]\s*$')
+# Bounds-only (no value): name [opt_units] [opt_in] (bounds) -- for the decoupled BOUNDS file.
+BOUNDS_ONLY_PATTERN = re.compile(fr'^\s*(?P<name>\w+)\s*(?:\(\s*(?P<units>[^)]+)\s*\))?\s*(?:in\s+)?[\[\(](?P<tup>.*?)[\]\)]\s*$')
 
 def parse_model_file(file_name: str) -> tuple:
     """
@@ -101,7 +104,113 @@ def parse_model_file(file_name: str) -> tuple:
 
     return init_conditions, parameters, rescale_params, forcing_params, tuple(collected_units)
 
-def list_dir(files_dir: str, return_list: bool = True) -> list[str] | list[None]:
+
+# --- Decoupled bounds / units / values parsers (additive; parse_model_file is left untouched) ---
+def _read_lines(file_name: str) -> list[str]:
+    try:
+        with open(file_name, 'r', encoding='utf-8') as file:
+            return file.read().strip().split('\n')
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File not found: {file_name}")
+
+
+def _section_of(header_line: str) -> str | None:
+    """Map a '# ...' header line to a section key, or None. Mirrors parse_model_file's logic + Units."""
+    if "Initial Conditions" in header_line:
+        return "INIT"
+    if "Units" in header_line:
+        return "UNITS"
+    if "Parameters" in header_line and "Forcing" not in header_line:
+        return "RESCALE" if header_line.startswith("# Dimensional") else "PARAM"
+    if "Forcing Parameters" in header_line:
+        return "FORCING"
+    return None
+
+
+def parse_bounds_file(file_name: str) -> tuple:
+    """
+    Parse a BOUNDS-only file: parameter bounds for the ND / Dimensional / Forcing sections, no values,
+    no initial conditions. Lines look like ``name (units) in (lo, hi)`` (units and ``in`` optional).
+
+    :return: (parameters, rescale_params, forcing_params, collected_units) where each param dict maps
+             {name: (None, (lo, hi))} -- the value slot is None until a cell file fills it.
+    """
+    parameters, rescale_params, forcing_params = OrderedDict(), OrderedDict(), OrderedDict()
+    collected_units = set()
+    targets = {"PARAM": parameters, "RESCALE": rescale_params, "FORCING": forcing_params}
+    current_section = None
+    for line in _read_lines(file_name):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            current_section = _section_of(line)
+            continue
+        if current_section in targets:
+            match = BOUNDS_ONLY_PATTERN.search(line)
+            if match:
+                bounds = tuple(float(x) for x in re.findall(FLOAT_REGEX, match.group('tup')))
+                targets[current_section][match.group('name')] = (None, bounds)
+                if match.group('units'):
+                    for u in match.group('units').split():
+                        collected_units.add(u.split('^')[0])
+    return parameters, rescale_params, forcing_params, tuple(collected_units)
+
+
+def parse_units_file(file_name: str) -> tuple:
+    """
+    Parse a UNITS-only file: a ``# Units`` section of whitespace-separated unit tokens (one per physical
+    dimension, e.g. ``nm ms pN Hz rad``). Returns the unit set as a tuple.
+    """
+    collected_units = set()
+    current_section = None
+    for line in _read_lines(file_name):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            current_section = "UNITS" if "Units" in line else None
+            continue
+        if current_section == "UNITS":
+            for u in line.split():
+                collected_units.add(u.split('^')[0])
+    return tuple(collected_units)
+
+
+def parse_values_file(file_name: str) -> tuple:
+    """
+    Parse a CELL / VALUES file: initial conditions + VALUES for the ND / Dimensional / Forcing params
+    (the ground-truth point). A trailing ``in (lo, hi)`` on a line is ignored -- only the value is taken,
+    so existing full cell files (value + bounds) work unchanged as a ground-truth source.
+
+    :return: (init_conditions, parameters, rescale_params, forcing_params) where each param dict maps
+             {name: val} (plain floats).
+    """
+    init_conditions, parameters, rescale_params, forcing_params = (
+        OrderedDict(), OrderedDict(), OrderedDict(), OrderedDict())
+    targets = {"PARAM": parameters, "RESCALE": rescale_params, "FORCING": forcing_params}
+    current_section = None
+    for line in _read_lines(file_name):
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            current_section = _section_of(line)
+            continue
+        if current_section == "INIT":
+            match = ASSIGNMENT_PATTERN.search(line)
+            if match:
+                init_conditions[match.group('name')] = float(match.group('val'))
+        elif current_section in targets:
+            # accept both `name = val` and `name = val in (lo,hi)` -- take the value either way
+            match = BOUNDS_PATTERN.search(line) or ASSIGNMENT_PATTERN.search(line)
+            if match:
+                targets[current_section][match.group('name')] = float(match.group('val'))
+    return init_conditions, parameters, rescale_params, forcing_params
+
+
+def list_dir(files_dir: str, return_list: bool = True,
+             keep: Callable[[str], bool] | None = None) -> list[str] | list[None]:
     """
     Lists all files in the specified directory and its subdirectories, with an option to return a list of files.
 
@@ -113,6 +222,11 @@ def list_dir(files_dir: str, return_list: bool = True) -> list[str] | list[None]
     :param return_list: A flag indicating whether to return the list of files. If True, the list of files is returned.
         Default is True.
     :type return_list: bool
+    :param keep: Optional predicate applied to each file's path (relative to files_dir). Only files for which
+        keep(rel) is True are numbered, printed, and returned -- so the printed ``(N)`` numbering stays in sync
+        with the returned list (e.g. a posterior picker that hides ``.rot.pt`` sidecars / ``.loss.npz`` curves).
+        Default None lists every file.
+    :type keep: Callable[[str], bool] | None
     :return: A list of all files in the directory and its subdirectories if `return_list` is True; otherwise, None.
     :rtype: list[str] | None
     """
@@ -125,7 +239,13 @@ def list_dir(files_dir: str, return_list: bool = True) -> list[str] | list[None]
         print(f"{indent}{os.path.basename(root)}")
         subindent = " " * 2 * (level + 1)
         for file in files:
-            model_files.append(file)
+            # Return the path relative to files_dir so subfoldered layouts (e.g. Bounds/<model>/<cell>.txt)
+            # resolve correctly and same-named files across subfolders don't collide. For a flat directory
+            # this is just the basename, so callers doing `PATH / result[i]` are unaffected.
+            rel = os.path.relpath(os.path.join(root, file), files_dir)
+            if keep is not None and not keep(rel):
+                continue          # skip before numbering so printed (N) matches the returned list
+            model_files.append(rel)
             print(f"{subindent}({file_num}) {file}")
             file_num += 1
     model_files.pop(0)

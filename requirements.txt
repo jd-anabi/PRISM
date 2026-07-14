@@ -1,14 +1,20 @@
+--extra-index-url https://download.pytorch.org/whl/cu130
+
 numpy==2.3.3
 scipy==1.16.2
+pandas==2.3.3
+pyarrow==20.0.0
+h5py==3.15.1
 matplotlib==3.10.7
 tqdm==4.67.1
 sympy==1.14.0
 torch==2.9.0+cu130
 torchvision==0.24.0+cu130
 pint==0.25
-sbi==0.25.0
+sbi==0.26.1
 antropy==0.1.9
 pybispectra==1.2.4
-sklearn==1.7.2
+scikit-learn==1.7.2
 corner==2.2.3
 hdbscan==0.8.41
+PySide6==6.9.3

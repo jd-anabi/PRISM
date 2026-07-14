@@ -1,0 +1,62 @@
+"""Build the QApplication + MainWindow and install a last-resort excepthook that surfaces unhandled
+errors in a dialog instead of silently killing the app."""
+import sys
+import traceback
+
+from PySide6.QtWidgets import QApplication, QMessageBox
+
+from core import config
+
+from . import settings
+from .main_window import MainWindow
+
+
+def _install_excepthook(parent_getter):
+    """Route any otherwise-unhandled exception to a dialog with a collapsible traceback.
+
+    Installed BEFORE MainWindow() is built, so a failure during panel construction (e.g. a bad cell
+    file breaking a panel's prefill) shows a dialog instead of a bare console traceback -- app.py used
+    to install this only after MainWindow(), leaving that whole window unguarded.
+    """
+    def _excepthook(exc_type, exc, tb):
+        tb_text = "".join(traceback.format_exception(exc_type, exc, tb))
+        try:
+            box = QMessageBox(parent_getter())
+            box.setIcon(QMessageBox.Critical)
+            box.setWindowTitle("Unhandled error")
+            box.setText(f"{exc_type.__name__}: {exc}")
+            box.setDetailedText(tb_text)
+            box.exec()
+        finally:
+            sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = _excepthook
+
+
+def build_app(argv=None):
+    # Quiet the per-time-segment bar: it wraps segs in {1,2,3} and nests a whole level under the
+    # training-data bar for nothing. The solver's per-step bar stays ON -- it feeds the Solver
+    # Performance meter. The GUI is the only caller that flips this; the CLI keeps both bars.
+    config.QUIET_SEGMENT_BAR = True
+
+    app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
+    app.setOrganizationName(settings.ORG)   # both are needed for a stable QSettings store on Windows
+    app.setApplicationName(settings.APP)
+
+    window_ref = {}
+    _install_excepthook(lambda: window_ref.get("w"))
+    try:
+        window = MainWindow()
+    except Exception as e:                   # noqa: BLE001 -- a construction failure must still show
+        box = QMessageBox(None)
+        box.setIcon(QMessageBox.Critical)
+        box.setWindowTitle("GFDT could not start")
+        box.setText(f"The application failed to start:\n{e}")
+        box.setDetailedText(traceback.format_exc())
+        box.exec()
+        # We already showed the dialog and logged the traceback. Exit via SystemExit so the installed
+        # sys.excepthook does NOT fire and pop a SECOND "Unhandled error" dialog for the same failure.
+        traceback.print_exc()
+        raise SystemExit(1) from e
+    window_ref["w"] = window
+    return app, window

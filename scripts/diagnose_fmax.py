@@ -28,7 +28,7 @@ N_GRID = int(os.environ.get("NGRID", "13"))
 T_OBS_S = float(os.environ.get("TOBS_S", str(T_MIN_EXP_S)))
 torch.manual_seed(0)
 
-inits, params, rescale, forcing, units, si, s2c = cli._parse_cell("Resources/Cells/nadrowski_cell.txt")
+inits, params, rescale, forcing, units, si, s2c = cli._parse_cell("Resources/Cells/nadrowski/cell.txt")
 cfg = SimConfig(model="NADROWSKI", labels=NADROWSKI_LABELS, state_dep_drift=True,
                 inits_dict=inits, params_dict=params, rescale_params=rescale, force_params_dict=forcing,
                 units_dict=units, si_factors=si, dt_exp=DT_EXP_S * s2c,

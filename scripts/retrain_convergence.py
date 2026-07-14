@@ -18,7 +18,7 @@ Workflow:
      then re-check SBC (scripts/sbc_characterize.py POST=<NAME>.pt) on {kappa,lambda,beta,...}.
 
 Env knobs:
-  CELL       cell file                              (default Resources/Cells/nadrowski_cell_2.txt)
+  CELL       cell file                              (default Resources/Cells/nadrowski/cell_2.txt)
   BASE_POST  posterior to inherit the prior from    (default posterior_3d.pt)
   NAME       output posterior name (no extension)   (default posterior_convergence)
   HIDDEN     NSF hidden features                    (default config.NSF_HIDDEN_FEATURES=128)
@@ -58,7 +58,7 @@ from core.SBI.reparam import build_inferred_bijection
 from core.Helpers import visualizers
 
 # ---- knobs ----
-CELL = os.environ.get("CELL", "Resources/Cells/nadrowski_cell_2.txt")
+CELL = os.environ.get("CELL", "Resources/Cells/nadrowski/cell_2.txt")
 BASE_POST = os.environ.get("BASE_POST", "posterior_3d.pt")
 NAME = os.environ.get("NAME", "posterior_convergence")
 HIDDEN = int(os.environ.get("HIDDEN", str(NSF_HIDDEN_FEATURES)))
@@ -150,7 +150,7 @@ posterior_latent, diag = pipeline.train_nn(
 torch.save(posterior_latent, str(POSTERIOR_PATH / (NAME + ".pt")))
 val = diag.get("validation_loss") or []
 train = diag.get("training_loss") or []
-np.savez(str(POSTERIOR_PATH / (NAME + ".loss.npz")),
+np.savez(str(PLOT_PATH / (NAME + ".loss.npz")),
          training_loss=np.asarray(train, dtype=float),
          validation_loss=np.asarray(val, dtype=float),
          best_validation_loss=float(diag.get("best_validation_loss") or float("nan")),

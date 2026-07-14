@@ -46,9 +46,15 @@ def _estimate_omega_0(cfg: FDTConfig) -> tuple[float, str]:
     return 1.0, "1.0 (fallback default)"
 
 
-def run_fdt(cfg: FDTConfig) -> None:
+def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
+            confirm_production: bool | None = None) -> None:
     """End-to-end FDT analysis. Runs sanity checks first; gates on user
-    confirmation before the production sweep."""
+    confirmation before the production sweep.
+
+    :param skip_sanity: skip the sanity checks. None (default) => prompt via input() (CLI);
+                        a GUI passes an explicit bool.
+    :param confirm_production: proceed to the production sweep after sanity. None (default) => prompt
+                        via input() (CLI); a GUI passes an explicit bool. Only consulted when sanity runs."""
     # 1. Model-specific natural-frequency starting estimate; the production omega_0
     #    is refined from the Campaign 1 PSD peak below.
     cfg.omega_0, omega_0_desc = _estimate_omega_0(cfg)
@@ -58,17 +64,21 @@ def run_fdt(cfg: FDTConfig) -> None:
     PLOT_PATH.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 2. Sanity checks (optional skip)
-    skip_ans = input("Skip sanity checks? (y/N): ").strip().lower()
-    if skip_ans in ("y", "yes"):
+    # 2. Sanity checks (optional skip). skip_sanity/confirm_production default to None => prompt (CLI);
+    #    a GUI supplies explicit booleans so no input() fires.
+    if skip_sanity is None:
+        skip_sanity = input("Skip sanity checks? (y/N): ").strip().lower() in ("y", "yes")
+    if skip_sanity:
         print("Skipping sanity checks.")
     else:
         passive_plot_path = PLOT_PATH / f"fdt_ratio_passive_{timestamp}.png"
         results = run_all_sanity(cfg, passive_plot_path=passive_plot_path)
         if not all(passed for passed, _ in results.values()):
             print("WARNING: one or more sanity checks failed (see metrics above).")
-        ans = input("Proceed to production sweep? (y/N): ").strip().lower()
-        if ans not in ("y", "yes"):
+        proceed = confirm_production
+        if proceed is None:
+            proceed = input("Proceed to production sweep? (y/N): ").strip().lower() in ("y", "yes")
+        if not proceed:
             print("Aborted by user.")
             return
 

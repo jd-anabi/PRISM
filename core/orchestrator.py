@@ -19,7 +19,7 @@ from torch.distributions import Distribution, MixtureSameFamily
 from tqdm import tqdm
 
 from .config import (
-    SimConfig, PRIOR_PATH, POSTERIOR_PATH, PLOT_PATH,
+    SimConfig, PRIOR_PATH, POSTERIOR_PATH, PLOT_PATH, T_MIN_EXP_S, T_MAX_EXP_S,
     CHUNK_LEN, N_ND_MAX, PPC_BIN_SIZE, SBC_N_CAL, STABILITY_SWEEP_ND_UNITS, TRAINING_NUM_RUNS,
     DENSITY_ESTIMATOR, NSF_HIDDEN_FEATURES, NSF_NUM_TRANSFORMS, NSF_NUM_BINS,
     TRAINING_NUM_ROUNDS, TRAINING_BATCH_SIZE, TRAINING_LEARNING_RATE,
@@ -49,46 +49,56 @@ ProductPrior = _product_mod.ProductPrior
 # ── Pipeline entry point ────────────────────────────────────────────────────
 def run(cfg: SimConfig):
     """
-    Execute the full SBI pipeline:
-      1. Generate synthetic observations
-      2. Build or load the prior (product prior: ND x rescale x forcing)
-      3. Train or load the posterior
-      4. Validate (PPC, SBC, coverage, eye test)
-      5. Optionally infer parameters from a real experimental recording
+    Execute the SBI pipeline:
+      1. Build or load the prior (ND x rescale x forcing product prior).
+      2. Train or load the posterior (amortized NPE — ground-truth-free).
+      3. Calibration diagnostics (SBC + expected coverage) — no chosen observation needed.
+      4. Optionally infer on a chosen observation: a simulated cell (ground truth), experimental
+         data, or neither. Only this step shows observation-dependent plots (GT trace, corner, PPC,
+         eye test).
     """
-    # 1. Synthetic observations
-    x_dim, obs_stats, t_dim = generate_observations(cfg)
-    visualizers.plot(
-        t_dim.squeeze(0).cpu().detach().numpy(),
-        x_dim[0, :].cpu().detach().numpy(),
-    )
-
-    # 2. Prior
+    # 1. Prior
     prior_choice, build_new = cli.select_or_build_prior()
     inf_prior, force_prior = build_prior(cfg, prior_choice, build_new)
 
-    # 3. Posterior
+    # 2. Posterior (training is amortized and observation-independent)
     pos_choice, train_new = cli.select_or_train_posterior()
-    posterior, pos_diagnostics = build_posterior(cfg, inf_prior, force_prior, obs_stats, pos_choice, train_new)
+    posterior, pos_diagnostics = build_posterior(cfg, inf_prior, force_prior, pos_choice, train_new)
     helpers.clear_screen()
 
-    # 4. Validate
-    validate(cfg, posterior, inf_prior, x_dim, obs_stats, force_prior, t_dim)
+    # 3. Calibration (data-free): SBC + expected coverage
+    validate_calibration(cfg, posterior, inf_prior, force_prior)
 
-    # 5. Inference on real experimental data (optional)
-    if cli.select_or_skip_inference():
-        spont_path, forced_path, T_obs_s, forcing_params_si = cli.get_inference_inputs(list(cfg.force_params_dict.keys()))
+    # 4. Optional inference on a chosen observation
+    mode = cli.select_inference_mode()
+    if mode == "simulated":
+        cell_file = cli.select_cell_file()
+        cli.load_and_validate_gt(cfg, cell_file)        # inject GT values + inits, validated vs bounds
+        T_obs_s = cli.get_time_params()
+        cfg.T_obs = T_obs_s * cfg.get_unit_conversion_factor("s")
+        if T_obs_s < T_MIN_EXP_S:
+            warnings.warn(
+                f"T_obs={T_obs_s:.2f}s is below the training range minimum T_MIN_EXP_S="
+                f"{T_MIN_EXP_S:.2f}s; the posterior may extrapolate poorly.", stacklevel=2)
+        elif T_obs_s > T_MAX_EXP_S:
+            warnings.warn(
+                f"T_obs={T_obs_s:.2f}s exceeds the training range maximum T_MAX_EXP_S="
+                f"{T_MAX_EXP_S:.2f}s; the posterior may extrapolate poorly.", stacklevel=2)
+        x_dim, obs_stats, t_dim = generate_observations(cfg)
+        visualizers.plot(
+            t_dim.squeeze(0).cpu().detach().numpy(),
+            x_dim[0, :].cpu().detach().numpy(),
+        )
+        infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True)
+    elif mode == "experimental":
+        spont_path, forced_path, T_obs_s, forcing_params_si = cli.get_inference_inputs(
+            list(cfg.force_params_dict.keys()))
         X_obs_spont = file_manager.load_experimental_data(spont_path, dtype=cfg.hw.dtype)
         X_obs_forced = file_manager.load_experimental_data(forced_path, dtype=cfg.hw.dtype)
-        samples = infer_from_experiment(
-            cfg, posterior, X_obs_spont, X_obs_forced, T_obs_s, forcing_params_si, n_samples=1000,
-        )
-        # Corner plot of inferred parameters
-        fig, ax = pairplot(
-            samples.cpu().numpy(),
-            labels=cfg.inferred_labels,
-        )
-        plt.show()
+        obs_stats, obs_data, t_dim = build_experiment_obs(
+            cfg, X_obs_spont, X_obs_forced, T_obs_s, forcing_params_si)
+        infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False)
+    # mode == "none": stop after calibration
 
 
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
@@ -198,7 +208,8 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
 
 
 # ── Step 2: Prior construction ──────────────────────────────────────────────
-def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Distribution, Distribution]:
+def build_prior(cfg: SimConfig, choice: str | None, build_new: bool,
+                *, save: bool = True, save_name: str | None = None, fig_sink=None) -> tuple[Distribution, Distribution]:
     """
     Load an existing prior from disk, or construct a new product prior:
         ProductPrior = ND parameter prior x rescaling prior x forcing prior
@@ -206,6 +217,10 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Di
     :param cfg: Pipeline configuration.
     :param choice: Filename of a saved prior, or None to build from scratch.
     :param build_new: True to construct from scratch.
+    :param save: When building new, persist the ND prior (+corner PNG). Defaults True (CLI behavior).
+                 Pass False to defer saving (e.g. a GUI that saves via an explicit control).
+    :param save_name: Name to save under; when None (and save=True) the CLI prompt is used.
+    :param fig_sink: Optional (title, fig) -> None display callback for the corner plot; None => plt.show().
     :return: A Distribution that can be sampled and scored.
     """
     # 1. Forcing prior
@@ -216,7 +231,7 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Di
 
     if not build_new and choice is not None:
         nd_prior = file_manager.load_mix_dist(str(PRIOR_PATH / choice), device=cfg.hw.device)
-        visualizers.visualize_dist(nd_prior, labels=cfg.labels)
+        visualizers.visualize_dist(nd_prior, labels=cfg.labels, title="Prior (loaded)", sink=fig_sink)
         nd_dim = len(cfg.params_dict)
         rescale_dim = len(cfg.rescale_params)
         inferred_prior = ProductPrior(
@@ -249,10 +264,12 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool) -> tuple[Di
         dtype=cfg.hw.dtype, device=cfg.hw.device,
     )
 
-    # Save the ND prior (GMM) with the existing serializer
-    nd_name = cli.prompt_save_name("ND parameter prior")
-    file_manager.save_mix_dist(nd_prior, str(PRIOR_PATH / (nd_name + ".pt")))
-    visualizers.visualize_dist(nd_prior, labels=cfg.labels, save_path=str(PLOT_PATH / (nd_name + ".png")))
+    # Save the ND prior (GMM) with the existing serializer -- or defer (GUI) and just display it.
+    if save:
+        nd_name = save_name if save_name is not None else cli.prompt_save_name("ND parameter prior")
+        save_prior_artifacts(nd_name, nd_prior, cfg, fig_sink=fig_sink)
+    else:
+        visualizers.visualize_dist(nd_prior, labels=cfg.labels, title="Prior", sink=fig_sink)
 
     # 4. Compose into product prior
     nd_dim = len(cfg.params_dict)
@@ -306,14 +323,20 @@ def build_posterior(
     cfg: SimConfig,
     prior: Distribution,                 # physical inferred prior from build_prior
     force_prior: Distribution,
-    obs_stats: torch.Tensor,
     choice: str | None,
     train_new: bool,
+    *, save: bool = True, save_name: str | None = None, fig_sink=None,
 ) -> tuple[TransformedPosterior, dict | None]:
     """
     Load an existing latent DirectPosterior from disk and wrap with T, or train a new one
     via NPE in latent space. Returns a TransformedPosterior whose .sample/.log_prob operate
     in physical-parameter coordinates for downstream code.
+
+    :param save: When training new, persist <name>.pt / .rot.pt / .loss.npz / _loss.png. Defaults
+                 True (CLI behavior). Pass False to defer saving (GUI saves via an explicit control).
+    :param save_name: Name to save under; when None (and save=True) the CLI prompt is used.
+    :param fig_sink: Optional (title, fig) -> None display callback for the training-loss curve
+                     (a GUI embeds it); None keeps the CLI behavior (loss saved to PNG, not shown).
     """
     T = build_inferred_bijection(cfg)
 
@@ -371,7 +394,9 @@ def build_posterior(
     if REPARAM_ROTATE:
         print("Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)...")
         # Average the Fisher over the prior (not just GT) so the linear rotation is valid prior-wide.
-        V = decorrelate.build_latent_fisher_rotation(cfg, T, latent_prior=latent_inferred_prior)
+        # GT-free: the rotation anchors on the prior median with a representative drive (force_prior).
+        V = decorrelate.build_latent_fisher_rotation(
+            cfg, T, latent_prior=latent_inferred_prior, force_prior=force_prior)
         T_train = build_rotated_bijection(T, V)
         train_prior = RotatedLatentPrior(latent_inferred_prior, V)
     else:
@@ -398,7 +423,8 @@ def build_posterior(
     # pathway, so input_dim (the leading summary block) includes it; only the forcing
     # params form the separate forcing pathway.
     forcing_dim = len(cfg.force_params_dict)
-    input_dim = obs_stats.shape[1] - forcing_dim   # = n_summary_stats + 1 (incl. log T)
+    from .SBI.statistics import FEATURE_LABELS
+    input_dim = len(FEATURE_LABELS) + 1            # n_summary_stats + log(T); observation-independent
 
     embedded_net = embedded_network.EmbeddedNet(
         input_dim, 3 * input_dim // 2,
@@ -410,15 +436,15 @@ def build_posterior(
 
     sbi_prior = sbi_prior_wrapper.SBIPriorWrapper(train_prior)
 
-    # theta_obs is the ground-truth PHYSICAL theta; for diagnostics we pass its latent form
-    # (in the rotated coordinate when REPARAM_ROTATE is on).
-    theta_obs_latent = T_train.inv(cfg.ground_truth_tensor.to(_transform_device(T_train)))
+    # Training is amortized (TRAINING_NUM_ROUNDS=1) and observation-independent: x_obs/theta_obs only
+    # feed training-time diagnostics, so we pass None — no ground-truth observation needed to train.
+    theta_obs_latent = None
 
     posterior_latent, pos_diagnostics = pipeline.train_nn(
         training_params, model=DENSITY_ESTIMATOR, prior=sbi_prior,
         embedding_net=embedded_net, forcing_prior=force_prior,
         nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
-        x_obs=obs_stats, theta_obs=theta_obs_latent, num_rounds=TRAINING_NUM_ROUNDS,
+        x_obs=None, theta_obs=theta_obs_latent, num_rounds=TRAINING_NUM_ROUNDS,
         return_diagnostics=True,
         theta_transform=T_train,
         hidden_features=NSF_HIDDEN_FEATURES, num_transforms=NSF_NUM_TRANSFORMS, num_bins=NSF_NUM_BINS,
@@ -427,71 +453,188 @@ def build_posterior(
         batch_size=TRAINING_BATCH_SIZE, device=cfg.hw.device,
     )
 
-    name = cli.prompt_save_name("posterior")
-    # Save the RAW latent DirectPosterior (not the wrapped one).
-    torch.save(posterior_latent, str(POSTERIOR_PATH / (name + ".pt")))
-    # Persist the reparameterization sidecar (self-describing) so eval reconstructs the exact
-    # training box: the decorrelating rotation V (or None) AND which params used the log box.
-    # Written whenever either is active; absence => legacy linear, no rotation. load_eval_bijection
-    # also accepts a bare-tensor V (older rotation-only saves) for backward compatibility.
-    log_params_used = resolved_log_params(cfg)
-    if V is not None or log_params_used:
-        torch.save({"V": V, "log_params": log_params_used}, str(POSTERIOR_PATH / (name + ".rot.pt")))
+    if save:
+        name = save_name if save_name is not None else cli.prompt_save_name("posterior")
+        save_posterior_artifacts(name, posterior_latent, V, pos_diagnostics, cfg)
 
-    # Persist the training/validation loss curve alongside the posterior so the
-    # convergence ("under-fit vs converged") check for the hard-to-identify params
-    # is reproducible after the fact (sbi otherwise keeps it only in the live trainer).
-    if pos_diagnostics is not None and pos_diagnostics.get("validation_loss"):
-        np.savez(
-            str(POSTERIOR_PATH / (name + ".loss.npz")),
-            training_loss=np.asarray(pos_diagnostics.get("training_loss", []), dtype=float),
-            validation_loss=np.asarray(pos_diagnostics.get("validation_loss", []), dtype=float),
-            best_validation_loss=float(pos_diagnostics.get("best_validation_loss") or float("nan")),
-            epochs_trained=int(pos_diagnostics.get("epochs_trained") or -1),
-            stop_after_epochs=int(pos_diagnostics.get("stop_after_epochs") or -1),
-        )
-        fig_loss = visualizers.plot_training_loss(
-            pos_diagnostics, save_path=str(PLOT_PATH / (name + "_loss.png"))
-        )
+    # Display the training-loss curve (a GUI embeds it via the sink; the CLI historically saved it to
+    # PNG without showing, so with no sink we do nothing here to preserve that behavior).
+    if fig_sink is not None and pos_diagnostics is not None and pos_diagnostics.get("validation_loss"):
+        fig_loss = visualizers.plot_training_loss(pos_diagnostics)
         if fig_loss is not None:
-            plt.close(fig_loss)
+            fig_sink("Training loss", fig_loss)
 
     assert isinstance(posterior_latent, DirectPosterior)
     return TransformedPosterior(posterior_latent, T_train), pos_diagnostics
 
 
-# ── Step 4: Validation ──────────────────────────────────────────────────────
-def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, inferred_prior: Distribution,
-    obs_data: torch.Tensor, obs_stats: torch.Tensor, force_prior: Distribution,
-    t_dim: torch.Tensor) -> None:
+def save_prior_artifacts(name: str, nd_prior, cfg: SimConfig, *, fig_sink=None) -> None:
     """
-    Run all posterior validation steps:
-      - Corner plot
-      - Posterior predictive check (PPC)
-      - Simulation-based calibration (SBC)
-      - Expected coverage
-      - Eye test (MAP vs ground truth vs posterior samples)
+    Persist an ND prior GMM to Resources/Priors/<name>.pt and its corner PNG to Resources/Plots.
+    Shared by build_prior (CLI, save=True) and a GUI's explicit "Save prior" control. With no
+    fig_sink the corner plot falls back to plt.show() (a no-op under the GUI's Agg backend).
+    """
+    file_manager.save_mix_dist(nd_prior, str(PRIOR_PATH / (name + ".pt")))
+    visualizers.visualize_dist(nd_prior, labels=cfg.labels,
+                               save_path=str(PLOT_PATH / (name + ".png")), title="Prior", sink=fig_sink)
 
-    :param inferred_prior: The actual prior used to train the posterior (ND x rescale
-                           product prior). SBC requires drawing theta_star from the
-                           prior, not from the posterior itself.
+
+def save_posterior_artifacts(name: str, posterior_latent, V, diagnostics: dict | None, cfg: SimConfig) -> None:
+    """
+    Persist a trained posterior and its companions: <name>.pt (raw latent DirectPosterior), the
+    <name>.rot.pt reparam sidecar (rotation V + log params, when either is active), and the
+    <name>.loss.npz curve + <name>_loss.png. Shared by build_posterior (CLI) and a GUI's explicit
+    "Save posterior" control.
+    """
+    torch.save(posterior_latent, str(POSTERIOR_PATH / (name + ".pt")))
+    # Self-describing sidecar so eval reconstructs the exact training box (log-mask + rotation V);
+    # absence => legacy linear, no rotation. Shared single source of truth with the diagnostic scripts.
+    log_params_used = resolved_log_params(cfg)
+    if V is not None or log_params_used:
+        torch.save({"V": V, "log_params": log_params_used}, str(POSTERIOR_PATH / (name + ".rot.pt")))
+    # Loss curve: persisted so the convergence check is reproducible (sbi keeps it only in the trainer).
+    if diagnostics is not None and diagnostics.get("validation_loss"):
+        np.savez(
+            str(PLOT_PATH / (name + ".loss.npz")),
+            training_loss=np.asarray(diagnostics.get("training_loss", []), dtype=float),
+            validation_loss=np.asarray(diagnostics.get("validation_loss", []), dtype=float),
+            best_validation_loss=float(diagnostics.get("best_validation_loss") or float("nan")),
+            epochs_trained=int(diagnostics.get("epochs_trained") or -1),
+            stop_after_epochs=int(diagnostics.get("stop_after_epochs") or -1),
+        )
+        fig_loss = visualizers.plot_training_loss(diagnostics, save_path=str(PLOT_PATH / (name + "_loss.png")))
+        if fig_loss is not None:
+            plt.close(fig_loss)
+
+
+def _observation_inits(cfg: SimConfig) -> torch.Tensor:
+    """
+    (1, n_vars) initial conditions for observation-side simulation (PPC / eye-test): the loaded cell's
+    inits when present (simulated branch), else the model-default the training loop synthesizes
+    (experimental branch has no cell; the transient washes these out).
+    """
+    if cfg.inits_dict:
+        return cfg.inits_tensor
+    n_pos, n_prob = pipeline.INIT_SHAPES[cfg.model.lower()]
+    rng = np.random.RandomState(0)
+    arr = np.concatenate([rng.randint(0, 10, size=(1, n_pos)), np.zeros((1, n_prob))], axis=1)
+    return torch.tensor(arr, dtype=cfg.hw.dtype, device=cfg.hw.device)
+
+
+# ── Step 4a: Calibration diagnostics (data-free — no chosen observation) ─────
+def _emit(fig_sink, title: str, fig) -> None:
+    """Display a figure: hand it to fig_sink (a GUI canvas) when given, else fall back to the legacy
+    blocking plt.show() (CLI). This keeps orchestrator.run's CLI behavior unchanged when fig_sink is None."""
+    if fig_sink is not None:
+        fig_sink(title, fig)
+    else:
+        plt.show()
+
+
+def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior,
+                         inferred_prior: Distribution, force_prior: Distribution,
+                         *, fig_sink=None) -> None:
+    """
+    Data-free posterior calibration: SBC (Talts 2018, marginals) + expected coverage (TARP, Lemos
+    2023). Both draw their calibration set from the PRIOR (theta_star ~ prior, x_cal simulated), so
+    this runs right after training with no chosen observation.
+
+    :param inferred_prior: the actual training prior (ND x rescale product prior) — SBC draws
+                           theta_star from it, not from the posterior.
+    """
+    t = cfg.t
+    device = cfg.hw.device
+    dtype = cfg.hw.dtype
+    # Posterior's actual transform (rotated if REPARAM_ROTATE) so the cal prior + theta_transform match.
+    T = posterior.T if isinstance(posterior, TransformedPosterior) else build_inferred_bijection(cfg)
+
+    # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
+    val_latent_prior = _build_latent_prior_for_validation(cfg, inferred_prior)
+    # If the posterior uses a decorrelating rotation, rotate the calibration prior to match it.
+    if hasattr(T, "parts") and len(T.parts) and isinstance(T.parts[0], OrthogonalTransform):
+        val_latent_prior = RotatedLatentPrior(val_latent_prior, T.parts[0].M.transpose(-1, -2))
+    x_cal, theta_star = analysis.gen_cal_data(
+        model=cfg.model, prior=val_latent_prior,
+        forcing_prior=force_prior,
+        t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=SBC_N_CAL,
+        nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+        dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+        t_scale_bounds=cfg.t_scale_bounds,
+        theta_transform=T,
+        state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
+    )
+    x_cal_dev = x_cal.to(device)
+    theta_star_dev = theta_star.to(device)
+
+    # --- SBC (Talts 2018, marginals) via sbi.diagnostics ---
+    ranks, dap_samples = run_sbc(
+        thetas=theta_star_dev, xs=x_cal_dev, posterior=posterior,
+        num_posterior_samples=1000, reduce_fns="marginals",
+        use_batched_sampling=True, show_progress_bar=True,
+    )
+    prior_samples = inferred_prior.sample((theta_star.shape[0],)).cpu()
+    sbc_stats = check_sbc(
+        ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
+        num_posterior_samples=1000,
+    )
+    print("SBC uniformity checks:")
+    for j, label in enumerate(cfg.inferred_labels):
+        print(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
+              f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
+              f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
+
+    f_cdf, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=1000, plot_type="cdf",
+                             parameter_labels=cfg.inferred_labels)
+    f_cdf.tight_layout()
+    n_sbc_rows = math.ceil(len(cfg.inferred_labels) / 4)
+    f_hist, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=1000, plot_type="hist",
+                              parameter_labels=cfg.inferred_labels, figsize=(16, 2.75 * n_sbc_rows))
+    f_hist.tight_layout()
+    if fig_sink is not None:
+        fig_sink("SBC ranks (CDF)", f_cdf)
+        fig_sink("SBC ranks (histogram)", f_hist)
+    else:
+        plt.show()   # CLI: a single blocking show for both open SBC figures (unchanged)
+
+    # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
+    ecp, alpha_grid = run_tarp(
+        thetas=theta_star_dev, xs=x_cal_dev, posterior=posterior,
+        num_posterior_samples=1000, use_batched_sampling=True,
+        z_score_theta=True, show_progress_bar=True,
+    )
+    atc, tarp_kspval = check_tarp(ecp.cpu(), alpha_grid.cpu())
+    print(f"TARP: ATC={atc:.3f}  KS p={tarp_kspval:.3f}")
+    plot_tarp(ecp.cpu(), alpha_grid.cpu(),
+              title=f"TARP (ATC={atc:.3f}, KS p={tarp_kspval:.3f})")
+    _emit(fig_sink, "TARP coverage", plt.gcf())
+
+
+# ── Step 4b: Inference visualization (requires a chosen observation) ─────────
+def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior,
+                        obs_stats: torch.Tensor, obs_data: torch.Tensor, t_dim: torch.Tensor,
+                        show_truth: bool, *, fig_sink=None) -> None:
+    """
+    Observation-dependent posterior plots for a chosen observation (a simulated ground-truth cell or
+    experimental data): corner plot, posterior-predictive check (PPC), and the eye test. show_truth
+    overlays the ground truth (simulated branch) or omits it (experimental branch).
+
+    :param fig_sink: Optional (title, fig) -> None display callback (a GUI embeds the figures); when
+                     None each plot falls back to the legacy blocking plt.show() (CLI unchanged).
     """
     t = cfg.t
     device = cfg.hw.device
     dtype = cfg.hw.dtype
     T_obs = cfg.T_obs
-    # Use the posterior's actual transform (rotated if trained with REPARAM_ROTATE) so SBC's
-    # calibration prior + theta_transform match how the posterior was built.
-    T = posterior.T if isinstance(posterior, TransformedPosterior) else build_inferred_bijection(cfg)
+    inits = _observation_inits(cfg)
 
     # Corner plot
     samples = posterior.sample((1000,), x=obs_stats.to(device))
     fig, ax = pairplot(
         samples.cpu().numpy(),
-        points=np.array([cfg.ground_truth]),
+        points=(np.array([cfg.ground_truth]) if show_truth else None),
         labels=cfg.inferred_labels,
     )
-    plt.show()
+    _emit(fig_sink, "Posterior corner", fig)
 
     # PPC - Option B: sort posterior samples by t_scale, process in mini-batches
     # Each sample gets its own subsample_factor based on its t_scale; all samples
@@ -553,7 +696,7 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
             for force_run, dest in ((force_bin, x_dim_sorted), (torch.zeros_like(force_bin), x_spont_sorted)):
                 x_nd_bin = pipeline.gen_obs(
                     model=cfg.model, params=bin_nd, t=t_fine_bin,
-                    inits=cfg.inits_tensor.expand(bs, -1),
+                    inits=inits.expand(bs, -1),
                     force=force_run, n_segs=n_segs_bin, steady_idx=cfg.steady_idx,
                     state_dep_drift=cfg.state_dep_drift,
                     batch_size=bs, dtype=dtype, device=device,
@@ -583,81 +726,13 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
     # Layout [S | log(T) | forcing] — must match the observation in generate_observations.
     sim_stats = torch.cat([sim_stats, log_T_obs, forcing_gt_expanded.cpu()], dim=-1)
     results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats)
-    visualizers.plot_ppc(
+    fig_ppc = visualizers.plot_ppc(
         results,
-        ground_truth=cfg.ground_truth,
+        ground_truth=(cfg.ground_truth if show_truth else None),
         param_names=cfg.inferred_labels,
         n_samples=n_samples,
     )
-    plt.show()
-
-    # SBC + coverage
-    # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
-    # SBC tests whether posterior(theta | x_cal) correctly ranks theta_true when
-    # (theta_true, x_cal) is drawn from the joint used to train the posterior.
-    val_latent_prior = _build_latent_prior_for_validation(cfg, inferred_prior)
-    # If the posterior uses a decorrelating rotation, rotate the calibration prior to match it
-    # (T.parts[0].M == V^T, so V = M^T). gen_cal_data only samples this prior, never .log_prob.
-    if hasattr(T, "parts") and len(T.parts) and isinstance(T.parts[0], OrthogonalTransform):
-        val_latent_prior = RotatedLatentPrior(val_latent_prior, T.parts[0].M.transpose(-1, -2))
-    x_cal, theta_star = analysis.gen_cal_data(
-        model=cfg.model, prior=val_latent_prior,
-        forcing_prior=force_prior,
-        t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, n_cal=SBC_N_CAL,
-        nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
-        dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
-        t_scale_bounds=cfg.t_scale_bounds,
-        theta_transform=T,
-        state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
-    )
-
-    # `gen_cal_data` returns CPU tensors; the posterior's embedding net is on
-    # CUDA after training. Sample_batched does not move x for us (see
-    # TransformedPosterior.sample_batched in reparam.py), so we need to match
-    # devices manually — mirroring the obs_stats.to(device) call above.
-    x_cal_dev = x_cal.to(device)
-    theta_star_dev = theta_star.to(device)
-
-    # --- SBC (Talts 2018, marginals) via sbi.diagnostics ---
-    ranks, dap_samples = run_sbc(
-        thetas=theta_star_dev, xs=x_cal_dev, posterior=posterior,
-        num_posterior_samples=1000, reduce_fns="marginals",
-        use_batched_sampling=True, show_progress_bar=True,
-    )
-    prior_samples = inferred_prior.sample((theta_star.shape[0],)).cpu()
-    sbc_stats = check_sbc(
-        ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
-        num_posterior_samples=1000,
-    )
-    print("SBC uniformity checks:")
-    for j, label in enumerate(cfg.inferred_labels):
-        print(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
-              f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
-              f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
-
-    f_cdf, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=1000, plot_type="cdf",
-                             parameter_labels=cfg.inferred_labels)
-    f_cdf.tight_layout()
-    # sbi sizes the hist grid at a huge default figsize (e.g. 64x20") that gets scaled
-    # down on show(), clipping the per-subplot labels. Override to a sane 4-column grid
-    # and tight_layout so every parameter label is legible.
-    n_sbc_rows = math.ceil(len(cfg.inferred_labels) / 4)
-    f_hist, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=1000, plot_type="hist",
-                              parameter_labels=cfg.inferred_labels, figsize=(16, 2.75 * n_sbc_rows))
-    f_hist.tight_layout()
-    plt.show()
-
-    # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
-    ecp, alpha_grid = run_tarp(
-        thetas=theta_star_dev, xs=x_cal_dev, posterior=posterior,
-        num_posterior_samples=1000, use_batched_sampling=True,
-        z_score_theta=True, show_progress_bar=True,
-    )
-    atc, tarp_kspval = check_tarp(ecp.cpu(), alpha_grid.cpu())
-    print(f"TARP: ATC={atc:.3f}  KS p={tarp_kspval:.3f}")
-    plot_tarp(ecp.cpu(), alpha_grid.cpu(),
-              title=f"TARP (ATC={atc:.3f}, KS p={tarp_kspval:.3f})")
-    plt.show()
+    _emit(fig_sink, "Posterior predictive check", fig_ppc)
 
     # Eye test: central-estimate trajectories (posterior mean & median) vs ground truth.
     # The MAP (argmax-log-prob sample) is a poor summary of a wide posterior, so instead we
@@ -680,7 +755,7 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
             forcing_gt, t_fine_c, central_rescale, cfg.forcing_idx, cfg.rescale_idx
         )
         x_nd_c = pipeline.gen_obs(
-            model=cfg.model, params=central_nd, t=t_fine_c, inits=cfg.inits_tensor,
+            model=cfg.model, params=central_nd, t=t_fine_c, inits=inits,
             force=force_c, n_segs=n_segs_c, steady_idx=cfg.steady_idx,
             state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
         )[0, :, :]                                                       # (1, n_fine_c - steady_idx)
@@ -705,7 +780,7 @@ def validate(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior, 
         x_samples=x_dim.cpu().numpy(),
         n_show=10,
     )
-    plt.show()
+    _emit(fig_sink, "Eye test", fig)
 
 def _build_latent_prior_for_validation(cfg, inferred_prior):
     """Mirror of the latent-prior construction in build_posterior, for gen_cal_data in validate."""
@@ -725,33 +800,28 @@ def _build_latent_prior_for_validation(cfg, inferred_prior):
 
 
 # ── Step 5: Inference on real experimental data ────────────────────────────
-def infer_from_experiment(
+def build_experiment_obs(
     cfg: SimConfig,
-    posterior: DirectPosterior | TransformedPosterior,
     X_obs_spont: torch.Tensor,
     X_obs_forced: torch.Tensor,
     T_obs_s: float,
     forcing_params_si: dict,
-    n_samples: int = 1000,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Infer posterior over [ND params, rescale params] from a real experimental recording.
+    Build the conditioning vector + observed trajectory from a real experimental recording, and set the
+    observation context on cfg (T_obs + forcing values, in cell-file units) so infer_and_visualize's
+    PPC / eye-test can simulate. Posterior sampling + the corner plot are done by infer_and_visualize.
 
-    The recording must be sampled at 1/cfg.dt_exp (the camera frame rate the network
-    was trained on). The user provides T_obs and forcing parameters in SI units;
-    this function converts them to cell-file units, builds the conditioning vector
-    [S(X_obs), log(T_obs), F_dim], and samples from the trained posterior.
+    The recording must be sampled at 1/cfg.dt_exp (the camera frame rate the network was trained on).
+    T_obs and the forcing params are given in SI units and converted to cell-file units here.
 
-    :param cfg: Pipeline configuration (provides dt_exp, unit conversion, device).
-    :param posterior: Trained DirectPosterior loaded from disk or freshly trained.
     :param X_obs_spont: 1D spontaneous (unforced) recording, shape (N_obs,), at 1/cfg.dt_exp.
     :param X_obs_forced: 1D forced (driven) recording, shape (N_obs,), at 1/cfg.dt_exp.
     :param T_obs_s: Observation duration in SECONDS.
     :param forcing_params_si: Dict with keys "amp" (N), "freq" (Hz), "phase" (rad), "offset" (N).
-    :param n_samples: Number of posterior samples to draw. Defaults to 1000.
-    :return: Posterior samples, shape (n_samples, nd_dim + rescale_dim), in cell-file units.
+    :return: (obs_stats, obs_data, t_dim): the [S | log(T) | forcing] conditioning vector (1, D), the
+             forced recording (1, N_obs) for the eye-test, and the dimensional time axis (1, N_obs).
     """
-    device = cfg.hw.device
     dtype = cfg.hw.dtype
 
     # Unit conversions: SI -> cell file units.
@@ -819,6 +889,11 @@ def infer_from_experiment(
     log_T_obs = torch.tensor([[math.log(T_obs)]], dtype=dtype)
     obs_stats = torch.cat([obs_stats, log_T_obs, forcing_t], dim=-1)
 
-    # Sample from the trained posterior
-    samples = posterior.sample((n_samples,), x=obs_stats.to(device))
-    return samples.cpu()
+    # Record the observation context so infer_and_visualize's PPC / eye-test can simulate.
+    forcing_vals = {name: float(forcing_t[0, cfg.forcing_idx[name]]) for name in cfg.force_params_dict}
+    cfg.set_observation_context(T_obs, forcing_vals)
+
+    # Dimensional time axis + observed (forced) trajectory for the eye-test.
+    N_obs = X_forced_batched.shape[-1]
+    t_dim = (torch.arange(N_obs, dtype=dtype) * cfg.dt_exp).unsqueeze(0)
+    return obs_stats, X_forced_batched, t_dim

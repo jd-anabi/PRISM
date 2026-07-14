@@ -21,8 +21,34 @@ from core.SBI.statistics import FEATURE_LABELS
 from core.SBI.reparam import build_inferred_bijection, fisher_eigenbasis
 
 
+def _default_inits(cfg, dtype, device) -> torch.Tensor:
+    """
+    (1, n_vars) model-default initial conditions for the GT-free rotation, matching the training loop's
+    own synthesis (pipeline.INIT_SHAPES: randint pos + zero prob), seeded for a deterministic Fisher.
+    The transient (steady_idx) washes these out, so the specific values do not matter.
+    """
+    n_pos, n_prob = pipeline.INIT_SHAPES[cfg.model.lower()]
+    rng = np.random.RandomState(0)
+    inits = np.concatenate([rng.randint(0, 10, size=(1, n_pos)), np.zeros((1, n_prob))], axis=1)
+    return torch.tensor(inits, dtype=dtype, device=device)
+
+
+def _representative_forcing(cfg, force_prior, dtype, device) -> torch.Tensor:
+    """
+    (1, n_forcing) representative in-distribution DRIVE for the GT-free rotation: the forcing-prior
+    median if available, else the forcing-bounds midpoints. Gives Group-G features something to respond
+    to (a GT-free config has no forcing values).
+    """
+    if force_prior is not None:
+        s = force_prior.sample((256,)).to(device=device, dtype=dtype)
+        return s.median(dim=0).values.reshape(1, -1)
+    mids = [(lo + hi) / 2.0 for _, (lo, hi) in cfg.force_params_dict.values()]
+    return torch.tensor([mids], dtype=dtype, device=device)
+
+
 def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
-                                 latent_prior=None, n_points: int = None) -> torch.Tensor:
+                                 latent_prior=None, n_points: int = None,
+                                 force_prior=None) -> torch.Tensor:
     """
     Decorrelating rotation V (P, P), P = ND + rescale dims, from the latent Fisher, AVERAGED over
     n_points operating points (GT + prior draws). Averaging makes the (single, linear) rotation
@@ -47,8 +73,19 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
     dtype, device = cfg.hw.dtype, cfg.hw.device
     nd_dim = len(cfg.params_dict)
     P = nd_dim + len(cfg.rescale_params)
-    N_obs = int(cfg.T_obs / cfg.dt_exp)
-    forcing_gt = torch.tensor([[v for v, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
+    # Observation length: a specific T_obs when a cell is loaded (scripts), else a representative
+    # training length (a GT-free training config has no T_obs).
+    t_rep = cfg.T_obs if cfg.T_obs is not None else cfg.t_min_exp
+    N_obs = int(t_rep / cfg.dt_exp)
+    # Drive + initial conditions: use the ground-truth cell when present (scripts, preserves the exact
+    # legacy V); otherwise (GT-free training) use a representative in-distribution drive and the
+    # model-default inits the training loop itself synthesizes, so the rotation reflects training, not GT.
+    if cfg.has_ground_truth:
+        forcing_gt = torch.tensor([[v for v, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
+        base_inits = cfg.inits_tensor
+    else:
+        forcing_gt = _representative_forcing(cfg, force_prior, dtype, device)
+        base_inits = _default_inits(cfg, dtype, device)
     amp_v, freq_v, phase_v = (forcing_gt[:, cfg.forcing_idx[k]] for k in ("amp", "freq", "phase"))
 
     def feats(theta_row, mm):
@@ -65,7 +102,7 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
 
         def s(f):
             return pipeline.gen_obs(model=cfg.model, params=nd, t=t_fine,
-                                    inits=cfg.inits_tensor.expand(mm, -1).contiguous(), force=f,
+                                    inits=base_inits.expand(mm, -1).contiguous(), force=f,
                                     n_segs=n_segs, steady_idx=cfg.steady_idx,
                                     state_dep_drift=cfg.state_dep_drift, batch_size=mm, dtype=dtype,
                                     device=device)[0][:, ::subs][:, :N_obs]
@@ -91,8 +128,15 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
             J[:, i] = (feats(T(zp), m).mean(0) - feats(T(zm), m).mean(0)) / (2 * dz) / fnoise
         return None if not np.isfinite(J).all() else (J.T @ J)
 
-    # Operating points: GT first, then (n_points-1) prior draws (if a prior was provided).
-    points = [cfg.ground_truth_tensor]
+    # Anchor point, then (n_points-1) prior draws (if a prior was provided). GT-free training anchors
+    # on the per-dim PRIOR MEDIAN (transformed to physical) instead of the ground-truth point.
+    if cfg.has_ground_truth:
+        points = [cfg.ground_truth_tensor]
+    elif latent_prior is not None:
+        z_med = latent_prior.sample((max(256, n_points),)).median(dim=0).values.to(device)
+        points = [T(z_med)]
+    else:
+        raise RuntimeError("build_latent_fisher_rotation: need a ground-truth cell or a latent_prior anchor.")
     if latent_prior is not None and n_points > 1:
         z_samp = latent_prior.sample((n_points - 1,)).to(device)
         points += [T(z_samp[k]) for k in range(z_samp.shape[0])]

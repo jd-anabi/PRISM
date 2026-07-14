@@ -2,9 +2,9 @@
 REM Change the directory to the one where this .bat file is located
 pushd "%~dp0"
 
-echo Starting application...
-REM Run the python module
-python -m core
+echo Starting GUI...
+REM Run the desktop GUI (PySide6). Use `python -m core` instead for the interactive CLI.
+python -m core.gui
 
 REM Return to the original directory
 popd

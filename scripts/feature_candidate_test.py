@@ -40,7 +40,7 @@ from core.config import (SimConfig, DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S, detect_d
                          NADROWSKI_LABELS, CHUNK_LEN, PLOT_PATH)
 from core.SBI import pipeline
 
-CELL = os.environ.get("CELL", "Resources/Cells/nadrowski_cell_2.txt")
+CELL = os.environ.get("CELL", "Resources/Cells/nadrowski/cell_2.txt")
 TOBS_S = float(os.environ.get("TOBS_S", str(T_MIN_EXP_S)))
 M = int(os.environ.get("M", "48"))
 M_NOISE = int(os.environ.get("M_NOISE", "192"))

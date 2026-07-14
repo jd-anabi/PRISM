@@ -57,6 +57,8 @@ def cpu_device() -> DeviceConfig:
 # === PATHS ===
 _ROOT = Path(os.getcwd()) / "Resources"
 CELL_PATH    = _ROOT / "Cells"
+BOUNDS_PATH  = _ROOT / "Bounds"
+UNITS_PATH   = _ROOT / "Units"
 PRIOR_PATH   = _ROOT / "Priors"
 POSTERIOR_PATH = _ROOT / "Posteriors"
 PLOT_PATH    = _ROOT / "Plots"
@@ -105,6 +107,23 @@ TRAINING_LEARNING_RATE = 1e-3            # Adam learning rate (sbi default)
 TRAINING_STOP_AFTER_EPOCHS = 20          # early-stopping patience in epochs (sbi default)
 TRAINING_MAX_NUM_EPOCHS = 2_147_483_647  # hard epoch cap (sbi default: effectively unbounded)
 TRAINING_SHOW_SUMMARY = True             # print sbi's train/validation-loss summary (check convergence)
+
+# === PROGRESS BARS ===
+# The per-time-segment bar (core/Simulator/simulator.py) wraps segs in {1,2,3} -- a three-step bar that
+# tells a user nothing, while nesting a whole extra level under the training-data bar.
+# core.gui.app.build_app() sets this True; the CLI and scripts/ never touch it, so `python -m core`
+# renders exactly the bars it always has.
+# Read this through the MODULE (`from core import config; config.QUIET_SEGMENT_BAR`) -- a
+# `from core.config import QUIET_SEGMENT_BAR` snapshots the value at import and would freeze it False.
+QUIET_SEGMENT_BAR = False
+
+# The SDE solver's per-step bar (core/Solvers/sdeint.py) is f"{SOLVER_BAR_DESC} (batch={batch_size})".
+# It stays ON under the GUI: its it/s IS the "Solver Performance" meter, and its percentage is the only
+# thing that moves during a ~10s training iteration. The GUI does NOT render it as a progress row (a
+# posterior build constructs 10k-30k of these bars, one per time segment) -- it feeds a dedicated widget,
+# found by this desc prefix. Keyed on the DESC, never on the row: the bar's tqdm `pos` is 0, 1 or 2
+# depending on which phase and which panel is running. See core/gui/widgets/progress_pane.py.
+SOLVER_BAR_DESC = "step"
 
 # === DECORRELATING REPARAMETERIZATION (Track A: flow calibration via latent rotation) ===
 # When the inferred params are well-identified but strongly correlated (e.g. kappa~x_scale at
@@ -231,8 +250,22 @@ class SimConfig:
         return steady_idx
 
     @property
+    def has_ground_truth(self) -> bool:
+        """True once ground-truth VALUES are loaded (a bounds-built config has None value slots)."""
+        rows = list(self.params_dict.values()) + list(self.rescale_params.values())
+        return len(rows) > 0 and all(row[0] is not None for row in rows)
+
+    def _require_ground_truth(self) -> None:
+        if not self.has_ground_truth:
+            raise ValueError(
+                "SimConfig was built from a bounds file (no ground-truth values). Load a cell file via "
+                "inject_ground_truth(...) before generating a synthetic observation, or use experimental data."
+            )
+
+    @property
     def ground_truth(self) -> list[float]:
-        """Ground-truth values for all inferred params (ND + rescale)."""
+        """Ground-truth values for all inferred params (ND + rescale). Requires a loaded cell."""
+        self._require_ground_truth()
         nd = [row[0] for row in self.params_dict.values()]
         rescale = [row[0] for row in self.rescale_params.values()]
         return nd + rescale
@@ -248,14 +281,63 @@ class SimConfig:
 
     @property
     def inits_tensor(self) -> torch.Tensor:
-        """Initial conditions as a (1, n_vars) tensor."""
+        """Initial conditions as a (1, n_vars) tensor. A bounds-built config has no inits until a cell loads."""
+        if not self.inits_dict:
+            raise ValueError(
+                "SimConfig has no initial conditions (built from bounds + units only). Load a ground-truth "
+                "cell file via inject_ground_truth(...) before generating an observation."
+            )
         return torch.tensor(list(self.inits_dict.values()), dtype=self.hw.dtype, device=self.hw.device).unsqueeze(0)
 
     @property
     def params_tensor(self) -> torch.Tensor:
-        """ND-only ground-truth parameters as a (1, n_params) tensor for the simulator."""
+        """ND-only ground-truth parameters as a (1, n_params) tensor for the simulator. Requires a loaded cell."""
+        self._require_ground_truth()
         nd = [row[0] for row in self.params_dict.values()]
         return torch.tensor(nd, dtype=self.hw.dtype, device=self.hw.device).unsqueeze(0)
+
+    @staticmethod
+    def _fill_checked(label: str, cell_vals: dict, cfg_dict: OrderedDict, check_bounds: bool) -> None:
+        """Validate a cell values dict against a config (val,(lo,hi)) dict, then fill in the values."""
+        if set(cell_vals.keys()) != set(cfg_dict.keys()):
+            missing = sorted(set(cfg_dict) - set(cell_vals))
+            extra = sorted(set(cell_vals) - set(cfg_dict))
+            raise ValueError(
+                f"Cell file {label} do not match the bounds file: missing={missing}, unexpected={extra}."
+            )
+        if check_bounds:
+            oob = [f"{n}={cell_vals[n]} not in ({lo}, {hi})"
+                   for n, (_, (lo, hi)) in cfg_dict.items() if not (lo <= cell_vals[n] <= hi)]
+            if oob:
+                raise ValueError(f"Cell file {label} outside the bounds file's bounds: " + "; ".join(oob))
+        for n in cfg_dict:
+            cfg_dict[n] = (cell_vals[n], cfg_dict[n][1])
+
+    def inject_ground_truth(self, inits: dict, param_vals: dict,
+                            rescale_vals: dict, forcing_vals: dict) -> None:
+        """
+        Fill ground-truth VALUES + initial conditions from a cell file into a bounds-built config.
+
+        SAFEGUARD: the ND and rescale (inferred) param sets must match the bounds file and every value
+        must lie within its bounds — else a clear ValueError listing the offenders. Forcing is the known
+        DRIVE (conditioning, not an inferred param): its set must match, but its range is not enforced
+        (a spontaneous cell legitimately uses amp=0/freq=0 outside the drive prior's range).
+        """
+        self._fill_checked("ND parameters", param_vals, self.params_dict, check_bounds=True)
+        self._fill_checked("rescale parameters", rescale_vals, self.rescale_params, check_bounds=True)
+        self._fill_checked("forcing parameters", forcing_vals, self.force_params_dict, check_bounds=False)
+        self.inits_dict = OrderedDict(inits)
+
+    def set_observation_context(self, T_obs: float, forcing_vals: dict | None = None) -> None:
+        """
+        Set the observation duration (and optionally forcing VALUES) for the experimental-data branch,
+        so PPC / eye-test simulators that read cfg.T_obs and cfg.force_params_dict values work.
+        """
+        self.T_obs = T_obs
+        if forcing_vals is not None:
+            for name, v in forcing_vals.items():
+                if name in self.force_params_dict:
+                    self.force_params_dict[name] = (v, self.force_params_dict[name][1])
 
     @property
     def inferred_labels(self) -> list[str]:

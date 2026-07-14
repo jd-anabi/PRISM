@@ -6,44 +6,58 @@ import torch
 from matplotlib import pyplot as plt
 
 # === GENERAL VISUALIZERS ===
-def plot(x: np.ndarray, y: np.ndarray, scatter: bool = False, title: str = None, labels: tuple = None, lims: list = None, hlines: tuple = None, tight: bool = True) -> None:
+def plot(x: np.ndarray, y: np.ndarray, scatter: bool = False, title: str = None, labels: tuple = None, lims: list = None, hlines: tuple = None, tight: bool = True, sink=None) -> "plt.Figure":
+    """Line/scatter plot. Builds an explicit Figure and returns it. ``sink``, if given, is a callable
+    ``(title, fig) -> None`` that handles display (e.g. a GUI canvas); when None, falls back to the
+    legacy blocking ``plt.show()`` so the CLI is unchanged."""
+    fig, ax = plt.subplots()
     if scatter:
-        plt.scatter(x, y)
+        ax.scatter(x, y)
     else:
-        plt.plot(x, y)
+        ax.plot(x, y)
 
     if title is not None:
-        plt.title(title)
+        ax.set_title(title)
 
     if labels is not None:
-        plt.xlabel(labels[0])
+        ax.set_xlabel(labels[0])
         if len(labels) > 1:
-            plt.ylabel(labels[1])
+            ax.set_ylabel(labels[1])
 
     if lims is not None:
-        plt.xlim(*lims[0])
+        ax.set_xlim(*lims[0])
         if len(lims) > 1:
-            plt.ylim(*lims[1])
+            ax.set_ylim(*lims[1])
 
     if hlines is not None:
-        plt.hlines(*hlines, linestyle='--', color='r')
+        ax.hlines(*hlines, linestyle='--', color='r')
 
     if tight:
-        plt.tight_layout()
-    plt.show()
+        fig.tight_layout()
+    if sink is not None:
+        sink(title or "Plot", fig)
+    else:
+        plt.show()
+    return fig
 
 # === DISTRIBUTION VISUALIZERS ===
-def visualize_dist(dist: torch.distributions.Distribution, labels: list, n_samples: int = 10000, save_path: str | PathLike[str] = None) -> None:
+def visualize_dist(dist: torch.distributions.Distribution, labels: list, n_samples: int = 10000, save_path: str | PathLike[str] = None, title: str = "Distribution", sink=None) -> "plt.Figure":
+    """Corner plot of a distribution. Returns the Figure. ``sink`` (title, fig)->None handles display
+    for a GUI; when None, falls back to blocking ``plt.show()`` (CLI-unchanged)."""
     # sample from distribution
     samples = dist.sample((n_samples,)).cpu().numpy()
 
     # generate the corner plot
     figure = corner.corner(samples, labels=labels, show_titles=True, title_fmt=".2f", plot_datapoints=False, plot_density=True, fill_contours=True, smooth=1.0)
 
-    # save distribution visualization and show it
+    # save distribution visualization, then display it (sink for GUI, else blocking show)
     if save_path is not None:
-        plt.savefig(save_path)
-    plt.show()
+        figure.savefig(save_path)
+    if sink is not None:
+        sink(title, figure)
+    else:
+        plt.show()
+    return figure
 
 # === POSTERIOR ANALYSIS VISUALIZERS ===
 def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = None,

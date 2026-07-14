@@ -1,7 +1,37 @@
 ================================================================================
 GFDT / SBI HANDOFF  —  Nadrowski hair-cell parameter inference
-Updated 2026-07-01. Self-contained context for a new chat to continue the SBI work.
+Updated 2026-07-13. Self-contained context for a new chat to continue the SBI work.
 ================================================================================
+
+OPEN ISSUES / TODO (fix in a new chat)
+  [x] DONE 2026-07-13 -- CELL FILES now hold VALUES + INITIAL CONDITIONS ONLY (no bounds, no units).
+      RESOLUTION (all local): stripped all 8 cells to `name = val`; the "no code change" note was WRONG
+      -- cli._parse_cell -> file_manager.parse_model_file sourced bounds+units FROM the cell (no bare-val
+      fallback), so a stripped cell silently dropped params + raised "Could not detect time unit" in the
+      9 scripts + FDT/REDUCTION/CROSSVAL builders. Fix: migrated cli._parse_cell to a DECOUPLED path
+      (values from cell + bounds/order from Resources/Bounds/<model>_bounds.txt + units from
+      Resources/Units/<model>_units.txt; merge iterates the bounds dict so cell params absent from bounds
+      DROP -> bp rescale/forcing stay empty; parse_model_file kept as fallback; same 7-tuple return so no
+      script/builder edits). Created hopf_bounds/units + bp_bounds(17 ND only)/units. Verified: parity on
+      all 8 cells, SBI inject_ground_truth on nadrowski_cell_2 (13-dim, within-bounds), reparam_selftest
+      full path PASS. NOTE: nadrowski_cell_1 f_max=7.55 is OUT of nadrowski_bounds.txt (0.01,5.0) --
+      PRE-EXISTING, not a regression (don't use cell_1 as an SBI GT here, or widen f_max bound).
+      Historical context of the refactor:
+      SBI startup was refactored (2026-07-13) to DECOUPLE bounds from ground-truth values into
+      THREE files -- Resources/Bounds/<model>_bounds.txt (parameter bounds; the only startup prompt),
+      Resources/Units/<model>_units.txt (units; auto-resolved per model), and Resources/Cells/<name>.txt
+      (a ground-truth POINT = values + inits, used only for "infer on a simulated dataset"). The parser
+      file_manager.parse_values_file TOLERATES leftover bounds/units on a cell line (it takes the value
+      and ignores the rest), so the current cell files still work -- but they are NOT clean: they still
+      carry `= val in (lo,hi)` and `(units)` annotations that now belong in the Bounds/Units files.
+      FIX (data-file hygiene, no code change -- the parser already handles values-only): strip every
+      Resources/Cells/*.txt to pure `name = val` per ND / Dimensional / Forcing param, plus the
+      `# Non-dimensional Initial Conditions` section. Drop the ` in (lo,hi)` bounds and the `(units)`
+      annotations. Affected: nadrowski_cell.txt, nadrowski_cell_1/2/3.txt (+ hopf_cell.txt, bp_cell_*.txt
+      if those models are used). Verify after: `python -m core` -> SBI -> NADROWSKI -> pick
+      nadrowski_bounds.txt -> (load/train posterior) -> inference prompt "simulated" -> a cleaned
+      nadrowski_cell_2.txt still injects the GT + passes the within-bounds safeguard (SimConfig.
+      inject_ground_truth) and reproduces the corner/PPC/eye-test.
 
 PROJECT & GOAL
   Simulation-based inference (amortized NPE via the `sbi` package, neural spline flow)

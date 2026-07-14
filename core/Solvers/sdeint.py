@@ -4,6 +4,8 @@ from typing import Any
 import torch
 from tqdm import tqdm
 
+from core import config
+
 
 def _step_iter(n: int, batch_size: int):
     """tqdm wrapper for the per-step loop with overhead-minimizing settings.
@@ -11,10 +13,16 @@ def _step_iter(n: int, batch_size: int):
     `miniters` controls how often tqdm checks for a display refresh.
     With ~1% of total per check, the per-iteration cost is just a counter
     increment, which is essentially free even at 2.4M iterations.
+
+    This bar runs in the GUI too, not just the CLI: its rendered `it/s` is what drives the GUI's
+    "Solver Performance" meter, and its percentage is the only thing that moves during a training
+    iteration (which takes ~10s, so the top-level bar looks frozen between ticks). The GUI finds it by
+    its desc -- hence config.SOLVER_BAR_DESC rather than a literal -- and shows it in a dedicated widget
+    rather than as a progress row. See core/gui/widgets/progress_pane.py.
     """
     return tqdm(
         range(n - 1),
-        desc=f"step (batch={batch_size})",
+        desc=f"{config.SOLVER_BAR_DESC} (batch={batch_size})",
         leave=False,
         mininterval=1.0,
         miniters=max(1000, n // 100),

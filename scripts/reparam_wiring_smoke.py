@@ -27,7 +27,7 @@ from core.SBI.reparam import (build_inferred_bijection, build_rotated_bijection,
                               TransformedPosterior)
 
 torch.manual_seed(0)
-inits, params, rescale, forcing, units, si, s2c = cli._parse_cell("Resources/Cells/nadrowski_cell_2.txt")
+inits, params, rescale, forcing, units, si, s2c = cli._parse_cell("Resources/Cells/nadrowski/cell_2.txt")
 cfg = SimConfig(model="NADROWSKI", labels=NADROWSKI_LABELS, state_dep_drift=True,
                 inits_dict=inits, params_dict=params, rescale_params=rescale, force_params_dict=forcing,
                 units_dict=units, si_factors=si, dt_exp=DT_EXP_S * s2c, t_min_exp=T_MIN_EXP_S * s2c,
