@@ -21,6 +21,9 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")   # must precede any PySide6 import
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import matplotlib                                                 # noqa: E402
+matplotlib.use("Agg")                                            # match the app (core/gui/__main__.py forces it)
+
 from PySide6.QtWidgets import QApplication                        # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
@@ -549,6 +552,7 @@ def test_a_cell_with_no_bounds_sibling_does_not_brick_the_gui():
     from pathlib import Path
 
     from core.config import CELL_PATH
+    from core.gui import settings as st
 
     _app()
     src = Path(CELL_PATH) / "nadrowski" / "cell.txt"
@@ -557,13 +561,21 @@ def test_a_cell_with_no_bounds_sibling_does_not_brick_the_gui():
     probe = src.with_name("aaa_probe_no_bounds.txt")   # sorts first => the picker selects it
     shutil.copyfile(src, probe)
     try:
+        # Isolate from the developer's real QSettings store. MainWindow() -> CrossValPanel.__init__
+        # restores its saved cell selection; a cell saved from a previous GUI session would be reloaded
+        # OVER our probe, so the picker would land on a valid cell and the prefill would parse fine --
+        # masking the degrade path this test exists to check. A clean temp .ini defaults the picker to
+        # the alphabetically-first entry (the probe), regardless of the machine's state.
+        _temp_settings()
         from core.gui.main_window import MainWindow
+        from core.gui.panels.crossval_panel import CrossValPanel
         window = MainWindow()                    # must not raise
-        xval = window.tabs.widget(3)
+        xval = window.panel(CrossValPanel)       # CrossVal now lives inside the FDT Analysis section
         assert "could not read cell" in xval.cell_values.text().lower(), \
             f"the bad cell should degrade the prefill label, got: {xval.cell_values.text()!r}"
     finally:
         probe.unlink(missing_ok=True)
+        st.use_ini_file(None)
 
 
 def test_plot_watcher_only_reports_pngs_written_after_start():
@@ -737,28 +749,26 @@ def test_cancel_is_not_consumed_by_a_non_worker_thread():
     assert out.get("worker_raised") is True, "the cancel was consumed by a non-worker thread and lost"
 
 
-def test_sbi_restore_with_a_stale_model_does_not_desync_the_pickers():
-    """A corrupt/version-skewed .ini with an unknown model must not point the bounds/cell pickers at a
-    nonexistent folder while the combo shows the default."""
+def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_picker():
+    """A corrupt/version-skewed .ini with an unknown model must not point the Config bounds picker at a
+    nonexistent folder while the combo shows a real default."""
     from core.gui import settings as st
-    from core.gui.panels.sbi_panel import SbiPanel
+    from core.gui.screens.inference_screen import InferenceScreen
 
     _app()
     _temp_settings()
     try:
         qs = st.settings()
-        qs.beginGroup("sbi")
+        qs.beginGroup("inference_config")
         qs.setValue("model", "NOT_A_REAL_MODEL")
         qs.endGroup()
         qs.sync()
 
-        panel = SbiPanel()
-        model = panel.model_combo.currentText()
+        cfg_panel = InferenceScreen().config_panel
+        model = cfg_panel.model_combo.currentText()
         assert model in ("BP", "NADROWSKI", "HOPF"), model
-        # the pickers must point at the SHOWN model's real folder, and be populated
-        assert panel.cell_picker.base_path.name == model.lower()
-        assert panel.bounds_picker.base_path.name == model.lower()
-        assert panel.cell_picker.combo.count() > 0, "the cell picker was left empty by a stale model"
+        assert cfg_panel.bounds_picker.base_path.name == model.lower()
+        assert cfg_panel.bounds_picker.combo.count() > 0, "the bounds picker was left empty by a stale model"
     finally:
         st.use_ini_file(None)
 
@@ -890,6 +900,313 @@ def test_on_error_puts_the_traceback_in_details_not_the_body(monkeypatch=None):
     assert captured["text"] == "Something failed"
     assert "Traceback" in captured["detail"], "the traceback was not routed to Details"
     assert "Traceback" not in captured["text"], "the traceback leaked into the body"
+
+
+# ── interactive "Pop out" for figures ────────────────────────────────────────────────────────────
+def _tiny_fig():
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots()
+    ax.plot([0, 1, 2], [0, 1, 4])
+    return fig
+
+
+def _png_bytes(fig):
+    import io
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    return buf.getvalue()
+
+
+def test_fig_sink_emits_png_and_a_reloadable_pickle():
+    """The worker sink must emit BOTH the PNG thumbnail and a pickle that reloads to a real Figure on
+    the GUI thread -- that pickle is what "Pop out" rebuilds into an interactive window."""
+    import pickle
+    import matplotlib.pyplot as plt
+    from core.gui.panels.base_panel import _png_fig_sink
+
+    _app()
+    sig = WorkerSignals()
+    events = []
+    sig.figure.connect(lambda title, png, fp: events.append((title, png, fp)))
+
+    _png_fig_sink(sig.figure)("Corner", _tiny_fig())
+
+    assert len(events) == 1, events
+    title, png, fp = events[0]
+    assert title == "Corner"
+    assert png[:4] == b"\x89PNG", "the PNG thumbnail is missing / not a PNG"
+    assert fp is not None, "no pickle was shipped for the pop-out"
+    assert len(pickle.loads(fp).axes) == 1, "the pickle did not reload to the figure"
+    plt.close("all")
+
+
+def test_fig_sink_pickle_failure_still_emits_the_png():
+    """If a figure will not pickle, the run must not break: emit fig_pickle=None and keep the PNG."""
+    import pickle
+    import matplotlib.pyplot as plt
+    from core.gui.panels.base_panel import _png_fig_sink
+
+    _app()
+    sig = WorkerSignals()
+    events = []
+    sig.figure.connect(lambda title, png, fp: events.append((title, png, fp)))
+
+    real = pickle.dumps
+    pickle.dumps = lambda *a, **k: (_ for _ in ()).throw(TypeError("cannot pickle this"))
+    try:
+        _png_fig_sink(sig.figure)("X", _tiny_fig())
+    finally:
+        pickle.dumps = real
+
+    assert len(events) == 1
+    _title, png, fp = events[0]
+    assert fp is None, "a pickle failure should degrade to None, not raise or drop the event"
+    assert png[:4] == b"\x89PNG", "the PNG must still be emitted when pickling fails"
+    plt.close("all")
+
+
+def test_add_figure_creates_an_interactive_capable_tab():
+    import pickle
+    import matplotlib.pyplot as plt
+    from PySide6.QtWidgets import QPushButton
+    from core.gui.widgets.figure_stack import FigureStack
+
+    _app()
+    fs = FigureStack()
+    fig = _tiny_fig()
+    fs.add_figure("Corner", _png_bytes(fig), fig_pickle=pickle.dumps(fig))
+    plt.close("all")
+
+    assert fs.count() == 1
+    container = fs.widget(0)
+    assert getattr(container, "_fig_pickle", None) is not None, "the pickle was not stored on the tab"
+    assert any(b.text() == "Pop out" for b in container.findChildren(QPushButton)), "no Pop out button"
+
+
+def test_pop_out_of_a_pickle_builds_a_qtagg_canvas_and_keeps_pyplot_clean():
+    """Popping a pickled figure builds a live FigureCanvasQTAgg on the GUI thread, and -- the linchpin
+    -- must NOT leave the reconstructed figure registered in pyplot's Gcf (else the worker's
+    plt.close("all") would later close it out from under the user)."""
+    import pickle
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+    from core.gui.widgets.figure_stack import FigureStack
+
+    app = _app()
+    fs = FigureStack()
+    fig = _tiny_fig()
+    fs.add_figure("Corner", _png_bytes(fig), fig_pickle=pickle.dumps(fig))
+    plt.close("all")
+
+    before = plt.get_fignums()
+    fs._pop_out(fs.widget(0))
+    assert len(fs._windows) == 1
+    win = next(iter(fs._windows))
+    assert isinstance(win.canvas, FigureCanvasQTAgg)
+    assert plt.get_fignums() == before, "the unpickled figure leaked into pyplot's Gcf"
+
+    win.close()
+    _pump(app, 0.1)
+    assert len(fs._windows) == 0, "the window ref was not dropped on close"
+    plt.close("all")
+
+
+def test_pop_out_without_a_pickle_uses_the_image_viewer():
+    import matplotlib.pyplot as plt
+    from PySide6.QtWidgets import QGraphicsView
+    from core.gui.widgets.figure_stack import FigureStack
+    from core.gui.widgets.figure_window import ImageZoomWindow
+
+    app = _app()
+    fs = FigureStack()
+    fig = _tiny_fig()
+    fs.add_figure("NoPickle", _png_bytes(fig), fig_pickle=None)
+    plt.close("all")
+
+    fs._pop_out(fs.widget(0))
+    win = next(iter(fs._windows))
+    assert isinstance(win, ImageZoomWindow), "a pickle-less figure should open the image viewer"
+    assert isinstance(win.view, QGraphicsView)
+    win.close()
+    _pump(app, 0.1)
+
+
+def test_disk_png_pop_out_is_an_image_viewer():
+    import tempfile
+    import matplotlib.pyplot as plt
+    from PySide6.QtWidgets import QGraphicsView
+    from core.gui.widgets.figure_stack import FigureStack
+    from core.gui.widgets.figure_window import ImageZoomWindow
+
+    app = _app()
+    png = Path(tempfile.mkdtemp()) / "sweep.png"
+    fig = _tiny_fig()
+    fig.savefig(str(png), format="png")
+    plt.close("all")
+
+    fs = FigureStack()
+    fs.add_png("Sweep", str(png))
+    fs._pop_out(fs.widget(0))
+    win = next(iter(fs._windows))
+    assert isinstance(win, ImageZoomWindow)
+    assert isinstance(win.view, QGraphicsView), "the disk-PNG pop-out has no zoom/pan view"
+    win.close()
+    _pump(app, 0.1)
+
+
+def test_a_popped_out_figure_survives_a_worker_plt_close_all():
+    """Worker.run runs plt.close("all") after every run and every cancel. A figure the user has popped
+    out must NOT be torn down by it -- the Gcf detach in build_interactive_window is the guarantee."""
+    import pickle
+    import matplotlib.pyplot as plt
+    from core.gui.widgets.figure_stack import FigureStack
+
+    app = _app()
+    fs = FigureStack()
+    fig = _tiny_fig()
+    fs.add_figure("Corner", _png_bytes(fig), fig_pickle=pickle.dumps(fig))
+    plt.close("all")
+
+    fs._pop_out(fs.widget(0))
+    win = next(iter(fs._windows))
+    assert len(win._fig.axes) == 1
+
+    plt.close("all")     # the worker's teardown, fired process-wide
+    assert len(win._fig.axes) == 1, "plt.close('all') destroyed a figure being viewed in a pop-out"
+
+    win.close()
+    _pump(app, 0.1)
+    plt.close("all")
+
+
+# ── MAPPI navigation redesign ────────────────────────────────────────────────────────────────────
+def test_greeting_maps_hours_to_time_of_day():
+    from core.gui.screens.home_screen import greeting
+    assert greeting(5) == greeting(11) == "Good morning"
+    assert greeting(8) == "Good morning"
+    assert greeting(12) == greeting(16) == "Good afternoon"
+    assert greeting(14) == "Good afternoon"
+    assert greeting(17) == greeting(23) == "Good evening"
+    assert greeting(0) == greeting(4) == "Good evening"
+
+
+def test_nav_shell_back_arrow_tracks_the_screen():
+    from PySide6.QtWidgets import QWidget
+    from core.gui.screens.nav_shell import NavShell
+
+    _app()
+    nav = NavShell()
+    for _ in range(3):
+        nav.add_screen(QWidget())
+    nav.go_home()
+    assert nav.btn_back.isHidden(), "back arrow should be hidden on home"
+    nav.go_to(2)
+    assert not nav.btn_back.isHidden(), "back arrow should show on a section"
+    nav.go_home()
+    assert nav.btn_back.isHidden(), "back arrow should hide again on home"
+
+
+def test_main_window_always_opens_on_home():
+    from core.gui import settings as st
+    _app()
+    _temp_settings()
+    try:
+        qs = st.settings()
+        qs.setValue("window/tab", 2)          # a stale key from the old flat-tab layout
+        qs.sync()
+        from core.gui.main_window import MainWindow
+        w = MainWindow()
+        assert w.nav.stack.currentIndex() == 0, "the app must always open on the home screen"
+    finally:
+        st.use_ini_file(None)
+
+
+def test_inference_tab_gates_follow_the_session():
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+
+    _app()
+    inf = InferenceScreen()
+
+    def enabled():
+        return [inf.tabs.isTabEnabled(i) for i in range(6)]   # Config Simulate Prior Posterior Validate Infer
+
+    inf.session = SbiSession(); inf.refresh_gates()
+    assert enabled() == [True, False, False, False, False, False]
+    inf.session.cfg = object(); inf.refresh_gates()
+    assert enabled() == [True, True, True, True, False, False]
+    inf.session.posterior = object(); inf.refresh_gates()
+    assert enabled() == [True, True, True, True, False, True], "Infer needs only a posterior; Validate needs priors"
+    inf.session.inf_prior = object(); inf.session.force_prior = object(); inf.refresh_gates()
+    assert enabled() == [True, True, True, True, True, True]
+
+
+def test_posterior_from_scratch_is_gated_on_a_prior():
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+
+    _app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object()); inf.refresh_gates()
+    pp = inf.posterior_panel
+    pp.post_picker.combo.setCurrentIndex(0)               # the "(from scratch)" sentinel (allow_new adds it first)
+    assert pp.post_picker.selected()[1] is True, "index 0 should be the from-scratch sentinel"
+    pp.refresh_local_gates()
+    assert not pp.btn_post.isEnabled(), "training from scratch must be disabled without a prior"
+    inf.session.inf_prior = object(); inf.session.force_prior = object()
+    pp.refresh_local_gates()
+    assert pp.btn_post.isEnabled(), "with a prior, training from scratch is allowed"
+
+
+def test_inference_cell_pickers_repoint_after_config_is_built():
+    """The Simulate/Infer cell pickers follow the BUILT config's model (there is no model combo in those
+    tabs), so new_session must repoint them."""
+    from core.gui.screens.inference_screen import InferenceScreen
+
+    _app()
+    inf = InferenceScreen()
+
+    class Cfg:
+        model = "HOPF"
+        force_params_dict = {}
+
+    inf.new_session(Cfg())
+    assert inf.simulate_panel.cell_picker.base_path.name == "hopf"
+    assert inf.infer_panel.cell_picker.base_path.name == "hopf"
+
+
+def test_help_badge_carries_its_text():
+    from core.gui.widgets.help_badge import HelpBadge
+    _app()
+    assert HelpBadge("what this does").toolTip() == "what this does"
+
+
+def test_simulated_preview_runner_emits_the_ground_truth_figure():
+    """The Simulate tab's runner produces a 'Ground-truth trace' figure. A real SDE sim is too slow for
+    a unit test, so stub the heavy pieces and assert the fig_sink wiring."""
+    import torch
+    from core import cli, orchestrator
+    from core.gui.panels import inference_tabs
+
+    _app()
+
+    class Cfg:
+        def get_unit_conversion_factor(self, _unit):
+            return 1.0
+
+    seen = []
+    real_gt, real_go = cli.load_and_validate_gt, orchestrator.generate_observations
+    cli.load_and_validate_gt = lambda cfg, path: None
+    orchestrator.generate_observations = lambda cfg: (
+        torch.zeros(1, 5), None, torch.linspace(0, 1, 5).unsqueeze(0))
+    try:
+        inference_tabs._run_simulated_preview(
+            Cfg(), "cell.txt", 0.1, fig_sink=lambda title, fig: seen.append(title))
+    finally:
+        cli.load_and_validate_gt = real_gt
+        orchestrator.generate_observations = real_go
+
+    assert seen == ["Ground-truth trace"], seen
 
 
 if __name__ == "__main__":

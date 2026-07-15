@@ -17,9 +17,21 @@ from core.FDT.cross_validation import run_param_study_cli
 from .base_panel import BasePanel
 from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker
+from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField, IntField
 
 _MODEL = "NADROWSKI"
+
+HELP = {
+    "cell": "A cell whose S and T_a/T set the far end of each sweep (the FDT-violating extreme).",
+    "preset": "exploratory = quick/coarse; production = finer grids and more frequencies.",
+    "s_grid": "S sweep (T_a/T fixed at 1): FDT is restored as S → 0. min / max / number of points.",
+    "t_grid": "T_a/T sweep (S fixed at 0): FDT is restored as T_a/T → 1. min / max / number of points.",
+    "n_freqs": "Number of (log-spaced) frequencies evaluated per sweep point.",
+    "ensemble_M": "Ensemble size: independent trajectories averaged per frequency.",
+    "freqs_per_batch": "How many frequencies to simulate per batch (memory/speed; results identical).",
+    "f0": "Non-dimensional forcing amplitude used to probe χ(ω) at each sweep point.",
+}
 
 
 class _GridRow(QWidget):
@@ -69,15 +81,15 @@ class CrossValPanel(BasePanel):
         self.btn_run.clicked.connect(self._run)
 
         form.addRow(QLabel(f"Model is fixed to {_MODEL}."))
-        form.addRow("Cell", self.cell_picker)
-        form.addRow("Cell values", self.cell_values)
-        form.addRow("Preset", self.preset_combo)
-        form.addRow("S grid  (T_a/T = 1)", self.s_grid)
-        form.addRow("T_a/T grid  (S = 0)", self.t_grid)
-        form.addRow("n_freqs", self.n_freqs)
-        form.addRow("ensemble_M", self.ensemble_m)
-        form.addRow("freqs_per_batch", self.freqs_per_batch)
-        form.addRow("F0 (ND forcing amplitude)", self.f0)
+        add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
+        form.addRow("Cell values", self.cell_values)          # an output display, not a configurable input
+        add_help_row(form, "Preset", self.preset_combo, HELP["preset"])
+        add_help_row(form, "S grid  (T_a/T = 1)", self.s_grid, HELP["s_grid"])
+        add_help_row(form, "T_a/T grid  (S = 0)", self.t_grid, HELP["t_grid"])
+        add_help_row(form, "n_freqs", self.n_freqs, HELP["n_freqs"])
+        add_help_row(form, "ensemble_M", self.ensemble_m, HELP["ensemble_M"])
+        add_help_row(form, "freqs_per_batch", self.freqs_per_batch, HELP["freqs_per_batch"])
+        add_help_row(form, "F0 (ND forcing amplitude)", self.f0, HELP["f0"])
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)

@@ -29,15 +29,30 @@ STATUS
   [DONE + verified]  Solver Performance meter + step strip + liveness spinner. See that section below.
   [DONE + verified]  Phase 3 — cooperative cancellation, QSettings persistence, better error dialogs.
                      See "PHASE 3" below.
+  [DONE + verified]  Interactive figures — a "Pop out" button on every figure tab (zoom/pan/save).
+                     See "INTERACTIVE FIGURES" below.
+  [DONE + verified]  MAPPI redesign — home/splash screen (greeting + 4 section buttons) over a nav shell;
+                     SBI -> "Parameter Inference" split into six gated tabs; CrossVal moved into FDT
+                     Analysis; per-option help badges. See "MAPPI LAYOUT" below.
 
-  Verified by tests/test_gui_progress.py (29 tests, all passing) plus a headless end-to-end run in
+  Verified by tests/test_gui_progress.py (46 tests, all passing) plus a headless end-to-end run in
   which the REDUCTION panel actually executed run_reduction_map, saved its PNG, and had it picked up
-  into the FigureStack with a clean log. An adversarial review then found 7 real defects (one of which
-  prevented the GUI from launching at all); all are fixed and pinned by tests — see the list below.
+  into the FigureStack with a clean log. TWO adversarial-review passes found 10 real defects total (one
+  prevented the GUI from launching; two were cancellation correctness bugs — the tqdm write-lock leak
+  and the monitor-thread latch theft); all are fixed and pinned by tests.
+
+  ENV NOTE: verified against the biophys-env as installed = sbi 0.25.0, PySide6 6.9.3, tqdm 4.67.1.
+  requirements.txt now PINS sbi==0.26.1 (a planned bump, not yet installed). The cooperative-cancel
+  design reaches inside sbi's fit loop via its per-epoch print (npe_base.py:437 in 0.25.0) -- if you
+  upgrade to 0.26.1, RE-VERIFY that print still fires per epoch (grep sbi for _maybe_show_progress /
+  "Epochs trained"), or a mid-training cancel loses its finest checkpoint. The tqdm gotchas (C1/C2)
+  are tqdm-version-bound, not sbi-bound.
 
   Still NOT exercised end-to-end on a real display (ask the user before assuming these work):
   the SBI panel's Save prior / Save posterior buttons, Validate (SBC/TARP), Infer (simulated AND
-  experimental), and a full FDT / CrossVal run (both are long; Reduction is the fast one).
+  experimental), a full FDT / CrossVal run (both are long; Reduction is the fast one), and the figure
+  "Pop out" windows (headless tests cover the wiring + the Gcf detach; the on-screen zoom/pan/save
+  toolbars still want a human click — Reduction's disk-PNG pop-out is the quickest to eyeball).
 
 ================================================================================
 PROGRESS — how tqdm is handled (this was the top bug; it is fixed)
@@ -191,7 +206,7 @@ ENVIRONMENT / HOW TO RUN
   - GUI:  run.bat  /  run.sh   (both do `python -m core.gui`)
           MUST be launched from the repo root — config.py builds paths from os.getcwd()/Resources.
   - CLI (still works, unchanged):  python -m core
-  - Tests: python tests/test_gui_progress.py     (13 tests; also runs under pytest)
+  - Tests: python tests/test_gui_progress.py     (46 tests; also runs under pytest)
   - Syntax check:  python -m py_compile <path>
   - GIT: make LOCAL changes only; the user handles all git / remote operations.
 
@@ -199,7 +214,11 @@ GUI PACKAGE LAYOUT (core/gui/)
   __main__.py     entry (`python -m core.gui`). Forces matplotlib Agg BEFORE importing core.* (GOTCHA #3).
   app.py          build_app() -> (QApplication, MainWindow); sets config.QUIET_SEGMENT_BAR = True;
                   installs a sys.excepthook -> QMessageBox.
-  main_window.py  QMainWindow + QTabWidget. All four tabs: SBI / FDT / Reduction / Cross-validation.
+  main_window.py  QMainWindow. Composes a NavShell over a Home screen + 3 section screens; always opens
+                  on Home; _all_panels()/panel(cls).                          [see MAPPI LAYOUT below]
+  screens/        nav_shell.py (MAPPI header + back arrow + QStackedWidget), home_screen.py (greeting +
+                  4 buttons; greeting(hour)), section_screen.py (heading + QTabWidget), inference_screen.py
+                  (owns the SbiSession + refresh_gates truth table).          [see MAPPI LAYOUT below]
   session.py      SbiSession dataclass (cfg, inf_prior, force_prior, posterior, diagnostics,
                   posterior_latent, V) + reset_downstream().
   worker.py       Worker(QRunnable) + WorkerSignals(log, log_batch, rows, figure, result, error, finished).
@@ -209,15 +228,20 @@ GUI PACKAGE LAYOUT (core/gui/)
   panels/base_panel.py    BasePanel: left controls column + right (FigureStack over ProgressPane over
                   LogPane); dispatch(fn, *args, provide_fig_sink=, watch_dir=, on_result=, on_finished=,
                   **kwargs). ALL panels must use this. Also _png_fig_sink().
-  panels/sbi_panel.py       the 5 stage groups + the two inference runners.
+  panels/inference_tabs.py  the six Parameter-Inference tabs (Config/Simulate/Prior/Posterior/Validate/
+                  Infer) as BasePanel subclasses over one shared session + the runners. Replaced sbi_panel.py.
   panels/fdt_panel.py       FDT form + the two gating checkboxes.
   panels/reduction_panel.py cell + F0. The fastest panel to test (pure-analytical, no simulation).
   panels/crossval_panel.py  cell + preset + S/T grids + FDT knobs.
   widgets/artifact_picker.py  ArtifactPicker(base_path, keep=, allow_new=)
-  widgets/figure_stack.py     FigureStack: add_figure(title, png_bytes) / add_png(title, path)
+  widgets/figure_stack.py     FigureStack: add_figure(title, png_bytes, fig_pickle=) / add_png(title,
+                  path); per-tab "Pop out" button.                    [see INTERACTIVE FIGURES below]
+  widgets/figure_window.py    InteractiveFigureWindow (live FigureCanvasQTAgg) + ImageZoomWindow +
+                  build_interactive_window (the Gcf-safe unpickle).   [see INTERACTIVE FIGURES below]
   widgets/log_pane.py         LogPane: append_line(text, level) / append_lines(batch)
   widgets/progress_pane.py    ProgressPane: begin() / set_rows(snapshot) / end()
   widgets/labeled_inputs.py   FloatField / IntField / PathField
+  widgets/help_badge.py       HelpBadge("?") + add_help_row(form, label, widget, help) + with_badge(cb, help)
 
 PHASE 0 REFACTORS — the hooks the GUI depends on (all non-breaking; defaults = old CLI behavior)
   R1  core/cli.py: class UnitParseError(ValueError). _parse_cell / _units_to_factors RAISE instead of
@@ -354,6 +378,117 @@ PHASE 3 — cancellation, QSettings, better error dialogs  (DONE)
     BasePanel._on_error puts the traceback in setDetailedText() (collapsible), not pasted into the body;
     _config_error uses a Warning icon + "Check your inputs" (a bad file pick is input, not a crash).
 
+================================================================================
+INTERACTIVE FIGURES — the "Pop out" button  (core/gui/widgets/figure_window.py)
+================================================================================
+  Every figure tab has a "Pop out" button that re-opens the figure in its OWN top-level window with real
+  zoom / pan / save. It lifts the static-PNG limitation WITHOUT breaking the rule that created it.
+
+  THE RULE IT KEEPS (GOTCHA #2). A figure BUILT on the worker thread must never be painted by a live
+  canvas — matplotlib global-lock deadlock. So the interactive copy is REBUILT ON THE GUI THREAD, never
+  the worker's original. Two sources, two windows:
+    - fig_sink figures (SBI panel): base_panel._png_fig_sink now ALSO pickles the Figure on the worker
+      (best-effort — a pickle failure yields None and the run never breaks) and ships the bytes on the
+      `figure` signal alongside the PNG. Pop out unpickles on the GUI thread into a live FigureCanvasQTAgg
+      + NavigationToolbar2QT (zoom-rect / pan / home / Save As). Pickling is SAFE on the worker: it NEVER
+      renders, so it never touches Agg's renderer lock — only savefig/paint does, and savefig ran there.
+    - disk PNGs (FDT / Reduction / CrossVal, via NewPngWatcher): no Figure exists, only a path — an
+      ImageZoomWindow (QGraphicsView: wheel-zoom about the cursor, drag-pan, Fit / 100% / Save As). Also
+      the fallback whenever a pickle is absent or fails to load.
+
+  *** THINGS THAT WILL BITE YOU ***
+   F1. THE Gcf DETACH (build_interactive_window — DO NOT REMOVE). Every stage figure is pyplot-managed,
+       so matplotlib bakes _restore_to_pylab into the pickle and pickle.loads RE-REGISTERS the figure
+       into the process-global registry (matplotlib._pylab_helpers.Gcf). Left there it (a) leaks for the
+       life of the process and (b) is destroyed by Worker.run's plt.close("all") — which fires after EVERY
+       run and cancel — tearing the manager out from under a figure the user is viewing. So we snapshot
+       Gcf around the load and Gcf.destroy() whatever it registered. Verified: plt.get_fignums() is
+       unchanged across a pop-out; pinned by test_a_popped_out_figure_survives_a_worker_plt_close_all.
+   F2. IMPORT backend_qtagg LAZILY, inside InteractiveFigureWindow.__init__ — only when a figure is
+       actually popped out. It does NOT switch the active backend (the app stays on Agg — verified); it
+       just lets us embed a canvas. Eager import would drag the Qt backend into app start and the headless
+       tests, and an import failure would break launch instead of being catchable at click time
+       (FigureStack then falls back to the image viewer). NEVER call plt.show() / matplotlib.use() here.
+   F3. WINDOW LIFETIME (the GOTCHA #1 trap again). Pop-outs are PARENTLESS top-levels; FigureStack._windows
+       holds the only ref, or Python/Qt GCs the window the instant show() returns. Each window drops its
+       ref via on_close in closeEvent (WA_DeleteOnClose).
+
+  CORE CHANGE: none outside core/gui. worker.py's `figure` signal widened to Signal(str, object, object)
+  = (title, png_bytes, fig_pickle|None). The CLI is untouched (fig_sink is None there, so no pickle).
+
+================================================================================
+MAPPI LAYOUT  —  home screen + navigation shell  (core/gui/screens/, main_window.py)
+================================================================================
+  The window no longer opens on a flat 4-tab bar. MainWindow composes a NavShell -- a persistent "MAPPI"
+  title in the TOP-LEFT AT ALL TIMES, a back arrow just BELOW it (hidden on Home), and a QStackedWidget --
+  over a Home/splash screen (index 0) and three section screens:
+
+      Home (greeting + 4 buttons)
+        -> Reduction Map        SectionScreen: [ ReductionPanel ]
+        -> FDT Analysis         SectionScreen: [ FdtPanel, CrossValPanel ]   (CrossVal moved here)
+        -> Parameter Inference  InferenceScreen: 6 gated tabs (owns the SbiSession)
+        -> Simulate             DEFERRED: a no-op home button ("coming soon"); no screen. See below.
+
+  Navigation is two levels deep, so the back arrow always returns Home; the app ALWAYS opens on Home
+  (the old window/tab persistence is dropped -- only geometry + each panel's own settings persist).
+  home_screen.greeting(hour) is pure (5-11 morning / 12-16 afternoon / else evening), called on show.
+
+  PARAMETER INFERENCE = the old SbiPanel decomposed into six BasePanel subclasses (panels/inference_tabs.py:
+  Config, Simulate, Prior, Posterior, Validate, Infer) that SHARE ONE SbiSession owned by the
+  InferenceScreen. Each tab keeps its own results area, so dispatch/cancel/fig-sink/progress are reused
+  verbatim; _running is class-level, so the six can't run at once. Tabs never cache the session -- they
+  read screen.session at use-time, because Config REPLACES it wholesale via screen.new_session(cfg).
+
+   *** THINGS THAT WILL BITE YOU ***
+   M1. GATING is InferenceScreen.refresh_gates() -- a setTabEnabled truth table re-run after every stage.
+       Verified against the pipeline:
+         Config       always on
+         Simulate/Prior/Posterior   on once cfg is built
+         Posterior "from scratch"   the TRAIN BUTTON is disabled while the (from-scratch) sentinel is
+                                    selected AND session.inf_prior is None (LOADING a .pt needs no prior)
+         Validate     on only with a posterior AND both priors -- validate_calibration CONSUMES
+                      inferred_prior + force_prior (orchestrator.py:534); a standalone-loaded posterior
+                      cannot validate
+         Infer        on with just a posterior -- infer_and_visualize takes no prior, and build_posterior's
+                      load path rebuilds from cfg + the .rot.pt sidecar (orchestrator.py:343)
+       After a re-gate, if the visible tab just got disabled it falls back to Config (else Qt jumps
+       arbitrarily). reset_downstream("prior") clears priors+posterior; each stage re-gates from on_result.
+   M2. The Simulate + Infer CELL PICKERS follow the BUILT cfg's model, not a live combo (there isn't one
+       in those tabs). new_session -> panel.on_config_built(cfg) repoints CELL_PATH/<model> and re-applies
+       the saved cell key THEN (it could not resolve at __init__, before any config). ConfigPanel still
+       restores model-first (the old picker restore-order trap).
+   M3. APP-WIDE CONTROL LOCK. redirect_streams swaps sys.stdout PROCESS-WIDE, so a run in ANY panel now
+       locks EVERY panel's controls (BasePanel._instances WeakSet; _set_busy loops it). With six sibling
+       inference tabs, a picker ⟳ in another tab mid-run would otherwise corrupt the worker's stream.
+   M4. HELP BADGES: widgets/help_badge.py -- add_help_row(form, label, widget, help) puts a circled "?"
+       next to an option; with_badge(checkbox, help) for spanning rows. Copy lives in a per-panel HELP
+       dict (DRAFT wording -- the user is reviewing it).
+
+================================================================================
+DEFERRED — real-time "Simulate" section (the 4th home button; NOT built)
+================================================================================
+  The Simulate home button is a placeholder. Intended feature: pick a model + cell + observation time,
+  then stream a live trace of the model's FIRST state variable and a "top-down hair bundle" heatmap
+  derived from it. Scoping (build it as a NEW thing -- nothing in the repo streams; every sim path is
+  batch-in / trajectory-out):
+    - The FIRST state variable is the hair-bundle displacement in ALL models (Nadrowski x0, Hopf x0,
+      BP/BPSteady x_hb); redimensionalize with model_helpers.rescale_x. Trace AND heatmap derive from it.
+    - Build a NEW worker-thread Euler loop: instantiate the model directly (NadrowskiModel/HopfModel/
+      BPModel), force CPU + eager Solver.euler at batch=1 (config.cpu_device notes CPU wins at small M;
+      compiled/CUDA warmup dominates at batch=1). Advance a fixed fine-step CHUNK per frame, carrying
+      x[-1] forward and RE-SLICING force per chunk (mirror simulator.py:55-66) into a ~one-T_obs ring
+      buffer -- do NOT allocate cfg.t (it can be millions of points).
+    - Minimal load path: cli._parse_cell -> make_sim_config -> cfg.inject_ground_truth ->
+      params_tensor/inits_tensor; force via pipeline.build_nondim_sin_force_tensor. The one-shot
+      reference is orchestrator.generate_observations(cfg) (too heavy to reuse for streaming).
+    - TRANSPORT: reuse the worker/dispatch rails but add a new Signal(object) carrying a numpy chunk;
+      _png_fig_sink (savefig+bbox_inches, ~50-150ms, closes the fig) is UNUSABLE at fps.
+    - RENDER ON THE GUI THREAD (GOTCHA #2 still holds -- never paint a worker-built figure): an embedded
+      FigureCanvasQTAgg updated via set_data/blit, or a QImage->QPixmap for the heatmap. The heatmap has
+      no existing implementation -- it's a rendering choice (e.g. a blob whose position tracks x0).
+    - A long-lived streaming run monopolizes the app-wide _running guard; decide how it coexists with the
+      other sections (e.g. its own stop control).
+
 WHAT'S NEXT
   All three planned phases are done. Remaining loose ends:
     - requirements.txt does NOT pin PySide6, even though run.bat/run.sh launch a PySide6 app (spun off as
@@ -361,13 +496,20 @@ WHAT'S NEXT
     - A true INSTANT/hard cancel (QProcess subprocess) was explicitly declined — cooperative was chosen.
     - torch.save/HDF5 writes are not atomic against a cancel (narrow window; worst case a partial-but-
       valid sweep file, not corruption).
-    - Figures are static PNGs (GOTCHA #2). A "pop out interactive" button could re-plot on the MAIN thread.
-    - Still never run FOR REAL on a display: the SBI Save buttons, Validate, Infer/experimental, a full
-      FDT/CrossVal run, and a cancel DURING live NN training (only the solver-phase cancel was exercised).
+    - [DONE] Figures were static PNGs (GOTCHA #2); a "Pop out" button now re-plots on the MAIN thread.
+      See "INTERACTIVE FIGURES" above.
+    - Still never run FOR REAL on a display: the Parameter-Inference Save buttons, Validate,
+      Infer/experimental, a full FDT/CrossVal run, a cancel DURING live NN training (only the
+      solver-phase cancel was exercised), and the MAPPI nav click-through — home greeting, the four
+      buttons, the back arrow, the six inference tabs greying/un-greying, help badges (verified headless).
 
 KEY FILES
   core/gui/**                       the GUI (see layout above)
-  tests/test_gui_progress.py        13 tests: the tqdm classifier, the Qt stack, the panels
+  tests/test_gui_progress.py        46 tests: the tqdm classifier, the Qt stack, the panels, the pop-out,
+                                    the nav/gating
+  core/gui/screens/**               the MAPPI nav shell + home + section + inference screens
+  core/gui/panels/inference_tabs.py the six Parameter-Inference tabs + gating (replaced sbi_panel.py)
+  core/gui/widgets/figure_window.py the "Pop out" windows (interactive canvas + image zoom/pan)
   core/orchestrator.py              the 4 stage fns + save_*_artifacts + _emit/fig_sink
   core/cli.py                       UnitParseError, make_* cores, _SWEEP_PRESETS, _parse_cell
   core/config.py                    VALID_MODELS/VALID_LABELS, *_PATH consts, TRAINING_*,

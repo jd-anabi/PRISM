@@ -11,7 +11,7 @@ class WorkerSignals(QObject):
     log = Signal(str, str)          # (text, level in {"info","warning","error"}) -- panel-side messages
     log_batch = Signal(object)      # list[(text, level)]: one pump tick of pipeline output
     rows = Signal(object)           # tuple[vt.RowState]: ALL live progress rows (a full snapshot)
-    figure = Signal(str, object)    # (title, png_bytes) -- rendered to PNG on the worker (see base_panel)
+    figure = Signal(str, object, object)  # (title, png_bytes, fig_pickle | None) -- see base_panel._png_fig_sink
     result = Signal(object)         # the callable's return value
     error = Signal(str, str)        # (message, traceback)
     cancelled = Signal()            # the user cancelled: a stop, not a failure -- no error dialog
@@ -23,7 +23,9 @@ class Worker(QRunnable):
 
     If the callable takes a ``fig_sink`` (a ``(title, fig) -> None`` display hook), the panel injects
     one that renders the Figure to PNG bytes here on the worker thread -- a figure created off-thread
-    must never be painted by a live canvas (it deadlocks on matplotlib's global lock).
+    must never be painted by a live canvas (it deadlocks on matplotlib's global lock). It also pickles
+    the Figure (best-effort) so the panel can rebuild an interactive copy on the GUI thread (the
+    "Pop out" button); pickling never renders, so it is safe here.
 
     ``cancel`` (a streams.CancelToken) makes the pipeline's next print/redraw raise WorkerCancelled, so
     the run unwinds cooperatively.

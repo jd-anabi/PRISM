@@ -1,3 +1,10 @@
+# NOTE: this file targets the PLANNED upgrade (sbi 0.26.1 + torch 2.9.0), which is a matched pair --
+# sbi 0.25.0 requires torch<2.6.0, so the two move together. It does NOT describe the currently
+# installed/tested env, which is sbi 0.25.0 + torch 2.5.1. Installing from this file WILL upgrade both.
+# After upgrading, re-verify: (1) sbi still prints its per-epoch counter (the GUI cancel checkpoint --
+# grep sbi for _maybe_show_progress / "Epochs trained"); (2) the calibration numbers (0.26's TARP
+# changes make them non-comparable to the pre-upgrade handoff). See gui_handoff.txt (ENV NOTE).
+
 --extra-index-url https://download.pytorch.org/whl/cu130
 
 numpy==2.3.3

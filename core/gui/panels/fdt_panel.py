@@ -16,7 +16,19 @@ from core.FDT.fdt_pipeline import run_fdt
 from .base_panel import BasePanel
 from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker
+from ..widgets.help_badge import add_help_row, with_badge
 from ..widgets.labeled_inputs import FloatField, IntField
+
+HELP = {
+    "model": "Which model to analyse. FDT analysis currently supports NADROWSKI cells.",
+    "cell": "A cell file whose parameters define the system whose fluctuation-dissipation relation is tested.",
+    "n_freqs": "Number of (log-spaced) frequencies at which G(ω) and χ(ω) are evaluated.",
+    "ensemble_M": "Ensemble size: independent trajectories averaged per frequency. More reduces noise at higher cost.",
+    "freqs_per_batch": "How many frequencies to simulate per batch (a memory/speed trade-off; results are identical).",
+    "f0": "Non-dimensional forcing amplitude used to probe the susceptibility χ(ω).",
+    "skip_sanity": "Skip the passive-baseline sanity checks and go straight to the production sweep.",
+    "confirm_production": "After the sanity checks, proceed to the (long) production sweep automatically.",
+}
 
 
 def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production):
@@ -63,14 +75,14 @@ class FdtPanel(BasePanel):
         self.btn_run = QPushButton("Run FDT analysis")
         self.btn_run.clicked.connect(self._run)
 
-        form.addRow("Model", self.model_combo)
-        form.addRow("Cell", self.cell_picker)
-        form.addRow("n_freqs", self.n_freqs)
-        form.addRow("ensemble_M", self.ensemble_m)
-        form.addRow("freqs_per_batch", self.freqs_per_batch)
-        form.addRow("F0 (ND forcing amplitude)", self.f0)
-        form.addRow(self.skip_sanity)
-        form.addRow(self.confirm_production)
+        add_help_row(form, "Model", self.model_combo, HELP["model"])
+        add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
+        add_help_row(form, "n_freqs", self.n_freqs, HELP["n_freqs"])
+        add_help_row(form, "ensemble_M", self.ensemble_m, HELP["ensemble_M"])
+        add_help_row(form, "freqs_per_batch", self.freqs_per_batch, HELP["freqs_per_batch"])
+        add_help_row(form, "F0 (ND forcing amplitude)", self.f0, HELP["f0"])
+        form.addRow(with_badge(self.skip_sanity, HELP["skip_sanity"]))
+        form.addRow(with_badge(self.confirm_production, HELP["confirm_production"]))
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)

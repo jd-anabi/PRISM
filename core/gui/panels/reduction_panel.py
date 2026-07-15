@@ -16,9 +16,15 @@ from core.Reduction.sweep import run_reduction_map
 from .base_panel import BasePanel
 from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker
+from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField
 
 _MODEL = "NADROWSKI"
+
+HELP = {
+    "cell": "A cell file (Resources/Cells/nadrowski) whose parameters are reduced to a Hopf normal form.",
+    "f0": "Non-dimensional forcing amplitude F0 used in the reduction's f_max sweep (Part B).",
+}
 
 
 class ReductionPanel(BasePanel):
@@ -38,8 +44,8 @@ class ReductionPanel(BasePanel):
         self.btn_run.clicked.connect(self._run)
 
         form.addRow(QLabel(f"Model is fixed to {_MODEL} (the reduction is Nadrowski-specific)."))
-        form.addRow("Cell", self.cell_picker)
-        form.addRow("F0 (ND forcing amplitude)", self.f0)
+        add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
+        add_help_row(form, "F0 (ND forcing amplitude)", self.f0, HELP["f0"])
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)

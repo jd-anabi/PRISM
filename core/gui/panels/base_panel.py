@@ -1,6 +1,8 @@
 """Shared panel scaffolding: a left controls column and a right results area (a figure stack over a
 progress pane + log pane), plus ``dispatch()`` to run a callable on a background worker with its
 output wired to those widgets."""
+import weakref
+
 from PySide6.QtCore import QThreadPool
 from PySide6.QtWidgets import (QHBoxLayout, QMessageBox, QPushButton, QScrollArea, QSplitter,
                                QVBoxLayout, QWidget)
@@ -18,16 +20,29 @@ def _png_fig_sink(figure_signal):
     """Return a ``(title, fig) -> None`` sink that renders a matplotlib Figure to PNG bytes ON THE
     WORKER THREAD and emits them. The UI thread then shows a QPixmap -- it never paints a live canvas
     created on the worker thread, which deadlocks on matplotlib's global lock. The figure is closed
-    after rendering to free memory."""
+    after rendering to free memory.
+
+    It ALSO pickles the figure (best-effort) and ships the bytes alongside the PNG, so the panel can
+    rebuild an interactive copy on the GUI thread for the "Pop out" button (FigureStack). Pickling is
+    done here on the worker because the Figure is closed right after -- but pickling never renders
+    (it does not touch Agg's renderer lock), so it is safe, unlike painting a live canvas. A pickle
+    failure must never break the run, so it degrades to None and the pop-out falls back to the image
+    viewer; the PNG thumbnail is emitted unconditionally either way.
+    """
     def _sink(title, fig):
         import io
+        import pickle
         import matplotlib.pyplot as plt
+        try:
+            fig_pickle = pickle.dumps(fig)      # before savefig -> the pristine figure the stage built
+        except Exception:                       # noqa: BLE001 -- pop-out is optional; keep the run alive
+            fig_pickle = None
         buf = io.BytesIO()
         try:
             fig.savefig(buf, format="png", dpi=110, bbox_inches="tight")
         finally:
             plt.close(fig)
-        figure_signal.emit(title, buf.getvalue())
+        figure_signal.emit(title, buf.getvalue(), fig_pickle)
     return _sink
 
 
@@ -40,6 +55,9 @@ class BasePanel(QWidget):
     # The one live run's cancel token (there is only ever one, per _running). MainWindow.closeEvent
     # reaches it through request_cancel_all() to stop a run before quitting.
     _active_cancel: "CancelToken | None" = None
+    # Every live panel, so a run in ANY panel can lock the controls of ALL of them (see _set_busy).
+    # A WeakSet so panels torn down in tests (or a future dynamic UI) drop out without bookkeeping.
+    _instances: "weakref.WeakSet" = weakref.WeakSet()
 
     @classmethod
     def request_cancel_all(cls) -> None:
@@ -49,6 +67,7 @@ class BasePanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        BasePanel._instances.add(self)
         self._busy = False
         self._cancel: "CancelToken | None" = None
         self._workers = set()   # keep workers alive until 'finished' (else Qt purges its queued signals)
@@ -187,7 +206,13 @@ class BasePanel(QWidget):
             self.progress_pane.begin()
         else:
             self.progress_pane.end()   # authoritative: drops any row a crashed worker left behind
-        self.set_controls_enabled(not busy)
+        # Lock EVERY panel's controls while a run is live, not just this one: redirect_streams swaps
+        # sys.stdout/stderr process-wide, so another panel's ArtifactPicker refresh (which wraps
+        # list_dir in redirect_stdout) or a model combo could swallow / corrupt the running worker's
+        # stream -- the hazard set_controls_enabled documents, now spread across sibling inference tabs.
+        # Only this panel keeps its Cancel button live (it lives outside `controls`).
+        for panel in list(BasePanel._instances):
+            panel.set_controls_enabled(not busy)
 
     def set_controls_enabled(self, enabled: bool):
         """Lock the whole left-hand column while a task runs.
@@ -200,6 +225,13 @@ class BasePanel(QWidget):
         then reinstates the dead _SignalStream as the process's stdout permanently.
         """
         self.controls.setEnabled(enabled)
+        if enabled:
+            self.refresh_local_gates()   # re-apply this panel's own widget gating after a run frees it
+
+    def refresh_local_gates(self) -> None:
+        """Re-apply widget-level gating within this panel (which buttons/options are enabled). Base is a
+        no-op; the inference sub-panels override it, and an owning screen may call it after a stage
+        completes. Distinct from the tab-level greying an InferenceScreen does via setTabEnabled."""
 
     # ── persistence (subclasses override; keys are namespaced under group() by MainWindow) ──────────
     def save_settings(self, qs) -> None:
