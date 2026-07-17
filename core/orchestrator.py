@@ -346,8 +346,15 @@ def build_posterior(
     T = build_inferred_bijection(cfg)
 
     if not train_new and choice is not None:
-        posterior_latent = torch.load(str(POSTERIOR_PATH / choice), weights_only=False)
+        # map_location rehomes every stored tensor onto this machine's device, so a posterior trained
+        # on a CUDA box (e.g. a Windows GPU) loads on a CPU/MPS-only Mac instead of raising
+        # "Attempting to deserialize object on a CUDA device". sbi caches the training device in two
+        # scalar attributes it does NOT refresh on load, so repoint both: .device drives sampling and
+        # ._device drives log_prob (sbi DirectPosterior.log_prob builds tensors on ._device).
+        posterior_latent = torch.load(str(POSTERIOR_PATH / choice),
+                                      map_location=cfg.hw.device, weights_only=False)
         assert isinstance(posterior_latent, DirectPosterior)
+        posterior_latent.device = posterior_latent._device = cfg.hw.device
         # Reconstruct the exact training box (+ rotation) from the <name>.rot.pt sidecar — log-mask
         # and V are self-describing, so eval is correct regardless of the current config (single
         # source of truth shared with the offline diagnostic scripts).

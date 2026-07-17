@@ -301,7 +301,9 @@ def load_eval_bijection(cfg, choice: str, posterior_dir) -> ComposeTransform:
     rot_path = posterior_dir / (base + ".rot.pt")
     if not rot_path.exists():
         return build_inferred_bijection(cfg, log_params=[])        # legacy: linear box, no rotation
-    obj = torch.load(str(rot_path), weights_only=False)
+    # map_location rehomes the saved rotation V onto this machine's device (a CUDA-trained V loads on
+    # CPU/MPS) so the box+rotation transform runs on the same device as the posterior's samples.
+    obj = torch.load(str(rot_path), map_location=cfg.hw.device, weights_only=False)
     if isinstance(obj, dict):
         V, log_params = obj.get("V", None), obj.get("log_params", [])
     else:                                                          # legacy bare-tensor V (linear box)
