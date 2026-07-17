@@ -99,16 +99,18 @@ class BasePanel(QWidget):
         progress_layout.addWidget(self.progress_pane, 1)
         progress_layout.addWidget(self.btn_cancel)
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.addWidget(self.figure_stack, 3)
-        right_layout.addWidget(progress_row)
-        right_layout.addWidget(self.log_pane, 1)
+        # Stored as attributes so a subclass can insert its own primary view above the figure stack
+        # (e.g. SimulatePanel mounts a live pyqtgraph view here and hides the static figure stack).
+        self.right = QWidget()
+        self.right_layout = QVBoxLayout(self.right)
+        self.right_layout.setContentsMargins(0, 0, 0, 0)
+        self.right_layout.addWidget(self.figure_stack, 3)
+        self.right_layout.addWidget(progress_row)
+        self.right_layout.addWidget(self.log_pane, 1)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(controls_scroll)
-        splitter.addWidget(right)
+        splitter.addWidget(self.right)
         splitter.setStretchFactor(1, 1)
 
         outer = QHBoxLayout(self)
@@ -116,8 +118,8 @@ class BasePanel(QWidget):
         outer.addWidget(splitter)
 
     # ── background dispatch ──────────────────────────────────────────────────
-    def dispatch(self, fn, *args, provide_fig_sink: bool = False, watch_dir=None,
-                 on_result=None, on_finished=None, **kwargs):
+    def dispatch(self, fn, *args, provide_fig_sink: bool = False, provide_stream: bool = False,
+                 on_chunk=None, watch_dir=None, on_result=None, on_finished=None, **kwargs):
         """Run ``fn`` on a worker thread. Its print()s and warnings stream to the log pane and its tqdm
         bars to the progress pane; figures (when ``provide_fig_sink``) embed in the figure stack; the
         return value goes to ``on_result``.
@@ -151,6 +153,15 @@ class BasePanel(QWidget):
         self._workers.add(worker)
         if provide_fig_sink:
             worker.kwargs["fig_sink"] = _png_fig_sink(worker.signals.figure)
+        if provide_stream:
+            # A long-lived streaming runner (e.g. SimulatePanel) emits numpy frames through the `chunk`
+            # signal and polls should_stop() to unwind cooperatively -- the same injection trick as
+            # provide_fig_sink, but for a continuous stream rather than one-shot figures. should_stop is
+            # the cancel token's flag: the runner raises WorkerCancelled between frames when it flips.
+            worker.kwargs["emit_chunk"] = worker.signals.chunk.emit
+            worker.kwargs["should_stop"] = self._cancel.requested.is_set
+            if on_chunk is not None:
+                worker.signals.chunk.connect(on_chunk)
         worker.signals.log.connect(self.log_pane.append_line)
         worker.signals.log_batch.connect(self.log_pane.append_lines)
         worker.signals.log_batch.connect(lambda _b: self.progress_pane.heartbeat())

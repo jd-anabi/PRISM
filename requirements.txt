@@ -1,9 +1,12 @@
-# NOTE: this file targets the PLANNED upgrade (sbi 0.26.1 + torch 2.9.0), which is a matched pair --
-# sbi 0.25.0 requires torch<2.6.0, so the two move together. It does NOT describe the currently
-# installed/tested env, which is sbi 0.25.0 + torch 2.5.1. Installing from this file WILL upgrade both.
-# After upgrading, re-verify: (1) sbi still prints its per-epoch counter (the GUI cancel checkpoint --
-# grep sbi for _maybe_show_progress / "Epochs trained"); (2) the calibration numbers (0.26's TARP
-# changes make them non-comparable to the pre-upgrade handoff). See gui_handoff.txt (ENV NOTE).
+# Pins the clean, installable matched pair: sbi 0.26.1 + torch 2.9.0+cu130. sbi 0.25.0 declares
+# torch<2.6.0, so sbi and torch move together -- 0.26.1 is the version that pairs with torch 2.9.
+#
+# This env currently RUNS sbi 0.25.0 against torch 2.9.0+cu130 (an unofficial pair sbi 0.25 does not
+# sanction but tolerates at runtime). So `pip install -r requirements.txt` bumps ONLY sbi (0.25.0 ->
+# 0.26.1); torch is already 2.9.0+cu130. After the bump, re-verify: (1) sbi still prints its per-epoch
+# counter (the GUI cancel checkpoint -- grep sbi for _maybe_show_progress / "Epochs trained");
+# (2) the calibration numbers (0.26's TARP changes make them non-comparable to the pre-upgrade
+# handoff). See gui_handoff.txt (ENV NOTE).
 
 --extra-index-url https://download.pytorch.org/whl/cu130
 
@@ -15,8 +18,15 @@ h5py==3.15.1
 matplotlib==3.10.7
 tqdm==4.67.1
 sympy==1.14.0
-torch==2.9.0+cu130
-torchvision==0.24.0+cu130
+# OS-conditional torch/torchvision so this file installs cross-platform, not just on a CUDA box:
+#   * Windows / Linux  -> the +cu130 CUDA wheels from the extra-index-url above (matches the dev env).
+#   * macOS (Darwin)   -> the plain wheels from PyPI (CPU/MPS; no +cu130 wheel exists for macOS).
+# A CPU-ONLY Linux box that wants the smaller CPU build should instead install torch by hand from the
+# CPU index, e.g.  pip install torch==2.9.0 torchvision==0.24.0 --index-url https://download.pytorch.org/whl/cpu
+torch==2.9.0+cu130 ; platform_system != "Darwin"
+torch==2.9.0 ; platform_system == "Darwin"
+torchvision==0.24.0+cu130 ; platform_system != "Darwin"
+torchvision==0.24.0 ; platform_system == "Darwin"
 pint==0.25
 sbi==0.26.1
 antropy==0.1.9
@@ -25,3 +35,9 @@ scikit-learn==1.7.2
 corner==2.2.3
 hdbscan==0.8.41
 PySide6==6.9.3
+pyqtgraph==0.13.7
+# The Simulate section's "Save video…": GIF needs only Pillow (transitive via matplotlib); MP4 additionally
+# needs an ffmpeg binary that pip cannot supply -- in the biophys-env it comes from the conda `ffmpeg`
+# package (resolved by imageio-ffmpeg under Library\bin), NOT this wheel.
+imageio==2.37.0
+imageio-ffmpeg==0.6.0

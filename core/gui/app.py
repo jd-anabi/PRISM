@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from core import config
 
-from . import settings
+from . import settings, theming
 from .main_window import MainWindow
 
 
@@ -42,11 +42,17 @@ def build_app(argv=None):
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setOrganizationName(settings.ORG)   # both are needed for a stable QSettings store on Windows
     app.setApplicationName(settings.APP)
+    # Fusion repaints every control from the palette (the native Windows style doesn't), so a light/dark
+    # colour-scheme switch recolours consistently on Win/Mac/Linux. Theming lives here (never in
+    # MainWindow) so it stays out of the test path.
+    app.setStyle("Fusion")
+    appearance = theming.Appearance(app)
+    appearance.set_mode(settings.get_appearance(settings.settings()))   # restore the saved appearance
 
     window_ref = {}
     _install_excepthook(lambda: window_ref.get("w"))
     try:
-        window = MainWindow()
+        window = MainWindow(appearance=appearance)
     except Exception as e:                   # noqa: BLE001 -- a construction failure must still show
         box = QMessageBox(None)
         box.setIcon(QMessageBox.Critical)

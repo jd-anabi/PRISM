@@ -6,6 +6,8 @@ Parameter Inference section needs cross-tab gating over a shared session, so it 
 """
 from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 
+from ..widgets.anim import fade_in
+
 
 class SectionScreen(QWidget):
     def __init__(self, title: str, tabs, parent=None):
@@ -17,6 +19,8 @@ class SectionScreen(QWidget):
         self.tabs = QTabWidget()
         for label, panel in tabs:
             self.tabs.addTab(panel, label)
+        # Connect AFTER the loop: the first addTab already emitted currentChanged(0) mid-construction.
+        self.tabs.currentChanged.connect(lambda _i: fade_in(self.tabs.currentWidget()))
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)

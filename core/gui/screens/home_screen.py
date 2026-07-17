@@ -1,4 +1,4 @@
-"""The MAPPI home / splash screen: a time-of-day greeting and one button per section.
+"""The MAPIS home / splash screen: a time-of-day greeting and one button per section.
 
 `greeting(hour)` is a pure function (easy to unit-test); the screen calls it with the local clock's
 hour on every show, so a session left open across the day updates rather than freezing on "morning".

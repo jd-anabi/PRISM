@@ -8,6 +8,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QToolTip, QWidget
 
+from core.Helpers import labels as _labels
+
 _STYLE = (
     "QToolButton { border: 1px solid palette(mid); border-radius: 8px; color: palette(mid);"
     " font-weight: bold; font-size: 10px; padding: 0px; }"
@@ -39,18 +41,21 @@ def help_label(text: str, help_text: str) -> QWidget:
     layout = QHBoxLayout(holder)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(4)
-    layout.addWidget(QLabel(text))
+    layout.addWidget(QLabel(_labels.pretty_gui(text)))     # HTML/Unicode rich text (Qt AutoText renders it)
     layout.addWidget(HelpBadge(help_text))
     layout.addStretch(1)
     return holder
 
 
 def add_help_row(form, text: str, widget, help_text: str) -> None:
-    """``form.addRow(label + badge, widget)`` -- or a plain string label when ``help_text`` is empty."""
+    """``form.addRow(label + badge, widget)`` -- or a plain string label when ``help_text`` is empty.
+
+    Both branches route the label through ``labels.pretty_gui`` so config-option names render as Qt rich
+    text (e.g. F0 -> F<sub>0</sub>, T_a/T -> T<sub>a</sub>/T) with zero call-site churn."""
     if help_text:
         form.addRow(help_label(text, help_text), widget)
     else:
-        form.addRow(text, widget)
+        form.addRow(_labels.pretty_gui(text), widget)
 
 
 def with_badge(widget, help_text: str) -> QWidget:

@@ -171,9 +171,10 @@ CURRENT POSTERIOR / CALIBRATION STATE
             NOT the rotation (f_scale self-conc 1.00, degen-overlap 0.00 in the deployed V -- rides its own
             axis). CAUSE = the LINEAR box on a 3-decade positive scale param (bounds 1-1000, GT=10 at
             box-fraction 0.009 / latent z=-4.7; 57% of the log-uniform prior mass has |z|>3 = flat sigmoid
-            tail the fixed-knot flow mis-resolves). FIX (retrain to confirm): REPARAM_LOG_PARAMS=['f_scale']
-            -- log f_scale ONLY (keep degeneracy params LINEAR); f_scale is a RESCALE param => NO ND prior
-            rebuild (guard passes). Too mild to block the keeper; do NOT file under the degeneracy.
+            tail the fixed-knot flow mis-resolves). ATTEMPTED FIX log f_scale (REPARAM_LOG_PARAMS=['f_scale']):
+            retrained under it, but the result was WORSE (bad TARP/expected-coverage + a worse f_scale SBC
+            rank); that posterior was DELETED and the config REVERTED to [] (2026-07-16). f_scale stays a
+            mild linear-box caveat on the keeper (do NOT file under the degeneracy); log-scaling is RULED OUT.
           Do NOT oversell TARP=1.000 (at ceiling partly from the conservative/wide lean; TARP is less
             sensitive than marginal SBC). Honest claim = "no detectable overconfidence; coverage
             indistinguishable from ideal", NOT "perfectly calibrated joint".
@@ -276,8 +277,9 @@ THE FIX, PART 2 (Track A+) -- IMPLEMENTED + VALIDATED + RETRAINED (posterior_630
   Prior-rebuild rule (IMPORTANT nuance): only ND log params (k/lam/... in REPARAM_LOG_PARAMS) force an ND
   prior rebuild (build_posterior raises on nd_log_mask mismatch). RESCALE-only log params (e.g.
   ['f_scale']) do NOT -- nd_log_mask stays all-False, so the existing linear ND prior passes the guard.
-  This is why the staged f_scale fix (REPARAM_LOG_PARAMS=['f_scale']) reuses prior_forcing_no_forcing.pt
-  with no rebuild. retrain_convergence.py refuses a rotated base.
+  This is why the f_scale log attempt (REPARAM_LOG_PARAMS=['f_scale']) reused prior_forcing_no_forcing.pt
+  with no rebuild -- and, since it was reverted (see below), no rebuild was needed to go back to [] either.
+  retrain_convergence.py refuses a rotated base.
   Old 16-dim posteriors (posterior_3d/new/6302026) are now OBSOLETE -- they fail loudly (shape mismatch /
   16x16 V vs 13-dim box) against the 13-dim cell; keep for record only.
 
@@ -304,14 +306,14 @@ STEP STATUS (original handoff plan)
 WHAT'S NEXT
   - [DONE] KEEPER LOCKED: posterior_07012026 (13-dim LINEAR box + multi-point rotation) MEETS the
     calibrated-JOINT bar (conservatively; no overconfidence on any of the 13 dims). See KEEPER block + caveats.
-  - [DIAGNOSED 2026-07-12, fix pending retrain] f_scale NEW in-scope mild tilt (~1.5% under-est):
+  - [2026-07-16 TRIED -> FAILED -> REVERTED] f_scale NEW in-scope mild tilt (~1.5% under-est on the keeper):
     scripts/diagnose_fscale.py showed it is NOT the rotation (f_scale unmixed in the deployed V, self-conc
     1.00 / degen-overlap 0.00) but the LINEAR box on a 3-decade positive scale param (GT=10 at box-fraction
-    0.009 / latent z=-4.7; 57% of prior mass in the flat sigmoid tail). It is collateral of the all-linear
-    REPARAM_LOG_PARAMS=[] (the degeneracy params NEED linear; f_scale needs log). FIX: set
-    REPARAM_LOG_PARAMS=['f_scale'] (log f_scale ONLY), reuse prior_forcing_no_forcing.pt (f_scale is
-    rescale -> NO ND prior rebuild, guard passes), TRAIN-NEW, re-check (header 'log-box dims=1/13').
-    Not a correctness blocker; do before freezing the amortized reference.
+    0.009 / latent z=-4.7; 57% of prior mass in the flat sigmoid tail). The proposed fix
+    REPARAM_LOG_PARAMS=['f_scale'] (log f_scale ONLY) WAS TRAINED and came out WORSE -- bad TARP/expected-
+    coverage and a worse f_scale SBC rank -- so that posterior was deleted and config REVERTED to []
+    (all-linear). f_scale stays a mild linear-box caveat on the keeper; log-scaling is RULED OUT. With that
+    ruled out, the mild tilt is an ACCEPTED caveat (not a correctness blocker).
   - [DONE] Ruled out artifacts on posterior_6302026: the "log hurt" conclusion is REAL (not a
     rebuild/underfit artifact) but MILD (see ARTIFACTS RULED OUT).
   - Consider whether KS-at-2000 is even the right bar: on the earlier runs pooled rank hists were ~flat

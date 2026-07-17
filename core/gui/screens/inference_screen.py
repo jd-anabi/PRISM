@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      SimulatePanel, ValidatePanel)
 from ..session import SbiSession
+from ..widgets.anim import fade_in
 
 
 class InferenceScreen(QWidget):
@@ -37,6 +38,9 @@ class InferenceScreen(QWidget):
         layout.addWidget(self.tabs, 1)
 
         self.refresh_gates()
+        # Connect AFTER refresh_gates so the initial programmatic gating doesn't trigger a fade during
+        # construction; a later fall-back-to-Config re-gate will fade, which is fine (no-op under offscreen).
+        self.tabs.currentChanged.connect(lambda _i: fade_in(self.tabs.currentWidget()))
 
     def panels(self):
         return [self.config_panel, self.simulate_panel, self.prior_panel,

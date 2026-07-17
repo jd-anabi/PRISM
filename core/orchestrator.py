@@ -26,7 +26,7 @@ from .config import (
     TRAINING_STOP_AFTER_EPOCHS, TRAINING_MAX_NUM_EPOCHS, TRAINING_SHOW_SUMMARY, REPARAM_ROTATE,
 )
 from . import cli
-from .Helpers import helpers, visualizers, file_manager
+from .Helpers import helpers, visualizers, file_manager, labels
 from .SBI import embedded_network, pipeline, analysis, decorrelate
 from .SBI.Priors import sbi_prior_wrapper
 from .SBI.reparam import (
@@ -88,6 +88,8 @@ def run(cfg: SimConfig):
         visualizers.plot(
             t_dim.squeeze(0).cpu().detach().numpy(),
             x_dim[0, :].cpu().detach().numpy(),
+            title="Ground-truth trace",
+            labels=(labels.axis_label("t", "s"), labels.axis_label("x", cfg.length_unit)),
         )
         infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True)
     elif mode == "experimental":
@@ -190,9 +192,12 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
     x_dim = helpers.rescale(x_nd, x_scale, x_offset)
     x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
 
-    # Dimensional time vector for plotting (N_obs points at dt_exp spacing)
-    t_dim = torch.arange(N_obs, dtype=cfg.hw.dtype) * cfg.dt_exp + t_offset
-    t_dim = t_dim.unsqueeze(0)  # (1, N_obs)
+    # Dimensional time vector for plotting, in SECONDS (N_obs points at dt_exp spacing). t_dim is
+    # display-only (never fed to gen_stats), so converting cell-time-units -> s here makes every
+    # downstream trace plot seconds without per-site conversion.
+    s_per_cell = 1.0 / cfg.get_unit_conversion_factor("s")   # cell time unit (e.g. ms) -> seconds
+    t_dim = (torch.arange(N_obs, dtype=cfg.hw.dtype) * cfg.dt_exp + t_offset) * s_per_cell
+    t_dim = t_dim.unsqueeze(0)  # (1, N_obs), seconds
 
     # Summary statistics (A-F from spontaneous, G from forced) + conditioning vector
     obs_stats = pipeline.gen_stats(
@@ -779,6 +784,8 @@ def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | Transformed
         x_median=x_median,
         x_samples=x_dim.cpu().numpy(),
         n_show=10,
+        xlabel=labels.axis_label("t", "s"),
+        ylabel=labels.axis_label("x", cfg.length_unit),
     )
     _emit(fig_sink, "Eye test", fig)
 
@@ -893,7 +900,8 @@ def build_experiment_obs(
     forcing_vals = {name: float(forcing_t[0, cfg.forcing_idx[name]]) for name in cfg.force_params_dict}
     cfg.set_observation_context(T_obs, forcing_vals)
 
-    # Dimensional time axis + observed (forced) trajectory for the eye-test.
+    # Dimensional time axis (in SECONDS) + observed (forced) trajectory for the eye-test.
     N_obs = X_forced_batched.shape[-1]
-    t_dim = (torch.arange(N_obs, dtype=dtype) * cfg.dt_exp).unsqueeze(0)
+    s_per_cell = 1.0 / cfg.get_unit_conversion_factor("s")   # cell time unit -> seconds
+    t_dim = ((torch.arange(N_obs, dtype=dtype) * cfg.dt_exp) * s_per_cell).unsqueeze(0)
     return obs_stats, X_forced_batched, t_dim

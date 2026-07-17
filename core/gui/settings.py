@@ -44,6 +44,15 @@ def get_bool(qs: QSettings, key: str, default: bool) -> bool:
     return str(v) in ("1", "true", "True")
 
 
+def get_appearance(qs: QSettings) -> str:
+    """The persisted appearance mode ('system' | 'light' | 'dark' | 'auto'); default 'system'."""
+    return get_str(qs, "appearance/mode", "system")
+
+
+def set_appearance(qs: QSettings, mode: str) -> None:
+    set_str(qs, "appearance/mode", mode)
+
+
 def restore_field(qs: QSettings, key: str, field) -> None:
     """Restore a FloatField / IntField / PathField / QLineEdit from its saved text, if present."""
     v = qs.value(key, None)

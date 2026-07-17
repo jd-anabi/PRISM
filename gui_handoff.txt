@@ -31,11 +31,21 @@ STATUS
                      See "PHASE 3" below.
   [DONE + verified]  Interactive figures — a "Pop out" button on every figure tab (zoom/pan/save).
                      See "INTERACTIVE FIGURES" below.
-  [DONE + verified]  MAPPI redesign — home/splash screen (greeting + 4 section buttons) over a nav shell;
+  [DONE + verified]  MAPIS redesign — home/splash screen (greeting + 4 section buttons) over a nav shell;
                      SBI -> "Parameter Inference" split into six gated tabs; CrossVal moved into FDT
-                     Analysis; per-option help badges. See "MAPPI LAYOUT" below.
+                     Analysis; per-option help badges. See "MAPIS LAYOUT" below.
+  [DONE + verified]  SIMULATE section — the deferred 4th home button is now LIVE: a real-time streaming
+                     view (worker-thread chunked Euler loop -> pyqtgraph trace + top-down ellipse heatmap).
+                     See "SIMULATE SECTION" below. Headless-tested; the on-display trace/heatmap/cancel
+                     click-through still wants a human (see that section).
+  [DONE + verified]  LABELS & UNITS — every plot axis carries units (dimensional axes get real units;
+                     ND axes keep "(ND)"); variable names render in LaTeX on plots and pretty Unicode/HTML
+                     in the GUI; all trace TIME axes are seconds. See "LABELS & UNITS" below.
+  [DONE + verified]  BACKLOG B1–B5 (2026-07-16) — frame-steps tooltip; progress-pane it/s sparkline;
+                     screen/tab fade animations; settings gear + Light/Dark/Auto/Follow-system theming +
+                     a Settings/Help screen; cross-platform torch pins + hardened run.sh. See "BACKLOG".
 
-  Verified by tests/test_gui_progress.py (46 tests, all passing) plus a headless end-to-end run in
+  Verified by tests/test_gui_progress.py (63 tests, all passing) plus a headless end-to-end run in
   which the REDUCTION panel actually executed run_reduction_map, saved its PNG, and had it picked up
   into the FigureStack with a clean log. TWO adversarial-review passes found 10 real defects total (one
   prevented the GUI from launching; two were cancellation correctness bugs — the tqdm write-lock leak
@@ -214,25 +224,35 @@ GUI PACKAGE LAYOUT (core/gui/)
   __main__.py     entry (`python -m core.gui`). Forces matplotlib Agg BEFORE importing core.* (GOTCHA #3).
   app.py          build_app() -> (QApplication, MainWindow); sets config.QUIET_SEGMENT_BAR = True;
                   installs a sys.excepthook -> QMessageBox.
-  main_window.py  QMainWindow. Composes a NavShell over a Home screen + 3 section screens; always opens
-                  on Home; _all_panels()/panel(cls).                          [see MAPPI LAYOUT below]
-  screens/        nav_shell.py (MAPPI header + back arrow + QStackedWidget), home_screen.py (greeting +
+  main_window.py  QMainWindow. Composes a NavShell over a Home screen + 4 section screens (Reduction,
+                  FDT, Parameter Inference, Simulate); always opens on Home; _all_panels()/panel(cls).
+                                                                              [see MAPIS LAYOUT below]
+  screens/        nav_shell.py (MAPIS header + back arrow + QStackedWidget), home_screen.py (greeting +
                   4 buttons; greeting(hour)), section_screen.py (heading + QTabWidget), inference_screen.py
-                  (owns the SbiSession + refresh_gates truth table).          [see MAPPI LAYOUT below]
+                  (owns the SbiSession + refresh_gates truth table).          [see MAPIS LAYOUT below]
   session.py      SbiSession dataclass (cfg, inf_prior, force_prior, posterior, diagnostics,
                   posterior_latent, V) + reset_downstream().
-  worker.py       Worker(QRunnable) + WorkerSignals(log, log_batch, rows, figure, result, error, finished).
+  worker.py       Worker(QRunnable) + WorkerSignals(log, log_batch, rows, figure, chunk, result, error,
+                  cancelled, finished). `chunk`=Signal(object): one streamed numpy frame (Simulate).
   streams.py      redirect_streams(signals) + _SignalStream + _Pump.   [see PROGRESS above]
   vt.py           the tqdm chunk classifier (Qt-free).                 [see PROGRESS above]
   plot_watcher.py NewPngWatcher: polls a plot dir and emits new PNGs.  [see PHASE 2 below]
-  panels/base_panel.py    BasePanel: left controls column + right (FigureStack over ProgressPane over
-                  LogPane); dispatch(fn, *args, provide_fig_sink=, watch_dir=, on_result=, on_finished=,
-                  **kwargs). ALL panels must use this. Also _png_fig_sink().
+  panels/base_panel.py    BasePanel: left controls column + right (self.right/right_layout: FigureStack
+                  over ProgressPane over LogPane); dispatch(fn, *args, provide_fig_sink=, provide_stream=,
+                  on_chunk=, watch_dir=, on_result=, on_finished=, **kwargs). ALL panels must use this.
+                  Also _png_fig_sink(). provide_stream injects emit_chunk + should_stop for a live stream.
   panels/inference_tabs.py  the six Parameter-Inference tabs (Config/Simulate/Prior/Posterior/Validate/
                   Infer) as BasePanel subclasses over one shared session + the runners. Replaced sbi_panel.py.
   panels/fdt_panel.py       FDT form + the two gating checkboxes.
   panels/reduction_panel.py cell + F0. The fastest panel to test (pure-analytical, no simulation).
   panels/crossval_panel.py  cell + preset + S/T grids + FDT knobs.
+  panels/simulate_panel.py  SIMULATE section: model + cell + T_obs + frame/fps knobs; mounts a live view
+                  above the (hidden) figure stack; dispatch(run_simulation_stream, provide_stream=True,
+                  on_chunk=view.push).                                 [see SIMULATE SECTION below]
+  panels/simulate_runner.py worker-callable streaming runner: build_stream_config / plan_stream (pure) /
+                  frame_time_grid (pure) / run_simulation_stream.      [see SIMULATE SECTION below]
+  panels/simulate_export.py "Save video…": export_stride (pure) / export_animation (matplotlib Agg ->
+                  imageio gif/mp4) / ffmpeg_available.                 [see SIMULATE SECTION / VIDEO EXPORT]
   widgets/artifact_picker.py  ArtifactPicker(base_path, keep=, allow_new=)
   widgets/figure_stack.py     FigureStack: add_figure(title, png_bytes, fig_pickle=) / add_png(title,
                   path); per-tab "Pop out" button.                    [see INTERACTIVE FIGURES below]
@@ -240,6 +260,8 @@ GUI PACKAGE LAYOUT (core/gui/)
                   build_interactive_window (the Gcf-safe unpickle).   [see INTERACTIVE FIGURES below]
   widgets/log_pane.py         LogPane: append_line(text, level) / append_lines(batch)
   widgets/progress_pane.py    ProgressPane: begin() / set_rows(snapshot) / end()
+  widgets/live_hair_bundle.py LiveHairBundleView (pyqtgraph trace + top-down ellipse heatmap) + pure
+                  gaussian_field(cx, cy, gx, gy, sx, sy).             [see SIMULATE SECTION below]
   widgets/labeled_inputs.py   FloatField / IntField / PathField
   widgets/help_badge.py       HelpBadge("?") + add_help_row(form, label, widget, help) + with_badge(cb, help)
 
@@ -417,17 +439,17 @@ INTERACTIVE FIGURES — the "Pop out" button  (core/gui/widgets/figure_window.py
   = (title, png_bytes, fig_pickle|None). The CLI is untouched (fig_sink is None there, so no pickle).
 
 ================================================================================
-MAPPI LAYOUT  —  home screen + navigation shell  (core/gui/screens/, main_window.py)
+MAPIS LAYOUT  —  home screen + navigation shell  (core/gui/screens/, main_window.py)
 ================================================================================
-  The window no longer opens on a flat 4-tab bar. MainWindow composes a NavShell -- a persistent "MAPPI"
+  The window no longer opens on a flat 4-tab bar. MainWindow composes a NavShell -- a persistent "MAPIS"
   title in the TOP-LEFT AT ALL TIMES, a back arrow just BELOW it (hidden on Home), and a QStackedWidget --
-  over a Home/splash screen (index 0) and three section screens:
+  over a Home/splash screen (index 0) and four section screens:
 
       Home (greeting + 4 buttons)
         -> Reduction Map        SectionScreen: [ ReductionPanel ]
         -> FDT Analysis         SectionScreen: [ FdtPanel, CrossValPanel ]   (CrossVal moved here)
         -> Parameter Inference  InferenceScreen: 6 gated tabs (owns the SbiSession)
-        -> Simulate             DEFERRED: a no-op home button ("coming soon"); no screen. See below.
+        -> Simulate             SectionScreen: [ SimulatePanel ]   (now LIVE; see SIMULATE SECTION below)
 
   Navigation is two levels deep, so the back arrow always returns Home; the app ALWAYS opens on Home
   (the old window/tab persistence is dropped -- only geometry + each panel's own settings persist).
@@ -465,34 +487,266 @@ MAPPI LAYOUT  —  home screen + navigation shell  (core/gui/screens/, main_wind
        dict (DRAFT wording -- the user is reviewing it).
 
 ================================================================================
-DEFERRED — real-time "Simulate" section (the 4th home button; NOT built)
+SIMULATE SECTION — real-time streaming (the 4th home button; BUILT)
 ================================================================================
-  The Simulate home button is a placeholder. Intended feature: pick a model + cell + observation time,
-  then stream a live trace of the model's FIRST state variable and a "top-down hair bundle" heatmap
-  derived from it. Scoping (build it as a NEW thing -- nothing in the repo streams; every sim path is
-  batch-in / trajectory-out):
-    - The FIRST state variable is the hair-bundle displacement in ALL models (Nadrowski x0, Hopf x0,
-      BP/BPSteady x_hb); redimensionalize with model_helpers.rescale_x. Trace AND heatmap derive from it.
-    - Build a NEW worker-thread Euler loop: instantiate the model directly (NadrowskiModel/HopfModel/
-      BPModel), force CPU + eager Solver.euler at batch=1 (config.cpu_device notes CPU wins at small M;
-      compiled/CUDA warmup dominates at batch=1). Advance a fixed fine-step CHUNK per frame, carrying
-      x[-1] forward and RE-SLICING force per chunk (mirror simulator.py:55-66) into a ~one-T_obs ring
-      buffer -- do NOT allocate cfg.t (it can be millions of points).
-    - Minimal load path: cli._parse_cell -> make_sim_config -> cfg.inject_ground_truth ->
-      params_tensor/inits_tensor; force via pipeline.build_nondim_sin_force_tensor. The one-shot
-      reference is orchestrator.generate_observations(cfg) (too heavy to reuse for streaming).
-    - TRANSPORT: reuse the worker/dispatch rails but add a new Signal(object) carrying a numpy chunk;
-      _png_fig_sink (savefig+bbox_inches, ~50-150ms, closes the fig) is UNUSABLE at fps.
-    - RENDER ON THE GUI THREAD (GOTCHA #2 still holds -- never paint a worker-built figure): an embedded
-      FigureCanvasQTAgg updated via set_data/blit, or a QImage->QPixmap for the heatmap. The heatmap has
-      no existing implementation -- it's a rendering choice (e.g. a blob whose position tracks x0).
-    - A long-lived streaming run monopolizes the app-wide _running guard; decide how it coexists with the
-      other sections (e.g. its own stop control).
+  Pick a model + cell + observation time, press Start, and watch a live scrolling trace of the
+  hair-bundle displacement (the FIRST state variable in every model: Nadrowski x0, Hopf x0, BP/BPSteady
+  x_hb) over a top-down "hair bundle" heatmap. A worker-thread chunked Euler loop streams numpy frames to
+  a GUI-thread pyqtgraph view. Files: panels/simulate_panel.py + panels/simulate_runner.py +
+  widgets/live_hair_bundle.py. Reuses the BasePanel dispatch rails verbatim; the ONLY new transport is a
+  `chunk` signal + dispatch(provide_stream=). requirements.txt pins pyqtgraph==0.13.7.
 
+  CONFIG (simulate_runner.build_stream_config). No separate bounds pick: the bounds file is the per-model
+  SIBLING of the cell (Bounds/<model>/<cell>.txt), so build make_sim_config(sibling) + load_and_validate_gt
+  (mirrors inference_tabs._run_simulated_preview). Then cfg.hw = cpu_device().
+    !! cfg.hw = cpu_device() is REQUIRED. make_sim_config defaults hw=detect_device() (CUDA on a capable
+       box), but the batch-1 loop is CPU-optimal AND every tensor must share one device; sim.sde.force =
+       force_chunk is a bare attribute set with no .to(device), so a CUDA/CPU mix would raise mid-stream.
+
+  THE STREAMING LOOP (simulate_runner.run_simulation_stream). Does NOT reuse generate_observations (it
+  allocates the ~2.4M-point cfg.t and simulates the whole horizon at once). It mirrors the segment loop in
+  simulator.py:34-68 incrementally, driving Solver().euler DIRECTLY, one frame_steps chunk per frame:
+    - plan_stream(cfg, T_obs) is PURE: forcing_gt/rescale_gt, t_scale_gt, subsample_factor, steady_steps,
+      total_steps = steady_steps + N_obs*subsample_factor -- the SAME arithmetic as generate_observations
+      (orchestrator.py:120-133), so a streamed trace matches the pipeline's observation. Bounds a FINITE
+      stream.
+    *** THINGS THAT WILL BITE YOU ***
+     SIM1. Construct the VALID_SIMS[model] Simulator ONCE, up front, GUARDED. Its _set_up_model calls
+           exit() on a bad construction -> SystemExit, a BaseException that Worker.run does NOT catch
+           (silent worker-thread death). _make_simulator catches SystemExit -> RuntimeError so the panel
+           shows a dialog. Driving Solver().euler directly (not Simulator.simulate/__sols) also dodges
+           __sols' exit().
+     SIM2. dt CONTINUITY: a frame of m steps needs m+1 grid points (frame_time_grid) -- euler derives
+           dt=(t1-t0)/(n-1) from linspace(t0,t1,n). m points would make dt != dt_nd_min (silent timescale
+           bug). res[0] duplicates the boundary, so emit res[1:]; advance t_now by m*dt_nd exactly.
+     SIM3. torch.no_grad() around the loop is REQUIRED -- Solver().euler has no autograd guard of its own
+           (that lived in Simulator.__sols, which we bypass); an unbounded stream would leak the graph.
+     SIM4. CANCEL: dispatch injects should_stop = self._cancel.requested.is_set. The runner polls it once
+           per frame and raises WorkerCancelled BETWEEN frames -- never inside a tqdm redraw, so no tqdm
+           write-lock leak (cancel.fired stays False; reset_tqdm_lock is skipped, correctly). Reuses the
+           `cancelled` UI path. Latency ~one frame. Wall-clock-paced with time.sleep on the WORKER thread.
+     SIM5. sim.sde.force = force_chunk (bare attribute set, mirroring simulator.py:58) -- NOT sim.force=,
+           which rebuilds the whole model. Hopf auto-gets 2 force channels (build_nondim_sin_force_tensor
+           emits 2 iff "amp_y" in forcing_idx). Use sim.inits as the first curr_inits (BP-steady slices it
+           to 4). Nadrowski passes state_dep_drift=True.
+
+  TRANSPORT. worker.py adds chunk=Signal(object). base_panel.dispatch(provide_stream=True, on_chunk=)
+  injects emit_chunk=worker.signals.chunk.emit + should_stop, and connects chunk->on_chunk (copies the
+  provide_fig_sink pattern). Each emitted frame is a FRESH (k,2) [t_seconds, x_displacement] array
+  (Signal(object) marshals by reference; never reuse a buffer). t is in SECONDS (one display sample =
+  DT_EXP_S apart, unit-independent); x is redimensionalized via helpers.rescale(hb_nd, x_scale, x_offset).
+
+  RENDER (widgets/live_hair_bundle.py, GUI THREAD). GOTCHA #2 (never paint a worker-built matplotlib
+  figure) is matplotlib-specific; pyqtgraph items are GUI-owned, so on_chunk=LiveHairBundleView.push
+  updates them safely. The panel mounts the view via self.right_layout.insertWidget(0, view, 5) and hides
+  the (static) figure stack. The trace is a fixed-size ring buffer (PlotDataItem.setData); the HEATMAP is
+  an anisotropic Gaussian -- an ELLIPSE whose MAJOR axis is perpendicular to the oscillation (displacement
+  slides the blob horizontally, so sigma_perp(vertical) > sigma_par(horizontal)), over a WIDE field
+  (aspect~2.6, aspect-locked) with the center mapped into a horizontal MARGIN so it never clips at the
+  oscillation peaks. gaussian_field(cx, cy, gx, gy, sx, sy) is a pure, unit-tested function; ImageItem uses
+  fixed levels=(0,1) so there's no per-frame autoscale flicker.
+
+  VIDEO EXPORT ("Save video…", panels/simulate_export.py). The panel RECORDS each emitted (k,2) frame
+  during a run (SimulatePanel._on_chunk wraps push + append; reset in _start). "Save video…" (enabled once
+  a recording exists, gated in refresh_local_gates) opens a QFileDialog (.mp4/.gif) and dispatches
+  export_animation on the worker. It is a RE-RENDER, not a screen-grab: the live stream emits only a few
+  coarse chunks, so the exporter sweeps the fine display series with export_stride(1/DT_EXP_S, video_fps)
+  and renders each video frame with a matplotlib Agg Figure+FigureCanvasAgg (no pyplot -- Agg is
+  worker-safe; GOTCHA #2 only bans a LIVE canvas) mirroring the live view (trace + imshow(field.T,
+  origin='lower') -- pyqtgraph is col-major, so imshow needs the transpose). Frames stream to imageio
+  (.gif via Pillow; .mp4 via imageio-ffmpeg -> conda ffmpeg in Library\bin, NOT on PATH, NOT in the wheel).
+   *** THINGS THAT WILL BITE YOU ***
+    V1. buffer_rgba()[...,:3] is a NON-contiguous view (tostring_rgb is gone in mpl 3.10); wrap in
+        np.ascontiguousarray + crop to even dims (H.264). figsize=(6.4,4.8)@dpi100 = 640x480 (even, /16).
+    V2. Cancel rides the per-frame tqdm redraw (the existing write() checkpoint) -- NOT provide_stream.
+        Partial-file cleanup is in a finally (ok flag; WorkerCancelled is a BaseException), and writer.close
+        is itself guarded (closing a 0-frame writer can raise). requirements pins imageio + imageio-ffmpeg.
+    V3. GIF duration is MILLISECONDS (Pillow, imageio>=2.28): duration=1000/video_fps. MP4 needs ffmpeg --
+        the panel pre-checks simulate_export.ffmpeg_available() on the GUI thread and shows _config_error
+        if absent, rather than dispatching a doomed job.
+    V4. OMP: importing imageio AFTER torch/pyqtgraph is fine; imageio is imported LAZILY (inside the
+        writer) so app start never loads it. Do NOT import imageio before torch (a second libiomp5md ->
+        OMP Error #15 abort). The tests import simulate_export (torch) before touching imageio.
+
+  APP-WIDE LOCK. A stream holds BasePanel._running (redirect_streams is process-wide) for its whole life,
+  so ALL panels' controls lock until it ends or is Cancelled -- accepted (the stream is finite + paced,
+  and Cancel stays live outside `controls`). Documented: the app is single-task while streaming.
+
+  NOT yet exercised on a real display (ask before assuming): the trace scrolling + the ellipse heatmap
+  tracking displacement without clipping; a mid-stream Cancel; Hopf (2 force channels) and BP (5 states)
+  running without shape errors. Headless tests (tests/test_gui_progress.py) cover plan_stream arithmetic,
+  frame_time_grid dt-continuity, the gaussian_field ellipse orientation + heatmap margin, the chunk-signal
+  injection + cancel, nav wiring, and QSettings round-trip.
+
+================================================================================
+LABELS & UNITS  (core/Helpers/labels.py + config.py + plot sites)
+================================================================================
+  GOAL: every plot axis carries units, and variable names render prettily. Renderers differ by audience:
+    PLOTS (matplotlib) use true LaTeX ($...$); the Qt GUI can't render LaTeX in a QLabel, so config-option
+    labels use Qt rich text (Unicode Greek + <sub>/<sup>; AutoText renders it, no color -> dark-mode safe).
+
+  core/Helpers/labels.py is the single source of truth (pure strings; imports nothing from the project,
+  so config.py + gui/widgets/help_badge.py import it without a cycle):
+    - axis_label(sym, unit=None) -> "$sym$ (unit)" / "$sym$ (ND)"; rescale_axis_label(name, *units) for the
+      corner/SBC/PPC rescale labels; SWEEP_LATEX.
+    - pretty_gui(text) -> Qt HTML via an EXPLICIT dict keyed on the exact panel label strings (grep
+      add_help_row to keep in sync); gui_forcing_label(name, unit) for the dynamic Infer forcing rows.
+
+  UNITS are cell-declared (Resources/Units/<model>/units.txt: nm ms pN Hz; BP only nm ms). SimConfig gained
+  cached length_unit/time_unit/force_unit/freq_unit that resolve a units_dict token by pint DIMENSIONALITY
+  (units_dict is set-derived/UNORDERED -- never index it). BP returns None for force/freq (it has no
+  rescale/forcing block, so inferred_labels never needs them).
+
+   *** THINGS THAT WILL BITE YOU ***
+    L1. TIME axes are SECONDS everywhere. t_dim is display-only; it is converted cell-time-unit -> s AT THE
+        SOURCE (orchestrator.generate_observations + build_experiment_obs, x 1/get_unit_conversion_factor("s")),
+        so the CLI GT trace, eye-test, and both GUI GT-trace runners are seconds with no per-site conversion.
+        Do NOT relabel the t_scale PARAM axis to s -- t_scale plots a value in ms/ND; seconds is only the
+        trace time axis.
+    L2. SimConfig.inferred_labels now returns LaTeX (ND params + rescale_axis_label(...) e.g.
+        "$x_{\mathrm{scale}}$ (nm/ND)"). Consumers (pairplot / sbc_rank_plot / plot_ppc) render mathtext fine.
+        The SBC console print (orchestrator.py:586) shows the raw $...$ -- cosmetic, left as-is.
+    L3. pyqtgraph live view: the displacement axis unit goes in the LABEL TEXT ("x (nm)"), NOT setLabel(units=)
+        -- pyqtgraph SI-prefixes a units= string and would mangle "nm". Time keeps units="s" (SI-prefix to ms/µs
+        is wanted). SimulatePanel.set_displacement_unit(cfg.length_unit) on _start; export gets x_unit=.
+    L4. Most plots are ND (FDT T_eff/T, G/χ(ω̃), SBC/loss/z-scores) and already say "(ND)"/normalized -- they
+        are dimensionless and are LEFT alone. Only the dimensional trace axes (t->s, x->nm) needed units.
+
+================================================================================
+BACKLOG — REQUESTED UI/UX FEATURES  (B1–B5 ALL IMPLEMENTED + verified 2026-07-16)
+================================================================================
+  Five UI/UX features the user requested. ALL FIVE now shipped (the 63-test suite stays green; each was
+  exercised headlessly incl. a full build_app() under the `minimal` QPA platform). The per-item notes
+  below keep the original scoping AND record what shipped + the gotchas honoured. Grounded against the
+  current code (PySide6 6.9.3 / Qt 6.9).
+
+  SHIPPED SUMMARY (2026-07-16):
+    B1  core/gui/panels/simulate_panel.py: HELP["frame"] reworded (plain language) + label "Frame steps"
+        -> "Steps / frame". labels.py passthrough comment synced. (No test asserts the strings.)
+    B2  core/gui/widgets/progress_pane.py: NEW _Sparkline widget (log-scale it/s trend, palette colours,
+        gap-aware) mounted next to solver_label; sampled once per 100ms _tick via _sample_rate(); overall
+        bar now shows %p%. The WHOLE test contract preserved (plus_meter/format_rate, solver_label text
+        "++++ (13.3k it/s)", attrs, methods, constants) -- plus_meter kept, just visually secondary.
+    B3  core/gui/widgets/anim.py NEW fade_in(widget, ms=150): QGraphicsOpacityEffect + QPropertyAnimation,
+        strong-ref'd (parented) + effect removed on finished + SKIPPED under offscreen. Wired into
+        nav_shell.go_home/go_to (after the synchronous setCurrentIndex) and QTabWidget.currentChanged in
+        section_screen + inference_screen (connected AFTER the tab loop / initial refresh_gates).
+    B4  Theming + gear + Settings/Help. NEW core/gui/theming.py (Appearance: system/light/dark/auto via
+        styleHints().setColorScheme; auto has its OWN day/night threshold + a 1-min QTimer). app.build_app
+        sets Fusion + restores the saved mode (theming lives ONLY in build_app, never MainWindow -> out of
+        the test path). settings.py get/set_appearance ("appearance/mode"). Gear QToolButton in nav_shell's
+        bottom-left seam (menu attached by MainWindow: QActionGroup of the 4 modes + "Full settings…").
+        NEW core/gui/screens/settings_screen.py (appearance radios + Help built from the 5 panel module
+        docstrings + their HELP dicts), added via nav.add_screen (index 5). Back arrow still returns Home.
+        THEMING-REACH NOTE: the Qt chrome recolours cleanly; the pyqtgraph live view (inferno LUT) and
+        matplotlib figures/PNGs are LEFT on their own scientific colours in every theme (documented gap).
+    B5  requirements.txt torch/torchvision now OS-conditional (+cu130 off Darwin, plain wheels on macOS).
+        run.sh hardened (python3 + exec + quoted paths + LF). config.py _ROOT gained a __file__ fallback.
+        See "RUNNING ON MAC / LINUX" below.
+
+  ORIGINAL SCOPING (kept for the record; each item's gotchas were honoured as noted above):
+
+  B1. CLEARER "Frame steps" TOOLTIP (Simulate). simulate_panel.py HELP["frame"] currently reads "Fine
+      integration steps advanced per rendered frame. Larger = faster playback, heavier per-frame compute
+      (snapped to a whole number of samples)." -- the user finds it unclear. Rewrite in plain language:
+      it controls HOW FAR THE SIMULATION JUMPS PER ON-SCREEN FRAME -> bigger = faster but choppier
+      playback + more compute per frame; smaller = smoother but slower. (frame_steps is snapped to a whole
+      number of display samples in simulate_runner.run_simulation_stream.) Optionally rename the field
+      label ("Steps / frame", or reframe as a "Playback speed" control). Trivial, self-contained.
+
+  B2. SLICKER PROGRESS BAR + a better SOLVER-PERFORMANCE indicator (app-wide). Redesign
+      core/gui/widgets/progress_pane.py -- it is used by EVERY panel via BasePanel, so this improves all
+      of them. Goals: a cleaner overall bar + per-bar rows, and replace the '+'-sign solver readout
+      (plus_meter -> "Solver Performance: ++++  (13.3k it/s)") with something clearer -- e.g. a live it/s
+      SPARKLINE, an animated RATE GAUGE, or a labelled mini-bar.
+       *** PRESERVE THE CONTRACT (or update the tests) ***
+        - Public API: begin() / end() / heartbeat() / set_rows(tuple[vt.RowState]).
+        - Pure helpers plus_meter(rate) / format_rate(rate) (unit-tested signatures).
+        - _retarget drives the overall bar from the deepest INFORMATIVE non-solver row (the solver bar is
+          deliberately excluded -- it would sweep 0->100% every second). Keep that.
+        - Idle/stall behaviour: SOLVER_IDLE_S / STALL_S (hold the last rate, then "— (idle)"; freeze the
+          spinner + "no output for Ns" after a stall).
+        - The anti-jitter QSizePolicy pinning on the row labels (labels must not updateGeometry per frame).
+        - tests/test_gui_progress.py (~385-454) pokes attributes DIRECTLY: overall, solver_strip,
+          solver_label, spinner, _rows, _rate_at, _beat_at -- keep them or rewrite those tests.
+
+  B3. SLICK SCREEN/TAB TRANSITION ANIMATIONS. Add a fade (or slide) when navigating. ONE seam covers all
+      screen changes: NavShell.go_to/go_home both call self.stack.setCurrentIndex (nav_shell.py) -- wrap
+      it to animate. Tab changes: connect QTabWidget.currentChanged in section_screen.py + inference_screen.py
+      (no hookup today). Use QPropertyAnimation + QGraphicsOpacityEffect (opacity) or an offset pos slide.
+       *** GOTCHA -- offscreen tests assert SYNCHRONOUS state ***
+        The suite runs under QT_QPA_PLATFORM=offscreen and asserts state right after the call
+        (test_main_window_always_opens_on_home: stack.currentIndex()==0 immediately; inference_screen
+        .refresh_gates() programmatically setCurrentIndex(0) when the visible tab is disabled). So change
+        the index IMMEDIATELY and animate only the visuals, with a zero/short-duration path under offscreen
+        (or finish the animation synchronously). Keep it subtle/fast; don't block the app-wide run lock.
+
+  B4. SETTINGS GEAR (bottom-left) -> quick-appearance popover + a full SETTINGS SCREEN (Help).
+      - MOUNT a persistent settings QToolButton at the bottom-left of NavShell -- its `outer` VBox
+        (nav_shell.py, after `outer.addWidget(self.stack, 1)`) has an empty seam; add the button there so
+        it shows on every screen.
+      - QUICK-SETTINGS POPOVER (a small frameless popup, or an anchored QMenu): APPEARANCE mode --
+        Light / Dark / Auto (time-of-day) / Follow system (exclusive) -- plus a "Full settings…" button.
+      - THEMING (green field -- none today). The ONLY colour-bearing stylesheet is help_badge.py's
+        palette(mid)/palette(highlight); everything else uses the default style's palette with no hardcoded
+        colours, so a scheme switch recolours the WHOLE app with NO widget edits. Qt 6.9 supports it:
+          * FORCE:  QApplication.instance().styleHints().setColorScheme(Qt.ColorScheme.Light|Dark)  (Qt 6.8+)
+          * FOLLOW OS: read styleHints().colorScheme() + subscribe colorSchemeChanged; leave scheme Unknown.
+          * AUTO (time-of-day): app logic on top of setColorScheme (reuse the home_screen.greeting(hour)
+            time pattern for the day/night threshold).
+        Call QApplication.setStyle("Fusion") in app.build_app() for CONSISTENT light/dark on Win/Mac/Linux
+        (native Windows style doesn't fully repaint every control from the palette). PERSIST the choice in
+        QSettings (settings.py; a "theme" key via set_str/get_str) and APPLY IT AT STARTUP (app.build_app or
+        MainWindow.__init__) -- unlike nav state (deliberately not persisted), theme SHOULD be restored.
+      - FULL SETTINGS SCREEN: a new nav screen (nav.add_screen + a _section_index entry, reached from the
+        popover's "Full settings…" and the back arrow) that FOR NOW contains only a HELP screen describing
+        each part of the app in detail. Source material: the panel MODULE DOCSTRINGS (good per-section prose)
+        + the per-control HELP dicts (fdt/reduction/crossval/inference_tabs/simulate). There is NO
+        section-level "what is this for" help today -- that gap is exactly what the Help screen fills.
+      - GOTCHA: keep the popover/screen construction test-safe under offscreen.
+
+  B5. CROSS-PLATFORM (Windows/Mac/Linux) + run.sh. The app CODE is already portable -- all paths use
+      pathlib/os.sep (no drive letters/backslash literals); QSettings is IniFormat/UserScope; detect_device()
+      handles CUDA/MPS/CPU; matplotlib is Agg; mp4 export uses imageio-ffmpeg's per-platform bundled binary
+      (GIF never needs ffmpeg). Targets:
+        - TOP BLOCKER -- requirements.txt pins torch==2.9.0+cu130 / torchvision==0.24.0+cu130 +
+          `--extra-index-url .../cu130`. Those CUDA-only wheels WON'T install on macOS (and a CPU-only Linux
+          box needs CPU wheels). Make the torch pins OS-CONDITIONAL (PEP 508 markers, e.g. +cu130 when
+          platform_system!="Darwin", plain torch on Darwin) or split requirements-{cuda,cpu,mac}.txt.
+        - run.sh already cds to the repo root (SCRIPT_DIR) + runs `python -m core.gui`. HARDEN: prefer
+          `python3` (bare `python` may be py2/absent), optionally activate the conda/venv env, use
+          `exec python -m core.gui`, and ensure LF line endings + the executable bit (chmod +x) for Mac/Linux.
+          run.bat stays for Windows.
+        - LAUNCH-FROM-ROOT: config.py `_ROOT = Path(os.getcwd())/"Resources"` is cwd-relative -- the run
+          scripts already guarantee it; optionally anchor to Path(__file__) for robustness (note only).
+        - Add a short "Running on Mac/Linux" note (launch from repo root; which requirements per OS; mp4 is
+          covered by the imageio-ffmpeg wheel -- the "conda ffmpeg in Library\bin" note is Windows-specific).
+
+================================================================================
+RUNNING ON MAC / LINUX  (B5 shipped 2026-07-16)
+================================================================================
+  - Launch from the REPO ROOT. ./run.sh cds there for you (config.py builds Resources/ paths from the cwd;
+    a __file__ fallback now covers a wrong-cwd launch, but the run scripts are still the supported path).
+    First time on a fresh clone: `chmod +x run.sh` (git may not carry the exec bit from a Windows commit).
+  - DEPENDENCIES: `pip install -r requirements.txt` is now cross-platform. torch/torchvision are
+    OS-conditional -- macOS (Darwin) pulls the plain CPU/MPS wheels from PyPI; Windows/Linux pull the
+    +cu130 CUDA wheels from the --extra-index-url. A CPU-ONLY Linux box that wants the smaller CPU build
+    should install torch by hand from the CPU index (see the comment above the torch pins in requirements.txt).
+  - VIDEO EXPORT (Simulate "Save video…"): GIF works everywhere (Pillow). MP4 needs an ffmpeg binary; on
+    Mac/Linux the imageio-ffmpeg wheel bundles its own per-platform binary, so no conda ffmpeg is needed
+    (the "conda ffmpeg in Library\bin" note elsewhere is Windows-env-specific).
+  - APPEARANCE: Fusion + palette-driven theming means Light/Dark/Auto/Follow-system all work on Mac/Linux
+    too (gear, bottom-left). "Follow system" tracks the OS light/dark setting.
+
+================================================================================
 WHAT'S NEXT
-  All three planned phases are done. Remaining loose ends:
+  All planned phases + the Simulate section are done. Remaining loose ends:
+    - [DONE 2026-07-16] All five requested UI/UX features (B1 frame-steps tooltip, B2 slicker progress bar
+      + it/s sparkline, B3 screen/tab fade animations, B4 settings gear + theming + Settings/Help screen,
+      B5 cross-platform torch pins + run.sh). See "BACKLOG" above for the shipped-summary + per-item notes.
+    - [DONE] The Simulate section (4th home button) is built. See "SIMULATE SECTION" above.
     - requirements.txt does NOT pin PySide6, even though run.bat/run.sh launch a PySide6 app (spun off as
-      its own task).
+      its own task). (pyqtgraph IS now pinned.)
     - A true INSTANT/hard cancel (QProcess subprocess) was explicitly declined — cooperative was chosen.
     - torch.save/HDF5 writes are not atomic against a cancel (narrow window; worst case a partial-but-
       valid sweep file, not corruption).
@@ -500,15 +754,22 @@ WHAT'S NEXT
       See "INTERACTIVE FIGURES" above.
     - Still never run FOR REAL on a display: the Parameter-Inference Save buttons, Validate,
       Infer/experimental, a full FDT/CrossVal run, a cancel DURING live NN training (only the
-      solver-phase cancel was exercised), and the MAPPI nav click-through — home greeting, the four
-      buttons, the back arrow, the six inference tabs greying/un-greying, help badges (verified headless).
+      solver-phase cancel was exercised), the MAPIS nav click-through — home greeting, the four
+      buttons, the back arrow, the six inference tabs greying/un-greying, help badges (verified headless);
+      and the SIMULATE section — trace scroll + ellipse heatmap tracking displacement without clipping,
+      mid-stream Cancel, Hopf/BP shapes (see "SIMULATE SECTION" above).
 
 KEY FILES
   core/gui/**                       the GUI (see layout above)
-  tests/test_gui_progress.py        46 tests: the tqdm classifier, the Qt stack, the panels, the pop-out,
-                                    the nav/gating
-  core/gui/screens/**               the MAPPI nav shell + home + section + inference screens
+  tests/test_gui_progress.py        63 tests: the tqdm classifier, the Qt stack, the panels, the pop-out,
+                                    the nav/gating, the Simulate stream/heatmap + video export, labels/units
+  core/Helpers/labels.py            single source of truth for plot LaTeX symbols + units and the GUI's
+                                    pretty Unicode/HTML labels.                 [see LABELS & UNITS below]
+  core/gui/screens/**               the MAPIS nav shell + home + section + inference screens
   core/gui/panels/inference_tabs.py the six Parameter-Inference tabs + gating (replaced sbi_panel.py)
+  core/gui/panels/simulate_panel.py + simulate_runner.py + simulate_export.py + widgets/live_hair_bundle.py
+                                    the SIMULATE section (chunked-Euler stream -> pyqtgraph trace + ellipse
+                                    heatmap; "Save video…" re-renders to gif/mp4)
   core/gui/widgets/figure_window.py the "Pop out" windows (interactive canvas + image zoom/pan)
   core/orchestrator.py              the 4 stage fns + save_*_artifacts + _emit/fig_sink
   core/cli.py                       UnitParseError, make_* cores, _SWEEP_PRESETS, _parse_cell

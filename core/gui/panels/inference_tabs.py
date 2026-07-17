@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, Q
                                QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
 from core import cli, orchestrator
-from core.Helpers import file_manager, visualizers
+from core.Helpers import file_manager, labels, visualizers
 from core.config import (VALID_MODELS, VALID_LABELS, BOUNDS_PATH, CELL_PATH, PRIOR_PATH,
                          POSTERIOR_PATH, T_MIN_EXP_S)
 
@@ -57,7 +57,9 @@ def _run_simulated_preview(cfg, cell_path, T_obs_s, *, fig_sink=None):
     cfg.T_obs = T_obs_s * cfg.get_unit_conversion_factor("s")
     x_dim, _obs_stats, t_dim = orchestrator.generate_observations(cfg)
     visualizers.plot(t_dim.squeeze(0).cpu().detach().numpy(), x_dim[0, :].cpu().detach().numpy(),
-                     title="Ground-truth trace", labels=("t", "x"), sink=fig_sink)
+                     title="Ground-truth trace",
+                     labels=(labels.axis_label("t", "s"), labels.axis_label("x", cfg.length_unit)),
+                     sink=fig_sink)
 
 
 def _run_simulated_inference(cfg, posterior, cell_path, T_obs_s, *, fig_sink=None):
@@ -66,7 +68,9 @@ def _run_simulated_inference(cfg, posterior, cell_path, T_obs_s, *, fig_sink=Non
     cfg.T_obs = T_obs_s * cfg.get_unit_conversion_factor("s")
     x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
     visualizers.plot(t_dim.squeeze(0).cpu().detach().numpy(), x_dim[0, :].cpu().detach().numpy(),
-                     title="Ground-truth trace", labels=("t", "x"), sink=fig_sink)
+                     title="Ground-truth trace",
+                     labels=(labels.axis_label("t", "s"), labels.axis_label("x", cfg.length_unit)),
+                     sink=fig_sink)
     orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True, fig_sink=fig_sink)
 
 
@@ -444,7 +448,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             unit = cli._INFERENCE_PROMPT_UNITS.get(name, "")
             fld = FloatField(0.0)
             self._forcing_fields[name] = fld
-            add_help_row(self.exp_form, f"{name}{f' ({unit})' if unit else ''}", fld, HELP["forcing"])
+            add_help_row(self.exp_form, labels.gui_forcing_label(name, unit), fld, HELP["forcing"])
 
     def _infer(self):
         cfg, post = self.session.cfg, self.session.posterior

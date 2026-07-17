@@ -153,7 +153,8 @@ def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = N
 def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray,
                            x_mean: np.ndarray = None, x_median: np.ndarray = None,
                            x_samples: np.ndarray = None, n_show: int = 10,
-                           fig_size: tuple = (14, 5)) -> plt.Figure:
+                           fig_size: tuple = (14, 5),
+                           xlabel: str = r"$t$ (s)", ylabel: str = r"$x$ (nm)") -> plt.Figure:
     """
     Overlay posterior-simulated trajectories on top of ground truth data.
 
@@ -187,8 +188,8 @@ def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray,
     if x_mean is not None:
         ax.plot(t, x_mean, color='darkorange', linewidth=1.0, linestyle='-.', label='Posterior mean')
 
-    ax.set_xlabel('Time')
-    ax.set_ylabel('x(t)')
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.set_title('Posterior vs Ground Truth')
     ax.legend()
     plt.tight_layout()

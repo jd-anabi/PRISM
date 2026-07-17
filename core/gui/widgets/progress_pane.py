@@ -20,8 +20,10 @@ fixed line instead, whose rate is HELD across the gaps between bars.
 """
 import math
 import time
+from collections import deque
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QPointF, Qt, QTimer
+from PySide6.QtGui import QPainter, QPalette, QPen
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QProgressBar, QSizePolicy, QVBoxLayout, QWidget)
 
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -58,6 +60,78 @@ def format_rate(rate: float | None) -> str:
     if rate >= 10:
         return f"{rate:.0f} it/s"
     return f"{rate:.1f} it/s"
+
+
+class _Sparkline(QWidget):
+    """A tiny live trend line of the SDE solver's throughput -- the primary at-a-glance solver readout.
+
+    Fed one sample per 100 ms tick with the HELD solver rate; ``None`` marks a gap (the solver is idle or
+    the run has stalled), which breaks the line so a pause reads as a pause rather than a flat crawl. Drawn
+    on a log10 scale, so a 10 it/s -> 10k it/s ramp is a gentle slope, not a cliff. Colours come from the
+    palette (Highlight for the trace, Mid for the baseline), so it reads correctly in light and dark.
+    """
+
+    def __init__(self, capacity: int = 64, parent=None):
+        super().__init__(parent)
+        self._capacity = capacity
+        self._samples: deque = deque([None] * capacity, maxlen=capacity)
+        self.setFixedSize(88, 18)
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.setToolTip("Recent SDE solver throughput (log it/s)")
+
+    def push(self, rate) -> None:
+        """Append one sample (a positive it/s, or None for a gap) and repaint just this widget."""
+        self._samples.append(rate if (rate is not None and rate > 0) else None)
+        self.update()
+
+    def clear(self) -> None:
+        self._samples = deque([None] * self._capacity, maxlen=self._capacity)
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        vals = list(self._samples)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+
+        pad = 2.0
+        mid_y = h - pad
+        # A baseline so an all-gap (idle) sparkline still reads as "present, nothing to show".
+        p.setPen(QPen(self.palette().color(QPalette.Mid), 1.0))
+        p.drawLine(QPointF(pad, mid_y), QPointF(w - pad, mid_y))
+
+        finite = [v for v in vals if v is not None]
+        if len(finite) < 2:
+            p.end()
+            return
+
+        logs = [math.log10(v) for v in finite]
+        lo, hi = min(logs), max(logs)
+        span = hi - lo
+        n = len(vals)
+        plot_w = w - 2 * pad
+        plot_h = h - 2 * pad
+
+        def point(i: int, v: float) -> QPointF:
+            x = pad + plot_w * (i / (n - 1))
+            frac = 0.5 if span < 1e-9 else (math.log10(v) - lo) / span
+            return QPointF(x, pad + plot_h * (1.0 - frac))
+
+        pen = QPen(self.palette().color(QPalette.Highlight))
+        pen.setWidthF(1.5)
+        p.setPen(pen)
+        prev = None                                  # break the polyline across None gaps
+        for i, v in enumerate(vals):
+            if v is None:
+                prev = None
+                continue
+            cur = point(i, v)
+            if prev is not None:
+                p.drawLine(prev, cur)
+            prev = cur
+        p.end()
 
 
 class _BarRow(QWidget):
@@ -108,6 +182,10 @@ class ProgressPane(QWidget):
         self.solver_label.setTextFormat(Qt.PlainText)
         self.solver_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
+        # The sparkline is the primary at-a-glance readout; the '+'-meter in solver_label is kept as a
+        # compact secondary. Must be constructed before _reset_solver() below (it clears the sparkline).
+        self.sparkline = _Sparkline()
+
         self.solver_strip = QProgressBar()
         self.solver_strip.setTextVisible(False)
         self.solver_strip.setFixedHeight(8)
@@ -118,11 +196,15 @@ class ProgressPane(QWidget):
         solver_layout.setContentsMargins(0, 0, 0, 0)
         solver_layout.setSpacing(8)
         solver_layout.addWidget(self.solver_label)
+        solver_layout.addWidget(self.sparkline)
         solver_layout.addWidget(self.solver_strip, 1)
 
         # ── overall bar + spinner ───────────────────────────────────────────
         self.overall = QProgressBar()
         self.overall.setRange(0, 0)              # indeterminate until something reports a percentage
+        self.overall.setTextVisible(True)        # show the top-level % right on the bar
+        self.overall.setFormat("%p%")
+        self.overall.setMinimumHeight(18)
 
         self.spinner = QLabel()
         self.spinner.setTextFormat(Qt.PlainText)
@@ -211,6 +293,7 @@ class ProgressPane(QWidget):
         self.solver_strip.setRange(0, 100)
         self.solver_strip.setValue(0)
         self.solver_strip.setVisible(False)
+        self.sparkline.clear()
         self._paint_solver()
 
     def _update_solver(self, solver) -> None:
@@ -245,10 +328,19 @@ class ProgressPane(QWidget):
             # Freeze the spinner rather than animate it. A spinner that keeps twirling on a wedged run
             # is worse than none: it actively asserts progress that is not happening.
             self.spinner.setText(f"⏳ no output for {int(idle)}s")
+            self.sparkline.push(None)                # and drain the trend line: nothing is happening
             return
         self._frame = (self._frame + 1) % len(_SPINNER)
         self.spinner.setText(_SPINNER[self._frame])
         self._paint_solver()                         # re-evaluate the solver's own idle timeout
+        self._sample_rate()                          # feed the sparkline on the same 100ms cadence
+
+    def _sample_rate(self) -> None:
+        """Feed the sparkline the current HELD solver rate -- None once it has gone stale, i.e. a gap."""
+        rate = self._rate
+        if rate is not None and time.monotonic() - self._rate_at > SOLVER_IDLE_S:
+            rate = None
+        self.sparkline.push(rate)
 
     def _retarget(self, rows) -> None:
         """Drive the overall bar from the DEEPEST live row that reports an informative percentage.

@@ -1,18 +1,20 @@
-"""The MAPPI navigation shell: a persistent top-left title + back arrow over a stack of screens.
+"""The MAPIS navigation shell: a persistent top-left title + back arrow over a stack of screens.
 
 Navigation is two levels deep -- a Home/splash screen (index 0) and the section screens -- so the back
-arrow always returns Home. The "MAPPI" title stays in the top-left AT ALL TIMES; the back arrow sits
+arrow always returns Home. The "MAPIS" title stays in the top-left AT ALL TIMES; the back arrow sits
 just below it and is hidden on Home.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QStackedWidget, QToolButton, QVBoxLayout, QWidget
+
+from ..widgets.anim import fade_in
 
 
 class NavShell(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.title = QLabel("MAPPI")
+        self.title = QLabel("MAPIS")
         self.title.setStyleSheet("font-size: 20px; font-weight: bold;")
 
         self.btn_back = QToolButton()
@@ -35,22 +37,38 @@ class NavShell(QWidget):
 
         self.stack = QStackedWidget()
 
+        # A persistent settings gear in the bottom-left seam (shown on every screen). Its menu is
+        # attached by MainWindow (which knows the appearance controller + the Settings screen index).
+        self.btn_settings = QToolButton()
+        self.btn_settings.setText("⚙")
+        self.btn_settings.setToolTip("Appearance & settings")
+        self.btn_settings.setAutoRaise(True)
+        self.btn_settings.setStyleSheet("font-size: 18px;")
+        self.btn_settings.setPopupMode(QToolButton.InstantPopup)
+
+        settings_row = QHBoxLayout()
+        settings_row.addWidget(self.btn_settings)
+        settings_row.addStretch(1)
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 8, 10, 10)
         outer.addLayout(header_row)
         outer.addWidget(self.stack, 1)
+        outer.addLayout(settings_row)
 
     def add_screen(self, widget) -> int:
         """Append a screen; the first one added (index 0) is Home."""
         return self.stack.addWidget(widget)
 
     def go_home(self) -> None:
-        self.stack.setCurrentIndex(0)
+        self.stack.setCurrentIndex(0)          # logical state first (tests read it synchronously)
         self._sync_back()
+        fade_in(self.stack.currentWidget())    # then fade the newly-shown screen (no-op under offscreen)
 
     def go_to(self, index: int) -> None:
         self.stack.setCurrentIndex(index)
         self._sync_back()
+        fade_in(self.stack.currentWidget())
 
     def _sync_back(self) -> None:
         self.btn_back.setVisible(self.stack.currentIndex() != 0)

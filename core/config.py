@@ -55,7 +55,12 @@ def cpu_device() -> DeviceConfig:
     return DeviceConfig(device=torch.device("cpu"), dtype=torch.float32, batch_size=2 ** 6)
 
 # === PATHS ===
+# Resources live at <repo-root>/Resources. The run scripts (run.bat/run.sh) cd to the repo root, so the
+# cwd-relative form is correct in normal use; the __file__ fallback keeps paths valid if the app is ever
+# launched from another directory (config.py is core/config.py, so parent.parent is the repo root).
 _ROOT = Path(os.getcwd()) / "Resources"
+if not _ROOT.exists():
+    _ROOT = Path(__file__).resolve().parent.parent / "Resources"
 CELL_PATH    = _ROOT / "Cells"
 BOUNDS_PATH  = _ROOT / "Bounds"
 UNITS_PATH   = _ROOT / "Units"
@@ -147,14 +152,16 @@ REPARAM_FISHER_POINTS = 8
 # list = pure linear box (legacy). The chosen mask is persisted beside each posterior (<name>.rot.pt)
 # so eval reconstructs the exact training box regardless of this setting. REBUILD the ND prior after
 # changing this (the latent GMM is fit in the box's coordinate).
-REPARAM_LOG_PARAMS = ["f_scale"]   # log ONLY f_scale (its natural 3-decade scale; a LINEAR box put GT=10
-                          # at box-fraction 0.009 = flat sigmoid tail -> the mild f_scale SBC tilt in the
-                          # 13-dim keeper posterior_07012026; see scripts/diagnose_fscale.py). Keep the
-                          # DEGENERACY params (k, lam, x_scale, t_scale) LINEAR -- log OVER-MIXED those in
-                          # posterior_6302026. f_scale is a RESCALE param, so this does NOT require an ND
-                          # prior rebuild: nd_log_mask stays all-False -> build_posterior guard passes on
-                          # the existing linear ND prior (prior_forcing_no_forcing.pt). Restore to [] to
-                          # reproduce the current keeper's all-linear box.
+REPARAM_LOG_PARAMS = []   # ALL-LINEAR box (the keeper posterior_07012026's coordinate). Log-scaling
+                          # f_scale (REPARAM_LOG_PARAMS=["f_scale"]) was TRIED as a fix for its mild
+                          # linear-box SBC tilt (GT=10 at box-fraction 0.009 = flat sigmoid tail; see
+                          # scripts/diagnose_fscale.py), but the posterior trained under it was WORSE --
+                          # bad TARP / expected-coverage and a worse f_scale SBC rank -- so it was
+                          # discarded and this was reverted to []. Keep the DEGENERACY params
+                          # (k, lam, x_scale, t_scale) LINEAR too (log OVER-MIXED those in posterior_6302026).
+                          # f_scale is a RESCALE param, so toggling it here does NOT rebuild the ND prior:
+                          # nd_log_mask stays all-False, and the existing linear ND prior
+                          # (prior_forcing_no_forcing.pt) + posterior_07012026 already match this box.
 
 # === TRANSIENT (Case A: clip initial conditions settling) ===
 TRANSIENT_ND_UNITS = 100  # ND time units of transient to discard; ~20 e-folds of the slowest
@@ -341,8 +348,17 @@ class SimConfig:
 
     @property
     def inferred_labels(self) -> list[str]:
-        """Labels for all inferred params (ND + rescale) for plotting."""
-        rescale_labels = list(self.rescale_params.keys())
+        """LaTeX labels (with units) for all inferred params (ND + rescale) for plotting.
+
+        ND params keep their model LaTeX (self.labels); rescale params are rendered via
+        Helpers.labels.rescale_axis_label so a corner/SBC plot shows e.g. ``$x_{\\mathrm{scale}}$ (nm/ND)``
+        instead of the raw string ``x_scale``."""
+        from .Helpers import labels as _labels
+        rescale_labels = [
+            _labels.rescale_axis_label(name, length_unit=self.length_unit,
+                                       time_unit=self.time_unit, force_unit=self.force_unit)
+            for name in self.rescale_params
+        ]
         return self.labels + rescale_labels
 
     @property
@@ -381,6 +397,49 @@ class SimConfig:
             except pint.UndefinedUnitError:
                 continue
         raise ValueError(f"No unit with dimensionality {target_dim} found in cell file.")
+
+    @cached_property
+    def _ureg(self):
+        import pint
+        return pint.UnitRegistry()
+
+    def _resolve_unit(self, si_unit: str) -> "str | None":
+        """The cell's unit TOKEN whose dimensionality matches ``si_unit`` (e.g. "s" -> "ms"), or None.
+
+        units_dict is set-derived (unordered), so match by DIMENSIONALITY, never by index."""
+        ureg = self._ureg
+        try:
+            target = ureg.Quantity(1, si_unit).dimensionality
+        except Exception:                      # noqa: BLE001
+            return None
+        for tok in self.units_dict:
+            try:
+                if ureg.Quantity(1, tok).dimensionality == target:
+                    return tok
+            except Exception:                  # noqa: BLE001 -- undefined token; skip
+                continue
+        return None
+
+    @cached_property
+    def length_unit(self) -> "str | None":
+        """Cell length unit token (e.g. "nm") for displacement axis labels."""
+        return self._resolve_unit("m")
+
+    @cached_property
+    def time_unit(self) -> "str | None":
+        """Cell time unit token (e.g. "ms"). Note: trace TIME axes are shown in seconds; this is only for
+        the rescale-param label t_scale (ms/ND)."""
+        return self._resolve_unit("s")
+
+    @cached_property
+    def force_unit(self) -> "str | None":
+        """Cell force unit token (e.g. "pN"); None for BP, which declares no force unit."""
+        return self._resolve_unit("N")
+
+    @cached_property
+    def freq_unit(self) -> "str | None":
+        """Cell frequency unit token (e.g. "Hz"); None for BP."""
+        return self._resolve_unit("Hz")
 
 
 # === FDT CONFIG DATACLASS ===
