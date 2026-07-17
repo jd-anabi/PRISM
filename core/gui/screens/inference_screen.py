@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, PriorPanel,
                                      SimulatePanel, ValidatePanel)
 from ..session import SbiSession
-from ..widgets.anim import fade_in
+from ..widgets.anim import crossfade_tab
 
 
 class InferenceScreen(QWidget):
@@ -18,7 +18,7 @@ class InferenceScreen(QWidget):
         self.session = SbiSession()
 
         heading = QLabel(title)
-        heading.setStyleSheet("font-size: 16px; font-weight: bold;")
+        heading.setProperty("type", "heading")     # Fluent type ramp (global QSS)
 
         self.tabs = QTabWidget()
         self.config_panel = ConfigPanel(self)
@@ -38,9 +38,14 @@ class InferenceScreen(QWidget):
         layout.addWidget(self.tabs, 1)
 
         self.refresh_gates()
-        # Connect AFTER refresh_gates so the initial programmatic gating doesn't trigger a fade during
-        # construction; a later fall-back-to-Config re-gate will fade, which is fine (no-op under offscreen).
-        self.tabs.currentChanged.connect(lambda _i: fade_in(self.tabs.currentWidget()))
+        # Track the outgoing page + connect AFTER refresh_gates: its programmatic setCurrentIndex(0) fires
+        # currentChanged, and the handler dereferences _prev_tab (which must exist by then).
+        self._prev_tab = self.tabs.currentWidget()
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+
+    def _on_tab_changed(self, _index):
+        crossfade_tab(self.tabs, self._prev_tab)          # no-op under offscreen / not-yet-visible
+        self._prev_tab = self.tabs.currentWidget()
 
     def panels(self):
         return [self.config_panel, self.simulate_panel, self.prior_panel,

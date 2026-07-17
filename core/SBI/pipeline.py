@@ -11,6 +11,7 @@ from sbi.inference import SNPE
 from sbi.neural_nets import posterior_nn
 from torch.distributions.transforms import Transform
 
+from core import forcing as _forcing
 from core.Helpers import helpers
 from core.config import CHUNK_LEN, N_ND_MAX
 from .Priors import bp_prior, hopf_prior, nadrowski_prior
@@ -59,46 +60,21 @@ def build_nondim_sin_force_tensor(
     :return: Non-dimensional force tensor, shape (batch, n_force_channels, T) where
              n_force_channels = 2 if "amp_y" in forcing_idx else 1.
     """
-    # extract forcing params as (batch, 1) for broadcasting against (1, T)
-    amp    = forcing_params[:, forcing_idx["amp"]].unsqueeze(1)
-    freq   = forcing_params[:, forcing_idx["freq"]].unsqueeze(1)
-    phase  = forcing_params[:, forcing_idx["phase"]].unsqueeze(1)
-    offset = forcing_params[:, forcing_idx["offset"]].unsqueeze(1)
+    # The math now lives in core/forcing.py (shared with the new step/triangular/exponential kinds);
+    # kind="sin" is numerically identical to the original body here (pinned by a golden test).
+    return _forcing.build_nondim_force_tensor(
+        forcing_params, t_nd, rescale_params, forcing_idx, rescale_idx, kind="sin")
 
-    # extract rescale params as (batch, 1)
-    t_scale  = rescale_params[:, rescale_idx["t_scale"]].unsqueeze(1)
-    t_offset = rescale_params[:, rescale_idx["t_offset"]].unsqueeze(1) if "t_offset" in rescale_idx else 0.0
-    if "f_scale" in rescale_idx:
-        f_scale  = rescale_params[:, rescale_idx["f_scale"]].unsqueeze(1)
-        f_offset = (rescale_params[:, rescale_idx["f_offset"]].unsqueeze(1)
-                    if "f_offset" in rescale_idx else torch.zeros_like(f_scale))
-    else:
-        # Hopf-style nondim: F_ND = F_dim / (l * omega_0) -> f_scale = x_scale / t_scale,
-        # f_offset = 0. Cell file omits f_scale/f_offset from the rescale block since
-        # they're algebraic combinations of the inferred length and time scales, not
-        # independent inferred dimensions.
-        x_scale  = rescale_params[:, rescale_idx["x_scale"]].unsqueeze(1)
-        f_scale  = x_scale / t_scale
-        f_offset = torch.zeros_like(f_scale)
 
-    # t_nd is (T,) -> (1, T) for broadcasting
-    t = t_nd.unsqueeze(0)
-
-    # nd -> dim time, then evaluate the shared sinusoidal carrier
-    t_dim = helpers.rescale(t, t_scale, t_offset)             # (batch, T)
-    sin_term = torch.sin(2 * np.pi * freq * t_dim + phase)    # (batch, T)
-
-    # x-channel: dim -> nd force
-    f_x_nd = (amp * sin_term + offset - f_offset) / f_scale   # (batch, T)
-
-    if "amp_y" in forcing_idx:
-        # y-channel shares freq, phase, offset, f_scale, f_offset with x;
-        # only amp differs. Used by ND Hopf where the latent y also gets forcing.
-        amp_y = forcing_params[:, forcing_idx["amp_y"]].unsqueeze(1)
-        f_y_nd = (amp_y * sin_term + offset - f_offset) / f_scale
-        return torch.stack([f_x_nd, f_y_nd], dim=1)           # (batch, 2, T)
-
-    return f_x_nd.unsqueeze(1)                                # (batch, 1, T)
+def _sim_class(model: str):
+    """The Simulator class for a BUILT-IN model name, with a clear error for anything else (a user
+    model leaking past the Simulate-only gate would otherwise surface as a bare KeyError)."""
+    cls = VALID_SIMS.get(model.lower())
+    if cls is None:
+        raise ValueError(
+            f"No simulator is registered for model '{model}' (valid: {list(VALID_SIMS)}). "
+            "User-defined models are Simulate-only in this version.")
+    return cls
 
 def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tensor, force: torch.Tensor,
             n_segs: int, steady_idx: int, fixed_dict: dict = None, state_dep_drift: bool = False,

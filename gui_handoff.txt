@@ -1,9 +1,16 @@
 ================================================================================
-GUI HANDOFF  —  PySide6 desktop front-end for the GFDT / SBI app
-Created 2026-07-14. Updated 2026-07-14 (progress fix + Phase 2 landed).
+GUI HANDOFF  —  PySide6 desktop front-end for the GFDT / SBI app  (app name: PRISM)
+Created 2026-07-14. Updated 2026-07-17 (user-defined model builder + OS accent + Inter toggle +
+ the MAPIS -> PRISM rename).
 Self-contained context for a new chat to continue the GUI work.
 (Companion doc: sbi_calibration_handoff.txt — the SCIENCE/pipeline handoff. This file is
- strictly about the GUI front-end. Read that one only if you need pipeline semantics.)
+ strictly about the GUI front-end. Read that one only if you need pipeline semantics.
+ Companion doc: features_handoff.txt — the forward-looking FEATURE backlog, incl. the phased
+ roadmap for taking user-defined models beyond Simulate into SBI/FDT.)
+
+APP NAME: the app is PRISM (renamed from MAPIS 2026-07-17). The two user-visible strings are
+  MainWindow.setWindowTitle("PRISM") and the NavShell top-left QLabel("PRISM") (nav_shell.py). Nothing
+  else keys on the name; this handoff, README.md, run.sh, and the module docstrings were all updated.
 ================================================================================
 
 GOAL
@@ -31,9 +38,9 @@ STATUS
                      See "PHASE 3" below.
   [DONE + verified]  Interactive figures — a "Pop out" button on every figure tab (zoom/pan/save).
                      See "INTERACTIVE FIGURES" below.
-  [DONE + verified]  MAPIS redesign — home/splash screen (greeting + 4 section buttons) over a nav shell;
+  [DONE + verified]  PRISM redesign — home/splash screen (greeting + 4 section buttons) over a nav shell;
                      SBI -> "Parameter Inference" split into six gated tabs; CrossVal moved into FDT
-                     Analysis; per-option help badges. See "MAPIS LAYOUT" below.
+                     Analysis; per-option help badges. See "PRISM LAYOUT" below.
   [DONE + verified]  SIMULATE section — the deferred 4th home button is now LIVE: a real-time streaming
                      view (worker-thread chunked Euler loop -> pyqtgraph trace + top-down ellipse heatmap).
                      See "SIMULATE SECTION" below. Headless-tested; the on-display trace/heatmap/cancel
@@ -44,12 +51,25 @@ STATUS
   [DONE + verified]  BACKLOG B1–B5 (2026-07-16) — frame-steps tooltip; progress-pane it/s sparkline;
                      screen/tab fade animations; settings gear + Light/Dark/Auto/Follow-system theming +
                      a Settings/Help screen; cross-platform torch pins + hardened run.sh. See "BACKLOG".
+  [DONE + verified]  NAV TRANSITIONS reworked (2026-07-17) — the weak fade is now a snapshot-based PURE
+                     SLIDE between screens + a quick cross-fade between tabs. See core/gui/widgets/anim.py.
+  [DONE + verified]  FLUENT DESIGN LANGUAGE (2026-07-17) — bespoke design-token + QSS layer (no 3rd-party
+                     widget lib). See "FLUENT DESIGN" below.
+  [DONE + verified]  USER-DEFINED MODEL BUILDER (2026-07-17) — a Settings-reached builder where users type
+                     per-variable drift/noise/forcing, saved to Resources/Models/ and run through the
+                     Simulate path (Simulate-only; gated out of FDT/Inference/Reduction). Plus OS-accent
+                     colour + Inter-everywhere font settings, and the MAPIS -> PRISM rename. See
+                     "USER-DEFINED MODEL BUILDER" below. (Feature-level backlog + the SBI/FDT roadmap for
+                     user models live in features_handoff.txt.)
 
-  Verified by tests/test_gui_progress.py (63 tests, all passing) plus a headless end-to-end run in
-  which the REDUCTION panel actually executed run_reduction_map, saved its PNG, and had it picked up
-  into the FigureStack with a clean log. TWO adversarial-review passes found 10 real defects total (one
-  prevented the GUI from launching; two were cancellation correctness bugs — the tqdm write-lock leak
-  and the monitor-thread latch theft); all are fixed and pinned by tests.
+  Verified by tests/test_gui_progress.py (63 tests) + tests/test_user_models.py (21 tests) = 84, all
+  passing, plus a headless end-to-end run in which the REDUCTION panel actually executed
+  run_reduction_map, saved its PNG, and had it picked up into the FigureStack with a clean log, AND a
+  saved user model streamed end-to-end through the Simulate path. THREE adversarial-review passes found
+  22 real defects total (one prevented the GUI from launching; two were cancellation correctness bugs —
+  the tqdm write-lock leak and the monitor-thread latch theft; the third pass, on the model builder,
+  found 12 — phantom-parameter parsing, silent value mis-binding, unstreamable-on-save configs, and a
+  picker-reset regression); all are fixed and pinned by tests.
 
   ENV NOTE: verified against the biophys-env as installed = sbi 0.25.0, PySide6 6.9.3, tqdm 4.67.1.
   requirements.txt now PINS sbi==0.26.1 (a planned bump, not yet installed). The cooperative-cancel
@@ -226,10 +246,16 @@ GUI PACKAGE LAYOUT (core/gui/)
                   installs a sys.excepthook -> QMessageBox.
   main_window.py  QMainWindow. Composes a NavShell over a Home screen + 4 section screens (Reduction,
                   FDT, Parameter Inference, Simulate); always opens on Home; _all_panels()/panel(cls).
-                                                                              [see MAPIS LAYOUT below]
-  screens/        nav_shell.py (MAPIS header + back arrow + QStackedWidget), home_screen.py (greeting +
+                                                                              [see PRISM LAYOUT below]
+  screens/        nav_shell.py (PRISM header + back arrow + QStackedWidget), home_screen.py (greeting +
                   4 buttons; greeting(hour)), section_screen.py (heading + QTabWidget), inference_screen.py
-                  (owns the SbiSession + refresh_gates truth table).          [see MAPIS LAYOUT below]
+                  (owns the SbiSession + refresh_gates truth table), settings_screen.py (appearance radios
+                  + accent/Inter checkboxes + the User-defined models list + Help), model_builder_screen.py
+                  (the user-model builder).                                   [see PRISM LAYOUT below]
+  NON-GUI modules the builder adds (core/, not core/gui/):  registry.py (the runtime model registry),
+                  forcing.py (kind-dispatching force builder), Models/user_model.py (sympy parse + torch
+                  UserModel), Simulator/user_simulator.py, Helpers/model_store.py (JSON + Bounds/Cells/Units
+                  writers).                                    [see USER-DEFINED MODEL BUILDER below]
   session.py      SbiSession dataclass (cfg, inf_prior, force_prior, posterior, diagnostics,
                   posterior_latent, V) + reset_downstream().
   worker.py       Worker(QRunnable) + WorkerSignals(log, log_batch, rows, figure, chunk, result, error,
@@ -439,9 +465,9 @@ INTERACTIVE FIGURES — the "Pop out" button  (core/gui/widgets/figure_window.py
   = (title, png_bytes, fig_pickle|None). The CLI is untouched (fig_sink is None there, so no pickle).
 
 ================================================================================
-MAPIS LAYOUT  —  home screen + navigation shell  (core/gui/screens/, main_window.py)
+PRISM LAYOUT  —  home screen + navigation shell  (core/gui/screens/, main_window.py)
 ================================================================================
-  The window no longer opens on a flat 4-tab bar. MainWindow composes a NavShell -- a persistent "MAPIS"
+  The window no longer opens on a flat 4-tab bar. MainWindow composes a NavShell -- a persistent "PRISM"
   title in the TOP-LEFT AT ALL TIMES, a back arrow just BELOW it (hidden on Home), and a QStackedWidget --
   over a Home/splash screen (index 0) and four section screens:
 
@@ -627,10 +653,21 @@ BACKLOG — REQUESTED UI/UX FEATURES  (B1–B5 ALL IMPLEMENTED + verified 2026-0
         gap-aware) mounted next to solver_label; sampled once per 100ms _tick via _sample_rate(); overall
         bar now shows %p%. The WHOLE test contract preserved (plus_meter/format_rate, solver_label text
         "++++ (13.3k it/s)", attrs, methods, constants) -- plus_meter kept, just visually secondary.
-    B3  core/gui/widgets/anim.py NEW fade_in(widget, ms=150): QGraphicsOpacityEffect + QPropertyAnimation,
-        strong-ref'd (parented) + effect removed on finished + SKIPPED under offscreen. Wired into
-        nav_shell.go_home/go_to (after the synchronous setCurrentIndex) and QTabWidget.currentChanged in
-        section_screen + inference_screen (connected AFTER the tab loop / initial refresh_gates).
+    B3  core/gui/widgets/anim.py — SNAPSHOT-based transitions (2026-07-17 rewrite; the original fade_in was
+        too subtle/janky). Grabs the outgoing + incoming pages to static QPixmaps and animates them in a
+        transient _TransitionOverlay, then deletes the overlay to reveal the real (already-current) widget
+        (NEVER touches a live widget's graphicsEffect -> no per-frame subtree re-render on the heavy
+        pyqtgraph/matplotlib pages). Public API: snapshot(widget) / slide_screens(stack, old_pm, forward,
+        ms=280 OutCubic) / crossfade_tab(tabwidget, old_widget, ms=180 InOutQuad). SCREENS get a PURE SLIDE
+        (both pages move at full opacity, no cross-fade; nav_shell._navigate grabs old_pm BEFORE
+        setCurrentIndex, forward=index>prev, skip if index==prev);
+        TABS get a quick cross-fade (section_screen/inference_screen track self._prev_tab, init BEFORE
+        connecting currentChanged). GOTCHAS honoured: slide math uses the LOGICAL overlay width (never
+        pm.width() -> would double on retina); point-based drawPixmap(QPointF, pm) is DPR-correct; the tab
+        content rect is QRect(page.mapTo(tabwidget,(0,0)), page.size()) (page.geometry() is in QTabWidget's
+        PRIVATE internal stack coords and lands over the tab bar); cancel-and-replace via container
+        ._transition (rapid nav can't stack overlays); SKIPPED under offscreen AND when the container isn't
+        visible yet (so tests + construction-time nav never animate; setCurrentIndex stays synchronous).
     B4  Theming + gear + Settings/Help. NEW core/gui/theming.py (Appearance: system/light/dark/auto via
         styleHints().setColorScheme; auto has its OWN day/night threshold + a 1-min QTimer). app.build_app
         sets Fusion + restores the saved mode (theming lives ONLY in build_app, never MainWindow -> out of
@@ -723,6 +760,177 @@ BACKLOG — REQUESTED UI/UX FEATURES  (B1–B5 ALL IMPLEMENTED + verified 2026-0
           covered by the imageio-ffmpeg wheel -- the "conda ffmpeg in Library\bin" note is Windows-specific).
 
 ================================================================================
+FLUENT DESIGN LANGUAGE  (bespoke tokens + QSS; shipped 2026-07-17)
+================================================================================
+  Microsoft Fluent adopted as a BESPOKE design-token + QSS layer on the existing Fusion + palette pipeline
+  -- NOT a 3rd-party widget library (qfluentwidgets was rejected: GPLv3 + would force a NavShell rewrite).
+  The app was already 100% palette-driven with almost no QSS, so this recolours the whole chrome cleanly.
+
+  NEW FILES
+    core/gui/design.py   tokens (LIGHT/DARK neutrals+accent, radius 4/8, ctl-height 32, type ramp) +
+                         build_palette(dark)->QPalette + build_qss(dark)->str (string.Template; named-class
+                         selectors ONLY -- never `*`/bare QWidget, which would paint behind _Sparkline / the
+                         pyqtgraph view / matplotlib QLabels / the anim.py overlays). Retune the look HERE.
+    core/gui/fonts.py    load_app_font(app): registers every *.ttf in assets/fonts/ (bundled Inter, SIL OFL)
+                         then sets the base app font. Preference = Segoe UI (Win11, authentic Fluent) THEN
+                         bundled Inter (macOS/Linux consistency). To use Inter EVERYWHERE (incl. Windows),
+                         put "Inter" first in fonts._PREFERRED -- one line.
+    core/gui/assets/fonts/  Inter-Regular.ttf + Inter-SemiBold.ttf (static; the VARIABLE Inter TTF is
+                         REJECTED by Qt 6.9's addApplicationFont -> id -1, so statics are required) + OFL.txt.
+
+  WIRING (all in build_app/Appearance -> OUT of the test path; tests build MainWindow directly)
+    theming.Appearance._reapply now: setColorScheme (native title bar/dialogs) -> resolve effective
+    light/dark (system reads styleHints().colorScheme(); Unknown->light) -> app.setPalette(build_palette) +
+    app.setStyleSheet(build_qss) -> emit theme_changed(dark). A re-entrancy guard (_applying) + a
+    colorSchemeChanged->_reapply connection GUARDED to mode=="system" handle live OS flips without a loop.
+    theming.active_appearance() exposes the instance so non-QSS surfaces can subscribe. app.build_app loads
+    the font between setStyle("Fusion") and Appearance.
+
+  CONVENTIONS (grep these)
+    * PRIMARY CTAs opt into the accent button via  btn.setProperty("accent", True)  at construction (Run/
+      Build/Train/Validate/Infer/Start + the Home section tiles). Save/refresh/Browse/Cancel/Pop-out stay neutral.
+    * TYPE RAMP via  QLabel.setProperty("type", "title|subtitle|heading|caption")  -- replaced the 7 old
+      inline font-size stylesheets. Nav glyph buttons use objectNames navBack/navSettings; the help badge
+      uses objectName helpBadge (its old per-instance _STYLE was folded into the global QSS).
+    * LOAD-BEARING: build_palette MUST set QPalette.Mid + Highlight -- progress_pane._Sparkline and the help
+      badge read them directly (QSS doesn't feed custom paint).
+    * COMPACT ICON BUTTONS (fix 2026-07-17): a fixed-width glyph QPushButton (the ArtifactPicker refresh
+      "⟳", setFixedWidth(32)) was squeezed to a sliver by the default QPushButton padding (4px 14px ->
+      needs 40px, clipped to 32 -> the middle of "⟳" reads as ":"). Such buttons now set
+      objectName "iconButton" -> QSS rule `QPushButton#iconButton { padding: 0 }` so the glyph fits. Reuse
+      that objectName for any new compact glyph button (artifact_picker.py:23 sets it on the refresh button).
+
+  pyqtgraph LIVE VIEW follows the theme: LiveHairBundleView._apply_theme sets trace bg/fg from tokens and
+    subscribes to Appearance.theme_changed (guarded via active_appearance() -> no-op in tests). Heatmap keeps
+    its inferno LUT. matplotlib figures stay WHITE (science layer builds them) -- the remaining theme gap.
+
+  VERIFIED: 63-test suite green (styling is out of the test path -> a red there flags accidental coupling);
+    design.build_qss parses with NO Qt "Could not parse stylesheet" warnings (checked via qInstallMessage-
+    Handler across every styled widget, both themes); headless build_app under QT_QPA_PLATFORM=minimal builds
+    MainWindow + all panels + the live view and cycles all 4 modes cleanly; font registers as family "Inter"
+    on the real Windows backend (minimal has no font engine). STILL WANTS A HUMAN EYEBALL on a real display
+    (light+dark+a live system flip): contrast/focus rings, combo popup+arrow, group-box card title notch,
+    pivot tab underline, scrollbar arrows gone, disabled controls column, tooltip+gear popover, the sparkline
+    trace colour + help badge, and the pyqtgraph view tracking the theme.
+
+================================================================================
+USER-DEFINED MODEL BUILDER + SETTINGS ADDITIONS  (shipped 2026-07-17)
+================================================================================
+  WHAT IT IS. A builder where a user declares state variables and, per variable, types the deterministic
+  RHS of dx/dt (nondimensional, first-order, may be nonlinear), a white-noise strength D (the solver
+  diffusion is g = sqrt(2*D); parameters only -> additive noise), and OPTIONALLY one time-driven forcing
+  from {sinusoidal, step, triangular, exponential}. The model is parsed by sympy, compiled to torch,
+  SAVED to Resources/Models/<NAME>.json (+ a generated Bounds/Cells/Units triple), registered at startup,
+  and appears in every model dropdown. v1 is SIMULATE-ONLY: user models are gated OUT of FDT / Parameter
+  Inference / Reduction (the SBI stack has no Prior/INIT_SHAPES for them, and FDT hardcodes Nadrowski's
+  T_eff params). The forward roadmap to SBI-ready (v2) and FDT (v3) user models is in features_handoff.txt.
+  Reached from Settings -> "User-defined models" -> "Open model builder" (nav screen index 6; not a Home
+  tile). Observable = state column 0 (same as every built-in model).
+
+  NEW MODULES (all in core/, NOT core/gui/ -- the science/runtime layer):
+    registry.py                 ModelSpec + a name-keyed registry. The 3 built-ins are seeded at import
+                                (light -- no Simulator imports). register(spec) APPENDS user models to the
+                                live config.VALID_MODELS / VALID_LABELS lists (built-ins keep indices 0-2;
+                                an assert enforces it). load_user_models() is an EXPLICIT call (build_app +
+                                core/__main__), NEVER an import side effect -- the test suite builds
+                                MainWindow directly and must see pristine registries. Per-file load failures
+                                land in registry.load_errors (shown on the Settings screen), never raised.
+    Models/user_model.py        parse_user_model(variables) -> CompiledUserModel; UserModel (the ONE generic
+                                torch model class every user model shares -- mirrors the hopf_model duck-typed
+                                contract: f(x,t) with the integer step index + additive self.force[:, j, t];
+                                g() returns the cached (batch,d) sqrt(2D) diagonal vector). SANDBOXED: a
+                                token pre-filter + a locked parse namespace + a hand-rolled tree->torch
+                                compiler (_compile_tree) -- no eval of arbitrary Python.
+    Simulator/user_simulator.py UserSimulator(Simulator): generic _set_up_model that builds UserModel via
+                                Model(*torch.unbind(params, dim=1), force, ...); RAISES RuntimeError on
+                                failure (no legacy print+exit()). Sets self._compiled BEFORE super().__init__.
+    forcing.py                  build_nondim_force_tensor(..., kind=) implementing all 4 carriers, +
+                                build_user_force_tensor(spec, ...) -> (batch, n_vars, T). LIGHT (torch/numpy/
+                                helpers only, no sbi import) so the GUI + tests import it freely.
+                                pipeline.build_nondim_sin_force_tensor now DELEGATES here (kind="sin") --
+                                numerically identical, pinned by a golden test (SBI training data depends on it).
+    Helpers/model_store.py      save_user_model(doc)/load_user_model/list_user_models/delete_user_model +
+                                validate_name. Writes the JSON AND emits Bounds/<name>/default.txt +
+                                Cells/<name>/default.txt + Units/<name>/units.txt so cli.make_sim_config /
+                                _parse_cell / simulate_runner.build_stream_config consume a user model exactly
+                                like a built-in (they resolve by folder name).
+
+  THE FORCE-CHANNEL CONVENTION for user models: ONE force row per state variable, (batch, n_vars, T),
+  zeros where unforced; UserModel.f adds force[:, j, t] to variable j. Forcing param names are suffixed
+  <pname>_<var> (amp_x, t0_x, ...) so they flow through the existing name-keyed forcing_idx machinery.
+  (Built-ins keep their legacy 1-or-2-channel sinusoidal convention -- 2 iff "amp_y" in forcing_idx.)
+
+  SIMULATE INTEGRATION (simulate_runner.py). build_stream_config resolves labels + state_dep_drift via
+  the registry (state_dep_drift is ALWAYS False for user models -- D is params-only in v1); plan_stream
+  sets user_spec + n_channels = spec.n_vars; _make_simulator branches to registry.make_user_simulator;
+  run_simulation_stream builds the per-frame force via forcing.build_user_force_tensor. A per-frame
+  BLOWUP_ND_LIMIT (1e6) + isfinite check after solver.euler raises a readable "diverged near t..." error
+  (arbitrary user drift can blow up under fixed-step Euler-Maruyama).
+
+  PERSISTENCE / JSON schema (schema_version 1): {name, variables:[{name, drift, D, init, forcing:
+  null|{kind, params, sign}}], params:{name:value}, rescale:{x_scale, t_scale}}. The generated Bounds ND
+  section order == parse_user_model's param discovery order == the UserModel constructor column order (the
+  LOAD-BEARING positional contract). Placeholder ND bounds are (v-max(|v|,1), v+max(|v|,1)); x_scale/t_scale
+  bounds are (v/2, 2v) -- STRICTLY POSITIVE because SimConfig.t_nd_max divides by the t_scale LOWER bound.
+  Units are fixed "nm s" (x_scale in nm, t_scale in s).
+
+  SETTINGS ADDITIONS (settings_screen.py -- new kw-only callbacks, all default None/False so the historical
+  two-arg construction the tests use still works):
+    * "User-defined models" QGroupBox: a list of registered models (+ any registry.load_errors as caption
+      rows), "Open model builder" (accent CTA) / per-model Edit / Delete. refresh_models() rebuilds it.
+    * "Use the Windows accent colour" checkbox (hidden off-win32) -- B-a.
+    * "Use the Inter font everywhere" checkbox + a restart-note caption -- B-b.
+  MainWindow wires these: _open_model_builder/_edit_user_model/_delete_user_model (delete confirms + is
+  refused mid-run), _on_user_models_changed -> _refresh_model_combos + settings_screen.refresh_models,
+  _set_system_accent/_set_force_inter (persist + live-apply).
+
+  OS ACCENT (B-a) + INTER TOGGLE (B-b) wiring:
+    design.system_accent() -> "#RRGGBB"|None reads the Windows Explorer AccentColorMenu (ABGR) with the DWM
+      ColorizationColor (ARGB) fallback; None off-Windows / on any error. tokens(dark, accent=None),
+      build_palette(dark, accent=None), build_qss(dark, accent=None) take an optional accent that recomputes
+      accent/accent_hover/accent_press/on_accent (on_accent black/white by luminance). Fixed Fluent blue is
+      the fallback; the override is OPT-IN.
+    theming.Appearance.set_system_accent(enabled) + _reapply re-reads the OS colour each apply (live on a
+      theme flip; there is no Qt signal for an OS accent CHANGE, so a changed accent lands on the next apply).
+    fonts.load_app_font(app, prefer_inter=False) prepends bundled "Inter" to _PREFERRED when set.
+    settings.py: "appearance/system_accent" + "appearance/force_inter" (both default False). app.build_app
+      reads both before Appearance.set_mode.
+
+   *** THINGS THAT WILL BITE YOU (each is a fixed adversarial-review finding + has a regression test) ***
+    U1. PARAM DISCOVERY must ignore numeric literals. _identifiers strips numbers (incl. "1e-3"/"0x1F")
+        BEFORE the identifier scan, else the mantissa tail ("e", "e3", "x1F") becomes a phantom parameter
+        -- a dead column that desyncs the positional contract. parse_user_model also keeps ONLY parameters
+        the parsed expressions actually reference (sympy can simplify some away).
+    U2. "E" is an ORDINARY parameter, not Euler's number (physics names E are common); only "pi" is a
+        constant. Names that shadow parse_expr's own constructors (Float/Integer/Rational/Symbol/Function)
+        are REJECTED with a clear message (they would break every numeric literal otherwise).
+    U3. build_stream_config re-checks that the model's compiled param_names EQUAL the emitted Bounds file's
+        ND key order, and raises "out of sync" if a hand-edited JSON drifted from a stale Bounds file --
+        else torch.unbind would silently mis-bind values by position (wrong physics, no error).
+    U4. save_user_model REFUSES: non-finite values (inf/nan -> unreadable tokens), t_scale >= the transient
+        budget ceiling (T_SCALE_MAX_S; a slow model would die on SimConfig.steady_idx's assert AFTER a clean
+        save), Windows reserved device names (NUL/CON/COM1.., whose folders half-create), and built-in/
+        existing names. It writes the triple FIRST and the JSON LAST (the registry loads from the JSON, so
+        that is the commit point); delete_user_model removes the JSON LAST for the same reason.
+    U5. _refresh_model_combos re-fires a panel's _on_model_changed ONLY when the selection actually changed.
+        The hooks refresh the cell/bounds pickers (which resets them to their first entry), so firing on a
+        mere item-list update would silently discard the user's picker selections app-wide on every save/
+        delete. A deleted selected model still falls back (to NADROWSKI) and re-fires correctly.
+    U6. The builder's Validate/Save run a short (100-step, batch-1) smoke integration ON THE GUI THREAD --
+        cheap, so no BasePanel.dispatch. But its solver's tqdm writes to the PROCESS-WIDE redirected streams,
+        so _validate/_save REFUSE while BasePanel._running (a worker owns those streams). The screen is a
+        plain QWidget (not a BasePanel), so it is NOT auto-locked by the app-wide control lock -- this guard
+        is the substitute.
+
+  NOT yet exercised on a real display (ask before assuming): the full builder round-trip on screen (declare
+  vars -> per-variable rows -> Detect parameters -> Validate -> Save -> the model appears in Simulate ->
+  stream a sane trace), the Edit/Delete flows, the FDT/Inference gate MESSAGES, and the accent/Inter
+  checkboxes recolouring/refonting live (+ persisting across restart). Headless tests
+  (tests/test_user_models.py, 21) cover the parser, forcing, persistence round-trip, registry, the
+  end-to-end Simulate stream + blow-up guard, the combo-refresh picker preservation, the Validate mid-run
+  guard, and the accent token/decode.
+
+================================================================================
 RUNNING ON MAC / LINUX  (B5 shipped 2026-07-16)
 ================================================================================
   - Launch from the REPO ROOT. ./run.sh cds there for you (config.py builds Resources/ paths from the cwd;
@@ -740,7 +948,14 @@ RUNNING ON MAC / LINUX  (B5 shipped 2026-07-16)
 
 ================================================================================
 WHAT'S NEXT
-  All planned phases + the Simulate section are done. Remaining loose ends:
+  All planned phases + the Simulate section + the user-defined model builder are done. Remaining loose ends:
+    - [DONE 2026-07-17] USER-DEFINED MODEL BUILDER (Simulate-only) + OS-accent colour (B-a) + Inter-
+      everywhere font toggle (B-b) + the MAPIS -> PRISM rename. See "USER-DEFINED MODEL BUILDER" above.
+      FORWARD ROADMAP for user models (features_handoff.txt FEATURE 1): v2 = SBI-ready (a rescale/forcing/
+      stability-Prior contract + an INIT_SHAPES entry + generalizing orchestrator._build_forcing_prior);
+      v3 = FDT (replace the hardcoded Nadrowski n/beta T_eff formula, fdt_pipeline.py). Reduction stays
+      excluded (intrinsic NWK->Hopf map). Other backlog there: B-c dark-theme matplotlib figures, B-d FDT
+      for non-Nadrowski models, B-e a real icon set (replace the unicode glyph buttons).
     - [DONE 2026-07-16] All five requested UI/UX features (B1 frame-steps tooltip, B2 slicker progress bar
       + it/s sparkline, B3 screen/tab fade animations, B4 settings gear + theming + Settings/Help screen,
       B5 cross-platform torch pins + run.sh). See "BACKLOG" above for the shipped-summary + per-item notes.
@@ -754,7 +969,7 @@ WHAT'S NEXT
       See "INTERACTIVE FIGURES" above.
     - Still never run FOR REAL on a display: the Parameter-Inference Save buttons, Validate,
       Infer/experimental, a full FDT/CrossVal run, a cancel DURING live NN training (only the
-      solver-phase cancel was exercised), the MAPIS nav click-through — home greeting, the four
+      solver-phase cancel was exercised), the PRISM nav click-through — home greeting, the four
       buttons, the back arrow, the six inference tabs greying/un-greying, help badges (verified headless);
       and the SIMULATE section — trace scroll + ellipse heatmap tracking displacement without clipping,
       mid-stream Cancel, Hopf/BP shapes (see "SIMULATE SECTION" above).
@@ -763,9 +978,17 @@ KEY FILES
   core/gui/**                       the GUI (see layout above)
   tests/test_gui_progress.py        63 tests: the tqdm classifier, the Qt stack, the panels, the pop-out,
                                     the nav/gating, the Simulate stream/heatmap + video export, labels/units
+  tests/test_user_models.py         21 tests: the sympy parser/codegen, forcing kinds + the sin golden test,
+                                    persistence round-trip, registry, Simulate stream + blow-up guard,
+                                    combo-refresh picker preservation, accent tokens/decode
+  core/registry.py                  the runtime model registry (ModelSpec, register/load_user_models)
+  core/forcing.py                   kind-dispatching force builder (sin/step/triangular/exponential)
+  core/Models/user_model.py         sandboxed sympy parse + the generic torch UserModel (g = sqrt(2D))
+  core/Simulator/user_simulator.py  generic UserSimulator(Simulator)
+  core/Helpers/model_store.py       user-model JSON + the Bounds/Cells/Units triple writers
   core/Helpers/labels.py            single source of truth for plot LaTeX symbols + units and the GUI's
                                     pretty Unicode/HTML labels.                 [see LABELS & UNITS below]
-  core/gui/screens/**               the MAPIS nav shell + home + section + inference screens
+  core/gui/screens/**               the PRISM nav shell + home + section + inference + settings + builder screens
   core/gui/panels/inference_tabs.py the six Parameter-Inference tabs + gating (replaced sbi_panel.py)
   core/gui/panels/simulate_panel.py + simulate_runner.py + simulate_export.py + widgets/live_hair_bundle.py
                                     the SIMULATE section (chunked-Euler stream -> pyqtgraph trace + ellipse

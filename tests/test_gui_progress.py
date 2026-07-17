@@ -1079,7 +1079,7 @@ def test_a_popped_out_figure_survives_a_worker_plt_close_all():
     plt.close("all")
 
 
-# ── MAPIS navigation redesign ────────────────────────────────────────────────────────────────────
+# ── PRISM navigation redesign ────────────────────────────────────────────────────────────────────
 def test_greeting_maps_hours_to_time_of_day():
     from core.gui.screens.home_screen import greeting
     assert greeting(5) == greeting(11) == "Good morning"

@@ -1,0 +1,302 @@
+"""User-defined SDE models: sympy parsing + a generic torch model satisfying the solver contract.
+
+A user declares state variables and, per variable, types (1) the deterministic RHS of dx/dt (first-order,
+nondimensional), (2) a white-noise strength D (parameters only -- additive noise; the solver diffusion is
+g = sqrt(2*D), matching <xi(t)xi(t')> = 2 D delta(t-t')), and (3) optionally a time-driven forcing (built
+separately in core/forcing.py). ``parse_user_model`` compiles the typed expressions into a
+``CompiledUserModel``; ``UserModel`` is the ONE generic runtime class every user model shares -- it mirrors
+the duck-typed contract of core/Models/hopf_model.py (f(x, t) with the integer step index, g() returning a
+(batch, d) diagonal vector, a settable public ``force`` (batch, n_vars, T) attribute, device/dtype applied
+to every param tensor).
+
+Parsing is sandboxed: a token pre-filter rejects everything outside identifiers/numbers/operators, the
+sympy namespace is locked to an explicit whitelist, and evaluation of the parsed tree is a hand-rolled
+walk over a fixed set of node types -- no eval of arbitrary Python anywhere.
+"""
+import math
+import re
+from dataclasses import dataclass, field
+
+import sympy
+import torch
+from sympy.core.function import AppliedUndef
+from sympy.parsing.sympy_parser import parse_expr
+
+
+class ModelParseError(ValueError):
+    """Raised when a user-typed model definition cannot be parsed/compiled. Message is user-facing."""
+
+
+# ── the expression whitelist ─────────────────────────────────────────────────
+# name -> (sympy class for parsing, torch fn for tensor args, python fn for constant args)
+_FUNCS = {
+    "sin":  (sympy.sin,  torch.sin,  math.sin),
+    "cos":  (sympy.cos,  torch.cos,  math.cos),
+    "tan":  (sympy.tan,  torch.tan,  math.tan),
+    "asin": (sympy.asin, torch.asin, math.asin),
+    "acos": (sympy.acos, torch.acos, math.acos),
+    "atan": (sympy.atan, torch.atan, math.atan),
+    "sinh": (sympy.sinh, torch.sinh, math.sinh),
+    "cosh": (sympy.cosh, torch.cosh, math.cosh),
+    "tanh": (sympy.tanh, torch.tanh, math.tanh),
+    "exp":  (sympy.exp,  torch.exp,  math.exp),
+    "log":  (sympy.log,  torch.log,  math.log),
+    "sqrt": (sympy.sqrt, torch.sqrt, math.sqrt),   # note: sympy.sqrt(x) becomes Pow(x, 1/2)
+    "Abs":  (sympy.Abs,  torch.abs,  abs),
+    "abs":  (sympy.Abs,  torch.abs,  abs),
+    "sign": (sympy.sign, torch.sign, lambda v: float((v > 0) - (v < 0))),
+}
+# NOTE: no "E" constant -- a physics parameter named E (modulus, field, energy) would silently become
+# Euler's number; exp() covers the use case, so E parses as an ordinary user parameter instead.
+_CONSTANTS = {"pi": sympy.pi}
+
+# The minimal constructors sympy's parser transformations reference at eval time. Nothing else.
+# Their NAMES are also refused as user identifiers: a parameter named e.g. "Float" would shadow the
+# constructor inside parse_expr's namespace and break every numeric literal with a baffling error.
+_GLOBAL_DICT = {
+    "Symbol": sympy.Symbol, "Integer": sympy.Integer, "Float": sympy.Float,
+    "Rational": sympy.Rational, "Function": sympy.Function,
+}
+RESERVED_NAMES = frozenset(_FUNCS) | frozenset(_CONSTANTS) | frozenset(_GLOBAL_DICT) | {"t", "force", "I"}
+
+# Legal characters for a user expression. Everything else (brackets, quotes, '=', '@', ';', ...) is
+# rejected BEFORE sympy ever sees the string.
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9_+\-*/^().,\s]*$")
+# A '.' adjacent to a letter/underscore is attribute access, not a decimal point -- reject it.
+_ATTR_DOT_RE = re.compile(r"[A-Za-z_]\s*\.|\.\s*[A-Za-z_]")
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# A numeric literal (incl. scientific notation and hex) NOT glued to an identifier. Stripped before
+# identifier discovery: the tokenizer reads "1e-3"/"0x1F" as single NUMBER tokens, so scanning the
+# raw text would otherwise shed phantom "parameters" like e/e3/x1F out of the mantissa tail.
+_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.])(?:0[xX][0-9A-Fa-f]+|(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?)")
+
+
+def _parse_one(text: str, where: str, local_dict: dict) -> sympy.Expr:
+    """Parse a single user expression inside the locked-down namespace, or raise ModelParseError."""
+    text = (text or "").strip()
+    if not text:
+        raise ModelParseError(f"{where}: expression is empty.")
+    if not _TOKEN_RE.match(text):
+        raise ModelParseError(f"{where}: only names, numbers and + - * / ^ ( ) are allowed.")
+    if _ATTR_DOT_RE.search(text):
+        raise ModelParseError(f"{where}: '.' is only allowed inside a number (e.g. 0.5).")
+    try:
+        expr = parse_expr(text.replace("^", "**"), local_dict=local_dict, global_dict=_GLOBAL_DICT)
+    except ModelParseError:
+        raise
+    except Exception as e:                                     # noqa: BLE001 -- any parse failure
+        raise ModelParseError(f"{where}: could not parse '{text}' ({e}).") from e
+    if not isinstance(expr, sympy.Expr):
+        raise ModelParseError(f"{where}: '{text}' is not a numeric expression.")
+    undef = expr.atoms(AppliedUndef)
+    if undef:
+        names = ", ".join(sorted(str(u.func) for u in undef))
+        raise ModelParseError(
+            f"{where}: unknown function(s) {names}. Allowed: {', '.join(sorted(set(_FUNCS) - {'Abs'}))}.")
+    return expr
+
+
+def _identifiers(text: str) -> list[str]:
+    """Identifiers in TEXT order (first appearance), with numeric literals stripped first -- the
+    user-visible parameter discovery order."""
+    return [m.group(0) for m in _IDENT_RE.finditer(_NUMBER_RE.sub(" ", text or ""))]
+
+
+def _compile_tree(expr: sympy.Expr, arg_index: dict, where: str):
+    """Recursively compile a sympy tree into a closure ``fn(args) -> tensor | float``.
+
+    ``args`` is the flat tuple (*state_columns, *param_tensors); ``arg_index`` maps Symbol -> position.
+    Only the whitelisted node types below are compilable -- anything else is a parse-stage bug or an
+    exotic sympy object the UI should not accept, so raise ModelParseError.
+    """
+    if expr is sympy.pi:
+        return lambda args: math.pi
+    if expr is sympy.E:
+        return lambda args: math.e
+    if isinstance(expr, sympy.Symbol):
+        idx = arg_index[expr]
+        return lambda args: args[idx]
+    if isinstance(expr, (sympy.Integer, sympy.Float, sympy.Rational)):
+        val = float(expr)
+        return lambda args: val
+    if isinstance(expr, sympy.Add):
+        parts = [_compile_tree(a, arg_index, where) for a in expr.args]
+        def _add(args, _parts=parts):
+            acc = _parts[0](args)
+            for p in _parts[1:]:
+                acc = acc + p(args)
+            return acc
+        return _add
+    if isinstance(expr, sympy.Mul):
+        parts = [_compile_tree(a, arg_index, where) for a in expr.args]
+        def _mul(args, _parts=parts):
+            acc = _parts[0](args)
+            for p in _parts[1:]:
+                acc = acc * p(args)
+            return acc
+        return _mul
+    if isinstance(expr, sympy.Pow):
+        base = _compile_tree(expr.base, arg_index, where)
+        exponent = _compile_tree(expr.exp, arg_index, where)
+        return lambda args: base(args) ** exponent(args)
+    if isinstance(expr, sympy.Function):
+        name = expr.func.__name__
+        if name in _FUNCS:
+            _, torch_fn, py_fn = _FUNCS[name]
+            arg = _compile_tree(expr.args[0], arg_index, where)
+            def _apply(args, _arg=arg, _t=torch_fn, _p=py_fn):
+                v = _arg(args)
+                return _t(v) if torch.is_tensor(v) else _p(v)
+            return _apply
+    raise ModelParseError(f"{where}: unsupported construct '{expr}'.")
+
+
+@dataclass
+class CompiledUserModel:
+    """The runnable form of a user model definition.
+
+    ``param_names`` order is LOAD-BEARING: it is the constructor positional order, the
+    ``torch.unbind(params, dim=1)`` column order, and the Bounds-file ND section order -- all three must
+    stay identical (see the model/solver contract in features_handoff.txt).
+    """
+    var_names: list = field(default_factory=list)     # declared order; index 0 = the observable
+    param_names: list = field(default_factory=list)   # first appearance in the typed expressions
+    drift_fns: list = field(default_factory=list)     # fn(args) per variable; args = (*states, *params)
+    diff_fns: list = field(default_factory=list)      # D_j as fn(args); same flat args (state unused)
+
+
+def parse_user_model(variables: list) -> CompiledUserModel:
+    """Compile ``[{name, drift, D}, ...]`` (declared order) into a CompiledUserModel.
+
+    Every identifier that is not a declared state variable (or a whitelisted function/constant) is a
+    PARAMETER, ordered by first appearance across the drift/D texts. D must not reference state (additive
+    noise only in v1).
+    """
+    if not variables:
+        raise ModelParseError("Declare at least one state variable.")
+    var_names = [str(v.get("name", "")).strip() for v in variables]
+    for name in var_names:
+        if not _NAME_RE.match(name):
+            raise ModelParseError(f"'{name}' is not a valid variable name (letters/digits/_, no leading _ or digit).")
+        if name in RESERVED_NAMES:
+            raise ModelParseError(f"'{name}' is reserved and cannot be a variable name.")
+    if len(set(var_names)) != len(var_names):
+        raise ModelParseError("Variable names must be unique.")
+
+    # Parameter discovery in text order (numeric literals pre-stripped): drift then D, per variable.
+    param_names: list[str] = []
+    for v, name in zip(variables, var_names):
+        for text in (v.get("drift", ""), v.get("D", "0")):
+            for ident in _identifiers(str(text).replace("^", "**")):
+                if ident in var_names or ident in param_names:
+                    continue
+                if ident in _GLOBAL_DICT:
+                    raise ModelParseError(f"'{ident}' is a reserved name and cannot be a parameter.")
+                if ident in RESERVED_NAMES:
+                    continue                                   # functions/constants, not parameters
+                if not _NAME_RE.match(ident):
+                    raise ModelParseError(f"'{ident}' is not a valid parameter name.")
+                param_names.append(ident)
+
+    state_syms = [sympy.Symbol(n) for n in var_names]
+    param_syms = [sympy.Symbol(n) for n in param_names]
+    local_dict = {n: s for n, s in zip(var_names, state_syms)}
+    local_dict.update({n: s for n, s in zip(param_names, param_syms)})
+    local_dict.update({n: cls for n, (cls, _, _) in _FUNCS.items()})
+    local_dict.update(_CONSTANTS)
+    allowed = set(state_syms) | set(param_syms)
+
+    # Pass 1 -- parse + validate every expression (so the used-symbol set is known before indices
+    # are frozen: a discovered name the tokenizer never emits as a Symbol must not become a column).
+    drift_exprs, diff_exprs = [], []
+    used: set = set()
+    for v, name in zip(variables, var_names):
+        where_d = f"d{name}/dt"
+        expr = _parse_one(str(v.get("drift", "")), where_d, local_dict)
+        stray = expr.free_symbols - allowed
+        if stray:
+            raise ModelParseError(f"{where_d}: unknown symbol(s) {sorted(map(str, stray))}.")
+        drift_exprs.append(expr)
+        used |= expr.free_symbols
+
+        where_n = f"D of {name}"
+        d_expr = _parse_one(str(v.get("D", "0") or "0"), where_n, local_dict)
+        if d_expr.free_symbols & set(state_syms):
+            raise ModelParseError(
+                f"{where_n}: the noise strength may only use parameters, not state variables "
+                "(additive white noise only).")
+        stray = d_expr.free_symbols - allowed
+        if stray:
+            raise ModelParseError(f"{where_n}: unknown symbol(s) {sorted(map(str, stray))}.")
+        diff_exprs.append(d_expr)
+        used |= d_expr.free_symbols
+
+    # Keep only parameters the parsed expressions actually reference: this drops any phantom the
+    # literal-stripping missed AND unused typo-parameters, keeping the positional contract honest.
+    param_syms = [s for s in param_syms if s in used]
+    param_names = [str(s) for s in param_syms]
+
+    # Pass 2 -- compile against the final (state + used-param) argument layout.
+    arg_index = {s: i for i, s in enumerate(state_syms + param_syms)}
+    drift_fns = [_compile_tree(expr, arg_index, f"d{name}/dt")
+                 for name, expr in zip(var_names, drift_exprs)]
+    diff_fns = [_compile_tree(expr, arg_index, f"D of {name}")
+                for name, expr in zip(var_names, diff_exprs)]
+
+    return CompiledUserModel(var_names=var_names, param_names=param_names,
+                             drift_fns=drift_fns, diff_fns=diff_fns)
+
+
+class UserModel:
+    """Generic runtime model for user-defined SDEs; satisfies the eager-solver duck-typed contract."""
+
+    def __init__(self, compiled: CompiledUserModel, params, force: torch.Tensor, batch_size: int,
+                 device: torch.device = torch.device('cpu'), dtype: torch.dtype = torch.float32):
+        self.batch_size = batch_size
+        self.device = device
+        self.dtype = dtype
+        self._compiled = compiled
+
+        params = tuple(params)
+        if len(params) != len(compiled.param_names):
+            raise ValueError(
+                f"UserModel expects {len(compiled.param_names)} parameter columns "
+                f"({compiled.param_names}), got {len(params)}.")
+        self.params = tuple(p.to(dtype=self.dtype, device=self.device) for p in params)
+
+        n_vars = len(compiled.var_names)
+        if force.shape[1] != n_vars:
+            raise ValueError(
+                f"UserModel force tensor must have one channel per state variable "
+                f"({n_vars}), got shape {tuple(force.shape)}.")
+        self.force = force.to(dtype=self.dtype, device=self.device)
+
+        # Additive noise: D depends on params only, so g = sqrt(2 D) is evaluated ONCE and cached
+        # (the solver's state_dep_drift=False path reads g() once before the loop).
+        zeros = torch.zeros(self.batch_size, dtype=self.dtype, device=self.device)
+        args = tuple(zeros for _ in range(n_vars)) + self.params
+        cols = []
+        for name, fn in zip(compiled.var_names, compiled.diff_fns):
+            d_val = self._as_batch(fn(args))
+            if bool((d_val < 0).any()):
+                raise ValueError(f"Noise strength D of '{name}' must be non-negative.")
+            cols.append(torch.sqrt(2.0 * d_val))
+        self._g = torch.stack(cols, dim=-1)                      # (batch, d) diagonal amplitudes
+
+    def _as_batch(self, val) -> torch.Tensor:
+        """Normalize a compiled-expression result (tensor or python number) to a (batch,) tensor."""
+        if not torch.is_tensor(val):
+            val = torch.tensor(float(val), dtype=self.dtype, device=self.device)
+        if val.dim() == 0:
+            val = val.expand(self.batch_size)
+        return val
+
+    def f(self, x: torch.Tensor, t) -> torch.Tensor:
+        args = tuple(x[:, j] for j in range(len(self._compiled.var_names))) + self.params
+        cols = [self._as_batch(fn(args)) + self.force[:, j, t]
+                for j, fn in enumerate(self._compiled.drift_fns)]
+        return torch.stack(cols, dim=1)
+
+    def g(self) -> torch.Tensor:
+        return self._g

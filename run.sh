@@ -1,5 +1,5 @@
 #!/bin/bash
-# Launch the MAPIS desktop GUI (PySide6) on macOS / Linux. Windows users: run.bat.
+# Launch the PRISM desktop GUI (PySide6) on macOS / Linux. Windows users: run.bat.
 #
 # Must be launched such that the working directory is the repo root -- core/config.py builds all
 # Resources/ paths from the current working directory. The cd below guarantees that regardless of where

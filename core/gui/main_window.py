@@ -1,9 +1,14 @@
-"""The MAPIS main window: a NavShell (persistent "MAPIS" title + back arrow) over a home/splash screen
-and four section screens. Replaces the old flat four-tab layout; the section panels are reused
-unchanged in behaviour -- only where they are mounted changes. Cross-validation now lives inside the
-FDT Analysis section, and the SBI panel is split into the Parameter Inference section's gated tabs."""
+"""The PRISM main window: a NavShell (persistent "PRISM" title + back arrow) over a home/splash screen,
+four section screens, and two Settings-reached screens (the Settings/Help screen and the user-defined
+model builder). Replaces the old flat four-tab layout; the section panels are reused unchanged in
+behaviour -- only where they are mounted changes. Cross-validation now lives inside the FDT Analysis
+section, and the SBI panel is split into the Parameter Inference section's gated tabs."""
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import QMainWindow, QMenu, QMessageBox
+
+from core import registry
+from core.config import VALID_MODELS
+from core.Helpers import model_store
 
 from . import settings, theming
 from .panels.base_panel import BasePanel
@@ -13,6 +18,7 @@ from .panels.reduction_panel import ReductionPanel
 from .panels.simulate_panel import SimulatePanel
 from .screens.home_screen import HomeScreen
 from .screens.inference_screen import InferenceScreen
+from .screens.model_builder_screen import ModelBuilderScreen
 from .screens.nav_shell import NavShell
 from .screens.section_screen import SectionScreen
 from .screens.settings_screen import SettingsScreen
@@ -22,7 +28,7 @@ class MainWindow(QMainWindow):
     def __init__(self, appearance=None):
         super().__init__()
         self.appearance = appearance         # theming.Appearance or None (tests build without one)
-        self.setWindowTitle("MAPIS — hair-cell parameter inference & FDT analysis")
+        self.setWindowTitle("PRISM")
         self.resize(1300, 820)
 
         self.nav = NavShell()
@@ -50,12 +56,27 @@ class MainWindow(QMainWindow):
         # button), so the back arrow still returns Home.
         current_mode = (appearance.mode() if appearance is not None
                         else settings.get_appearance(settings.settings()))
-        self.settings_screen = SettingsScreen(self.set_appearance_mode, current_mode)
+        qs0 = settings.settings()
+        self.settings_screen = SettingsScreen(self.set_appearance_mode, current_mode,
+                                              on_open_builder=self._open_model_builder,
+                                              on_edit_model=self._edit_user_model,
+                                              on_delete_model=self._delete_user_model,
+                                              on_system_accent=self._set_system_accent,
+                                              system_accent=settings.get_system_accent(qs0),
+                                              on_force_inter=self._set_force_inter,
+                                              force_inter=settings.get_force_inter(qs0))
         idx_settings = self.nav.add_screen(self.settings_screen)
+
+        # The model builder: reached only from the Settings "User-defined models" group (never a Home
+        # tile); its own Back button returns to Settings, the nav back arrow still returns Home.
+        self.model_builder_screen = ModelBuilderScreen(
+            on_saved=self._on_user_models_changed,
+            on_back=lambda: self.nav.go_to(self._section_index["Settings"]))
+        idx_builder = self.nav.add_screen(self.model_builder_screen)
 
         self._section_index = {"Reduction Map": idx_red, "FDT Analysis": idx_fdt,
                                "Parameter Inference": idx_inf, "Simulate": idx_sim,
-                               "Settings": idx_settings}
+                               "Settings": idx_settings, "Model builder": idx_builder}
         home.navigate.connect(lambda name: self.nav.go_to(self._section_index[name]))
         self._build_settings_menu(current_mode)
         self.nav.go_home()                                          # ALWAYS open on Home
@@ -101,6 +122,87 @@ class MainWindow(QMainWindow):
         if act is not None and not act.isChecked():
             act.setChecked(True)
         self.settings_screen.set_mode(mode)
+
+    # ── appearance extras (Settings checkboxes) ───────────────────────────────
+    def _set_system_accent(self, enabled: bool):
+        """Persist + live-apply the follow-OS-accent toggle (no-op appearance under tests)."""
+        qs = settings.settings()
+        settings.set_system_accent(qs, enabled)
+        qs.sync()
+        if self.appearance is not None:
+            self.appearance.set_system_accent(enabled)
+
+    def _set_force_inter(self, enabled: bool):
+        """Persist + live-apply the Inter-everywhere toggle (custom-painted caches settle on restart)."""
+        qs = settings.settings()
+        settings.set_force_inter(qs, enabled)
+        qs.sync()
+        from PySide6.QtWidgets import QApplication
+        from . import fonts
+        app = QApplication.instance()
+        if app is not None:
+            fonts.load_app_font(app, prefer_inter=enabled)
+
+    # ── user-defined models (Settings group + builder screen) ─────────────────
+    def _open_model_builder(self):
+        self.model_builder_screen.reset()
+        self.nav.go_to(self._section_index["Model builder"])
+
+    def _edit_user_model(self, name: str):
+        try:
+            self.model_builder_screen.load_existing(name)
+        except Exception as e:                       # noqa: BLE001 -- a corrupt file must not crash
+            QMessageBox.warning(self, "Cannot edit model", f"Could not load '{name}':\n{e}")
+            return
+        self.nav.go_to(self._section_index["Model builder"])
+
+    def _delete_user_model(self, name: str):
+        if BasePanel._running:
+            QMessageBox.information(self, "A task is running",
+                                    "Wait for the running task to finish before deleting a model.")
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Delete model")
+        box.setText(f"Delete the user-defined model '{name}'?")
+        box.setInformativeText("This removes its definition and its generated Bounds/Cells/Units files.")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        if box.exec() != QMessageBox.Yes:
+            return
+        try:
+            model_store.delete_user_model(name)
+        except Exception as e:                       # noqa: BLE001
+            QMessageBox.warning(self, "Delete failed", str(e))
+            return
+        registry.unregister(name)
+        self._on_user_models_changed()
+
+    def _on_user_models_changed(self, _name: str = ""):
+        """After a save/delete: re-sync every model combo + the Settings list."""
+        self._refresh_model_combos()
+        self.settings_screen.refresh_models()
+
+    def _refresh_model_combos(self):
+        """Reload every panel's model combo from the live VALID_MODELS list, keeping the selection
+        (falling back to NADROWSKI if the previous selection was deleted). The panel's model-changed
+        hook is re-fired ONLY when the selection actually changed: the hooks refresh cell/bounds
+        pickers (which resets them to their first entry), so firing on a mere item-list update would
+        silently discard the user's picker selections app-wide on every model save/delete."""
+        for panel in self._all_panels():
+            combo = getattr(panel, "model_combo", None)
+            if combo is None:
+                continue
+            current = combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItems(VALID_MODELS)
+            combo.setCurrentText(current if current in VALID_MODELS else "NADROWSKI")
+            combo.blockSignals(False)
+            if combo.currentText() != current:
+                handler = getattr(panel, "_on_model_changed", None)
+                if handler is not None:
+                    handler(combo.currentText())
 
     def _all_panels(self):
         return (self.reduction_screen.panels() + self.fdt_screen.panels()

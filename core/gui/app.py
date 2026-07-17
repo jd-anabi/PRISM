@@ -5,9 +5,9 @@ import traceback
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from core import config
+from core import config, registry
 
-from . import settings, theming
+from . import fonts, settings, theming
 from .main_window import MainWindow
 
 
@@ -39,6 +39,10 @@ def build_app(argv=None):
     # Performance meter. The GUI is the only caller that flips this; the CLI keeps both bars.
     config.QUIET_SEGMENT_BAR = True
 
+    # Register saved user-defined models BEFORE MainWindow: the model combos read VALID_MODELS at
+    # construction. Per-file failures land in registry.load_errors (shown on the Settings screen).
+    registry.load_user_models()
+
     app = QApplication.instance() or QApplication(argv if argv is not None else sys.argv)
     app.setOrganizationName(settings.ORG)   # both are needed for a stable QSettings store on Windows
     app.setApplicationName(settings.APP)
@@ -46,8 +50,11 @@ def build_app(argv=None):
     # colour-scheme switch recolours consistently on Win/Mac/Linux. Theming lives here (never in
     # MainWindow) so it stays out of the test path.
     app.setStyle("Fusion")
+    qs = settings.settings()
+    fonts.load_app_font(app, prefer_inter=settings.get_force_inter(qs))  # base UI font before any widget
     appearance = theming.Appearance(app)
-    appearance.set_mode(settings.get_appearance(settings.settings()))   # restore the saved appearance
+    appearance.set_system_accent(settings.get_system_accent(qs))         # OS accent (opt-in) ...
+    appearance.set_mode(settings.get_appearance(qs))                     # ... then restore + apply Fluent
 
     window_ref = {}
     _install_excepthook(lambda: window_ref.get("w"))

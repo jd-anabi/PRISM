@@ -1,0 +1,126 @@
+"""Runtime model registry: the three built-ins plus user-defined models (Resources/Models/*.json).
+
+The many existing consumers of ``config.VALID_MODELS`` / ``config.VALID_LABELS`` index the two lists
+positionally, so user models are APPENDED IN PLACE to those live lists -- the built-ins keep indices
+0-2 and nothing downstream changes. Loading is an explicit call (``load_user_models()``, from
+core.gui.app.build_app and core.__main__), never an import side effect: the GUI test suite constructs
+MainWindow directly and must keep seeing pristine registries.
+
+User models are Simulate-only in v1: they carry no Prior/INIT_SHAPES entries and the FDT/Inference
+panels gate them out; ``is_user_model`` is the single source of truth for that gate.
+"""
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import torch
+
+from core import config
+
+
+@dataclass
+class ModelSpec:
+    name: str                          # canonical (uppercase) name as shown in every model dropdown
+    labels: list                       # per-ND-param plot labels (built-ins: LaTeX; user models: names)
+    state_dep_drift: bool = False      # user models: always False in v1 (D is params-only)
+    is_user_model: bool = False
+    n_vars: int = 0
+    variables: list = field(default_factory=list)   # user models: [{name, drift, D, init, forcing}]
+    compiled: object = None            # user models: user_model.CompiledUserModel
+    spec_path: Path | None = None      # user models: the Resources/Models/<name>.json source
+
+
+_BUILTINS = ("BP", "NADROWSKI", "HOPF")
+_SPECS: dict = {
+    "BP":        ModelSpec("BP", config.BP_LABELS, state_dep_drift=False, n_vars=5),
+    "NADROWSKI": ModelSpec("NADROWSKI", config.NADROWSKI_LABELS, state_dep_drift=True, n_vars=3),
+    "HOPF":      ModelSpec("HOPF", config.HOPF_LABELS, state_dep_drift=False, n_vars=2),
+}
+
+# (path, message) per model file that failed to load -- shown on the Settings screen, never raised.
+load_errors: list = []
+
+
+def get(name: str) -> "ModelSpec | None":
+    return _SPECS.get(str(name).upper())
+
+
+def is_user_model(name: str) -> bool:
+    spec = get(name)
+    return spec is not None and spec.is_user_model
+
+
+def state_dep_drift(name: str) -> bool:
+    """The model's state-dependent-diffusion flag; falls back to the legacy name test for unknowns."""
+    spec = get(name)
+    if spec is not None:
+        return spec.state_dep_drift
+    return "nadrowski" in str(name).lower()
+
+
+def register(spec: ModelSpec) -> None:
+    """Register (or re-register) a spec and keep the live VALID_MODELS/VALID_LABELS lists in sync.
+
+    Append-only for new names: the built-ins MUST keep indices 0-2 (several call sites and tests index
+    the parallel lists positionally).
+    """
+    _SPECS[spec.name] = spec
+    if spec.name in config.VALID_MODELS:
+        config.VALID_LABELS[config.VALID_MODELS.index(spec.name)] = spec.labels
+    else:
+        config.VALID_MODELS.append(spec.name)
+        config.VALID_LABELS.append(spec.labels)
+    assert list(config.VALID_MODELS[:3]) == list(_BUILTINS), \
+        "VALID_MODELS built-in order changed -- positional label lookups would silently break"
+
+
+def unregister(name: str) -> None:
+    """Remove a USER model from the registry + the live lists. Built-ins cannot be removed."""
+    name = str(name).upper()
+    spec = _SPECS.get(name)
+    if spec is None or not spec.is_user_model:
+        return
+    del _SPECS[name]
+    if name in config.VALID_MODELS:
+        idx = config.VALID_MODELS.index(name)
+        config.VALID_MODELS.pop(idx)
+        config.VALID_LABELS.pop(idx)
+
+
+def user_model_names() -> list:
+    return [s.name for s in _SPECS.values() if s.is_user_model]
+
+
+def load_user_models() -> None:
+    """Scan config.MODELS_PATH (at CALL time -- tests monkeypatch the path) and register every valid
+    saved model; collect per-file failures into ``load_errors``. Idempotent; never raises."""
+    from core.Helpers import model_store
+    from core.Models.user_model import parse_user_model
+
+    load_errors.clear()
+    for path in model_store.list_user_models():
+        try:
+            doc = model_store.load_user_model(path)
+            compiled = parse_user_model(doc["variables"])
+            register(ModelSpec(
+                name=doc["name"],
+                labels=list(compiled.param_names),
+                state_dep_drift=False,
+                is_user_model=True,
+                n_vars=len(compiled.var_names),
+                variables=doc["variables"],
+                compiled=compiled,
+                spec_path=Path(path),
+            ))
+        except Exception as e:                                  # noqa: BLE001 -- one bad file must not
+            load_errors.append((Path(path), str(e)))            # brick startup (CrossValPanel precedent)
+
+
+def make_user_simulator(spec: ModelSpec, params: torch.Tensor, force: torch.Tensor,
+                        inits: torch.Tensor, t: torch.Tensor, *, segs: int = 1, batch_size: int = 1,
+                        device: torch.device = torch.device('cpu')):
+    """Construct a UserSimulator for a registered user-model spec (lazy import keeps registry light)."""
+    from core.Simulator.user_simulator import UserSimulator
+    if spec.compiled is None:
+        raise RuntimeError(f"User model '{spec.name}' has no compiled definition.")
+    return UserSimulator(spec.compiled, params, force, inits, t, segs=segs,
+                         batch_size=batch_size, device=device)

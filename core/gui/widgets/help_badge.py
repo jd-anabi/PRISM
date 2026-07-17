@@ -1,20 +1,14 @@
 """A small circular "?" help badge shown next to a configurable option's name.
 
 Hover shows the description as a tooltip; clicking pins it at the cursor (so a click/touch user, or
-anyone who wants to read it without holding the mouse still, gets it too). Colours come from the
-palette, so it reads correctly in both light and dark themes.
+anyone who wants to read it without holding the mouse still, gets it too). Styling lives in the global
+Fluent stylesheet (design.build_qss) keyed on objectName ``helpBadge``, so it recolours with the theme.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QToolTip, QWidget
 
 from core.Helpers import labels as _labels
-
-_STYLE = (
-    "QToolButton { border: 1px solid palette(mid); border-radius: 8px; color: palette(mid);"
-    " font-weight: bold; font-size: 10px; padding: 0px; }"
-    "QToolButton:hover { border-color: palette(highlight); color: palette(highlight); }"
-)
 
 
 class HelpBadge(QToolButton):
@@ -23,12 +17,12 @@ class HelpBadge(QToolButton):
     def __init__(self, text: str, parent=None):
         super().__init__(parent)
         self._text = text
+        self.setObjectName("helpBadge")         # -> QToolButton#helpBadge in the global Fluent QSS
         self.setText("?")
         self.setToolTip(text)
         self.setFixedSize(16, 16)
         self.setCursor(Qt.WhatsThisCursor)
         self.setFocusPolicy(Qt.NoFocus)         # a help hint must never steal tab focus from the form
-        self.setStyleSheet(_STYLE)
         self.clicked.connect(self._pin)
 
     def _pin(self):

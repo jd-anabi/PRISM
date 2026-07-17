@@ -67,6 +67,7 @@ UNITS_PATH   = _ROOT / "Units"
 PRIOR_PATH   = _ROOT / "Priors"
 POSTERIOR_PATH = _ROOT / "Posteriors"
 PLOT_PATH    = _ROOT / "Plots"
+MODELS_PATH  = _ROOT / "Models"      # user-defined model definitions (see core/registry.py)
 
 # === PARAMETER LABELS (for plotting) ===
 HOPF_LABELS = [r"$\mu$", r"$\beta$", r"$\sigma_x$", r"$\sigma_y$"]

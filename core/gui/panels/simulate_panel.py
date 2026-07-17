@@ -63,6 +63,7 @@ class SimulatePanel(BasePanel):
         self.frame_steps = IntField(2000)
         self.fps = IntField(30)
         self.btn_start = QPushButton("Start streaming")
+        self.btn_start.setProperty("accent", True)        # primary CTA (Fluent accent)
         self.btn_start.clicked.connect(self._start)
         self.btn_save_video = QPushButton("Save video…")
         self.btn_save_video.setToolTip("Save the last run as an animation (.mp4 or .gif)")

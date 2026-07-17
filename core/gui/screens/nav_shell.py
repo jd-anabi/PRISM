@@ -1,27 +1,27 @@
-"""The MAPIS navigation shell: a persistent top-left title + back arrow over a stack of screens.
+"""The PRISM navigation shell: a persistent top-left title + back arrow over a stack of screens.
 
 Navigation is two levels deep -- a Home/splash screen (index 0) and the section screens -- so the back
-arrow always returns Home. The "MAPIS" title stays in the top-left AT ALL TIMES; the back arrow sits
+arrow always returns Home. The "PRISM" title stays in the top-left AT ALL TIMES; the back arrow sits
 just below it and is hidden on Home.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 
-from ..widgets.anim import fade_in
+from ..widgets.anim import slide_screens, snapshot
 
 
 class NavShell(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.title = QLabel("MAPIS")
-        self.title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        self.title = QLabel("PRISM")
+        self.title.setProperty("type", "subtitle")     # Fluent type ramp (global QSS)
 
         self.btn_back = QToolButton()
+        self.btn_back.setObjectName("navBack")          # -> QToolButton#navBack in the global QSS
         self.btn_back.setText("←")
         self.btn_back.setToolTip("Back to the home screen")
         self.btn_back.setAutoRaise(True)
-        self.btn_back.setStyleSheet("font-size: 18px;")
         self.btn_back.clicked.connect(self.go_home)
         self.btn_back.setVisible(False)                  # hidden on Home; shown on any section
 
@@ -40,10 +40,10 @@ class NavShell(QWidget):
         # A persistent settings gear in the bottom-left seam (shown on every screen). Its menu is
         # attached by MainWindow (which knows the appearance controller + the Settings screen index).
         self.btn_settings = QToolButton()
+        self.btn_settings.setObjectName("navSettings")   # -> QToolButton#navSettings in the global QSS
         self.btn_settings.setText("⚙")
         self.btn_settings.setToolTip("Appearance & settings")
         self.btn_settings.setAutoRaise(True)
-        self.btn_settings.setStyleSheet("font-size: 18px;")
         self.btn_settings.setPopupMode(QToolButton.InstantPopup)
 
         settings_row = QHBoxLayout()
@@ -61,14 +61,20 @@ class NavShell(QWidget):
         return self.stack.addWidget(widget)
 
     def go_home(self) -> None:
-        self.stack.setCurrentIndex(0)          # logical state first (tests read it synchronously)
-        self._sync_back()
-        fade_in(self.stack.currentWidget())    # then fade the newly-shown screen (no-op under offscreen)
+        self._navigate(0)
 
     def go_to(self, index: int) -> None:
+        self._navigate(index)
+
+    def _navigate(self, index: int) -> None:
+        prev = self.stack.currentIndex()
+        # Snapshot the OUTGOING screen before the switch, flip logical state SYNCHRONOUSLY (tests read the
+        # index / back-arrow right after with no pump), then slide the incoming screen in over the snapshot.
+        old_pm = snapshot(self.stack.currentWidget()) if index != prev else None
         self.stack.setCurrentIndex(index)
         self._sync_back()
-        fade_in(self.stack.currentWidget())
+        if index != prev:
+            slide_screens(self.stack, old_pm, forward=index > prev)   # no-op offscreen / not-yet-visible
 
     def _sync_back(self) -> None:
         self.btn_back.setVisible(self.stack.currentIndex() != 0)

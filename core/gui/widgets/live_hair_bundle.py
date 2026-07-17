@@ -95,6 +95,30 @@ class LiveHairBundleView(pg.GraphicsLayoutWidget):
         self._buf_x = np.zeros(self._w, dtype=np.float64)
         self._count = 0
         self.reset()
+        self._install_theme()
+
+    def _install_theme(self) -> None:
+        """Follow the app's Fluent theme for the trace background/foreground (the heatmap keeps its
+        inferno LUT). No-op when there's no active Appearance (tests) -> keeps the pyqtgraph default."""
+        from .. import theming
+        ap = theming.active_appearance()
+        if ap is None:
+            return
+        self._apply_theme(ap.is_dark())
+        ap.theme_changed.connect(self._apply_theme)      # Qt auto-disconnects when this view is destroyed
+
+    def _apply_theme(self, dark: bool) -> None:
+        from .. import design
+        t = design.tokens(dark)
+        bg, fg = t["base"], t["text"]
+        self.setBackground(bg)
+        for name in ("left", "bottom"):
+            axis = self._trace_plot.getAxis(name)
+            axis.setPen(fg)
+            axis.setTextPen(fg)
+        self._curve.setPen(pg.mkPen(color=fg, width=1))
+        self._trace_plot.setTitle("Hair-bundle displacement", color=fg)
+        self._hm_plot.setTitle("Top-down hair bundle", color=fg)
 
     def _cx(self, x0_norm: float) -> float:
         """Map a normalized displacement in [0, 1] to a horizontal center inside the safe margin."""

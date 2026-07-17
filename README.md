@@ -1,6 +1,6 @@
 # GFDTResearch
 
-Research for running GFDT theory and experiments on a simulated biophysical model of the inner-ear hair-cell bundles. The application (**MAPIS**) is a PySide6 desktop GUI.
+Research for running GFDT theory and experiments on a simulated biophysical model of the inner-ear hair-cell bundles. The application (**PRISM**) is a PySide6 desktop GUI.
 
 ## Installation
 

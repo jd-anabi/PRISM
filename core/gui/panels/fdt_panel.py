@@ -9,7 +9,7 @@ explicit booleans; leaving them None would block the worker forever on an input(
 """
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPushButton
 
-from core import cli
+from core import cli, registry
 from core.config import CELL_PATH, PLOT_PATH, VALID_MODELS
 from core.FDT.fdt_pipeline import run_fdt
 
@@ -73,6 +73,7 @@ class FdtPanel(BasePanel):
             lambda on: self.confirm_production.setEnabled(not on))   # only consulted when sanity runs
 
         self.btn_run = QPushButton("Run FDT analysis")
+        self.btn_run.setProperty("accent", True)          # primary CTA (Fluent accent)
         self.btn_run.clicked.connect(self._run)
 
         add_help_row(form, "Model", self.model_combo, HELP["model"])
@@ -90,6 +91,14 @@ class FdtPanel(BasePanel):
     def _on_model_changed(self, model: str):
         self.cell_picker.base_path = CELL_PATH / model.lower()
         self.cell_picker.refresh()
+        # User-defined models are Simulate-only (v1): disable the CTA with a visible reason instead of
+        # letting the run die on the Nadrowski-coupled T_eff params (see _run_fdt_guarded).
+        is_user = registry.is_user_model(model)
+        self.btn_run.setEnabled(not is_user)
+        if is_user:
+            self.log_pane.append_line(
+                f"'{model}' is a user-defined model. FDT analysis does not support user-defined "
+                "models (v1); use the Simulate section.", "warning")
 
     def _run(self):
         cell = self.cell_picker.selected_path()
@@ -97,9 +106,13 @@ class FdtPanel(BasePanel):
             self.log_pane.append_line("Select a cell file first.", "warning")
             return
         model = self.model_combo.currentText()
+        if registry.is_user_model(model):                 # backstop; the CTA is already disabled
+            self.log_pane.append_line(
+                "FDT analysis does not support user-defined models (v1); use Simulate.", "warning")
+            return
         try:
             cfg = cli.make_fdt_config(
-                model, "nadrowski" in model.lower(), cell,
+                model, registry.state_dep_drift(model), cell,
                 n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
                 freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value())
         except Exception as e:                       # noqa: BLE001 -- see BasePanel._config_error

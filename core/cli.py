@@ -42,7 +42,12 @@ def select_model() -> tuple[str, list[str], bool]:
     model_num = int(input("\nWhich model would you like to run? Select a number: "))
     model = VALID_MODELS[model_num - 1]
     labels = VALID_LABELS[model_num - 1]
-    state_dep_drift = "nadrowski" in model.lower()
+    from core import registry
+    if registry.is_user_model(model):
+        raise ValueError(
+            f"'{model}' is a user-defined model. User-defined models are Simulate-only; "
+            "use the GUI's Simulate section.")
+    state_dep_drift = registry.state_dep_drift(model)
     if model not in VALID_MODELS:
         raise ValueError(f"Invalid model selection. Please choose from {VALID_MODELS}.")
     helpers.clear_screen()

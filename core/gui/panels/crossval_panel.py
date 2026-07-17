@@ -78,6 +78,7 @@ class CrossValPanel(BasePanel):
         self.f0 = FloatField(0.05)
 
         self.btn_run = QPushButton("Run sweep study")
+        self.btn_run.setProperty("accent", True)          # primary CTA (Fluent accent)
         self.btn_run.clicked.connect(self._run)
 
         form.addRow(QLabel(f"Model is fixed to {_MODEL}."))

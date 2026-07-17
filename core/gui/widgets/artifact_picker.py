@@ -20,6 +20,7 @@ class ArtifactPicker(QWidget):
 
         self.combo = QComboBox()
         refresh = QPushButton("⟳")
+        refresh.setObjectName("iconButton")     # compact square button -> small QSS padding (glyph fits)
         refresh.setFixedWidth(32)
         refresh.setToolTip("Rescan the folder")
         refresh.clicked.connect(self.refresh)

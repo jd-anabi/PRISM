@@ -22,10 +22,14 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from core import cli
+from core import cli, forcing, registry
 from core.SBI import pipeline
 from core.Solvers import sdeint
 from core.config import BOUNDS_PATH, DT_EXP_S, VALID_LABELS, VALID_MODELS, cpu_device
+
+# ND magnitude ceiling for the divergence guard: built-in ND states are O(1)-O(1e2); an arbitrary
+# user-typed drift can blow up under fixed-step Euler-Maruyama, and NaN/inf silently flatlines the plot.
+BLOWUP_ND_LIMIT = 1e6
 
 from ..streams import WorkerCancelled
 
@@ -41,9 +45,23 @@ def build_stream_config(model: str, cell_path: str):
     catches it as a config error.
     """
     bounds_file = BOUNDS_PATH / model.lower() / Path(cell_path).name
-    labels = VALID_LABELS[VALID_MODELS.index(model)]
-    state_dep_drift = "nadrowski" in model.lower()
+    spec = registry.get(model)
+    if spec is not None and spec.is_user_model:
+        labels = list(spec.labels)
+    else:
+        labels = VALID_LABELS[VALID_MODELS.index(model)]
+    state_dep_drift = registry.state_dep_drift(model)
     cfg = cli.make_sim_config(model, labels, state_dep_drift, str(bounds_file))
+    if spec is not None and spec.is_user_model and spec.compiled is not None:
+        # The JSON (-> spec.compiled) and the emitted Bounds file must agree on the parameter NAME
+        # ORDER -- torch.unbind binds columns positionally, so a hand-edited JSON over a stale Bounds
+        # file would otherwise mis-bind values silently (wrong physics, no error).
+        expected, actual = list(spec.compiled.param_names), list(cfg.params_dict.keys())
+        if actual != expected:
+            raise ValueError(
+                f"Model '{model}' is out of sync with its bounds file: the definition uses "
+                f"parameters {expected} but the bounds file lists {actual}. Re-save the model "
+                "from the Settings model builder to regenerate its files.")
     cli.load_and_validate_gt(cfg, cell_path)
     cfg.hw = cpu_device()
     return cfg
@@ -73,6 +91,7 @@ class StreamPlan:
     rescale_idx: dict
     params_tensor: torch.Tensor     # (1, n_params)
     inits_tensor: torch.Tensor      # (1, n_vars)
+    user_spec: object = None        # registry.ModelSpec for user-defined models, else None
 
 
 def plan_stream(cfg, t_obs_s: float) -> StreamPlan:
@@ -103,12 +122,18 @@ def plan_stream(cfg, t_obs_s: float) -> StreamPlan:
     x_scale = rescale_gt[:, rescale_idx["x_scale"]].item()
     x_offset = (rescale_gt[:, rescale_idx["x_offset"]].item() if "x_offset" in rescale_idx else 0.0)
 
+    # User models drive ONE force channel per state variable (zeros where unforced); built-ins keep
+    # the legacy 1-or-2-channel sinusoidal convention.
+    spec = registry.get(cfg.model)
+    user_spec = spec if (spec is not None and spec.is_user_model) else None
+    n_channels = spec.n_vars if user_spec is not None else (2 if "amp_y" in forcing_idx else 1)
+
     return StreamPlan(
         dt_nd=dt_nd_min, subsample_factor=subsample_factor, steady_steps=steady_steps, n_obs=n_obs,
-        total_steps=total_steps, n_channels=(2 if "amp_y" in forcing_idx else 1),
+        total_steps=total_steps, n_channels=n_channels,
         state_dep_drift=cfg.state_dep_drift, model=cfg.model, x_scale=x_scale, x_offset=x_offset,
         forcing_gt=forcing_gt, rescale_gt=rescale_gt, forcing_idx=forcing_idx, rescale_idx=rescale_idx,
-        params_tensor=cfg.params_tensor, inits_tensor=cfg.inits_tensor,
+        params_tensor=cfg.params_tensor, inits_tensor=cfg.inits_tensor, user_spec=user_spec,
     )
 
 
@@ -133,7 +158,12 @@ def _make_simulator(plan: StreamPlan, dtype, device):
     """
     placeholder_force = torch.zeros((1, plan.n_channels, 2), dtype=dtype, device=device)
     placeholder_t = torch.zeros(2, dtype=dtype, device=device)
-    sim_cls = pipeline.VALID_SIMS[plan.model.lower()]
+    if plan.user_spec is not None:
+        # UserSimulator raises RuntimeError natively (no exit()), so no SystemExit translation needed.
+        return registry.make_user_simulator(plan.user_spec, plan.params_tensor, placeholder_force,
+                                            plan.inits_tensor, placeholder_t, segs=1, batch_size=1,
+                                            device=device)
+    sim_cls = pipeline._sim_class(plan.model)
     try:
         return sim_cls(plan.params_tensor, placeholder_force, plan.inits_tensor, placeholder_t,
                        segs=1, batch_size=1, device=device)
@@ -180,12 +210,22 @@ def run_simulation_stream(cfg, t_obs_s: float, frame_steps: int = 2000, fps: flo
 
             m = min(frame_steps, plan.total_steps - step)        # fine steps this frame
             t_chunk = frame_time_grid(t_now, m, plan.dt_nd, dtype, device)
-            force_chunk = pipeline.build_nondim_sin_force_tensor(
-                plan.forcing_gt, t_chunk, plan.rescale_gt, plan.forcing_idx, plan.rescale_idx)
+            if plan.user_spec is not None:
+                force_chunk = forcing.build_user_force_tensor(
+                    plan.user_spec, plan.forcing_gt, t_chunk, plan.rescale_gt,
+                    plan.forcing_idx, plan.rescale_idx)
+            else:
+                force_chunk = pipeline.build_nondim_sin_force_tensor(
+                    plan.forcing_gt, t_chunk, plan.rescale_gt, plan.forcing_idx, plan.rescale_idx)
             sim.sde.force = force_chunk                           # mirror simulator.py:58 (NOT sim.force=)
             res = solver.euler(sim.sde, curr_inits,
                                (t_chunk[0].item(), t_chunk[-1].item()), m + 1,
                                state_dep_drift=plan.state_dep_drift)
+            if not bool(torch.isfinite(res).all()) or bool(res.abs().max() > BLOWUP_ND_LIMIT):
+                raise RuntimeError(
+                    f"Simulation diverged near t ≈ {sample_idx * DT_EXP_S:.3g} s (state left the "
+                    f"±{BLOWUP_ND_LIMIT:g} ND range or became NaN). Check the drift/noise "
+                    "expressions, initial conditions, or reduce the forcing amplitude.")
             curr_inits = res[-1]
             t_now += m * plan.dt_nd
             step += m

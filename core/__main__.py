@@ -1,5 +1,6 @@
 import sys
 
+from core import registry
 from core.cli import (select_mode, build_sim_config, build_fdt_config,
                       build_reduction_config, build_param_sweep_config, UnitParseError)
 from core.orchestrator import run
@@ -9,6 +10,9 @@ from core.Reduction import run_reduction_map
 
 
 def main() -> None:
+    # User models appear in the CLI model menu too, but selecting one raises a clear "Simulate-only"
+    # error in cli.select_model -- the CLI drives the SBI/FDT paths, which user models don't support.
+    registry.load_user_models()
     mode = select_mode()
     if mode == "FDT":
         run_fdt(build_fdt_config())

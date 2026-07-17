@@ -53,6 +53,24 @@ def set_appearance(qs: QSettings, mode: str) -> None:
     set_str(qs, "appearance/mode", mode)
 
 
+def get_system_accent(qs: QSettings) -> bool:
+    """Follow the Windows accent colour (opt-in; the fixed Fluent blue is the default)."""
+    return get_bool(qs, "appearance/system_accent", False)
+
+
+def set_system_accent(qs: QSettings, enabled: bool) -> None:
+    set_bool(qs, "appearance/system_accent", enabled)
+
+
+def get_force_inter(qs: QSettings) -> bool:
+    """Force the bundled Inter font on all platforms (default: prefer the native Fluent face)."""
+    return get_bool(qs, "appearance/force_inter", False)
+
+
+def set_force_inter(qs: QSettings, enabled: bool) -> None:
+    set_bool(qs, "appearance/force_inter", enabled)
+
+
 def restore_field(qs: QSettings, key: str, field) -> None:
     """Restore a FloatField / IntField / PathField / QLineEdit from its saved text, if present."""
     v = qs.value(key, None)

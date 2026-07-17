@@ -1,0 +1,148 @@
+"""Time-driven external forcing tensors, shared by the SBI pipeline and user-defined models.
+
+``build_nondim_force_tensor`` generalizes the original ``pipeline.build_nondim_sin_force_tensor``
+(which now delegates here with kind="sin" -- its numerical behaviour is pinned by a golden test) to
+four carrier shapes. Every kind follows the same recipe: build F_dim on the dimensional time grid,
+then nondimensionalize as F_nd = (F_dim - f_offset) / f_scale with the identical rescale logic
+(f_scale/f_offset from the rescale block if present, else Hopf-style f_scale = x_scale / t_scale).
+
+``build_user_force_tensor`` assembles the per-variable force tensor for a user model: ONE row per
+state variable, zeros where unforced -- the UserModel adds force[:, j, t] to variable j.
+
+Kept light on purpose (torch/numpy/helpers only, no sbi import) so the GUI and headless tests can
+import it without pulling the SBI stack.
+"""
+import numpy as np
+import torch
+
+from core.Helpers import helpers
+
+FORCE_KINDS = ("sin", "step", "triangular", "exponential")
+
+# Forcing parameter names per kind (the <name>_<var> suffix convention is applied by the caller).
+FORCING_PARAM_NAMES = {
+    "sin":         ("amp", "freq", "phase", "offset"),
+    "triangular":  ("amp", "freq", "phase", "offset"),
+    "step":        ("amp", "t0", "offset"),
+    "exponential": ("amp", "tau", "offset"),
+}
+
+
+def build_nondim_force_tensor(
+    forcing_params: torch.Tensor,
+    t_nd: torch.Tensor,
+    rescale_params: torch.Tensor,
+    forcing_idx: dict,
+    rescale_idx: dict,
+    kind: str = "sin",
+    *,
+    exp_sign: float = 1.0,
+    name_suffix: str = "",
+) -> torch.Tensor:
+    """
+    Build a batch of non-dimensional force tensors for one carrier ``kind``.
+
+    Carriers (all built in dimensional time t_dim, then nondimensionalized):
+        sin         : amp * sin(2*pi*freq*t_dim + phase) + offset
+        triangular  : amp * (2/pi) * asin(sin(2*pi*freq*t_dim + phase)) + offset
+        step        : offset + amp * (t_dim >= t0)
+        exponential : amp * exp(exp_sign * t_dim / tau) + offset      (exp_sign = +1 grow / -1 decay)
+
+    :param forcing_params: forcing parameter values, shape (batch, n_forcing).
+    :param t_nd: non-dimensional time vector, shape (T,).
+    :param rescale_params: rescaling parameter values, shape (batch, n_rescale).
+    :param forcing_idx: maps forcing param names to columns of forcing_params. Parameter names are
+                        looked up with ``name_suffix`` appended (user models name theirs amp_<var> etc.).
+                        For kind="sin" with no suffix, an "amp_y" entry builds the legacy second (Hopf)
+                        channel sharing freq/phase/offset.
+    :param rescale_idx: maps rescale param names to columns of rescale_params. If "f_scale" is absent,
+                        f_scale = x_scale / t_scale and f_offset = 0 (Hopf-style nondim).
+    :param kind: one of FORCE_KINDS.
+    :param exp_sign: +1.0 or -1.0; the exponential's grow/decay sign (spec metadata, not a parameter).
+    :param name_suffix: appended to every forcing param name before the forcing_idx lookup.
+    :return: non-dimensional force tensor, shape (batch, n_channels, T); n_channels = 2 only for the
+             legacy un-suffixed sin + "amp_y" case, else 1.
+    """
+    if kind not in FORCE_KINDS:
+        raise ValueError(f"Unknown forcing kind '{kind}'. Valid: {FORCE_KINDS}.")
+
+    def fp(name: str) -> torch.Tensor:
+        key = name + name_suffix
+        if key not in forcing_idx:
+            raise KeyError(f"Forcing parameter '{key}' missing for kind '{kind}'.")
+        return forcing_params[:, forcing_idx[key]].unsqueeze(1)          # (batch, 1)
+
+    # rescale params as (batch, 1) -- identical logic to the original sinusoidal builder
+    t_scale = rescale_params[:, rescale_idx["t_scale"]].unsqueeze(1)
+    t_offset = rescale_params[:, rescale_idx["t_offset"]].unsqueeze(1) if "t_offset" in rescale_idx else 0.0
+    if "f_scale" in rescale_idx:
+        f_scale = rescale_params[:, rescale_idx["f_scale"]].unsqueeze(1)
+        f_offset = (rescale_params[:, rescale_idx["f_offset"]].unsqueeze(1)
+                    if "f_offset" in rescale_idx else torch.zeros_like(f_scale))
+    else:
+        # Hopf-style nondim: F_ND = F_dim / (l * omega_0) -> f_scale = x_scale / t_scale, f_offset = 0.
+        x_scale = rescale_params[:, rescale_idx["x_scale"]].unsqueeze(1)
+        f_scale = x_scale / t_scale
+        f_offset = torch.zeros_like(f_scale)
+
+    # nd -> dim time; (T,) -> (1, T) for broadcasting against (batch, 1)
+    t_dim = helpers.rescale(t_nd.unsqueeze(0), t_scale, t_offset)        # (batch, T)
+
+    amp = fp("amp")
+    offset = fp("offset")
+
+    if kind in ("sin", "triangular"):
+        freq = fp("freq")
+        phase = fp("phase")
+        sin_term = torch.sin(2 * np.pi * freq * t_dim + phase)           # (batch, T)
+        if kind == "sin":
+            carrier = sin_term
+        else:
+            carrier = (2.0 / np.pi) * torch.asin(sin_term)
+        f_x_nd = (amp * carrier + offset - f_offset) / f_scale
+        if kind == "sin" and not name_suffix and "amp_y" in forcing_idx:
+            # Legacy second channel (ND Hopf): shares freq/phase/offset/f_scale/f_offset, own amplitude.
+            amp_y = forcing_params[:, forcing_idx["amp_y"]].unsqueeze(1)
+            f_y_nd = (amp_y * carrier + offset - f_offset) / f_scale
+            return torch.stack([f_x_nd, f_y_nd], dim=1)                  # (batch, 2, T)
+        return f_x_nd.unsqueeze(1)                                       # (batch, 1, T)
+
+    if kind == "step":
+        t0 = fp("t0")
+        f_dim = offset + amp * (t_dim >= t0).to(t_dim.dtype)
+    else:  # exponential
+        tau = fp("tau")
+        f_dim = amp * torch.exp(exp_sign * t_dim / tau) + offset
+    return ((f_dim - f_offset) / f_scale).unsqueeze(1)                   # (batch, 1, T)
+
+
+def build_user_force_tensor(
+    spec,
+    forcing_params: torch.Tensor,
+    t_nd: torch.Tensor,
+    rescale_params: torch.Tensor,
+    forcing_idx: dict,
+    rescale_idx: dict,
+) -> torch.Tensor:
+    """
+    The (batch, n_vars, T) force tensor for a user model spec (registry.ModelSpec): one row per state
+    variable in declared order, built from that variable's forcing entry (params named <name>_<var>),
+    zeros for unforced variables. All-zeros when nothing is forced.
+    """
+    batch = rescale_params.shape[0]
+    n_t = t_nd.shape[0]
+    zeros = None
+    rows = []
+    for v in spec.variables:
+        forcing = v.get("forcing") or None
+        if forcing:
+            row = build_nondim_force_tensor(
+                forcing_params, t_nd, rescale_params, forcing_idx, rescale_idx,
+                kind=forcing["kind"], exp_sign=float(forcing.get("sign", 1.0)),
+                name_suffix=f"_{v['name']}")
+            rows.append(row[:, 0, :])
+        else:
+            if zeros is None:
+                zeros = torch.zeros((batch, n_t), dtype=t_nd.dtype, device=t_nd.device)
+            rows.append(zeros)
+    return torch.stack(rows, dim=1)

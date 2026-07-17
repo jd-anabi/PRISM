@@ -1,0 +1,8 @@
+# Non-dimensional Initial Conditions
+x_init = 1.0
+v_init = 1.0
+# Non-dimensional Parameters
+# Dimensional Parameters
+x_scale = 1.0
+t_scale = 1.0
+# Forcing Parameters

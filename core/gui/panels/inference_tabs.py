@@ -12,7 +12,7 @@ stage completes. This is the old single-column SbiPanel decomposed -- the stage 
 from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QStackedWidget, QVBoxLayout, QWidget)
 
-from core import cli, orchestrator
+from core import cli, orchestrator, registry
 from core.Helpers import file_manager, labels, visualizers
 from core.config import (VALID_MODELS, VALID_LABELS, BOUNDS_PATH, CELL_PATH, PRIOR_PATH,
                          POSTERIOR_PATH, T_MIN_EXP_S)
@@ -108,6 +108,7 @@ class ConfigPanel(_StagePanel):
         self.bounds_picker = ArtifactPicker(BOUNDS_PATH / "nadrowski")
         self.model_combo.currentTextChanged.connect(self._on_model_changed)
         self.btn_config = QPushButton("Build config")
+        self.btn_config.setProperty("accent", True)       # primary CTA (Fluent accent)
         self.btn_config.clicked.connect(self._build_config)
         add_help_row(form, "Model", self.model_combo, HELP["model"])
         add_help_row(form, "Bounds", self.bounds_picker, HELP["bounds"])
@@ -118,11 +119,23 @@ class ConfigPanel(_StagePanel):
     def _on_model_changed(self, model: str):
         self.bounds_picker.base_path = BOUNDS_PATH / model.lower()
         self.bounds_picker.refresh()
+        # User-defined models are Simulate-only (v1): the SBI stack has no Prior/INIT_SHAPES for them.
+        is_user = registry.is_user_model(model)
+        self.btn_config.setEnabled(not is_user)
+        if is_user:
+            self.log_pane.append_line(
+                f"'{model}' is a user-defined model. Parameter inference does not support "
+                "user-defined models (v1); use the Simulate section.", "warning")
 
     def _build_config(self):
         model = self.model_combo.currentText()
+        if registry.is_user_model(model):                 # backstop; the CTA is already disabled
+            self.log_pane.append_line(
+                "Parameter inference does not support user-defined models (v1); use Simulate.",
+                "warning")
+            return
         labels = VALID_LABELS[VALID_MODELS.index(model)]
-        state_dep_drift = "nadrowski" in model.lower()
+        state_dep_drift = registry.state_dep_drift(model)
         bounds_path = self.bounds_picker.selected_path()
         if not bounds_path:
             self.log_pane.append_line("Select a bounds file first.", "warning")
@@ -176,6 +189,7 @@ class SimulatePanel(_StagePanel, _CellPreviewMixin):
         form = QFormLayout(box)
         self.sim_tobs = FloatField(T_MIN_EXP_S)
         self.btn_run = QPushButton("Simulate trace")
+        self.btn_run.setProperty("accent", True)          # primary CTA (Fluent accent)
         self.btn_run.clicked.connect(self._run)
         form.addRow(QLabel("Preview a synthetic observation from a cell's ground-truth parameters."))
         add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
@@ -221,6 +235,7 @@ class PriorPanel(_StagePanel):
         add_help_row(form, "Prior", self.prior_picker, HELP["prior"])
         v.addLayout(form)
         self.btn_prior = QPushButton("Build / Load prior")
+        self.btn_prior.setProperty("accent", True)        # primary CTA (Fluent accent)
         self.btn_prior.clicked.connect(self._build_prior)
         v.addWidget(self.btn_prior)
         self.prior_name = QLineEdit()
@@ -287,6 +302,7 @@ class PosteriorPanel(_StagePanel):
         add_help_row(form, "Posterior", self.post_picker, HELP["posterior"])
         v.addLayout(form)
         self.btn_post = QPushButton("Train / Load posterior")
+        self.btn_post.setProperty("accent", True)         # primary CTA (Fluent accent)
         self.btn_post.clicked.connect(self._build_posterior)
         v.addWidget(self.btn_post)
         self.post_name = QLineEdit()
@@ -374,6 +390,7 @@ class ValidatePanel(_StagePanel):
         v = QVBoxLayout(box)
         v.addWidget(QLabel("Data-free calibration. Needs a posterior and the prior it was trained against."))
         self.btn_validate = QPushButton("Run calibration")
+        self.btn_validate.setProperty("accent", True)     # primary CTA (Fluent accent)
         self.btn_validate.clicked.connect(self._validate)
         v.addWidget(self.btn_validate)
         self.controls_layout.addWidget(box)
@@ -428,6 +445,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         v.addWidget(self.infer_stack)
 
         self.btn_infer = QPushButton("Run inference")
+        self.btn_infer.setProperty("accent", True)        # primary CTA (Fluent accent)
         self.btn_infer.clicked.connect(self._infer)
         v.addWidget(self.btn_infer)
         self.controls_layout.addWidget(box)

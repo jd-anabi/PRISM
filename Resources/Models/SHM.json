@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "name": "SHM",
+  "variables": [
+    {
+      "name": "x",
+      "drift": "v",
+      "D": "0",
+      "init": 1.0,
+      "forcing": null
+    },
+    {
+      "name": "v",
+      "drift": "-x",
+      "D": "0",
+      "init": 1.0,
+      "forcing": null
+    }
+  ],
+  "params": {},
+  "rescale": {
+    "x_scale": 1.0,
+    "t_scale": 1.0
+  }
+}

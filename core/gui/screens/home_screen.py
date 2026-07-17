@@ -1,4 +1,4 @@
-"""The MAPIS home / splash screen: a time-of-day greeting and one button per section.
+"""The PRISM home / splash screen: a time-of-day greeting and one button per section.
 
 `greeting(hour)` is a pure function (easy to unit-test); the screen calls it with the local clock's
 hour on every show, so a session left open across the day updates rather than freezing on "morning".
@@ -8,7 +8,7 @@ from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
-# The four sections, in display order. "Simulate" has no screen yet (deferred), so it is a no-op button.
+# The four sections, in display order. All four are live; MainWindow passes them all in live_sections.
 SECTIONS = ("Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate")
 
 
@@ -23,8 +23,8 @@ def greeting(hour: int) -> str:
 
 class HomeScreen(QWidget):
     """Emits ``navigate(section_name)`` when a live section button is clicked. The owner (MainWindow)
-    maps the name to a stack index. `live_sections` is the set of names that actually have a screen --
-    "Simulate" is omitted, so its button is a no-op with a "Coming soon" tooltip."""
+    maps the name to a stack index. `live_sections` is the set of names that actually have a screen;
+    any name NOT in it becomes a no-op button with a "Coming soon" tooltip (all four are live today)."""
 
     navigate = Signal(str)
 
@@ -34,7 +34,7 @@ class HomeScreen(QWidget):
 
         self.greeting_label = QLabel()
         self.greeting_label.setAlignment(Qt.AlignCenter)
-        self.greeting_label.setStyleSheet("font-size: 26px; font-weight: bold;")
+        self.greeting_label.setProperty("type", "title")     # Fluent type ramp (global QSS)
 
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignCenter)
@@ -48,6 +48,7 @@ class HomeScreen(QWidget):
             btn.setMinimumWidth(260)
             btn.setMinimumHeight(44)
             if name in live:
+                btn.setProperty("accent", True)         # live section tiles are primary (Fluent accent)
                 btn.clicked.connect(lambda _=False, n=name: self.navigate.emit(n))
             else:
                 btn.setToolTip("Coming soon")           # Simulate is deferred: clickable, no target

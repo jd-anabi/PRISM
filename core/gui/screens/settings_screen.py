@@ -7,10 +7,13 @@ docstrings and their per-control ``HELP`` dicts -- filling the gap where the app
 """
 import html
 import importlib
+import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QButtonGroup, QGroupBox, QLabel, QRadioButton, QScrollArea, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QButtonGroup, QCheckBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+                               QRadioButton, QScrollArea, QVBoxLayout, QWidget)
+
+from core import registry
 
 from ..theming import MODE_LABELS
 
@@ -36,13 +39,26 @@ def _first_paragraph(doc: str) -> str:
 
 
 class SettingsScreen(QWidget):
-    def __init__(self, on_mode, current_mode="system", parent=None):
-        """``on_mode(mode)`` is called when the user picks an appearance; ``current_mode`` pre-selects."""
+    def __init__(self, on_mode, current_mode="system", parent=None, *,
+                 on_open_builder=None, on_edit_model=None, on_delete_model=None,
+                 on_system_accent=None, system_accent=False,
+                 on_force_inter=None, force_inter=False):
+        """``on_mode(mode)`` is called when the user picks an appearance; ``current_mode`` pre-selects.
+
+        The keyword callbacks wire the "User-defined models" group and the accent/font checkboxes to
+        MainWindow. All default to None/False so tests can construct the screen with the historical
+        two-argument signature -- the extra controls are then inert.
+        """
         super().__init__(parent)
         self._on_mode = on_mode
+        self._on_open_builder = on_open_builder
+        self._on_edit_model = on_edit_model
+        self._on_delete_model = on_delete_model
+        self._on_system_accent = on_system_accent
+        self._on_force_inter = on_force_inter
 
         heading = QLabel("Settings")
-        heading.setStyleSheet("font-size: 16px; font-weight: bold;")
+        heading.setProperty("type", "heading")     # Fluent type ramp (global QSS)
 
         appearance = QGroupBox("Appearance")
         av = QVBoxLayout(appearance)
@@ -59,6 +75,34 @@ class SettingsScreen(QWidget):
         for mode, rb in self._radios.items():
             rb.toggled.connect(lambda checked, m=mode: checked and self._on_mode(m))
 
+        # Accent + font toggles: state set BEFORE connecting (same construction-never-fires rule).
+        self.accent_check = QCheckBox("Use the Windows accent colour")
+        self.accent_check.setChecked(bool(system_accent))
+        self.accent_check.toggled.connect(
+            lambda on: self._on_system_accent and self._on_system_accent(on))
+        if sys.platform != "win32":                    # the OS accent read is Windows-only
+            self.accent_check.setVisible(False)
+        av.addWidget(self.accent_check)
+
+        self.inter_check = QCheckBox("Use the Inter font everywhere")
+        self.inter_check.setChecked(bool(force_inter))
+        self.inter_check.toggled.connect(
+            lambda on: self._on_force_inter and self._on_force_inter(on))
+        av.addWidget(self.inter_check)
+        inter_note = QLabel("Font changes apply immediately; some views refresh fully after a restart.")
+        inter_note.setProperty("type", "caption")
+        av.addWidget(inter_note)
+
+        models_box = QGroupBox("User-defined models")
+        mv = QVBoxLayout(models_box)
+        self._models_list = QVBoxLayout()          # rebuilt by refresh_models()
+        mv.addLayout(self._models_list)
+        btn_new = QPushButton("Open model builder")
+        btn_new.setProperty("accent", True)
+        btn_new.clicked.connect(lambda: self._on_open_builder and self._on_open_builder())
+        mv.addWidget(btn_new)
+        self.refresh_models()
+
         help_box = QGroupBox("Help — what each section does")
         hv = QVBoxLayout(help_box)
         hv.addWidget(self._build_help())
@@ -67,6 +111,7 @@ class SettingsScreen(QWidget):
         iv = QVBoxLayout(inner)
         iv.addWidget(heading)
         iv.addWidget(appearance)
+        iv.addWidget(models_box)
         iv.addWidget(help_box)
         iv.addStretch(1)
 
@@ -85,6 +130,38 @@ class SettingsScreen(QWidget):
             rb.blockSignals(True)
             rb.setChecked(True)
             rb.blockSignals(False)
+
+    def refresh_models(self) -> None:
+        """Rebuild the user-model list (one row per registered model + any startup load failures)."""
+        while self._models_list.count():
+            item = self._models_list.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+        names = registry.user_model_names()
+        if not names and not registry.load_errors:
+            empty = QLabel("No user-defined models yet. Build one to add it to the Simulate model list.")
+            empty.setProperty("type", "caption")
+            self._models_list.addWidget(empty)
+        for name in names:
+            row = QWidget()
+            h = QHBoxLayout(row)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.addWidget(QLabel(name))
+            h.addStretch(1)
+            btn_edit = QPushButton("Edit")
+            btn_edit.clicked.connect(lambda _=False, n=name: self._on_edit_model and self._on_edit_model(n))
+            btn_del = QPushButton("Delete")
+            btn_del.clicked.connect(lambda _=False, n=name: self._on_delete_model and self._on_delete_model(n))
+            h.addWidget(btn_edit)
+            h.addWidget(btn_del)
+            self._models_list.addWidget(row)
+        for path, msg in registry.load_errors:
+            err = QLabel(f"Failed to load {path.name}: {msg}")
+            err.setProperty("type", "caption")
+            err.setWordWrap(True)
+            self._models_list.addWidget(err)
 
     def _build_help(self) -> QLabel:
         parts = []
