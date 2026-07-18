@@ -57,15 +57,21 @@ STATUS
                      widget lib). See "FLUENT DESIGN" below.
   [DONE + verified]  USER-DEFINED MODEL BUILDER (2026-07-17) — a Settings-reached builder where users type
                      per-variable drift/noise/forcing, saved to Resources/Models/ and run through the
-                     Simulate path (Simulate-only; gated out of FDT/Inference/Reduction). Plus OS-accent
-                     colour + Inter-everywhere font settings, and the MAPIS -> PRISM rename. See
-                     "USER-DEFINED MODEL BUILDER" below. (Feature-level backlog + the SBI/FDT roadmap for
-                     user models live in features_handoff.txt.)
+                     Simulate path. Plus OS-accent colour + Inter-everywhere font settings, and the
+                     MAPIS -> PRISM rename. See "USER-DEFINED MODEL BUILDER" below.
+  [DONE + verified]  USER MODELS IN SBI, v2 (2026-07-18) — no-forcing user models are now INFERABLE via the
+                     Parameter Inference tabs (ConfigPanel enables them for registry.is_sbi_user_model;
+                     forced/zero-param user models stay Simulate-only with a message), plus a passive-
+                     recording experimental path (InferPanel hides the forced row) and STATE-DEPENDENT
+                     (multiplicative) noise in the builder (D may reference state variables). The heavy
+                     science lives in features_handoff.txt FEATURE 1 v2; the GUI-facing surface is the
+                     ConfigPanel gate + the InferPanel passive UI + the D-field semantics.
 
-  Verified by tests/test_gui_progress.py (63 tests) + tests/test_user_models.py (21 tests) = 84, all
-  passing, plus a headless end-to-end run in which the REDUCTION panel actually executed
-  run_reduction_map, saved its PNG, and had it picked up into the FigureStack with a clean log, AND a
-  saved user model streamed end-to-end through the Simulate path. THREE adversarial-review passes found
+  Verified by tests/test_gui_progress.py (63) + tests/test_user_models.py (22) + tests/test_user_sbi.py (2)
+  = 87, all passing, plus headless end-to-end runs: the REDUCTION panel executed run_reduction_map and its
+  PNG reached the FigureStack with a clean log; a saved user model streamed end-to-end through Simulate;
+  and a no-forcing user model ran the WHOLE spontaneous SBI path (prior -> short train -> SBC/TARP -> infer
+  on simulated + passive obs). THREE adversarial-review passes found
   22 real defects total (one prevented the GUI from launching; two were cancellation correctness bugs —
   the tqdm write-lock leak and the monitor-thread latch theft; the third pass, on the model builder,
   found 12 — phantom-parameter parsing, silent value mis-binding, unstreamable-on-save configs, and a

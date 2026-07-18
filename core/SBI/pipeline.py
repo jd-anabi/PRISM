@@ -109,7 +109,8 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     if params.shape[0] != batch_size or inits.shape[0] != batch_size:
         raise ValueError(f"Batch size: {batch_size} cannot differ from dim 0 of parameters tensor or initial conditions tensor")
 
-    if VALID_SIMS.get(model.lower()) is None:
+    from core import registry
+    if VALID_SIMS.get(model.lower()) is None and not registry.is_user_model(model):
         raise ValueError(f"Invalid simulator: {model}")
 
     full_params = params
@@ -128,8 +129,13 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
     # move to the specified device
     t = t.to(dtype=dtype, device=device)
 
-    simulator_cls = VALID_SIMS[model.lower()]
-    simulator = simulator_cls(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
+    if registry.is_user_model(model):
+        simulator = registry.make_user_simulator(
+            registry.get(model), full_params, force, inits, t,
+            segs=n_segs, batch_size=batch_size, device=device)
+    else:
+        simulator_cls = VALID_SIMS[model.lower()]
+        simulator = simulator_cls(full_params, force, inits, t, segs=n_segs, batch_size=batch_size, device=device)
 
     obs = simulator.simulate(state_dep_drift=state_dep_drift)[:, 0, :, steady_idx:].clone()
     return obs
@@ -137,7 +143,8 @@ def gen_obs(model: str, params: torch.Tensor, t: torch.Tensor, inits: torch.Tens
 def gen_stats(x_spont: torch.Tensor, x_forced: torch.Tensor, dt: float | torch.Tensor,
               drive_amp, drive_freq, drive_phase,
               band_halfwidth: int = 2, bp_lo: float = 0.5, bp_hi: float = 1.5, slow_env_frac: float = 0.15,
-              device: torch.device = torch.device('cpu'), stats_batch_size: int = 256) -> torch.Tensor:
+              device: torch.device = torch.device('cpu'), stats_batch_size: int = 256,
+              spontaneous_only: bool = False) -> torch.Tensor:
     """
     Generate statistical features from input data using the given parameters.
 
@@ -160,6 +167,9 @@ def gen_stats(x_spont: torch.Tensor, x_forced: torch.Tensor, dt: float | torch.T
     :type device: torch.device
     :param stats_batch_size: Number of samples to process per sub-batch on GPU. Defaults to 256.
     :type stats_batch_size: int
+    :param spontaneous_only: If True (a no-forcing model), skip the forced-response Group G and zero-pad
+        it to the full feature width. ``x_forced``/``drive_*`` may then be None -- the spontaneous run
+        is reused as the (unused) forced input. Keeps the output width == len(FEATURE_LABELS).
 
     :return: A tensor containing the computed statistical features. Shape: (batch size, number of statistics).
     :rtype: torch.Tensor
@@ -168,6 +178,15 @@ def gen_stats(x_spont: torch.Tensor, x_forced: torch.Tensor, dt: float | torch.T
         if torch.is_tensor(v) and v.dim() > 0:
             return v[s:e].to(device)
         return v
+
+    if spontaneous_only:
+        # Group G is skipped, but SummaryStatistics.__init__ still coerces the drive params via
+        # float(v) -> None would crash. The forced trajectory is likewise unused; reuse the spontaneous.
+        if x_forced is None:
+            x_forced = x_spont
+        drive_amp = 0.0 if drive_amp is None else drive_amp
+        drive_freq = 0.0 if drive_freq is None else drive_freq
+        drive_phase = 0.0 if drive_phase is None else drive_phase
 
     total = x_spont.shape[0]
     results = []
@@ -181,7 +200,7 @@ def gen_stats(x_spont: torch.Tensor, x_forced: torch.Tensor, dt: float | torch.T
             _sub(drive_amp, start, end), _sub(drive_freq, start, end), _sub(drive_phase, start, end),
             band_halfwidth=band_halfwidth, bp_lo=bp_lo, bp_hi=bp_hi, slow_env_frac=slow_env_frac,
         )
-        result = stats.compute_statistics()
+        result = stats.compute_statistics(spontaneous_only=spontaneous_only)
         results.append(result.cpu())
         del stats, xs_sub, xf_sub, result
         if device.type == 'cuda':
@@ -224,13 +243,20 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
 
     :raises ValueError: If the specified model is not supported.
     """
-    if VALID_PRIORS.get(model.lower()) is None:
+    from core import registry
+    if registry.is_user_model(model):
+        if not registry.is_sbi_user_model(model):
+            raise ValueError(
+                f"'{model}' is a user-defined model that is Simulate-only (it has forcing or no free "
+                "parameters). Parameter inference supports user models with no forcing and >=1 parameter.")
+        from core.SBI.Priors.user_prior import UserPrior
+        prior = UserPrior(registry.get(model), dtype, device)
+    elif VALID_PRIORS.get(model.lower()) is None:
         raise ValueError(f"Invalid simulator: {model}")
+    else:
+        prior = VALID_PRIORS[model.lower()](dtype, device)
 
     n_params = len(prior_bounds)
-
-    prior_cls = VALID_PRIORS[model.lower()]
-    prior = prior_cls(dtype, device)
 
     with torch.no_grad():
         prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size, segs, prior_bounds,
@@ -245,7 +271,9 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                       dt_exp: float = None, t_min_exp: float = None, t_max_exp: float = None,
                       t_scale_bounds: tuple[float, float] = None,
                       proposal: DirectPosterior = None, theta_transform: Transform | None = None,
-                      fixed_dict: dict = None, state_dep_drift: bool = False, dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
+                      fixed_dict: dict = None, state_dep_drift: bool = False,
+                      spontaneous_only: bool = False, n_vars: int | None = None,
+                      dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
     """
     Generate synthetic training data for the SBI posterior using batch-by-scale strategy.
 
@@ -295,17 +323,25 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
              (n_runs * run_size, n_stats + n_forcing + 1) and thetas has shape
              (n_runs * run_size, nd_dim + rescale_dim).
     """
-    if model.lower() not in VALID_SIMS:
+    from core import registry
+    is_user = registry.is_user_model(model)
+    if model.lower() not in VALID_SIMS and not is_user:
         raise ValueError(f"Invalid simulator: {model}")
 
-    n_pos, n_prob = INIT_SHAPES[model.lower()]
-    if n_prob > 0:
-        inits = torch.tensor(
-            helpers.concat(np.array(np.random.randint(0, 10, size=(run_size, n_pos))),
-                           np.array(np.random.randint(0, 1, size=(run_size, n_prob)))),
-            dtype=dtype, device=device)
+    if is_user:
+        # User models declare per-variable inits (a nondimensional model may live on a unit scale that
+        # randint(0, 10) would blow past); broadcast them across the run. n_vars comes from the caller.
+        from core.SBI.Priors.user_prior import declared_inits
+        inits = declared_inits(registry.get(model)).to(dtype=dtype, device=device).expand(run_size, -1)
     else:
-        inits = torch.tensor(np.random.randint(0, 10, size=(run_size, n_pos)), dtype=dtype, device=device)
+        n_pos, n_prob = INIT_SHAPES[model.lower()]
+        if n_prob > 0:
+            inits = torch.tensor(
+                helpers.concat(np.array(np.random.randint(0, 10, size=(run_size, n_pos))),
+                               np.array(np.random.randint(0, 1, size=(run_size, n_prob)))),
+                dtype=dtype, device=device)
+        else:
+            inits = torch.tensor(np.random.randint(0, 10, size=(run_size, n_pos)), dtype=dtype, device=device)
 
     # move to the specified device
     t = t.to(dtype=dtype, device=device)
@@ -366,7 +402,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 
             curr_thetas_nd      = curr_thetas_phys[:, :nd_dim]
             curr_thetas_rescale = curr_thetas_phys[:, nd_dim:]
-            curr_thetas_forcing = forcing_prior.sample((run_size,)).to(device=device, dtype=dtype)
+            curr_thetas_forcing = (None if spontaneous_only
+                                   else forcing_prior.sample((run_size,)).to(device=device, dtype=dtype))
 
             # Override t_scale to the batch-level value (in PHYSICAL space)
             curr_thetas_rescale[:, rescale_idx["t_scale"]] = t_scale_k
@@ -377,52 +414,75 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             else:
                 curr_thetas_latent = curr_thetas_phys
 
-            # 2. Build nondimensional force tensor at fine resolution (uses PHYSICAL rescale)
-            force = build_nondim_sin_force_tensor(
-                curr_thetas_forcing, t_fine, curr_thetas_rescale, forcing_idx, rescale_idx
-            )
-
-            # 3. Simulate the FORCED run (drive on) -> Group G
-            x_nd_fine = gen_obs(
-                model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
-                force=force, n_segs=n_segs_k, steady_idx=steady_idx,
-                fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-                batch_size=run_size, dtype=dtype, device=device,
-            )[0, :, :]
-            x_nd = x_nd_fine[:, ::subsample_factor][:, :N_points_k]
-            del x_nd_fine
-
-            # 3b. Simulate the SPONTANEOUS run (zero force) -> Groups A-F
-            x_nd_spont_fine = gen_obs(
-                model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
-                force=torch.zeros_like(force), n_segs=n_segs_k, steady_idx=steady_idx,
-                fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
-                batch_size=run_size, dtype=dtype, device=device,
-            )[0, :, :]
-            x_nd_spont = x_nd_spont_fine[:, ::subsample_factor][:, :N_points_k]
-            del x_nd_spont_fine, force
-
-            # 4. Redimensionalize both runs (uses PHYSICAL rescale)
             x_scale  = curr_thetas_rescale[:, rescale_idx["x_scale"]].unsqueeze(1)
             x_offset = curr_thetas_rescale[:, rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in rescale_idx else 0.0
-            x_dim = helpers.rescale(x_nd, x_scale, x_offset)
-            x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
-            del x_nd, x_nd_spont
 
-            # 5. Stats (A-F from spontaneous, G from forced) + conditioning
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                drive_amp = curr_thetas_forcing[:, forcing_idx["amp"]].cpu()
-                drive_freq = curr_thetas_forcing[:, forcing_idx["freq"]].cpu()
-                drive_phase = curr_thetas_forcing[:, forcing_idx["phase"]].cpu()
-                training_stats = gen_stats(x_spont_dim.cpu(), x_dim.cpu(), dt_exp, drive_amp, drive_freq, drive_phase, device=device)
-                log_T_k_tensor = torch.full((run_size, 1), math.log(T_k), dtype=dtype)
-                # Canonical conditioning layout: [S(x_dim) | log(T) | theta_force].
-                # log(T) rides with the summary pathway; theta_force is a separate block.
-                # The embedding split in build_posterior depends on this exact order, so
-                # keep it in sync with generate_observations / validate / infer_from_experiment.
-                training_stats = torch.cat((training_stats, log_T_k_tensor, curr_thetas_forcing.cpu()), dim=-1)
-                training_data.append(training_stats)
+            if spontaneous_only:
+                # No drive: one spontaneous run (Groups A-F; Group G is zero-padded), no forcing block.
+                force = torch.zeros((run_size, n_vars, t_fine.shape[0]), dtype=dtype, device=device)
+                x_nd_spont_fine = gen_obs(
+                    model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
+                    force=force, n_segs=n_segs_k, steady_idx=steady_idx,
+                    fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+                    batch_size=run_size, dtype=dtype, device=device,
+                )[0, :, :]
+                x_nd_spont = x_nd_spont_fine[:, ::subsample_factor][:, :N_points_k]
+                del x_nd_spont_fine, force
+                x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
+                del x_nd_spont
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    training_stats = gen_stats(x_spont_dim.cpu(), None, dt_exp, None, None, None,
+                                               device=device, spontaneous_only=True)
+                    log_T_k_tensor = torch.full((run_size, 1), math.log(T_k), dtype=dtype)
+                    # Conditioning [S | log(T)] -- no forcing block (forcing_dim = 0).
+                    training_stats = torch.cat((training_stats, log_T_k_tensor), dim=-1)
+                    training_data.append(training_stats)
+            else:
+                # 2. Build nondimensional force tensor at fine resolution (uses PHYSICAL rescale)
+                force = build_nondim_sin_force_tensor(
+                    curr_thetas_forcing, t_fine, curr_thetas_rescale, forcing_idx, rescale_idx
+                )
+
+                # 3. Simulate the FORCED run (drive on) -> Group G
+                x_nd_fine = gen_obs(
+                    model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
+                    force=force, n_segs=n_segs_k, steady_idx=steady_idx,
+                    fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+                    batch_size=run_size, dtype=dtype, device=device,
+                )[0, :, :]
+                x_nd = x_nd_fine[:, ::subsample_factor][:, :N_points_k]
+                del x_nd_fine
+
+                # 3b. Simulate the SPONTANEOUS run (zero force) -> Groups A-F
+                x_nd_spont_fine = gen_obs(
+                    model=model, params=curr_thetas_nd, t=t_fine, inits=inits,
+                    force=torch.zeros_like(force), n_segs=n_segs_k, steady_idx=steady_idx,
+                    fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+                    batch_size=run_size, dtype=dtype, device=device,
+                )[0, :, :]
+                x_nd_spont = x_nd_spont_fine[:, ::subsample_factor][:, :N_points_k]
+                del x_nd_spont_fine, force
+
+                # 4. Redimensionalize both runs (uses PHYSICAL rescale)
+                x_dim = helpers.rescale(x_nd, x_scale, x_offset)
+                x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
+                del x_nd, x_nd_spont
+
+                # 5. Stats (A-F from spontaneous, G from forced) + conditioning
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    drive_amp = curr_thetas_forcing[:, forcing_idx["amp"]].cpu()
+                    drive_freq = curr_thetas_forcing[:, forcing_idx["freq"]].cpu()
+                    drive_phase = curr_thetas_forcing[:, forcing_idx["phase"]].cpu()
+                    training_stats = gen_stats(x_spont_dim.cpu(), x_dim.cpu(), dt_exp, drive_amp, drive_freq, drive_phase, device=device)
+                    log_T_k_tensor = torch.full((run_size, 1), math.log(T_k), dtype=dtype)
+                    # Canonical conditioning layout: [S(x_dim) | log(T) | theta_force].
+                    # log(T) rides with the summary pathway; theta_force is a separate block.
+                    # The embedding split in build_posterior depends on this exact order, so
+                    # keep it in sync with generate_observations / validate / infer_from_experiment.
+                    training_stats = torch.cat((training_stats, log_T_k_tensor, curr_thetas_forcing.cpu()), dim=-1)
+                    training_data.append(training_stats)
 
             # 6. Collect LATENT targets (not physical)
             thetas.append(curr_thetas_latent.cpu())
@@ -503,6 +563,8 @@ def train_nn(training_params: dict, model: str, prior: torch.distributions.Distr
             theta_transform=theta_transform,
             fixed_dict=fixed_dict,
             state_dep_drift=training_params.get("state_dep_drift", False),
+            spontaneous_only=training_params.get("spontaneous_only", False),
+            n_vars=training_params.get("n_vars", None),
             dtype=training_params["dtype"], device=training_params["device"],
         )
 

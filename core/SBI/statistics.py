@@ -396,16 +396,26 @@ class SummaryStatistics:
         ], dim=-1)
 
     # --- PUBLIC ----------------------------------------------------------------
-    def compute_statistics(self) -> torch.Tensor:
+    # Group G (forced response) is the last block of FEATURE_LABELS; the rest are spontaneous (A-F).
+    _N_GROUP_G = 11
+
+    def compute_statistics(self, spontaneous_only: bool = False) -> torch.Tensor:
         """
         Assemble Groups A-G into a fixed-width feature tensor of shape
         (B, len(FEATURE_LABELS)). NaN/Inf are mapped to 0.
+
+        ``spontaneous_only`` (a no-forcing model): compute Groups A-F and ZERO-PAD the 11 forced-response
+        Group G features. The output width stays len(FEATURE_LABELS), so the conditioning layout and the
+        embedding net are unchanged -- only the (undefined-without-a-drive) Group G block is constant.
         """
         with torch.no_grad():
-            out = torch.cat([
-                self._group_a(), self._group_b(), self._group_c(), self._group_d(),
-                self._group_e(), self._group_f(), self._group_g(),
-            ], dim=-1)
+            groups = [self._group_a(), self._group_b(), self._group_c(), self._group_d(),
+                      self._group_e(), self._group_f()]
+            if spontaneous_only:
+                groups.append(torch.zeros(self.B, self._N_GROUP_G, device=self.device, dtype=self.dtype))
+            else:
+                groups.append(self._group_g())
+            out = torch.cat(groups, dim=-1)
             assert out.shape[-1] == len(FEATURE_LABELS), (
                 f"feature count {out.shape[-1]} != len(FEATURE_LABELS) {len(FEATURE_LABELS)}"
             )

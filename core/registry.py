@@ -21,7 +21,7 @@ from core import config
 class ModelSpec:
     name: str                          # canonical (uppercase) name as shown in every model dropdown
     labels: list                       # per-ND-param plot labels (built-ins: LaTeX; user models: names)
-    state_dep_drift: bool = False      # user models: always False in v1 (D is params-only)
+    state_dep_drift: bool = False      # user models: True iff any D references state (multiplicative noise)
     is_user_model: bool = False
     n_vars: int = 0
     variables: list = field(default_factory=list)   # user models: [{name, drift, D, init, forcing}]
@@ -47,6 +47,26 @@ def get(name: str) -> "ModelSpec | None":
 def is_user_model(name: str) -> bool:
     spec = get(name)
     return spec is not None and spec.is_user_model
+
+
+def user_model_has_forcing(name: str) -> bool:
+    """True if any variable of a user model declares a forcing entry (-> Simulate-only in v2)."""
+    spec = get(name)
+    return bool(spec and spec.is_user_model and any(v.get("forcing") for v in spec.variables))
+
+
+def is_sbi_user_model(name: str) -> bool:
+    """A user model eligible for the SBI (Parameter Inference) path in v2: user-defined, NO forcing
+    (spontaneous dynamics only), and at least one ND parameter to infer. A forced model keeps the
+    sinusoid machinery out of scope; a zero-parameter model (e.g. pure SHM) has nothing to infer and
+    can't build a stability-screened GMM prior -- both stay Simulate-only."""
+    spec = get(name)
+    return bool(
+        spec and spec.is_user_model
+        and not user_model_has_forcing(name)
+        and spec.compiled is not None
+        and len(spec.compiled.param_names) >= 1
+    )
 
 
 def state_dep_drift(name: str) -> bool:
@@ -104,7 +124,7 @@ def load_user_models() -> None:
             register(ModelSpec(
                 name=doc["name"],
                 labels=list(compiled.param_names),
-                state_dep_drift=False,
+                state_dep_drift=compiled.state_dep_noise,   # multiplicative noise -> solver g(x) per step
                 is_user_model=True,
                 n_vars=len(compiled.var_names),
                 variables=doc["variables"],

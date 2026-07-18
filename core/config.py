@@ -363,6 +363,14 @@ class SimConfig:
         return self.labels + rescale_labels
 
     @property
+    def has_forcing(self) -> bool:
+        """Whether this model carries any external forcing parameters. False for a spontaneous model
+        (a no-forcing user model, or BP whose bounds file has no forcing section). The SBI pipeline
+        branches on this: a no-forcing config skips the forced run + Group-G lock-in and drops the
+        forcing conditioning block, so its forcing_idx has none of amp/freq/phase to key on."""
+        return len(self.force_params_dict) > 0
+
+    @property
     def forcing_idx(self) -> dict[str, int]:
         """Maps forcing param names to column indices, e.g. {"amp": 0, "freq": 1, ...}."""
         return {name: i for i, name in enumerate(self.force_params_dict.keys())}

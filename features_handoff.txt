@@ -12,8 +12,9 @@ HOW TO USE THIS FILE
   (tests/test_gui_progress.py, 63 + tests/test_user_models.py, 21 = 84) and follow gui_handoff.txt's
   rules for GUI work.
 
-  NOTE: the app was renamed MAPIS -> PRISM (2026-07-17). FEATURE 1 v1 and backlog items B-a/B-b below
-  are now DONE (see their STATUS lines); the rest of this file is still forward-looking.
+  NOTE: the app was renamed MAPIS -> PRISM (2026-07-17). FEATURE 1 v1 AND v2 (SBI-ready + state-dependent
+  noise) are DONE, as are backlog items B-a/B-b (see their STATUS lines). Still forward-looking: FEATURE 1
+  v3 (FDT for user models) and backlog B-c/B-d/B-e.
 
 ================================================================================
 FEATURE 1  —  USER-DEFINED MODEL BUILDER  (the big one; recommended v1 = Simulate-only)
@@ -215,10 +216,38 @@ PHASED ROADMAP
       registry, Resources/Models persistence + startup loader, the dynamic dropdown, the 5 forcing types
       (spring special-cased), and Simulate integration (observable = col 0). Gate the model OUT of FDT/SBI/
       Reduction for now. Deliverable: users build + save + simulate + visualize their own first-order SDEs.
-  v2  SBI-READY: satisfy the rescale (t_scale/x_scale) + sinusoidal-forcing contract, add an INIT_SHAPES entry,
-      generalize orchestrator._build_forcing_prior, and author a stability-screening Prior (the heaviest dep --
-      each existing prior instantiates the concrete simulator to screen for stability; nadrowski_prior.py:49).
-      Then user models can be INFERRED. This is the big scientific payoff.
+  v2  SBI-READY.  STATUS 2026-07-18: DONE (SPONTANEOUS-ONLY) + STATE-DEPENDENT NOISE. Scope decided with the
+      user: SBI supports no-forcing user models only (a user model with any forcing stays Simulate-only,
+      gated by registry.is_sbi_user_model = user + no forcing + >=1 ND param). Both simulated and PASSIVE
+      experimental observations. New code:
+        - core/SBI/Priors/user_prior.py (UserPrior(Prior)): ONE generic stability-screened prior; reuses
+          Prior.construct_prior unchanged, pulls the simulator from registry.make_user_simulator, uses the
+          model's DECLARED inits (not randint(0,10)) + a zero (batch,n_vars,T) force. Its _local_map OVERRIDES
+          the base @staticmethod as an instance method to reach self.spec.
+        - Dispatch by registry fallback (NOT new dict entries): pipeline.gen_obs/gen_prior branch on
+          registry.is_user_model; INIT_SHAPES is bypassed (declared inits). Built-in dicts stay byte-identical.
+        - Spontaneous-only path gated by SimConfig.has_forcing (len(force_params_dict)>0). statistics.
+          compute_statistics(spontaneous_only=True) computes Groups A-F and ZERO-PADS the 11 Group-G features
+          (fixed width -> conditioning [S(41 w/ G=0) | log(T)], forcing_dim=0, EmbeddedNet unconditioned).
+          gen_stats/gen_training_data/gen_cal_data + orchestrator generate_observations/build_prior/
+          build_posterior/train_nn/infer_and_visualize/validate_calibration/_observation_inits all branch on
+          has_forcing; every branch defaults to the ORIGINAL code so Nadrowski/Hopf/BP are unchanged (pinned by
+          tests/test_user_sbi.py::test_builtin_forcing_path_unperturbed). Fisher rotation is OFF for no-forcing
+          (rotate = REPARAM_ROTATE and cfg.has_forcing; V=None = the plain pipeline). _build_forcing_prior
+          returns None for an empty force dict.
+        - STATE-DEPENDENT (multiplicative) NOISE: user_model.py no longer rejects state in D; CompiledUserModel.
+          state_dep_noise = any(D references state); UserModel.g(x) = sqrt(2 D(x)) per step (clamp>=0) when
+          state-dependent, else the cached g(); registry sets state_dep_drift = compiled.state_dep_noise, which
+          rides the existing flag plumbing into BOTH Simulate and SBI. NOTE: a NEGATIVE constant D now yields
+          NaN (screened out) instead of raising -- required so the stability sweep's Sobol box (which includes
+          negative-D samples) doesn't kill a whole batch.
+        - Passive experimental: orchestrator.build_experiment_obs_spontaneous (single unforced recording, no
+          force/freq units) + InferPanel passive UI (forced row hidden) + cli.get_inference_inputs_spontaneous.
+      CAVEAT (documented, not solved): the pipeline (summary stats, reparam, calibration) is Nadrowski-TUNED;
+      v2 runs the machinery + produces a posterior + SBC/TARP, but calibration is NOT pre-tuned per user model.
+      A zero-ND-param model (e.g. SHM) stays Simulate-only. Tests: tests/test_user_sbi.py (2, tiny end-to-end
+      via a monkeypatched pipeline.gen_prior); test_user_models.py 22, test_gui_progress.py 63 stay green.
+      NOT YET DONE for v2: forced-model inference (sinusoidal/arbitrary forcing) -- deliberately out of scope.
   v3  FDT: replace the hardcoded Nadrowski n/beta effective-temperature formula (fdt_pipeline.py:126-127) with
       a model-supplied T_eff normalization; then user models work in FDT. (Also see backlog "FDT for
       non-Nadrowski".)  REDUCTION stays excluded.

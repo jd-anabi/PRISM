@@ -12,6 +12,7 @@ JSON schema (schema_version 1):
       "name": "MYMODEL",                       # uppercase; also the JSON filename stem
       "variables": [                            # declared order; variable 0 is the observable
         {"name": "x", "drift": "mu*x - x^3", "D": "d0", "init": 0.1,
+         # D: params/numbers = additive noise; referencing state vars = multiplicative (state-dependent).
          "forcing": null | {"kind": "sin|step|triangular|exponential",
                             "params": {"amp": 1.0, ...},   # names WITHOUT the _<var> suffix
                             "sign": 1 | -1}},              # exponential grow/decay only

@@ -1169,6 +1169,7 @@ def test_inference_cell_pickers_repoint_after_config_is_built():
     class Cfg:
         model = "HOPF"
         force_params_dict = {}
+        has_forcing = False   # mirrors SimConfig.has_forcing (empty force_params_dict)
 
     inf.new_session(Cfg())
     assert inf.simulate_panel.cell_picker.base_path.name == "hopf"

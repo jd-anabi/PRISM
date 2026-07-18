@@ -25,8 +25,10 @@ from ..widgets.labeled_inputs import FloatField, PathField
 
 # Help text shown by the "?" badge next to each option. Drafted from the code/science; user reviews.
 HELP = {
-    "model": "Which hair-cell model to fit. NADROWSKI is the state-dependent-drift model the pipeline "
-             "is built around; HOPF and BP are alternatives.",
+    "model": "Which model to fit. NADROWSKI is the state-dependent-drift model the pipeline is tuned "
+             "for; HOPF and BP are alternatives. User-defined models are inferable too if they have no "
+             "forcing (spontaneous dynamics) and at least one parameter — but their calibration is not "
+             "pre-tuned, so validate SBC/TARP per model.",
     "bounds": "Parameter-bounds file (Resources/Bounds/<model>) defining the inference box: which "
               "parameters are inferred and the prior range of each.",
     "cell": "A cell file (Resources/Cells/<model>) whose parameter values are the ground truth — the "
@@ -38,8 +40,9 @@ HELP = {
     "posterior": "Load a trained posterior (.pt), or “(from scratch)” to train a new one. Training "
                  "from scratch needs a prior; loading an existing posterior does not.",
     "infer_mode": "Simulated: infer on a synthetic observation from a cell’s ground truth. "
-                  "Experimental: infer on your own recorded spontaneous + forced traces.",
-    "spont": "Path to the recorded spontaneous (undriven) hair-bundle trace (.csv or .npy; last column "
+                  "Experimental: infer on your own recording (a driven spontaneous+forced pair, or — "
+                  "for a no-forcing model — a single passive recording).",
+    "spont": "Path to the recorded spontaneous/passive (undriven) trace (.csv or .npy; last column "
              "= values).",
     "forced": "Path to the recorded forced (driven) hair-bundle trace (.csv or .npy; last column = "
               "values).",
@@ -82,6 +85,13 @@ def _run_experimental_inference(cfg, posterior, spont_path, forced_path, T_obs_s
     orchestrator.infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False, fig_sink=fig_sink)
 
 
+def _run_experimental_inference_spontaneous(cfg, posterior, path, T_obs_s, *, fig_sink=None):
+    """Passive-recording inference for a no-forcing model: a single unforced recording, no drive."""
+    x_obs = file_manager.load_experimental_data(path, dtype=cfg.hw.dtype)
+    obs_stats, obs_data, t_dim = orchestrator.build_experiment_obs_spontaneous(cfg, x_obs, T_obs_s)
+    orchestrator.infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False, fig_sink=fig_sink)
+
+
 class _StagePanel(BasePanel):
     """Common base for the six inference tabs: holds a back-reference to the owning InferenceScreen and
     reads/writes the shared session through it (never caching the session object, which Config replaces
@@ -119,20 +129,23 @@ class ConfigPanel(_StagePanel):
     def _on_model_changed(self, model: str):
         self.bounds_picker.base_path = BOUNDS_PATH / model.lower()
         self.bounds_picker.refresh()
-        # User-defined models are Simulate-only (v1): the SBI stack has no Prior/INIT_SHAPES for them.
-        is_user = registry.is_user_model(model)
-        self.btn_config.setEnabled(not is_user)
-        if is_user:
+        # User models are inferable only when SBI-eligible: no forcing (spontaneous dynamics) AND at
+        # least one ND parameter. Forced / zero-parameter user models stay Simulate-only.
+        ineligible_user = registry.is_user_model(model) and not registry.is_sbi_user_model(model)
+        self.btn_config.setEnabled(not ineligible_user)
+        if ineligible_user:
+            reason = ("has external forcing" if registry.user_model_has_forcing(model)
+                      else "has no free parameters to infer")
             self.log_pane.append_line(
-                f"'{model}' is a user-defined model. Parameter inference does not support "
-                "user-defined models (v1); use the Simulate section.", "warning")
+                f"'{model}' {reason}, so it is Simulate-only. Parameter inference supports "
+                "user-defined models with no forcing and at least one parameter.", "warning")
 
     def _build_config(self):
         model = self.model_combo.currentText()
-        if registry.is_user_model(model):                 # backstop; the CTA is already disabled
+        if registry.is_user_model(model) and not registry.is_sbi_user_model(model):   # backstop
             self.log_pane.append_line(
-                "Parameter inference does not support user-defined models (v1); use Simulate.",
-                "warning")
+                "This user-defined model is Simulate-only (needs no forcing + ≥1 parameter for "
+                "inference).", "warning")
             return
         labels = VALID_LABELS[VALID_MODELS.index(model)]
         state_dep_drift = registry.state_dep_drift(model)
@@ -148,6 +161,11 @@ class ConfigPanel(_StagePanel):
         self._screen.new_session(cfg)                # replaces the shared session + repoints + re-gates
         self.log_pane.append_line(
             f"Config built: {model} — {len(cfg.params_dict)} ND + {len(cfg.rescale_params)} rescale params.")
+        if registry.is_user_model(model):
+            self.log_pane.append_line(
+                "Note: user-model inference runs the full pipeline (spontaneous dynamics only), but "
+                "calibration is NOT pre-tuned — check the Validate tab's SBC/TARP results for this model.",
+                "warning")
 
     def save_settings(self, qs):
         qs.beginGroup("inference_config")
@@ -454,6 +472,9 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
     def on_config_built(self, cfg):
         _CellPreviewMixin.on_config_built(self, cfg)
         self._rebuild_forcing_fields(cfg)
+        # A no-forcing (passive) model has no forced recording and no drive params: hide the forced row.
+        # _rebuild_forcing_fields already produces no forcing fields for an empty force_params_dict.
+        self.exp_form.setRowVisible(self.exp_forced, cfg.has_forcing)
 
     def _rebuild_forcing_fields(self, cfg):
         for fld in self._forcing_fields.values():
@@ -479,7 +500,13 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                 return
             self.dispatch(_run_simulated_inference, cfg, post, cell, self.sim_tobs.value(),
                           provide_fig_sink=True)
-        else:                                        # experimental
+        elif not cfg.has_forcing:                    # experimental, passive (no drive)
+            if not self.exp_spont.value():
+                self.log_pane.append_line("Select a passive recording first.", "warning")
+                return
+            self.dispatch(_run_experimental_inference_spontaneous, cfg, post,
+                          self.exp_spont.value(), self.exp_tobs.value(), provide_fig_sink=True)
+        else:                                        # experimental, driven
             forcing_si = {name: fld.value() for name, fld in self._forcing_fields.items()}
             self.dispatch(_run_experimental_inference, cfg, post, self.exp_spont.value(),
                           self.exp_forced.value(), self.exp_tobs.value(), forcing_si, provide_fig_sink=True)

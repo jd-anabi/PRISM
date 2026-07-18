@@ -84,7 +84,6 @@ def test_user_model_parser_rejects_bad_input():
         [{"name": "x", "drift": "foo(x)", "D": "0"}],                         # unknown function
         [{"name": "x", "drift": "lambda: 1", "D": "0"}],                      # not an expression
         [{"name": "x", "drift": "a[0]", "D": "0"}],                           # brackets
-        [{"name": "x", "drift": "-x", "D": "x*d0"}],                          # state-dependent D
         [{"name": "t", "drift": "-t", "D": "0"}],                             # reserved name
         [{"name": "x", "drift": "", "D": "0"}],                               # empty drift
     )
@@ -97,9 +96,39 @@ def test_user_model_parser_rejects_bad_input():
             raise AssertionError(f"not rejected: {variables}")
 
 
+def test_state_dependent_noise_detection_and_gx():
+    """A D that references state -> state_dep_noise True, g(None)==None cache skipped, g(x)=sqrt(2 D(x))
+    per column, and state_dep_drift=True integrates finitely. Additive models keep g() cached and
+    x-invariant (backward compatible)."""
+    # multiplicative: D = 0.5*x^2 -> g = sqrt(2*0.5*x^2) = |x|
+    c = parse_user_model([{"name": "x", "drift": "-k*x", "D": "0.5*x^2"}])
+    assert c.state_dep_noise is True and c.param_names == ["k"]
+    m = UserModel(c, (torch.ones(3),), torch.zeros(3, 1, 4), batch_size=3)
+    assert m._g is None                                              # nothing cached for state-dep
+    xq = torch.tensor([[2.0], [3.0], [-4.0]])
+    assert torch.allclose(m.g(xq)[:, 0], xq[:, 0].abs())
+    # a transient negative D is clamped, never NaN
+    cneg = parse_user_model([{"name": "x", "drift": "-x", "D": "x"}])   # D=x can go negative
+    mneg = UserModel(cneg, (), torch.zeros(2, 1, 4), batch_size=2)
+    assert torch.isfinite(mneg.g(torch.tensor([[-5.0], [5.0]]))).all()
+    # euler runs finite under the state-dependent branch
+    from core.Solvers import sdeint
+    res = sdeint.Solver().euler(
+        UserModel(c, (torch.ones(1),), torch.zeros(1, 1, 101), batch_size=1),
+        torch.tensor([[0.1]]), (0.0, 0.5), 101, state_dep_drift=True)
+    assert torch.isfinite(res).all()
+
+    # additive stays False + cached + x-invariant
+    c2 = parse_user_model([{"name": "x", "drift": "-k*x", "D": "d0"}])
+    assert c2.state_dep_noise is False
+    m2 = UserModel(c2, (torch.ones(3), torch.full((3,), 0.02)), torch.zeros(3, 1, 4), batch_size=3)
+    assert m2._g is not None and torch.allclose(m2.g(xq), m2.g())
+
+
 def test_user_model_constant_and_zero_noise_normalization():
     """Constant/param-only expressions come back as scalars -- they must normalize to (batch,), zero-D
-    channels must zero-pad g (the BP convention), and a negative D must be refused."""
+    channels must zero-pad g (the BP convention), and a negative constant D yields NaN g (so the SBI
+    stability screen / builder smoke test drops that parameter set, rather than raising per-batch)."""
     compiled = parse_user_model([{"name": "x", "drift": "-x", "D": "0"},
                                  {"name": "y", "drift": "1.5", "D": "d0"}])
     d0 = 0.02
@@ -109,12 +138,9 @@ def test_user_model_constant_and_zero_noise_normalization():
     assert torch.allclose(um.g()[:, 1], torch.full((3,), math.sqrt(2 * d0)))
     fx = um.f(torch.randn(3, 2), 0)
     assert fx.shape == (3, 2) and torch.all(fx[:, 1] == 1.5)
-    try:
-        UserModel(compiled, (torch.full((3,), -1.0),), torch.zeros(3, 2, 4), batch_size=3)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("negative D not refused")
+    # negative constant D -> NaN in that channel (screened downstream), no raise
+    umn = UserModel(compiled, (torch.full((3,), -1.0),), torch.zeros(3, 2, 4), batch_size=3)
+    assert torch.isnan(umn.g()[:, 1]).all()
 
 
 def test_parameter_discovery_ignores_numeric_literals():

@@ -1,0 +1,7 @@
+# Non-dimensional Parameters
+k in (0.0, 2.0)
+m in (0.0, 2.0)
+# Dimensional Parameters
+x_scale in (0.5, 2.0)
+t_scale in (0.5, 2.0)
+# Forcing Parameters

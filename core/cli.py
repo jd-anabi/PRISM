@@ -220,6 +220,18 @@ def get_inference_inputs(force_param_names: list[str]) -> tuple[str, str, float,
     helpers.clear_screen()
     return spont_path, forced_path, T_obs_s, forcing_params_si
 
+
+def get_inference_inputs_spontaneous() -> tuple[str, float]:
+    """Prompt for a PASSIVE (no-drive) experimental recording + observation duration. Used by the
+    no-forcing inference path; there is no forced file and no forcing SI params.
+
+    :return: (path, T_obs_seconds).
+    """
+    path = input("Path to PASSIVE (unforced) recording (.csv or .npy): ").strip()
+    T_obs_s = float(input("Observation duration T_obs (seconds): "))
+    helpers.clear_screen()
+    return path, T_obs_s
+
 # ── Mode selection (top-level) ──────────────────────────────────────────────
 def select_mode() -> str:
     """

@@ -92,6 +92,12 @@ def run(cfg: SimConfig):
             labels=(labels.axis_label("t", "s"), labels.axis_label("x", cfg.length_unit)),
         )
         infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True)
+    elif mode == "experimental" and not cfg.has_forcing:
+        # Passive recording: a single unforced trace, no drive.
+        path, T_obs_s = cli.get_inference_inputs_spontaneous()
+        X_obs = file_manager.load_experimental_data(path, dtype=cfg.hw.dtype)
+        obs_stats, obs_data, t_dim = build_experiment_obs_spontaneous(cfg, X_obs, T_obs_s)
+        infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False)
     elif mode == "experimental":
         spont_path, forced_path, T_obs_s, forcing_params_si = cli.get_inference_inputs(
             list(cfg.force_params_dict.keys()))
@@ -158,39 +164,35 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
         cfg.T_obs = actual_T_obs  # keep log(T) conditioning consistent across pipeline
 
     t_fine = t[:n_fine_total]
+    n_vars = cfg.inits_tensor.shape[-1]
 
     # Auto-derive n_segs based on CHUNK_LEN (per-chunk memory cap)
     n_segs_gt = max(1, math.ceil(n_fine_total / CHUNK_LEN))
 
-    # Build ND force at fine resolution
-    force = pipeline.build_nondim_sin_force_tensor(forcing_gt, t_fine, rescale_gt, cfg.forcing_idx, cfg.rescale_idx)
-
-    # Simulate the FORCED run at fine dt_nd_min (stable for EM), then downsample
-    x_nd_fine = pipeline.gen_obs(
-        model=cfg.model, params=cfg.params_tensor, t=t_fine, inits=cfg.inits_tensor,
-        force=force, n_segs=n_segs_gt, steady_idx=cfg.steady_idx,
-        state_dep_drift=cfg.state_dep_drift,
-        dtype=cfg.hw.dtype, device=cfg.hw.device,
-    )[0, :, :]
-    x_nd = x_nd_fine[:, ::subsample_factor][:, :N_obs]
-    del x_nd_fine
-
-    # Simulate the SPONTANEOUS run (zero force) for Groups A-F
-    x_nd_spont_fine = pipeline.gen_obs(
-        model=cfg.model, params=cfg.params_tensor, t=t_fine, inits=cfg.inits_tensor,
-        force=torch.zeros_like(force), n_segs=n_segs_gt, steady_idx=cfg.steady_idx,
-        state_dep_drift=cfg.state_dep_drift,
-        dtype=cfg.hw.dtype, device=cfg.hw.device,
-    )[0, :, :]
-    x_nd_spont = x_nd_spont_fine[:, ::subsample_factor][:, :N_obs]
-    del x_nd_spont_fine, force
-
-    # Redimensionalize both runs
     x_scale = rescale_gt[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
     x_offset = rescale_gt[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
     t_offset = rescale_gt[:, cfg.rescale_idx["t_offset"]].item() if "t_offset" in cfg.rescale_idx else 0.0
-    x_dim = helpers.rescale(x_nd, x_scale, x_offset)
-    x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
+
+    def _spont_run(force_tensor):
+        x_fine = pipeline.gen_obs(
+            model=cfg.model, params=cfg.params_tensor, t=t_fine, inits=cfg.inits_tensor,
+            force=force_tensor, n_segs=n_segs_gt, steady_idx=cfg.steady_idx,
+            state_dep_drift=cfg.state_dep_drift, dtype=cfg.hw.dtype, device=cfg.hw.device,
+        )[0, :, :]
+        return x_fine[:, ::subsample_factor][:, :N_obs]
+
+    if cfg.has_forcing:
+        force = pipeline.build_nondim_sin_force_tensor(forcing_gt, t_fine, rescale_gt, cfg.forcing_idx, cfg.rescale_idx)
+        x_nd = _spont_run(force)                                 # forced run -> Group G
+        x_nd_spont = _spont_run(torch.zeros_like(force))         # spontaneous -> Groups A-F
+        x_dim = helpers.rescale(x_nd, x_scale, x_offset)
+        x_spont_dim = helpers.rescale(x_nd_spont, x_scale, x_offset)
+        del x_nd, x_nd_spont, force
+    else:
+        # No drive: a single spontaneous run; Group G is zero-padded, no forcing conditioning block.
+        zero_force = torch.zeros((1, n_vars, n_fine_total), dtype=cfg.hw.dtype, device=cfg.hw.device)
+        x_spont_dim = helpers.rescale(_spont_run(zero_force), x_scale, x_offset)
+        x_dim = x_spont_dim                                      # the observation IS the passive trace
 
     # Dimensional time vector for plotting, in SECONDS (N_obs points at dt_exp spacing). t_dim is
     # display-only (never fed to gen_stats), so converting cell-time-units -> s here makes every
@@ -199,16 +201,20 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
     t_dim = (torch.arange(N_obs, dtype=cfg.hw.dtype) * cfg.dt_exp + t_offset) * s_per_cell
     t_dim = t_dim.unsqueeze(0)  # (1, N_obs), seconds
 
-    # Summary statistics (A-F from spontaneous, G from forced) + conditioning vector
-    obs_stats = pipeline.gen_stats(
-        x_spont_dim, x_dim, cfg.dt_exp,
-        forcing_gt[:, cfg.forcing_idx["amp"]], forcing_gt[:, cfg.forcing_idx["freq"]],
-        forcing_gt[:, cfg.forcing_idx["phase"]], device=cfg.hw.device,
-    )
+    # Summary statistics + conditioning vector. Layout: [S | log(T) | forcing]; log(T) is grouped
+    # with the summary pathway. Keep this order in sync with gen_training_data and build_posterior.
     log_T_obs = torch.tensor([[math.log(cfg.T_obs)]], dtype=cfg.hw.dtype)
-    # Conditioning layout: [S | log(T) | forcing]. log(T) is grouped with the summary
-    # pathway; keep this order in sync with gen_training_data and build_posterior.
-    obs_stats = torch.cat([obs_stats, log_T_obs, forcing_gt.cpu()], dim=-1)
+    if cfg.has_forcing:
+        obs_stats = pipeline.gen_stats(
+            x_spont_dim, x_dim, cfg.dt_exp,
+            forcing_gt[:, cfg.forcing_idx["amp"]], forcing_gt[:, cfg.forcing_idx["freq"]],
+            forcing_gt[:, cfg.forcing_idx["phase"]], device=cfg.hw.device,
+        )
+        obs_stats = torch.cat([obs_stats, log_T_obs, forcing_gt.cpu()], dim=-1)
+    else:
+        obs_stats = pipeline.gen_stats(x_spont_dim, None, cfg.dt_exp, None, None, None,
+                                       device=cfg.hw.device, spontaneous_only=True)
+        obs_stats = torch.cat([obs_stats, log_T_obs], dim=-1)
     return x_dim, obs_stats, t_dim
 
 
@@ -228,6 +234,18 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool,
     :param fig_sink: Optional (title, fig) -> None display callback for the corner plot; None => plt.show().
     :return: A Distribution that can be sampled and scored.
     """
+    # User-model guard: the bounds ND section order MUST equal the compiled param order (torch.unbind
+    # binds columns positionally). A hand-edited JSON over a stale Bounds file would mis-bind silently.
+    from core import registry
+    if registry.is_user_model(cfg.model):
+        spec = registry.get(cfg.model)
+        expected = list(spec.compiled.param_names)
+        actual = list(cfg.params_dict.keys())
+        if actual != expected:
+            raise ValueError(
+                f"Model '{cfg.model}' is out of sync with its bounds file: definition uses {expected}, "
+                f"bounds file lists {actual}. Re-save the model from the Settings model builder.")
+
     # 1. Forcing prior
     force_prior = _build_forcing_prior(cfg)
 
@@ -314,6 +332,8 @@ def _build_forcing_prior(cfg: SimConfig) -> Distribution:
     uniform — amp bound can include 0 (log-uniform would fail), phase is a bounded
     angle, offset can be negative.
     """
+    if not cfg.has_forcing:
+        return None                                   # no drive -> no forcing prior (spontaneous model)
     bounds = [row[1] for row in cfg.force_params_dict.values()]
     types = tuple(
         "log-uni" if name == "freq" else "uniform"
@@ -403,7 +423,10 @@ def build_posterior(
     # Optional decorrelating reparameterization (Track A): rotate the flow's latent coordinate
     # into the simulation-based Fisher eigenbasis so the well-identified-but-correlated posterior
     # is axis-aligned and the flow can calibrate it. REPARAM_ROTATE=False => V=None => plain.
-    if REPARAM_ROTATE:
+    # The Fisher rotation probes a representative drive (decorrelate reads forcing_idx["amp"/…]); a
+    # no-forcing model has no such params, so rotation is disabled for it. V=None is the plain pipeline.
+    rotate = REPARAM_ROTATE and cfg.has_forcing
+    if rotate:
         print("Computing decorrelating Fisher rotation (REPARAM_ROTATE=True)...")
         # Average the Fisher over the prior (not just GT) so the linear rotation is valid prior-wide.
         # GT-free: the rotation anchors on the prior median with a representative drive (force_prior).
@@ -427,6 +450,8 @@ def build_posterior(
         "t_max_exp": cfg.t_max_exp,
         "t_scale_bounds": cfg.t_scale_bounds,
         "state_dep_drift": cfg.state_dep_drift,
+        "spontaneous_only": not cfg.has_forcing,
+        "n_vars": cfg.inits_tensor.shape[-1],
         "dtype": cfg.hw.dtype,
         "device": cfg.hw.device,
     }
@@ -527,6 +552,10 @@ def _observation_inits(cfg: SimConfig) -> torch.Tensor:
     """
     if cfg.inits_dict:
         return cfg.inits_tensor
+    from core import registry
+    if registry.is_user_model(cfg.model):
+        from core.SBI.Priors.user_prior import declared_inits
+        return declared_inits(registry.get(cfg.model)).to(dtype=cfg.hw.dtype, device=cfg.hw.device)
     n_pos, n_prob = pipeline.INIT_SHAPES[cfg.model.lower()]
     rng = np.random.RandomState(0)
     arr = np.concatenate([rng.randint(0, 10, size=(1, n_pos)), np.zeros((1, n_prob))], axis=1)
@@ -573,7 +602,9 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
         dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
         t_scale_bounds=cfg.t_scale_bounds,
         theta_transform=T,
-        state_dep_drift=cfg.state_dep_drift, dtype=dtype, device=device,
+        state_dep_drift=cfg.state_dep_drift,
+        spontaneous_only=not cfg.has_forcing, n_vars=cfg.inits_tensor.shape[-1],
+        dtype=dtype, device=device,
     )
     x_cal_dev = x_cal.to(device)
     theta_star_dev = theta_star.to(device)
@@ -658,7 +689,8 @@ def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | Transformed
     N_points_obs = int(cfg.T_obs / cfg.dt_exp)  # same for all samples
 
     forcing_gt = torch.tensor([[val for val, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
-    forcing_gt_expanded = forcing_gt.expand(n_samples, -1)  # (n_samples, n_forcing)
+    forcing_gt_expanded = forcing_gt.expand(n_samples, -1)  # (n_samples, n_forcing); empty if no forcing
+    n_vars = inits.shape[-1]
 
     # Sort by t_scale (ascending) so each bin contains similar-scale samples
     t_scales_all = samples_rescale[:, cfg.rescale_idx["t_scale"]]
@@ -690,11 +722,6 @@ def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | Transformed
             t_fine_bin = t[:n_fine_bin]
             n_segs_bin = max(1, math.ceil(n_fine_bin / CHUNK_LEN))
 
-            # Build ND force for this bin (forced run)
-            force_bin = pipeline.build_nondim_sin_force_tensor(
-                forcing_gt.expand(bs, -1), t_fine_bin, bin_rescale, cfg.forcing_idx, cfg.rescale_idx
-            )
-
             # Per-sample downsample indices (each row uses its own subsample_factor)
             subsample_factors = torch.clamp(
                 torch.round((cfg.dt_exp / bin_t_scales) / cfg.dt_nd_min), min=1
@@ -704,8 +731,15 @@ def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | Transformed
             x_scale_col = bin_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
             x_offset_col = bin_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
 
-            # Forced run (Group G) then spontaneous run (Groups A-F, zero force)
-            for force_run, dest in ((force_bin, x_dim_sorted), (torch.zeros_like(force_bin), x_spont_sorted)):
+            # Forced run (Group G) then spontaneous run (Groups A-F); no-forcing = spontaneous only.
+            if cfg.has_forcing:
+                force_bin = pipeline.build_nondim_sin_force_tensor(
+                    forcing_gt.expand(bs, -1), t_fine_bin, bin_rescale, cfg.forcing_idx, cfg.rescale_idx)
+                run_specs = ((force_bin, x_dim_sorted), (torch.zeros_like(force_bin), x_spont_sorted))
+            else:
+                force_bin = torch.zeros((bs, n_vars, t_fine_bin.shape[0]), dtype=dtype, device=device)
+                run_specs = ((force_bin, x_spont_sorted),)
+            for force_run, dest in run_specs:
                 x_nd_bin = pipeline.gen_obs(
                     model=cfg.model, params=bin_nd, t=t_fine_bin,
                     inits=inits.expand(bs, -1),
@@ -723,20 +757,25 @@ def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | Transformed
                 torch.cuda.empty_cache()
 
     # Restore original sample order
-    x_dim = x_dim_sorted[inv_sort_idx]
     x_spont = x_spont_sorted[inv_sort_idx]
-
-    n_drive = x_dim.shape[0]
-    sim_stats = pipeline.gen_stats(
-        x_spont, x_dim, cfg.dt_exp,
-        forcing_gt[:, cfg.forcing_idx["amp"]].expand(n_drive),
-        forcing_gt[:, cfg.forcing_idx["freq"]].expand(n_drive),
-        forcing_gt[:, cfg.forcing_idx["phase"]].expand(n_drive),
-        device=device,
-    )
-    log_T_obs = torch.full((sim_stats.shape[0], 1), math.log(T_obs), dtype=dtype)
+    log_T_obs = torch.full((n_samples, 1), math.log(T_obs), dtype=dtype)
     # Layout [S | log(T) | forcing] — must match the observation in generate_observations.
-    sim_stats = torch.cat([sim_stats, log_T_obs, forcing_gt_expanded.cpu()], dim=-1)
+    if cfg.has_forcing:
+        x_dim = x_dim_sorted[inv_sort_idx]
+        n_drive = x_dim.shape[0]
+        sim_stats = pipeline.gen_stats(
+            x_spont, x_dim, cfg.dt_exp,
+            forcing_gt[:, cfg.forcing_idx["amp"]].expand(n_drive),
+            forcing_gt[:, cfg.forcing_idx["freq"]].expand(n_drive),
+            forcing_gt[:, cfg.forcing_idx["phase"]].expand(n_drive),
+            device=device,
+        )
+        sim_stats = torch.cat([sim_stats, log_T_obs, forcing_gt_expanded.cpu()], dim=-1)
+    else:
+        x_dim = x_spont                                 # the PPC "sample trajectories" are spontaneous
+        sim_stats = pipeline.gen_stats(x_spont, None, cfg.dt_exp, None, None, None,
+                                       device=device, spontaneous_only=True)
+        sim_stats = torch.cat([sim_stats, log_T_obs], dim=-1)
     results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats)
     fig_ppc = visualizers.plot_ppc(
         results,
@@ -763,9 +802,11 @@ def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | Transformed
         n_fine_c = min(cfg.steady_idx + N_points_obs * subsample_c, len(t))
         t_fine_c = t[:n_fine_c]
         n_segs_c = max(1, math.ceil(n_fine_c / CHUNK_LEN))
-        force_c = pipeline.build_nondim_sin_force_tensor(
-            forcing_gt, t_fine_c, central_rescale, cfg.forcing_idx, cfg.rescale_idx
-        )
+        if cfg.has_forcing:
+            force_c = pipeline.build_nondim_sin_force_tensor(
+                forcing_gt, t_fine_c, central_rescale, cfg.forcing_idx, cfg.rescale_idx)
+        else:
+            force_c = torch.zeros((1, n_vars, t_fine_c.shape[0]), dtype=dtype, device=device)
         x_nd_c = pipeline.gen_obs(
             model=cfg.model, params=central_nd, t=t_fine_c, inits=inits,
             force=force_c, n_segs=n_segs_c, steady_idx=cfg.steady_idx,
@@ -912,3 +953,38 @@ def build_experiment_obs(
     s_per_cell = 1.0 / cfg.get_unit_conversion_factor("s")   # cell time unit -> seconds
     t_dim = ((torch.arange(N_obs, dtype=dtype) * cfg.dt_exp) * s_per_cell).unsqueeze(0)
     return obs_stats, X_forced_batched, t_dim
+
+
+def build_experiment_obs_spontaneous(
+    cfg: SimConfig, X_obs: torch.Tensor, T_obs_s: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Passive-recording variant of build_experiment_obs for a NO-FORCING model: a SINGLE unforced
+    recording, no forced file, and no forcing/frequency SI units (the drive machinery is not entered).
+    Conditioning is [S(A-F, Group G zeroed) | log(T_obs)], matching generate_observations' no-forcing path.
+
+    :param X_obs: 1D passive recording, shape (N_obs,), sampled at 1/cfg.dt_exp.
+    :param T_obs_s: observation duration in SECONDS.
+    :return: (obs_stats, obs_data, t_dim): the [S | log(T)] conditioning vector, the recording (1, N_obs),
+             and the dimensional (seconds) time axis (1, N_obs).
+    """
+    dtype = cfg.hw.dtype
+    s_to_cell = cfg.get_unit_conversion_factor("s")
+    T_obs = T_obs_s * s_to_cell
+
+    expected_N = int(T_obs / cfg.dt_exp)
+    if abs(X_obs.shape[-1] - expected_N) > 1:
+        warnings.warn(
+            f"Recording length ({X_obs.shape[-1]}) doesn't match expected from T_obs_s={T_obs_s:.4f}s "
+            f"at 1/dt_exp sampling (expected ~{expected_N} points).", stacklevel=2)
+
+    X_batched = X_obs.to(dtype=dtype).unsqueeze(0)
+    obs_stats = pipeline.gen_stats(X_batched, None, cfg.dt_exp, None, None, None,
+                                   device=cfg.hw.device, spontaneous_only=True)
+    log_T_obs = torch.tensor([[math.log(T_obs)]], dtype=dtype)
+    obs_stats = torch.cat([obs_stats, log_T_obs], dim=-1)      # [S | log(T)], no forcing block
+
+    cfg.set_observation_context(T_obs, {})
+    N_obs = X_batched.shape[-1]
+    s_per_cell = 1.0 / cfg.get_unit_conversion_factor("s")
+    t_dim = ((torch.arange(N_obs, dtype=dtype) * cfg.dt_exp) * s_per_cell).unsqueeze(0)
+    return obs_stats, X_batched, t_dim

@@ -56,6 +56,7 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
                  dt_exp: float = None, t_min_exp: float = None, t_max_exp: float = None,
                  t_scale_bounds: tuple[float, float] = None, theta_transform: Transform | None = None,
                  fixed_dict: dict = None, state_dep_drift: bool = False,
+                 spontaneous_only: bool = False, n_vars: int | None = None,
                  dtype: torch.dtype = torch.float32,
                  device: torch.device = torch.device('cpu')) -> tuple[torch.Tensor, torch.Tensor]:
     """
@@ -92,6 +93,7 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
         t_scale_bounds=t_scale_bounds, proposal=None,
         theta_transform=theta_transform,  # <-- NEW
         fixed_dict=fixed_dict, state_dep_drift=state_dep_drift,
+        spontaneous_only=spontaneous_only, n_vars=n_vars,
         dtype=dtype, device=device,
     )
 

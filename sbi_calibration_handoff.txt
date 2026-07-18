@@ -3,6 +3,19 @@ GFDT / SBI HANDOFF  —  Nadrowski hair-cell parameter inference
 Updated 2026-07-13. Self-contained context for a new chat to continue the SBI work.
 ================================================================================
 
+USER-DEFINED MODELS IN SBI (v2, 2026-07-18) — the pipeline now also infers NO-FORCING user-defined models
+  (spontaneous dynamics), branched on SimConfig.has_forcing (len(force_params_dict)>0). When has_forcing is
+  False: the forced run + Group-G lock-in are skipped, statistics.compute_statistics(spontaneous_only=True)
+  computes Groups A-F and ZERO-PADS the 11 Group-G features (fixed width -> conditioning [S(41 w/ G=0) |
+  log(T)], forcing_dim=0, EmbeddedNet unconditioned), the Fisher rotation is OFF (V=None = plain pipeline),
+  and the prior is a generic core/SBI/Priors/user_prior.py UserPrior (reuses Prior.construct_prior; simulator
+  from registry.make_user_simulator; declared inits; zero force). EVERY has_forcing branch defaults to the
+  original Nadrowski/Hopf/BP code, pinned by tests/test_user_sbi.py::test_builtin_forcing_path_unperturbed --
+  so nothing in THIS handoff's Nadrowski calibration story changes. CAVEAT: the summary stats + reparam +
+  calibration are Nadrowski-TUNED; v2 runs the machinery for a user model but its SBC/TARP calibration is NOT
+  pre-tuned. Full design: features_handoff.txt FEATURE 1 v2. FORCED user models remain Simulate-only.
+================================================================================
+
 OPEN ISSUES / TODO (fix in a new chat)
   [x] DONE 2026-07-13 -- CELL FILES now hold VALUES + INITIAL CONDITIONS ONLY (no bounds, no units).
       RESOLUTION (all local): stripped all 8 cells to `name = val`; the "no code change" note was WRONG

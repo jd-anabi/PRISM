@@ -163,15 +163,18 @@ class CompiledUserModel:
     var_names: list = field(default_factory=list)     # declared order; index 0 = the observable
     param_names: list = field(default_factory=list)   # first appearance in the typed expressions
     drift_fns: list = field(default_factory=list)     # fn(args) per variable; args = (*states, *params)
-    diff_fns: list = field(default_factory=list)      # D_j as fn(args); same flat args (state unused)
+    diff_fns: list = field(default_factory=list)      # D_j as fn(args); same flat args (may use state)
+    state_dep_noise: bool = False                     # True if any D references a state variable ->
+                                                      # multiplicative noise; g(x) is evaluated per step
 
 
 def parse_user_model(variables: list) -> CompiledUserModel:
     """Compile ``[{name, drift, D}, ...]`` (declared order) into a CompiledUserModel.
 
     Every identifier that is not a declared state variable (or a whitelisted function/constant) is a
-    PARAMETER, ordered by first appearance across the drift/D texts. D must not reference state (additive
-    noise only in v1).
+    PARAMETER, ordered by first appearance across the drift/D texts. D MAY reference state variables:
+    if any does, the model has multiplicative (state-dependent) noise and ``state_dep_noise`` is set,
+    so the solver evaluates g(x) = sqrt(2 D(x)) each step; otherwise D is a constant amplitude cached once.
     """
     if not variables:
         raise ModelParseError("Declare at least one state variable.")
@@ -222,10 +225,6 @@ def parse_user_model(variables: list) -> CompiledUserModel:
 
         where_n = f"D of {name}"
         d_expr = _parse_one(str(v.get("D", "0") or "0"), where_n, local_dict)
-        if d_expr.free_symbols & set(state_syms):
-            raise ModelParseError(
-                f"{where_n}: the noise strength may only use parameters, not state variables "
-                "(additive white noise only).")
         stray = d_expr.free_symbols - allowed
         if stray:
             raise ModelParseError(f"{where_n}: unknown symbol(s) {sorted(map(str, stray))}.")
@@ -237,6 +236,9 @@ def parse_user_model(variables: list) -> CompiledUserModel:
     param_syms = [s for s in param_syms if s in used]
     param_names = [str(s) for s in param_syms]
 
+    # Multiplicative noise iff any diffusion expression references a state variable.
+    state_dep_noise = any(bool(d.free_symbols & set(state_syms)) for d in diff_exprs)
+
     # Pass 2 -- compile against the final (state + used-param) argument layout.
     arg_index = {s: i for i, s in enumerate(state_syms + param_syms)}
     drift_fns = [_compile_tree(expr, arg_index, f"d{name}/dt")
@@ -245,7 +247,7 @@ def parse_user_model(variables: list) -> CompiledUserModel:
                 for name, expr in zip(var_names, diff_exprs)]
 
     return CompiledUserModel(var_names=var_names, param_names=param_names,
-                             drift_fns=drift_fns, diff_fns=diff_fns)
+                             drift_fns=drift_fns, diff_fns=diff_fns, state_dep_noise=state_dep_noise)
 
 
 class UserModel:
@@ -272,17 +274,22 @@ class UserModel:
                 f"({n_vars}), got shape {tuple(force.shape)}.")
         self.force = force.to(dtype=self.dtype, device=self.device)
 
-        # Additive noise: D depends on params only, so g = sqrt(2 D) is evaluated ONCE and cached
-        # (the solver's state_dep_drift=False path reads g() once before the loop).
-        zeros = torch.zeros(self.batch_size, dtype=self.dtype, device=self.device)
-        args = tuple(zeros for _ in range(n_vars)) + self.params
-        cols = []
-        for name, fn in zip(compiled.var_names, compiled.diff_fns):
-            d_val = self._as_batch(fn(args))
-            if bool((d_val < 0).any()):
-                raise ValueError(f"Noise strength D of '{name}' must be non-negative.")
-            cols.append(torch.sqrt(2.0 * d_val))
-        self._g = torch.stack(cols, dim=-1)                      # (batch, d) diagonal amplitudes
+        self.state_dep_noise = compiled.state_dep_noise
+        if self.state_dep_noise:
+            # Multiplicative noise: g depends on state, so it is recomputed per step in g(x). Nothing
+            # to cache; the solver takes the state_dep_drift=True branch and calls g(x_curr).
+            self._g = None
+        else:
+            # Additive noise: D depends on params only, so g = sqrt(2 D) is evaluated ONCE and cached
+            # (the solver's state_dep_drift=False path reads g() once before the loop). A NEGATIVE
+            # constant D yields NaN here (sqrt of a negative): per-sample this screens that parameter
+            # set out downstream -- the SBI stability sweep drops non-finite trajectories, and the
+            # builder smoke integration flags it as diverged -- rather than raising and killing an
+            # entire batch (the stability screen Sobol-samples a whole bounds box, negatives included).
+            zeros = torch.zeros(self.batch_size, dtype=self.dtype, device=self.device)
+            args = tuple(zeros for _ in range(n_vars)) + self.params
+            cols = [torch.sqrt(2.0 * self._as_batch(fn(args))) for fn in compiled.diff_fns]
+            self._g = torch.stack(cols, dim=-1)                  # (batch, d) diagonal amplitudes
 
     def _as_batch(self, val) -> torch.Tensor:
         """Normalize a compiled-expression result (tensor or python number) to a (batch,) tensor."""
@@ -298,5 +305,14 @@ class UserModel:
                 for j, fn in enumerate(self._compiled.drift_fns)]
         return torch.stack(cols, dim=1)
 
-    def g(self) -> torch.Tensor:
-        return self._g
+    def g(self, x: torch.Tensor | None = None) -> torch.Tensor:
+        """Diagonal diffusion amplitudes (batch, d). Additive: the cached sqrt(2D) (``x`` ignored).
+        Multiplicative: sqrt(2 D(x)) recomputed from the state (the solver passes x_curr each step)."""
+        if not self.state_dep_noise:
+            return self._g
+        args = tuple(x[:, j] for j in range(len(self._compiled.var_names))) + self.params
+        # clamp at 0: a transient negative-D excursion from a badly-typed expression must not NaN the
+        # whole batch (a grossly-wrong D still surfaces via the builder smoke test / divergence guard).
+        cols = [torch.sqrt(torch.clamp(2.0 * self._as_batch(fn(args)), min=0.0))
+                for fn in self._compiled.diff_fns]
+        return torch.stack(cols, dim=-1)

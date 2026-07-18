@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "name": "SHM2",
+  "variables": [
+    {
+      "name": "x",
+      "drift": "v",
+      "D": "0",
+      "init": 1.0,
+      "forcing": null
+    },
+    {
+      "name": "v",
+      "drift": "-k/m * x",
+      "D": "0",
+      "init": 1.0,
+      "forcing": null
+    }
+  ],
+  "params": {
+    "k": 1.0,
+    "m": 1.0
+  },
+  "rescale": {
+    "x_scale": 1.0,
+    "t_scale": 1.0
+  }
+}

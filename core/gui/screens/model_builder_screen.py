@@ -35,7 +35,8 @@ HELP = {
              "declared variables, parameters (any new name), numbers, + - * / ^ ( ) and "
              "sin cos tan asin acos atan sinh cosh tanh exp log sqrt abs sign, pi.",
     "D": "White-noise strength D (<xi(t)xi(t')> = 2 D delta): the solver's noise amplitude is "
-         "sqrt(2*D). Parameters/numbers only (additive noise); 0 = noiseless.",
+         "sqrt(2*D). Use parameters/numbers for additive noise, or reference state variables for "
+         "multiplicative (state-dependent) noise; 0 = noiseless.",
     "init": "Initial condition for this variable (nondimensional).",
     "forcing": "Optional time-driven external force added to this variable's RHS. For a restoring "
                "(spring) force, put -k*(x - x0) directly in the RHS instead -- it depends on state.",
@@ -296,7 +297,8 @@ class ModelBuilderScreen(QWidget):
             model = UserModel(compiled, torch.unbind(params, dim=1), force, batch_size=1)
             inits = torch.tensor([[float(v["init"]) for v in doc["variables"]]])
             dt_nd = DT_EXP_S / (2.0 * t_scale)
-            res = sdeint.Solver().euler(model, inits, (0.0, _SMOKE_STEPS * dt_nd), _SMOKE_STEPS + 1)
+            res = sdeint.Solver().euler(model, inits, (0.0, _SMOKE_STEPS * dt_nd), _SMOKE_STEPS + 1,
+                                        state_dep_drift=compiled.state_dep_noise)
             if not bool(torch.isfinite(res).all()):
                 self._set_status("Validation integration diverged (NaN/inf) -- check the drift/noise "
                                  "expressions or the initial conditions.", error=True)
