@@ -1,4 +1,4 @@
-# GFDTResearch
+# PRISM
 
 Research for running GFDT theory and experiments on a simulated biophysical model of the inner-ear hair-cell bundles. The application (**PRISM**) is a PySide6 desktop GUI.
 
@@ -14,8 +14,8 @@ Research for running GFDT theory and experiments on a simulated biophysical mode
 Clone the repository first (all platforms):
 
 ```bash
-git clone https://github.com/jd-anabi/GFDTResearch.git
-cd GFDTResearch
+git clone https://github.com/jd-anabi/PRISM.git
+cd PRISM
 ```
 
 Then follow the section for your platform.

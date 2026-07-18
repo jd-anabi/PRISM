@@ -5,8 +5,8 @@ core.gui.app.build_app() sets both. Tests point the store at a temp file via use
 """
 from PySide6.QtCore import QSettings
 
-ORG = "GFDTResearch"
-APP = "GFDT-SBI"
+ORG = "PRISM"
+APP = "PRISM"
 
 _override_path: str | None = None
 
