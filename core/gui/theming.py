@@ -9,8 +9,10 @@ Each mode resolves to an effective light/dark, then applies:
 Kept out of the test path on purpose: only ``build_app`` constructs an ``Appearance`` (tests build
 ``MainWindow`` directly), so none of this fires during the suite.
 
-Two rendering surfaces stay outside the palette pipeline: the pyqtgraph live view re-themes itself via the
-``theme_changed`` signal (see live_hair_bundle.py), and matplotlib figures stay white (scientific norm).
+Two rendering surfaces stay outside the palette pipeline but still follow the theme via the
+``theme_changed`` signal: the pyqtgraph live view re-themes itself (see live_hair_bundle.py), and
+matplotlib figures follow the theme through rcParams (see mpl_theme.install, wired in app.build_app).
+The one deliberate exception is the Simulate video export, which stays white (simulate_export.py).
 """
 from datetime import datetime
 

@@ -125,6 +125,39 @@ def test_state_dependent_noise_detection_and_gx():
     assert m2._g is not None and torch.allclose(m2.g(xq), m2.g())
 
 
+def test_compiled_step_matches_eager():
+    """The @torch.jit.script compiled_step (euler_compiled fast path) must reproduce the eager `euler`
+    trajectory for additive AND state-dependent models -- same seed => same dW => identical math. Also:
+    a model whose step wasn't built (None) exposes no compiled_step attr and falls back to eager."""
+    from core.Models.user_model import build_compiled_step
+    from core.Solvers import sdeint
+    solver = sdeint.Solver()
+    cases = [
+        ([{"name": "x", "drift": "mu*x - x^3", "D": "d0"}], [0.5, 0.05], False),
+        ([{"name": "x", "drift": "v", "D": "0"},
+          {"name": "v", "drift": "-k*x - c*v", "D": "d0"}], [1.0, 0.2, 0.05], False),
+        ([{"name": "x", "drift": "-k*x", "D": "0.5*x^2 + d0"}], [1.0, 0.01], True),
+    ]
+    for variables, pvals, sdd in cases:
+        c = parse_user_model(variables)
+        c.compiled_step_fn = build_compiled_step(c)
+        assert c.compiled_step_fn is not None, variables
+        n_vars, B = len(c.var_names), 5
+        um = UserModel(c, tuple(torch.full((B,), v) for v in pvals), torch.zeros(B, n_vars, 50),
+                       batch_size=B)
+        assert hasattr(um, "compiled_step") and um.compiled_params() == um.params
+        inits = torch.full((B, n_vars), 0.2)
+        torch.manual_seed(3); a = solver.euler(um, inits, (0.0, 0.25), 50, state_dep_drift=sdd)
+        torch.manual_seed(3); b = solver.euler_compiled(um, inits, (0.0, 0.25), 50, state_dep_drift=sdd)
+        assert torch.allclose(a, b, atol=1e-4, rtol=1e-4), (variables, (a - b).abs().max().item())
+
+    # No compiled step built -> no compiled_step attr -> __sols stays on eager euler (safe fallback).
+    c0 = parse_user_model([{"name": "x", "drift": "-x", "D": "d0"}])   # compiled_step_fn stays None
+    um0 = UserModel(c0, (torch.full((4,), 0.02),), torch.zeros(4, 1, 10), batch_size=4)
+    assert not hasattr(um0, "compiled_step")
+    assert torch.isfinite(solver.euler(um0, torch.zeros(4, 1), (0.0, 0.05), 10)).all()
+
+
 def test_user_model_constant_and_zero_noise_normalization():
     """Constant/param-only expressions come back as scalars -- they must normalize to (batch,), zero-D
     channels must zero-pad g (the BP convention), and a negative constant D yields NaN g (so the SBI
@@ -297,7 +330,9 @@ def test_model_store_round_trip_emits_a_parseable_triple():
         assert set(file_manager.parse_units_file(str(config.UNITS_PATH / folder / "units.txt"))) == {"nm", "s"}
 
         doc = model_store.load_user_model(config.MODELS_PATH / f"{name}.json")
-        assert doc["name"] == name and doc["params"] == {"k1": 1.0, "d0": 0.05}
+        assert doc["name"] == name and doc["schema_version"] == 2      # v1 _doc migrated on save/load
+        assert doc["params"]["k1"] == model_store._param_entry(1.0)    # scalar -> placeholder box
+        assert doc["params"]["d0"] == model_store._param_entry(0.05)
         try:
             model_store.validate_name("NADROWSKI")
         except ValueError:
@@ -309,6 +344,86 @@ def test_model_store_round_trip_emits_a_parseable_triple():
     assert not (config.MODELS_PATH / f"{name}.json").exists()
     for base in (config.BOUNDS_PATH, config.CELL_PATH, config.UNITS_PATH):
         assert not (base / folder).exists()
+
+
+def _doc_v2(name="UMTESTV2", params=None):
+    """A schema_version-2 doc: params carry {value, lo, hi} (per-parameter SBI bounds, S-1)."""
+    return {
+        "schema_version": 2,
+        "name": name,
+        "variables": [{"name": "x", "drift": "-k1*x", "D": "d0", "init": 0.1, "forcing": None}],
+        "params": params or {"k1": {"value": 1.0, "lo": 0.5, "hi": 1.5},
+                             "d0": {"value": 0.05, "lo": 0.01, "hi": 0.1}},
+        "rescale": {"x_scale": 10.0, "t_scale": 0.01},
+    }
+
+
+def test_custom_param_bounds_emitted_verbatim():
+    """A v2 doc's per-parameter (lo, hi) reach the Bounds file VERBATIM (not the _nd_bounds placeholder),
+    and the value reaches the Cells file -- so a tightened SBI box actually flows into the pipeline."""
+    name, folder = "UMTESTBND", "umtestbnd"
+    try:
+        model_store.save_user_model(_doc_v2(name))
+        b_params, _, _, _ = file_manager.parse_bounds_file(str(config.BOUNDS_PATH / folder / "default.txt"))
+        assert b_params["k1"][1] == (0.5, 1.5)                     # custom box, not _nd_bounds(1.0)=(0,2)
+        assert b_params["d0"][1] == (0.01, 0.1)                    # not _nd_bounds(0.05)=(-0.95,1.05)
+        _, vals, _, _ = file_manager.parse_values_file(str(config.CELL_PATH / folder / "default.txt"))
+        assert vals["k1"] == 1.0 and vals["d0"] == 0.05
+    finally:
+        _remove_user_model(name)
+
+
+def test_param_bounds_validation_rejects_bad_boxes():
+    """lo >= hi and value-outside-[lo,hi] must fail at save time, persisting nothing."""
+    name = "UMTESTBADBOX"
+    for params, needle in (
+        ({"k1": {"value": 1.0, "lo": 2.0, "hi": 1.0}, "d0": {"value": 0.05, "lo": 0.0, "hi": 0.1}}, "lo must be < hi"),
+        ({"k1": {"value": 5.0, "lo": 0.0, "hi": 1.0}, "d0": {"value": 0.05, "lo": 0.0, "hi": 0.1}}, "outside its bounds"),
+    ):
+        try:
+            model_store.save_user_model(_doc_v2(name, params))
+        except ValueError as e:
+            assert needle in str(e), e
+        else:
+            raise AssertionError(f"bad box not refused: {params}")
+    assert not (config.MODELS_PATH / f"{name}.json").exists()
+
+
+def test_v1_params_migrate_to_placeholder_boxes():
+    """schema_version-1 scalar params migrate IN MEMORY to {value, lo, hi} placeholder boxes (non-mutating);
+    a v2 doc is returned unchanged. This is what keeps old Resources/Models/*.json working after the bump."""
+    v1 = {"schema_version": 1, "name": "X", "variables": [], "params": {"k": 2.0, "d0": 0.05},
+          "rescale": {"x_scale": 10.0, "t_scale": 0.01}}
+    out = model_store._normalize_to_v2(v1)
+    assert out["schema_version"] == 2
+    assert out["params"] == {"k": model_store._param_entry(2.0), "d0": model_store._param_entry(0.05)}
+    assert v1["params"] == {"k": 2.0, "d0": 0.05}                  # input not mutated
+    assert model_store._normalize_to_v2(out) is out               # already v2 -> unchanged
+
+
+def test_builder_param_row_preserves_and_defaults():
+    """The builder's per-parameter row: 'auto' reproduces _nd_bounds, a custom (min,max) survives a
+    re-detect, and _validate refuses a value outside its bounds."""
+    from core.gui.screens.model_builder_screen import ModelBuilderScreen, _ParamRow
+    _app()
+    r = _ParamRow(0.05)                                            # auto -> placeholder box
+    assert r.auto.isChecked() and r.spec() == (0.05, *model_store._nd_bounds(0.05))
+    r.set_spec(0.05, 0.01, 0.1)                                    # a custom box turns auto off
+    assert not r.auto.isChecked() and r.spec() == (0.05, 0.01, 0.1)
+
+    mb = ModelBuilderScreen()
+    mb.vars_edit.setText("x")
+    mb._set_variables()
+    mb._var_rows[0].drift.setText("-k*x")
+    mb._var_rows[0].noise.setText("d0")
+    mb.name_edit.setText("UMTESTROW")
+    mb._detect_params()
+    assert set(mb._param_fields) == {"k", "d0"}
+    mb._param_fields["d0"].set_spec(0.05, 0.01, 0.1)
+    mb._detect_params()                                            # re-detect preserves the custom box
+    assert mb._param_fields["d0"].spec() == (0.05, 0.01, 0.1)
+    mb._param_fields["k"].set_spec(5.0, 0.0, 1.0)                  # value outside its box
+    assert mb._validate() is None and "outside its bounds" in mb.status.text()
 
 
 def test_model_store_rejects_unusable_values_and_names():
@@ -511,6 +626,57 @@ def test_load_app_font_prefers_inter_when_forced():
         assert fonts.load_app_font(app, prefer_inter=True) == "Inter"   # bundled Inter always registers
     finally:
         app.setFont(saved)
+
+
+# ── icon set (B-e) ─────────────────────────────────────────────────────────────────────────────────
+def test_icons_register_or_fallback():
+    """The bundled icon font registers (or degrades to None), and every semantic name has a real
+    codepoint glyph AND a non-empty unicode fallback."""
+    from core.gui import icons
+    _app()
+    fam = icons.register()
+    assert fam is None or isinstance(fam, str)
+    assert isinstance(icons.available(), bool)
+    for name, (glyph_cp, fallback) in icons.NAMES.items():
+        assert glyph_cp and fallback, name
+        assert icons.glyph(name) in (glyph_cp, fallback)
+
+
+def test_apply_icon_never_blank():
+    """apply_icon leaves a button non-blank in BOTH branches: the icon glyph when the font is present,
+    the unicode fallback when it is monkeypatched away."""
+    from PySide6.QtWidgets import QToolButton
+    from core.gui import icons
+    _app()
+    for name in icons.NAMES:
+        b = QToolButton()
+        icons.apply_icon(b, name)
+        assert b.text(), name
+    real = icons.available
+    icons.available = lambda: False                              # force the fallback path
+    try:
+        for name, (_glyph, fallback) in icons.NAMES.items():
+            b = QToolButton()
+            icons.apply_icon(b, name)
+            assert b.text() == fallback, (name, b.text())
+    finally:
+        icons.available = real
+
+
+def test_migrated_glyph_buttons_render():
+    """The four migrated buttons (nav back/settings, picker refresh, help badge) never render blank."""
+    import tempfile
+    from PySide6.QtWidgets import QPushButton
+    from core.gui.screens.nav_shell import NavShell
+    from core.gui.widgets.artifact_picker import ArtifactPicker
+    from core.gui.widgets.help_badge import HelpBadge
+    _app()
+    ns = NavShell()
+    assert ns.btn_back.text() and ns.btn_settings.text()
+    ap = ArtifactPicker(tempfile.mkdtemp())
+    refresh = ap.findChild(QPushButton, "iconButton")
+    assert refresh is not None and refresh.text()
+    assert HelpBadge("some help text").text()
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ def plot_sweep_summary(df: pd.DataFrame, save: bool = True, show: bool = False) 
     ax_alpha, ax_beta = axes[1]
 
     ax_mu.plot(ok["f_max"], ok["mu_N"], "o-", color="tab:blue")
-    ax_mu.axhline(0.0, color="k", lw=0.5, ls="--")
+    ax_mu.axhline(0.0, color=plt.rcParams['axes.edgecolor'], lw=0.5, ls="--")
     ax_mu.set_ylabel(r"$\mu_H^{(N)}$")
     ax_mu.set_title("Bifurcation distance")
 
@@ -41,13 +41,13 @@ def plot_sweep_summary(df: pd.DataFrame, save: bool = True, show: bool = False) 
     ax_Omega.set_title("Intrinsic frequency")
 
     ax_alpha.plot(ok["f_max"], ok["alpha_H_N"], "o-", color="tab:orange")
-    ax_alpha.axhline(0.0, color="k", lw=0.5, ls="--")
+    ax_alpha.axhline(0.0, color=plt.rcParams['axes.edgecolor'], lw=0.5, ls="--")
     ax_alpha.set_ylabel(r"$\alpha_H^{(N)}$")
     ax_alpha.set_xlabel(r"$f_{\max}$")
     ax_alpha.set_title("Cubic real part")
 
     ax_beta.plot(ok["f_max"], ok["beta_H_N"], "o-", color="tab:red")
-    ax_beta.axhline(0.0, color="k", lw=0.5, ls="--")
+    ax_beta.axhline(0.0, color=plt.rcParams['axes.edgecolor'], lw=0.5, ls="--")
     ax_beta.set_ylabel(r"$\beta_H^{(N)}$")
     ax_beta.set_xlabel(r"$f_{\max}$")
     ax_beta.set_title("Cubic imaginary part")

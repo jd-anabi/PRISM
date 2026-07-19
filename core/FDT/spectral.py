@@ -83,13 +83,15 @@ def lock_in_chi(t: torch.Tensor, x_mean: torch.Tensor, omega: float, F0: float, 
     return chi
 
 
-def eff_temp_ratio(G: torch.Tensor, chi_imag: torch.Tensor, omega: torch.Tensor, n: float, beta: float) -> torch.Tensor:
+def eff_temp_ratio(G: torch.Tensor, chi_imag: torch.Tensor, omega: torch.Tensor, prefactor: float) -> torch.Tensor:
     """
-    T_eff / T = N * beta * omega * G(omega) / (4 * chi''(omega))   -- one-sided PSD convention.
+    T_eff / T = prefactor * omega * G(omega) / (4 * chi''(omega))   -- one-sided PSD convention.
 
-    Vectorized over omega. Returns a tensor of the same shape as omega.
+    ``prefactor`` is the per-model normalization coupling/D_x (the inverse observable diffusion, times
+    the drive coupling); it is ``n * beta`` for Nadrowski. See
+    ``core.FDT.campaigns.observable_noise_prefactor``. Vectorized over omega; same shape as omega.
     """
-    return n * beta * omega * G / (4.0 * chi_imag)
+    return prefactor * omega * G / (4.0 * chi_imag)
 
 
 def gen_freqs_log(omega_0: float, n: int, bounds: tuple, device: torch.device, dtype: torch.dtype) -> torch.Tensor:

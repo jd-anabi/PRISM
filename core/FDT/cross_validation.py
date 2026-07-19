@@ -28,7 +28,7 @@ import numpy as np
 import torch
 
 from ..config import FDTConfig
-from .campaigns import run_campaign1_psd, run_campaign2_chi
+from .campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
 from .spectral import gen_freqs_log, eff_temp_ratio
 from .sanity import _interp_log
 from .fdt_pipeline import _estimate_omega_0
@@ -80,9 +80,8 @@ def _campaign2_ratio(cfg: FDTConfig, omegas: torch.Tensor,
     """
     chis = run_campaign2_chi(cfg, omegas)
     G_at = _interp_log(omegas, freqs_psd, G)
-    n = cfg.params_dict["n"][0]
-    beta = cfg.params_dict["beta"][0]
-    ratio = eff_temp_ratio(G_at, chis.imag, omegas.to(torch.float64), n, beta)
+    prefactor = observable_noise_prefactor(cfg)
+    ratio = eff_temp_ratio(G_at, chis.imag, omegas.to(torch.float64), prefactor)
     return chis, ratio
 
 

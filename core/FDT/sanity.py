@@ -11,7 +11,7 @@ import torch
 from core.config import FDTConfig
 from core.FDT.campaigns import (
     run_campaign1_psd, run_campaign2_chi,
-    _get_simulator_cls, _n_force_channels, _pick_n_segs,
+    _make_simulator, _n_force_channels, _pick_n_segs, observable_noise_prefactor,
 )
 from core.FDT.spectral import (
     psd_welch, lock_in_chi, eff_temp_ratio, gen_freqs_log, find_spectral_peak,
@@ -70,8 +70,8 @@ def check_passive_baseline(cfg: FDTConfig, save_plot_path=None) -> tuple[bool, d
     chis = run_campaign2_chi(passive, omegas, show_progress=False)
 
     G_at_om = _interp_log(omegas, freqs_psd, G)
-    n, beta = passive.params_dict["n"][0], passive.params_dict["beta"][0]
-    ratio = eff_temp_ratio(G_at_om, chis.imag, omegas.to(torch.float64), n, beta).cpu().numpy()
+    prefactor = observable_noise_prefactor(passive)
+    ratio = eff_temp_ratio(G_at_om, chis.imag, omegas.to(torch.float64), prefactor).cpu().numpy()
 
     devs = np.abs(ratio - 1.0)
     med_dev, max_dev = float(np.median(devs)), float(np.max(devs))
@@ -123,8 +123,8 @@ def check_high_freq_fdt(cfg: FDTConfig) -> tuple[bool, dict]:
     chis = run_campaign2_chi(high_freq_cfg, omegas, show_progress=False)
 
     G_at_om = _interp_log(omegas, freqs_psd, G)
-    n, beta = high_freq_cfg.params_dict["n"][0], high_freq_cfg.params_dict["beta"][0]
-    ratio = eff_temp_ratio(G_at_om, chis.imag, omegas.to(torch.float64), n, beta).cpu().numpy()
+    prefactor = observable_noise_prefactor(high_freq_cfg)
+    ratio = eff_temp_ratio(G_at_om, chis.imag, omegas.to(torch.float64), prefactor).cpu().numpy()
 
     devs = np.abs(ratio - 1.0)
     med_dev, max_dev = float(np.median(devs)), float(np.max(devs))
@@ -173,10 +173,8 @@ def check_ensemble_convergence(cfg: FDTConfig) -> tuple[bool, dict]:
     inits = cfg.inits_for_M(M_max)
     params = cfg.params_for_M(M_max)
     n_segs = _pick_n_segs(n_steps, M_max)
-    sim_cls = _get_simulator_cls(cfg.model)
-    sim = sim_cls(params, force, inits, t,
-                   freqs_per_batch=1, segs=n_segs, batch_size=M_max,
-                   device=device)
+    sim = _make_simulator(cfg, params, force, inits, t,
+                          freqs_per_batch=1, segs=n_segs, batch_size=M_max, device=device)
     sol = sim.simulate(state_dep_drift=cfg.state_dep_drift)
     x_steady = sol[0, 0, :, burn_idx:]    # (M_max, n_obs)
     t_steady = t[burn_idx:]
@@ -212,9 +210,8 @@ def check_psd_window(cfg: FDTConfig) -> tuple[bool, dict]:
     params = half_cfg.params_for_M(M)
 
     n_segs = _pick_n_segs(n_steps, M)
-    sim_cls = _get_simulator_cls(half_cfg.model)
-    sim = sim_cls(params, force, inits, t,
-                   freqs_per_batch=1, segs=n_segs, batch_size=M, device=device)
+    sim = _make_simulator(half_cfg, params, force, inits, t,
+                          freqs_per_batch=1, segs=n_segs, batch_size=M, device=device)
     sol = sim.simulate(state_dep_drift=half_cfg.state_dep_drift)
     x_steady = sol[0, 0, :, burn_idx:]
     n_half = n_obs // 2
@@ -254,6 +251,14 @@ def run_all_sanity(cfg: FDTConfig, passive_plot_path=None) -> dict:
         ("ensemble_convergence",  check_ensemble_convergence,  "chi'' stable by M=256"),
         ("psd_window",            check_psd_window,            "PSD halves agree"),
     ]
+    # passive_baseline / high_freq_fdt reason about Nadrowski-specific physics (the s-feedback and the
+    # motor thermostat via with_overrides(s=, temp=)), which only exist as params_dict keys for
+    # Nadrowski. For any other model run only the model-agnostic checks (linearity / convergence / PSD).
+    _NADROWSKI_ONLY = {"passive_baseline", "high_freq_fdt"}
+    if cfg.model.lower() != "nadrowski":
+        checks = [c for c in checks if c[0] not in _NADROWSKI_ONLY]
+        print(f"Note: the passive-baseline / high-frequency FDT checks are Nadrowski-specific and are "
+              f"skipped for {cfg.model}; running the model-agnostic checks only.")
     results = {}
     for name, fn, desc in checks:
         print(f"\n[{name}] {desc}")

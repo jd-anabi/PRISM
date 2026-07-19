@@ -59,7 +59,7 @@ def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
     ax.plot(x, ratio, marker='o', linestyle='none', markersize=4, color='steelblue')
     ax.set_xscale('log')
     ax.set_yscale('symlog', linthresh=linthresh)
-    ax.axhline(1.0, color='k', linestyle='--', linewidth=0.8,
+    ax.axhline(1.0, color=plt.rcParams['axes.edgecolor'], linestyle='--', linewidth=0.8,
                label=r'$T_{\rm eff}/T = 1$ (equilibrium)')
     ax.axhline(0.0, color='gray', linestyle=':', linewidth=0.6,
                 label=r"$T_{\rm eff}/T = 0$ ($\chi''=0$ crossing)")
@@ -102,7 +102,7 @@ def plot_spontaneous_trajectory(t: np.ndarray, x_mean: np.ndarray,
 
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.plot(t, x_mean, linewidth=0.8, color='steelblue')
-    ax.axhline(0.0, color='k', linestyle='--', linewidth=0.8)
+    ax.axhline(0.0, color=plt.rcParams['axes.edgecolor'], linestyle='--', linewidth=0.8)
     if burn_in is not None:
         ax.axvline(burn_in, color='darkorange', linestyle=':', linewidth=1.2,
                     label=fr'burn-in ends: $\tilde t = {burn_in:.0f}$')
@@ -206,7 +206,7 @@ def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
 
     # chi' (real / in-phase)
     ax_real.plot(x, chi_real, marker='o', linestyle='none', markersize=4, color='steelblue')
-    ax_real.axhline(0.0, color='k', linestyle='--', linewidth=0.8)
+    ax_real.axhline(0.0, color=plt.rcParams['axes.edgecolor'], linestyle='--', linewidth=0.8)
     if x_res is not None:
         ax_real.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
                          label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
@@ -217,7 +217,7 @@ def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
 
     # chi'' (imaginary / dissipative)
     ax_imag.plot(x, chi_imag, marker='o', linestyle='none', markersize=4, color='steelblue')
-    ax_imag.axhline(0.0, color='k', linestyle='--', linewidth=0.8)
+    ax_imag.axhline(0.0, color=plt.rcParams['axes.edgecolor'], linestyle='--', linewidth=0.8)
     if x_res is not None:
         ax_imag.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2)
     ax_imag.set_xlabel(xlabel)

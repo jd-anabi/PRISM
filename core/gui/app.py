@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 
 from core import config, registry
 
-from . import fonts, settings, theming
+from . import fonts, mpl_theme, settings, theming
 from .main_window import MainWindow
 
 
@@ -55,6 +55,7 @@ def build_app(argv=None):
     appearance = theming.Appearance(app)
     appearance.set_system_accent(settings.get_system_accent(qs))         # OS accent (opt-in) ...
     appearance.set_mode(settings.get_appearance(qs))                     # ... then restore + apply Fluent
+    mpl_theme.install(appearance)   # matplotlib figures follow the theme (built after this point)
 
     window_ref = {}
     _install_excepthook(lambda: window_ref.get("w"))

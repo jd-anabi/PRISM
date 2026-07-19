@@ -6,9 +6,9 @@ decoupled ``Bounds/<name_lower>/default.txt`` + ``Cells/<name_lower>/default.txt
 ``cli._parse_cell``, ``simulate_runner.build_stream_config``) consumes a user model exactly like a
 built-in -- they resolve those files purely by folder name.
 
-JSON schema (schema_version 1):
+JSON schema (schema_version 2):
     {
-      "schema_version": 1,
+      "schema_version": 2,
       "name": "MYMODEL",                       # uppercase; also the JSON filename stem
       "variables": [                            # declared order; variable 0 is the observable
         {"name": "x", "drift": "mu*x - x^3", "D": "d0", "init": 0.1,
@@ -18,13 +18,17 @@ JSON schema (schema_version 1):
                             "sign": 1 | -1}},              # exponential grow/decay only
         ...
       ],
-      "params": {"mu": 1.0, "d0": 0.05},       # values for every discovered parameter
+      "params": {"mu": {"value": 1.0, "lo": 0.0, "hi": 2.0},   # value + its SBI inference box (lo < value < hi)
+                 "d0": {"value": 0.05, "lo": 0.01, "hi": 0.1}},
       "rescale": {"x_scale": 10.0, "t_scale": 0.01}
     }
 
-Bounds are PLACEHOLDERS wide enough to contain the value (SBI is gated off for user models; the only
-consumer that range-checks is ``SimConfig.inject_ground_truth``). The x_scale/t_scale bounds must be
-strictly positive multiplicative ranges -- ``SimConfig.t_nd_max`` divides by the t_scale LOWER bound.
+schema_version 1 stored each param as a bare scalar value and let ``_nd_bounds`` auto-generate a
+placeholder box; v2 lets the builder set per-parameter (lo, hi) for a tighter SBI prior. ``_normalize_to_v2``
+migrates a v1 doc IN MEMORY (bare scalars -> the same placeholder box) on every load and save, so existing
+``Resources/Models/*.json`` keep working after the bump. The emitted ND Bounds now carry the user's (lo, hi);
+the x_scale/t_scale bounds stay the auto multiplicative range and must be strictly positive --
+``SimConfig.t_nd_max`` divides by the t_scale LOWER bound.
 """
 import json
 import math
@@ -36,7 +40,7 @@ from core import config
 from core.forcing import FORCE_KINDS, FORCING_PARAM_NAMES
 from core.Models.user_model import parse_user_model
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,23}$")
 _BUILTIN_NAMES = frozenset({"BP", "NADROWSKI", "HOPF"})
 # Windows reserved device names: creating Bounds/<name>/... would half-fail (mkdir 'nul' silently
@@ -92,6 +96,35 @@ def _nd_bounds(v: float) -> tuple:
     return (v - pad, v + pad)
 
 
+def _param_entry(value, lo=None, hi=None) -> dict:
+    """One ND parameter's persisted form: its ground-truth value + the SBI inference box (lo, hi).
+    lo/hi None -> the historical placeholder box ``_nd_bounds(value)``, so an auto-bounds parameter is
+    byte-identical to the old scalar-schema emit."""
+    value = float(value)
+    if lo is None or hi is None:
+        lo, hi = _nd_bounds(value)
+    return {"value": value, "lo": float(lo), "hi": float(hi)}
+
+
+def _migrate_params_v1(params: dict) -> dict:
+    """schema_version 1 stored params as name -> scalar; v2 stores name -> {value, lo, hi}. Old scalars
+    get the placeholder box ``_nd_bounds`` used to auto-generate, so a migrated model keeps its exact
+    previous behaviour."""
+    return {name: _param_entry(v) for name, v in params.items()}
+
+
+def _normalize_to_v2(doc: dict) -> dict:
+    """Return ``doc`` as schema_version 2 WITHOUT mutating the input. A v1 doc's scalar params are
+    migrated to the {value, lo, hi} form; anything else is returned unchanged (a malformed params block
+    is left for ``_check_schema`` to reject). Called before ``_check_schema`` on every load and save so
+    old Resources/Models/*.json survive the schema bump."""
+    if doc.get("schema_version") != 1:
+        return doc
+    params = doc.get("params")
+    migrated = _migrate_params_v1(params) if isinstance(params, dict) else params
+    return {**doc, "schema_version": 2, "params": migrated}
+
+
 def _check_schema(doc: dict) -> None:
     """Strict structural validation; raises ValueError with a user-facing message on any deviation."""
     if not isinstance(doc, dict):
@@ -122,9 +155,17 @@ def _check_schema(doc: dict) -> None:
                 raise ValueError(f"Variable '{v['name']}': exponential forcing needs sign 1 or -1.")
     params = doc.get("params")
     if not isinstance(params, dict):
-        raise ValueError("'params' must be an object of name -> value.")
-    for pname, pv in params.items():
-        _finite(pv, f"Parameter '{pname}'")
+        raise ValueError("'params' must be an object of name -> {value, lo, hi}.")
+    for pname, entry in params.items():
+        if not isinstance(entry, dict) or set(entry) != {"value", "lo", "hi"}:
+            raise ValueError(f"Parameter '{pname}' must be an object with value, lo and hi.")
+        value = _finite(entry["value"], f"Parameter '{pname}'")     # _finite first: keeps the NaN message
+        lo = _finite(entry["lo"], f"Parameter '{pname}' lo")
+        hi = _finite(entry["hi"], f"Parameter '{pname}' hi")
+        if not lo < hi:
+            raise ValueError(f"Parameter '{pname}': lo must be < hi (got [{lo}, {hi}]).")
+        if not lo <= value <= hi:
+            raise ValueError(f"Parameter '{pname}': value {value} is outside its bounds [{lo}, {hi}].")
     rescale = doc.get("rescale")
     if not isinstance(rescale, dict) or set(rescale) != {"x_scale", "t_scale"}:
         raise ValueError("'rescale' must contain exactly x_scale and t_scale.")
@@ -143,6 +184,7 @@ def load_user_model(path) -> dict:
     path = Path(path)
     with open(path, "r", encoding="utf-8") as fh:
         doc = json.load(fh)
+    doc = _normalize_to_v2(doc)                                 # migrate v1 scalar params -> v2 objects
     _check_schema(doc)
     if path.stem.upper() != doc["name"].upper():
         raise ValueError(f"File name '{path.stem}' does not match model name '{doc['name']}'.")
@@ -157,6 +199,7 @@ def save_user_model(doc: dict) -> Path:
     order ``UserModel`` consumes constructor columns in (the load-bearing invariant). Every discovered
     parameter must have a value in ``doc['params']``.
     """
+    doc = _normalize_to_v2(doc)                                 # accept v1 scalar-param docs unchanged
     _check_schema(doc)
     name = validate_name(doc["name"])
     doc = {**doc, "name": name}
@@ -172,8 +215,8 @@ def save_user_model(doc: dict) -> Path:
     # ── Bounds/<name_lower>/default.txt ──
     lines = ["# Non-dimensional Parameters"]
     for p in compiled.param_names:
-        lo, hi = _nd_bounds(float(doc["params"][p]))
-        lines.append(f"{p} in ({_fmt(lo)}, {_fmt(hi)})")
+        entry = doc["params"][p]
+        lines.append(f"{p} in ({_fmt(entry['lo'])}, {_fmt(entry['hi'])})")   # user-set (or auto) SBI box
     lines.append("# Dimensional Parameters")
     for key, v in (("x_scale", x_scale), ("t_scale", t_scale)):
         lines.append(f"{key} in ({_fmt(v / 2)}, {_fmt(v * 2)})")   # strictly positive: t_nd_max divides by lo
@@ -192,7 +235,7 @@ def save_user_model(doc: dict) -> Path:
         lines.append(f"{v['name']}_init = {_fmt(v['init'])}")
     lines.append("# Non-dimensional Parameters")
     for p in compiled.param_names:
-        lines.append(f"{p} = {_fmt(doc['params'][p])}")
+        lines.append(f"{p} = {_fmt(doc['params'][p]['value'])}")
     lines.append("# Dimensional Parameters")
     lines.append(f"x_scale = {_fmt(x_scale)}")
     lines.append(f"t_scale = {_fmt(t_scale)}")

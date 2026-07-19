@@ -69,6 +69,36 @@ def is_sbi_user_model(name: str) -> bool:
     )
 
 
+def fdt_support(name: str) -> tuple:
+    """Whether the FDT effective-temperature pipeline can run for this model, and why not.
+
+    Built-ins are always supported (their observable-noise prefactor is coded per model in
+    ``campaigns.observable_noise_prefactor``). A user model is supported only when its OBSERVABLE
+    (variable index 0) has ADDITIVE, non-zero white noise and the model carries NO intrinsic forcing --
+    FDT overwrites the force tensor to probe chi(omega), so a user's own drive would be silently
+    dropped. Returns (ok, reason); ``reason`` is '' when ok. The single source of truth for the FDT
+    GUI gate (mirrors ``is_sbi_user_model`` for the SBI gate)."""
+    spec = get(name)
+    if spec is None:
+        return False, f"Unknown model '{name}'."
+    if not spec.is_user_model:
+        return True, ""
+    if spec.compiled is None:
+        return False, f"User model '{name}' has no compiled definition."
+    if user_model_has_forcing(name):
+        return False, (f"FDT can't run '{name}': it has intrinsic forcing, but FDT drives the "
+                       "observable itself to measure the response. Remove the forcing to use FDT.")
+    c = spec.compiled
+    obs, d0 = c.var_names[0], c.diff_exprs[0]
+    if {str(s) for s in d0.free_symbols} & set(c.var_names):
+        return False, (f"FDT can't run '{name}': observable '{obs}' has state-dependent "
+                       "(multiplicative) noise. FDT supports additive-noise observables only.")
+    if d0.is_zero:
+        return False, (f"FDT can't run '{name}': observable '{obs}' is deterministic (D=0). "
+                       "FDT needs a stochastic observable.")
+    return True, ""
+
+
 def state_dep_drift(name: str) -> bool:
     """The model's state-dependent-diffusion flag; falls back to the legacy name test for unknowns."""
     spec = get(name)
@@ -114,13 +144,16 @@ def load_user_models() -> None:
     """Scan config.MODELS_PATH (at CALL time -- tests monkeypatch the path) and register every valid
     saved model; collect per-file failures into ``load_errors``. Idempotent; never raises."""
     from core.Helpers import model_store
-    from core.Models.user_model import parse_user_model
+    from core.Models.user_model import parse_user_model, build_compiled_step
 
     load_errors.clear()
     for path in model_store.list_user_models():
         try:
             doc = model_store.load_user_model(path)
             compiled = parse_user_model(doc["variables"])
+            # Best-effort JIT fast path (used only on CUDA; None -> eager euler). Kept OUT of the
+            # builder's validate (correctness-only) so the GUI thread never pays the torch.jit.script cost.
+            compiled.compiled_step_fn = build_compiled_step(compiled)
             register(ModelSpec(
                 name=doc["name"],
                 labels=list(compiled.param_names),
@@ -136,11 +169,14 @@ def load_user_models() -> None:
 
 
 def make_user_simulator(spec: ModelSpec, params: torch.Tensor, force: torch.Tensor,
-                        inits: torch.Tensor, t: torch.Tensor, *, segs: int = 1, batch_size: int = 1,
+                        inits: torch.Tensor, t: torch.Tensor, *, freqs_per_batch: int = 1,
+                        segs: int = 1, batch_size: int = 1,
                         device: torch.device = torch.device('cpu')):
-    """Construct a UserSimulator for a registered user-model spec (lazy import keeps registry light)."""
+    """Construct a UserSimulator for a registered user-model spec (lazy import keeps registry light).
+    ``freqs_per_batch`` supports the FDT Campaign-2 frequency packing; it defaults to 1, so existing
+    SBI callers are unaffected."""
     from core.Simulator.user_simulator import UserSimulator
     if spec.compiled is None:
         raise RuntimeError(f"User model '{spec.name}' has no compiled definition.")
-    return UserSimulator(spec.compiled, params, force, inits, t, segs=segs,
-                         batch_size=batch_size, device=device)
+    return UserSimulator(spec.compiled, params, force, inits, t, freqs_per_batch=freqs_per_batch,
+                         segs=segs, batch_size=batch_size, device=device)

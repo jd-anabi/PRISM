@@ -11,9 +11,9 @@ app (refreshing the model combos mid-run would fight the app-wide control lock),
 through core/Helpers/model_store.py (the JSON + the Bounds/Cells/Units triple).
 """
 import torch
-from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
-                               QPushButton, QRadioButton, QScrollArea, QStackedWidget, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
+                               QLineEdit, QPushButton, QRadioButton, QScrollArea, QStackedWidget,
+                               QVBoxLayout, QWidget)
 
 from core import config, registry
 from core.config import DT_EXP_S
@@ -124,6 +124,63 @@ class _VarRow(QGroupBox):
                 (self._exp_grow if forcing.get("sign", -1) == 1 else self._exp_decay).setChecked(True)
 
 
+class _ParamRow(QWidget):
+    """One parameter's ground-truth value plus its SBI inference box: value | auto | min | max.
+
+    'auto' reproduces the placeholder box ``model_store._nd_bounds`` used to auto-generate (v - pad,
+    v + pad); unchecking it exposes an editable (min, max) for a tighter, physical prior. ``spec()``
+    returns (value, lo, hi) and is the single reuse of the placeholder rule when auto is on.
+    """
+
+    def __init__(self, value=1.0, lo=None, hi=None, parent=None):
+        super().__init__(parent)
+        self.value = FloatField(value)
+        self.auto = QCheckBox("auto")
+        self.lo = FloatField(0.0)
+        self.hi = FloatField(0.0)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(QLabel("value"))
+        layout.addWidget(self.value, 1)
+        layout.addWidget(self.auto)
+        for label, field in (("min", self.lo), ("max", self.hi)):
+            layout.addWidget(QLabel(label))
+            layout.addWidget(field, 1)
+        self.auto.toggled.connect(self._on_auto)
+        self.set_spec(value, lo, hi)
+
+    def _on_auto(self, checked: bool) -> None:
+        # Disable the fields under auto, and (re)seed them with the placeholder box so unchecking leaves
+        # a sensible editable starting point rather than a blank/zero range.
+        self.lo.setEnabled(not checked)
+        self.hi.setEnabled(not checked)
+        lo, hi = model_store._nd_bounds(self.value.value())
+        self.lo.setText(repr(lo))
+        self.hi.setText(repr(hi))
+
+    def spec(self) -> tuple:
+        v = self.value.value()
+        if self.auto.isChecked():
+            lo, hi = model_store._nd_bounds(v)
+            return v, lo, hi
+        return v, self.lo.value(), self.hi.value()
+
+    def set_spec(self, value, lo=None, hi=None) -> None:
+        value = float(value)
+        auto = lo is None or hi is None or (float(lo), float(hi)) == model_store._nd_bounds(value)
+        self.value.setText(repr(value))
+        self.auto.setChecked(auto)                 # fires _on_auto (seeds the placeholder box) if it flips
+        if auto:
+            alo, ahi = model_store._nd_bounds(value)
+            self.lo.setText(repr(alo))
+            self.hi.setText(repr(ahi))
+        else:
+            self.lo.setText(repr(float(lo)))
+            self.hi.setText(repr(float(hi)))
+        self.lo.setEnabled(not auto)
+        self.hi.setEnabled(not auto)
+
+
 class ModelBuilderScreen(QWidget):
     def __init__(self, on_saved=None, on_back=None, parent=None):
         """``on_saved(name)`` fires after a successful save (MainWindow refreshes the model combos);
@@ -133,7 +190,7 @@ class ModelBuilderScreen(QWidget):
         self._on_back = on_back
         self._editing_name = None                 # set by load_existing(); None = creating new
         self._var_rows = []                       # [_VarRow] in declared order
-        self._param_fields = {}                   # name -> FloatField (rebuilt by _detect_params)
+        self._param_fields = {}                   # name -> _ParamRow (rebuilt by _detect_params)
 
         heading = QLabel("Model builder")
         heading.setProperty("type", "heading")
@@ -234,14 +291,14 @@ class ModelBuilderScreen(QWidget):
         except ModelParseError as e:
             self._set_status(str(e), error=True)
             return
-        old = {name: fld.value() for name, fld in self._param_fields.items()}
+        old = {name: row.spec() for name, row in self._param_fields.items()}
         while self._params_form.rowCount():
             self._params_form.removeRow(0)
         self._param_fields = {}
         for name in compiled.param_names:
-            fld = FloatField(old.get(name, 1.0))
-            self._param_fields[name] = fld
-            self._params_form.addRow(name, fld)
+            row = _ParamRow(*old[name]) if name in old else _ParamRow(1.0)   # keep typed (value, lo, hi)
+            self._param_fields[name] = row
+            self._params_form.addRow(name, row)
         self._set_status(f"Found {len(compiled.param_names)} parameter(s): "
                          f"{', '.join(compiled.param_names) or '(none)'}. Set values, then Validate.")
         return compiled
@@ -252,7 +309,8 @@ class ModelBuilderScreen(QWidget):
             "schema_version": model_store.SCHEMA_VERSION,
             "name": self.name_edit.text().strip(),
             "variables": [row.values() for row in self._var_rows],
-            "params": {name: fld.value() for name, fld in self._param_fields.items()},
+            "params": {name: dict(zip(("value", "lo", "hi"), row.spec()))
+                       for name, row in self._param_fields.items()},
             "rescale": {"x_scale": self.x_scale.value(), "t_scale": self.t_scale.value()},
         }
 
@@ -288,11 +346,19 @@ class ModelBuilderScreen(QWidget):
         if doc["rescale"]["x_scale"] <= 0 or t_scale <= 0:
             self._set_status("x_scale and t_scale must be > 0.", error=True)
             return None
+        for p, e in doc["params"].items():         # UX pre-check; model_store._check_schema re-enforces
+            if not e["lo"] < e["hi"]:
+                self._set_status(f"Parameter '{p}': min must be < max.", error=True)
+                return None
+            if not e["lo"] <= e["value"] <= e["hi"]:
+                self._set_status(f"Parameter '{p}': value {e['value']} is outside its bounds "
+                                 f"[{e['lo']}, {e['hi']}].", error=True)
+                return None
 
         # Smoke integration at the stream's fine ND step (dt_exp over the t_scale upper bound).
         try:
             n_vars = len(compiled.var_names)
-            params = torch.tensor([[doc["params"][p] for p in compiled.param_names]])
+            params = torch.tensor([[doc["params"][p]["value"] for p in compiled.param_names]])
             force = torch.zeros((1, n_vars, _SMOKE_STEPS + 1))
             model = UserModel(compiled, torch.unbind(params, dim=1), force, batch_size=1)
             inits = torch.tensor([[float(v["init"]) for v in doc["variables"]]])
@@ -350,9 +416,10 @@ class ModelBuilderScreen(QWidget):
         self.x_scale.setText(repr(float(doc["rescale"]["x_scale"])))
         self.t_scale.setText(repr(float(doc["rescale"]["t_scale"])))
         self._detect_params()
-        for pname, fld in self._param_fields.items():
+        for pname, row in self._param_fields.items():
             if pname in doc["params"]:
-                fld.setText(repr(float(doc["params"][pname])))
+                e = doc["params"][pname]           # load_user_model migrates v1 -> {value, lo, hi}
+                row.set_spec(float(e["value"]), float(e["lo"]), float(e["hi"]))
         self._set_status(f"Editing '{doc['name']}'. Renaming saves a copy under the new name.")
 
     def reset(self) -> None:

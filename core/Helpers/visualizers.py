@@ -48,7 +48,7 @@ def visualize_dist(dist: torch.distributions.Distribution, labels: list, n_sampl
     samples = dist.sample((n_samples,)).cpu().numpy()
 
     # generate the corner plot
-    figure = corner.corner(samples, labels=labels, show_titles=True, title_fmt=".2f", plot_datapoints=False, plot_density=True, fill_contours=True, smooth=1.0)
+    figure = corner.corner(samples, labels=labels, show_titles=True, title_fmt=".2f", plot_datapoints=False, plot_density=True, fill_contours=True, smooth=1.0, color=plt.rcParams["text.color"])
 
     # save distribution visualization, then display it (sink for GUI, else blocking show)
     if save_path is not None:
@@ -95,7 +95,7 @@ def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = N
     ax.axhspan(-2, 2, alpha=0.1, color='green', label=r'$|z| < 2$ region')
 
     # reference lines
-    ax.axhline(0, color='black', linewidth=0.8)
+    ax.axhline(0, color=plt.rcParams["axes.edgecolor"], linewidth=0.8)
     ax.axhline(2, color='red', linestyle='--', linewidth=0.8, label=r'$|z| = 2$')
     ax.axhline(-2, color='red', linestyle='--', linewidth=0.8)
 
@@ -136,7 +136,8 @@ def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = N
         f"Outside interval: {ppc_results['num_outside']}/{num_total}\n"
         f"Invalid stats: {ppc_results['num_invalid']}/{num_total}"
     )
-    props = dict(boxstyle='round', facecolor='white', edgecolor='black', alpha=0.9)
+    props = dict(boxstyle='round', facecolor=plt.rcParams["axes.facecolor"],
+                 edgecolor=plt.rcParams["axes.edgecolor"], alpha=0.9)
     ax.text(0.99, 0.99, textstr, transform=ax.transAxes, fontsize=9,
             verticalalignment='top', horizontalalignment='right', bbox=props,
             family='monospace')
@@ -144,7 +145,8 @@ def plot_ppc(ppc_results: dict, ground_truth: list = None, param_names: list = N
     # add "Summary Statistics" header above the box
     ax.text(0.99, 1.0, "Summary Statistics", transform=ax.transAxes, fontsize=10,
             fontweight='bold', verticalalignment='bottom', horizontalalignment='right',
-            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', edgecolor='black'))
+            bbox=dict(boxstyle='round,pad=0.3', facecolor=plt.rcParams["axes.facecolor"],
+                      edgecolor=plt.rcParams["axes.edgecolor"]))
 
     plt.tight_layout()
     return fig
@@ -182,7 +184,7 @@ def plot_posterior_vs_truth(t: np.ndarray, x_true: np.ndarray,
             ax.plot(t, x_samples[idx], color='steelblue', alpha=0.25, linewidth=0.5,
                     label='Posterior samples' if i == 0 else None)
 
-    ax.plot(t, x_true, color='black', linewidth=1.2, label='Ground truth')
+    ax.plot(t, x_true, color=plt.rcParams["text.color"], linewidth=1.2, label='Ground truth')
     if x_median is not None:
         ax.plot(t, x_median, color='red', linewidth=1.0, linestyle='--', label='Posterior median')
     if x_mean is not None:

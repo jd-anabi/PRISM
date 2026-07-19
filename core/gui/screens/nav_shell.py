@@ -7,6 +7,7 @@ just below it and is hidden on Home.
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 
+from .. import icons
 from ..widgets.anim import slide_screens, snapshot
 
 
@@ -19,7 +20,7 @@ class NavShell(QWidget):
 
         self.btn_back = QToolButton()
         self.btn_back.setObjectName("navBack")          # -> QToolButton#navBack in the global QSS
-        self.btn_back.setText("←")
+        icons.apply_icon(self.btn_back, "back")         # bundled icon font (falls back to "←")
         self.btn_back.setToolTip("Back to the home screen")
         self.btn_back.setAutoRaise(True)
         self.btn_back.clicked.connect(self.go_home)
@@ -41,7 +42,7 @@ class NavShell(QWidget):
         # attached by MainWindow (which knows the appearance controller + the Settings screen index).
         self.btn_settings = QToolButton()
         self.btn_settings.setObjectName("navSettings")   # -> QToolButton#navSettings in the global QSS
-        self.btn_settings.setText("⚙")
+        icons.apply_icon(self.btn_settings, "settings")  # bundled icon font (falls back to "⚙")
         self.btn_settings.setToolTip("Appearance & settings")
         self.btn_settings.setAutoRaise(True)
         self.btn_settings.setPopupMode(QToolButton.InstantPopup)

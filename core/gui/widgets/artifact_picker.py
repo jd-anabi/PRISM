@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QPushButton, QWidget
 
 from core.Helpers import file_manager
+from core.gui import icons
 
 
 class ArtifactPicker(QWidget):
@@ -19,8 +20,9 @@ class ArtifactPicker(QWidget):
         self._allow_new = allow_new
 
         self.combo = QComboBox()
-        refresh = QPushButton("⟳")
+        refresh = QPushButton()                 # keep QPushButton -> QSS selector QPushButton#iconButton
         refresh.setObjectName("iconButton")     # compact square button -> small QSS padding (glyph fits)
+        icons.apply_icon(refresh, "refresh")    # bundled icon font (falls back to "⟳")
         refresh.setFixedWidth(32)
         refresh.setToolTip("Rescan the folder")
         refresh.clicked.connect(self.refresh)

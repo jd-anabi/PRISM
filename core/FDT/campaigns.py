@@ -22,6 +22,11 @@ VALID_SIMS = {
     "bp":        BPSimulator,
 }
 
+
+class FDTModelError(ValueError):
+    """A model/cell cannot run the FDT pipeline (missing FDT parameter, multiplicative or zero
+    observable noise, or an unregistered model). Carries a user-facing message the GUI shows plainly."""
+
 # Per-segment element budget for the solver's xs buffer. Sized to keep the per-segment
 # allocation under ~800 MB at float32, matching the SBI side's CHUNK_LEN x reference
 # batch (~100k steps x 2048 batch). The simulator's full `sol` tensor lives outside
@@ -86,18 +91,72 @@ def _plan_adaptive_batches(omegas_list: list, fpb_max: int, M: int, n_vars: int,
     return batches
 
 
-def _get_simulator_cls(model: str):
-    """Look up the simulator class for the model name. Case-insensitive."""
-    cls = VALID_SIMS.get(model.lower())
+def _make_simulator(cfg: FDTConfig, params, force, inits, t, *, freqs_per_batch=1, segs=1,
+                    batch_size=1, device):
+    """Build the model simulator for an FDT campaign. User models dispatch through the registry
+    (a UserSimulator around the compiled torch model), mirroring core/SBI/pipeline.py:132-138;
+    built-ins use their VALID_SIMS class. Case-insensitive on the model name."""
+    from core import registry
+    if registry.is_user_model(cfg.model):
+        return registry.make_user_simulator(
+            registry.get(cfg.model), params, force, inits, t,
+            freqs_per_batch=freqs_per_batch, segs=segs, batch_size=batch_size, device=device)
+    cls = VALID_SIMS.get(cfg.model.lower())
     if cls is None:
-        raise ValueError(f"Invalid model for FDT: {model}. Valid: {list(VALID_SIMS.keys())}")
-    return cls
+        raise FDTModelError(f"Invalid model for FDT: {cfg.model}. Valid: {list(VALID_SIMS)}.")
+    return cls(params, force, inits, t, freqs_per_batch=freqs_per_batch, segs=segs,
+               batch_size=batch_size, device=device)
+
+
+def observable_noise_prefactor(cfg: FDTConfig) -> float:
+    """The per-model FDT normalization prefactor: T_eff/T = prefactor * omega * G / (4 * chi'').
+
+    Physically prefactor = coupling / D_x, where D_x = g_0^2 / 2 is the diffusion coefficient of the
+    OBSERVABLE (state column 0; the solver writes dx = drift*dt + g*dW*sqrt(dt)) and `coupling` is the
+    coefficient the Campaign-2 drive enters the observable's drift with (1 for every model except BP).
+    For Nadrowski this reduces to the historical n*beta. Raises FDTModelError when a model/cell cannot
+    supply it (missing param, or a user model with multiplicative/zero observable noise)."""
+    m, pd = cfg.model.lower(), cfg.params_dict
+    try:
+        if m == "nadrowski":       # x_noise = sqrt(2/(n*beta)) -> D_x = 1/(n*beta); coupling 1
+            return float(pd["n"][0] * pd["beta"][0])
+        if m == "hopf":            # x_noise = sigma_x -> D_x = sigma_x^2/2; coupling 1
+            return float(2.0 / pd["sigma_x"][0] ** 2)
+        if m == "bp":              # EXPERIMENTAL: drive enters as force/tau_hb (coupling 1/tau_hb),
+            # x_noise = eta_hb/tau_hb -> D_x = (eta_hb/tau_hb)^2/2, so prefactor = 2*tau_hb/eta_hb^2.
+            # No passive baseline exists to adjudicate the magnitude -- treat BP numbers as unverified.
+            return float(2.0 * pd["tau_hb"][0] / pd["eta_hb"][0] ** 2)
+    except KeyError as e:
+        raise FDTModelError(f"The {cfg.model} cell is missing the FDT parameter {e}.") from e
+
+    # User model: g = sqrt(2 D) so D_x = D_0 (the observable's white-noise strength); coupling 1.
+    from core import registry
+    spec = registry.get(cfg.model)
+    if spec is None or spec.compiled is None:
+        raise FDTModelError(f"User model '{cfg.model}' has no compiled definition for FDT.")
+    c = spec.compiled
+    if {str(s) for s in c.diff_exprs[0].free_symbols} & set(c.var_names):
+        raise FDTModelError(f"Observable '{c.var_names[0]}' has state-dependent (multiplicative) noise; "
+                            "FDT supports additive-noise observables only.")
+    try:
+        param_vals = [pd[name][0] for name in c.param_names]
+    except KeyError as e:
+        raise FDTModelError(f"The {cfg.model} cell is missing parameter {e}.") from e
+    args = tuple(0.0 for _ in c.var_names) + tuple(param_vals)     # states irrelevant for additive D
+    D0 = float(c.diff_fns[0](args))
+    if not math.isfinite(D0) or D0 <= 0.0:
+        raise FDTModelError(f"Observable '{c.var_names[0]}' has non-positive/zero noise (D0={D0}); "
+                            "FDT requires a stochastic observable.")
+    return 1.0 / D0
 
 
 def _n_force_channels(cfg: FDTConfig) -> int:
-    """Number of forcing channels the model expects: 2 if 'amp_y' is in force params
-    (Hopf dual-channel), else 1. Matches the convention in core/SBI/pipeline.py:
-    build_nondim_sin_force_tensor."""
+    """Number of forcing channels the model's simulator expects. A user model needs ONE channel per
+    state variable (UserModel indexes force[:, j, t] per variable, Campaign drives channel 0 only);
+    a built-in uses 2 if 'amp_y' is a force param (Hopf dual-channel), else 1."""
+    from core import registry
+    if registry.is_user_model(cfg.model):
+        return cfg.inits_tensor.shape[1]
     return 2 if "amp_y" in cfg.force_params_dict else 1
 
 
@@ -133,10 +192,8 @@ def run_campaign1_psd(cfg: FDTConfig, M: int = None, T_obs_nd: float = None,
     params = cfg.params_for_M(M)
 
     n_segs = _pick_n_segs(n_steps, M)
-    sim_cls = _get_simulator_cls(cfg.model)
-    sim = sim_cls(params, force, inits, t,
-                   freqs_per_batch=1, segs=n_segs, batch_size=M,
-                   device=device)
+    sim = _make_simulator(cfg, params, force, inits, t,
+                          freqs_per_batch=1, segs=n_segs, batch_size=M, device=device)
     sol = sim.simulate(state_dep_drift=cfg.state_dep_drift)  # (n_vars, 1, M, n_steps)
     x_full = sol[0, 0, :, :]            # (M, n_steps) -- full trajectory including burn-in
     x_steady = x_full[:, burn_idx:]      # (M, n_obs)   -- post-burn-in for PSD
@@ -232,10 +289,9 @@ def run_campaign2_chi(cfg: FDTConfig, omegas: torch.Tensor, M: int = None,
         params = cfg.params_tensor.expand(batch_size, -1).contiguous()
 
         n_segs = _pick_n_segs(n_steps, batch_size)
-        sim_cls = _get_simulator_cls(cfg.model)
-        sim = sim_cls(params, force, inits, t,
-                      freqs_per_batch=actual_fpb, segs=n_segs,
-                      batch_size=batch_size, device=device)
+        sim = _make_simulator(cfg, params, force, inits, t,
+                              freqs_per_batch=actual_fpb, segs=n_segs,
+                              batch_size=batch_size, device=device)
         sol = sim.simulate(state_dep_drift=cfg.state_dep_drift)  # (n_vars, actual_fpb, M, n_steps)
 
         for k, omega in enumerate(omegas_batch):

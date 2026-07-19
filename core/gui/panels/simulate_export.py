@@ -88,7 +88,10 @@ def export_animation(series, path, *, window_pts, grid_x, grid_y, sigma_x, sigma
     stride = export_stride(sample_rate_hz, video_fps)
     grid_x, grid_y = np.asarray(grid_x), np.asarray(grid_y)
 
-    fig = Figure(figsize=figsize, dpi=dpi)                    # 640x480 @ dpi 100: even + a multiple of 16
+    # Insulated from the app's dark/light matplotlib theme (mpl_theme): the exported video must look the
+    # same regardless of the global rcParams, so force the classic white/black look with explicit colors
+    # (an rc_context would transiently mutate the process-global rcParams on this worker thread).
+    fig = Figure(figsize=figsize, dpi=dpi, facecolor="white")  # 640x480 @ dpi 100: even + a multiple of 16
     canvas = FigureCanvasAgg(fig)
     ax_tr = fig.add_subplot(2, 1, 1)
     ax_tr.set_title("Hair-bundle displacement")
@@ -103,6 +106,14 @@ def export_animation(series, path, *, window_pts, grid_x, grid_y, sigma_x, sigma
     field0 = gaussian_field(hb_center(0.5, aspect, margin), 0.5, grid_x, grid_y, sigma_x, sigma_y)
     im = ax_hm.imshow(field0.T, origin="lower", extent=[0.0, aspect, 0.0, 1.0], aspect="equal",
                       cmap="inferno", vmin=0.0, vmax=1.0)    # .T + origin='lower' matches the ImageItem
+    for ax in (ax_tr, ax_hm):                                # pin the classic light look (see above)
+        ax.set_facecolor("white")
+        ax.title.set_color("black")
+        for sp in ax.spines.values():
+            sp.set_color("black")
+    ax_tr.xaxis.label.set_color("black")
+    ax_tr.yaxis.label.set_color("black")
+    ax_tr.tick_params(colors="black")                        # ax_hm has no ticks (set_xticks([]) above)
     fig.tight_layout()
 
     # Fixed y-range for the trace (stable axis across the whole video), with a small pad.

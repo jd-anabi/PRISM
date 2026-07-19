@@ -8,9 +8,9 @@ SBI science/pipeline). Read those for subsystem detail; this file is the forward
 HOW TO USE THIS FILE
   Each feature below carries: the GOAL, a FEASIBILITY verdict, the exact CONTRACT/interfaces it must meet
   (with file:line anchors verified 2026-07-17), the GAPS/open decisions, and a PHASED plan. Start any
-  feature by re-reading the named files (line numbers drift). Keep BOTH test suites green
-  (tests/test_gui_progress.py, 63 + tests/test_user_models.py, 21 = 84) and follow gui_handoff.txt's
-  rules for GUI work.
+  feature by re-reading the named files (line numbers drift). Keep the test suites green
+  (tests/test_gui_progress.py 63 + tests/test_user_models.py 22 + tests/test_user_sbi.py 2 = 87) and
+  follow gui_handoff.txt's rules for GUI work.
 
   NOTE: the app was renamed MAPIS -> PRISM (2026-07-17). FEATURE 1 v1 AND v2 (SBI-ready + state-dependent
   noise) are DONE, as are backlog items B-a/B-b (see their STATUS lines). Still forward-looking: FEATURE 1
@@ -30,7 +30,8 @@ STATUS 2026-07-17: v1 (SIMULATE-ONLY) IMPLEMENTED. Spring was DROPPED from the f
   core/gui/screens/model_builder_screen.py (reached from Settings -> "User-defined models").
   Simulate streams user models (one force row per state variable, zeros where unforced; NaN/blow-up
   guard BLOWUP_ND_LIMIT in simulate_runner); FDT + Inference gate user models with a message;
-  Reduction untouched. Tests: tests/test_user_models.py (21) + the 63-test GUI suite stays green (84 total).
+  Reduction untouched. Tests: tests/test_user_models.py + the 63-test GUI suite stay green (v1 shipped at
+  84; the suite is now 87 after v2 + S-2 -- see the top-of-file count).
   An adversarial review (3rd pass) found + FIXED 12 defects -- the load-bearing ones: numeric-notation
   literals spawned phantom parameters (param discovery now strips numbers); "E" silently meant Euler's
   number (now an ordinary parameter; only "pi" is a constant); a hand-edited JSON over a stale Bounds file
@@ -286,4 +287,79 @@ FEATURE 2  —  SESSION BACKLOG  (smaller deferred items from the 2026-07-16..17
        real icons (bundled SVGs behind a .qrc, or a licensed icon font). This also sidesteps per-font glyph
        coverage/sizing quirks -- e.g. the 2026-07-17 refresh-button ":" bug (fixed via #iconButton padding;
        see gui_handoff.txt FLUENT DESIGN). Would give a cleaner, more legible Fluent look than text glyphs.
+================================================================================
+
+================================================================================
+SMALL FUTURE ADDITIONS  (user's own backlog of nice-to-haves; nothing here is required)
+================================================================================
+  S-1  PER-PARAMETER BOUNDS / PRIORS IN THE MODEL BUILDER. Today the builder collects a single VALUE per
+       parameter and model_store.py auto-generates PLACEHOLDER bounds (core/Helpers/model_store.py:90
+       _nd_bounds): ND + forcing params get (v - pad, v + pad) with pad=max(|v|,1); x_scale/t_scale get
+       (v/2, 2v) (strictly positive -- SimConfig.t_nd_max divides by the t_scale LOWER bound). These are
+       fine for SIMULATE (which uses the exact ground-truth value; the bounds only need to CONTAIN it) but
+       for SBI they can be loose or unphysical -- e.g. a noise strength d0=0.05 gets the box (-0.95, 1.05),
+       whose negative half is unphysical (the stability screen simulates + drops the NaN/negative-D samples,
+       so the GMM prior self-corrects to the stable region, but it's wasteful). ADDITION: let the user set
+       per-parameter (lo, hi) + a prior type (uniform / log-uniform) in the builder, written into the
+       emitted Bounds file. Keep the ND-section ORDER == compiled.param_names (build_prior + build_stream_
+       config both assert this "out of sync" guard). Reuse the crossval _GridRow (min/max) widget pattern.
+  S-2  COMPILED / JIT SOLVER FAST PATH FOR USER MODELS (perf).  [DONE 2026-07-18 -- 2.01x on CUDA:
+       6.5k -> 13.1k it/s for a 2-var user model at batch 2048, now matching Nadrowski's ~12k. Option (a)
+       shipped exactly as scoped below. core/Models/user_model.py: _print_torch (a torchscript-source
+       printer parallel to _compile_tree; folds constant subexprs incl. f(const) to a float literal) +
+       build_compiled_step (emits a def, exec's it under a UNIQUE linecache filename -- torch.jit.script
+       needs both __module__ via __name__ in the exec globals AND source access via linecache -- then
+       torch.jit.script; any failure -> None). CompiledUserModel gained drift_exprs/diff_exprs/
+       compiled_step_fn; UserModel sets self.compiled_step only when built + defines compiled_params() ->
+       self.params. core/registry.py: load_user_models builds it after parse (best-effort). Pinned by
+       tests/test_user_models.py::test_compiled_step_matches_eager (euler vs euler_compiled allclose for
+       additive + state-dependent, plus the no-step eager-fallback). Original scoping kept below.]
+       PROBLEM. User models run the EAGER Euler loop: UserModel has no `compiled_step`, so
+       Simulator.__sols (core/Simulator/simulator.py:133-135) auto-selects eager `euler` even on CUDA,
+       evaluating the parsed-expression Python closures (UserModel.f/g tree-walk) every step. Measured on
+       an RTX 5070 Ti: ~7k it/s for a small user model vs ~12k it/s for Nadrowski. BOTH are on the GPU --
+       the gap is Python per-step dispatch, not the device (detect_device -> cuda for SBI; only Simulate
+       forces CPU).
+       RECOMMENDED APPROACH = option (a): TEXTUAL codegen of a @torch.jit.script-able `compiled_step` from
+       the parsed sympy tree. (Rejected: (b) torch.compile of the closures -- unreliable graph-breaks +
+       warmup, and doesn't fit the euler_compiled contract; (c) a bespoke AST->torchscript emitter -- more
+       machinery than a string printer.)
+       CONTRACT to hit (core/Solvers/sdeint.py:116-151 euler_compiled; nadrowski_model.py:4-30 is the
+       state-dependent template, hopf_model.py:56-58 the additive one):
+         * `compiled_step(x, force_step, dW, *params, dt, sqrt_dt) -> next_x`, wrapped @torch.jit.script.
+         * `compiled_params() -> self.params` (the raw param tuple, param_names order). RECOMPUTE g INLINE
+           in the step (Nadrowski-style) so ONE uniform codegen covers additive + state-dependent (Hopf
+           instead passes a precomputed g -- don't; inline keeps it uniform, the constant recompute is
+           negligible).
+         * Auto-selected ONLY on CUDA + hasattr(compiled_step); CPU / codegen-failure -> eager `euler`
+           (the safe fallback -- so this is pure speedup, never a correctness risk).
+       PLAN.
+         1. core/Models/user_model.py: add `_print_torch(expr, state_idx, param_idx) -> str` PARALLEL to
+            _compile_tree (Symbol state j -> "x[:, j]", param k -> "p{k}", Add/Mul/Pow -> "(a + b)"/"(a * b)"/
+            "(b ** e)", whitelisted fn -> "torch.{fn}(...)", pi/E -> math.pi/math.e). `build_compiled_step(
+            compiled) -> callable | None`: emit a def _step(x, force_step, dW, p0..pN, dt: float,
+            sqrt_dt: float) -> torch.Tensor whose body is drift = stack(<expr_j> + force_step[:, j]),
+            g = stack(<g_j>), return x + drift*dt + g*dW*sqrt_dt. The g codegen is STATE-DEP-AWARE and must
+            match the eager math EXACTLY: additive -> torch.sqrt(2.0*D_j) (NO clamp: a negative constant D
+            NaNs and is screened out by the stability sweep -- do not change that); state-dependent ->
+            torch.sqrt(torch.clamp(2.0*D_j, min=0.0)) (matches UserModel.g(x)). exec in {'torch':torch,
+            'math':math}, then torch.jit.script; ANY failure -> return None (best-effort). Add
+            CompiledUserModel.compiled_step_fn (default None); UserModel.__init__ sets self.compiled_step =
+            it when non-None + defines compiled_params(self) -> self.params.
+         2. core/registry.py: in load_user_models, after parse do compiled.compiled_step_fn =
+            build_compiled_step(compiled) (try/except -> None). Startup builds the fast path for saved
+            models; keep it OUT of model_builder_screen._validate (correctness-only, eager, no jit cost on
+            the GUI thread). Optionally also build on Save so a new model is fast without a restart.
+         3. VERIFY: the load-bearing test -- construct a UserModel, torch.manual_seed(s), run
+            solver.euler(...) and solver.euler_compiled(...); assert allclose trajectories (BOTH an additive
+            and a state-dependent model). Same seed => same dW sequence (both call dW_buf.normal_() once per
+            step), so identical math => identical trace. Plus: negative-D still NaNs (additive) / clamps
+            (state-dep); a codegen-failure model falls back to eager and still runs; informal CUDA it/s
+            eager-vs-compiled (expect ~built-in level). Keep the 3 suites green.
+       RISKS: RNG-consumption must line up between the two loops (the equivalence test pins it); jit.script
+       quirks on some whitelist fns (Min/Max/sign/fractional powers) -> fall back to eager on any that don't
+       script; per-model jit cost at startup (~100ms each -> go lazy if many models). exec surface = OUR
+       printer over the already-sandboxed tree (minimal namespace), same trust level as the current closures.
+       FILES: core/Models/user_model.py (printer + build_compiled_step + UserModel hooks), core/registry.py
+       (build at load), tests/test_user_models.py (the euler-vs-euler_compiled equivalence test).
 ================================================================================

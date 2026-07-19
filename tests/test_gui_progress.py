@@ -517,29 +517,37 @@ def test_worker_payload_is_released_after_the_run():
 
 
 # ── Phase-2 panels ───────────────────────────────────────────────────────────────────────────────
-def test_fdt_panel_turns_the_nadrowski_coupling_keyerror_into_a_readable_error():
-    """run_fdt reads params_dict["n"] / ["beta"], so it KeyErrors on hopf/bp cells. That is a
-    pre-existing pipeline limitation; the panel must explain it rather than surface a bare KeyError."""
+def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins():
+    """FDT now supports HOPF/BP + additive-noise user models. The guard turns an FDTModelError (a
+    missing FDT parameter, or a user model with multiplicative/zero observable noise) into a readable
+    RuntimeError instead of a bare traceback; the registry gate admits every built-in."""
     import core.gui.panels.fdt_panel as fdt_panel
+    from core.FDT.campaigns import FDTModelError
+    from core import registry
 
     class Cfg:
         model = "HOPF"
 
     def boom(cfg, *, skip_sanity, confirm_production):
-        raise KeyError("n")
+        raise FDTModelError("Observable 'x' has state-dependent (multiplicative) noise; FDT supports "
+                            "additive-noise observables only.")
 
     real, fdt_panel.run_fdt = fdt_panel.run_fdt, boom
     try:
         try:
             fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False)
         except RuntimeError as e:
-            assert "NADROWSKI" in str(e) and "HOPF" in str(e), str(e)
-        except KeyError:
-            raise AssertionError("the bare KeyError escaped the guard")
+            assert "multiplicative" in str(e), str(e)
+        except FDTModelError:
+            raise AssertionError("the FDTModelError escaped the guard unwrapped")
         else:
             raise AssertionError("the guard swallowed the failure entirely")
     finally:
         fdt_panel.run_fdt = real
+
+    # HOPF / BP / NADROWSKI are no longer rejected by the FDT gate.
+    for m in ("NADROWSKI", "HOPF", "BP"):
+        assert registry.fdt_support(m) == (True, ""), m
 
 
 def test_a_cell_with_no_bounds_sibling_does_not_brick_the_gui():
@@ -1557,6 +1565,121 @@ def test_gui_form_labels_are_prettified():
     from core.gui.panels.fdt_panel import FdtPanel
     from core.gui.panels.simulate_panel import SimulatePanel
     FdtPanel(); CrossValPanel(); SimulatePanel()
+
+
+# ── dark-theme matplotlib figures (B-c) ──────────────────────────────────────────────────────────
+import contextlib                                                  # noqa: E402
+
+
+@contextlib.contextmanager
+def _rcparams_guard():
+    """Snapshot + restore matplotlib rcParams (process-global) so a theming test never bleeds its dark
+    colours into the plot-producing tests that expect matplotlib's white defaults."""
+    import matplotlib
+    saved = dict(matplotlib.rcParams)
+    try:
+        yield
+    finally:
+        matplotlib.rcParams.update(saved)
+
+
+def _fake_appearance(dark):
+    """A minimal Appearance stand-in (is_dark + a real theme_changed Signal) so the theming test never
+    touches theming._ACTIVE / the app styleHints wiring a real Appearance installs."""
+    from PySide6.QtCore import QObject, Signal
+
+    class _FakeAppearance(QObject):
+        theme_changed = Signal(bool)
+
+        def __init__(self, d):
+            super().__init__()
+            self._dark = d
+
+        def is_dark(self):
+            return self._dark
+
+        def flip(self, d):
+            self._dark = d
+            self.theme_changed.emit(d)
+
+    return _FakeAppearance(dark)
+
+
+def test_apply_mpl_theme_sets_design_tokens():
+    """apply_mpl_theme drives figure/axes/savefig facecolor + text.color from the DARK/LIGHT tokens."""
+    import matplotlib
+    from core.gui import design, mpl_theme
+    with _rcparams_guard():
+        mpl_theme.apply_mpl_theme(True)
+        d = design.tokens(True)
+        assert matplotlib.rcParams["figure.facecolor"] == d["window"]
+        assert matplotlib.rcParams["axes.facecolor"] == d["base"]
+        assert matplotlib.rcParams["savefig.facecolor"] == d["window"]
+        assert matplotlib.rcParams["text.color"] == d["text"]
+        mpl_theme.apply_mpl_theme(False)
+        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(False)["window"]
+
+
+def test_mpl_theme_install_none_is_a_noop():
+    """No Appearance (the test path) -> rcParams untouched, so figures keep matplotlib's default white."""
+    import matplotlib
+    from core.gui import mpl_theme
+    with _rcparams_guard():
+        before = matplotlib.rcParams["figure.facecolor"]
+        mpl_theme.install(None)
+        assert matplotlib.rcParams["figure.facecolor"] == before
+
+
+def test_mpl_theme_follows_the_appearance_signal():
+    """install(appearance) applies now AND subscribes: flipping the theme re-applies the rcParams."""
+    import matplotlib
+    from core.gui import design, mpl_theme
+    _app()
+    with _rcparams_guard():
+        ap = _fake_appearance(True)
+        mpl_theme.install(ap)
+        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(True)["window"]
+        ap.flip(False)
+        assert matplotlib.rcParams["figure.facecolor"] == design.tokens(False)["window"]
+
+
+def test_plot_ppc_summary_box_follows_the_dark_theme():
+    """The two PPC summary boxes read plt.rcParams, so under a dark theme they are NOT the old hardcoded
+    white -- locks the B-c hardcoded-white regression."""
+    import numpy as np
+    import matplotlib.pyplot as plt
+    from core.gui import mpl_theme
+    from core.Helpers.visualizers import plot_ppc
+    with _rcparams_guard():
+        mpl_theme.apply_mpl_theme(True)
+        ppc = {"z_scores": np.array([0.1, 0.5, 2.5, np.nan]),
+               "coverage_90": 0.9, "num_outside": 1, "num_invalid": 1}
+        fig = plot_ppc(ppc)
+        try:
+            fig.canvas.draw()
+            boxes = [t.get_bbox_patch() for t in fig.axes[0].texts if t.get_bbox_patch() is not None]
+            assert boxes, "expected summary boxes with a bbox patch"
+            assert all(max(p.get_facecolor()[:3]) < 0.5 for p in boxes), \
+                [p.get_facecolor() for p in boxes]
+        finally:
+            plt.close(fig)
+
+
+def test_export_animation_background_stays_white_under_dark_theme():
+    """The Simulate video export is insulated from the app's matplotlib theme: its background stays
+    white even when the global rcParams are dark, so exported videos look the same in any theme."""
+    import os
+    import tempfile
+    from core.gui import mpl_theme
+    from core.gui.panels.simulate_export import export_animation
+    with _rcparams_guard():
+        mpl_theme.apply_mpl_theme(True)                            # global dark theme active
+        path = os.path.join(tempfile.mkdtemp(), "dark.gif")
+        export_animation(_tiny_series(), path, **_export_kwargs())
+        import imageio
+        frame0 = imageio.mimread(path)[0]
+        corner = frame0[0, 0][:3]                                  # top-left = figure background margin
+        assert min(int(c) for c in corner) > 230, corner          # near-white, not the dark theme bg
 
 
 if __name__ == "__main__":

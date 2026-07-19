@@ -15,7 +15,7 @@ from datetime import datetime
 import torch
 
 from core.config import FDTConfig, PLOT_PATH
-from core.FDT.campaigns import run_campaign1_psd, run_campaign2_chi
+from core.FDT.campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
 from core.FDT.spectral import gen_freqs_log, eff_temp_ratio, find_spectral_peak
 from core.FDT.sanity import run_all_sanity, _interp_log
 from core.FDT.plots import (
@@ -121,10 +121,9 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
     # 7. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y)
     G_at_omegas = _interp_log(omegas, freqs_psd, G)
 
-    # 8. T_eff/T
-    n = cfg.params_dict["n"][0]
-    beta = cfg.params_dict["beta"][0]
-    ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), n, beta)
+    # 8. T_eff/T -- the normalization prefactor is per-model (Nadrowski n*beta, else 1/D_x).
+    prefactor = observable_noise_prefactor(cfg)
+    ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), prefactor)
 
     # 9. Plot + save (PLOT_PATH and timestamp set at the top of run_fdt)
     ratio_path = PLOT_PATH / f"fdt_ratio_{timestamp}.png"

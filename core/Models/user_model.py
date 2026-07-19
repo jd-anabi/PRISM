@@ -13,6 +13,8 @@ Parsing is sandboxed: a token pre-filter rejects everything outside identifiers/
 sympy namespace is locked to an explicit whitelist, and evaluation of the parsed tree is a hand-rolled
 walk over a fixed set of node types -- no eval of arbitrary Python anywhere.
 """
+import itertools
+import linecache
 import math
 import re
 from dataclasses import dataclass, field
@@ -152,6 +154,82 @@ def _compile_tree(expr: sympy.Expr, arg_index: dict, where: str):
     raise ModelParseError(f"{where}: unsupported construct '{expr}'.")
 
 
+# ── torchscript codegen (the euler_compiled fast path) ───────────────────────
+_STEP_ID = itertools.count()   # unique compile filenames so each model's linecache entry is distinct
+
+
+def _print_torch(expr: sympy.Expr, name_src: dict) -> str:
+    """Print a sympy expression as torch source, PARALLEL to _compile_tree (same node types, same
+    left-fold order). ``name_src`` maps a symbol NAME to its source ("x{j}" for a state column,
+    "p{k}" for a parameter arg). Constant subexpressions -- incl. pi, E, and f(const) like exp(2) --
+    fold to a float literal (matching _compile_tree, which routes constant-arg functions to the python
+    fn), which also avoids torch.<fn>(<float>) calls that TorchScript rejects."""
+    if expr.is_number:
+        return repr(float(expr))
+    if isinstance(expr, sympy.Symbol):
+        return name_src[expr.name]
+    if isinstance(expr, sympy.Add):
+        return "(" + " + ".join(_print_torch(a, name_src) for a in expr.args) + ")"
+    if isinstance(expr, sympy.Mul):
+        return "(" + " * ".join(_print_torch(a, name_src) for a in expr.args) + ")"
+    if isinstance(expr, sympy.Pow):
+        return "(" + _print_torch(expr.base, name_src) + " ** " + _print_torch(expr.exp, name_src) + ")"
+    if isinstance(expr, sympy.Function):
+        name = expr.func.__name__
+        if name in _FUNCS:
+            torch_fn = _FUNCS[name][1]
+            return f"torch.{torch_fn.__name__}(" + _print_torch(expr.args[0], name_src) + ")"
+    raise ModelParseError(f"cannot print '{expr}' to torch source")
+
+
+def build_compiled_step(compiled: "CompiledUserModel"):
+    """Best-effort: emit a @torch.jit.script one-step Euler-Maruyama function for the euler_compiled fast
+    path (core/Solvers/sdeint.py euler_compiled -- auto-selected only on CUDA + hasattr(compiled_step)),
+    or return None so the model falls back to the eager `euler` loop. Signature matches the built-ins:
+    ``step(x, force_step, dW, *params, dt, sqrt_dt) -> next_x``, recomputing g INLINE (Nadrowski-style) so
+    one codegen covers additive + state-dependent noise. The g math mirrors UserModel EXACTLY: additive
+    -> sqrt(2 D) (unclamped -- a negative constant D must still NaN so the stability sweep screens it),
+    state-dependent -> sqrt(clamp(2 D, 0)). The torch.zeros_like(x[:,0]) anchor keeps a purely-constant D
+    (e.g. "0") a tensor. Any codegen/script failure returns None (pure-speedup contract: never a
+    correctness risk). The exec runs OUR printer output over the already-sandboxed sympy tree, in a
+    minimal {torch, math} namespace -- same trust level as the closure interpreter."""
+    try:
+        var_names, param_names = compiled.var_names, compiled.param_names
+        n_vars = len(var_names)
+        name_src = {vn: f"x{j}" for j, vn in enumerate(var_names)}
+        name_src.update({pn: f"p{k}" for k, pn in enumerate(param_names)})
+
+        drift_src = [_print_torch(e, name_src) for e in compiled.drift_exprs]
+        diff_src = [_print_torch(e, name_src) for e in compiled.diff_exprs]
+
+        params_sig = "".join(f", p{k}: torch.Tensor" for k in range(len(param_names)))
+        lines = [f"def _user_step(x: torch.Tensor, force_step: torch.Tensor, dW: torch.Tensor"
+                 f"{params_sig}, dt: float, sqrt_dt: float) -> torch.Tensor:"]
+        for j in range(n_vars):
+            lines.append(f"    x{j} = x[:, {j}]")
+        for j in range(n_vars):
+            lines.append(f"    dx{j} = ({drift_src[j]}) + force_step[:, {j}]")
+        lines.append("    drift = torch.stack([" + ", ".join(f"dx{j}" for j in range(n_vars)) + "], dim=1)")
+        for j in range(n_vars):
+            two_d = f"2.0 * ({diff_src[j]}) + torch.zeros_like(x[:, 0])"
+            lines.append(f"    g{j} = torch.sqrt(torch.clamp({two_d}, min=0.0))"
+                         if compiled.state_dep_noise else f"    g{j} = torch.sqrt({two_d})")
+        lines.append("    g = torch.stack([" + ", ".join(f"g{j}" for j in range(n_vars)) + "], dim=-1)")
+        lines.append("    return x + drift * dt + g * dW * sqrt_dt")
+
+        src = "\n".join(lines)
+        # torch.jit.script needs (a) a qualified name -> __name__ in the exec globals gives __module__,
+        # and (b) SOURCE ACCESS via inspect/linecache -- an exec'd function has no source file, so
+        # register the generated source under a UNIQUE compile filename in linecache.
+        filename = f"<user_model_step_{next(_STEP_ID)}>"
+        linecache.cache[filename] = (len(src), None, [ln + "\n" for ln in src.split("\n")], filename)
+        g: dict = {"torch": torch, "math": math, "__name__": "core.Models._user_model_compiled"}
+        exec(compile(src, filename, "exec"), g, g)
+        return torch.jit.script(g["_user_step"])
+    except Exception:                                          # noqa: BLE001 -- any failure -> eager
+        return None
+
+
 @dataclass
 class CompiledUserModel:
     """The runnable form of a user model definition.
@@ -166,6 +244,10 @@ class CompiledUserModel:
     diff_fns: list = field(default_factory=list)      # D_j as fn(args); same flat args (may use state)
     state_dep_noise: bool = False                     # True if any D references a state variable ->
                                                       # multiplicative noise; g(x) is evaluated per step
+    drift_exprs: list = field(default_factory=list)   # sympy Expr per variable (for the torchscript codegen)
+    diff_exprs: list = field(default_factory=list)    # sympy Expr per variable
+    compiled_step_fn: object = None                   # @torch.jit.script euler_compiled step, or None
+                                                      # (built lazily by build_compiled_step; eager fallback)
 
 
 def parse_user_model(variables: list) -> CompiledUserModel:
@@ -247,7 +329,8 @@ def parse_user_model(variables: list) -> CompiledUserModel:
                 for name, expr in zip(var_names, diff_exprs)]
 
     return CompiledUserModel(var_names=var_names, param_names=param_names,
-                             drift_fns=drift_fns, diff_fns=diff_fns, state_dep_noise=state_dep_noise)
+                             drift_fns=drift_fns, diff_fns=diff_fns, state_dep_noise=state_dep_noise,
+                             drift_exprs=drift_exprs, diff_exprs=diff_exprs)
 
 
 class UserModel:
@@ -290,6 +373,15 @@ class UserModel:
             args = tuple(zeros for _ in range(n_vars)) + self.params
             cols = [torch.sqrt(2.0 * self._as_batch(fn(args))) for fn in compiled.diff_fns]
             self._g = torch.stack(cols, dim=-1)                  # (batch, d) diagonal amplitudes
+
+        # Fast path: expose a @torch.jit.script step ONLY when one was built (registry.load_user_models).
+        # Its presence is what Simulator.__sols keys on to pick euler_compiled on CUDA; absent -> eager.
+        if compiled.compiled_step_fn is not None:
+            self.compiled_step = compiled.compiled_step_fn
+
+    def compiled_params(self) -> tuple:
+        """The param tuple passed to compiled_step after (x, force_step, dW); g is recomputed inline."""
+        return self.params
 
     def _as_batch(self, val) -> torch.Tensor:
         """Normalize a compiled-expression result (tensor or python number) to a (batch,) tensor."""

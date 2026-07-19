@@ -9,6 +9,7 @@ from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QToolButton, QToolTip, QWidget
 
 from core.Helpers import labels as _labels
+from core.gui import icons
 
 
 class HelpBadge(QToolButton):
@@ -18,7 +19,7 @@ class HelpBadge(QToolButton):
         super().__init__(parent)
         self._text = text
         self.setObjectName("helpBadge")         # -> QToolButton#helpBadge in the global Fluent QSS
-        self.setText("?")
+        icons.apply_icon(self, "help")          # bundled icon font (falls back to "?")
         self.setToolTip(text)
         self.setFixedSize(16, 16)
         self.setCursor(Qt.WhatsThisCursor)

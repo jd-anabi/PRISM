@@ -200,7 +200,7 @@ QPushButton[accent="true"]:focus   { border: 1px solid $text; }
 QPushButton[accent="true"]:disabled{ background: $mid; border-color: $mid; color: $text_disabled; }
 /* compact square icon buttons (e.g. the picker refresh) -- override the wide default padding so a
    fixed-width glyph button isn't squeezed to a sliver, and match the adjacent input height. */
-QPushButton#iconButton { padding: 0px; min-height: ${ctl_h_sm}px; }
+QPushButton#iconButton { padding: 0px; min-height: ${ctl_h_sm}px; font-size: 18px; }
 
 /* ---- text inputs (covers FloatField/IntField/PathField.edit subclasses of QLineEdit) ---- */
 QLineEdit, QPlainTextEdit {
@@ -257,10 +257,10 @@ QProgressBar::chunk { border-radius: 3px; background: $accent; }
 QToolButton { border: none; background: transparent; border-radius: ${radius_sm}px; color: $text; }
 QToolButton:hover   { background: $button_hover; }
 QToolButton:pressed { background: $button_press; }
-QToolButton#navBack, QToolButton#navSettings { font-size: 18px; padding: 2px 6px; }
+QToolButton#navBack, QToolButton#navSettings { font-size: 20px; padding: 2px 6px; }
 QToolButton#helpBadge {
     border: 1px solid $mid; border-radius: 8px; color: $text_2nd;
-    font-weight: bold; font-size: 10px; padding: 0px; background: transparent;
+    font-size: 13px; padding: 0px; background: transparent;
 }
 QToolButton#helpBadge:hover { border-color: $accent; color: $accent; }
 

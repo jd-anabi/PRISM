@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPus
 
 from core import cli, registry
 from core.config import CELL_PATH, PLOT_PATH, VALID_MODELS
+from core.FDT.campaigns import FDTModelError
 from core.FDT.fdt_pipeline import run_fdt
 
 from .base_panel import BasePanel
@@ -20,7 +21,9 @@ from ..widgets.help_badge import add_help_row, with_badge
 from ..widgets.labeled_inputs import FloatField, IntField
 
 HELP = {
-    "model": "Which model to analyse. FDT analysis currently supports NADROWSKI cells.",
+    "model": "Which model to analyse. FDT supports NADROWSKI, HOPF, BP (experimental), and "
+             "additive-noise user-defined models. The frequency grid and burn-in are Nadrowski-tuned, "
+             "so treat other models' calibration as your responsibility.",
     "cell": "A cell file whose parameters define the system whose fluctuation-dissipation relation is tested.",
     "n_freqs": "Number of (log-spaced) frequencies at which G(ω) and χ(ω) are evaluated.",
     "ensemble_M": "Ensemble size: independent trajectories averaged per frequency. More reduces noise at higher cost.",
@@ -32,16 +35,17 @@ HELP = {
 
 
 def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production):
-    """run_fdt is Nadrowski-coupled: it reads params_dict["n"] / ["beta"], so it KeyErrors on the
-    hopf and bp cells. That is a pre-existing pipeline limitation, not a GUI one -- catch it and say
-    so plainly rather than dumping a bare KeyError traceback on the user."""
+    """Translate a model/cell FDT incompatibility into a readable message. FDTModelError (a missing FDT
+    parameter, or a user model with multiplicative/zero observable noise) is already user-facing; the
+    KeyError net is a defensive backstop for a malformed cell (it should no longer fire for HOPF/BP)."""
     try:
         return run_fdt(cfg, skip_sanity=skip_sanity, confirm_production=confirm_production)
+    except FDTModelError as e:
+        raise RuntimeError(str(e)) from e
     except KeyError as e:
         raise RuntimeError(
-            f"The FDT pipeline needs the Nadrowski parameter {e} and the selected "
-            f"{cfg.model} cell does not define it. FDT analysis currently only supports "
-            f"NADROWSKI cells."
+            f"The FDT pipeline needs the parameter {e}, which the selected {cfg.model} cell does not "
+            f"define."
         ) from e
 
 
@@ -91,14 +95,12 @@ class FdtPanel(BasePanel):
     def _on_model_changed(self, model: str):
         self.cell_picker.base_path = CELL_PATH / model.lower()
         self.cell_picker.refresh()
-        # User-defined models are Simulate-only (v1): disable the CTA with a visible reason instead of
-        # letting the run die on the Nadrowski-coupled T_eff params (see _run_fdt_guarded).
-        is_user = registry.is_user_model(model)
-        self.btn_run.setEnabled(not is_user)
-        if is_user:
-            self.log_pane.append_line(
-                f"'{model}' is a user-defined model. FDT analysis does not support user-defined "
-                "models (v1); use the Simulate section.", "warning")
+        # FDT supports the built-ins + additive-noise, no-forcing user models. Gate the CTA on
+        # registry.fdt_support and show the reason (multiplicative/zero-noise or forced user models).
+        ok, reason = registry.fdt_support(model)
+        self.btn_run.setEnabled(ok)
+        if not ok:
+            self.log_pane.append_line(reason, "warning")
 
     def _run(self):
         cell = self.cell_picker.selected_path()
@@ -106,9 +108,9 @@ class FdtPanel(BasePanel):
             self.log_pane.append_line("Select a cell file first.", "warning")
             return
         model = self.model_combo.currentText()
-        if registry.is_user_model(model):                 # backstop; the CTA is already disabled
-            self.log_pane.append_line(
-                "FDT analysis does not support user-defined models (v1); use Simulate.", "warning")
+        ok, reason = registry.fdt_support(model)          # backstop; the CTA is already disabled
+        if not ok:
+            self.log_pane.append_line(reason, "warning")
             return
         try:
             cfg = cli.make_fdt_config(
