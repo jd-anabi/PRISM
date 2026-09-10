@@ -2073,7 +2073,8 @@ runs in seconds and needs no simulation — **run it first when touching anythin
 > Fixes X1–X5 landed 2026-09-09 as one commit each (`184cd80` … `3e2659e`), with the forensics in
 > `818a09d` and the handoff in `521cd67`; **§11.6 guardrails 7 and 8** state the rules, **§5 group D**
 > the traps, and the top Appendix A entry the full account and the closing gate — the eleven fast
-> suites green after every commit and `test_user_sbi.py` 97/97, 321 tests in all.
+> suites green after every commit and `test_user_sbi.py` 97/97, 321 tests in all — 322 since the
+> 2026-09-10 follow-up that closed the prior check.
 >
 > **What exists to start from — listed only in the 2026-09-09 Appendix A artifact map, and never
 > connected to the 2026-08-28 loss entry it contradicts.** The 10000-batch run the 2026-08-28
