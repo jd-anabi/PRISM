@@ -89,6 +89,30 @@ def _assert_prior_used_matches_posterior(posterior, inferred_prior, what: str) -
         f"posterior -- results computed against a different prior describe neither.")
 
 
+def _assert_prior_matches_region(region, inferred_prior, what: str) -> None:
+    """Refuse to run a truncated round on a base prior other than its parent's.
+
+    A truncation region restricts the PARENT posterior's TRAINING prior: its box was drawn from a
+    posterior trained under that prior, and the retrain's proposal is that prior restricted to the
+    box. Supplied another prior, the round trains that one restricted to a box nobody measured on
+    it -- and every basis check passes, because ``TruncationRegion.check_basis`` compares V and the
+    box, not the GMM. So the region carries the parent's GMM fingerprint (recorded by
+    ``orchestrator.build_truncation_region`` from the prior pickled inside the posterior) and this
+    compares it with the prior actually supplied. Same policy as
+    ``_assert_prior_used_matches_posterior``: unverifiable on either side (a region built before the
+    fingerprint travelled with it, a hand-built stand-in prior) is silence, not a false alarm.
+    """
+    want = getattr(region, "prior_fingerprint", None)
+    supplied = _gmm_fingerprint(inferred_prior)
+    if want is None or supplied is None or want == supplied:
+        return
+    raise ValueError(
+        f"{what}: the prior supplied is not the one the truncation region's parent posterior was "
+        f"trained with (prior {supplied} vs the region's {want}). A truncated round restricts the "
+        f"PARENT's prior; on another base prior the box selects a slab of a distribution nobody "
+        f"measured. Load the prior that belongs to the parent posterior.")
+
+
 def _assert_prior_matches(cfg: SimConfig, path: str, choice: str) -> None:
     """Fail LOUDLY when a saved ND prior does not belong to this config.
 

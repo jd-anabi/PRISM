@@ -2289,8 +2289,9 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     0.01% of the parent posterior survived and the ground truth did not (Appendix A 2026-09-09, D1).
     So a truncated round must (i) never call the Fisher, (ii) train under the region's own V and
     refuse a region whose probe disagrees with that bijection, (iii) refuse to resume a checkpoint
-    stored under another V, (iv) refuse a config whose rotation flag disagrees with the region, and
-    (v) warn -- not refuse -- when the loaded cell's truth lies outside the box.
+    stored under another V, (iv) refuse a config whose rotation flag disagrees with the region,
+    (v) warn -- not refuse -- when the loaded cell's truth lies outside the box, and (vi) refuse a
+    supplied prior other than the parent's, which the region names by fingerprint (2026-09-10).
 
     train_nn is stubbed to capture the plan and return a bare DirectPosterior, so the whole path up to
     the first TRAINING simulation runs for real (the tiny prior build does simulate, for seconds) and
@@ -2362,6 +2363,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         assert "at the rejection sampler (P(A), PRE-override)" in _out, _out[-600:]
         assert "post-override containment of the recorded training targets: not measured" in _out, \
             "with train_nn stubbed nothing is recorded, and the line must say so rather than print a number"
+        assert "[tsnpe] prior: NOT verifiable" in _out, \
+            "a region carrying no prior fingerprint must say the loaded prior went unverified"
         assert isinstance(seen["prior"], _tr.TruncatedLatentPrior), type(seen["prior"])
         assert seen["prior"].region is region
         assert isinstance(seen["prior"].base, _rp.RotatedLatentPrior)
@@ -2377,6 +2380,42 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
             raise AssertionError("an artifact was allowed to name an observation its region did not come from")
         except ValueError as e:
             assert "x_obs_digest" in str(e)
+
+        # (vi) the base prior: the region restricts the PARENT's training prior, so a region carrying
+        # another prior's fingerprint is refused naming both, and one carrying THIS prior's passes and
+        # says so; the hand-built regions above carry none, which is silence -- a legacy region's policy
+        from core.SBI.run_guards import _gmm_fingerprint as _fp
+        from core.SBI.Priors.sbi_prior_wrapper import SBIPriorWrapper as _SPW
+        assert _fp(inferred_prior) is not None
+        # The RECORDING side walks the parent's pickled training prior -- the real chain
+        # SBIPriorWrapper -> RotatedLatentPrior -> ProductPrior -> GMM -- and must reach the same GMM
+        # the COMPARING side reaches from the supplied physical prior. That equality is what keeps a
+        # real round from being refused, and a region built by hand cannot pin it.
+
+        class _Parent:
+            prior = _SPW(rot)
+
+            @staticmethod
+            def sample(shape, x=None):
+                return rot.sample(shape)
+
+        x_obs = torch.zeros(1, 4)
+        own_prior = orchestrator.build_truncation_region(
+            _rp.TransformedPosterior(_Parent(), T_train), {"digest": orchestrator.observation_digest(x_obs)},
+            x_obs, n_directions=1, t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
+        assert own_prior.prior_fingerprint == _fp(inferred_prior), \
+            "the parent's pickled training prior and the supplied prior digest differently"
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            _round(own_prior, digest=None)                # the region's own observation digest fills in
+        assert "verified against the loaded one" in buf.getvalue(), buf.getvalue()[-400:]
+        foreign = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
+                                       probe=probe, prior_fingerprint="0" * 16)
+        try:
+            _round(foreign)
+            raise AssertionError("a round on a prior other than the region's parent's was accepted")
+        except ValueError as e:
+            assert "0" * 16 in str(e) and _fp(inferred_prior) in str(e), e
 
         # (ii) a region whose recorded probe does not describe the bijection its own V builds
         flip = torch.ones(P)

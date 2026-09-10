@@ -35,7 +35,8 @@ from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
 from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint, truncation_from_sidecar,  # noqa: E402
-                             _assert_prior_used_matches_posterior, _assert_prior_matches,
+                             _assert_prior_used_matches_posterior, _assert_prior_matches_region,
+                             _assert_prior_matches,
                              _assert_chi_config_is_deliberate,
                              _assert_amortization_understood, _log_params_for)
 from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derived, overlay, ppc,
@@ -774,6 +775,9 @@ def build_posterior(
                     f"parent rather than trusting either.")
             region.check_basis(T_load, dim=len(cfg.params_dict) + len(cfg.rescale_params),
                                device=cfg.hw.device)
+            # The sidecar's region names the base prior its parent restricted; the prior loaded beside
+            # this artifact must be that one (silent when either side is unverifiable, as in training).
+            _assert_prior_matches_region(region, prior, f"Posterior '{choice}'")
             print(f"[tsnpe] loaded a NON-AMORTIZED posterior: valid only near the observation with "
                   f"digest {digest if digest is not None else '(not recorded)'} ({region!r}). "
                   f"Calibration restricts its prior to that region; inference on any other observation "
@@ -908,6 +912,26 @@ def build_posterior(
                     f"region was drawn around ({truncation.x_obs_digest}); a non-amortized artifact "
                     f"must name the observation its region came from.")
             x_obs_digest = truncation.x_obs_digest
+        # The box restricts the PARENT's training prior, and check_basis sees V and the box but not
+        # the GMM: supplied another prior, the round would train that prior restricted to a box
+        # nobody measured on it, with every basis check green. The region carries the parent's GMM
+        # fingerprint; silence only when one side is unverifiable (a pre-2026-09-10 region, a
+        # stand-in prior), the same policy as validate_calibration's prior check.
+        _want = getattr(truncation, "prior_fingerprint", None)
+        try:
+            _assert_prior_matches_region(truncation, prior, "A truncated round")
+        except ValueError as _e:
+            # The digest alone is not actionable; the file it belongs to is, when it is on disk.
+            _file = _saved_prior_fingerprints().get(_want)
+            raise ValueError(f"{_e} The region's fingerprint is that of Resources/Priors/{_file}."
+                             if _file else str(_e)) from None
+        if _want is not None and _gmm_fingerprint(prior) is not None:
+            print(f"[tsnpe] prior: the parent's training prior ({_want}), "
+                  f"verified against the loaded one.", flush=True)
+        else:
+            print("[tsnpe] prior: NOT verifiable against the parent's (the region carries no prior "
+                  "fingerprint, or the loaded prior has no GMM) -- make sure the loaded prior is the "
+                  "one the parent posterior was trained with.", flush=True)
         V = None if truncation.V is None else truncation.V.to(device=cfg.hw.device, dtype=cfg.hw.dtype)
         if ckpt_resumed is not None:
             # Rows may be resumed only if they were DRAWN UNDER THIS REGION: the stored identity must
@@ -1181,6 +1205,10 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
     of the wrong data -- and truncation is a one-way ratchet, so a later round cannot undo it. This is
     the check that makes "persist x_obs at inference time" worth doing at all.
 
+    The region also records the GMM fingerprint of the parent's TRAINING prior (the prior pickled
+    inside the posterior) -- the base prior its box restricts -- so ``build_posterior`` can refuse a
+    round started with another prior loaded; ``check_basis`` sees V and the box, not the GMM.
+
     :param posterior: the TransformedPosterior to draw the region from. Its ``.T`` is the only
                       carrier of the latent basis the region is measured in, so a bare
                       DirectPosterior is refused: it cannot say which coordinate its samples are in.
@@ -1241,11 +1269,14 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
                          "cannot be sized from it.")
     probe = training_checkpoint.bijection_probe(T_parent, int(_box.lows.numel()),
                                                 device=transform_device(T_parent))
+    # The base prior the box restricts, by fingerprint; None when the parent carries no GMM (a
+    # legacy or stand-in posterior), which build_posterior treats as unverifiable, not as wrong.
     return truncate.region_from_posterior(
         latent, x_obs,
         n_directions=truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions),
         level=truncate.DEFAULT_HPD if level is None else float(level),
-        V=V, probe=probe, x_obs_digest=got, t_scale_idx=int(t_scale_idx))
+        V=V, probe=probe, x_obs_digest=got, t_scale_idx=int(t_scale_idx),
+        prior_fingerprint=_gmm_fingerprint(getattr(latent, "prior", None)))
 
 
 def _refuse_to_orphan_a_checkpoint(name: str, nd_prior) -> None:

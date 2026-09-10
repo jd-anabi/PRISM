@@ -102,15 +102,20 @@ class TruncationRegion:
     ``V`` and ``probe`` are the basis those indices refer to: the parent posterior's rotation
     (eigenvectors in COLUMNS, ``w = z @ V``; None for an unrotated run) and
     ``training_checkpoint.bijection_probe`` of the parent's whole training bijection (box + rotation).
-    ``x_obs_digest`` is the observation the region was drawn around (``observation_digest``). A region
-    built by ``orchestrator.build_truncation_region`` always carries all three; ``build_posterior``
-    reuses the V and refuses, through ``check_basis``, to apply the box in any other coordinate. They
-    are optional here only so a hand-built region (tests, legacy sidecars) still constructs.
+    ``x_obs_digest`` is the observation the region was drawn around (``observation_digest``), and
+    ``prior_fingerprint`` the GMM fingerprint (``run_guards._gmm_fingerprint``) of the parent's
+    training prior -- the base prior the box restricts. A region built by
+    ``orchestrator.build_truncation_region`` always carries the first three, and the fingerprint
+    whenever the parent's prior has a GMM to fingerprint; ``build_posterior`` reuses the
+    V, refuses through ``check_basis`` to apply the box in any other coordinate, and refuses a
+    supplied prior whose fingerprint verifiably differs. They are optional here only so a
+    hand-built region (tests, legacy sidecars) still constructs.
     """
 
     def __init__(self, dims, lo, hi, *, level: float = DEFAULT_HPD, n_latent: int | None = None,
                  V=None, probe=None, x_obs_digest: str | None = None,
-                 excluded=None, t_scale_idx: int | None = None):
+                 excluded=None, t_scale_idx: int | None = None,
+                 prior_fingerprint: str | None = None):
         self.dims = [int(d) for d in dims]
         # Directions region_from_posterior skipped for their t_scale loading (a record, not a
         # constraint), and the latent index of t_scale it judged them by.
@@ -132,6 +137,11 @@ class TruncationRegion:
         self.V = None if V is None else V.detach().cpu().clone()
         self.probe = None if probe is None else probe.detach().to(torch.float64).cpu().clone()
         self.x_obs_digest = None if x_obs_digest is None else str(x_obs_digest)
+        # The GMM fingerprint of the parent's TRAINING prior -- the base prior this box restricts.
+        # check_basis compares V and the box but not the GMM, so without this a round started with
+        # another prior loaded would train that prior restricted to a box nobody measured on it,
+        # with every basis check green. None for a hand-built region or a pre-2026-09-10 sidecar.
+        self.prior_fingerprint = None if prior_fingerprint is None else str(prior_fingerprint)
         if self.V is not None:
             if self.V.dim() != 2 or self.V.shape[0] != self.V.shape[1]:
                 raise ValueError(f"TruncationRegion: V must be a square (P, P) rotation, got "
@@ -252,6 +262,7 @@ class TruncationRegion:
                 "probe": None if self.probe is None else self.probe.clone(),
                 "V_digest": rotation_digest(self.V),
                 "x_obs_digest": self.x_obs_digest,
+                "prior_fingerprint": self.prior_fingerprint,
                 "excluded": list(self.excluded), "t_scale_idx": self.t_scale_idx}
 
     @staticmethod
@@ -259,7 +270,8 @@ class TruncationRegion:
         return TruncationRegion(d["dims"], d["lo"], d["hi"],
                                 level=d.get("level", DEFAULT_HPD), n_latent=d.get("n_latent"),
                                 V=d.get("V"), probe=d.get("probe"), x_obs_digest=d.get("x_obs_digest"),
-                                excluded=d.get("excluded"), t_scale_idx=d.get("t_scale_idx"))
+                                excluded=d.get("excluded"), t_scale_idx=d.get("t_scale_idx"),
+                                prior_fingerprint=d.get("prior_fingerprint"))
 
     def __repr__(self) -> str:
         parts = ", ".join(f"d{d}:[{float(a):.3g},{float(b):.3g}]"
@@ -273,6 +285,7 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
                           level: float = DEFAULT_HPD, n_samples: int = 20000,
                           V=None, probe=None, x_obs_digest: str | None = None,
                           t_scale_idx: int | None = None,
+                          prior_fingerprint: str | None = None,
                           max_loading: float | None = None) -> TruncationRegion:
     """Draw from the posterior at ``x_obs`` and take a per-direction HPD interval in LATENT space.
 
@@ -290,6 +303,8 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
     ``V`` and ``probe`` are the parent posterior's basis, recorded on the region (see
     ``TruncationRegion``); ``orchestrator.build_truncation_region`` always supplies them, and
     ``posterior_latent``'s samples ARE coordinates in that V -- the flow was trained on ``w = z @ V``.
+    ``prior_fingerprint`` is the parent's training-prior GMM digest, recorded verbatim on the region so
+    ``build_posterior`` can refuse another base prior; None when the caller cannot name one.
 
     ``t_scale_idx`` is t_scale's index in the latent ([ND | rescale] order); when it is given, any
     direction whose |V[t_scale_idx, j]| exceeds ``max_loading`` (default ``t_scale_loading_max``) is
@@ -358,7 +373,8 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
                          "nothing can be truncated.")
     bounds = torch.quantile(z[:, dims], q, dim=0)
     return TruncationRegion(dims, bounds[0], bounds[1], level=level, n_latent=p, V=V, probe=probe,
-                            x_obs_digest=x_obs_digest, excluded=excluded, t_scale_idx=t_scale_idx)
+                            x_obs_digest=x_obs_digest, excluded=excluded, t_scale_idx=t_scale_idx,
+                            prior_fingerprint=prior_fingerprint)
 
 
 class TruncatedLatentPrior:

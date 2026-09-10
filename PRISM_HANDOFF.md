@@ -83,13 +83,14 @@ crashing test reports as ONE failure instead of silently killing the suite's tai
 > gained three `retry_on_oom` tests (88 → 91). The table below is the current layout; the original
 > per-suite "Covers" notes survive in each file's module docstring. **Counts as of the refactor's
 > final gate — COUNT them, do not trust these numbers either.** Total then: **300**; after the
-> 2026-09-09 TSNPE fixes X1–X5 (Appendix A), **321** — the five suites that gained tests are marked.
+> 2026-09-09 TSNPE fixes X1–X5 (Appendix A), **321**; after the 2026-09-10 follow-up, **322** — the
+> suites that gained tests are marked.
 
 | Suite | Tests |
 |---|---|
 | `tests/test_user_sbi.py` | 97 (~1 hour — nearly all inside `test_chi_mode_full_sbi_pipeline`; +6 on 2026-09-09: the TSNPE end-to-end round, identity, near-miss, verify, calibration and post-override tests) |
 | `tests/test_user_models.py` | 39 |
-| `tests/test_conditioning_repair.py` | 34 (+9 on 2026-09-09: the region's basis, the D1 regression test, the checkpoint-V refusal, `build_truncation_region`, region reproducibility, the `t_scale` filter, the inference-time warning, the CLI `run` pin, the one-reader scan) |
+| `tests/test_conditioning_repair.py` | 35 (+9 on 2026-09-09: the region's basis, the D1 regression test, the checkpoint-V refusal, `build_truncation_region`, region reproducibility, the `t_scale` filter, the inference-time warning, the CLI `run` pin, the one-reader scan; +1 on 2026-09-10: the parent-prior refusal) |
 | `tests/test_chi_set_encoder.py` | 23 |
 | `tests/test_artifact_consistency.py` | 18 (+3 on 2026-09-09: the non-amortized load path, the D6 spec test, the sidecar reconcile) |
 | `tests/test_fdt_user.py` | 5 |
@@ -2098,15 +2099,16 @@ runs in seconds and needs no simulation — **run it first when touching anythin
 > loaded through the Posterior tab (the load warns that the sidecar is transposed and rotates by the
 > V pickled inside the posterior's own prior, bitwise the checkpoint header's), with
 > `prior_08282026_1.pt` as the loaded prior and the `master.txt` chi config it was trained under;
-> `check_basis` refuses another box, but NOTHING on the round's build path refuses another prior
-> (only `validate_calibration` checks that), so a round started with `3d_master_08102026.pt` — the
-> prior §11.9's Run A tells you to load — would silently train on the wrong base prior restricted to
-> the region; at the tab's default of 5 directions the region skips direction 0 (`t_scale`, loading
+> `check_basis` refuses another box and, since the 2026-09-10 follow-up commit, the round refuses a
+> loaded prior whose GMM fingerprint differs from the parent's (the region records it; a region from
+> an older sidecar carries none and passes silently), so `3d_master_08102026.pt` — the prior §11.9's
+> Run A tells you to load — fails fast instead of training the wrong base prior restricted to the
+> region; at the tab's default of 5 directions the region skips direction 0 (`t_scale`, loading
 > 1.00) and truncates 1–5 — **and the §11.9 retrains** (Run A flow-only, Run B tier-1). Recorded,
-> not fixed: the missing prior check just named; the GUI save drops `fisher_eigenvalues`; the
-> joint-KL informativeness of a truncated round is against the full prior (`−log P(A)` printed, not
-> corrected); `scripts/sbc_characterize.py` honours the region by construction (it draws from the
-> pickled training prior) but mirrors no `t_scale` override, and `_common.load_posterior` has no
+> not fixed: the GUI save drops `fisher_eigenvalues`; the joint-KL informativeness of a truncated
+> round is against the full prior (`−log P(A)` printed, not corrected);
+> `scripts/sbc_characterize.py` honours the region by construction (it draws from the pickled
+> training prior) but mirrors no `t_scale` override, and `_common.load_posterior` has no
 > non-amortized gate; the three transposed sidecars are reconciled at load, not rewritten.
 > Deliberately open, not owed: pooling rows across rounds, the batch-by-scale `t_scale` override,
 > and any change to `build_latent_fisher_rotation` or `fisher_eigenbasis`.
@@ -3373,9 +3375,16 @@ Guardrails, in order of how badly their absence bites:
    round finds its own rows again). Directions whose |V[t_scale, j]| exceeds 1/√d are NOT truncated:
    the per-batch `t_scale` override would carry rows out of such a box, turning the restriction into a
    reweighting by P(A|θ₋ₜ) that NPE does not correct (D4); the kept fraction is measured on the
-   recorded post-override targets, beside the rejection sampler's pre-override P(A). Pinned by
-   `test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one` and
-   `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch`.
+   recorded post-override targets, beside the rejection sampler's pre-override P(A). **And the
+   region names its base prior** (2026-09-10): `build_truncation_region` records the GMM fingerprint
+   of the prior pickled inside the parent, and `build_posterior` refuses a loaded prior whose
+   fingerprint verifiably differs, on the training branch and for a sidecar's region on the load
+   branch (the refusal names the prior file) — the box restricts the PARENT's prior, and `check_basis`
+   sees V and the box, not the GMM; a region from a pre-2026-09-10 sidecar carries none and passes
+   silently, like `validate_calibration`'s prior check. Pinned by
+   `test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one`,
+   `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch` and
+   `test_a_truncated_round_refuses_a_prior_other_than_the_parents`.
 8. **Calibrate on the truncated prior.** SBC/TARP for a non-amortized posterior draw θ* from the
    prior RESTRICTED to its region (after the rotation wrap), and `check_sbc`'s reference sample comes
    from that same proposal — including the per-batch `t_scale` override θ* went through — because the
@@ -3459,9 +3468,10 @@ built for 12 slots and fed 4 live probes.
 | `scripts/channel_ablation.py` | ⊕ **new** — the CORRECTED range-sweep ablation (§11.2 item 1) |
 | `scripts/migrate_checkpoint_flags.py` | ⊕ **new** — one-shot cache widening, `V` copied verbatim |
 | `tests/test_conditioning_repair.py` | ⊕ **new** — 20 tests incl. the TSNPE pinning test |
-| `core/SBI/truncate.py` (2026-09-09) | the region carries V + probe + digest, `check_basis`/`check_checkpoint_V`/`identity_fields`, the seeded draw, the `t_scale` filter, `recorded_containment` |
+| `core/SBI/truncate.py` (2026-09-09) | the region carries V + probe + digest, `check_basis`/`check_checkpoint_V`/`identity_fields`, the seeded draw, the `t_scale` filter, `recorded_containment`; `prior_fingerprint` (2026-09-10) |
+| `core/SBI/run_guards.py` (2026-09-10) | `_assert_prior_matches_region` — the region's parent-prior fingerprint against the supplied prior, silent when either side is unverifiable, beside `_assert_prior_used_matches_posterior` |
 | `core/SBI/reparam.py` (2026-09-09) | `rotation_of`, `rotation_of_prior`, `reconcile_loaded_rotation`; `TransformedPosterior(truncation=, x_obs_digest=)` |
-| `core/orchestrator.py` (2026-09-09) | identity `truncation` key (omitted when amortized), `accept_truncated`, `validate_calibration(truncation=)`, the inference-time digest warning, the load-side reconcile |
+| `core/orchestrator.py` (2026-09-09) | identity `truncation` key (omitted when amortized), `accept_truncated`, `validate_calibration(truncation=)`, the inference-time digest warning, the load-side reconcile; `build_truncation_region` records the parent's prior fingerprint and `build_posterior` refuses a mismatched prior on the training and load branches (2026-09-10) |
 | `core/SBI/pipeline.py` (2026-09-09) | the post-override containment tally (bit-identical without a region) |
 | `core/SBI/training_checkpoint.py` (2026-09-09) | `near_miss_siblings` ignores `truncation`-only siblings |
 | `scripts/tsnpe_round1_forensics.py` | ⊕ **new** — F1–F4 of the round-1 post-mortem, read-only |
@@ -3510,8 +3520,9 @@ Closing the browsers is still worth more than any constant here.
 > it. It is independent of Runs A and B below because its parent, `posterior_09022026`, already
 > carries the repaired feature set (the full 10000 × 2048 re-simulation that completed 2026-08-29 —
 > not Run A, which is the flow-only A/B off the cache); it needs the same card, and the smoke train
-> first. Load `prior_08282026_1.pt` for it, not the `3d_master_08102026.pt` Run A names below:
-> nothing on the round's build path refuses a mismatched prior.
+> first. Load `prior_08282026_1.pt` for it, not the `3d_master_08102026.pt` Run A names below: since
+> the 2026-09-10 follow-up the round refuses a mismatched prior (the region carries the parent's
+> prior fingerprint), so the wrong one fails fast instead of training.
 
 #### Run A — the Phase-1 flow-only retrain. NO SIMULATION.
 
@@ -4051,16 +4062,17 @@ the same order, head §6.
    sidecar is transposed and rotates by the V pickled inside the posterior's own training prior —
    bitwise the checkpoint header's; no checkpoint directory is read), or a parent still in memory
    from its own training; `prior_08282026_1.pt` as the loaded prior and the `master.txt` chi config
-   it was trained under — `check_basis` refuses another box, but nothing on the round's build path
-   refuses another prior (`_assert_prior_used_matches_posterior` runs only in `validate_calibration`),
-   so a different loaded prior trains silently on the wrong base prior restricted to the region;
-   any budget (the round gets its own checkpoint directory whenever checkpointing is on). For the
-   round-0 rotation the region skips direction 0 (`t_scale`, loading 1.00) and truncates the next
-   `n_directions` — 1–5 at the tab's default of 5; the `[tsnpe]` lines print the pre-override
+   it was trained under — `check_basis` refuses another box and, since the follow-up commit of
+   2026-09-10, the round refuses a loaded prior whose GMM fingerprint differs from the parent's
+   (`run_guards._assert_prior_matches_region`, on the training branch and when a sidecar's region is
+   loaded; the refusal names the prior file; a region from an older sidecar carries none and passes
+   silently); any budget (the round gets its own checkpoint directory whenever checkpointing is on).
+   For the round-0 rotation the region skips direction 0 (`t_scale`, loading 1.00) and truncates the
+   next `n_directions` — 1–5 at the tab's default of 5; the `[tsnpe]` lines print the pre-override
    acceptance and the post-override containment side by side, and the calibration runs on the
    truncated prior.
-3. **Recorded, not fixed:** the missing prior check in item 2; the GUI's deferred save passes no
-   `fisher_eigenvalues`, so every GUI-saved sidecar records None; the joint-KL informativeness of a
+3. **Recorded, not fixed:** the GUI's deferred save passes no `fisher_eigenvalues`, so every
+   GUI-saved sidecar records None; the joint-KL informativeness of a
    truncated round is still measured against the full prior (the `−log P(A)` inflation is printed,
    not corrected); `scripts/sbc_characterize.py` — correcting the X3 paragraph above and `f682a27`'s
    message, which said it "draws from the full prior": it draws θ* from the prior pickled inside the
@@ -4072,6 +4084,30 @@ the same order, head §6.
    posterior was trained under); the quarantined directory stays (§6's banner says why, and why never
    to rename it back). Deliberately open, not owed: pooling rows across rounds, the batch-by-scale
    `t_scale` override, and any change to `build_latent_fisher_rotation` or `fisher_eigenbasis`.
+
+**Follow-up, 2026-09-10 (the commit after this one):** the missing prior check is closed.
+`TruncationRegion` carries the parent's GMM fingerprint (`prior_fingerprint`, round-tripped by the
+sidecar, None for older ones, and NOT part of the checkpoint identity, which already carries the
+supplied prior's), `build_truncation_region` records it from the prior pickled inside the parent,
+and `build_posterior` refuses a loaded prior that verifiably differs through
+`run_guards._assert_prior_matches_region` — on the training branch and, for a sidecar's region, on
+the load branch; the same silent-when-unverifiable policy as `validate_calibration`'s check; the
+refusal names the prior file when `Resources/Priors` has it — and prints a `[tsnpe] prior:` line
+saying whether the parent's prior was verified. The amortized path and `training_identity` are
+untouched. Tests: `test_conditioning_repair.py` +1
+(`test_a_truncated_round_refuses_a_prior_other_than_the_parents`: the dict round trip, a legacy
+dict's None, the recording, the identity staying free of it, a match versus an abstention, the
+helper's four policies, and an AST pin that the call sits inside the truncation branch before
+`check_basis` and that the load branch has its own) and two legs of the end-to-end test in
+`test_user_sbi.py` (leg (i) pins the NOT-verifiable line; leg (vi) builds its region through
+`build_truncation_region` on a parent carrying the real `SBIPriorWrapper → RotatedLatentPrior`
+chain, so the recorded and the compared fingerprints are shown equal before the round is accepted,
+and a foreign fingerprint is refused naming both). Gate: the eleven fast suites at 35 / 18 / 27 / 18
+/ 7 / 19 / 22 / 12 / 23 / 39 / 5 (322 with `test_user_sbi`'s 97), run for this change;
+`test_user_sbi.py`'s end-to-end test function was run directly — its pinned strings are untouched,
+and the full hour-long suite was not rerun. A three-lens read-only review of the diff found no
+blockers; its majors (the identity pin, the real-chain leg, the NOT-verifiable pin) are closed in
+the commit.
 
 ## 2026-08-28 (second session) — the §6.1 refactor landed: 39 commits, zero drift, two new ladders
 

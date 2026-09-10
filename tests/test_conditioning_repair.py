@@ -672,6 +672,107 @@ def test_build_truncation_region_records_the_parents_basis():
             pass
 
 
+def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
+    """The region restricts the PARENT's training prior, and check_basis compares V and the box, not
+    the GMM -- so a round started with another prior loaded would train that prior restricted to a
+    box nobody measured on it, with every basis check green. Since 2026-09-10 the region carries the
+    parent's GMM fingerprint (build_truncation_region records it from the prior pickled inside the
+    posterior) and build_posterior's truncation branch refuses a supplied prior that verifiably
+    differs -- silent, like validate_calibration's check, when either side is unverifiable. The
+    end-to-end drive through build_posterior is leg (vi) of test_user_sbi's guardrail-7 test."""
+    import ast
+    import inspect
+    import textwrap
+    from core import orchestrator
+    from core.SBI import run_guards
+
+    P = 13
+
+    def _gmm(seed):
+        g = torch.Generator().manual_seed(seed)
+        mix = torch.distributions.Categorical(torch.tensor([0.3, 0.7]))
+        comp = torch.distributions.MultivariateNormal(torch.randn(2, P, generator=g),
+                                                      covariance_matrix=torch.eye(P).expand(2, P, P))
+        return torch.distributions.MixtureSameFamily(mix, comp)
+
+    class _Parent(_Wide):
+        """A posterior stand-in whose pickled training prior is a RotatedLatentPrior over a GMM."""
+
+        def __init__(self, gmm, V):
+            self.prior = type("Pr", (), {"gen_dist": reparam.RotatedLatentPrior(gmm, V)})()
+
+    gmm_a, gmm_b = _gmm(1), _gmm(2)
+    fp_a, fp_b = run_guards._gmm_fingerprint(gmm_a), run_guards._gmm_fingerprint(gmm_b)
+    assert fp_a and fp_b and fp_a != fp_b and len(fp_a) == 16
+    # the region carries the fingerprint, round-trips it, and a legacy dict gives None
+    r = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, prior_fingerprint=fp_a)
+    d = r.to_dict()
+    assert d["prior_fingerprint"] == fp_a
+    assert truncate.TruncationRegion.from_dict(d).prior_fingerprint == fp_a
+    del d["prior_fingerprint"]
+    legacy = truncate.TruncationRegion.from_dict(d)
+    assert legacy.prior_fingerprint is None
+    # build_truncation_region records the fingerprint of the prior pickled inside the parent, and None
+    # for a parent that carries no GMM
+    Q = _orthogonal_keeping(P, 11, axis=11)
+    box, T_parent = _rotated_box(Q)
+    x = torch.linspace(-1.0, 1.0, 7).reshape(1, 7)
+    rec = {"digest": orchestrator.observation_digest(x), "param_keys": _KEYS13}
+    torch.manual_seed(12)
+    region = orchestrator.build_truncation_region(
+        reparam.TransformedPosterior(_Parent(gmm_a, Q), T_parent), rec, x)
+    assert region.prior_fingerprint == fp_a
+    assert truncate.TruncationRegion.from_dict(region.to_dict()).prior_fingerprint == fp_a
+    bare = orchestrator.build_truncation_region(reparam.TransformedPosterior(_Wide(), T_parent), rec, x)
+    assert bare.prior_fingerprint is None
+    # ...and it is NOT part of the checkpoint identity: the identity already carries the supplied
+    # prior's fingerprint, and a new key in identity_fields would re-digest every truncated
+    # checkpoint directory (the amortized identity omits the region entirely -- test_user_sbi pins it)
+    probe = training_checkpoint.bijection_probe(T_parent, P)
+    without = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q, probe=probe)
+    with_fp = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q, probe=probe,
+                                        prior_fingerprint=fp_a)
+    assert without.identity_fields() == with_fp.identity_fields()
+    assert "prior_fingerprint" not in with_fp.identity_fields()
+    # the walk reaches the GMM through the rotation wrapper and finds nothing in a bare object, so
+    # the "passes" below are a MATCH and an ABSTENTION respectively, not the same outcome twice
+    assert run_guards._gmm_fingerprint(reparam.RotatedLatentPrior(gmm_a, Q)) == fp_a
+    assert run_guards._gmm_fingerprint(object()) is None
+    # the refusal names both fingerprints; the parent's own prior passes, wrapped or bare; an
+    # unverifiable side on either end is silence
+    try:
+        run_guards._assert_prior_matches_region(region, gmm_b, "A truncated round")
+        raise AssertionError("a round on a prior other than the region's parent's was accepted")
+    except ValueError as e:
+        assert fp_a in str(e) and fp_b in str(e) and "parent" in str(e).lower(), e
+    run_guards._assert_prior_matches_region(region, gmm_a, "A truncated round")
+    run_guards._assert_prior_matches_region(region, reparam.RotatedLatentPrior(gmm_a, Q), "A truncated round")
+    run_guards._assert_prior_matches_region(region, object(), "A truncated round")     # no GMM to compare
+    run_guards._assert_prior_matches_region(legacy, gmm_b, "A truncated round")        # no fingerprint recorded
+    run_guards._assert_prior_matches_region(bare, gmm_b, "A truncated round")
+    # and build_posterior applies it to the SUPPLIED prior: inside the `if truncation is not None`
+    # branch, before the round commits to the region's basis (check_basis), and on the load branch
+    # to a sidecar's region -- pinned at the AST, so a moved or dropped call fails here
+    assert orchestrator._assert_prior_matches_region is run_guards._assert_prior_matches_region
+    tree = ast.parse(textwrap.dedent(inspect.getsource(orchestrator.build_posterior)))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "_assert_prior_matches_region"]
+    by_args = {tuple(ast.unparse(a) for a in c.args[:2]): c for c in calls}
+    train_call = by_args.get(("truncation", "prior"))
+    assert train_call is not None, \
+        "build_posterior's truncation branch does not check the supplied prior against the region's parent"
+    branch = [n for n in ast.walk(tree) if isinstance(n, ast.If)
+              and ast.unparse(n.test) == "truncation is not None"
+              and any(c is train_call for c in ast.walk(n))]
+    assert branch, "the prior check is not inside build_posterior's `if truncation is not None` branch"
+    basis = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and ast.unparse(n.func) == "truncation.check_basis"]
+    assert basis and train_call.lineno < min(c.lineno for c in basis), \
+        "the prior check must run before the round commits to the region's basis"
+    assert ("region", "prior") in by_args, \
+        "the load branch does not check a sidecar's region against the prior loaded beside it"
+
+
 def test_the_same_posterior_and_observation_redraw_the_same_region():
     """The region is part of the round's checkpoint identity, so a round that died at batch 3000 must
     redraw the SAME box to find its own rows again: the draw is seeded from the observation and the
