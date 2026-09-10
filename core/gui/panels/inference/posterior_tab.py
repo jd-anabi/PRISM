@@ -123,9 +123,11 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self._screen.refresh_gates()
         # Passed, never written to config: orchestrator does `from .config import TRAINING_NUM_RUNS`,
         # so setting the constant here would be a silent no-op and the run would use the default.
+        # accept_truncated: a NON-AMORTIZED artifact loads here and carries its region into the
+        # session, so Validate restricts its prior to it and Infer warns on another observation.
         self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
                       self.session.force_prior, entry, is_new, save=False,
-                      num_runs=n_runs, run_size_cap=cap,
+                      num_runs=n_runs, run_size_cap=cap, accept_truncated=True,
                       hidden_features=max(1, self.flow_hidden.value()),
                       num_transforms=max(1, self.flow_transforms.value()),
                       learning_rate=self.flow_lr.value() or config.TRAINING_LEARNING_RATE,
@@ -190,10 +192,17 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.session.posterior, self.session.diagnostics = payload
         self.session.posterior_latent = getattr(self.session.posterior, "latent", None)
         self.session.V = self._extract_rotation(self.session.posterior)
-        # CLEARED, not merely left alone. Training an amortized posterior after a TSNPE round would
-        # otherwise inherit that round's region and be saved marked non-amortized -- the mislabelling
-        # runs in both directions, and this is the direction that is easy to miss.
-        self.session.truncation = self.session.x_obs_digest = None
+        # Taken FROM THE POSTERIOR, which carries its own region (None for an amortized one). So a
+        # freshly trained amortized posterior clears the previous round's region -- the mislabelling
+        # runs in both directions, and that is the direction that is easy to miss -- while a loaded
+        # non-amortized artifact installs its region for Validate and its digest for Infer.
+        self.session.truncation = getattr(self.session.posterior, "truncation", None)
+        self.session.x_obs_digest = getattr(self.session.posterior, "x_obs_digest", None)
+        if self.session.truncation is not None:
+            self.log_pane.append_line(
+                f"This posterior is NON-AMORTIZED (observation digest {self.session.x_obs_digest}): "
+                f"Validate restricts its prior to the region it was trained on; Infer warns on any "
+                f"other observation.", "warning")
         self.log_pane.append_line("Posterior ready.")
         self._screen.refresh_gates()
 

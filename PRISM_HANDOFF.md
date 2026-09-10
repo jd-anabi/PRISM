@@ -3663,6 +3663,54 @@ which is the only reason D4 did not also bias this round.
   stream untouched, a different observation / level / direction count → a different box, and the
   quantisation semantics); `test_settings_persistence.py` +1 (the TSNPE tab's line never says
   "Resumes" and differs from the Posterior tab's).
+- **X3 — calibration on the truncated prior, GUI and CLI.** `validate_calibration(…,
+  truncation=None)`: after the rotation wrap (the region's dims index the rotated latent) it runs
+  `check_basis` on the posterior's own T and wraps the calibration prior in
+  `TruncatedLatentPrior`; `check_sbc`'s reference sample comes from that SAME restricted prior,
+  mapped to physical through T (the data-averaged posterior converges to the proposal, so against
+  the full prior `c2st_dap` reported a miscalibration that was not one) **and then mirrors the
+  per-batch `t_scale` override θ* went through in `gen_training_data`** — its `t_scale` column is a
+  permutation of θ*'s own. The diff review caught that without this the reference pins `t_scale`
+  wherever the region constrains a `t_scale`-loaded direction (the round-0 rotation's direction 0
+  IS `t_scale`) while θ* spans the whole schedule, and `c2st_dap[t_scale]` reads ≈1 by construction
+  — the very false miscalibration the fix exists to remove. It prints the kept fraction (P(A) at
+  the rejection sampler, pre-override, which overstates what the override leaves restricted) and the
+  `−log P(A)` by which the JOINT KL of the informativeness block, still against the full prior, is
+  inflated. Its docstring carries the corrected theory (corrections 7–8 above) and says plainly that
+  along a `t_scale`-loaded direction the override turns the restriction into a reweighting, which X4
+  addresses. Load path: `build_posterior(…, accept_truncated=False)` — the load branch skips
+  `_assert_amortization_understood` only when the caller opts in; `run_guards.truncation_from_
+  sidecar` returns the region and digest (from the sidecar's key or the region's own) and **refuses
+  a sidecar that declares itself non-amortized but carries no region or a region without its basis**
+  (otherwise such an artifact would load looking amortized — strictly weaker than the refusal being
+  bypassed); the load branch then names a sidecar whose V is the TRANSPOSE of the region's as a D6
+  sidecar rather than blaming the region, runs `check_basis` against the bijection just rebuilt, and
+  returns a posterior carrying `.truncation` and `.x_obs_digest`. `orchestrator.run` opts in and
+  passes the region to calibration (pinned at the source by
+  `test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region`).
+  `infer_and_visualize` compares the posterior's digest with the observation's before sampling and
+  **warns loudly, does not refuse** (the user's decision: a simulated cell re-drawn with new noise
+  is exactly the "near x_obs" such a posterior is for). GUI: the Posterior tab's load opts in;
+  `_on_posterior` takes the session's region and digest FROM the posterior (a freshly trained
+  amortized one still clears both) and logs a warning line for a non-amortized one; the Validate tab
+  forwards `truncation=`. Tests: `test_user_sbi.py` +1
+  (`test_calibration_theta_star_lies_inside_the_region_when_one_is_given`: real `gen_cal_data`,
+  ten rows, sbi's diagnostics stubbed — the prior handed in is the `TruncatedLatentPrior`, every
+  simulated θ* and every reference draw lies inside a `t_scale`-free region in the training latent,
+  the reference's `t_scale` column is θ*'s own, the two operator-facing lines are printed; a ROTATED
+  leg puts `t_scale` itself on truncated direction 0 and pins what survives there — the
+  `t_scale`-free direction stays restricted for θ* and the reference alike, and the reference
+  mirrors the override; without a region the prior is the `ProductPrior` as before);
+  `test_nav_and_gating.py` +1 (a loaded non-amortized posterior installs its region and digest,
+  Validate forwards the region, the load dispatch opts in, a plain posterior clears both);
+  `test_artifact_consistency.py` +1 (a non-amortized artifact is refused without the flag, loads
+  with it carrying region and digest, an amortized one carries neither, a region probed over another
+  box is refused, a non-amortized sidecar with no region or a probe-less one is refused even when
+  accepted, the digest survives being recorded only inside the region, a rotated sidecar loads when
+  its V is the region's and is named as TRANSPOSED when it is not); `test_conditioning_repair.py`
+  +2 (the inference-time warning fires for a foreign observation, not for the recorded one, never
+  for an amortized posterior; the CLI `run` source pin). Noted, not done: `scripts/
+  sbc_characterize.py` still draws its calibration set from the full prior for a TSNPE artifact.
 
 ## 2026-08-28 (second session) — the §6.1 refactor landed: 39 commits, zero drift, two new ladders
 

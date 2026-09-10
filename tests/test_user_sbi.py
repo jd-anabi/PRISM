@@ -2436,6 +2436,146 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         orchestrator.TRAINING_CHECKPOINT_EVERY, _cfg.CHECKPOINT_PATH = saved_every, saved_root
 
 
+def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
+    """⚠ GUARDRAIL 8, end to end through validate_calibration with the real gen_cal_data (10 rows).
+
+    For a TSNPE posterior the calibration prior must be the prior RESTRICTED to its region -- drawn
+    from the full prior, theta* lands mostly where the flow saw no training row, and check_sbc's
+    data-averaged-posterior test reports a miscalibration that is not one. So with a region: the
+    prior handed to gen_cal_data is the TruncatedLatentPrior, every theta* it simulates lies inside
+    the region in the training latent (for directions free of t_scale loading -- the per-batch
+    t_scale override moves every other coordinate), and so does every reference draw check_sbc
+    receives. Without a region nothing changes. The rotated leg puts t_scale itself on a truncated
+    direction: there the override carries theta* off the box along it, and what must hold is that
+    the reference sample mirrors the override (its t_scale column is a permutation of theta*'s) while
+    the t_scale-free direction stays restricted for both. The sbi diagnostics and the plots are
+    stubbed; the simulation is real.
+    """
+    import contextlib
+    import matplotlib.pyplot as plt
+    from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
+
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    sink = lambda title, fig: None                                # noqa: E731
+    saved_gen_prior = orchestrator.pipeline.gen_prior
+    real_gen_cal = orchestrator.analysis.gen_cal_data
+    saved_info = orchestrator.analysis.informativeness
+    saved_guard = orchestrator._assert_prior_used_matches_posterior
+    names = ("run_sbc", "check_sbc", "sbc_rank_plot", "run_tarp", "check_tarp", "plot_tarp")
+    saved = {n: getattr(orchestrator, n) for n in names}
+    cap = {}
+
+    def _gen_cal(**kw):
+        cap["prior"] = kw["prior"]
+        return real_gen_cal(**kw)
+
+    def _run_sbc(thetas, xs, posterior, **k):
+        cap["thetas"] = thetas
+        n, p = thetas.shape
+        return torch.zeros(n, p, dtype=torch.long), torch.zeros(n, p)
+
+    def _check_sbc(ranks, prior_samples, dap_samples, num_posterior_samples):
+        cap["prior_samples"] = prior_samples
+        p = prior_samples.shape[1]
+        return {"ks_pvals": [1.0] * p, "c2st_ranks": [0.5] * p, "c2st_dap": [0.5] * p}
+
+    stubs = dict(run_sbc=_run_sbc, check_sbc=_check_sbc,
+                 sbc_rank_plot=lambda **k: (plt.figure(), None),
+                 run_tarp=lambda thetas, xs, posterior, **k: (torch.linspace(0, 1, 5), torch.linspace(0, 1, 5)),
+                 check_tarp=lambda ecp, alpha: (0.0, 1.0),
+                 plot_tarp=lambda *a, **k: None)
+    try:
+        cfg = cli.make_sim_config("NADROWSKI", labels, True,
+                                  str(config.BOUNDS_PATH / "nadrowski" / "master.txt"),
+                                  reparam_rotate=False)
+        cfg.hw = config.cpu_device()
+        cfg.hw.batch_size = 8
+        torch.manual_seed(0)                      # the prior fit, the box and the rejection draws all read it
+        orchestrator.pipeline.gen_prior = _tiny_nadrowski_gen_prior
+        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        P = len(cfg.params_dict) + len(cfg.rescale_params)
+        i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
+        T = orchestrator.build_inferred_bijection(cfg, log_params=orchestrator._log_params_for(cfg))
+        with torch.no_grad():
+            z = orchestrator._build_latent_prior_for_validation(cfg, inferred_prior).sample((4000,)).double()
+        # ND dims 0 and 1 (never t_scale, which the per-batch override rewrites), at the prior's
+        # 25-75% quantiles so the region is neither vacuous nor starved
+        region = _tr.TruncationRegion([0, 1], [float(z[:, 0].quantile(0.25)), float(z[:, 1].quantile(0.25))],
+                                      [float(z[:, 0].quantile(0.75)), float(z[:, 1].quantile(0.75))],
+                                      n_latent=P, V=None, probe=_tc.bijection_probe(T, P))
+
+        class _Lat:
+            prior = None
+
+            def sample(self, shape, x=None, **k):
+                return torch.randn(int(torch.Size(shape).numel()), P)
+
+            sample_batched = sample
+
+        post = _rp.TransformedPosterior(_Lat(), T)
+        orchestrator.analysis.gen_cal_data = _gen_cal
+        orchestrator.analysis.informativeness = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("stub"))
+        orchestrator._assert_prior_used_matches_posterior = lambda *a, **k: None
+        for n, fn in stubs.items():
+            setattr(orchestrator, n, fn)
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            orchestrator.validate_calibration(cfg, post, inferred_prior, force_prior, fig_sink=sink,
+                                              n_cal=10, cal_n_scales=1, truncation=region)
+        assert isinstance(cap["prior"], _tr.TruncatedLatentPrior) and cap["prior"].region is region
+        z_star = T.inv(cap["thetas"].cpu()).double()
+        assert z_star.shape[0] > 0 and bool(region.contains(z_star).all()), \
+            "a calibration theta* lies outside the region the posterior was trained on"
+        assert bool(region.contains(T.inv(cap["prior_samples"].cpu()).double()).all()), \
+            "check_sbc's reference sample was drawn from the FULL prior"
+        assert cap["prior_samples"].shape[0] == cap["thetas"].shape[0]
+        # the reference mirrors the per-batch t_scale override: its t_scale column is theta*'s own
+        assert torch.equal(cap["prior_samples"][:, i_t].sort().values, cap["thetas"].cpu()[:, i_t].sort().values)
+        out = buf.getvalue()
+        assert "PRIOR RESTRICTED" in out and "kept fraction" in out and "-log P(A) = " in out, out[-800:]
+        assert math.isfinite(float(out.split("-log P(A) = ")[1].split(" nats")[0]))
+
+        # the ROTATED leg: t_scale IS truncated direction 0, an ND parameter is direction 1
+        V = torch.zeros(P, P)
+        order = [i_t, 0] + [i for i in range(P) if i not in (i_t, 0)]
+        for j, i in enumerate(order):
+            V[i, j] = 1.0
+        T_rot = _rp.build_rotated_bijection(T, V)
+        w = (z.float() @ V).double()
+        region_rot = _tr.TruncationRegion([0, 1], [float(w[:, 0].quantile(0.25)), float(w[:, 1].quantile(0.25))],
+                                          [float(w[:, 0].quantile(0.75)), float(w[:, 1].quantile(0.75))],
+                                          n_latent=P, V=V, probe=_tc.bijection_probe(T_rot, P))
+        cap.clear()
+        orchestrator.validate_calibration(cfg, _rp.TransformedPosterior(_Lat(), T_rot), inferred_prior,
+                                          force_prior, fig_sink=sink, n_cal=10, cal_n_scales=1,
+                                          truncation=region_rot)
+        w_star = T_rot.inv(cap["thetas"].cpu()).double()
+        w_ref = T_rot.inv(cap["prior_samples"].cpu()).double()
+        lo1, hi1 = float(region_rot.lo[1]), float(region_rot.hi[1])
+        assert bool(((w_star[:, 1] >= lo1) & (w_star[:, 1] <= hi1)).all()), "the t_scale-free direction leaked"
+        assert bool(((w_ref[:, 1] >= lo1) & (w_ref[:, 1] <= hi1)).all())
+        assert torch.equal(cap["prior_samples"][:, i_t].sort().values, cap["thetas"].cpu()[:, i_t].sort().values), \
+            "the reference sample did not mirror the t_scale override"
+
+        cap.clear()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            orchestrator.validate_calibration(cfg, post, inferred_prior, force_prior, fig_sink=sink,
+                                              n_cal=10, cal_n_scales=1)
+        assert type(cap["prior"]).__name__ == "ProductPrior", type(cap["prior"])
+        assert cap["prior_samples"].shape[0] == cap["thetas"].shape[0]
+        assert "kept fraction" not in buf.getvalue()
+    finally:
+        orchestrator.pipeline.gen_prior = saved_gen_prior
+        orchestrator.analysis.gen_cal_data = real_gen_cal
+        orchestrator.analysis.informativeness = saved_info
+        orchestrator._assert_prior_used_matches_posterior = saved_guard
+        for n, fn in saved.items():
+            setattr(orchestrator, n, fn)
+        plt.close("all")
+
+
 def test_build_posterior_takes_the_budget_as_arguments_because_the_constants_are_snapshotted():
     """orchestrator does `from .config import TRAINING_NUM_RUNS, TRAINING_RUN_SIZE`, so both are bound
     at IMPORT. A caller that "configures" a run by writing config.TRAINING_NUM_RUNS = 200 changes

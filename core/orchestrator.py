@@ -34,7 +34,7 @@ from . import cli, config, forcing
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
-from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint,  # noqa: E402
+from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint, truncation_from_sidecar,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches,
                              _assert_chi_config_is_deliberate,
                              _assert_amortization_understood, _log_params_for)
@@ -77,11 +77,15 @@ def run(cfg: SimConfig):
 
     # 2. Posterior (training is amortized and observation-independent)
     pos_choice, train_new = cli.select_or_train_posterior()
-    posterior, pos_diagnostics = build_posterior(cfg, inf_prior, force_prior, pos_choice, train_new)
+    # accept_truncated: a NON-AMORTIZED artifact may be loaded here -- its region then restricts the
+    # calibration prior below, and step 4 warns if the observation is not the one it was drawn around.
+    posterior, pos_diagnostics = build_posterior(cfg, inf_prior, force_prior, pos_choice, train_new,
+                                                 accept_truncated=True)
     helpers.clear_screen()
 
-    # 3. Calibration (data-free): SBC + expected coverage
-    validate_calibration(cfg, posterior, inf_prior, force_prior)
+    # 3. Calibration (data-free): SBC + expected coverage -- on the truncated prior for a TSNPE posterior
+    validate_calibration(cfg, posterior, inf_prior, force_prior,
+                         truncation=getattr(posterior, "truncation", None))
 
     # 4. Optional inference on a chosen observation
     mode = cli.select_inference_mode()
@@ -617,7 +621,7 @@ def build_posterior(
     train_new: bool,
     *, save: bool = True, save_name: str | None = None, fig_sink=None,
     num_runs: int | None = None, run_size_cap: int | None = None,
-    truncation=None, x_obs_digest: str | None = None,
+    truncation=None, x_obs_digest: str | None = None, accept_truncated: bool = False,
     hidden_features: int | None = None, num_transforms: int | None = None,
     learning_rate: float | None = None, stop_after_epochs: int | None = None,
     fisher_m: int | None = None, fisher_dz: float | None = None,
@@ -642,6 +646,11 @@ def build_posterior(
                      its sidecar and the load path refuses it for general inference.
     :param x_obs_digest: the observation the region was drawn around (``observation_digest``), so the
                      artifact records what it is valid near.
+    :param accept_truncated: LOAD path only. By default a NON-AMORTIZED artifact is refused (guardrail
+                     2: it is valid only near one observation). True loads it anyway and hands back a
+                     posterior carrying ``.truncation`` and ``.x_obs_digest`` from its sidecar, so
+                     calibration can restrict its prior to the same region and inference can warn on
+                     any other observation -- the GUI's Posterior tab and the CLI's ``run`` opt in.
     :param hidden_features: flow width per transform; None = config.NSF_HIDDEN_FEATURES.
     :param num_transforms: flow depth; None = config.NSF_NUM_TRANSFORMS.
     :param learning_rate: Adam LR; None = config.TRAINING_LEARNING_RATE.
@@ -729,12 +738,36 @@ def build_posterior(
         assert isinstance(posterior_latent, DirectPosterior)
         posterior_latent.device = posterior_latent._device = cfg.hw.device
         _assert_mode_matches(cfg, posterior_latent, choice)
-        _assert_amortization_understood(choice)
+        if not accept_truncated:
+            _assert_amortization_understood(choice)
         # Reconstruct the exact training box (+ rotation) from the <name>.rot.pt sidecar — log-mask
         # and V are self-describing, so eval is correct regardless of the current config (single
         # source of truth shared with the offline diagnostic scripts).
         T_load = load_eval_bijection(cfg, choice, POSTERIOR_PATH)
-        return TransformedPosterior(posterior_latent, T_load), None
+        # A non-amortized artifact carries its region and observation into the session, so the
+        # calibration prior can be restricted to the same region (guardrail 8) and inference can say
+        # which observation it is valid near. The region's basis is checked against the bijection
+        # just rebuilt: a sidecar whose V and region disagree is refused, not decoded.
+        region, digest = truncation_from_sidecar(choice)      # raises for an unverifiable region
+        if region is not None:
+            _V_load = rotation_of(T_load)
+            if (region.V is not None and _V_load is not None
+                    and not torch.allclose(_V_load.detach().cpu().double(), region.V.double(), atol=1e-6)
+                    and torch.allclose(_V_load.detach().cpu().double(), region.V.double().transpose(-1, -2),
+                                       atol=1e-6)):
+                raise ValueError(
+                    f"Posterior '{choice}': its sidecar's V is the TRANSPOSE of the rotation its "
+                    f"truncation region records -- a sidecar written by the GUI's deferred save while it "
+                    f"still read parts[0].M directly (defect D6, Appendix A 2026-09-09). The region is "
+                    f"right and the sidecar is wrong; the artifact cannot be decoded until the load path "
+                    f"reconciles the two.")
+            region.check_basis(T_load, dim=len(cfg.params_dict) + len(cfg.rescale_params),
+                               device=cfg.hw.device)
+            print(f"[tsnpe] loaded a NON-AMORTIZED posterior: valid only near the observation with "
+                  f"digest {digest if digest is not None else '(not recorded)'} ({region!r}). "
+                  f"Calibration restricts its prior to that region; inference on any other observation "
+                  f"warns.", flush=True)
+        return TransformedPosterior(posterior_latent, T_load, truncation=region, x_obs_digest=digest), None
 
     # --- Build a LATENT product prior for SBI to train on ---
     # Physical prior layout: ProductPrior([nd_prior_physical, rescale_prior_physical]).
@@ -1532,14 +1565,42 @@ def _observation_inits(cfg: SimConfig) -> torch.Tensor:
 def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior,
                          inferred_prior: Distribution, force_prior: Distribution,
                          *, fig_sink=None, n_cal: int | None = None,
-                         cal_n_scales: int | None = None) -> None:
+                         cal_n_scales: int | None = None, truncation=None) -> None:
     """
     Data-free posterior calibration: SBC (Talts 2018, marginals) + expected coverage (TARP, Lemos
     2023). Both draw their calibration set from the PRIOR (theta_star ~ prior, x_cal simulated), so
     this runs right after training with no chosen observation.
 
+    ⚠ FOR A TSNPE POSTERIOR THE PRIOR IS THE TRUNCATED ONE (guardrail 8). With pt = p·1_A/P(A), NPE
+    trained on pt(θ)p(x|θ) converges to pt(θ|x) = p(θ|x)·1_A(θ)/P(A|x) -- exact, but equal to p(θ|x)
+    only on the set of x whose posterior mass lies in A (which the round intends to contain x_obs and
+    does not verify). The absence of a proposal correction is a property of the LOSS and holds for
+    every x; what is x_obs-specific is only that P(A|x_obs) ≈ 1. So SBC/TARP must draw θ* from pt:
+    drawn from the full prior they measure extrapolation where the flow saw no row, and check_sbc's
+    data-averaged-posterior test reports a false miscalibration by construction. What a flat result
+    then certifies is calibration ON THE REGION; it cannot tell whether the region cut real mass at
+    x_obs. (The failure is NOT a pair of rank spikes: the ranks here are per PHYSICAL parameter, and a
+    latent box is unbounded in the untruncated directions, so ranks pile up continuously toward the
+    ends in proportion to Σ_{j<k} V[i,j]².)
+
+    THE t_scale OVERRIDE. The calibration draws pass through gen_training_data's per-batch t_scale
+    override exactly as the training rows did, so the calibration proposal IS the training proposal
+    -- and that proposal is the truncated prior only along directions that carry no t_scale loading.
+    Along a direction that does, the override carries θ* off the box (a restriction becomes a
+    reweighting by P(A | θ_-t), or a no-op when the direction IS the t_scale axis, as it is for the
+    round-0 rotation's direction 0). check_sbc's reference sample therefore mirrors the override --
+    its t_scale column is a permutation of θ*'s own -- so it is the proposal the flow was trained on,
+    not the pure region; and the kept fraction printed below is the pure region's P(A) at the
+    rejection sampler, which overstates what the override left restricted. The region's own filter
+    against t_scale-loaded directions is the next fix (truncate.region_from_posterior).
+
     :param inferred_prior: the actual training prior (ND x rescale product prior) — SBC draws
                            theta_star from it, not from the posterior.
+    :param truncation: the ``TruncationRegion`` a TSNPE posterior was trained on (``posterior.
+                       truncation``); None for an amortized posterior. When given, the calibration
+                       prior is restricted to it AFTER the rotation wrap (the region's dims index
+                       the rotated latent) and check_sbc's reference sample comes from the same
+                       restricted prior, mapped to physical through the posterior's own bijection.
     :param n_cal: calibration datasets for SBC/TARP; None = config.SBC_N_CAL.
     :param cal_n_scales: (t_scale, T) operating points the calibration set is spread over; None =
                      config.CAL_N_SCALES.
@@ -1564,6 +1625,14 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
     _V_post = rotation_of(T)
     if _V_post is not None:
         val_latent_prior = RotatedLatentPrior(val_latent_prior, _V_post)
+    if truncation is not None:
+        # AFTER the rotation wrap: the region's dims index the rotated latent w = z @ V, and its basis
+        # must be the one this posterior evaluates in -- the same check a training round makes.
+        truncation.check_basis(T, dim=len(cfg.params_dict) + len(cfg.rescale_params), device=device)
+        val_latent_prior = truncate.TruncatedLatentPrior(val_latent_prior, truncation)
+        print(f"[tsnpe] calibration draws theta* from the PRIOR RESTRICTED to {truncation!r}: SBC and "
+              f"TARP certify calibration ON THE REGION -- they cannot tell whether the region cut real "
+              f"mass at x_obs.", flush=True)
     x_cal, theta_star = analysis.gen_cal_data(
         model=cfg.model, prior=val_latent_prior,
         forcing_prior=force_prior,
@@ -1598,7 +1667,24 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
         num_posterior_samples=1000, reduce_fns="marginals",
         use_batched_sampling=True, show_progress_bar=True,
     )
-    prior_samples = inferred_prior.sample((theta_star.shape[0],)).cpu()
+    if truncation is not None:
+        # check_sbc's reference sample must come from the SAME proposal theta* did -- the data-averaged
+        # posterior converges to that proposal, and against the full prior c2st_dap reports a
+        # miscalibration that is not one. That proposal is the restricted prior mapped through the
+        # posterior's own bijection AND THEN the per-batch t_scale override theta* went through in
+        # gen_training_data: without mirroring it, a region that constrains a t_scale-loaded
+        # direction pins the reference's t_scale while theta*'s spans the whole schedule, and
+        # c2st_dap[t_scale] reads ~1 by construction. A permutation of theta*'s own t_scale column IS
+        # the schedule's marginal, drawn independently of the other coordinates -- exactly the
+        # override's effect.
+        with torch.no_grad():
+            _z_ref = val_latent_prior.sample((theta_star.shape[0],)).to(device=device, dtype=dtype)
+            _ref = T(_z_ref).detach().cpu()
+        _i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
+        _ref[:, _i_t] = theta_star[torch.randperm(theta_star.shape[0]), _i_t].to(_ref)
+        prior_samples = _ref
+    else:
+        prior_samples = inferred_prior.sample((theta_star.shape[0],)).cpu()
     sbc_stats = check_sbc(
         ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
         num_posterior_samples=1000,
@@ -1608,6 +1694,14 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
         print(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
               f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
               f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
+    if truncation is not None:
+        _acc = val_latent_prior.acceptance_rate
+        print(f"[tsnpe] kept fraction: the region accepted {_acc:.3%} of prior draws at the rejection "
+              f"sampler (P(A), before the per-batch t_scale override, which re-opens any t_scale-loaded "
+              f"direction). The JOINT KL in the informativeness block below is measured against the "
+              f"FULL prior, so for this truncated posterior it is inflated by -log P(A) = "
+              f"{-math.log(max(_acc, 1e-300)):.2f} nats; its per-parameter entropy reductions are "
+              f"against the full prior too, each by its own offset.", flush=True)
 
     # Both SBC figures are grids of small panels, so give each ROW enough height for its own x-label --
     # at the previous 2.75 in/row the per-panel "posterior rank <param>" label was clipped by the row
@@ -1673,6 +1767,24 @@ def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | Transformed
     dtype = cfg.hw.dtype
     T_obs = cfg.T_obs
     inits = _observation_inits(cfg)
+
+    # GUARDRAIL 2 at the one place every inference passes through: a NON-AMORTIZED posterior says
+    # which observation its region was drawn around, and this is where the observation first exists.
+    # A hard WARNING, not a refusal -- a simulated cell re-drawn with new noise legitimately has a new
+    # digest and is exactly the "near x_obs" such a posterior is for; a different recording is not,
+    # and the flow saw no training row there.
+    _want = getattr(posterior, "x_obs_digest", None)
+    if _want is not None:
+        _got = observation_digest(obs_stats)
+        if _got != _want:
+            _msg = (f"[tsnpe] WARNING: this posterior is NOT AMORTIZED. TSNPE trained it on a prior "
+                    f"restricted to a region drawn around the observation with digest {_want}; the "
+                    f"observation supplied has digest {_got}. Near that observation (the same cell "
+                    f"re-simulated with new noise, say) it is valid; anywhere else the flow has never "
+                    f"seen a training row and extrapolates confidently rather than returning the prior. "
+                    f"Use the recorded observation, or an amortized posterior, for anything else.")
+            print(_msg, flush=True)
+            warnings.warn(_msg, stacklevel=2)
 
     # GUARDRAIL 1: record the observation this inference actually ran against, here,
     # where it first exists. Written before the figures, so an interrupted or crashed inference still

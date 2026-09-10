@@ -326,6 +326,42 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized():
     pp._on_posterior((object(), {"loss": []}))
     assert inf.session.truncation is None and inf.session.x_obs_digest is None,         "an amortized posterior inherited the previous round's truncation"
 
+
+def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session():
+    """⚠ GUARDRAIL 8's GUI half. A non-amortized artifact is loaded through the Posterior tab, which
+    opts in (accept_truncated) and installs the posterior's own region and observation digest on the
+    session; Validate forwards the region so calibration draws from the truncated prior; a plain
+    posterior (an object with neither attribute) still clears both."""
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+
+    _app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=object())
+    pp, vp = inf.posterior_panel, inf.validate_panel
+
+    region = object()
+    stub = type("Post", (), {"truncation": region, "x_obs_digest": "feedfacefeedface", "latent": object()})()
+    pp._on_posterior((stub, {"loss": []}))
+    assert inf.session.truncation is region and inf.session.x_obs_digest == "feedfacefeedface"
+
+    captured = {}
+    vp.dispatch = lambda fn, *a, **k: captured.update(kwargs=k)
+    vp._validate()
+    assert captured["kwargs"].get("truncation") is region, \
+        "Validate ran on the FULL prior for a truncated posterior"
+
+    load = {}
+    pp.dispatch = lambda fn, *a, **k: load.update(args=a, kwargs=k)
+    pp.post_picker.selected = lambda: ("posterior_x.pt", False)
+    pp._build_posterior()
+    assert load["kwargs"].get("accept_truncated") is True and load["args"][4] is False, \
+        "the Posterior tab's LOAD does not opt in to non-amortized artifacts"
+
+    pp._on_posterior((object(), {"loss": []}))
+    assert inf.session.truncation is None and inf.session.x_obs_digest is None
+
+
 def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     """Prior, Posterior and Validate all gained fields. Each must reach its orchestrator function as
     an ARGUMENT -- orchestrator snapshots those constants at import, so writing them would be a

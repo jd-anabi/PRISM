@@ -14,6 +14,7 @@ Run:  python tests/test_conditioning_repair.py
 import math
 import os
 import sys
+import warnings
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -664,6 +665,78 @@ def test_the_same_posterior_and_observation_redraw_the_same_region():
     assert not torch.equal(nudged.lo, grid.lo), "the exact bounds must stay exact; only the NAME is rounded"
     moved = truncate.TruncationRegion(a.dims, a.lo * 1.01, a.hi, level=a.level, n_latent=P, V=Q, probe=a.probe)
     assert moved.identity_fields() != a.identity_fields()
+
+
+def test_a_truncated_posterior_warns_on_a_foreign_observation_at_inference():
+    """⚠ GUARDRAIL 2 at inference time. A non-amortized posterior names the observation its region
+    was drawn around; infer_and_visualize compares it against the observation it is handed BEFORE
+    sampling and warns loudly on a mismatch -- warns, not refuses, because a simulated cell re-drawn
+    with new noise is exactly the 'near x_obs' such a posterior is for. The matching observation is
+    silent."""
+    from core import cli, config, orchestrator, registry
+    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
+
+    class _Halt(Exception):
+        pass
+
+    class _Lat:
+        def sample(self, *a, **k):
+            raise _Halt()
+
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                              str(BOUNDS_PATH / "nadrowski" / "master.txt"))
+    cfg.hw = config.cpu_device()
+    T = reparam.build_inferred_bijection(cfg, log_params=[])
+    x0 = torch.linspace(-1.0, 1.0, 50).reshape(1, 50)
+    region = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=13)
+    post = reparam.TransformedPosterior(_Lat(), T, truncation=region,
+                                        x_obs_digest=orchestrator.observation_digest(x0))
+    saved = orchestrator.PERSIST_OBSERVATIONS
+    orchestrator.PERSIST_OBSERVATIONS = False
+    try:
+        for x, expect in ((x0 + 1.0, True), (x0, False)):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                try:
+                    orchestrator.infer_and_visualize(cfg, post, x, None, None, show_truth=False)
+                    raise AssertionError("the stub posterior was never sampled")
+                except _Halt:
+                    pass
+            got = any("NOT AMORTIZED" in str(c.message) for c in caught)
+            assert got is expect, f"warned={got} for {'a foreign' if expect else 'the recorded'} observation"
+        amortized = reparam.TransformedPosterior(_Lat(), T)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            try:
+                orchestrator.infer_and_visualize(cfg, amortized, x0 + 1.0, None, None, show_truth=False)
+                raise AssertionError("the stub posterior was never sampled")
+            except _Halt:
+                pass
+        assert not any("NOT AMORTIZED" in str(c.message) for c in caught)
+    finally:
+        orchestrator.PERSIST_OBSERVATIONS = saved
+
+
+def test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region():
+    """The CLI half of guardrail 8, pinned at the source: orchestrator.run must opt in to a
+    non-amortized artifact and hand its region to validate_calibration. Dropping either keyword would
+    silently restore full-prior SBC/TARP for every CLI TSNPE posterior with every suite green."""
+    import ast
+    import inspect
+    import textwrap
+    from core import orchestrator
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(orchestrator.run)))
+    calls = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            calls.setdefault(node.func.id, []).append({kw.arg: ast.unparse(kw.value) for kw in node.keywords})
+    assert any(kw.get("accept_truncated") == "True" for kw in calls.get("build_posterior", [])), \
+        "orchestrator.run does not opt in to non-amortized artifacts"
+    assert any("truncation" in kw and "truncation" in kw["truncation"]
+               for kw in calls.get("validate_calibration", [])), \
+        "orchestrator.run calibrates a TSNPE posterior on the FULL prior"
 
 
 def test_a_resumed_checkpoint_with_another_rotation_is_refused():

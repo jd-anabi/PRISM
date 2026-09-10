@@ -194,6 +194,32 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         f"  If the difference is DELIBERATE (a band sweep, say), re-run with {CHI_OVERRIDE_ENV}=1.")
 
 
+def truncation_from_sidecar(choice: str) -> tuple:
+    """``(TruncationRegion, x_obs_digest)`` recorded in a posterior's sidecar, or ``(None, None)`` for
+    an amortized or a legacy artifact.
+
+    REFUSES a sidecar that declares itself non-amortized but carries no region, or a region without
+    its basis (a sidecar written before the basis travelled with the region). Such an artifact would
+    otherwise load looking amortized -- no region for calibration to restrict to, no digest for
+    inference to warn on -- which is strictly weaker than the refusal ``accept_truncated`` bypasses.
+    The digest comes from the sidecar's own key or, failing that, from the region, which records the
+    observation it was drawn around.
+    """
+    side = read_sidecar(choice, POSTERIOR_PATH, map_location="cpu")
+    if not side or side.get("amortized", True):
+        return None, None
+    from core.SBI import truncate                        # kept lazy so run_guards imports without the TSNPE stack
+    tr = side.get("truncation")
+    region = truncate.TruncationRegion.from_dict(tr) if tr else None
+    if region is None or region.probe is None:
+        raise ValueError(
+            f"Posterior '{choice}' declares itself NON-AMORTIZED but its sidecar carries "
+            f"{'no truncation region' if region is None else 'a region without its basis (written before the basis travelled with the region)'}"
+            f", so the coordinate its box refers to cannot be verified and calibration could not "
+            f"restrict its prior correctly. It cannot be loaded; run the round again from its parent.")
+    return region, side.get("x_obs_digest") or region.x_obs_digest
+
+
 def _assert_amortization_understood(choice: str) -> None:
     """Refuse a TRUNCATED (non-amortized) posterior unless the caller opted into one.
 
@@ -215,8 +241,10 @@ def _assert_amortization_understood(choice: str) -> None:
         f"{tr.get('level', '?')}-HPD region along Fisher direction(s) {dims}, drawn around the "
         f"observation with digest {side.get('x_obs_digest')}. It is only valid for observations in "
         f"that region -- outside it the flow has never seen a training row and will extrapolate "
-        f"confidently rather than return the prior. Use it from the TSNPE tab, which checks the "
-        f"observation against that digest, or pick an amortized posterior for general inference.")
+        f"confidently rather than return the prior. The Posterior tab and the CLI's run() load it "
+        f"anyway (build_posterior(..., accept_truncated=True)), installing its region for calibration "
+        f"and its observation digest for inference, which warns on any other observation; pick an "
+        f"amortized posterior for general inference.")
 
 
 # Whether infer_and_visualize records the observation it ran against.

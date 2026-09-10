@@ -331,6 +331,93 @@ def _failing(real):
 
 
 
+class _FakeDP(orchestrator.DirectPosterior):
+    """A DirectPosterior by type only, so torch.save/load and build_posterior's isinstance accept it.
+    Module-level so it pickles."""
+
+    def __init__(self):
+        pass
+
+
+def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_region():
+    """⚠ GUARDRAIL 2 and 8 on the load path. A non-amortized artifact is refused unless the caller
+    opts in (accept_truncated), and then the posterior carries the sidecar's region and observation
+    digest -- with the region's basis checked against the bijection just rebuilt, so a sidecar whose
+    region and box disagree is refused rather than decoded."""
+    from core.SBI import training_checkpoint, truncate
+    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
+    name = "_ptest_trunc"
+    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    T = reparam.build_inferred_bijection(cfg, log_params=[])
+    region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
+                                       probe=training_checkpoint.bijection_probe(T, P),
+                                       x_obs_digest="d" * 16)
+    try:
+        torch.save(_FakeDP(), str(pt))
+        torch.save(_sidecar(cfg, amortized=False, truncation=region.to_dict(), x_obs_digest="d" * 16),
+                   str(rot))
+        try:
+            orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False)
+            raise AssertionError("a non-amortized artifact was loaded without opting in")
+        except ValueError as e:
+            assert "NOT AMORTIZED" in str(e), e
+        post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False,
+                                               accept_truncated=True)
+        assert post.truncation.dims == [0, 1] and post.x_obs_digest == "d" * 16
+        assert torch.equal(post.truncation.probe, region.probe) and post.truncation.V is None
+        # an amortized sidecar loads with neither
+        torch.save(_sidecar(cfg), str(rot))
+        post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+        assert post.truncation is None and post.x_obs_digest is None
+        # a region measured over a DIFFERENT box than the sidecar rebuilds is refused on load
+        other_box = reparam.build_box_bijection(torch.zeros(P), torch.ones(P))
+        other = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
+                                          probe=training_checkpoint.bijection_probe(other_box, P))
+        torch.save(_sidecar(cfg, amortized=False, truncation=other.to_dict(), x_obs_digest="d" * 16),
+                   str(rot))
+        try:
+            orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+            raise AssertionError("a region whose probe disagrees with the artifact's box was loaded")
+        except ValueError as e:
+            assert "probe max|diff|" in str(e), e
+        # a non-amortized sidecar whose region cannot be verified is refused EVEN when accepted:
+        # no region at all, and a region without its basis (the pre-2026-09-09 shape)
+        for tr, tag in ((None, "no region"),
+                        (truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P).to_dict(), "no probe")):
+            torch.save(_sidecar(cfg, amortized=False, truncation=tr, x_obs_digest="d" * 16), str(rot))
+            try:
+                orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+                raise AssertionError(f"a non-amortized artifact with {tag} loaded as if amortized")
+            except ValueError as e:
+                assert "cannot be verified" in str(e), e
+        # the digest survives being recorded only inside the region
+        torch.save(_sidecar(cfg, amortized=False, truncation=region.to_dict()), str(rot))
+        post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+        assert post.x_obs_digest == "d" * 16
+        # ROTATED artifacts: the sidecar's V must be the region's V; its transpose (the GUI's D6
+        # sidecars) is named as such rather than blamed on the region
+        Q, _ = torch.linalg.qr(torch.randn(P, P))
+        T_rot = reparam.build_rotated_bijection(T, Q)
+        rotated = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=Q,
+                                            probe=training_checkpoint.bijection_probe(T_rot, P),
+                                            x_obs_digest="d" * 16)
+        torch.save(_sidecar(cfg, V=Q, amortized=False, truncation=rotated.to_dict(), x_obs_digest="d" * 16),
+                   str(rot))
+        post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+        assert torch.allclose(reparam.rotation_of(post.T).cpu(), Q) and torch.equal(post.truncation.V, Q)
+        torch.save(_sidecar(cfg, V=Q.T.contiguous(), amortized=False, truncation=rotated.to_dict(),
+                            x_obs_digest="d" * 16), str(rot))
+        try:
+            orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+            raise AssertionError("a sidecar holding V transposed was decoded")
+        except ValueError as e:
+            assert "TRANSPOSE" in str(e), e
+    finally:
+        for q in (pt, rot):
+            q.unlink(missing_ok=True)
+
+
 def test_the_sidecar_records_the_fisher_eigenvalues_beside_V():
     """The rotation is saved so a later reader can say WHICH directions the run constrained. Without
     the eigenvalues it can only say which is worst, never by how much -- and the gap between "3x" and
