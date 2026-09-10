@@ -1404,15 +1404,22 @@ def test_gen_training_data_recovers_from_an_oom_outside_the_simulator():
 
     try:
         pipeline_mod.gen_stats, pipeline_mod._MIN_SIM_CHUNK = flaky, 1
-        data, thetas = pipeline_mod.gen_training_data(
-            model, _FixedPrior(cfg.ground_truth_tensor.reshape(1, -1)), None, t,
-            run_size=run_size, n_runs=2, steady_idx=steady_idx, dt_nd_min=cfg.dt_nd_min,
-            nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
-            dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
-            t_scale_bounds=cfg.t_scale_bounds, state_dep_drift=cfg.state_dep_drift,
-            chi_mode=True, chi_f0=config.CHI_F0, chi_freq_bounds=config.CHI_FREQ_BOUNDS,
-            chi_k_pad=4, chi_max_cycles=config.CHI_MAX_CYCLES,
-            n_vars=cfg.inits_tensor.shape[-1], dtype=cfg.hw.dtype, device=cfg.hw.device)
+        # Seeded AND forked: _batch_schedule draws its Sobol schedule from the global RNG and raises
+        # when a 6-candidate draw fits none of the fine-grid ceiling. Which draw that is depends on
+        # every test that ran before, so under pytest's definition order this failed deterministically
+        # where the old sorted-order runner happened to pass. Any seed whose draws fit works;
+        # fork_rng leaves the global stream as it found it for the tests after this one.
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(0)
+            data, thetas = pipeline_mod.gen_training_data(
+                model, _FixedPrior(cfg.ground_truth_tensor.reshape(1, -1)), None, t,
+                run_size=run_size, n_runs=2, steady_idx=steady_idx, dt_nd_min=cfg.dt_nd_min,
+                nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+                dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+                t_scale_bounds=cfg.t_scale_bounds, state_dep_drift=cfg.state_dep_drift,
+                chi_mode=True, chi_f0=config.CHI_F0, chi_freq_bounds=config.CHI_FREQ_BOUNDS,
+                chi_k_pad=4, chi_max_cycles=config.CHI_MAX_CYCLES,
+                n_vars=cfg.inits_tensor.shape[-1], dtype=cfg.hw.dtype, device=cfg.hw.device)
     finally:
         pipeline_mod.gen_stats, pipeline_mod._MIN_SIM_CHUNK = real_stats, saved_floor
 
