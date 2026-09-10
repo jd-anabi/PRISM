@@ -6,6 +6,13 @@ which the clean break retires along with every directory it named.
 existing digests would not move; there are no existing digests any more. ``feature_set_version``
 is new: the old identity digested only the valid-flag LABELS, so a changed feature definition behind
 an unchanged label re-keyed nothing and a cache could be resumed onto rows that meant something else.
+
+Everything in the identity is known BEFORE the Fisher rotation runs, and it has to be: the digest
+names the directory the rotation's own V is stored in (``header.pt``), so including V would make
+the naming circular. A resumed run reuses the stored V precisely because V is not reproducible
+across processes (its operating points come from the unseeded global RNG), so the identity must be
+computable without it. The region a TSNPE round trains under DOES enter (``truncation``): it
+carries the PARENT's V, copied and never recomputed, so its digest is stable by construction.
 """
 from __future__ import annotations
 
