@@ -27,3 +27,6 @@ __pycache__/
 
 # pytest
 /.pytest_cache/
+
+# Feature worktrees (superpowers:using-git-worktrees)
+/.worktrees/
