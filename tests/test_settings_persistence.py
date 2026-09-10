@@ -230,6 +230,30 @@ def test_the_budget_lines_never_raise_on_a_config_they_do_not_understand():
     assert panel.budget_total.text(), "the total line went blank on an unknown config"
     assert "config" in panel.budget_ckpt.text().lower(), panel.budget_ckpt.text()
 
+def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint():
+    """D3's user-facing face. The TSNPE tab shares the Posterior tab's budget group, whose
+    checkpoint line is computed from the AMORTIZED identity -- so at the parent's budget it read
+    "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely", which is exactly what a
+    round at that budget did before the region became part of the identity. The region is drawn
+    when the round starts, so the tab cannot resolve a directory in advance; it states the rule."""
+    from core import config as _cfg
+    inf, _ = _budget_panel(cfg=_budget_cfg(), prior=object())
+    panel = inf.tsnpe_panel
+    saved = _cfg.TRAINING_CHECKPOINT_EVERY
+    try:
+        _cfg.TRAINING_CHECKPOINT_EVERY = 50
+        panel._sync_budget()
+        inf.posterior_panel._sync_budget()
+        text = panel.budget_ckpt.text()
+        assert "Resumes" not in text and "OWN identity" in text, text
+        assert text != inf.posterior_panel.budget_ckpt.text(), \
+            "the TSNPE tab shows the Posterior tab's amortized checkpoint line"
+        _cfg.TRAINING_CHECKPOINT_EVERY = 0
+        panel._sync_budget()
+        assert "off" in panel.budget_ckpt.text().lower(), panel.budget_ckpt.text()
+    finally:
+        _cfg.TRAINING_CHECKPOINT_EVERY = saved
+
 def test_the_training_budget_round_trips_through_settings():
     """"I have to retype it every launch" is the complaint L1 already answered for splitters."""
     from core.gui import settings as st

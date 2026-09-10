@@ -126,6 +126,20 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
             f"observation {digest}, and its sidecar will say so.", "warning")
         self._screen.refresh_gates()
 
+    def _budget_checkpoint(self, cfg, width: int, n_runs: int) -> str:
+        """The mixin's line is computed from the AMORTIZED identity, and on this tab it used to say
+        "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely" whenever the budget
+        matched the parent's -- and that is what a round at that budget did before the region became
+        part of the identity (D3). The region is drawn when the round starts, so nothing here can be
+        resolved in advance; the honest line is the rule."""
+        if not config.TRAINING_CHECKPOINT_EVERY:
+            return super()._budget_checkpoint(cfg, width, n_runs)
+        return ("A TSNPE round is checkpointed under its OWN identity: the truncation region is part "
+                "of it and is drawn when the round starts, so it never resumes the amortized checkpoint "
+                "at these settings. Re-running with the SAME posterior, observation, HPD level, "
+                "direction count and budget redraws the same region and resumes that round's own "
+                "checkpoint; anything else simulates the full budget from zero.")
+
     def refresh_local_gates(self):
         s = self.session
         self.obs_picker.refresh()

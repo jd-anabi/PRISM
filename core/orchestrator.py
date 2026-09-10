@@ -355,7 +355,7 @@ def _assert_prior_is_saved(prior, n_runs: int, run_size: int) -> None:
 
 
 
-def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int) -> dict:
+def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int, truncation=None) -> dict:
     """The config fields a training-data checkpoint must agree with before it can be resumed (C-11).
 
     PUBLIC (it was `_training_identity`) because the GUI's Posterior tab computes it to tell the user,
@@ -377,7 +377,7 @@ def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int) -> dict
     distributions while every declared field still matched. It is also what makes "save your prior and
     reuse it" a guard rather than merely advice.
     """
-    return {
+    ident = {
         "format": "training-rows",
         "model": cfg.model,
         "prior_fingerprint": _gmm_fingerprint(prior),
@@ -416,6 +416,22 @@ def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int) -> dict
         "device": cfg.hw.device.type,
         "dtype": str(cfg.hw.dtype),
     }
+    # THE TRUNCATION REGION IS PART OF THE IDENTITY, AND THE KEY IS OMITTED -- NEVER None -- FOR AN
+    # AMORTIZED RUN. A TSNPE round's rows are drawn from the prior RESTRICTED to a region, so a round at
+    # the parent's budget must not resolve to the parent's directory (it would resume the untruncated
+    # rows and, if that checkpoint is complete, simulate nothing while printing that it is restricted:
+    # defect D3, Appendix A 2026-09-09), and an amortized run must never resume a truncated round's
+    # rows either (train_0b471d560271 was quarantined for exactly that). identity_digest serialises
+    # the whole dict, so a present-but-None key would re-digest every existing checkpoint and orphan
+    # all five complete ones; the amortized identity is therefore byte-identical to what it always was.
+    # The V digested inside identity_fields is the PARENT's rotation, carried with the region and
+    # never recomputed by this run, so the docstring's rule -- this run's own V cannot name its
+    # directory -- still holds. And this key is the identity_fields SUBSET of the sidecar's
+    # "truncation" (which is region.to_dict(), with the tensors), not the same dict: the sidecar
+    # describes the artifact, the identity names the rows.
+    if truncation is not None:
+        ident["truncation"] = truncation.identity_fields()
+    return ident
 
 
 PERSIST_OBSERVATIONS = True
@@ -806,7 +822,9 @@ def build_posterior(
         # BEFORE the digest is computed, because the digest is the thing an unsaved prior poisons.
         if n_runs >= _UNSAVED_PRIOR_MIN_RUNS:
             _assert_prior_is_saved(prior, n_runs, run_size)
-        ident = training_identity(cfg, prior, run_size, n_runs)
+        # The region is part of the identity (omitted for an amortized run), so a TSNPE round has its
+        # OWN directory and can never resume the amortized run's rows, nor the other way round (D3).
+        ident = training_identity(cfg, prior, run_size, n_runs, truncation=truncation)
         ckpt_dir = training_checkpoint.resolve_dir(ident)
         _st = training_checkpoint.peek(ckpt_dir)
         # A COMPLETE checkpoint counts too, and deliberately so. Its rows are already expressed in the

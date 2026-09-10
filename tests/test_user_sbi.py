@@ -2176,6 +2176,69 @@ def test_the_training_budget_routes_to_a_different_checkpoint():
         "the same budget must resolve to the same directory, or nothing could ever resume"
 
 
+def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest_is_untouched():
+    """⚠ DEFECT D3, and the constraint that makes fixing it delicate.
+
+    A TSNPE round's rows are drawn from the prior RESTRICTED to a region, so its checkpoint identity
+    must differ from the amortized run's at the same budget -- otherwise a round at the parent's
+    budget resolves to the parent's directory, resumes its untruncated rows and, if that checkpoint
+    is complete, simulates nothing while printing that it is restricted. But identity_digest
+    serialises the WHOLE dict, so adding a `truncation: None` key would re-digest every existing
+    checkpoint and orphan all five complete ones on disk. Hence: the key is present for a truncated
+    run and OMITTED, never None, for an amortized one, whose identity is byte-identical to before.
+    """
+    from core import cli as _cli, registry as _reg
+    from core.SBI import training_checkpoint as tc, truncate as _tr
+    m = "NADROWSKI"
+    cfg = _cli.make_sim_config(m, VALID_LABELS[VALID_MODELS.index(m)], _reg.state_dep_drift(m),
+                               str(config.BOUNDS_PATH / "nadrowski" / "master.txt"))
+    cfg.hw = config.cpu_device()                    # the device is in the identity; pin it for the golden digest
+    with torch.random.fork_rng():                   # this test's seed must not shift its neighbours' streams
+        torch.manual_seed(3)
+        mix = torch.distributions.Categorical(probs=torch.rand(3))
+        comp = torch.distributions.MultivariateNormal(torch.randn(3, 13), torch.eye(13).expand(3, 13, 13))
+        prior = torch.distributions.MixtureSameFamily(mix, comp)
+        Q, _ = torch.linalg.qr(torch.randn(13, 13))
+        Q2, _ = torch.linalg.qr(torch.randn(13, 13))
+
+    ia = orchestrator.training_identity(cfg, prior, 2048, 5000)
+    assert "truncation" not in ia, "an amortized identity grew a truncation key -- every digest moves"
+    # THE GOLDEN DIGEST. Computed once from this cfg/prior pair at the commit that added the region
+    # to the identity; if it moves, every complete checkpoint on disk is orphaned. Update it only
+    # deliberately, with a migration for the checkpoints on disk (scripts/migrate_checkpoint_flags.py
+    # is the precedent).
+    assert tc.identity_digest(ia) == "463e81d156cd", \
+        f"the amortized identity moved to {tc.identity_digest(ia)} -- every checkpoint on disk is orphaned"
+    assert set(ia) == {
+        "format", "model", "prior_fingerprint", "mode", "param_keys", "nd_lows", "nd_highs",
+        "rescale_lows", "rescale_highs", "log_params", "reparam_rotate", "run_size", "n_runs",
+        "steady_idx", "dt_nd_min", "dt_exp", "t_min_exp", "t_max_exp", "t_scale_bounds", "n_grid",
+        "spontaneous_only", "summary_flags", "chi_mode", "chi_layout", "chi_k_pad", "chi_elem_w",
+        "chi_f0", "chi_freq_bounds", "chi_max_cycles", "device", "dtype"}, sorted(ia)
+    assert tc.identity_digest(ia) == tc.identity_digest(
+        orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=None))
+
+    r1 = _tr.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], level=0.999, n_latent=13, V=Q)
+    it = orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=r1)
+    assert it["truncation"] == r1.identity_fields()
+    assert it["truncation"]["V_digest"] == _tr.rotation_digest(Q) and it["truncation"]["hi"] == [1.0, 1.0]
+    assert {k: v for k, v in it.items() if k != "truncation"} == ia, "the region changed another field"
+    assert tc.resolve_dir(it) != tc.resolve_dir(ia), "a truncated round shares the amortized run's directory"
+    assert tc.resolve_dir(it) == tc.resolve_dir(orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=r1)), \
+        "the same region must resolve to the same directory, or a round could never resume itself"
+    wider = _tr.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 2.0], level=0.999, n_latent=13, V=Q)
+    other_V = _tr.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], level=0.999, n_latent=13, V=Q2)
+    unrotated = _tr.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], level=0.999, n_latent=13)
+    dirs = {tc.resolve_dir(orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=r))
+            for r in (r1, wider, other_V, unrotated)}
+    assert len(dirs) == 4, "two different regions resolved to one checkpoint directory"
+    assert orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=unrotated)["truncation"]["V_digest"] is None
+    # the checkpoint store needs no change: verify() and the sibling scans iterate the union of keys,
+    # so an amortized parent shows up as a one-field sibling of a truncated round
+    diffs = {k for k in set(it) | set(ia) if tc._canonical(it.get(k)) != tc._canonical(ia.get(k))}
+    assert diffs == {"truncation"}
+
+
 def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     """⚠ GUARDRAIL 7, end to end through build_posterior, with ZERO simulation.
 
@@ -2207,6 +2270,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
 
     def _train_stub(plan, **kw):
         seen["prior"] = plan.prior
+        seen["checkpoint"] = plan.checkpoint
         return _FakeDP(), {"loss": []}
 
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
@@ -2276,43 +2340,54 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         except ValueError as e:
             assert "recorded probe does not describe" in str(e), e
 
-        # (iii) a resumable checkpoint at this budget is refused unless it was generated under THIS
-        # region: the amortized parent's (same V, no region in its identity -- the D3 no-op) and a
-        # checkpoint stored under another rotation alike
+        # (iii) checkpoints. The amortized parent's checkpoint at this very budget (same V, no region
+        # in its identity -- the D3 silent no-op) is simply NOT this round's directory any more: the
+        # region is part of the identity, so the round routes elsewhere and simulates. A checkpoint
+        # that IS under this round's identity but stores another rotation is refused, and one that
+        # records this region under the region's own V resumes.
+        import shutil
         tmp = Path(tempfile.mkdtemp())
         orchestrator.TRAINING_CHECKPOINT_EVERY = 1
         _cfg.CHECKPOINT_PATH = tmp
-        ident = orchestrator.training_identity(cfg, inferred_prior, 8, 2)
-        d = _tc.resolve_dir(ident)
+        amortized = orchestrator.training_identity(cfg, inferred_prior, 8, 2)
+        own = orchestrator.training_identity(cfg, inferred_prior, 8, 2, truncation=region)
+        d_am, d_own = _tc.resolve_dir(amortized), _tc.resolve_dir(own)
+        assert d_am != d_own, "a truncated round resolved to the amortized run's checkpoint directory"
         Q2, _ = torch.linalg.qr(torch.randn(P, P))
-        for V_stored, expect in ((Q, "no region at all"), (Q2, "no region at all")):
+
+        def _write(d, ident, V_stored):
             if d.exists():
-                import shutil
                 shutil.rmtree(d)
             _tc.create(d, ident, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2),
                        inits=torch.zeros(8, 3), V=V_stored, probe=torch.zeros(0), run_size=8, n_runs=2)
             _tc.save(d, from_batch=0, batch_k=1,
                      rng={"cpu": torch.get_rng_state(), "cuda": None, "chi_gen": None},
                      x_buf=torch.zeros(16, 5), th_buf=torch.zeros(16, P), run_size=8)
-            try:
-                _round(region)
-                raise AssertionError("a checkpoint not generated under this region was resumed")
-            except ValueError as e:
-                assert expect in str(e) and "checkpoint" in str(e).lower(), e
-        # and the V check itself, for a header that DOES record this region but under another V
-        import shutil
-        shutil.rmtree(d)
-        ident_tr = dict(ident, truncation=region.identity_fields())
-        _tc.create(d, ident_tr, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2),
-                   inits=torch.zeros(8, 3), V=Q2, probe=torch.zeros(0), run_size=8, n_runs=2)
-        _tc.save(d, from_batch=0, batch_k=1,
-                 rng={"cpu": torch.get_rng_state(), "cuda": None, "chi_gen": None},
-                 x_buf=torch.zeros(16, 5), th_buf=torch.zeros(16, P), run_size=8)
+
+        _write(d_am, amortized, Q)                        # the parent's complete-looking checkpoint
+        seen.clear()
+        _round(region)                                    # ...is not resumed: the round routes to its own slot
+        assert seen["prior"].region is region
+        assert seen["checkpoint"]["dir"] == d_own and seen["checkpoint"]["dir"] != d_am
+        assert seen["checkpoint"]["identity"]["truncation"] == region.identity_fields()
+        _write(d_own, own, Q2)                            # this round's slot, another rotation
         try:
             _round(region)
             raise AssertionError("a checkpoint stored under another rotation was resumed")
         except ValueError as e:
             assert "rotation" in str(e) and "checkpoint" in str(e).lower(), e
+        _write(d_own, own, Q)                             # this round's slot, this region's V: ACCEPTED
+        seen.clear()                                      # (train_nn is stubbed, so no rows are adopted here;
+        _round(region)                                    #  this leg pins the absence of both refusals)
+        assert seen["checkpoint"]["dir"] == d_own and _tc.peek(d_own)["batches_done"] == 1
+        # and a header under this round's slot that records ANOTHER region is refused on identity
+        other = _tr.TruncationRegion([0], [-2.0], [2.0], n_latent=P, V=Q, probe=probe)
+        _write(d_own, dict(own, truncation=other.identity_fields()), Q)
+        try:
+            _round(region)
+            raise AssertionError("a checkpoint recording another region was resumed")
+        except ValueError as e:
+            assert "a different region" in str(e), e
         orchestrator.TRAINING_CHECKPOINT_EVERY = 0
         _cfg.CHECKPOINT_PATH = saved_root
 
@@ -2431,6 +2506,60 @@ def test_a_mismatched_sibling_checkpoint_is_reported_by_name():
     assert tc.describe_siblings(base, Path(tempfile.mkdtemp())) == ""
     assert tc.describe_siblings(base, root / "does-not-exist") == ""
     assert tc.describe_siblings(sib, root) == "", "a run must not report ITSELF as a mismatch"
+
+
+def test_a_truncated_rounds_checkpoint_is_never_a_near_miss_of_an_amortized_run():
+    """A TSNPE round's identity is the amortized run's plus one key, so every truncated checkpoint
+    would be "one setting away" from every amortized run at its budget -- and the Posterior tab's
+    fresh-run modal would tell the user to change a setting that tab does not have, to continue rows
+    an amortized run must never adopt (D3). near_miss_siblings ignores that key; describe_siblings
+    still names the directory, saying why it is not resumable."""
+    import tempfile
+    from core.SBI import training_checkpoint as tc
+    root = Path(tempfile.mkdtemp())
+    base = {"model": "NADROWSKI", "run_size": 2048, "prior_fingerprint": "aaaa", "chi_k_pad": 12}
+    region = {"dims": [0], "level": 0.999, "lo": [-1.0], "hi": [1.0], "V_digest": "0" * 16}
+    truncated = {**base, "truncation": region}
+    d = tc.resolve_dir(truncated, root)
+    tc.create(d, truncated, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2),
+              inits=torch.zeros(2, 3), V=None, probe=torch.zeros(0, dtype=torch.float64),
+              run_size=2, n_runs=2)
+    tc.save(d, from_batch=0, batch_k=2, rng={"cpu": torch.get_rng_state(), "cuda": None,
+                                             "chi_gen": None},
+            x_buf=torch.zeros(4, 5), th_buf=torch.zeros(4, 2), run_size=2)
+    assert tc.near_miss_siblings(base, root) == [], "a truncated checkpoint was offered as a near miss"
+    msg = tc.describe_siblings(base, root)
+    assert d.name in msg and "truncation" in msg and "never share rows" in msg, msg
+    # the other direction too: an amortized checkpoint is not a near miss of a truncated round
+    other = {**base, "truncation": {**region, "hi": [2.0]}}
+    assert tc.near_miss_siblings(other, root) == []
+    # while a genuine one-field accident still is
+    assert [r["field"] for r in tc.near_miss_siblings({**truncated, "prior_fingerprint": "bbbb"}, root)] == ["prior_fingerprint"]
+
+
+def test_verify_refuses_a_truncation_record_present_on_one_side_only():
+    """verify() iterates the UNION of stored and wanted keys, which is the whole reason the region
+    could be added to the identity without touching the checkpoint store: an amortized run must not
+    resume a header that records a region, and a truncated round must not resume one that does not.
+    Both asymmetric cases, so a 'simplification' to `for key in identity` cannot pass silently."""
+    import tempfile
+    from core.SBI import training_checkpoint as tc
+    run_size, n_runs = 4, 6
+    probe = torch.linspace(0, 1, 21, dtype=torch.float64).reshape(7, 3)
+    ident = _ckpt_ident(run_size=run_size, n_runs=n_runs)
+    region = {"dims": [0], "level": 0.999, "lo": [-1.0], "hi": [1.0], "V_digest": None}
+    for stored, wanted, tag in ((ident, {**ident, "truncation": region}, "a truncated round onto amortized rows"),
+                                ({**ident, "truncation": region}, ident, "an amortized run onto truncated rows")):
+        d = Path(tempfile.mkdtemp()) / "ck"
+        tc.create(d, stored, schedule_t_scales=torch.zeros(n_runs), schedule_Ts=torch.zeros(n_runs),
+                  inits=torch.zeros(run_size, 3), V=None, probe=probe, run_size=run_size, n_runs=n_runs)
+        tc.verify(d, stored, probe)                              # its own identity passes
+        try:
+            tc.verify(d, wanted, probe)
+        except ValueError as e:
+            assert "truncation" in str(e), f"{tag}: the message must name the field: {e}"
+        else:
+            raise AssertionError(f"{tag} was accepted by verify()")
 
 
 def test_checkpoint_shards_do_not_serialize_the_whole_accumulator():

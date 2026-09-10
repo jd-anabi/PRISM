@@ -625,6 +625,47 @@ def test_build_truncation_region_records_the_parents_basis():
             pass
 
 
+def test_the_same_posterior_and_observation_redraw_the_same_region():
+    """The region is part of the round's checkpoint identity, so a round that died at batch 3000 must
+    redraw the SAME box to find its own rows again: the draw is seeded from the observation and the
+    settings, under fork_rng so the caller's stream is untouched, and the identity quantises the
+    bounds so a last-ULP difference cannot rename the directory. A different observation, level or
+    direction count draws a different box."""
+    from core import orchestrator
+
+    P = 13
+    Q = _orthogonal(P, 13)
+    _, T_parent = _rotated_box(Q)
+    post = reparam.TransformedPosterior(_Wide(), T_parent)
+    x = torch.linspace(-1.0, 1.0, 7).reshape(1, 7)
+    rec = {"digest": orchestrator.observation_digest(x)}
+    torch.manual_seed(1)
+    before = torch.get_rng_state()
+    a = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.999)
+    assert torch.equal(torch.get_rng_state(), before), "the region draw disturbed the caller's RNG stream"
+    torch.manual_seed(999)                                          # a different global state...
+    b = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.999)
+    assert torch.equal(a.lo, b.lo) and torch.equal(a.hi, b.hi), "the same inputs drew a different box"
+    assert a.identity_fields() == b.identity_fields()
+    x2 = x + 0.5
+    c = orchestrator.build_truncation_region(post, {"digest": orchestrator.observation_digest(x2)}, x2)
+    d = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.99)
+    e = orchestrator.build_truncation_region(post, rec, x, n_directions=4, level=0.999)
+    assert not torch.equal(a.lo, c.lo) and not torch.equal(a.lo, d.lo) and e.dims == [0, 1, 2, 3]
+    # quantisation: a bound perturbed far below the fifth significant digit names the same directory.
+    # Perturb the QUANTISED values (they sit on grid points, half a quantum from any rounding
+    # boundary), so the check cannot straddle a boundary by accident.
+    lo_q = torch.tensor(a.identity_fields()["lo"], dtype=torch.float64)
+    hi_q = torch.tensor(a.identity_fields()["hi"], dtype=torch.float64)
+    grid = truncate.TruncationRegion(a.dims, lo_q, hi_q, level=a.level, n_latent=P, V=Q, probe=a.probe)
+    nudged = truncate.TruncationRegion(a.dims, lo_q * (1 + 1e-8), hi_q * (1 + 1e-8), level=a.level,
+                                       n_latent=P, V=Q, probe=a.probe)
+    assert nudged.identity_fields() == grid.identity_fields() == a.identity_fields()
+    assert not torch.equal(nudged.lo, grid.lo), "the exact bounds must stay exact; only the NAME is rounded"
+    moved = truncate.TruncationRegion(a.dims, a.lo * 1.01, a.hi, level=a.level, n_latent=P, V=Q, probe=a.probe)
+    assert moved.identity_fields() != a.identity_fields()
+
+
 def test_a_resumed_checkpoint_with_another_rotation_is_refused():
     """A checkpoint's rows are latent targets in the V stored beside them. A truncated round may
     resume onto them only if that V IS the region's; anything else mixes coordinates."""

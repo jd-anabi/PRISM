@@ -3627,6 +3627,42 @@ which is the only reason D4 did not also bias this round.
   refused both ways, the truth-outside warning fires and the truth-inside case is silent). Known
   until X5: a parent RELOADED from a Vᵀ sidecar hands X1 the wrong V self-consistently; in-session
   parents (this round's situation) and CLI-saved artifacts are correct from here.
+- **X2 — the region is part of the checkpoint identity.** `training_identity(cfg, prior, run_size,
+  n_runs, truncation=None)` adds `"truncation": region.identity_fields()` (dims, level, lo, hi,
+  `V_digest`) ONLY when a region is given; an amortized identity is byte-identical to before (the
+  key is omitted, never None — `identity_digest` serialises the whole dict, so a None would have
+  re-digested every checkpoint and orphaned all five complete ones). Its docstring is untouched.
+  `build_posterior` passes the region in, so a TSNPE round has its own directory and can never
+  resume the amortized run's rows, nor the reverse. `verify` and the sibling scans iterate the union
+  of keys, so they needed nothing — except that **`near_miss_siblings` now ignores a sibling that
+  differs only in `truncation`**: every truncated checkpoint would otherwise be "one setting away"
+  from every amortized run at its budget, and the Posterior tab's modal would tell the user to change
+  a setting that tab does not have, to continue rows an amortized run must never adopt.
+  `describe_siblings` still names it, saying the two never share rows. **Two consequences the plan
+  had not weighed**, both found by the diff review: with the box in the directory name, a crashed
+  round could only find its rows again if it redrew the SAME box, and `region_from_posterior` drew
+  from 20000 unseeded posterior samples. So the draw is now seeded from the observation and the
+  settings (under `fork_rng`, the caller's stream untouched), and `identity_fields()` quantises the
+  bounds to five significant digits so a last-ULP GPU difference cannot rename the directory
+  (`contains` keeps the exact bounds; only the name is rounded). The TSNPE tab's checkpoint line —
+  the Posterior tab's, computed from the amortized identity, which at the parent's budget read
+  "Resumes a COMPLETE checkpoint … simulation will be skipped entirely" — is overridden to state the
+  rule, including the resume that IS reachable. Tests: `test_user_sbi.py` +3
+  (`test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest_is_untouched` —
+  no key and the same 31 names for an amortized identity, and its digest pinned to the golden
+  `463e81d156cd` for a fixed cfg/prior pair so any drift that would orphan the checkpoints on disk
+  fails loudly; four different regions → four directories; the only differing field is
+  `truncation`; `test_a_truncated_rounds_checkpoint_is_never_a_near_miss_of_an_amortized_run`;
+  `test_verify_refuses_a_truncation_record_present_on_one_side_only`, both asymmetric cases); the
+  X1 end-to-end test's checkpoint step now pins, through the captured plan, that the round routes to
+  its OWN directory with the region in its identity while the amortized parent's checkpoint sits
+  untouched at the same budget, that its own slot under another V is refused and under the region's
+  V accepted, and that a header recording another region is refused;
+  `test_conditioning_repair.py` +1 (`test_the_same_posterior_and_observation_redraw_the_same_region`:
+  same inputs → identical bounds and identity under a different global RNG state, the caller's
+  stream untouched, a different observation / level / direction count → a different box, and the
+  quantisation semantics); `test_settings_persistence.py` +1 (the TSNPE tab's line never says
+  "Resumes" and differs from the Posterior tab's).
 
 ## 2026-08-28 (second session) — the §6.1 refactor landed: 39 commits, zero drift, two new ladders
 

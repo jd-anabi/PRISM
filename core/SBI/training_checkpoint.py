@@ -242,7 +242,8 @@ def describe_siblings(identity: dict, root=None) -> str:
     """A one-line account of other checkpoints under ``root``, and the first identity field each one
     differs in. Turns the commonest silent restart -- 'I rebuilt the prior, so the digest changed and
     it started from zero' -- into a message that names the reason."""
-    notes = [f"{d.name} ({done} batches, differs in {diff[0] if diff else 'nothing recorded'})"
+    notes = [f"{d.name} ({done} batches, differs in "
+             f"{'truncation -- a TSNPE round and an amortized run never share rows' if diff == ['truncation'] else (diff[0] if diff else 'nothing recorded')})"
              for d, done, diff, _ in _sibling_diffs(identity, root)]
     if not notes:
         return ""
@@ -288,10 +289,16 @@ def near_miss_siblings(identity: dict, root=None) -> list:
     prior was never saved), and twice more where a 3989-batch checkpoint was one field away from the
     run about to start. Two or more differing fields is a different question -- that usually IS a
     different experiment -- so widening this would make it noise and it would be ignored.
+
+    ``truncation`` alone is never a near miss. A TSNPE round's identity is the amortized run's plus
+    that one key, so every truncated checkpoint would otherwise be "one setting away" from every
+    amortized run at its budget -- and the Posterior tab would tell the user to change a setting it
+    does not have, to continue rows an amortized run must never adopt (defect D3).
     """
     out = [{"name": d.name, "batches": done, "field": diff[0],
             "mine": identity.get(diff[0]), "theirs": stored.get(diff[0])}
-           for d, done, diff, stored in _sibling_diffs(identity, root) if len(diff) == 1]
+           for d, done, diff, stored in _sibling_diffs(identity, root)
+           if len(diff) == 1 and diff[0] != "truncation"]
     return sorted(out, key=lambda r: -r["batches"])
 
 

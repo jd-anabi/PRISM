@@ -177,11 +177,19 @@ class TruncationRegion:
 
     def identity_fields(self) -> dict:
         """The region as the checkpoint identity records it: JSON-able, and enough to say whether a
-        stored checkpoint's rows were drawn under THIS region -- dims, level, both bounds as lists,
-        and the rotation's digest. A checkpoint whose identity lacks this record, or records another
-        region, holds rows this round must not resume onto."""
+        stored checkpoint's rows were drawn under THIS region -- dims, level, both bounds, and the
+        rotation's digest. A checkpoint whose identity lacks this record, or records another region,
+        holds rows this round must not resume onto.
+
+        The bounds are QUANTISED to five significant digits. They come from posterior draws, and the
+        checkpoint directory is named from this dict, so for a crashed round to find its own rows
+        again the redrawn box must digest to the same name: ``region_from_posterior`` seeds the draw
+        for that, and the quantisation absorbs the last-ULP differences a GPU can still introduce.
+        ``contains`` uses the exact bounds; only the NAME is rounded.
+        """
         return {"dims": list(self.dims), "level": float(self.level),
-                "lo": [float(v) for v in self.lo.tolist()], "hi": [float(v) for v in self.hi.tolist()],
+                "lo": [float(f"{float(v):.5g}") for v in self.lo.tolist()],
+                "hi": [float(f"{float(v):.5g}") for v in self.hi.tolist()],
                 "V_digest": rotation_digest(self.V)}
 
     def check_checkpoint_V(self, V_stored, *, where: str = "the training checkpoint",
@@ -251,13 +259,25 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
     ``V`` and ``probe`` are the parent posterior's basis, recorded on the region (see
     ``TruncationRegion``); ``orchestrator.build_truncation_region`` always supplies them, and
     ``posterior_latent``'s samples ARE coordinates in that V -- the flow was trained on ``w = z @ V``.
+
+    THE DRAW IS SEEDED, from the observation and the settings, under ``fork_rng`` so the caller's
+    stream is untouched. The region is part of the round's checkpoint identity, so the SAME
+    posterior, observation, level, direction count and sample count must redraw the SAME box: that is
+    what lets a round that died at batch 3000 of 5000 find its own rows again instead of drawing a
+    new box, routing to a new directory and simulating from zero while the old shards rot.
     """
     if x_obs is None:
         raise ValueError(
             "region_from_posterior needs the observation the region is being drawn around. An "
             "amortized posterior has no default_x -- persist x_obs at INFERENCE time and pass it "
             "here.")
-    with torch.no_grad():
+    seed_src = (x_obs.detach().cpu().to(torch.float64).contiguous().numpy().tobytes()
+                + f"|{int(n_directions)}|{float(level)!r}|{int(n_samples)}".encode("utf-8"))
+    seed = int(hashlib.sha256(seed_src).hexdigest()[:8], 16)
+    dev = getattr(posterior_latent, "device", None)
+    fork_devices = [torch.device(dev)] if dev is not None and torch.device(dev).type == "cuda" else []
+    with torch.no_grad(), torch.random.fork_rng(devices=fork_devices):
+        torch.manual_seed(seed)
         z = posterior_latent.sample((int(n_samples),), x=x_obs)
     z = z.detach().to(torch.float64).cpu()
     p = z.shape[-1]
