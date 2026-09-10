@@ -1311,6 +1311,12 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     th_buf = None
 
     sampling_dist = prior if proposal is None else proposal
+    # TSNPE only: the region the proposal is restricted to, so the rows RECORDED (after the per-batch
+    # t_scale override below) can be counted against it. None for every other prior -- a plain
+    # Distribution, ProductPrior, RotatedLatentPrior and sbi's own priors have no such attribute -- and
+    # then nothing under `_region is not None` executes: no RNG, no tensor is touched, bit-identical.
+    _region = getattr(sampling_dist, "region", None)
+    _region_inside = _region_total = 0
 
     # chi(omega) mode: precompute the relative-frequency multipliers + drive amplitude once. K / bounds /
     # F0 come from the CALLER (carried on the SimConfig) so a run is self-describing; None falls back to
@@ -1375,6 +1381,11 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 th_buf = torch.empty((n_runs * run_size, _th_prev.shape[-1]), dtype=_th_prev.dtype)
                 x_buf[:_x_prev.shape[0]] = _x_prev
                 th_buf[:_th_prev.shape[0]] = _th_prev
+                if _region is not None:
+                    # Resumed rows count too: the identity carries the region, so they were drawn
+                    # under this very one. A CPU read of a buffer already loaded -- no RNG, no write.
+                    _region_inside += int(_region.contains(_th_prev).sum())
+                    _region_total += int(_th_prev.shape[0])
                 del _x_prev, _th_prev
             # LAST, so nothing above (Sobol is skipped, but prior construction elsewhere may have
             # drawn) leaves the streams anywhere other than where batch _start_k found them.
@@ -1677,6 +1688,12 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             # recomputes nor re-draws them -- the halves REPARTITION the batch's rows, they do not
             # resample it.
             _th_out = curr_thetas_latent.cpu()
+            if _region is not None:
+                # The POST-override target, on the CPU and outside the retry seam. The rejection
+                # sampler's acceptance describes draws before step 1's t_scale override; this is what
+                # the training set actually holds (defect D4).
+                _region_inside += int(_region.contains(_th_out).sum())
+                _region_total += int(_th_out.shape[0])
             if x_buf is None:
                 x_buf = torch.empty((n_runs * run_size, _rows_out.shape[-1]), dtype=_rows_out.dtype)
                 th_buf = torch.empty((n_runs * run_size, _th_out.shape[-1]), dtype=_th_out.dtype)
@@ -1777,6 +1794,14 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
               f"trajectories ({100.0 * _bad / _patho['rows']:.4f}%) -- "
               f"{_patho['nonfinite']:,} non-finite, {_patho['constant']:,} exactly constant, "
               f"{_patho['overflow']:,} over {_PATHO_MAG:g}", flush=True)
+    if _region is not None and _region_total:
+        print(f"[tsnpe] post-override containment: {_region_inside:,}/{_region_total:,} = "
+              f"{_region_inside / _region_total:.3%} of the recorded latent targets lie inside the "
+              f"region, resumed rows included (the per-batch t_scale override moves every row after "
+              f"the rejection draw; the sampler's acceptance rate describes PRE-override draws).",
+              flush=True)
+        if hasattr(sampling_dist, "note_recorded"):
+            sampling_dist.note_recorded(_region_inside, _region_total)
     if x_buf is None:                       # n_runs == 0: nothing was generated, and nothing to size from
         return torch.empty((0, 0)), torch.empty((0, 0))
     if _ck_dir is not None:

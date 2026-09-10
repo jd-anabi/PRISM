@@ -1762,12 +1762,14 @@ class _FixedTdPrior:
     def sample(self, shape): return self.theta.expand(shape[0], -1).clone()
 
 
-def _gen_td(mode, *, seed=0, n_runs=3, run_size=4, **over):
+def _gen_td(mode, *, seed=0, n_runs=3, run_size=4, prior=None, **over):
     """``gen_training_data`` under a FULLY pinned RNG.
 
     Seeds numpy as well as torch, and that is not belt-and-braces: ``inits`` comes from
     ``np.random.randint``, which ``torch.manual_seed`` does not touch, so without the numpy
     seed two runs of identical code differ and every bit-identity claim below would be vacuous.
+
+    ``prior`` replaces the fixed ground-truth prior (a TSNPE test hands in a truncated one).
     """
     import numpy as np
     cfg = _td_cfg()
@@ -1788,7 +1790,48 @@ def _gen_td(mode, *, seed=0, n_runs=3, run_size=4, **over):
                   chi_k_pad=4, chi_max_cycles=config.CHI_MAX_CYCLES)
     kw.update(over)
     return pipeline_mod.gen_training_data(
-        cfg.model, _FixedTdPrior(cfg.ground_truth_tensor.reshape(1, -1)), force_prior, t, **kw)
+        cfg.model, prior if prior is not None else _FixedTdPrior(cfg.ground_truth_tensor.reshape(1, -1)),
+        force_prior, t, **kw)
+
+
+def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override():
+    """⚠ DEFECT D4 MADE VISIBLE. The rejection sampler accepts a row BEFORE gen_training_data
+    overwrites its t_scale with the batch's value and recomputes the latent target, so its acceptance
+    rate says nothing about the rows the flow trains on. A region that pins the t_scale latent to a
+    sliver around the truth accepts every draw of a fixed prior (100 %) and contains NONE of the
+    recorded targets; a region on an ND direction contains all of them. Both numbers are reported."""
+    import contextlib
+    from core.SBI import reparam as _rp, truncate as _tr
+
+    cfg = _td_cfg()
+    T = _rp.build_inferred_bijection(cfg, log_params=orchestrator._log_params_for(cfg))
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
+    z_gt = T.inv(cfg.ground_truth_tensor.reshape(1, -1)).detach()
+    fixed = _FixedTdPrior(z_gt)
+
+    sliver = _tr.TruncationRegion([i_t], [float(z_gt[0, i_t]) - 1e-3], [float(z_gt[0, i_t]) + 1e-3], n_latent=P)
+    tp = _tr.TruncatedLatentPrior(fixed, sliver)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _gen_td("forced", seed=5, n_runs=3, run_size=4, prior=tp, theta_transform=T)
+    assert tp.acceptance_rate == 1.0, tp.acceptance_rate
+    assert tp.recorded_containment == 0.0, tp.recorded_containment
+    assert "post-override containment: 0/12" in buf.getvalue(), buf.getvalue()[-500:]
+
+    wide = _tr.TruncationRegion([0], [float(z_gt[0, 0]) - 1.0], [float(z_gt[0, 0]) + 1.0], n_latent=P)
+    tp2 = _tr.TruncatedLatentPrior(fixed, wide)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _gen_td("forced", seed=5, n_runs=3, run_size=4, prior=tp2, theta_transform=T)
+    assert tp2.recorded_containment == 1.0 and "post-override containment: 12/12" in buf.getvalue()
+
+    assert tp2.recorded_counts == (12, 12)
+    # and with no region in sight the tally is silent: the amortized path prints nothing new
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _gen_td("forced", seed=5, n_runs=1, run_size=2, theta_transform=T)
+    assert "post-override" not in buf.getvalue()
 
 
 def test_the_suite_does_not_write_checkpoints_into_the_real_resources_tree():
@@ -2312,7 +2355,13 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
 
         # (i) + (ii): the parent's basis is reused, the Fisher stub never fires, the plan's prior is
         # THIS region over a latent rotated by exactly Q, and the posterior carries the region
-        post, _ = _round(region)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            post, _ = _round(region)
+        _out = buf.getvalue()
+        assert "at the rejection sampler (P(A), PRE-override)" in _out, _out[-600:]
+        assert "post-override containment of the recorded training targets: not measured" in _out, \
+            "with train_nn stubbed nothing is recorded, and the line must say so rather than print a number"
         assert isinstance(seen["prior"], _tr.TruncatedLatentPrior), type(seen["prior"])
         assert seen["prior"].region is region
         assert isinstance(seen["prior"].base, _rp.RotatedLatentPrior)
@@ -2535,6 +2584,8 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         out = buf.getvalue()
         assert "PRIOR RESTRICTED" in out and "kept fraction" in out and "-log P(A) = " in out, out[-800:]
         assert math.isfinite(float(out.split("-log P(A) = ")[1].split(" nats")[0]))
+        assert "of the recorded calibration targets lie inside it after the override" in out, out[-800:]
+        assert cap["prior"].recorded_containment == 1.0, "a t_scale-free region must contain every recorded target"
 
         # the ROTATED leg: t_scale IS truncated direction 0, an ND parameter is direction 1
         V = torch.zeros(P, P)

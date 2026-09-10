@@ -1093,10 +1093,19 @@ def build_posterior(
     if truncation is not None and hasattr(train_prior, "acceptance_rate"):
         # GUARDRAIL 5: the fraction of prior mass this round threw away, measured rather than
         # assumed. Deleted support is a one-way ratchet -- no later round can recover it -- so the
-        # number belongs in the run log next to the artifact it produced.
+        # number belongs in the run log next to the artifact it produced. TWO numbers, and they
+        # differ: the rejection sampler's acceptance is P(A) of the draws BEFORE gen_training_data's
+        # per-batch t_scale override; the recorded containment is what the training set holds after
+        # it, and only the second says how much of the set actually lies in the region (D4).
         _acc = train_prior.acceptance_rate
-        print(f"[tsnpe] the truncation kept {_acc:.3%} of the prior's mass "
-              f"({1 - _acc:.3%} of the support is now permanently unavailable to later rounds).",
+        _in, _tot = getattr(train_prior, "recorded_counts", (0, 0))
+        print(f"[tsnpe] the truncation accepted {_acc:.3%} of prior draws at the rejection sampler "
+              f"(P(A), PRE-override); {1 - _acc:.3%} of the prior's mass along the truncated "
+              f"directions is unavailable to later rounds.", flush=True)
+        print(f"[tsnpe] post-override containment of the recorded training targets: "
+              + ("not measured -- no rows were generated or loaded in this process"
+                 if not _tot else f"{_in:,}/{_tot:,} = {_in / _tot:.3%}")
+              + " (this is the number that says how much of the training set lies in the region).",
               flush=True)
 
     assert isinstance(posterior_latent, DirectPosterior)
@@ -1152,7 +1161,8 @@ def load_observation(path) -> dict:
 
 
 def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
-                            n_directions: int = None, level: float = None):
+                            n_directions: int = None, level: float = None,
+                            t_scale_idx: int | None = None):
     """The TSNPE region for the NEXT round, with guardrail 1 enforced.
 
     ⚠ REFUSES unless the observation currently loaded is BITWISE the one the stored record describes.
@@ -1165,6 +1175,10 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
                       DirectPosterior is refused: it cannot say which coordinate its samples are in.
     :param obs_record: the dict from :func:`load_observation`.
     :param x_obs: the conditioning vector currently loaded.
+    :param t_scale_idx: t_scale's index in the latent, ``len(cfg.params_dict) + cfg.rescale_idx[
+                        "t_scale"]``; taken from the record's ``param_keys`` when not given. REQUIRED
+                        at this level: a direction that loads on t_scale is not truncated, because
+                        the per-batch t_scale override would turn its box into a reweighting (D4).
     """
     want, got = obs_record.get("digest"), observation_digest(x_obs)
     if want != got:
@@ -1173,6 +1187,16 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
             f"so a truncation region built from it would delete prior support on the strength of a "
             f"DIFFERENT recording -- permanently, because truncation is one-way. Re-run inference on "
             f"this dataset first so its observation is the one on record.")
+    if t_scale_idx is None:                 # AFTER guardrail 1: the observation check fires first
+        keys = list(obs_record.get("param_keys") or [])
+        if "t_scale" not in keys:
+            raise ValueError(
+                "build_truncation_region needs t_scale's latent index (t_scale_idx=len(cfg.params_dict) "
+                "+ cfg.rescale_idx['t_scale']) -- a direction that loads on t_scale must not be "
+                "truncated (D4) -- and "
+                + ("the observation record carries no param_keys to derive it from."
+                   if not keys else f"the record's param_keys {keys} contain no t_scale."))
+        t_scale_idx = keys.index("t_scale")
     # GUARDRAIL 7: the region records the PARENT's basis -- its rotation V and the bijection probe of
     # its whole training transform -- so the retrain can reuse that V and refuse any other. Without
     # this the box's "direction j" is a number with no coordinate attached (defect D1).
@@ -1194,7 +1218,7 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
         latent, x_obs,
         n_directions=truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions),
         level=truncate.DEFAULT_HPD if level is None else float(level),
-        V=V, probe=probe, x_obs_digest=got)
+        V=V, probe=probe, x_obs_digest=got, t_scale_idx=int(t_scale_idx))
 
 
 def _refuse_to_orphan_a_checkpoint(name: str, nd_prior) -> None:
@@ -1590,9 +1614,10 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
     reweighting by P(A | θ_-t), or a no-op when the direction IS the t_scale axis, as it is for the
     round-0 rotation's direction 0). check_sbc's reference sample therefore mirrors the override --
     its t_scale column is a permutation of θ*'s own -- so it is the proposal the flow was trained on,
-    not the pure region; and the kept fraction printed below is the pure region's P(A) at the
-    rejection sampler, which overstates what the override left restricted. The region's own filter
-    against t_scale-loaded directions is the next fix (truncate.region_from_posterior).
+    not the pure region. region_from_posterior SKIPS any direction whose |V[t_scale, j]| exceeds
+    truncate.t_scale_loading_max, so the residual tilt is bounded by the summed squared loadings it
+    prints; the kept fraction below is the pure region's P(A) at the rejection sampler, and the
+    containment of the recorded calibration targets printed beside it is what the override left.
 
     :param inferred_prior: the actual training prior (ND x rescale product prior) — SBC draws
                            theta_star from it, not from the posterior.
@@ -1696,9 +1721,11 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
               f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
     if truncation is not None:
         _acc = val_latent_prior.acceptance_rate
+        _rec = val_latent_prior.recorded_containment
         print(f"[tsnpe] kept fraction: the region accepted {_acc:.3%} of prior draws at the rejection "
               f"sampler (P(A), before the per-batch t_scale override, which re-opens any t_scale-loaded "
-              f"direction). The JOINT KL in the informativeness block below is measured against the "
+              f"direction); {'' if _rec is None else f'{_rec:.3%} of the recorded calibration targets lie inside it after the override. '}"
+              f"The JOINT KL in the informativeness block below is measured against the "
               f"FULL prior, so for this truncated posterior it is inflated by -log P(A) = "
               f"{-math.log(max(_acc, 1e-300)):.2f} nats; its per-parameter entropy reductions are "
               f"against the full prior too, each by its own offset.", flush=True)

@@ -73,8 +73,11 @@ def _run_tsnpe_round(cfg, posterior, inferred_prior, force_prior, obs_path, n_di
     """
     rec = orchestrator.load_observation(obs_path)
     x_obs = rec["x_obs"].to(cfg.hw.device)
+    # t_scale_idx: a direction that loads on t_scale is not truncated -- the per-batch override would
+    # turn its box into a reweighting (D4) -- and the region records which ones were skipped.
     region = orchestrator.build_truncation_region(posterior, rec, x_obs,
-                                                  n_directions=n_directions, level=level)
+                                                  n_directions=n_directions, level=level,
+                                                  t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
     print(f"[tsnpe] region from {getattr(obs_path, 'name', obs_path)}: {region!r}", flush=True)
     out = orchestrator.build_posterior(
         cfg, inferred_prior, force_prior, choice=None, train_new=True, save=False,

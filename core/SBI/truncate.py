@@ -38,10 +38,30 @@ the parent posterior's mass and excluded the ground truth (Appendix A 2026-09-09
 V for a truncated round, refusing on any mismatch, rather than ever running the Fisher again.
 """
 import hashlib
+import math
 
 import torch
 
 from core.SBI import reparam as _reparam, training_checkpoint as _tc
+
+
+def t_scale_loading_max(n_latent: int) -> float:
+    """A direction whose |V[t_scale, j]| exceeds this is NOT truncated.
+
+    gen_training_data overwrites t_scale per batch AFTER the proposal draw and recomputes the latent
+    target, so along a direction that loads on t_scale a box is not a restriction at all: the rows
+    that reach the simulator have been carried out of it, the proposal becomes the prior TILTED by
+    P(A | theta_-t) (a no-op when the direction IS the t_scale axis), and NPE converges to
+    p(theta|x) * P(A|theta_-t) rather than the truncated posterior (defect D4, Appendix A 2026-09-09).
+    The round-0 rotation puts t_scale on direction 0 alone; round 1's spread it 0.66/0.75 over two.
+
+    1/sqrt(d) is the RMS entry of a random d-dimensional rotation -- the post-mortem's 0.1 sat below
+    it and would have flagged directions that barely touch t_scale (a judgement taken with the user
+    on 2026-09-09). The governing scalar is really sum_j V[t_scale, j]^2 over the truncated
+    directions, which region_from_posterior prints.
+    """
+    return 1.0 / math.sqrt(max(1, int(n_latent)))
+
 
 # 99.9%, not 95%: guardrail 5. The cost of an over-wide region is simulations; the cost of a narrow
 # one is deleted support that no later round can recover.
@@ -89,8 +109,13 @@ class TruncationRegion:
     """
 
     def __init__(self, dims, lo, hi, *, level: float = DEFAULT_HPD, n_latent: int | None = None,
-                 V=None, probe=None, x_obs_digest: str | None = None):
+                 V=None, probe=None, x_obs_digest: str | None = None,
+                 excluded=None, t_scale_idx: int | None = None):
         self.dims = [int(d) for d in dims]
+        # Directions region_from_posterior skipped for their t_scale loading (a record, not a
+        # constraint), and the latent index of t_scale it judged them by.
+        self.excluded = [int(d) for d in (excluded or [])]
+        self.t_scale_idx = None if t_scale_idx is None else int(t_scale_idx)
         self.lo = torch.as_tensor(lo, dtype=torch.float64).reshape(-1)
         self.hi = torch.as_tensor(hi, dtype=torch.float64).reshape(-1)
         if not (len(self.dims) == self.lo.numel() == self.hi.numel()):
@@ -226,13 +251,15 @@ class TruncationRegion:
                 "V": None if self.V is None else self.V.clone(),
                 "probe": None if self.probe is None else self.probe.clone(),
                 "V_digest": rotation_digest(self.V),
-                "x_obs_digest": self.x_obs_digest}
+                "x_obs_digest": self.x_obs_digest,
+                "excluded": list(self.excluded), "t_scale_idx": self.t_scale_idx}
 
     @staticmethod
     def from_dict(d: dict) -> "TruncationRegion":
         return TruncationRegion(d["dims"], d["lo"], d["hi"],
                                 level=d.get("level", DEFAULT_HPD), n_latent=d.get("n_latent"),
-                                V=d.get("V"), probe=d.get("probe"), x_obs_digest=d.get("x_obs_digest"))
+                                V=d.get("V"), probe=d.get("probe"), x_obs_digest=d.get("x_obs_digest"),
+                                excluded=d.get("excluded"), t_scale_idx=d.get("t_scale_idx"))
 
     def __repr__(self) -> str:
         parts = ", ".join(f"d{d}:[{float(a):.3g},{float(b):.3g}]"
@@ -244,7 +271,9 @@ class TruncationRegion:
 def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
                           n_directions: int = DEFAULT_N_DIRECTIONS,
                           level: float = DEFAULT_HPD, n_samples: int = 20000,
-                          V=None, probe=None, x_obs_digest: str | None = None) -> TruncationRegion:
+                          V=None, probe=None, x_obs_digest: str | None = None,
+                          t_scale_idx: int | None = None,
+                          max_loading: float | None = None) -> TruncationRegion:
     """Draw from the posterior at ``x_obs`` and take a per-direction HPD interval in LATENT space.
 
     ⚠ GUARDRAIL 4: UNWEIGHTED draws. Not "the M best fits". Selecting on goodness of fit applies a
@@ -253,12 +282,21 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
     of a prior.
 
     The interval is a marginal quantile range per direction, which is what makes the region a box.
-    That is deliberately conservative: a box containing the 99.9% marginal of every truncated
-    direction contains AT LEAST the 99.9% joint HPD, never less.
+    Its mass is NOT "at least the joint HPD's": for k independent directions a box of per-direction
+    level q holds q^k of the posterior (0.999^5 = 0.995), and the union bound is the honest statement
+    -- the box misses at most k(1 - q) of the posterior's mass. Generous by construction, then, and
+    the level is 99.9% for exactly that reason (guardrail 5).
 
     ``V`` and ``probe`` are the parent posterior's basis, recorded on the region (see
     ``TruncationRegion``); ``orchestrator.build_truncation_region`` always supplies them, and
     ``posterior_latent``'s samples ARE coordinates in that V -- the flow was trained on ``w = z @ V``.
+
+    ``t_scale_idx`` is t_scale's index in the latent ([ND | rescale] order); when it is given, any
+    direction whose |V[t_scale_idx, j]| exceeds ``max_loading`` (default ``t_scale_loading_max``) is
+    SKIPPED and the box takes the first ``n_directions`` eligible ones instead -- the per-batch
+    t_scale override would carry rows out of a box along such a direction, turning the restriction
+    into a reweighting (defect D4). With V None the latent is unrotated and the only loaded
+    direction is t_scale's own axis. Skipped directions are recorded on the region as ``excluded``.
 
     THE DRAW IS SEEDED, from the observation and the settings, under ``fork_rng`` so the caller's
     stream is untouched. The region is part of the round's checkpoint identity, so the SAME
@@ -287,10 +325,40 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
     k = max(1, min(int(n_directions), p))
     tail = (1.0 - float(level)) / 2.0
     q = torch.tensor([tail, 1.0 - tail], dtype=torch.float64)
-    dims = list(range(k))                       # latent axes are already sorted best-constrained first
+    if t_scale_idx is None:
+        dims, excluded = list(range(k)), []     # latent axes are already sorted best-constrained first
+    else:
+        i_t = int(t_scale_idx)
+        if not 0 <= i_t < p:
+            raise ValueError(f"region_from_posterior: t_scale_idx={i_t} is outside the {p}-dimensional latent.")
+        limit = t_scale_loading_max(p) if max_loading is None else float(max_loading)
+        load = (V.detach().cpu().to(torch.float64).abs()[i_t] if V is not None
+                else torch.eye(p, dtype=torch.float64)[i_t])
+        eligible = [j for j in range(p) if float(load[j]) <= limit]
+        dims = eligible[:k]
+        # Everything passed over while filling the box: up to the last kept direction when the box
+        # filled, the WHOLE latent when the eligible set ran out first (then every ineligible
+        # direction really was skipped, and the record must say so).
+        scanned = (p if len(dims) < k else dims[-1] + 1) if dims else p
+        excluded = [j for j in range(scanned) if j not in dims]
+        for j in excluded:
+            src = f"|V[t_scale, {j}]|" if V is not None else f"the t_scale axis' weight on direction {j} (unrotated latent)"
+            print(f"[tsnpe] direction {j} NOT truncated: {src} = {float(load[j]):.3f} > {limit:.3f}. The "
+                  f"per-batch t_scale override would carry rows out of a box along it, turning the "
+                  f"restriction into a reweighting (D4).", flush=True)
+        if len(dims) < k:
+            print(f"[tsnpe] only {len(dims)} of the requested {k} directions are eligible for truncation.",
+                  flush=True)
+        if dims:
+            print(f"[tsnpe] fraction of the t_scale axis inside the truncated subspace: "
+                  f"{float((load[dims] ** 2).sum()):.3f} (0 = the override cannot move a row out of the box)",
+                  flush=True)
+    if not dims:
+        raise ValueError("region_from_posterior: every direction loads on t_scale above the limit; "
+                         "nothing can be truncated.")
     bounds = torch.quantile(z[:, dims], q, dim=0)
     return TruncationRegion(dims, bounds[0], bounds[1], level=level, n_latent=p, V=V, probe=probe,
-                            x_obs_digest=x_obs_digest)
+                            x_obs_digest=x_obs_digest, excluded=excluded, t_scale_idx=t_scale_idx)
 
 
 class TruncatedLatentPrior:
@@ -314,6 +382,28 @@ class TruncatedLatentPrior:
         self.max_tries = int(max_tries)
         self._accepted = 0
         self._proposed = 0
+        # What gen_training_data actually RECORDED as inside the region, after its per-batch t_scale
+        # override -- the sampler's own count above describes draws BEFORE it. None until measured.
+        self._recorded_inside = 0
+        self._recorded_total = 0
+
+    def note_recorded(self, inside: int, total: int) -> None:
+        """gen_training_data's tally of post-override latent targets inside the region."""
+        self._recorded_inside += int(inside)
+        self._recorded_total += int(total)
+
+    @property
+    def recorded_counts(self) -> tuple:
+        """``(inside, total)`` of the RECORDED training targets -- resumed rows included, since a
+        checkpoint a truncated round resumes was drawn under this very region."""
+        return self._recorded_inside, self._recorded_total
+
+    @property
+    def recorded_containment(self) -> float | None:
+        """Fraction of the RECORDED training targets inside the region, or None when nothing was
+        recorded in this process. This is the number that says how much of the training set actually
+        lies in the region; ``acceptance_rate`` does not."""
+        return (self._recorded_inside / self._recorded_total) if self._recorded_total else None
 
     def sample(self, sample_shape=torch.Size()):
         n = int(torch.Size(sample_shape).numel()) if len(torch.Size(sample_shape)) else 1
@@ -352,8 +442,10 @@ class TruncatedLatentPrior:
 
     @property
     def acceptance_rate(self) -> float:
-        """Measured P(A) under the prior. Also guardrail 5's honest failure rate: 1 - this is the
-        fraction of prior mass the round threw away."""
+        """Measured P(A) under the prior, at the rejection sampler -- i.e. BEFORE gen_training_data's
+        per-batch t_scale override, which re-opens any t_scale-loaded direction. For what the training
+        set actually contains see ``recorded_containment``. 1 - this is the fraction of prior mass the
+        region excludes along its directions (guardrail 5's honest failure rate)."""
         return (self._accepted / self._proposed) if self._proposed else 0.0
 
     def __getattr__(self, name):

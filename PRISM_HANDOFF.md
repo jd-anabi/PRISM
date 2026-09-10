@@ -3711,6 +3711,42 @@ which is the only reason D4 did not also bias this round.
   +2 (the inference-time warning fires for a foreign observation, not for the recorded one, never
   for an amortized posterior; the CLI `run` source pin). Noted, not done: `scripts/
   sbc_characterize.py` still draws its calibration set from the full prior for a TSNPE artifact.
+- **X4 — `t_scale`-loaded directions are not truncated; the kept mass is measured after the
+  override.** `truncate.t_scale_loading_max(d) = 1/√d` (≈ 0.277 at d = 13 — the user's decision,
+  not the post-mortem's 0.1, which sits below the RMS entry of a random rotation).
+  `region_from_posterior(…, t_scale_idx=, max_loading=)` skips any direction whose
+  `|V[t_scale, j]|` exceeds the limit (the identity when unrotated), takes the first `n_directions`
+  eligible ones, prints each exclusion, the eligible count and the fraction of the `t_scale` axis
+  inside the truncated subspace (0 = the override cannot move a row out of the box), and refuses
+  when nothing is eligible; the region records `excluded` and `t_scale_idx` — EVERY direction passed
+  over, the whole latent's worth when the eligible set ran out before the box filled (the diff review
+  caught the record stopping at the last kept direction on exactly the round where the filter did
+  the most). For the round-0 rotation this skips direction 0 (`t_scale` alone) and truncates 1–5;
+  for round 1's V′ it would have skipped 0 and 1. Its docstring's "contains at least the joint HPD"
+  is replaced by the union bound. `gen_training_data` tallies `region.contains` on the recorded,
+  post-override latent targets — the rows it generates AND the rows it resumes from a checkpoint,
+  which the identity guarantees were drawn under this region (guarded by `getattr(sampling_dist,
+  "region", None)`; CPU, outside the OOM-retry seam) — and reports the count with its denominator;
+  `TruncatedLatentPrior.recorded_counts`/`recorded_containment` carry it, `acceptance_rate` now
+  says PRE-override; `build_posterior` prints both numbers, says which is which, and says "not
+  measured" only when no row was generated or loaded in the process; the calibration line adds the
+  containment of the calibration targets. **Bit-identity for amortized runs verified:** seeded
+  `gen_training_data` hashes in chi, forced and spontaneous modes equal the pre-change baseline byte
+  for byte. `build_truncation_region` derives `t_scale`'s index from the record's `param_keys` (the
+  runner passes it explicitly) and refuses without it — after guardrail 1's digest check, which
+  stays the first thing it enforces. `scripts/tsnpe_round1_forensics.py` deliberately keeps the
+  unfiltered call, since F4 reproduces what the round did. Tests: `test_conditioning_repair.py` +1
+  (`test_a_t_scale_loaded_direction_is_excluded_from_the_region`: a 30° rotation in the
+  (1, `t_scale`) plane drops direction 1, the box moves to [0,2,3,4,5], the record round-trips, the
+  legacy call is unchanged, an unrotated latent skips `t_scale`'s own axis and says so, the threshold
+  is a parameter, fewer eligible than requested names and records every skipped direction, no
+  eligible direction refuses with its own message); `test_user_sbi.py` +1
+  (`test_the_reported_kept_fraction_is_measured_after_the_t_scale_override`: a fixed prior through
+  the real `gen_training_data` with a sliver region on the `t_scale` latent accepts 100 % of draws
+  and contains 0 % of the recorded targets, an ND region contains 100 % with counts 12/12, and
+  without a region nothing is printed), plus the X1 end-to-end test pinning both `build_posterior`
+  lines (the "not measured" wording when nothing was recorded) and the calibration test pinning the
+  containment fragment and a 100 % containment for a `t_scale`-free region.
 
 ## 2026-08-28 (second session) — the §6.1 refactor landed: 39 commits, zero drift, two new ladders
 

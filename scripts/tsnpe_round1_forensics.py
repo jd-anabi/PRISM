@@ -273,6 +273,9 @@ def main() -> None:
     torch.manual_seed(0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        # DELIBERATELY the pre-fix call: no t_scale_idx, so the box covers the leading directions
+        # exactly as the 2026-09-02 round drew it (direction 0 included, which for this rotation is
+        # t_scale alone and which the fixed code now skips). F4 reproduces what the round did.
         region = truncate.region_from_posterior(post, x_obs, n_directions=N_DIRECTIONS, level=HPD, n_samples=20000)
         with torch.no_grad():
             w = post.sample((20000,), x=x_obs, show_progress_bars=False).detach().to(torch.float64).cpu()

@@ -11,6 +11,7 @@ Every test below was checked to FAIL against the pre-change code.
 
 Run:  python tests/test_conditioning_repair.py
 """
+import io
 import math
 import os
 import sys
@@ -479,6 +480,24 @@ def _rotated_box(Q: torch.Tensor, width: float = 10.0):
     return box, reparam.build_rotated_bijection(box, Q)
 
 
+_KEYS13 = ["k", "lam", "f_max", "tau", "tau_c", "s", "delta_E", "beta", "n", "temp",
+           "x_scale", "t_scale", "f_scale"]                   # master.txt's [ND | rescale] order
+
+
+def _orthogonal_keeping(n: int, seed: int, axis: int) -> torch.Tensor:
+    """A random rotation that leaves coordinate ``axis`` alone (its column is the unit vector), so a
+    region over the leading directions never loads on it -- the t_scale-loading filter then has
+    nothing to exclude and the tests here measure what they mean to."""
+    q = _orthogonal(n - 1, seed)
+    out = torch.zeros(n, n)
+    rows = [i for i in range(n) if i != axis]
+    for a, i in enumerate(rows):
+        for b, j in enumerate(rows):
+            out[i, j] = q[a, b]
+    out[axis, axis] = 1.0
+    return out
+
+
 def test_the_region_carries_its_basis_through_a_sidecar_round_trip():
     """A box over 'directions 0..K-1' is meaningless without the V those directions are columns of,
     and V is not reproducible across processes. So the region records the parent's V and the probe
@@ -596,26 +615,33 @@ def test_build_truncation_region_records_the_parents_basis():
     from core import orchestrator
 
     P = 13
-    Q = _orthogonal(P, 11)
+    Q = _orthogonal_keeping(P, 11, axis=11)                  # t_scale (index 11) stays its own axis
     box, T_parent = _rotated_box(Q)
     x = torch.linspace(-1.0, 1.0, 7).reshape(1, 7)
-    rec = {"digest": orchestrator.observation_digest(x)}
+    rec = {"digest": orchestrator.observation_digest(x), "param_keys": _KEYS13}
     post = reparam.TransformedPosterior(_Wide(), T_parent)
     torch.manual_seed(12)
     region = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.999)
     assert torch.equal(region.V, Q) and not torch.equal(region.V, Q.T)
     assert torch.equal(region.probe, training_checkpoint.bijection_probe(T_parent, P))
     assert region.x_obs_digest == rec["digest"] and region.dims == [0, 1, 2, 3, 4] and region.n_latent == P
+    assert region.t_scale_idx == 11 and region.excluded == []
     region.check_basis(T_parent, dim=P)
     # an unrotated parent records V=None and a probe of the box alone
     plain = orchestrator.build_truncation_region(reparam.TransformedPosterior(_Wide(), box), rec, x)
     assert plain.V is None and torch.equal(plain.probe, training_checkpoint.bijection_probe(box, P))
-    # refusals: the wrong observation, a bare posterior with no transform, a transform with no box
+    # refusals: the wrong observation, a record without t_scale's index, a bare posterior with no
+    # transform, a transform with no box
     try:
-        orchestrator.build_truncation_region(post, {"digest": "0" * 16}, x)
+        orchestrator.build_truncation_region(post, {"digest": "0" * 16, "param_keys": _KEYS13}, x)
         raise AssertionError("a region was drawn around an observation that is not the recorded one")
     except ValueError:
         pass
+    try:
+        orchestrator.build_truncation_region(post, {"digest": rec["digest"]}, x)
+        raise AssertionError("a region was built without knowing where t_scale is")
+    except ValueError as e:
+        assert "t_scale" in str(e)
     for bad, tag in ((_Wide(), "a posterior with no transform"),
                      (reparam.TransformedPosterior(_Wide(), torch.distributions.transforms.ComposeTransform(
                          [reparam.OrthogonalTransform(Q.T)])), "a transform with no box")):
@@ -635,11 +661,11 @@ def test_the_same_posterior_and_observation_redraw_the_same_region():
     from core import orchestrator
 
     P = 13
-    Q = _orthogonal(P, 13)
+    Q = _orthogonal_keeping(P, 13, axis=11)
     _, T_parent = _rotated_box(Q)
     post = reparam.TransformedPosterior(_Wide(), T_parent)
     x = torch.linspace(-1.0, 1.0, 7).reshape(1, 7)
-    rec = {"digest": orchestrator.observation_digest(x)}
+    rec = {"digest": orchestrator.observation_digest(x), "param_keys": _KEYS13}
     torch.manual_seed(1)
     before = torch.get_rng_state()
     a = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.999)
@@ -649,7 +675,8 @@ def test_the_same_posterior_and_observation_redraw_the_same_region():
     assert torch.equal(a.lo, b.lo) and torch.equal(a.hi, b.hi), "the same inputs drew a different box"
     assert a.identity_fields() == b.identity_fields()
     x2 = x + 0.5
-    c = orchestrator.build_truncation_region(post, {"digest": orchestrator.observation_digest(x2)}, x2)
+    c = orchestrator.build_truncation_region(post, {"digest": orchestrator.observation_digest(x2),
+                                                    "param_keys": _KEYS13}, x2)
     d = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.99)
     e = orchestrator.build_truncation_region(post, rec, x, n_directions=4, level=0.999)
     assert not torch.equal(a.lo, c.lo) and not torch.equal(a.lo, d.lo) and e.dims == [0, 1, 2, 3]
@@ -665,6 +692,64 @@ def test_the_same_posterior_and_observation_redraw_the_same_region():
     assert not torch.equal(nudged.lo, grid.lo), "the exact bounds must stay exact; only the NAME is rounded"
     moved = truncate.TruncationRegion(a.dims, a.lo * 1.01, a.hi, level=a.level, n_latent=P, V=Q, probe=a.probe)
     assert moved.identity_fields() != a.identity_fields()
+
+
+def test_a_t_scale_loaded_direction_is_excluded_from_the_region():
+    """⚠ DEFECT D4. gen_training_data overwrites t_scale per batch AFTER the proposal draw and
+    recomputes the latent target, so a box along a direction that loads on t_scale never reaches the
+    simulator as a restriction: the proposal becomes the prior tilted by P(A | theta_-t) (a no-op when
+    the direction IS the t_scale axis), and NPE converges to p(theta|x)*P(A|theta_-t). Such directions
+    are skipped, the box takes the next eligible ones, and the region records what was skipped and
+    why. Without t_scale's index the old behaviour (the leading k directions) is untouched."""
+    import contextlib
+
+    P, i_t = 13, 11
+    # a 30-degree rotation in the (1, 11) plane: |V[t_scale, 1]| = sin(30) = 0.5 > 1/sqrt(13)
+    V = torch.eye(P)
+    c, s = math.cos(math.pi / 6), math.sin(math.pi / 6)
+    V[1, 1], V[1, i_t], V[i_t, 1], V[i_t, i_t] = c, -s, s, c
+    x = torch.zeros(1, 4)
+
+    def _region(**kw):
+        torch.manual_seed(21)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            r = truncate.region_from_posterior(_Wide(), x, n_directions=5, n_samples=4000, **kw)
+        return r, buf.getvalue()
+
+    region, out = _region(V=V, t_scale_idx=i_t)
+    assert region.dims == [0, 2, 3, 4, 5], region.dims
+    assert region.excluded == [1] and region.t_scale_idx == i_t
+    assert "direction 1 NOT truncated" in out and "0.500" in out and "fraction of the t_scale axis" in out
+    assert abs(truncate.t_scale_loading_max(P) - 1 / math.sqrt(13)) < 1e-12
+    back = truncate.TruncationRegion.from_dict(region.to_dict())
+    assert back.excluded == [1] and back.t_scale_idx == i_t
+    # the legacy call (no index) keeps the leading directions
+    assert _region(V=V)[0].dims == [0, 1, 2, 3, 4]
+    # an unrotated latent: the only loaded direction is t_scale's own axis, and the line says so
+    r, out = _region(V=None, t_scale_idx=2)
+    assert r.dims == [0, 1, 3, 4, 5] and r.excluded == [2] and "unrotated latent" in out
+    # the threshold is a parameter: with it above 0.5 direction 1 stays
+    assert _region(V=V, t_scale_idx=i_t, max_loading=0.6)[0].dims == [0, 1, 2, 3, 4]
+    # FEWER eligible than requested: the box takes what there is, and EVERY skipped direction is
+    # named and recorded -- not only those below the last kept one
+    V2 = torch.eye(P)
+    V2[i_t, 2:] = 0.5                                    # directions 2..12 all load on t_scale
+    r, out = _region(V=V2, t_scale_idx=i_t)
+    assert r.dims == [0, 1] and r.excluded == list(range(2, P)), (r.dims, r.excluded)
+    assert "only 2 of the requested 5" in out and "direction 12 NOT truncated" in out
+    # nothing eligible at all is refused rather than silently truncating nothing
+    try:
+        _region(V=torch.eye(P), t_scale_idx=i_t, max_loading=-1.0)
+        raise AssertionError("a region with no eligible direction was built")
+    except ValueError as e:
+        assert "every direction loads on t_scale" in str(e), e
+    # a fixed prior's recorded containment starts unknown and accumulates
+    tp = truncate.TruncatedLatentPrior(_Wide(), region)
+    assert tp.recorded_containment is None
+    tp.note_recorded(3, 12)
+    tp.note_recorded(1, 4)
+    assert abs(tp.recorded_containment - 0.25) < 1e-12
 
 
 def test_a_truncated_posterior_warns_on_a_foreign_observation_at_inference():
