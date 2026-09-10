@@ -14,9 +14,12 @@ non-interactive diagnostic scripts.
   contracts you must not break.
 - **§4 is current state** — read this before starting any run.
 - **§11 is the informativeness programme — IMPLEMENTED 2026-08-26, NOT YET RETRAINED.** All four
-  phases are code, tests and a migrated cache; **§11.9 is the runbook for the two runs that are
-  owed.** It carries its own evidence ledger, because it began as a user-written addendum whose
-  claims were then verified against the artifacts — **§11.2 lists the four that did not survive, one
+  phases are code, tests and a migrated cache; **§11.9 is the runbook for the runs that are owed —
+  the two retrains and, since the 2026-09-09 fixes, a TSNPE round on the fixed code.** **§11.6's TSNPE
+  guardrails 7–8 landed 2026-09-09** (fixes X1–X4, one commit each, plus X5 for trap D6; the top
+  Appendix A entry) after the first TSNPE round failed under a fresh rotation. §11 carries its own
+  evidence ledger, because it began as a user-written addendum whose claims were then verified
+  against the artifacts — **§11.2 lists the four that did not survive, one
   of them the test that addendum nominates as decisive, and a fifth correction added on 2026-08-26
   where §11.2 itself gave the wrong REASON for a right number.** Read §11.2 before acting on it.
   Two of its own instructions were also overtaken by measurement: the valid-flag set is **eight
@@ -2059,6 +2062,55 @@ runs in seconds and needs no simulation — **run it first when touching anythin
 
 ## 6. Open backlog
 
+> ### ▶ PICK UP HERE (as of 2026-09-10) — THE TSNPE FIXES ARE IN. NEITHER §11.9 RETRAIN (RUN A / RUN B) HAS BEEN RUN, AND NO TSNPE ROUND HAS RUN ON THE FIXED CODE.
+>
+> **The 2026-09-02 TSNPE round failed for a reason that is now fixed and pinned.** It ran under a
+> FRESH Fisher rotation with the truncation region applied in the wrong basis — the region kept
+> 0.01 % of the parent posterior's mass and excluded the ground truth — and on the way every
+> GUI-saved rotation sidecar on disk turned out to hold Vᵀ, which is why §4.6's direction table is
+> the transpose (see its banner: `t_scale` is direction 0, and "k is unmeasured" was an artifact).
+> Fixes X1–X5 landed 2026-09-09 as one commit each (`184cd80` … `3e2659e`), with the forensics in
+> `818a09d` and the handoff in `521cd67`; **§11.6 guardrails 7 and 8** state the rules, **§5 group D**
+> the traps, and the top Appendix A entry the full account and the closing gate — the eleven fast
+> suites green after every commit and `test_user_sbi.py` 97/97, 321 tests in all.
+>
+> **What exists to start from — listed only in the 2026-09-09 Appendix A artifact map, and never
+> connected to the 2026-08-28 loss entry it contradicts.** The 10000-batch run the 2026-08-28
+> entries declared unresumable after its prior was overwritten was in fact resumed — its
+> distribution survives as `prior_08282026_1.pt` (fingerprint `d8f719a5ddde5183`) — and completed on
+> 2026-08-29 07:06 as `train_3780fd37a16a`: 10000 × 2048, chi, the master box, the repaired 50-wide
+> conditioning (the old 42-wide block — 41 stats + log T — plus the eight valid-flag channels). Its
+> posterior is `posterior_09022026` (GUI-saved 09-02): the TSNPE parent, and the only rotated
+> posterior whose conditioning width matches this code — `posterior_08232026` is 42-wide too, and
+> nothing on the load path checks the width, so it loads and dies at the first conditioning (the
+> retired 08192026 artifact is refused earlier, by the chi-band check). It is NOT characterised in
+> §4, and its §11.9 gates are not recorded here. The failed round's checkpoint is
+> `Resources/Checkpoints/QUARANTINED_tsnpe_round1_truncated_rows_train_0b471d560271`: never rename
+> it back (with the `train_` prefix restored, an amortized 5000 × 2048 run with
+> `prior_08282026_1.pt` would resume onto its truncated rows), and keep it while
+> `scripts/tsnpe_round1_forensics.py` is expected to reproduce F2/F4, which read its header's V′ —
+> the one exception to trap D3's "delete it by hand".
+>
+> **Owed, in this order:** (1) the GPU `smoke_train.py` (CHI=1 and CHI=0, explicit
+> `BOUNDS=Resources/Bounds/nadrowski/master.txt`) — owed since the refactor, and X1–X5 touched
+> tensor-moving code, so §1.3's rule puts it before ANY run below. (2) Then, independent of each
+> other and in the user's order: **a TSNPE round on the fixed code** — from `posterior_09022026`
+> loaded through the Posterior tab (the load warns that the sidecar is transposed and rotates by the
+> V pickled inside the posterior's own prior, bitwise the checkpoint header's), with
+> `prior_08282026_1.pt` as the loaded prior and the `master.txt` chi config it was trained under;
+> `check_basis` refuses another box, but NOTHING on the round's build path refuses another prior
+> (only `validate_calibration` checks that), so a round started with `3d_master_08102026.pt` — the
+> prior §11.9's Run A tells you to load — would silently train on the wrong base prior restricted to
+> the region; at the tab's default of 5 directions the region skips direction 0 (`t_scale`, loading
+> 1.00) and truncates 1–5 — **and the §11.9 retrains** (Run A flow-only, Run B tier-1). Recorded,
+> not fixed: the missing prior check just named; the GUI save drops `fisher_eigenvalues`; the
+> joint-KL informativeness of a truncated round is against the full prior (`−log P(A)` printed, not
+> corrected); `scripts/sbc_characterize.py` honours the region by construction (it draws from the
+> pickled training prior) but mirrors no `t_scale` override, and `_common.load_posterior` has no
+> non-amortized gate; the three transposed sidecars are reconciled at load, not rewritten.
+> Deliberately open, not owed: pooling rows across rounds, the batch-by-scale `t_scale` override,
+> and any change to `build_latent_fisher_rotation` or `fisher_eigenbasis`.
+
 > ### ▶ PICK UP HERE (as of 2026-08-28, second session) — THE REFACTOR IS DONE. THE RETRAIN IS NEXT.
 >
 > **The §6.1 refactor LANDED: 39 local commits (`7b1a3d0..`), zero functional change outside the two
@@ -2998,12 +3050,12 @@ on both paths at a geometry with a partial tail (2 full chunks + 3 leftover step
 >
 > | phase | code | run |
 > |---|---|---|
-> | 1 — repair the feature set | ✅ landed | ⬅ **the flow-only retrain is NEXT; it needs no simulation** |
+> | 1 — repair the feature set | ✅ landed | Run A (flow-only, off the migrated cache) still NOT run. But a full 10000 × 2048 re-simulation on the repaired feature set DID complete on 2026-08-29 — `train_3780fd37a16a` → `posterior_09022026`, 50-wide conditioning, prior `prior_08282026_1.pt` — uncharacterised in this document; see §6's 2026-09-10 banner |
 > | 2 — the informativeness scalar | ✅ landed, reported by `validate_calibration` | runs with any validate |
 > | 3 — tier-1 prior narrowing | ✅ landed, own box `master_tier1.txt` | needs a full re-simulation |
-> | 4 — TSNPE | ✅ landed, six guardrails + the pinning test | needs a Phase-1 posterior first |
+> | 4 — TSNPE | ✅ landed; EIGHT guardrails since 2026-09-09 (7–8 after the first round failed — Appendix A) + the pinning tests | the parent exists (`posterior_09022026`); the 2026-09-02 round is void and quarantined; no round has run on the fixed code |
 >
-> **§11.9 has the two commands.** Three things below were changed by measurement while implementing
+> **§11.9 has the two retrain commands and, since 2026-09-10, the TSNPE round's note.** Three things below were changed by measurement while implementing
 > them, and each is corrected in place: the valid-flag set is **8 channels, not 1** (§11.3), §11.2's
 > correction 3 gives the **wrong reason** for a right number, and §11.8's "edit `master.txt`" would
 > have orphaned the very cache Phase 1 needs. The top Appendix A entry is the full account.
@@ -3440,12 +3492,26 @@ runbook.
 
 ---
 
-### 11.9 The runbook — the two runs that are owed, and what to watch
+### 11.9 The runbook — the runs that are owed (two retrains; since the 2026-09-09 fixes a TSNPE round too), and what to watch
 
-Everything in §11 is code, tests and a migrated cache. **Neither retrain has been done.** Both need
-the card, and the VRAM rule has not changed: check `nvidia-smi --query-gpu=memory.used --format=csv`,
-**never** `torch.cuda.mem_get_info()`, which overstates free VRAM by the size of the desktop (measured
-15037 MiB against nvidia-smi's 5814). Closing the browsers is still worth more than any constant here.
+Everything in §11 is code, tests and a migrated cache. **Neither retrain has been done, and no TSNPE
+round has run on the fixed code.** All three need the card, and the VRAM rule has not changed: check
+`nvidia-smi --query-gpu=memory.used --format=csv`, **never** `torch.cuda.mem_get_info()`, which
+overstates free VRAM by the size of the desktop (measured 15037 MiB against nvidia-smi's 5814).
+Closing the browsers is still worth more than any constant here.
+
+> **Added 2026-09-10 — a THIRD run is owed, and it can now be run correctly:** a TSNPE round on the
+> fixed code (§11.6 guardrails 7–8; the Appendix A entry of 2026-09-09; the load path and settings
+> are in §6's 2026-09-10 banner). The first one, on 2026-09-02, ran under a fresh rotation with the
+> region misapplied and its checkpoint is quarantined. A round on the fixed code reuses the parent's
+> V, is checkpointed under its own identity at any budget (whenever checkpointing is on), skips
+> `t_scale`-loaded directions, and is calibrated on the truncated prior — its Informativeness block
+> is still against the full prior, so read the printed `−log P(A)` before applying gate 2 below to
+> it. It is independent of Runs A and B below because its parent, `posterior_09022026`, already
+> carries the repaired feature set (the full 10000 × 2048 re-simulation that completed 2026-08-29 —
+> not Run A, which is the flow-only A/B off the cache); it needs the same card, and the smoke train
+> first. Load `prior_08282026_1.pt` for it, not the `3d_master_08102026.pt` Run A names below:
+> nothing on the round's build path refuses a mismatched prior.
 
 #### Run A — the Phase-1 flow-only retrain. NO SIMULATION.
 
@@ -3833,7 +3899,12 @@ which is the only reason D4 did not also bias this round.
   its V is the region's and is named as TRANSPOSED when it is not); `test_conditioning_repair.py`
   +2 (the inference-time warning fires for a foreign observation, not for the recorded one, never
   for an amortized posterior; the CLI `run` source pin). Noted, not done: `scripts/
-  sbc_characterize.py` still draws its calibration set from the full prior for a TSNPE artifact.
+  sbc_characterize.py` — this paragraph and `f682a27`'s message first said it "still draws its
+  calibration set from the full prior for a TSNPE artifact"; **wrong, corrected 2026-09-10**: it
+  draws θ* from the prior pickled inside the artifact (`post.prior.gen_dist`), which for a TSNPE
+  artifact is the `TruncatedLatentPrior` itself, so the region is honoured by construction. What it
+  lacks against `validate_calibration` is `check_basis`, the override mirror in its reference sample,
+  the kept-fraction line, and any non-amortized gate in `scripts/_common.load_posterior`.
 - **X4 — `t_scale`-loaded directions are not truncated; the kept mass is measured after the
   override.** `truncate.t_scale_loading_max(d) = 1/√d` (≈ 0.277 at d = 13 — the user's decision,
   not the post-mortem's 0.1, which sits below the RMS entry of a random rotation).
@@ -3927,6 +3998,80 @@ banner with the correct-orientation table and cross-references in §11.2.1 and g
 recounted (321); §11.8 rows. Not done, deliberately: pooling rows across rounds, any change to
 `build_latent_fisher_rotation` or `fisher_eigenbasis`, the batch-by-scale `t_scale` override, and
 any retrain — those are the next decision, not this session's.
+
+### Closing state (added 2026-09-10)
+
+**The commits, in order** — all on `main` on top of `f5ee44d`; each message carries the full account
+of its step, so `git log f5ee44d..` (seven commits) is the second copy of this entry:
+
+| commit | when (09-09, PDT) | what |
+|---|---|---|
+| `818a09d` | 20:53 | forensics: `scripts/tsnpe_round1_forensics.py`, the quarantine, this entry's F1–F5 |
+| `184cd80` | 21:30 | X1 — the region carries its basis; `build_posterior(truncation=…)` reuses that V and refuses every mismatch |
+| `1b651e1` | 21:56 | X2 — the region is in the checkpoint identity (omitted, never None, when amortized); seeded draw, quantised bounds |
+| `f682a27` | 22:20 | X3 — calibration on the truncated prior, GUI and CLI; `accept_truncated`; the inference-time hard-warn |
+| `398284d` | 22:44 | X4 — `t_scale`-loaded directions excluded (`1/√d`); post-override containment tallied and printed |
+| `3e2659e` | 23:05 | X5 — the GUI saves V; every reader reconciles a transposed or rotation-less sidecar |
+| `521cd67` | 23:08 | handoff: guardrails 7–8, trap group D, the §4.6 banner, §1.3 recounted, §11.8 rows |
+
+**The gate.** The eleven fast suites' final run (23:03–23:04, the counts `3e2659e`'s message
+records) preceded the X5 and handoff commits: 34 / 18 / 27 / 18 / 7 / 19 / 22 / 12 / 23 / 39 / 5
+(`conditioning_repair`, `artifact_consistency`, `nav_and_gating`, `settings_persistence`,
+`worker_dispatch`, `figures`, `vt_progress`, `simulate`, `chi_set_encoder`, `user_models`,
+`fdt_user`). `test_user_sbi.py` started at 23:06, after X5 was committed, and finished **97/97, ALL
+PASSED** at 23:49 — after the handoff commit, which touched only this file, so `521cd67` could not
+record that result (§1.3's 97 in it is the count, taken before the run finished), and it lives
+only here. 321 in all, the counts §1.3 carries. The fast suites were
+green after every one of the seven commits, and the seeded `gen_training_data` hashes in chi,
+forced and spontaneous modes were byte-identical before and after X4, the only commit that touched
+`pipeline.py`. Each fix's diff was reviewed read-only by three skeptic agents before it was
+committed — a session procedure, not a repo artifact: X1's message calls it three-lens and lists its
+four majors, X2–X5's messages name the review findings they closed — and the review-driven design
+changes are named in the X1–X5 paragraphs above (X2's seeded draw and quantised bounds, X3's
+reference sample, X4's exclusion record, X5's rotation-less sidecar).
+
+**Deviations from the post-mortem's written spec:** the X4 threshold is `1/√d`, not 0.1; a digest
+mismatch at inference hard-warns instead of refusing; the post-mortem file stays out of the repo —
+three decisions taken with the user in plan mode, before X1 (this entry's pre-fix text records the
+first and the third; the second is stated at X3 and in `f682a27`'s message). And the offline
+scripts were reconciled together with the GUI load path — raised by the X5 diff review and decided
+then; the plan had left `scripts/_common.load_posterior` alone, although the forensics above had
+already shown every offline reader of the three artifacts in the inverse rotation.
+
+**Owed after this entry — the next decision is the user's, not this session's.** The same items, in
+the same order, head §6.
+
+1. **The GPU `smoke_train.py`** (CHI=1 and CHI=0, explicit `BOUNDS`) the refactor left owed. X1–X5
+   are CPU-certified like everything since the refactor, and X1–X5 touched tensor-moving code
+   (`orchestrator.py`, `pipeline.py`, `truncate.py`, `reparam.py`), so §1.3's rule puts it before
+   any run on the card.
+2. **A TSNPE round on the fixed code** — none has been run — and **the §11.9 retrains** (Run A
+   flow-only, Run B tier-1; nothing in X1–X5 changed their runbook). Independent of each other. The
+   round: parent `posterior_09022026` loaded through the Posterior tab (the load warns that the
+   sidecar is transposed and rotates by the V pickled inside the posterior's own training prior —
+   bitwise the checkpoint header's; no checkpoint directory is read), or a parent still in memory
+   from its own training; `prior_08282026_1.pt` as the loaded prior and the `master.txt` chi config
+   it was trained under — `check_basis` refuses another box, but nothing on the round's build path
+   refuses another prior (`_assert_prior_used_matches_posterior` runs only in `validate_calibration`),
+   so a different loaded prior trains silently on the wrong base prior restricted to the region;
+   any budget (the round gets its own checkpoint directory whenever checkpointing is on). For the
+   round-0 rotation the region skips direction 0 (`t_scale`, loading 1.00) and truncates the next
+   `n_directions` — 1–5 at the tab's default of 5; the `[tsnpe]` lines print the pre-override
+   acceptance and the post-override containment side by side, and the calibration runs on the
+   truncated prior.
+3. **Recorded, not fixed:** the missing prior check in item 2; the GUI's deferred save passes no
+   `fisher_eigenvalues`, so every GUI-saved sidecar records None; the joint-KL informativeness of a
+   truncated round is still measured against the full prior (the `−log P(A)` inflation is printed,
+   not corrected); `scripts/sbc_characterize.py` — correcting the X3 paragraph above and `f682a27`'s
+   message, which said it "draws from the full prior": it draws θ* from the prior pickled inside the
+   artifact, which for a TSNPE artifact is the `TruncatedLatentPrior` itself, so the region is
+   honoured by construction, but it runs no `check_basis`, its reference sample does not mirror the
+   `t_scale` override, it prints no kept fraction, and `scripts/_common.load_posterior` loads a
+   non-amortized artifact with no gate or warning; the three transposed sidecars stay transposed on
+   disk (reconciled at every load, never rewritten — a repair re-save must use the bounds file the
+   posterior was trained under); the quarantined directory stays (§6's banner says why, and why never
+   to rename it back). Deliberately open, not owed: pooling rows across rounds, the batch-by-scale
+   `t_scale` override, and any change to `build_latent_fisher_rotation` or `fisher_eigenbasis`.
 
 ## 2026-08-28 (second session) — the §6.1 refactor landed: 39 commits, zero drift, two new ladders
 
@@ -4186,6 +4331,11 @@ byte-identical to `prior_08272026.pt`. The 3989-batch run that had been training
 contents since 00:07 became **permanently unresumable** — its `prior_fingerprint`
 (`d8f719a5ddde5183`) now matches no file on disk. The simulation is still there; nothing can ever
 name it again.
+
+> ⚠ **Overtaken the same evening (recorded 2026-09-10):** the old distribution was re-saved as
+> `prior_08282026_1.pt` at 21:27 (same fingerprint `d8f719a5ddde5183`), the run resumed and completed
+> 10000/10000 on 2026-08-29 07:06 as `train_3780fd37a16a`, and its posterior is `posterior_09022026`
+> — the TSNPE parent. §6's 2026-09-10 banner has the rest.
 
 That is the second loss by this mechanism (884 batches on 2026-08-27, a prior built and never saved)
 and the exposure is live: **`3d_master_08102026.pt` currently backs three separate 5000-batch
