@@ -100,3 +100,73 @@ class ArtifactPicker(QWidget):
         self.refresh()
         if restore_key is not None:
             self.restore_key(restore_key)
+
+
+class StorePicker(QWidget):
+    """A combo over one KIND of the artifact store -- the generated-kind twin of ArtifactPicker,
+    which stays for the input pickers (cells, bounds). Items are complete artifacts only, labelled by
+    name (or ``(unnamed <id>)``), with the id, creation time, mode, width and amortization in the
+    tooltip; ``userData`` is the id, which is what ``key()`` persists and ``selected()`` returns."""
+    NEW_LABEL = ArtifactPicker.NEW_LABEL
+
+    def __init__(self, kind: str, allow_new: bool = False, store=None, parent=None):
+        super().__init__(parent)
+        self.kind, self._allow_new, self._store = kind, allow_new, store
+        self.combo = QComboBox()
+        refresh = QPushButton()
+        refresh.setObjectName("iconButton")
+        icons.apply_icon(refresh, "refresh")
+        refresh.setFixedWidth(32)
+        refresh.setToolTip("Rescan the artifact store")
+        refresh.clicked.connect(self.refresh)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.combo, 1)
+        layout.addWidget(refresh)
+        self.refresh()
+
+    def _resolved_store(self):
+        from core.artifacts import resolve_store
+        return resolve_store(self._store)
+
+    def refresh(self):
+        current = self.key()
+        self.combo.clear()
+        if self._allow_new:
+            self.combo.addItem(self.NEW_LABEL, userData=None)
+        try:
+            rows = self._resolved_store().list(self.kind)
+        except Exception:                        # noqa: BLE001 -- an unreadable root lists nothing
+            rows = []
+        for s in rows:
+            if not s.complete:
+                continue
+            self.combo.addItem(s.label, userData=s.id)
+            tip = f"{s.id} · {s.created}"
+            if s.mode:
+                tip += f" · {s.mode}"
+            if s.width:
+                tip += f" · width {s.width}"
+            if s.amortized is not None:
+                tip += " · amortized" if s.amortized else " · NON-AMORTIZED (TSNPE)"
+            self.combo.setItemData(self.combo.count() - 1, tip, _TOOLTIP_ROLE)
+        self.restore_key(current)
+
+    def selected(self):
+        """``(id_or_None, is_new)``."""
+        data = self.combo.currentData()
+        return data, (data is None)
+
+    def has_entries(self) -> bool:
+        return any(self.combo.itemData(i) is not None for i in range(self.combo.count()))
+
+    def key(self) -> str:
+        data = self.combo.currentData()
+        return "" if data is None else str(data)
+
+    def restore_key(self, key: str) -> None:
+        if not key:
+            return
+        i = self.combo.findData(key)
+        if i >= 0:
+            self.combo.setCurrentIndex(i)

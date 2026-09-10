@@ -93,3 +93,143 @@ def test_sim_config_records_its_sources_and_the_feature_set_is_versioned():
     c = mf.config_from_cfg(cfg)
     assert c["model"] == "NADROWSKI" and c["param_keys"][0] == list(cfg.params_dict)[0]
     assert math.isfinite(c["dt_exp"])
+
+
+from datetime import datetime, timedelta, timezone
+
+from core.artifacts import store as st
+
+
+def _cal_body(n=10):
+    return {"results": {"n_cal": n}}
+
+
+def _make(store, kind="calibration", name="", body=None, parents=None, note=""):
+    with store.create(kind, None, name=name, note=note) as w:
+        w.body = body if body is not None else _cal_body()
+        w.parents = dict(parents or {})
+        p = w.payload("results.json")
+        p.write_text("{}", encoding="utf-8")
+    return w
+
+
+def test_create_list_get_round_trip_per_kind(store):
+    bodies = {
+        "prior": {"gmm": {"n_components": 2, "param_keys": ["a"], "box": {"nd_lows": [0.0], "nd_highs": [1.0], "log_mask": [False]}},
+                  "sweep": {}, "stability": {"accepted_sets": None, "iterations": 1}},
+        "posterior": {"mode": "chi", "conditioning": {"width": 50}, "transform": {}, "amortized": True,
+                      "truncation": None, "training": {}},
+        "observation": {"mode": "chi", "conditioning": {"width": 50}, "x_obs_digest": "0" * 16, "T_obs_cell": 1.0,
+                        "n_obs": 10, "forcing_vals": {}, "chi_obs_freqs": None, "source": {"kind": "simulated"}},
+        "calibration": _cal_body(), "inference": {"results": {"n_samples": 5}},
+    }
+    for kind, body in bodies.items():
+        w = _make(store, kind, name=f"n_{kind}", body=body)
+        rows = store.list(kind)
+        assert [r.id for r in rows] == [w.id] and rows[0].complete and rows[0].name == f"n_{kind}"
+        m = store.get(kind, w.id)
+        assert m.to_dict() == store.get(kind, f"n_{kind}").to_dict() and m.body == body
+        assert store.path(kind, w.id) == w.dir and m.payloads["results.json"] == prov.sha256_file(w.dir / "results.json")
+        assert m.prism["git_rev"] != "" and m.env["python"]
+    assert store.list("posterior")[0].width == 50 and store.list("posterior")[0].amortized is True
+
+
+def test_writer_removes_the_directory_on_exception(store):
+    class _Cancel(BaseException):           # the shape of gui.streams.WorkerCancelled
+        pass
+    with pytest.raises(_Cancel):
+        with store.create("calibration", None) as w:
+            w.payload("results.json").write_text("{}")
+            raise _Cancel()
+    assert not w.dir.exists() and store.list("calibration") == []
+
+
+def test_a_truncated_manifest_is_listed_incomplete_and_never_loadable(store):
+    w = _make(store, name="ok")
+    (w.dir / st.MANIFEST).write_bytes((w.dir / st.MANIFEST).read_bytes()[:40])
+    rows = store.list("calibration")
+    assert len(rows) == 1 and not rows[0].complete and "manifest" in rows[0].reason
+    with pytest.raises(st.StoreError, match="no complete"):
+        store.get("calibration", "ok")
+    (w.dir / st.MANIFEST).unlink()
+    assert not store.list("calibration")[0].complete
+
+
+def test_same_second_ids_get_a_suffix(tmp_path):
+    fixed = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)
+    s = st.ArtifactStore(tmp_path, clock=lambda: fixed)
+    ids = [_make(s).id for _ in range(3)]
+    assert ids == ["20260910T120000", "20260910T120000-2", "20260910T120000-3"]
+    assert {r.id for r in s.list("calibration")} == set(ids)
+
+
+def test_rename_keeps_the_id_and_dependents_resolve(store):
+    p = _make(store, "posterior", name="post", body={"mode": "chi", "conditioning": {}, "transform": {},
+                                                     "amortized": True, "truncation": None, "training": {}})
+    c = _make(store, "calibration", name="cal", parents={"posterior": p.id})
+    store.rename("posterior", "post", "post_v2")
+    m = store.get("posterior", "post_v2")
+    assert m.id == p.id and store.path("posterior", p.id).name == f"post_v2__{p.id}"
+    assert store.get("calibration", c.id).parents["posterior"] == m.id
+    assert store.dependents("posterior", p.id) == [("calibration", c.id, "cal")]
+    with pytest.raises(st.StoreError, match="already exists"):
+        _make(store, "posterior", name="post_v2", body=m.body)
+    with pytest.raises(st.StoreError):
+        store.rename("posterior", p.id, "bad name")
+    store.set_note("posterior", p.id, "kept")
+    assert store.get("posterior", p.id).note == "kept"
+
+
+def test_delete_refuses_naming_dependents_and_force_deletes(store):
+    p = _make(store, "posterior", name="post", body={"mode": "chi", "conditioning": {}, "transform": {},
+                                                     "amortized": True, "truncation": None, "training": {}})
+    _make(store, "inference", name="inf", body={"results": {}}, parents={"posterior": p.id})
+    with pytest.raises(st.StoreError, match="inference inf"):
+        store.delete("posterior", p.id)
+    assert store.get("posterior", p.id)
+    store.delete("posterior", p.id, force=True)
+    with pytest.raises(st.StoreError):
+        store.get("posterior", p.id)
+
+
+def test_unnamed_artifacts_group_and_age_out(tmp_path):
+    t0 = datetime(2026, 9, 1, tzinfo=timezone.utc)
+    clock = {"now": t0}
+    s = st.ArtifactStore(tmp_path, clock=lambda: clock["now"])
+    old = _make(s)
+    clock["now"] = t0 + timedelta(days=3)
+    new = _make(s)
+    named = _make(s, name="keep")
+    assert {r.id for r in s.unnamed("calibration")} == {old.id, new.id}
+    assert [r.id for r in s.unnamed("calibration", older_than=timedelta(days=1))] == [old.id]
+    assert s.list("calibration")[0].label.startswith("(unnamed") or named.name == "keep"
+
+
+def test_store_fig_sink_saves_png_and_forwards(store):
+    from matplotlib import pyplot as plt
+    seen = []
+    with store.create("calibration", None) as w:
+        w.body = _cal_body()
+        sink = w.fig_sink(forward=lambda title, fig: seen.append((title, fig.number)))
+        f1 = plt.figure(); sink("SBC ranks (CDF)", f1)
+        f2 = plt.figure(); sink("SBC ranks (CDF)", f2)
+        assert plt.fignum_exists(f1.number), "a forwarded figure is the GUI's to close"
+        w.fig_sink()("TARP coverage", plt.figure())
+    m = store.get("calibration", w.id)
+    assert m.figures == ["figures/sbc_ranks_cdf.png", "figures/sbc_ranks_cdf-2.png", "figures/tarp_coverage.png"]
+    assert all((w.dir / f).stat().st_size > 0 for f in m.figures) and len(seen) == 2
+    plt.close("all")
+
+
+def test_default_store_is_swappable_and_resolves_from_the_root(monkeypatch, tmp_path):
+    session_default = st.default_store()                 # the conftest sandbox; put it back at the end
+    try:
+        monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "R"))
+        st.set_default_store(None)
+        assert st.default_store().root == tmp_path / "R"
+        other = st.ArtifactStore(tmp_path / "O")
+        with st.use_store(other):
+            assert st.default_store() is other and st.resolve_store(None) is other
+        assert st.default_store().root == tmp_path / "R"
+    finally:
+        st.set_default_store(session_default)
