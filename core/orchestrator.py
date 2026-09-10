@@ -44,8 +44,9 @@ from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derive
 from .SBI.Priors import sbi_prior_wrapper
 from .SBI.reparam import (
     build_inferred_bijection, TransformedPosterior, build_rescale_bijection,
-    build_rotated_bijection, RotatedLatentPrior, OrthogonalTransform, load_eval_bijection,
+    build_rotated_bijection, RotatedLatentPrior, load_eval_bijection,
     nd_log_mask, resolved_log_params, read_sidecar, posterior_mode as reparam_posterior_mode,
+    rotation_of, transform_device, UnitToBoxTransform,
 )
 
 # Directories have spaces in their names, so use importlib for these imports
@@ -638,6 +639,9 @@ def build_posterior(
                      ⚠ A RESUMED run reuses the checkpoint's stored V and ignores all three
                      : V is not reproducible across processes, so a fresh one would
                      put the reused rows in a different coordinate than their stored targets.
+                     ⚠ So does a TRUNCATED run (``truncation=``): it reuses the region's V and never
+                     runs the Fisher at all -- the box is measured in the parent's basis and is
+                     meaningless in any other (guardrail 7).
 
     ⚠ THESE FOUR ARE WHAT A COMPLETE C-11 CHECKPOINT IS FOR. Its own docstring says a finished
     checkpoint "is a cache of the whole simulation run, so you can retrain the flow at a different
@@ -694,6 +698,11 @@ def build_posterior(
     T = build_inferred_bijection(cfg, log_params=_log_params_for(cfg))
 
     if not train_new and choice is not None:
+        if truncation is not None:
+            raise ValueError(
+                "build_posterior(truncation=...) restricts the prior for a NEW training run; a loaded "
+                "posterior already carries whatever region it was trained under. Load it without a "
+                "region, or train a new round from it.")
         # map_location rehomes every stored tensor onto this machine's device, so a posterior trained
         # on a CUDA box (e.g. a Windows GPU) loads on a CPU/MPS-only Mac instead of raising
         # "Attempting to deserialize object on a CUDA device". sbi caches the training device in two
@@ -727,10 +736,9 @@ def build_posterior(
     # box (REPARAM_LOG_PARAMS changed since this prior was built), physical training samples would
     # be drawn from the wrong prior. Require the loaded prior's box mask to match the config mask.
     from torch.distributions.transforms import ComposeTransform as _Compose
-    from .SBI.reparam import UnitToBoxTransform as _Box
     _nd_box = next((inner for tr in nd_prior_physical.transforms
                     for inner in (tr.parts if isinstance(tr, _Compose) else [tr])
-                    if isinstance(inner, _Box)), None)
+                    if isinstance(inner, UnitToBoxTransform)), None)
     if _nd_box is not None:
         _want = nd_log_mask(cfg, log_params=_log_params_for(cfg)).to(_nd_box.log_mask.device)
         if not torch.equal(_nd_box.log_mask, _want):
@@ -812,7 +820,56 @@ def build_posterior(
     # Only the freshly-computed branch below knows the eigenvalues; a resumed checkpoint carries V but
     # not them, and an unrotated run has no Fisher at all. None is recorded honestly in the sidecar.
     fisher_evals = None
-    if ckpt_resumed is not None and rotate:
+    if truncation is not None:
+        # ── TSNPE: THE BASIS COMES WITH THE REGION, AND THE FISHER IS NEVER RUN (guardrail 7) ────
+        # The region's dims are columns of the PARENT posterior's V, and V is not reproducible across
+        # processes (trap X10: the operating points come from the unseeded global RNG). The
+        # 2026-09-02 round computed a fresh V' here and enforced the parent's box in it: 0.01% of
+        # the parent posterior survived, and the ground truth did not (Appendix A 2026-09-09, D1).
+        # So a truncated round trains in the region's own V, refuses a checkpoint stored under any
+        # other, and refuses a config whose rotation flag disagrees with the region -- a rotated
+        # box has no meaning in an unrotated latent and vice versa.
+        if bool(rotate) != (truncation.V is not None):
+            raise ValueError(
+                f"cfg.reparam_rotate is {bool(rotate)} but the truncation region was measured "
+                f"{'WITH' if truncation.V is not None else 'WITHOUT'} a Fisher rotation. A truncated "
+                f"round trains in the parent posterior's basis: load the config the parent was trained "
+                f"with, or rebuild the region from a posterior trained under this one.")
+        # GUARDRAIL 2's binding: the region already knows which observation it was drawn around
+        # (build_truncation_region records it from the same record it checked the digest of), so
+        # the artifact's digest is that one -- a separately supplied one must agree, and None is
+        # filled in rather than written into a sidecar as "valid near observation None".
+        if truncation.x_obs_digest is not None:
+            if x_obs_digest is not None and x_obs_digest != truncation.x_obs_digest:
+                raise ValueError(
+                    f"x_obs_digest={x_obs_digest!r} does not match the observation the truncation "
+                    f"region was drawn around ({truncation.x_obs_digest}); a non-amortized artifact "
+                    f"must name the observation its region came from.")
+            x_obs_digest = truncation.x_obs_digest
+        V = None if truncation.V is None else truncation.V.to(device=cfg.hw.device, dtype=cfg.hw.dtype)
+        if ckpt_resumed is not None:
+            # Rows may be resumed only if they were DRAWN UNDER THIS REGION: the stored identity must
+            # record it (the amortized parent's never does -- its rows are the full prior's, and
+            # resuming them is a silent no-op of the whole round, defect D3), and the stored V must
+            # be the region's. Both checks; the identity is what keeps the parent's own V from
+            # passing the second one.
+            _where = f"The training checkpoint at {ckpt_dir} ({_st['batches_done']} batches)"
+            _stored_region = (ckpt_resumed.get("identity") or {}).get("truncation")
+            if _stored_region != truncation.identity_fields():
+                raise ValueError(
+                    f"{_where} was not generated under this truncation region -- its identity records "
+                    f"{'no region at all (an amortized run)' if _stored_region is None else 'a different region'}"
+                    f". Resuming would train a 'truncated' round on rows drawn from another proposal "
+                    f"while printing that it is restricted. A truncated round resumes only its own "
+                    f"checkpoint; rename that directory or change the budget so this round starts one.")
+            truncation.check_checkpoint_V(ckpt_resumed.get("V"), where=_where)
+        print(f"[tsnpe] basis: reusing the PARENT posterior's rotation carried with the region "
+              f"({'V ' + truncate.rotation_digest(truncation.V) if V is not None else 'unrotated'}); "
+              f"the Fisher is NOT recomputed for a truncated round -- a fresh V would put the box on "
+              f"axes it was never measured on.", flush=True)
+        T_train = build_rotated_bijection(T, V) if V is not None else T
+        train_prior = RotatedLatentPrior(latent_inferred_prior, V) if V is not None else latent_inferred_prior
+    elif ckpt_resumed is not None and rotate:
         # Rehomed onto this run's device/dtype. The checkpoint stores V on the CPU so it is portable,
         # but build_latent_fisher_rotation returns it on cfg.hw.device -- and OrthogonalTransform does
         # `x @ M`, which is a hard device error, not a silent promotion. Without this the FIRST GPU
@@ -858,6 +915,32 @@ def build_posterior(
     # No proposal correction is applied, and that is correct rather than an omission: truncation is a
     # RESTRICTION, not a reweighting, which is the property that distinguishes TSNPE from SNPE-A/B/C.
     if truncation is not None:
+        _P = len(cfg.params_dict) + len(cfg.rescale_params)
+        # The region's own guard: the bijection this round trains in must be the one the box was
+        # measured in -- V compared directly (a probe cannot see a column permutation) and the probe
+        # for the box. Refuses; a region in the wrong basis is the whole of defect D1.
+        truncation.check_basis(T_train, dim=_P, device=cfg.hw.device)
+        if cfg.has_ground_truth:
+            # GUARDRAIL 5's honest failure rate, per run: does the box even contain the loaded cell's
+            # truth? Warn, never refuse -- an experimental observation has no truth, and a simulated
+            # one's lying outside is a finding about the parent posterior, not a reason to stop.
+            with torch.no_grad():
+                _z_true = T_train.inv(cfg.ground_truth_tensor.reshape(1, -1)).detach().cpu().to(torch.float64)
+            if not bool(truncation.contains(_z_true)[0]):
+                _sel = _z_true[0, truncation.dims]
+                _bad = [f"direction {d}: truth {float(v):+.3g} outside [{float(a):.3g}, {float(b):.3g}]"
+                        for d, v, a, b in zip(truncation.dims, _sel, truncation.lo, truncation.hi)
+                        if v < a or v > b]
+                # contains() is False for a non-finite coordinate too, which neither comparison names
+                _bad = _bad or [f"direction {d}: truth {float(v)!r} not inside [{float(a):.3g}, {float(b):.3g}]"
+                                for d, v, a, b in zip(truncation.dims, _sel, truncation.lo, truncation.hi)]
+                _msg = ("[tsnpe] WARNING: the loaded cell's GROUND TRUTH lies OUTSIDE the truncation "
+                        "region -- " + "; ".join(_bad) + ". This round will never see a training row "
+                        "near the truth. Continuing, because the truth is a simulated cell's, not the "
+                        "data's -- but the parent posterior disagreed with it, and this round inherits "
+                        "that.")
+                print(_msg, flush=True)
+                warnings.warn(_msg, stacklevel=2)
         train_prior = truncate.TruncatedLatentPrior(train_prior, truncation)
         print(f"[tsnpe] training on the PRIOR RESTRICTED to {truncation!r}", flush=True)
         print(f"[tsnpe] this artifact will be marked NON-AMORTIZED; it is valid only near the "
@@ -966,7 +1049,11 @@ def build_posterior(
               flush=True)
 
     assert isinstance(posterior_latent, DirectPosterior)
-    return TransformedPosterior(posterior_latent, T_train), pos_diagnostics
+    # The region and the observation it was drawn around ride on the posterior (None when amortized),
+    # so calibration can restrict its prior to the same region and inference can tell what this
+    # posterior is valid near.
+    return (TransformedPosterior(posterior_latent, T_train, truncation=truncation,
+                                 x_obs_digest=x_obs_digest), pos_diagnostics)
 
 
 def observation_digest(x_obs: torch.Tensor) -> str:
@@ -1022,7 +1109,9 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
     of the wrong data -- and truncation is a one-way ratchet, so a later round cannot undo it. This is
     the check that makes "persist x_obs at inference time" worth doing at all.
 
-    :param posterior: the TransformedPosterior (or DirectPosterior) to draw the region from.
+    :param posterior: the TransformedPosterior to draw the region from. Its ``.T`` is the only
+                      carrier of the latent basis the region is measured in, so a bare
+                      DirectPosterior is refused: it cannot say which coordinate its samples are in.
     :param obs_record: the dict from :func:`load_observation`.
     :param x_obs: the conditioning vector currently loaded.
     """
@@ -1033,11 +1122,28 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
             f"so a truncation region built from it would delete prior support on the strength of a "
             f"DIFFERENT recording -- permanently, because truncation is one-way. Re-run inference on "
             f"this dataset first so its observation is the one on record.")
+    # GUARDRAIL 7: the region records the PARENT's basis -- its rotation V and the bijection probe of
+    # its whole training transform -- so the retrain can reuse that V and refuse any other. Without
+    # this the box's "direction j" is a number with no coordinate attached (defect D1).
+    T_parent = getattr(posterior, "T", None)
+    if T_parent is None:
+        raise ValueError(
+            "build_truncation_region needs the parent's TransformedPosterior: its .T is the only "
+            "carrier of the latent basis the region is measured in. A bare DirectPosterior cannot say "
+            "which coordinate its samples are in, so a region drawn from it cannot be applied safely.")
+    V = rotation_of(T_parent)
+    _box = next((p for p in T_parent.parts if isinstance(p, UnitToBoxTransform)), None)
+    if _box is None:
+        raise ValueError("The parent posterior's transform has no parameter box; the region's probe "
+                         "cannot be sized from it.")
+    probe = training_checkpoint.bijection_probe(T_parent, int(_box.lows.numel()),
+                                                device=transform_device(T_parent))
     latent = getattr(posterior, "latent", posterior)
     return truncate.region_from_posterior(
         latent, x_obs,
         n_directions=truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions),
-        level=truncate.DEFAULT_HPD if level is None else float(level))
+        level=truncate.DEFAULT_HPD if level is None else float(level),
+        V=V, probe=probe, x_obs_digest=got)
 
 
 def _refuse_to_orphan_a_checkpoint(name: str, nd_prior) -> None:
@@ -1435,8 +1541,11 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
     # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
     val_latent_prior = _build_latent_prior_for_validation(cfg, inferred_prior)
     # If the posterior uses a decorrelating rotation, rotate the calibration prior to match it.
-    if hasattr(T, "parts") and len(T.parts) and isinstance(T.parts[0], OrthogonalTransform):
-        val_latent_prior = RotatedLatentPrior(val_latent_prior, T.parts[0].M.transpose(-1, -2))
+    # rotation_of is the ONE decoder of parts[0].M == V^T; reading the attribute here directly is
+    # how the GUI's deferred save came to write V transposed (defect D6).
+    _V_post = rotation_of(T)
+    if _V_post is not None:
+        val_latent_prior = RotatedLatentPrior(val_latent_prior, _V_post)
     x_cal, theta_star = analysis.gen_cal_data(
         model=cfg.model, prior=val_latent_prior,
         forcing_prior=force_prior,

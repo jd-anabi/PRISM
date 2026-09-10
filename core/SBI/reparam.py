@@ -226,9 +226,16 @@ class TransformedPosterior:
     Adapter that turns a latent-space DirectPosterior into a physical-space one
     via a bijection T: z -> θ_phys. Preserves the x-conditional API of DirectPosterior.
     """
-    def __init__(self, latent_posterior, transform: ComposeTransform):
+    def __init__(self, latent_posterior, transform: ComposeTransform, *,
+                 truncation=None, x_obs_digest: str | None = None):
         self.latent = latent_posterior
         self.T = transform
+        # A TSNPE posterior carries the region it was trained on and the observation that region was
+        # drawn around, so calibration can restrict its prior to the same region and inference can
+        # tell whether it is being asked about the observation this posterior is valid near. None
+        # for an amortized posterior -- the 2-argument construction every script uses is unchanged.
+        self.truncation = truncation
+        self.x_obs_digest = x_obs_digest
 
     def sample(self, sample_shape, x=None, **kwargs):
         z = self.latent.sample(sample_shape, x=x, **kwargs)
@@ -324,6 +331,25 @@ def build_rotated_bijection(box_transform: ComposeTransform, V: torch.Tensor) ->
     V orthogonal => the rotation adds 0 to the log-det. V = I recovers box_transform.
     """
     return ComposeTransform([OrthogonalTransform(V.transpose(-1, -2))] + list(box_transform.parts))
+
+
+def rotation_of(transform) -> torch.Tensor | None:
+    """The rotation V of a transform built by ``build_rotated_bijection``, or None if it has none.
+
+    THE ONE PLACE THE TRANSPOSE CONVENTION IS DECODED. ``build_rotated_bijection`` stores
+    ``OrthogonalTransform(V^T)`` as ``parts[0]``, so ``parts[0].M`` is V TRANSPOSED, and this returns
+    ``M^T == V`` -- the matrix ``RotatedLatentPrior`` samples with (``w = z @ V``) and
+    ``decorrelate.build_latent_fisher_rotation`` returns, i.e. eigenvectors in COLUMNS. Every reader
+    and writer of a rotation must go through here. The GUI's deferred save read ``parts[0].M``
+    directly instead and wrote ``V^T`` into every sidecar it produced, which ``load_eval_bijection``
+    then rebuilt as the inverse rotation (defect D6 of the TSNPE round-1 post-mortem, Appendix A
+    2026-09-09; the writer is repaired in the commit that pins the orientation with a save-then-load
+    probe test).
+    """
+    parts = getattr(transform, "parts", None)
+    if parts and isinstance(parts[0], OrthogonalTransform):
+        return parts[0].M.transpose(-1, -2)
+    return None
 
 
 def sidecar_path(choice: str, posterior_dir):

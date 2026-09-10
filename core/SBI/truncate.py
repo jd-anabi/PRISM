@@ -27,8 +27,21 @@ axes, which under REPARAM_ROTATE *are* V's columns -- truncate directions 0..K-1
 full width. This also dissolves the clustering concern outright: in that basis the
 region is approximately axis-aligned, so there is no curved ridge to fragment and no clustering
 needed at all.
+
+THE REGION CARRIES ITS BASIS (guardrail 7, 2026-09-09). A box over "directions 0..K-1" means nothing
+without the V those directions are columns of, and V is NOT reproducible across processes: the Fisher
+draws its operating points from the unseeded global RNG, so a retrain that recomputes it gets a
+different rotation with a different column order. The 2026-09-02 round did exactly that -- drew the
+region in the parent's basis and enforced it in a fresh one -- and the truncated prior kept 0.01% of
+the parent posterior's mass and excluded the ground truth (Appendix A 2026-09-09, defect D1). So a
+``TruncationRegion`` records the parent's V and its bijection probe, and ``build_posterior`` REUSES that
+V for a truncated round, refusing on any mismatch, rather than ever running the Fisher again.
 """
+import hashlib
+
 import torch
+
+from core.SBI import reparam as _reparam, training_checkpoint as _tc
 
 # 99.9%, not 95%: guardrail 5. The cost of an over-wide region is simulations; the cost of a narrow
 # one is deleted support that no later round can recover.
@@ -43,15 +56,40 @@ _FIRST_PASS_RATE = 0.25
 _MAX_DRAW = 1_000_000
 
 
+def rotation_digest(V) -> str | None:
+    """16-hex sha256 of a rotation's float64 bytes, or None for an unrotated run.
+
+    Same shape as ``orchestrator._gmm_fingerprint`` and ``observation_digest``. The caveat in
+    ``training_checkpoint.bijection_probe`` -- that hashing V's bytes is a brittle way to VERIFY a
+    rotation -- does not apply here: the V this names is carried verbatim with the region and copied,
+    never recomputed, so its bytes are stable by construction. The digest is only ever a NAME (the
+    region's ``identity_fields``, the region's repr); the actual check is
+    ``TruncationRegion.check_basis``, which compares the matrices and the probe.
+    """
+    if V is None:
+        return None
+    b = V.detach().cpu().to(torch.float64).contiguous().numpy().tobytes()
+    return hashlib.sha256(b).hexdigest()[:16]
+
+
 class TruncationRegion:
     """An axis-aligned box in the flow's LATENT coordinate, over a subset of directions.
 
     Latent, not physical, and that is load-bearing -- see the module docstring. ``dims`` are indices
     into the latent vector; under REPARAM_ROTATE, dim j is column j of the Fisher rotation V, so it
     is the same "direction j" that scripts/posterior_identifiability.py reports.
+
+    ``V`` and ``probe`` are the basis those indices refer to: the parent posterior's rotation
+    (eigenvectors in COLUMNS, ``w = z @ V``; None for an unrotated run) and
+    ``training_checkpoint.bijection_probe`` of the parent's whole training bijection (box + rotation).
+    ``x_obs_digest`` is the observation the region was drawn around (``observation_digest``). A region
+    built by ``orchestrator.build_truncation_region`` always carries all three; ``build_posterior``
+    reuses the V and refuses, through ``check_basis``, to apply the box in any other coordinate. They
+    are optional here only so a hand-built region (tests, legacy sidecars) still constructs.
     """
 
-    def __init__(self, dims, lo, hi, *, level: float = DEFAULT_HPD, n_latent: int | None = None):
+    def __init__(self, dims, lo, hi, *, level: float = DEFAULT_HPD, n_latent: int | None = None,
+                 V=None, probe=None, x_obs_digest: str | None = None):
         self.dims = [int(d) for d in dims]
         self.lo = torch.as_tensor(lo, dtype=torch.float64).reshape(-1)
         self.hi = torch.as_tensor(hi, dtype=torch.float64).reshape(-1)
@@ -62,6 +100,24 @@ class TruncationRegion:
             raise ValueError("TruncationRegion: every interval must have hi > lo.")
         self.level = float(level)
         self.n_latent = None if n_latent is None else int(n_latent)
+        # V keeps its own dtype (the checkpoint header stores `V.detach().cpu()` the same way, so the
+        # two compare bitwise); the probe is float64 on the CPU, as bijection_probe returns it. Both
+        # are CLONED: rotation_of returns a transposed VIEW of the parent transform's own matrix, and
+        # a region is a measurement, not an alias of the thing it measured.
+        self.V = None if V is None else V.detach().cpu().clone()
+        self.probe = None if probe is None else probe.detach().to(torch.float64).cpu().clone()
+        self.x_obs_digest = None if x_obs_digest is None else str(x_obs_digest)
+        if self.V is not None:
+            if self.V.dim() != 2 or self.V.shape[0] != self.V.shape[1]:
+                raise ValueError(f"TruncationRegion: V must be a square (P, P) rotation, got "
+                                 f"{tuple(self.V.shape)}.")
+            if self.n_latent is not None and self.V.shape[0] != self.n_latent:
+                raise ValueError(f"TruncationRegion: V is {tuple(self.V.shape)} but the region has "
+                                 f"n_latent={self.n_latent}.")
+        if (self.probe is not None and self.probe.dim() == 2 and self.n_latent is not None
+                and self.probe.shape[1] != self.n_latent):
+            raise ValueError(f"TruncationRegion: probe is {tuple(self.probe.shape)} but the region "
+                             f"has n_latent={self.n_latent}.")
 
     def contains(self, z: torch.Tensor) -> torch.Tensor:
         """(N, P) latent -> (N,) bool. Untruncated directions are unconstrained by construction."""
@@ -70,24 +126,117 @@ class TruncationRegion:
         sel = z[:, self.dims]
         return ((sel >= lo) & (sel <= hi)).all(dim=1)
 
+    def check_basis(self, T_train, *, dim: int, device=None, atol: float = 1e-6) -> None:
+        """Refuse unless ``T_train`` is the bijection this region was measured in.
+
+        Two comparisons, and both are needed. The rotation is compared DIRECTLY (``reparam.rotation_of``
+        against the recorded V): a probe alone cannot see a permutation of V's columns, because the
+        probe grid's rows have all coordinates equal and a column permutation leaves ``z @ V^T``
+        unchanged -- and a permuted V is exactly a same-eigenvectors, different-order rotation, the
+        kind of "almost the same basis" that would put the box's dims on other directions with no
+        numeric warning. The PROBE is then compared too, because the box can change with V held fixed
+        (bounds, a log-box setting), and the probe is what catches that.
+        """
+        if self.probe is None or self.probe.numel() == 0:
+            raise ValueError(
+                "This TruncationRegion carries no bijection probe (built by hand, or from a sidecar "
+                "written before the basis travelled with the region), so the coordinate its box refers "
+                "to cannot be verified. Rebuild it with orchestrator.build_truncation_region.")
+        V_train = _reparam.rotation_of(T_train)
+        if (V_train is None) != (self.V is None):
+            raise ValueError(
+                f"The truncation region was measured {'WITH' if self.V is not None else 'WITHOUT'} a "
+                f"Fisher rotation, but the training bijection has "
+                f"{'none' if V_train is None else 'one'}. Its box indexes the parent posterior's "
+                f"latent directions; applying it along other axes deletes support the parent never "
+                f"excluded (defect D1, Appendix A 2026-09-09).")
+        if self.V is not None:
+            a = V_train.detach().cpu().to(torch.float64)
+            b = self.V.to(torch.float64)
+            if a.shape != b.shape or not torch.allclose(a, b, rtol=0, atol=atol):
+                diff = float((a - b).abs().max()) if a.shape == b.shape else float("inf")
+                raise ValueError(
+                    f"The training bijection rotates by a DIFFERENT V than the one the truncation region "
+                    f"was measured in (max|diff| = {diff:.3g}). The box's dims index the PARENT "
+                    f"posterior's Fisher directions; along any other rotation the same numbers select "
+                    f"a slab the parent never occupied -- the 2026-09-02 round kept 0.01% of the parent "
+                    f"posterior that way (defect D1). A truncated round must reuse the region's V and "
+                    f"never recompute the Fisher.")
+        got = _tc.bijection_probe(T_train, dim, device=device)
+        if got.shape != self.probe.shape:
+            raise ValueError(f"The training bijection's probe is {tuple(got.shape)} but the region's is "
+                             f"{tuple(self.probe.shape)}: a different parameter count or grid.")
+        if not torch.allclose(got, self.probe, rtol=atol, atol=atol):
+            raise ValueError(
+                f"The training bijection differs from the one the truncation region was measured in "
+                f"(probe max|diff| = {float((got - self.probe).abs().max()):.3g}) although the rotation "
+                f"matches: either the BOX changed -- bounds, or a log-box setting -- since the parent "
+                f"was trained, or the region's recorded probe does not describe the bijection its own V "
+                f"builds. Load the config the parent was trained with, or rebuild the region from a "
+                f"posterior trained under this one.")
+
+    def identity_fields(self) -> dict:
+        """The region as the checkpoint identity records it: JSON-able, and enough to say whether a
+        stored checkpoint's rows were drawn under THIS region -- dims, level, both bounds as lists,
+        and the rotation's digest. A checkpoint whose identity lacks this record, or records another
+        region, holds rows this round must not resume onto."""
+        return {"dims": list(self.dims), "level": float(self.level),
+                "lo": [float(v) for v in self.lo.tolist()], "hi": [float(v) for v in self.hi.tolist()],
+                "V_digest": rotation_digest(self.V)}
+
+    def check_checkpoint_V(self, V_stored, *, where: str = "the training checkpoint",
+                           atol: float = 1e-6) -> None:
+        """Refuse to resume onto rows whose stored rotation is not this region's basis.
+
+        A checkpoint's rows are LATENT targets in the V stored beside them. Reusing them under
+        another V would train the flow on targets from two coordinates -- and reusing them under
+        this region's V while the header says otherwise means the rows are not this round's at all.
+        """
+        if (V_stored is None) != (self.V is None):
+            raise ValueError(
+                f"{where} stores {'no rotation' if V_stored is None else 'a rotation'} but the "
+                f"truncation region was measured {'with one' if self.V is not None else 'without one'}. "
+                f"Its rows are latent targets in another coordinate and cannot be reused for this "
+                f"round; rename that directory or change the budget so the round starts its own.")
+        if self.V is None:
+            return
+        a = V_stored.detach().cpu().to(torch.float64)
+        b = self.V.to(torch.float64)
+        if a.shape != b.shape or not torch.allclose(a, b, rtol=0, atol=atol):
+            diff = float((a - b).abs().max()) if a.shape == b.shape else float("inf")
+            raise ValueError(
+                f"{where} stores a rotation that is not the one the truncation region was measured in "
+                f"(max|diff| = {diff:.3g}). Its rows are latent targets in ANOTHER basis and cannot be "
+                f"reused for this round. Rename that directory or change the budget so the round starts "
+                f"its own checkpoint.")
+
     def to_dict(self) -> dict:
         return {"basis": "fisher-latent", "dims": list(self.dims), "level": self.level,
-                "lo": self.lo.clone(), "hi": self.hi.clone(), "n_latent": self.n_latent}
+                "lo": self.lo.clone(), "hi": self.hi.clone(), "n_latent": self.n_latent,
+                # The basis itself, so a sidecar can say which coordinate its box is in and a later
+                # round can reuse it. Absent from sidecars written before 2026-09-09 -> None.
+                "V": None if self.V is None else self.V.clone(),
+                "probe": None if self.probe is None else self.probe.clone(),
+                "V_digest": rotation_digest(self.V),
+                "x_obs_digest": self.x_obs_digest}
 
     @staticmethod
     def from_dict(d: dict) -> "TruncationRegion":
         return TruncationRegion(d["dims"], d["lo"], d["hi"],
-                                level=d.get("level", DEFAULT_HPD), n_latent=d.get("n_latent"))
+                                level=d.get("level", DEFAULT_HPD), n_latent=d.get("n_latent"),
+                                V=d.get("V"), probe=d.get("probe"), x_obs_digest=d.get("x_obs_digest"))
 
     def __repr__(self) -> str:
         parts = ", ".join(f"d{d}:[{float(a):.3g},{float(b):.3g}]"
                           for d, a, b in zip(self.dims, self.lo, self.hi))
-        return f"TruncationRegion(level={self.level:.4g}, {parts})"
+        basis = "unrotated" if self.V is None else f"V:{rotation_digest(self.V)[:8]}"
+        return f"TruncationRegion(level={self.level:.4g}, {parts}, basis={basis})"
 
 
 def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
                           n_directions: int = DEFAULT_N_DIRECTIONS,
-                          level: float = DEFAULT_HPD, n_samples: int = 20000) -> TruncationRegion:
+                          level: float = DEFAULT_HPD, n_samples: int = 20000,
+                          V=None, probe=None, x_obs_digest: str | None = None) -> TruncationRegion:
     """Draw from the posterior at ``x_obs`` and take a per-direction HPD interval in LATENT space.
 
     ⚠ GUARDRAIL 4: UNWEIGHTED draws. Not "the M best fits". Selecting on goodness of fit applies a
@@ -98,6 +247,10 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
     The interval is a marginal quantile range per direction, which is what makes the region a box.
     That is deliberately conservative: a box containing the 99.9% marginal of every truncated
     direction contains AT LEAST the 99.9% joint HPD, never less.
+
+    ``V`` and ``probe`` are the parent posterior's basis, recorded on the region (see
+    ``TruncationRegion``); ``orchestrator.build_truncation_region`` always supplies them, and
+    ``posterior_latent``'s samples ARE coordinates in that V -- the flow was trained on ``w = z @ V``.
     """
     if x_obs is None:
         raise ValueError(
@@ -108,12 +261,16 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
         z = posterior_latent.sample((int(n_samples),), x=x_obs)
     z = z.detach().to(torch.float64).cpu()
     p = z.shape[-1]
+    if V is not None and tuple(V.shape) != (p, p):
+        raise ValueError(f"region_from_posterior: the posterior's latent is {p}-dimensional but V is "
+                         f"{tuple(V.shape)}; that is not the basis these samples are in.")
     k = max(1, min(int(n_directions), p))
     tail = (1.0 - float(level)) / 2.0
     q = torch.tensor([tail, 1.0 - tail], dtype=torch.float64)
     dims = list(range(k))                       # latent axes are already sorted best-constrained first
     bounds = torch.quantile(z[:, dims], q, dim=0)
-    return TruncationRegion(dims, bounds[0], bounds[1], level=level, n_latent=p)
+    return TruncationRegion(dims, bounds[0], bounds[1], level=level, n_latent=p, V=V, probe=probe,
+                            x_obs_digest=x_obs_digest)
 
 
 class TruncatedLatentPrior:

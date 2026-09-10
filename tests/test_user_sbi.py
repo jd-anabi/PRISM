@@ -2176,6 +2176,191 @@ def test_the_training_budget_routes_to_a_different_checkpoint():
         "the same budget must resolve to the same directory, or nothing could ever resume"
 
 
+def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
+    """⚠ GUARDRAIL 7, end to end through build_posterior, with ZERO simulation.
+
+    The 2026-09-02 TSNPE round computed a FRESH Fisher rotation and enforced the parent's box in it:
+    0.01% of the parent posterior survived and the ground truth did not (Appendix A 2026-09-09, D1).
+    So a truncated round must (i) never call the Fisher, (ii) train under the region's own V and
+    refuse a region whose probe disagrees with that bijection, (iii) refuse to resume a checkpoint
+    stored under another V, (iv) refuse a config whose rotation flag disagrees with the region, and
+    (v) warn -- not refuse -- when the loaded cell's truth lies outside the box.
+
+    train_nn is stubbed to capture the plan and return a bare DirectPosterior, so the whole path up to
+    the first TRAINING simulation runs for real (the tiny prior build does simulate, for seconds) and
+    no training row is ever generated.
+    """
+    import contextlib
+    import tempfile
+    from core import config as _cfg
+    from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
+    from sbi.inference import DirectPosterior as _DP
+
+    class _FakeDP(_DP):
+        def __init__(self):                                   # never trained; only its type matters
+            pass
+
+    seen = {}
+
+    def _fisher_stub(*a, **k):
+        raise AssertionError("a truncated round must never compute a fresh Fisher rotation (D1)")
+
+    def _train_stub(plan, **kw):
+        seen["prior"] = plan.prior
+        return _FakeDP(), {"loss": []}
+
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    sink = lambda title, fig: None                                # noqa: E731
+    saved_gen_prior = orchestrator.pipeline.gen_prior
+    saved_fisher = orchestrator.decorrelate.build_latent_fisher_rotation
+    saved_train_nn = pipeline_mod.train_nn
+    saved_every, saved_root = orchestrator.TRAINING_CHECKPOINT_EVERY, _cfg.CHECKPOINT_PATH
+    try:
+        cfg = cli.make_sim_config("NADROWSKI", labels, True,
+                                  str(config.BOUNDS_PATH / "nadrowski" / "master.txt"),
+                                  reparam_rotate=True)
+        cfg.hw = config.cpu_device()
+        cfg.hw.batch_size = 8
+        orchestrator.pipeline.gen_prior = _tiny_nadrowski_gen_prior
+        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        orchestrator.decorrelate.build_latent_fisher_rotation = _fisher_stub
+        pipeline_mod.train_nn = _train_stub
+
+        P = len(cfg.params_dict) + len(cfg.rescale_params)
+        T = orchestrator.build_inferred_bijection(cfg, log_params=orchestrator._log_params_for(cfg))
+        torch.manual_seed(0)
+        Q, _ = torch.linalg.qr(torch.randn(P, P))
+        T_train = _rp.build_rotated_bijection(T, Q)
+        probe = _tc.bijection_probe(T_train, P, device=cfg.hw.device)
+        # The box is drawn from the rotated prior's own quantiles, so its acceptance is bounded below
+        # whatever GMM the (unseeded) prior fit produced: SBIPriorWrapper draws 10000 rows through the
+        # rejection sampler before train_nn is ever reached.
+        with torch.no_grad():
+            rot = _rp.RotatedLatentPrior(orchestrator._build_latent_prior_for_validation(cfg, inferred_prior), Q)
+            w0 = rot.sample((4000,))[:, 0].double()
+        region = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
+                                      probe=probe, x_obs_digest="deadbeefdeadbeef")
+
+        def _round(reg, digest="deadbeefdeadbeef"):
+            return orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
+                                                save=False, fig_sink=sink, num_runs=2, run_size_cap=8,
+                                                truncation=reg, x_obs_digest=digest)
+
+        # (i) + (ii): the parent's basis is reused, the Fisher stub never fires, the plan's prior is
+        # THIS region over a latent rotated by exactly Q, and the posterior carries the region
+        post, _ = _round(region)
+        assert isinstance(seen["prior"], _tr.TruncatedLatentPrior), type(seen["prior"])
+        assert seen["prior"].region is region
+        assert isinstance(seen["prior"].base, _rp.RotatedLatentPrior)
+        assert torch.allclose(seen["prior"].base.V.cpu(), Q), "the round did not train under the region's V"
+        assert bool(region.contains(seen["prior"].sample((256,)).cpu().double()).all())
+        assert post.truncation is region and post.x_obs_digest == "deadbeefdeadbeef"
+        assert torch.allclose(_rp.rotation_of(post.T).cpu(), Q)
+        # the region's own digest fills in a missing one, and contradicts a wrong one
+        post2, _ = _round(region, digest=None)
+        assert post2.x_obs_digest == "deadbeefdeadbeef"
+        try:
+            _round(region, digest="0" * 16)
+            raise AssertionError("an artifact was allowed to name an observation its region did not come from")
+        except ValueError as e:
+            assert "x_obs_digest" in str(e)
+
+        # (ii) a region whose recorded probe does not describe the bijection its own V builds
+        flip = torch.ones(P)
+        flip[0] = -1.0
+        inconsistent = _tr.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q @ torch.diag(flip),
+                                            probe=probe)
+        try:
+            _round(inconsistent)
+            raise AssertionError("a region whose probe disagrees with its own V was accepted")
+        except ValueError as e:
+            assert "recorded probe does not describe" in str(e), e
+
+        # (iii) a resumable checkpoint at this budget is refused unless it was generated under THIS
+        # region: the amortized parent's (same V, no region in its identity -- the D3 no-op) and a
+        # checkpoint stored under another rotation alike
+        tmp = Path(tempfile.mkdtemp())
+        orchestrator.TRAINING_CHECKPOINT_EVERY = 1
+        _cfg.CHECKPOINT_PATH = tmp
+        ident = orchestrator.training_identity(cfg, inferred_prior, 8, 2)
+        d = _tc.resolve_dir(ident)
+        Q2, _ = torch.linalg.qr(torch.randn(P, P))
+        for V_stored, expect in ((Q, "no region at all"), (Q2, "no region at all")):
+            if d.exists():
+                import shutil
+                shutil.rmtree(d)
+            _tc.create(d, ident, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2),
+                       inits=torch.zeros(8, 3), V=V_stored, probe=torch.zeros(0), run_size=8, n_runs=2)
+            _tc.save(d, from_batch=0, batch_k=1,
+                     rng={"cpu": torch.get_rng_state(), "cuda": None, "chi_gen": None},
+                     x_buf=torch.zeros(16, 5), th_buf=torch.zeros(16, P), run_size=8)
+            try:
+                _round(region)
+                raise AssertionError("a checkpoint not generated under this region was resumed")
+            except ValueError as e:
+                assert expect in str(e) and "checkpoint" in str(e).lower(), e
+        # and the V check itself, for a header that DOES record this region but under another V
+        import shutil
+        shutil.rmtree(d)
+        ident_tr = dict(ident, truncation=region.identity_fields())
+        _tc.create(d, ident_tr, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2),
+                   inits=torch.zeros(8, 3), V=Q2, probe=torch.zeros(0), run_size=8, n_runs=2)
+        _tc.save(d, from_batch=0, batch_k=1,
+                 rng={"cpu": torch.get_rng_state(), "cuda": None, "chi_gen": None},
+                 x_buf=torch.zeros(16, 5), th_buf=torch.zeros(16, P), run_size=8)
+        try:
+            _round(region)
+            raise AssertionError("a checkpoint stored under another rotation was resumed")
+        except ValueError as e:
+            assert "rotation" in str(e) and "checkpoint" in str(e).lower(), e
+        orchestrator.TRAINING_CHECKPOINT_EVERY = 0
+        _cfg.CHECKPOINT_PATH = saved_root
+
+        # (iv) the config's rotation flag must agree with the region, in both directions
+        cfg.reparam_rotate = False
+        try:
+            _round(region)
+            raise AssertionError("a rotated region was accepted by an unrotated config")
+        except ValueError as e:
+            assert "reparam_rotate" in str(e), e
+        cfg.reparam_rotate = True
+        plain = _tr.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=None,
+                                     probe=_tc.bijection_probe(T, P, device=cfg.hw.device))
+        try:
+            _round(plain)
+            raise AssertionError("an unrotated region was accepted by a rotated config")
+        except ValueError as e:
+            assert "reparam_rotate" in str(e), e
+
+        # (v) the loaded cell's truth outside the box: a loud warning, and the round continues;
+        # inside the box: silence
+        cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
+        with torch.no_grad():
+            z0 = float(T_train.inv(cfg.ground_truth_tensor.reshape(1, -1))[0, 0])
+        lo, hi = ((w0.quantile(0.6), w0.quantile(0.9)) if z0 <= float(w0.median())
+                  else (w0.quantile(0.1), w0.quantile(0.4)))      # the side of the median the truth is NOT on
+        far = _tr.TruncationRegion([0], [lo], [hi], n_latent=P, V=Q, probe=probe)
+        buf = io.StringIO()
+        with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(buf):
+            warnings.simplefilter("always")
+            _round(far)
+        out = buf.getvalue()
+        assert "GROUND TRUTH" in out and "direction 0" in out, out[-600:]
+        assert any("GROUND TRUTH" in str(c.message) for c in caught)
+        near = _tr.TruncationRegion([0], [min(z0, float(w0.quantile(0.02))) - 0.5],
+                                    [max(z0, float(w0.quantile(0.98))) + 0.5], n_latent=P, V=Q, probe=probe)
+        buf = io.StringIO()
+        with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(buf):
+            warnings.simplefilter("always")
+            _round(near)
+        assert "GROUND TRUTH" not in buf.getvalue() and not any("GROUND TRUTH" in str(c.message) for c in caught)
+    finally:
+        orchestrator.pipeline.gen_prior = saved_gen_prior
+        orchestrator.decorrelate.build_latent_fisher_rotation = saved_fisher
+        pipeline_mod.train_nn = saved_train_nn
+        orchestrator.TRAINING_CHECKPOINT_EVERY, _cfg.CHECKPOINT_PATH = saved_every, saved_root
+
+
 def test_build_posterior_takes_the_budget_as_arguments_because_the_constants_are_snapshotted():
     """orchestrator does `from .config import TRAINING_NUM_RUNS, TRAINING_RUN_SIZE`, so both are bound
     at IMPORT. A caller that "configures" a run by writing config.TRAINING_NUM_RUNS = 200 changes

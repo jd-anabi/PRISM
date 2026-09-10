@@ -3591,6 +3591,43 @@ which is the only reason D4 did not also bias this round.
   the override; the GUI saving V, with a load-side reconcile for the three transposed artifacts)
   follow, one commit each, each extending this entry.
 
+### The fixes, as they landed
+
+- **X1 — the region carries its basis; a truncated round never recomputes V.**
+  `reparam.rotation_of(T)` is now the ONE decoder of `parts[0].M == Vᵀ` (the hand-written transpose
+  in `validate_calibration` goes through it). `TruncationRegion` gains `V`, `probe` and
+  `x_obs_digest` (cloned, not aliased; round-tripped by `to_dict`/`from_dict`, absent → None for
+  old sidecars), `identity_fields()` (dims, level, lo, hi, `V_digest` — what a checkpoint identity
+  records), `check_basis(T_train)` and `check_checkpoint_V(V)`. `check_basis` compares the rotation
+  DIRECTLY and then the probe, because **`bijection_probe` is blind to a column permutation of V**
+  (its grid rows have all coordinates equal, so `z @ Vᵀ` is invariant under reordering columns;
+  measured: max|diff| 9.5e-7 for a swap, 2.8 for a sign flip) — a same-eigenvectors, different-order
+  rotation would otherwise pass. `build_truncation_region` refuses a posterior without `.T`, reads V
+  through `rotation_of`, probes the parent's whole bijection, and binds the observation digest.
+  `build_posterior(truncation=…)`: refuses a `reparam_rotate` flag disagreeing with the region;
+  reuses the region's V and never calls the Fisher; refuses to resume any checkpoint whose identity
+  does not record THIS region (so, until X2 writes that record, a truncated round never resumes at
+  all — the amortized parent's own checkpoint, whose V equals the region's, is exactly the D3 no-op)
+  and then also checks the stored V; runs `check_basis` on `T_train`; warns (print + `warnings.warn`,
+  never refuses) naming the directions when the loaded cell's truth is outside the box; fills the
+  artifact's `x_obs_digest` from the region and refuses a contradicting one; refuses `truncation=`
+  on the LOAD branch; returns a `TransformedPosterior` carrying `.truncation`/`.x_obs_digest`
+  (keyword-only extras; every 2-argument construction unchanged). `orchestrator` no longer imports
+  `OrthogonalTransform`. Tests: `test_conditioning_repair.py` +4
+  (`test_the_region_carries_its_basis_through_a_sidecar_round_trip`,
+  `test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one` — THE regression test: a
+  sign flip on a truncated column, on an untruncated one, a column swap, an unrelated rotation, a
+  changed box, an unrotated bijection in both directions, a probe-less region —
+  `test_a_resumed_checkpoint_with_another_rotation_is_refused`,
+  `test_build_truncation_region_records_the_parents_basis`); `test_user_sbi.py` +1
+  (`test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch`: end to end through
+  `build_posterior` with `train_nn` stubbed, ~45 s, no training simulation — the Fisher stub never
+  fires, the plan's prior is THIS region over a latent rotated by exactly the parent's V, the
+  amortized parent's checkpoint and one under another V are both refused, the flag disagreement is
+  refused both ways, the truth-outside warning fires and the truth-inside case is silent). Known
+  until X5: a parent RELOADED from a Vᵀ sidecar hands X1 the wrong V self-consistently; in-session
+  parents (this round's situation) and CLI-saved artifacts are correct from here.
+
 ## 2026-08-28 (second session) — the §6.1 refactor landed: 39 commits, zero drift, two new ladders
 
 The whole of §6.1 executed in one session as 39 local commits on `main` (from `7b1a3d0`), one per

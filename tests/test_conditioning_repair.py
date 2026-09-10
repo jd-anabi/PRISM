@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 
 from core import config
-from core.SBI import derived, pipeline, statistics, truncate
+from core.SBI import derived, pipeline, reparam, statistics, training_checkpoint, truncate
 from core.SBI.embedded_network import EmbeddedNet, _probit
 
 _SENT = float(torch.log(torch.tensor(1e-12, dtype=torch.float32)))
@@ -455,6 +455,201 @@ def test_the_region_survives_a_sidecar_round_trip():
     back = truncate.TruncationRegion.from_dict(r.to_dict())
     assert back.dims == r.dims and back.level == r.level and back.n_latent == r.n_latent
     assert torch.equal(back.lo, r.lo) and torch.equal(back.hi, r.hi)
+
+
+# ── Phase 4, guardrail 7: the region carries its basis ───────────────────────────────────────────
+class _Wide:
+    """A posterior stand-in whose latent has five tight and eight wide directions (13-D)."""
+
+    def sample(self, shape, x=None):
+        n = int(torch.Size(shape).numel())
+        return torch.randn(n, 13) * torch.tensor([0.1] * 5 + [5.0] * 8)
+
+
+def _orthogonal(n: int, seed: int) -> torch.Tensor:
+    g = torch.Generator().manual_seed(seed)
+    q, _ = torch.linalg.qr(torch.randn(n, n, generator=g))
+    return q
+
+
+def _rotated_box(Q: torch.Tensor, width: float = 10.0):
+    p = Q.shape[0]
+    box = reparam.build_box_bijection(torch.zeros(p), width * torch.ones(p))
+    return box, reparam.build_rotated_bijection(box, Q)
+
+
+def test_the_region_carries_its_basis_through_a_sidecar_round_trip():
+    """A box over 'directions 0..K-1' is meaningless without the V those directions are columns of,
+    and V is not reproducible across processes. So the region records the parent's V and the probe
+    of its whole training bijection, and both survive the sidecar; a sidecar written before they
+    existed loads with None rather than failing."""
+    P = 13
+    Q = _orthogonal(P, 3)
+    _, T_train = _rotated_box(Q)
+    probe = training_checkpoint.bijection_probe(T_train, P)
+    r = truncate.TruncationRegion([0, 3], [-1.5, 0.25], [2.5, 4.0], level=0.999, n_latent=P,
+                                  V=Q, probe=probe, x_obs_digest="0123456789abcdef")
+    d = r.to_dict()
+    assert d["V_digest"] == truncate.rotation_digest(Q) and len(d["V_digest"]) == 16
+    back = truncate.TruncationRegion.from_dict(d)
+    assert torch.equal(back.V, Q) and torch.equal(back.probe, probe)
+    assert back.dims == r.dims and torch.equal(back.lo, r.lo) and torch.equal(back.hi, r.hi)
+    assert back.x_obs_digest == "0123456789abcdef"
+    assert "V:" + d["V_digest"][:8] in repr(back)
+    assert back.identity_fields() == r.identity_fields()
+    assert r.identity_fields()["V_digest"] == d["V_digest"] and r.identity_fields()["lo"] == [-1.5, 0.25]
+    # the region is a measurement, not an alias of the transform it was measured from
+    assert r.V.data_ptr() != T_train.parts[0].M.data_ptr()
+
+    legacy = truncate.TruncationRegion.from_dict({"dims": [0], "lo": [-1.0], "hi": [1.0]})
+    assert legacy.V is None and legacy.probe is None and "unrotated" in repr(legacy)
+    assert legacy.x_obs_digest is None and legacy.identity_fields()["V_digest"] is None
+    assert truncate.rotation_digest(None) is None
+
+    # region_from_posterior forwards both onto the region it measures
+    torch.manual_seed(4)
+    region = truncate.region_from_posterior(_Wide(), torch.zeros(1, 4), n_directions=5,
+                                            n_samples=2000, V=Q, probe=probe)
+    assert torch.equal(region.V, Q) and torch.equal(region.probe, probe) and region.n_latent == P
+
+    for bad in ({"V": torch.eye(12)}, {"V": torch.ones(13)}, {"probe": torch.zeros(7, 12)}):
+        try:
+            truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, **bad)
+            raise AssertionError(f"a mis-sized basis was accepted: {bad}")
+        except ValueError:
+            pass
+    try:
+        truncate.region_from_posterior(_Wide(), torch.zeros(1, 4), n_samples=200, V=torch.eye(12))
+        raise AssertionError("a V of the wrong size was accepted by region_from_posterior")
+    except ValueError:
+        pass
+
+
+def test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one():
+    """⚠ THE REGRESSION TEST FOR THE 2026-09-02 ROUND (defect D1).
+
+    That round drew its box in the parent posterior's V and enforced it under a freshly computed
+    V' -- different signs, different column ORDER, different mixing -- so the truncated prior kept
+    0.01% of the parent posterior and excluded the ground truth. check_basis must refuse every such
+    mismatch: a sign flip on a truncated column, a flip on an UNTRUNCATED one (the box's dims still
+    index other directions), a column swap (which a probe alone cannot see -- the probe grid's rows
+    have all coordinates equal, so a permutation of V's columns leaves it unchanged), an unrelated
+    rotation, and a changed box under the same rotation. A region with no probe is refused outright.
+    """
+    P = 13
+    Q = _orthogonal(P, 5)
+    box, T_train = _rotated_box(Q)
+    probe = training_checkpoint.bijection_probe(T_train, P)
+    torch.manual_seed(6)
+    region = truncate.region_from_posterior(_Wide(), torch.zeros(1, 4), n_directions=5,
+                                            n_samples=2000, V=Q, probe=probe)
+    region.check_basis(T_train, dim=P)                       # the parent's own basis passes
+
+    flip2, flip9 = torch.ones(P), torch.ones(P)
+    flip2[2], flip9[9] = -1.0, -1.0
+    swapped = Q[:, [1, 0] + list(range(2, P))]
+    for tag, V2 in (("a sign flip on truncated column 2", Q @ torch.diag(flip2)),
+                    ("a sign flip on UNTRUNCATED column 9", Q @ torch.diag(flip9)),
+                    ("a swap of columns 0 and 1", swapped),
+                    ("an unrelated rotation", _orthogonal(P, 8))):
+        try:
+            region.check_basis(reparam.build_rotated_bijection(box, V2), dim=P)
+            raise AssertionError(f"{tag} was accepted as the region's basis")
+        except ValueError as e:
+            assert "DIFFERENT V" in str(e), f"{tag}: {e}"
+    # the same V over a different box: the rotation matches, the probe does not
+    other_box, _ = _rotated_box(Q, width=20.0)
+    try:
+        region.check_basis(reparam.build_rotated_bijection(other_box, Q), dim=P)
+        raise AssertionError("a changed box under the same rotation was accepted")
+    except ValueError as e:
+        assert "BOX" in str(e)
+    # an unrotated bijection against a rotated region, and the mirror image
+    try:
+        region.check_basis(box, dim=P)
+        raise AssertionError("an unrotated bijection was accepted for a rotated region")
+    except ValueError as e:
+        assert "measured WITH a Fisher rotation, but the training bijection has none" in str(e), e
+    plain = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=None,
+                                      probe=training_checkpoint.bijection_probe(box, P))
+    plain.check_basis(box, dim=P)
+    try:
+        plain.check_basis(T_train, dim=P)
+        raise AssertionError("a rotated bijection was accepted for an unrotated region")
+    except ValueError as e:
+        assert "measured WITHOUT a Fisher rotation, but the training bijection has one" in str(e), e
+    # a probe-less region
+    bare = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q)
+    try:
+        bare.check_basis(T_train, dim=P)
+        raise AssertionError("a region without a probe was accepted")
+    except ValueError as e:
+        assert "probe" in str(e)
+
+
+def test_build_truncation_region_records_the_parents_basis():
+    """The RECORDING end of guardrail 7: orchestrator.build_truncation_region must read the parent
+    posterior's V through reparam.rotation_of (V, not its transpose -- the GUI's mistake), probe the
+    parent's whole bijection, and bind the observation digest; a posterior with no transform, or a
+    transform with no box, is refused rather than guessed at."""
+    from core import orchestrator
+
+    P = 13
+    Q = _orthogonal(P, 11)
+    box, T_parent = _rotated_box(Q)
+    x = torch.linspace(-1.0, 1.0, 7).reshape(1, 7)
+    rec = {"digest": orchestrator.observation_digest(x)}
+    post = reparam.TransformedPosterior(_Wide(), T_parent)
+    torch.manual_seed(12)
+    region = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.999)
+    assert torch.equal(region.V, Q) and not torch.equal(region.V, Q.T)
+    assert torch.equal(region.probe, training_checkpoint.bijection_probe(T_parent, P))
+    assert region.x_obs_digest == rec["digest"] and region.dims == [0, 1, 2, 3, 4] and region.n_latent == P
+    region.check_basis(T_parent, dim=P)
+    # an unrotated parent records V=None and a probe of the box alone
+    plain = orchestrator.build_truncation_region(reparam.TransformedPosterior(_Wide(), box), rec, x)
+    assert plain.V is None and torch.equal(plain.probe, training_checkpoint.bijection_probe(box, P))
+    # refusals: the wrong observation, a bare posterior with no transform, a transform with no box
+    try:
+        orchestrator.build_truncation_region(post, {"digest": "0" * 16}, x)
+        raise AssertionError("a region was drawn around an observation that is not the recorded one")
+    except ValueError:
+        pass
+    for bad, tag in ((_Wide(), "a posterior with no transform"),
+                     (reparam.TransformedPosterior(_Wide(), torch.distributions.transforms.ComposeTransform(
+                         [reparam.OrthogonalTransform(Q.T)])), "a transform with no box")):
+        try:
+            orchestrator.build_truncation_region(bad, rec, x)
+            raise AssertionError(f"{tag} was accepted")
+        except ValueError:
+            pass
+
+
+def test_a_resumed_checkpoint_with_another_rotation_is_refused():
+    """A checkpoint's rows are latent targets in the V stored beside them. A truncated round may
+    resume onto them only if that V IS the region's; anything else mixes coordinates."""
+    P = 13
+    Q = _orthogonal(P, 7)
+    _, T_train = _rotated_box(Q)
+    region = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q,
+                                       probe=training_checkpoint.bijection_probe(T_train, P))
+    region.check_checkpoint_V(Q.clone())                     # the same rotation, another copy
+    region.check_checkpoint_V(Q.to(torch.float64))           # dtype is not identity
+    flip = torch.ones(P)
+    flip[0] = -1.0
+    for bad in (Q @ torch.diag(flip), _orthogonal(P, 9), None):
+        try:
+            region.check_checkpoint_V(bad)
+            raise AssertionError(f"a checkpoint rotation that is not the region's was accepted: {bad}")
+        except ValueError:
+            pass
+    plain = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P)
+    plain.check_checkpoint_V(None)
+    try:
+        plain.check_checkpoint_V(Q)
+        raise AssertionError("an unrotated region accepted a rotated checkpoint")
+    except ValueError:
+        pass
 
 
 # ── the prior sweep's device and its knobs ───────────────────────────────────────────────────────
