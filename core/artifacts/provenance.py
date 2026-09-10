@@ -36,7 +36,7 @@ def device_name(hw) -> str:
         try:
             import torch
             return torch.cuda.get_device_name(dev)
-        except Exception:                    # noqa: BLE001
+        except Exception:                    # noqa: BLE001 -- torch.cuda.get_device_name can fail for any driver or enumeration reason
             return "cuda"
     return str(getattr(dev, "type", dev) or "cpu")
 
