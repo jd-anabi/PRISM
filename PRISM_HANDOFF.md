@@ -79,21 +79,22 @@ crashing test reports as ONE failure instead of silently killing the suite's tai
 > subjects) became SIX standalone files split along its own section banners, and `test_user_sbi.py`
 > gained three `retry_on_oom` tests (88 → 91). The table below is the current layout; the original
 > per-suite "Covers" notes survive in each file's module docstring. **Counts as of the refactor's
-> final gate — COUNT them, do not trust these numbers either.** Total then: **300**.
+> final gate — COUNT them, do not trust these numbers either.** Total then: **300**; after the
+> 2026-09-09 TSNPE fixes X1–X5 (Appendix A), **321** — the five suites that gained tests are marked.
 
 | Suite | Tests |
 |---|---|
-| `tests/test_user_sbi.py` | 91 (~1 hour — nearly all inside `test_chi_mode_full_sbi_pipeline`) |
+| `tests/test_user_sbi.py` | 97 (~1 hour — nearly all inside `test_chi_mode_full_sbi_pipeline`; +6 on 2026-09-09: the TSNPE end-to-end round, identity, near-miss, verify, calibration and post-override tests) |
 | `tests/test_user_models.py` | 39 |
-| `tests/test_conditioning_repair.py` | 25 |
+| `tests/test_conditioning_repair.py` | 34 (+9 on 2026-09-09: the region's basis, the D1 regression test, the checkpoint-V refusal, `build_truncation_region`, region reproducibility, the `t_scale` filter, the inference-time warning, the CLI `run` pin, the one-reader scan) |
 | `tests/test_chi_set_encoder.py` | 23 |
-| `tests/test_artifact_consistency.py` | 15 |
+| `tests/test_artifact_consistency.py` | 18 (+3 on 2026-09-09: the non-amortized load path, the D6 spec test, the sidecar reconcile) |
 | `tests/test_fdt_user.py` | 5 |
 | `tests/test_vt_progress.py` | 22 — the tqdm/VT100 router, the Qt progress stack, the solver meter, the overall-bar election |
 | `tests/test_worker_dispatch.py` | 7 — dispatch, cancellation, error dialogs, payload lifetime |
-| `tests/test_settings_persistence.py` | 17 — QSettings round-trips, the training-budget group, layout geometry, the `_code_only` config-tab tests |
+| `tests/test_settings_persistence.py` | 18 — QSettings round-trips, the training-budget group, layout geometry, the `_code_only` config-tab tests (+1: the TSNPE tab's checkpoint line) |
 | `tests/test_figures.py` | 19 — figure sinks, pop-outs, dark-theme matplotlib, labels |
-| `tests/test_nav_and_gating.py` | 25 — navigation, inference-tab gating, the χ probe table |
+| `tests/test_nav_and_gating.py` | 27 — navigation, inference-tab gating, the χ probe table (+2: the non-amortized session, the deferred save's V) |
 | `tests/test_simulate.py` | 12 — the Simulate streaming loop and video export |
 
 
@@ -1347,6 +1348,33 @@ information on `f_scale` (from nothing to measurable), `t_scale` and `lam`. It d
 > **What to DO about it is §11.** This section is the characterisation; §11 is the programme, and
 > §11.2.1 reconciles the two where they appear to disagree.
 
+> ### ⚠⚠ THE DIRECTION TABLE BELOW IS THE TRANSPOSE — found 2026-09-09 (Appendix A, D6)
+> `posterior_08232026.rot.pt` was saved by the GUI, which wrote V TRANSPOSED (defect D6), and
+> `scripts/posterior_identifiability.py` read the sidecar's columns as directions — so every
+> "direction j" row below is really **parameter j's row** of the true V (its loadings across the
+> directions), labelled as a direction. In the correct orientation (checkpoint `train_230ae7cb5fc2`,
+> verified bitwise against the rotation pickled inside the posterior itself):
+>
+> | direction | dominant loadings (correct orientation) |
+> |---|---|
+> | 0 (best) | −1.00·`t_scale` (alone; nothing else above 0.02) |
+> | 1 | −0.67·`k` −0.64·`s` −0.34·`f_max` |
+> | 2 | +0.55·`lam` −0.55·`beta` +0.48·`tau` |
+> | 3 | −0.63·`f_max` +0.51·`lam` +0.47·`s` |
+> | 4 | +0.59·`beta` +0.54·`k` −0.50·`s` |
+> | 9 | −0.83·`delta_E` +0.45·`f_scale` +0.32·`x_scale` |
+> | 10 | −0.86·`n` +0.49·`temp` |
+> | 11 | −0.82·`tau_c` +0.55·`temp` |
+> | 12 (worst) | +0.68·`temp` +0.55·`tau_c` +0.49·`n` |
+>
+> So **"`k` is UNMEASURED / its own null direction" is an artifact of the transpose**: what was read
+> as "direction 11 = −1.00·k" is `t_scale`'s row (parameter index 11), and `t_scale` is the single
+> best-constrained direction; `k` sits in directions 1 and 4. The per-parameter "share of
+> identifiability" figures below are transposed too. The SBC/PPC/loss-curve facts stand: they were
+> measured in-session, in the correct basis. The script now checks the sidecar's V against the
+> rotation inside the posterior and prints the correct table. Nothing below this banner has been
+> rewritten; read it as the transposed reading it is.
+
 Trained on the corrected χ band (`chi_f0 = 0.15`, `(0.03, 0.3) × Ω₀`, `CHI_MAX_CYCLES = 20`,
 K=6 supplied into `chi_k_pad = 12`). Analysed with **`scripts/posterior_identifiability.py`**, which
 reads the `.pt` + `.rot.pt` and simulates nothing.
@@ -1963,6 +1991,56 @@ runs in seconds and needs no simulation — **run it first when touching anythin
   executed on the card by the resume drill in the top Appendix A entry. Exercising it needs
   `smoke_train.py`'s `CKPT_DIR` **and** `PRIOR` together; `CKPT_DIR` alone routes run 2 to a different
   directory on `prior_fingerprint` and tests nothing.
+
+### D — TSNPE / decorrelation (the 2026-09-09 round-1 post-mortem; full account in Appendix A)
+
+- **D1. (one line)** The region's basis must travel with it — §11.6 guardrail 7; `reparam.rotation_of`
+  is the ONE decoder of the transform's `parts[0].M == Vᵀ` (a source scan keeps it that way).
+- **D2. (one line)** `validate_calibration` rebuilt the FULL prior; it takes `truncation=` and wraps
+  AFTER the rotation — §11.6 guardrail 8.
+- **D3. THE CHECKPOINT IDENTITY DID NOT KNOW ABOUT THE REGION.** `training_identity` had no
+  truncation field, so a TSNPE round at the parent's budget resolved to the parent's
+  `Checkpoints/train_<digest>`: COMPLETE there, the round simulated NOTHING, reused the parent's V
+  and its untruncated rows, and the TSNPE tab's budget line (the Posterior tab's) said so in plain
+  words — "Resumes a COMPLETE checkpoint … simulation will be skipped entirely". At a different
+  budget it computed a fresh V (D1) and wrote truncated rows under an AMORTIZED identity — a directory
+  a later ordinary run would resume and save as `amortized: True`; that is what
+  `QUARANTINED_tsnpe_round1_truncated_rows_train_0b471d560271` is (renamed without the `train_`
+  prefix so no scanner touches it; nothing deleted). Which failure you got was decided by whether the
+  Batches field happened to equal the parent's. The identity now carries `truncation` (dims, level,
+  quantised bounds, V digest) — OMITTED for amortized runs, never `None`: `identity_digest`
+  serialises a null and would rename all five complete checkpoints (the amortized digest for a fixed
+  cfg/prior pair is pinned to a golden value). `near_miss_siblings` ignores a sibling that differs
+  only in `truncation`, or the Posterior tab would tell you to change a setting it does not have.
+  A pre-fix TSNPE directory can never be told from an amortized one — delete it by hand. Corrected
+  claim: a near-zero-mass region cannot print "kept 0.000%" — `SBIPriorWrapper` draws 10 000 rows
+  through the truncated prior before training, so either the print shows ≥ 0.016 % or the
+  wrapper's constructor raises. Pinned by
+  `test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest_is_untouched`.
+- **D4. (one line)** The per-batch `t_scale` override turns a box along a `t_scale`-loaded
+  direction into a reweighting — guardrail 7; `truncate.t_scale_loading_max`; the kept fraction is
+  the post-override one.
+- **D6. THE GUI SAVED V TRANSPOSED.** `build_rotated_bijection` stores `OrthogonalTransform(Vᵀ)` as
+  `parts[0]`, so `parts[0].M` is `Vᵀ`; `PosteriorPanel._extract_rotation` returned it verbatim and
+  `_save_posterior` wrote it as `"V"`. `load_eval_bijection` re-transposes whatever it reads, so every
+  GUI-saved rotated posterior reloaded through `box(w @ V)` instead of `box(w @ Vᵀ)` — every physical
+  parameter a different mixture of the true ones, silently: `Vᵀ` has the same shape and is just as
+  orthogonal, and no guard compared it. The CLI path passed the true V, so the two kinds of artifact
+  sat side by side. Verified on all three `.rot.pt` files on disk (`posterior_09022026`,
+  `posterior_08232026`, the retired 08192026 one): each is bitwise the transpose of its checkpoint
+  header's V and of the rotation pickled inside the posterior's own prior. Worse, `_on_posterior`
+  serves the LOAD branch too, so load → Save transposed a correct sidecar, and each cycle flipped it.
+  §4.6's direction table was computed from one of these (see its banner). Rules: `reparam.rotation_of`
+  is the one place the convention is decoded; the sidecar and `session.V` hold V with eigenvectors in
+  COLUMNS (`w = z @ V`); `torch.eye` is transpose-blind, so any orientation test needs a non-symmetric
+  V; every reader (`build_posterior`'s load branch, `scripts/_common.load_posterior`,
+  `identifiability_offgt`, `posterior_identifiability`) reconciles a sidecar against the rotation
+  inside the posterior's own training prior — repairing a transposed or missing one with a warning
+  and refusing any other disagreement. The three artifacts stay transposed ON DISK until each is
+  loaded and re-saved from the GUI with the bounds file it was trained under. Pinned by
+  `test_a_gui_saved_rotation_reloads_as_the_training_bijection`,
+  `test_the_deferred_save_forwards_V_not_its_transpose` and
+  `test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior`.
 
 ### Core-side contract hooks (Phase 0 refactors — non-breaking, defaults = old CLI behaviour)
 
@@ -3041,6 +3119,11 @@ consistent, unverified here.
 
 ### 11.2.1 How §11 and §4.6 fit together — the question the addendum raises and answers wrongly
 
+> ⚠ 2026-09-09: §4.6's DIRECTION attributions ("`k` unmeasured", "direction 11 = −1.00·k") are the
+> transposed reading of V — see the banner at the top of §4.6. The argument below about the clean
+> standardisation stands; the identity of the flat direction does not (`t_scale` is direction 0,
+> `k` sits in directions 1 and 4).
+
 The addendum's §0 argues §4.6's "identifiability limit" verdict is invalid *because* the conditioning
 is broken. **That challenge is checkable and the answer is no.** `decorrelate.py` standardises its
 Jacobian by `fnoise = np.maximum(f0.std(0), 1e-9)` — the **single-trajectory feature noise measured
@@ -3211,7 +3294,10 @@ Guardrails, in order of how badly their absence bites:
    support is permanent — a one-way ratchet. Truncate along directions 0–4, leave the flat ones
    full-width. This also dissolves the addendum's own §8.3 flaw 2 outright: in that basis the region
    is approximately axis-aligned, so there is no ridge for HDBSCAN to fragment and no clustering
-   needed at all.
+   needed at all. (⚠ 2026-09-09: §4.6's attributions are the transposed reading — in the correct
+   orientation `t_scale` is direction 0 and `k` sits in directions 1 and 4. The rule is unchanged:
+   truncate the leading directions, leave the flat ones; guardrail 7 adds that `t_scale`-loaded
+   directions are skipped.)
 4. **Use unweighted posterior draws, not "the M best fits."** Selecting on goodness of fit applies a
    second, undeclared likelihood with the discrepancy metric as a hidden hyperparameter.
    `posterior_overlay` takes the best 50 — fine for a figure, wrong as the seed of a prior.
@@ -3219,6 +3305,37 @@ Guardrails, in order of how badly their absence bites:
    frequency is the honest failure rate.
 6. **Show the cost.** Each round is a simulation campaign, not a click — reuse the Posterior tab's
    training-budget widget so the number is on screen before the button.
+7. **The region carries its basis, and the retrain REUSES it — never the Fisher.** (2026-09-09,
+   after the round-1 post-mortem.) A box over "directions 0..K−1" is meaningless without the V those
+   directions are columns of, and V is not reproducible across processes (trap X10). The 2026-09-02
+   round drew its box in the parent's V and enforced it in a fresh V′: 0.01 % of the parent
+   posterior survived and the ground truth did not (Appendix A 2026-09-09, D1). So `TruncationRegion`
+   records the parent's V, the bijection probe of its whole training transform and the observation
+   digest; `build_posterior(truncation=…)` trains under `build_rotated_bijection(T, region.V)`,
+   never runs the Fisher, and refuses a probe mismatch, a `reparam_rotate` flag disagreeing with the
+   region, or a resumed checkpoint whose identity does not record THIS region under THIS V (a
+   probe alone is blind to a column permutation, so V is compared directly). The region is part of
+   the checkpoint identity — omitted, never None, for an amortized run — so a TSNPE round has its own
+   directory and can neither resume the amortized run's rows nor be resumed by one (D3; the
+   region draw is seeded from the observation and the identity quantises the bounds, so a crashed
+   round finds its own rows again). Directions whose |V[t_scale, j]| exceeds 1/√d are NOT truncated:
+   the per-batch `t_scale` override would carry rows out of such a box, turning the restriction into a
+   reweighting by P(A|θ₋ₜ) that NPE does not correct (D4); the kept fraction is measured on the
+   recorded post-override targets, beside the rejection sampler's pre-override P(A). Pinned by
+   `test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one` and
+   `test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch`.
+8. **Calibrate on the truncated prior.** SBC/TARP for a non-amortized posterior draw θ* from the
+   prior RESTRICTED to its region (after the rotation wrap), and `check_sbc`'s reference sample comes
+   from that same proposal — including the per-batch `t_scale` override θ* went through — because the
+   data-averaged posterior converges to the proposal and against the full prior `c2st_dap` reports a
+   miscalibration that is not one. What a flat result then certifies is calibration ON THE REGION; it
+   cannot tell whether the region cut real mass at x_obs. The kept fraction prints beside the SBC
+   table, with the `−log P(A)` by which the joint-KL informativeness, still against the full prior, is
+   inflated. The Posterior tab and the CLI load a non-amortized artifact with `accept_truncated=True`,
+   which installs its region for Validate and its digest for Infer, and `infer_and_visualize` WARNS
+   (does not refuse) on any other observation — a simulated cell re-drawn with new noise is exactly
+   the "near x_obs" such a posterior is for. Pinned by
+   `test_calibration_theta_star_lies_inside_the_region_when_one_is_given`.
 
 **The free pre-test (addendum §8.5) works for one truncation and not the other.** Retraining on the
 cached rows whose θ falls in `A` is truncated NPE with zero new simulation — **66 % of the cache
@@ -3290,6 +3407,12 @@ built for 12 slots and fed 4 live probes.
 | `scripts/channel_ablation.py` | ⊕ **new** — the CORRECTED range-sweep ablation (§11.2 item 1) |
 | `scripts/migrate_checkpoint_flags.py` | ⊕ **new** — one-shot cache widening, `V` copied verbatim |
 | `tests/test_conditioning_repair.py` | ⊕ **new** — 20 tests incl. the TSNPE pinning test |
+| `core/SBI/truncate.py` (2026-09-09) | the region carries V + probe + digest, `check_basis`/`check_checkpoint_V`/`identity_fields`, the seeded draw, the `t_scale` filter, `recorded_containment` |
+| `core/SBI/reparam.py` (2026-09-09) | `rotation_of`, `rotation_of_prior`, `reconcile_loaded_rotation`; `TransformedPosterior(truncation=, x_obs_digest=)` |
+| `core/orchestrator.py` (2026-09-09) | identity `truncation` key (omitted when amortized), `accept_truncated`, `validate_calibration(truncation=)`, the inference-time digest warning, the load-side reconcile |
+| `core/SBI/pipeline.py` (2026-09-09) | the post-override containment tally (bit-identical without a region) |
+| `core/SBI/training_checkpoint.py` (2026-09-09) | `near_miss_siblings` ignores `truncation`-only siblings |
+| `scripts/tsnpe_round1_forensics.py` | ⊕ **new** — F1–F4 of the round-1 post-mortem, read-only |
 | ~~`Resources/Bounds/nadrowski/master.txt`~~ | ⚠ **NOT edited in place — see below.** Tier 1 got its own box: `master_tier1.txt` + `Cells/nadrowski/master_spont_tier1.txt` |
 
 > **Why tier 1 did not edit `master.txt`.** Editing it changes `param_keys`, hence the checkpoint
@@ -3790,6 +3913,20 @@ which is the only reason D4 did not also bias this round.
   GUI-saved sidecar records None; a re-save from the GUI to repair a sidecar must be done with the
   bounds file the posterior was trained under, because `save_posterior_artifacts` writes the box from
   the live config.
+
+### After the five fixes
+
+`scripts/tsnpe_round1_forensics.py` re-run at the end reproduces the verdict; its region numbers move
+within Monte Carlo noise (0.9944 / 0.0002 / 0.146 against the recorded 0.9958 / 0.0001 / 0.196)
+because X2 now seeds the region draw from the observation rather than from the script's own seed —
+the recorded figures are the pre-fix draw. Loading `posterior_09022026` through `build_posterior`
+now warns about its transposed sidecar and evaluates in the checkpoint's V; a region drawn from it
+through the fixed path skips direction 0 (`t_scale`), truncates 1–5, and contains the ground truth.
+Handoff edits in this session: §11.6 guardrails 7 and 8; §5 group D (D3 and D6 in full); the §4.6
+banner with the correct-orientation table and cross-references in §11.2.1 and guardrail 3; §1.3
+recounted (321); §11.8 rows. Not done, deliberately: pooling rows across rounds, any change to
+`build_latent_fisher_rotation` or `fisher_eigenbasis`, the batch-by-scale `t_scale` override, and
+any retrain — those are the next decision, not this session's.
 
 ## 2026-08-28 (second session) — the §6.1 refactor landed: 39 commits, zero drift, two new ladders
 
@@ -4589,7 +4726,7 @@ was trained on. So the pinning test is arithmetic on a case with a known answer:
 narrow posterior, a region, and an assertion that the proposal's width is the **prior's** over that
 region — explicitly not the posterior's (1.0) and not the posterior's over √2 (0.707).
 
-Guardrails 1–6 are all in: `x_obs` persisted at **inference** time (an amortized posterior has none at
+Guardrails 1–6 are all in (7 and 8 landed 2026-09-09 — §11.6): `x_obs` persisted at **inference** time (an amortized posterior has none at
 save time, which is why `default_x` is None on `posterior_08232026`); the artifact marked
 `amortized: False` with its region in the sidecar and a load path that refuses it for general
 inference; truncation along the leading Fisher directions only, leaving the flat ones full width;
