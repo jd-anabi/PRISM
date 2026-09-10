@@ -11,5 +11,7 @@ cd "$SCRIPT_DIR" || exit 1
 
 # Prefer python3 (a bare `python` may be Python 2 or absent on macOS/Linux). Use `python3 -m core` for
 # the interactive CLI instead of the GUI. exec replaces this shell so signals reach Python directly.
+# torch+MKL ship two OpenMP runtimes under conda; without this the first simulation aborts with OMP Error #15.
+export KMP_DUPLICATE_LIB_OK=TRUE
 echo "Starting GUI..."
 exec python3 -m core.gui
