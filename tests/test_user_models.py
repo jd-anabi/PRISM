@@ -14,8 +14,8 @@ WHAT THESE LOCK DOWN
 Round-trip tests write a throwaway model (name UMTEST*) into the real Resources tree and remove it in
 a finally -- the exact code path the app takes, no path monkey-patching.
 
-Run:  python -m pytest tests/test_user_models.py -v
-      (or just: python tests/test_user_models.py)
+Run:  pytest tests/test_user_models.py
+      (or just: pytest tests/test_user_models.py)
 """
 import math
 import os
@@ -908,22 +908,3 @@ def test_build_app_starts_and_sets_the_window_icon():
         window.close()
     finally:
         core_config.QUIET_SEGMENT_BAR = saved_quiet
-
-
-if __name__ == "__main__":
-    _app()
-    failures = 0
-    for test_name, fn in sorted(globals().items()):
-        if test_name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {test_name}")
-            # Exception, NOT AssertionError. A test that raises anything else -- a ValueError
-            # from a stale str.index, a CUDA error from a hostile card -- used to abort the
-            # ENTIRE run at that point, silently losing every test after it. That cost 26
-            # tests twice on 2026-08-28. A crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {test_name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

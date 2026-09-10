@@ -1,4 +1,4 @@
-"""Worker dispatch, cooperative cancellation, error dialogs and payload lifetime. Split from test_gui_progress.py; run directly: python tests/test_worker_dispatch.py"""
+"""Worker dispatch, cooperative cancellation, error dialogs and payload lifetime. Split from test_gui_progress.py; run directly: pytest tests/test_worker_dispatch.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -11,8 +11,8 @@ THE BUG THESE LOCK DOWN
     The pipeline nests bars four deep (core/SBI/pipeline.py:517 -> :371 ->
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
-Run:  python -m pytest tests/test_gui_progress.py -v
-      (or just: python tests/test_gui_progress.py)
+Run:  pytest tests/test_worker_dispatch.py
+      (or just: pytest tests/test_gui_progress.py)
 """
 import ast
 import inspect
@@ -258,7 +258,7 @@ def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_
         st.use_ini_file(None)
 
 # ── Phase 3: error dialogs ───────────────────────────────────────────────────────────────────────
-def test_on_error_puts_the_traceback_in_details_not_the_body(monkeypatch=None):
+def test_on_error_puts_the_traceback_in_details_not_the_body():
     """A run failure's traceback belongs in a collapsible Details panel, not pasted whole into the
     dialog body."""
     from PySide6.QtWidgets import QMessageBox
@@ -286,19 +286,3 @@ def test_on_error_puts_the_traceback_in_details_not_the_body(monkeypatch=None):
     assert captured["text"] == "Something failed"
     assert "Traceback" in captured["detail"], "the traceback was not routed to Details"
     assert "Traceback" not in captured["text"], "the traceback leaked into the body"
-
-
-if __name__ == "__main__":
-    _app()
-    failures = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {name}")
-            # Exception, NOT AssertionError: a crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

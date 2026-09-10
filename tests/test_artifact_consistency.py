@@ -18,7 +18,7 @@ WHAT THESE LOCK DOWN
     point is that ONE box serves every cell, so "the two bounds files agree" and "every cell sits
     strictly inside" are invariants, not incidental facts.
 
-Run:  python tests/test_artifact_consistency.py
+Run:  pytest tests/test_artifact_consistency.py
 """
 import os
 import sys
@@ -720,21 +720,3 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
             _os.environ.pop(orchestrator.CHI_OVERRIDE_ENV, None)
         else:
             _os.environ[orchestrator.CHI_OVERRIDE_ENV] = prev
-
-
-if __name__ == "__main__":
-    failures = 0
-    for test_name, fn in sorted(globals().items()):
-        if test_name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {test_name}")
-            # Exception, NOT AssertionError. A test that raises anything else -- a ValueError
-            # from a stale str.index, a CUDA error from a hostile card -- used to abort the
-            # ENTIRE run at that point, silently losing every test after it. That cost 26
-            # tests twice on 2026-08-28. A crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {test_name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

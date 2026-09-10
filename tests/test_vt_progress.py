@@ -1,4 +1,4 @@
-"""The tqdm/VT100 router, the Qt progress stack, the solver meter and the overall-bar election. Split from test_gui_progress.py; run directly: python tests/test_vt_progress.py"""
+"""The tqdm/VT100 router, the Qt progress stack, the solver meter and the overall-bar election. Split from test_gui_progress.py; run directly: pytest tests/test_vt_progress.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -11,8 +11,8 @@ THE BUG THESE LOCK DOWN
     The pipeline nests bars four deep (core/SBI/pipeline.py:517 -> :371 ->
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
-Run:  python -m pytest tests/test_gui_progress.py -v
-      (or just: python tests/test_gui_progress.py)
+Run:  pytest tests/test_vt_progress.py
+      (or just: pytest tests/test_gui_progress.py)
 """
 import ast
 import inspect
@@ -607,19 +607,3 @@ def test_leave_true_pos0_bar_is_retired_not_left_pegged_at_100():
             live.pop(payload, None)
         prog.set_rows(tuple(live.values()))
     assert prog.overall.maximum() == 0, "the overall bar is still determinate after the bar finished"
-
-
-if __name__ == "__main__":
-    _app()
-    failures = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {name}")
-            # Exception, NOT AssertionError: a crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

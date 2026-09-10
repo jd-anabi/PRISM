@@ -1,4 +1,4 @@
-"""QSettings round-trips, the training-budget group, layout geometry, and the config-tab hardware fields. Split from test_gui_progress.py; run directly: python tests/test_settings_persistence.py"""
+"""QSettings round-trips, the training-budget group, layout geometry, and the config-tab hardware fields. Split from test_gui_progress.py; run directly: pytest tests/test_settings_persistence.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -11,8 +11,8 @@ THE BUG THESE LOCK DOWN
     The pipeline nests bars four deep (core/SBI/pipeline.py:517 -> :371 ->
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
-Run:  python -m pytest tests/test_gui_progress.py -v
-      (or just: python tests/test_gui_progress.py)
+Run:  pytest tests/test_settings_persistence.py
+      (or just: pytest tests/test_gui_progress.py)
 """
 import ast
 import inspect
@@ -603,19 +603,3 @@ def test_the_confirmation_is_reached_and_can_refuse():
     assert body.count("return True") >= 3, (
         "the check must fail OPEN -- no prior, an unreadable identity, and no near miss must all "
         "proceed; a warning that can block a run is worse than no warning")
-
-
-if __name__ == "__main__":
-    _app()
-    failures = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {name}")
-            # Exception, NOT AssertionError: a crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

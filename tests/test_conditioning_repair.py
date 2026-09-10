@@ -9,7 +9,7 @@ it. Neither shows up as a crash.
 
 Every test below was checked to FAIL against the pre-change code.
 
-Run:  python tests/test_conditioning_repair.py
+Run:  pytest tests/test_conditioning_repair.py
 """
 import io
 import math
@@ -1040,20 +1040,3 @@ def test_the_local_sweep_is_no_longer_a_staticmethod_pinned_to_the_cpu():
         # and the accept loop must not sync per row -- that would hand back most of the device move
         assert "for i in range(batch_size)" not in code, \
             f"{cls}._local_map still walks rows one at a time (a device-to-host sync per row)"
-
-if __name__ == "__main__":
-    failures = 0
-    for test_name, fn in sorted(globals().items()):
-        if test_name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {test_name}")
-            # Exception, NOT AssertionError. A test that raises anything else -- a ValueError
-            # from a stale str.index, a CUDA error from a hostile card -- used to abort the
-            # ENTIRE run at that point, silently losing every test after it. That cost 26
-            # tests twice on 2026-08-28. A crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {test_name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

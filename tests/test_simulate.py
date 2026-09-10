@@ -1,4 +1,4 @@
-"""The Simulate section's streaming loop and its video export. Split from test_gui_progress.py; run directly: python tests/test_simulate.py"""
+"""The Simulate section's streaming loop and its video export. Split from test_gui_progress.py; run directly: pytest tests/test_simulate.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -11,8 +11,8 @@ THE BUG THESE LOCK DOWN
     The pipeline nests bars four deep (core/SBI/pipeline.py:517 -> :371 ->
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
-Run:  python -m pytest tests/test_gui_progress.py -v
-      (or just: python tests/test_gui_progress.py)
+Run:  pytest tests/test_simulate.py
+      (or just: pytest tests/test_gui_progress.py)
 """
 import ast
 import inspect
@@ -322,19 +322,3 @@ def test_simulate_panel_records_chunks_and_gates_the_save_button():
     p._record = []
     p.refresh_local_gates()
     assert not p.btn_save_video.isEnabled(), "save must disable again when the recording is cleared"
-
-
-if __name__ == "__main__":
-    _app()
-    failures = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {name}")
-            # Exception, NOT AssertionError: a crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

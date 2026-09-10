@@ -1,4 +1,4 @@
-"""Figure sinks, pop-out windows, dark-theme matplotlib and label rendering. Split from test_gui_progress.py; run directly: python tests/test_figures.py"""
+"""Figure sinks, pop-out windows, dark-theme matplotlib and label rendering. Split from test_gui_progress.py; run directly: pytest tests/test_figures.py"""
 """Progress-rendering regression tests for the GUI.
 
 THE BUG THESE LOCK DOWN
@@ -11,8 +11,8 @@ THE BUG THESE LOCK DOWN
     The pipeline nests bars four deep (core/SBI/pipeline.py:517 -> :371 ->
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
-Run:  python -m pytest tests/test_gui_progress.py -v
-      (or just: python tests/test_gui_progress.py)
+Run:  pytest tests/test_figures.py
+      (or just: pytest tests/test_gui_progress.py)
 """
 import ast
 import inspect
@@ -476,19 +476,3 @@ def test_export_animation_background_stays_white_under_dark_theme():
         frame0 = imageio.mimread(path)[0]
         corner = frame0[0, 0][:3]                                  # top-left = figure background margin
         assert min(int(c) for c in corner) > 230, corner          # near-white, not the dark theme bg
-
-
-if __name__ == "__main__":
-    _app()
-    failures = 0
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {name}")
-            # Exception, NOT AssertionError: a crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

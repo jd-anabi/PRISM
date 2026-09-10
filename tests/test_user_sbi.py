@@ -9,7 +9,7 @@ same construct_prior call, small sizes. Everything else runs for real.
 Also pins the built-in (Nadrowski) forcing path: generate_observations still yields the full-width,
 Group-G-populated conditioning vector, so the spontaneous-only branching did not perturb it.
 
-Run:  python tests/test_user_sbi.py      (or under pytest)
+Run:  pytest tests/test_user_sbi.py   (the chi pipeline test is marked slow; pytest -m "not slow" skips it)
 """
 import ast
 import io
@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import matplotlib                                                 # noqa: E402
 matplotlib.use("Agg")
 
+import pytest  # noqa: E402
 import torch                                                      # noqa: E402
 
 from core import config, registry, orchestrator, cli, forcing    # noqa: E402
@@ -421,6 +422,7 @@ def test_chi_mode_observation_width():
         config.CHI_MODE, config.CHI_N_FREQS = saved_mode, saved_k
 
 
+@pytest.mark.slow
 def test_chi_mode_full_sbi_pipeline():
     """CHI_MODE end-to-end at tiny sizes: prior -> posterior -> observe -> infer -> validate, plus the
     experimental chi path. Pins the chi(omega) branch across gen_training_data / gen_cal_data / PPC."""
@@ -1070,6 +1072,7 @@ def test_solver_failure_raises_instead_of_killing_the_process():
         assert "construction failed" in str(e), f"unexpected message: {e}"
 
 
+@pytest.mark.gpu
 def test_sim_batch_planning():
     """pipeline._max_sim_batch decides whether a simulation batch has to be split. It is pure
     arithmetic and it is where the subtle bugs live, so pin the behaviour directly."""
@@ -1492,6 +1495,7 @@ def test_split_gen_obs_concatenates_correctly():
         pipeline_mod._max_sim_batch = saved
 
 
+@pytest.mark.gpu
 def test_cufft_plan_cache_is_cleared_between_training_batches():
     """cuFFT caches one plan per distinct transform SHAPE, allocated OUTSIDE PyTorch's caching
     allocator -- so torch.cuda.empty_cache() cannot reclaim it and exhaustion surfaces as a raw driver
@@ -2946,6 +2950,7 @@ def test_the_bijection_probe_detects_a_changed_rotation():
         "the probe cannot tell a rotated box from an unrotated one"
 
 
+@pytest.mark.gpu
 def test_the_bijection_probe_works_when_the_rotation_lives_on_the_gpu():
     """The probe grid must be built on the TRANSFORM's device.
 
@@ -3050,6 +3055,7 @@ def _graph_test_model(B, T, dev):
     return m
 
 
+@pytest.mark.gpu
 def test_the_cuda_graph_step_matches_the_eager_step_bitwise():
     """The graphed solver must integrate the SAME trajectory as the eager loop.
 
@@ -3108,6 +3114,7 @@ def test_the_cuda_graph_step_matches_the_eager_step_bitwise():
         f"graphed and eager disagree, max|diff|={float((graphed - eager).abs().max()):.3e}"
 
 
+@pytest.mark.gpu
 def test_the_cuda_graph_preserves_the_rng_contract_c11_depends_on():
     """C-11's resume restores the CUDA RNG state and expects the noise stream to continue from there.
 
@@ -3153,6 +3160,7 @@ def test_the_cuda_graph_preserves_the_rng_contract_c11_depends_on():
         _cfg.SOLVER_CUDA_GRAPHS = prev
 
 
+@pytest.mark.gpu
 def test_the_graph_cache_is_not_hung_off_the_solver_class():
     """Trap X1 in a new costume.
 
@@ -4068,21 +4076,3 @@ def test_the_fisher_wraps_each_operating_point_and_skips_on_exhausted_oom():
     i_retry = src.find("retry_on_oom")
     i_skip = src.find("skipping it")
     assert 0 <= i_retry < i_skip, "the exhausted-retry skip must follow the wrapped call"
-
-
-if __name__ == "__main__":
-    failures = 0
-    for test_name, fn in sorted(globals().items()):
-        if test_name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {test_name}")
-            # Exception, NOT AssertionError. A test that raises anything else -- a ValueError
-            # from a stale str.index, a CUDA error from a hostile card -- used to abort the
-            # ENTIRE run at that point, silently losing every test after it. That cost 26
-            # tests twice on 2026-08-28. A crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {test_name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

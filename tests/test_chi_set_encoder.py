@@ -11,7 +11,7 @@ invariance are only to ~1e-6, because `sum(dim=1)` is a float reduction whose ro
 order and number of elements summed. Asserting torch.equal on the latter would be wrong and would
 fail intermittently.
 
-Run:  python tests/test_chi_set_encoder.py
+Run:  pytest tests/test_chi_set_encoder.py
 """
 import math
 import os
@@ -519,21 +519,3 @@ def test_resolvable_multipliers_rescue_slow_rows_without_leaving_the_band():
     assert bool((out[1][1:] > out[1][:-1]).all()), f"placement lost its ordering: {out[1]}"
     assert len(set(round(float(v), 9) for v in out[1])) == 5, \
         f"placement collapsed probes onto one frequency, measuring no shape: {out[1]}"
-
-
-if __name__ == "__main__":
-    failures = 0
-    for test_name, fn in sorted(globals().items()):
-        if test_name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {test_name}")
-            # Exception, NOT AssertionError. A test that raises anything else -- a ValueError
-            # from a stale str.index, a CUDA error from a hostile card -- used to abort the
-            # ENTIRE run at that point, silently losing every test after it. That cost 26
-            # tests twice on 2026-08-28. A crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {test_name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)

@@ -12,7 +12,7 @@ Locks down the generalized effective-temperature normalization and its gate:
 No cell files / QApplication needed: a tiny fake cfg supplies only .model / .params_dict (and, for the
 force-channel test, .inits_tensor / .force_params_dict), which is all these functions read.
 
-Run:  python tests/test_fdt_user.py
+Run:  pytest tests/test_fdt_user.py
 """
 import math
 import os
@@ -135,21 +135,3 @@ def test_n_force_channels_user_vs_builtin():
         registry.unregister(name)
     assert _n_force_channels(_FakeCfg("BP", force_params={})) == 1
     assert _n_force_channels(_FakeCfg("HOPF", force_params={"amp_y": 0.0})) == 2
-
-
-if __name__ == "__main__":
-    failures = 0
-    for test_name, fn in sorted(globals().items()):
-        if test_name.startswith("test_") and callable(fn):
-            try:
-                fn()
-                print(f"PASS  {test_name}")
-            # Exception, NOT AssertionError. A test that raises anything else -- a ValueError
-            # from a stale str.index, a CUDA error from a hostile card -- used to abort the
-            # ENTIRE run at that point, silently losing every test after it. That cost 26
-            # tests twice on 2026-08-28. A crash is a failure of THAT test, not of the suite.
-            except Exception as e:
-                failures += 1
-                print(f"FAIL  {test_name}\n      {type(e).__name__}: {e}")
-    print(f"\n{'ALL PASSED' if not failures else f'{failures} FAILURE(S)'}")
-    raise SystemExit(1 if failures else 0)
