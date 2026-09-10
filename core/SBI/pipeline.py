@@ -1414,7 +1414,9 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             _tc.create(_ck_dir, checkpoint["identity"],
                        schedule_t_scales=batch_t_scales, schedule_Ts=batch_Ts, inits=inits,
                        V=checkpoint.get("V"), probe=checkpoint.get("probe"),
-                       run_size=run_size, n_runs=n_runs)
+                       run_size=run_size, n_runs=n_runs,
+                       parents=checkpoint.get("parents"), inputs=checkpoint.get("inputs"),
+                       hw=checkpoint.get("hw"))
             _free = shutil.disk_usage(_ck_dir).free
             # Conditioning width is [S(41) | log T | forcing-or-chi]; the exact forcing width is not
             # resolved until the first batch returns, so bound it here -- this is a disk-space sanity
@@ -1816,7 +1818,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             _tc.save(_ck_dir, from_batch=_ck_from, batch_k=n_runs,
                      rng=_try_rng_snapshot(_tc, device, chi_gen),
                      x_buf=x_buf, th_buf=th_buf, run_size=run_size)
-        _tc.mark_complete(_ck_dir, n_runs)
+        _tc.mark_complete(_ck_dir, n_runs, rows=tuple(int(v) for v in x_buf.shape))
         print(f"[checkpoint] complete: {n_runs} batches in {_ck_dir}. Safe to delete once the "
               f"posterior is saved; keeping it lets you retrain the flow without re-simulating.",
               flush=True)

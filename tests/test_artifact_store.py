@@ -233,3 +233,83 @@ def test_default_store_is_swappable_and_resolves_from_the_root(monkeypatch, tmp_
         assert st.default_store().root == tmp_path / "R"
     finally:
         st.set_default_store(session_default)
+
+
+def _nad_cfg(**over):
+    from core import cli, registry
+    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                              str(BOUNDS_PATH / "nadrowski" / "master.txt"), **over)
+    cfg.hw = config.cpu_device()
+    return cfg
+
+
+_IDENTITY_KEYS = {
+    "format", "model", "prior_fingerprint", "mode", "param_keys", "nd_lows", "nd_highs", "rescale_lows",
+    "rescale_highs", "log_params", "reparam_rotate", "run_size", "n_runs", "steady_idx", "dt_nd_min",
+    "dt_exp", "t_min_exp", "t_max_exp", "t_scale_bounds", "n_grid", "spontaneous_only", "summary_flags",
+    "feature_set_version", "chi_mode", "chi_layout", "chi_k_pad", "chi_elem_w", "chi_f0", "chi_freq_bounds",
+    "chi_max_cycles", "device", "dtype", "truncation"}
+
+
+def test_identity_carries_truncation_always_and_feature_set_version_rekeys(monkeypatch):
+    from core import orchestrator
+    from core.artifacts.identity import FORMAT, SimulationIdentity
+    from core.SBI import statistics, truncate
+    from core.SBI.training_checkpoint import identity_digest
+    cfg = _nad_cfg(chi_mode=True)
+    ident = SimulationIdentity.from_cfg(cfg, object(), 2048, 5000)
+    d = ident.to_dict()
+    assert d["format"] == FORMAT and d["truncation"] is None and d["prior_fingerprint"] is None
+    assert d["feature_set_version"] == statistics.FEATURE_SET_VERSION and set(d) == _IDENTITY_KEYS
+    assert identity_digest(orchestrator.training_identity(cfg, object(), 2048, 5000)) == ident.digest
+    monkeypatch.setattr(statistics, "FEATURE_SET_VERSION", statistics.FEATURE_SET_VERSION + 1)
+    assert SimulationIdentity.from_cfg(cfg, object(), 2048, 5000).digest != ident.digest, \
+        "a changed feature definition must re-key the cache"
+    monkeypatch.undo()
+    Q = torch.linalg.qr(torch.randn(13, 13, dtype=torch.float64))[0]
+    region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], level=0.999, n_latent=13, V=Q)
+    t = SimulationIdentity.from_cfg(cfg, object(), 2048, 5000, truncation=region)
+    assert t.truncated and t.to_dict()["truncation"] == region.identity_fields() and t.digest != ident.digest
+    assert {k for k in _IDENTITY_KEYS if t.to_dict()[k] != d[k]} == {"truncation"}
+
+    class _LoadedLike:                       # a LoadedPrior supplies its fingerprint outright
+        fingerprint = "f" * 16
+    assert SimulationIdentity.from_cfg(cfg, _LoadedLike(), 2048, 5000).to_dict()["prior_fingerprint"] == "f" * 16
+
+
+def test_simulation_directories_live_under_the_store_without_a_prefix(store):
+    from core.SBI import training_checkpoint as tc
+    ident = {"format": "training-rows/2", "n_runs": 3, "prior_fingerprint": "a" * 16, "truncation": None}
+    d = tc.resolve_dir(ident)
+    assert d.parent == store.kind_dir("simulation") and d.name == tc.identity_digest(ident)
+    assert not d.name.startswith("train_")
+    other = dict(ident, n_runs=4)
+    od = tc.resolve_dir(other)
+    (od / "shards").mkdir(parents=True)
+    torch.save({"format": tc.CHECKPOINT_FORMAT, "identity": other, "V": None, "probe": None}, od / "header.pt")
+    torch.save({"batches_done": 2, "complete": False, "rng": None}, od / "state.pt")
+    assert tc.near_miss_siblings(ident)[0]["field"] == "n_runs"
+    assert "n_runs" in tc.describe_siblings(ident)
+    assert tc.checkpoints_using_prior("a" * 16) == [(od.name, 2)]
+
+
+def test_simulation_manifest_written_at_create_and_refreshed_on_save_and_complete(store):
+    from core.SBI import training_checkpoint as tc
+    ident = {"format": "training-rows/2", "model": "X", "n_runs": 3, "run_size": 4,
+             "prior_fingerprint": "b" * 16, "truncation": None}
+    d = tc.resolve_dir(ident)
+    tc.create(d, ident, schedule_t_scales=torch.ones(3), schedule_Ts=torch.ones(3), inits=torch.zeros(1, 2),
+              V=None, probe=torch.zeros(7, 2, dtype=torch.float64), run_size=4, n_runs=3,
+              parents={"prior": "20260910T100000"}, inputs=None, hw=config.cpu_device())
+    m = store.get("simulation", d.name)
+    assert m.id == d.name and m.body["batches_done"] == 0 and m.body["complete"] is False
+    assert m.parents == {"prior": "20260910T100000"} and m.fingerprints["gmm"] == "b" * 16
+    tc.save(d, from_batch=0, batch_k=2, rng=None, x_buf=torch.zeros(12, 5), th_buf=torch.zeros(12, 2), run_size=4)
+    m2 = store.get("simulation", d.name)
+    assert m2.body["batches_done"] == 2 and m2.created == m.created
+    tc.mark_complete(d, 3, rows=(12, 5))
+    m3 = store.get("simulation", d.name)
+    assert m3.body["complete"] is True and m3.body["rows"] == [12, 5] and m3.body["wall_seconds"] >= 0.0
+    assert store.simulation_for(ident) == d and store.list("simulation")[0].complete

@@ -33,6 +33,7 @@ from .config import (
 from . import cli, config, forcing
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
+from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
 from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint, truncation_from_sidecar,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches_region,
@@ -361,82 +362,12 @@ def _assert_prior_is_saved(prior, n_runs: int, run_size: int) -> None:
 
 
 def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int, truncation=None) -> dict:
-    """The config fields a training-data checkpoint must agree with before it can be resumed (C-11).
-
-    PUBLIC (it was `_training_identity`) because the GUI's Posterior tab computes it to tell the user,
-    before they press Train, whether their current Batches / rows-per-batch settings resume an
-    existing checkpoint or silently start a new run -- §9.6's private-name-across-boundaries rule.
-
-    Deliberately the SAME key names save_posterior_artifacts writes into the .rot.pt sidecar, plus the
-    training geometry the sidecar has no reason to carry. One vocabulary for "which run is this",
-    checked in two places, so a checkpoint and the posterior it eventually produces cannot describe
-    different things.
-
-    Everything here is known BEFORE the Fisher rotation runs, which it has to be: the digest names the
-    directory the rotation's own V is stored in, so including V would make the naming circular.
-
-    ``prior_fingerprint`` is the one entry that is NOT derivable from the config, and it is the one
-    that matters most: the box bounds do not identify a prior. ``_gmm_fingerprint``'s own docstring
-    says it -- *"two runs over the same box produce different fits"* -- and the training rows are
-    drawn FROM the prior, so resuming under a rebuilt one would mix rows from two different
-    distributions while every declared field still matched. It is also what makes "save your prior and
-    reuse it" a guard rather than merely advice.
-    """
-    ident = {
-        "format": "training-rows",
-        "model": cfg.model,
-        "prior_fingerprint": _gmm_fingerprint(prior),
-        "mode": cfg.observation_mode,
-        "param_keys": list(cfg.params_dict) + list(cfg.rescale_params),
-        "nd_lows": [b[0] for _, b in cfg.params_dict.values()],
-        "nd_highs": [b[1] for _, b in cfg.params_dict.values()],
-        "rescale_lows": [b[0] for _, b in cfg.rescale_params.values()],
-        "rescale_highs": [b[1] for _, b in cfg.rescale_params.values()],
-        "log_params": resolved_log_params(cfg, log_params=_log_params_for(cfg)),
-        "reparam_rotate": bool(cfg.reparam_rotate),
-        "run_size": int(run_size),
-        "n_runs": int(n_runs),
-        "steady_idx": int(cfg.steady_idx),
-        "dt_nd_min": float(cfg.dt_nd_min),
-        "dt_exp": float(cfg.dt_exp),
-        "t_min_exp": float(cfg.t_min_exp),
-        "t_max_exp": float(cfg.t_max_exp),
-        "t_scale_bounds": list(cfg.t_scale_bounds),
-        "n_grid": int(cfg.t.shape[0]),
-        "spontaneous_only": not cfg.has_forcing,
-        # The FEATURE SET, not just its width. A checkpoint stores conditioning ROWS, so a run
-        # whose summary block means something different must not resume onto them -- and width
-        # alone would not catch a reordered or substituted flag set of equal length. Naming the
-        # flags makes the digest change when the feature set does, which is what orphans the
-        # pre-flag checkpoints and sends scripts/migrate_checkpoint_flags.py to a NEW directory
-        # rather than splicing rows that mean two different things.
-        "summary_flags": list(statistics.VALID_FLAG_LABELS),
-        "chi_mode": bool(cfg.chi_mode),
-        "chi_layout": config.CHI_LAYOUT if cfg.chi_mode else None,
-        "chi_k_pad": cfg.chi_k_pad if cfg.chi_mode else None,
-        "chi_elem_w": config.CHI_ELEM_W if cfg.chi_mode else None,
-        "chi_f0": cfg.chi_f0 if cfg.chi_mode else None,
-        "chi_freq_bounds": list(cfg.chi_freq_bounds) if cfg.chi_mode else None,
-        "chi_max_cycles": float(cfg.chi_max_cycles) if cfg.chi_mode else None,
-        "device": cfg.hw.device.type,
-        "dtype": str(cfg.hw.dtype),
-    }
-    # THE TRUNCATION REGION IS PART OF THE IDENTITY, AND THE KEY IS OMITTED -- NEVER None -- FOR AN
-    # AMORTIZED RUN. A TSNPE round's rows are drawn from the prior RESTRICTED to a region, so a round at
-    # the parent's budget must not resolve to the parent's directory (it would resume the untruncated
-    # rows and, if that checkpoint is complete, simulate nothing while printing that it is restricted:
-    # defect D3, Appendix A 2026-09-09), and an amortized run must never resume a truncated round's
-    # rows either (train_0b471d560271 was quarantined for exactly that). identity_digest serialises
-    # the whole dict, so a present-but-None key would re-digest every existing checkpoint and orphan
-    # all five complete ones; the amortized identity is therefore byte-identical to what it always was.
-    # The V digested inside identity_fields is the PARENT's rotation, carried with the region and
-    # never recomputed by this run, so the docstring's rule -- this run's own V cannot name its
-    # directory -- still holds. And this key is the identity_fields SUBSET of the sidecar's
-    # "truncation" (which is region.to_dict(), with the tensors), not the same dict: the sidecar
-    # describes the artifact, the identity names the rows.
-    if truncation is not None:
-        ident["truncation"] = truncation.identity_fields()
-    return ident
+    """The simulation identity, as the dict training_checkpoint digests. A delegate to
+    core.artifacts.identity.SimulationIdentity, kept under this name for the GUI's Posterior tab,
+    which computes it before Train is pressed (the checkpoint line and the near-miss modal) and passes
+    whatever it holds for a prior -- a LoadedPrior, or a stub that must fail open."""
+    from .artifacts.identity import SimulationIdentity
+    return SimulationIdentity.from_cfg(cfg, prior, run_size, n_runs, truncation=truncation).to_dict()
 
 
 PERSIST_OBSERVATIONS = True
@@ -1076,6 +1007,8 @@ def build_posterior(
             "probe": training_checkpoint.bijection_probe(
                 T_train, len(cfg.params_dict) + len(cfg.rescale_params), device=cfg.hw.device),
             "V": V, "every": TRAINING_CHECKPOINT_EVERY, "resume": "auto",
+            "parents": {"prior": getattr(prior, "id", None)} if getattr(prior, "id", None) else {},
+            "inputs": _inputs_from_cfg(cfg), "hw": cfg.hw,
         }
 
     # Conditioning layout is [S(x) | log(T) | forcing]. log(T) rides with the summary

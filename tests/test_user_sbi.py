@@ -55,13 +55,6 @@ orchestrator.TRAINING_CHECKPOINT_EVERY = 0
 # and litter here. Nothing else in the suite writes into Resources/; keep it that way.
 orchestrator.PERSIST_OBSERVATIONS = False
 
-# Snapshot of the checkpoint directories that existed BEFORE this suite ran, so the guard below can
-# tell "the suite created one" from "the user has a real retrain checkpoint on disk". Checking for
-# their mere existence would fail on any machine that has actually run a retrain -- which is every
-# machine this matters on.
-_CKPT_DIRS_AT_IMPORT = frozenset(
-    p.name for p in config.CHECKPOINT_PATH.glob("train_*")) if config.CHECKPOINT_PATH.exists() else frozenset()
-
 
 def _tiny_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds,
                     state_dep_drift=False, num_iterations=25, log_mask=None,
@@ -1845,32 +1838,6 @@ def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override():
     assert "post-override" not in buf.getvalue()
 
 
-def test_the_suite_does_not_write_checkpoints_into_the_real_resources_tree():
-    """A guard on the guard, because the failure mode is silent and severe.
-
-    The full-pipeline tests call orchestrator.build_posterior for real. With checkpointing at its
-    production default they write into Resources/Checkpoints/ keyed on a digest of their config --
-    and a COMPLETE checkpoint short-circuits generation and returns its stored rows. So the first
-    suite run would create them and EVERY RUN AFTER would skip gen_training_data entirely while
-    reporting a pass: the suite would be green and testing nothing. Observed, not theorised -- three
-    such directories (spontaneous / forced / chi, run_size=8, n_runs=2) appeared in the tree the
-    first time this suite ran with C-11 enabled.
-    """
-    from core import orchestrator as _orch
-    assert _orch.TRAINING_CHECKPOINT_EVERY == 0, (
-        "this suite must disable training-data checkpointing at import (see the module header); "
-        f"it is {_orch.TRAINING_CHECKPOINT_EVERY}")
-    ck = config.CHECKPOINT_PATH
-    now = frozenset(p.name for p in ck.glob("train_*")) if ck.exists() else frozenset()
-    # NEW ones only. A user who has run a retrain has a train_* directory sitting there legitimately,
-    # and failing on its existence would make this suite un-runnable on exactly the machines that
-    # matter. What must never happen is the suite ADDING one.
-    created = sorted(now - _CKPT_DIRS_AT_IMPORT)
-    assert not created, (
-        f"the suite created training checkpoints in {ck}: {created}. Later runs would reuse those "
-        f"rows instead of generating them, and the suite would go green without testing anything.")
-
-
 def test_gen_training_data_is_reproducible_from_a_seed_in_every_mode():
     """THE GATE for any change to gen_training_data's loop, and the reason C-11 could be built at all.
 
@@ -2256,19 +2223,21 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
         Q2, _ = torch.linalg.qr(torch.randn(13, 13))
 
     ia = orchestrator.training_identity(cfg, prior, 2048, 5000)
-    assert "truncation" not in ia, "an amortized identity grew a truncation key -- every digest moves"
+    assert ia["truncation"] is None, "an amortized identity records truncation=None"
     # THE GOLDEN DIGEST. Computed once from this cfg/prior pair at the commit that added the region
     # to the identity; if it moves, every complete checkpoint on disk is orphaned. Update it only
     # deliberately, with a migration for the checkpoints on disk (scripts/migrate_checkpoint_flags.py
-    # is the precedent).
-    assert tc.identity_digest(ia) == "463e81d156cd", \
+    # is the precedent). Belongs to training-rows/2 -- the training-rows/1 digest this superseded was
+    # "463e81d156cd".
+    assert tc.identity_digest(ia) == "1912d2139359", \
         f"the amortized identity moved to {tc.identity_digest(ia)} -- every checkpoint on disk is orphaned"
     assert set(ia) == {
         "format", "model", "prior_fingerprint", "mode", "param_keys", "nd_lows", "nd_highs",
         "rescale_lows", "rescale_highs", "log_params", "reparam_rotate", "run_size", "n_runs",
         "steady_idx", "dt_nd_min", "dt_exp", "t_min_exp", "t_max_exp", "t_scale_bounds", "n_grid",
-        "spontaneous_only", "summary_flags", "chi_mode", "chi_layout", "chi_k_pad", "chi_elem_w",
-        "chi_f0", "chi_freq_bounds", "chi_max_cycles", "device", "dtype"}, sorted(ia)
+        "spontaneous_only", "summary_flags", "feature_set_version", "chi_mode", "chi_layout",
+        "chi_k_pad", "chi_elem_w", "chi_f0", "chi_freq_bounds", "chi_max_cycles", "device", "dtype",
+        "truncation"}, sorted(ia)
     assert tc.identity_digest(ia) == tc.identity_digest(
         orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=None))
 
@@ -2276,7 +2245,8 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
     it = orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=r1)
     assert it["truncation"] == r1.identity_fields()
     assert it["truncation"]["V_digest"] == _tr.rotation_digest(Q) and it["truncation"]["hi"] == [1.0, 1.0]
-    assert {k: v for k, v in it.items() if k != "truncation"} == ia, "the region changed another field"
+    assert {k: v for k, v in it.items() if k != "truncation"} == {k: v for k, v in ia.items() if k != "truncation"}, \
+        "the region changed another field"
     assert tc.resolve_dir(it) != tc.resolve_dir(ia), "a truncated round shares the amortized run's directory"
     assert tc.resolve_dir(it) == tc.resolve_dir(orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=r1)), \
         "the same region must resolve to the same directory, or a round could never resume itself"
@@ -3860,6 +3830,7 @@ def test_saving_a_prior_cannot_orphan_a_checkpoint():
     AND a committed checkpoint depends on the old contents."""
     import tempfile, hashlib
     from pathlib import Path as _P
+    from core.artifacts.store import ArtifactStore, use_store
     from core.SBI import training_checkpoint as tc
 
     def fp_of(means, weights):
@@ -3881,8 +3852,12 @@ def test_saving_a_prior_cannot_orphan_a_checkpoint():
     m_new, w_new = torch.randn(4, 3, dtype=torch.float64), _w(4)
 
     with tempfile.TemporaryDirectory() as tmp:
-        priors, ckpts = _P(tmp) / "Priors", _P(tmp) / "Checkpoints"
-        priors.mkdir(); ckpts.mkdir()
+        # The checkpoint now lives under a store (piece 1); ckpts is that store's "simulations" kind
+        # dir, so _refuse_to_orphan_a_checkpoint's checkpoints_using_prior(old_fp) call -- which takes
+        # no root and reads the process default store -- finds the hand-built checkpoint below.
+        priors, store_root = _P(tmp) / "Priors", _P(tmp) / "Artifacts"
+        priors.mkdir()
+        ckpts = store_root / "simulations"
         # Build the distribution FIRST and save what it exposes, exactly as save_mix_dist does.
         # Constructing a Categorical normalises `probs` again, so saving the raw weights would make
         # the file and the rebuilt distribution differ in the last bits -- a mismatch production
@@ -3898,29 +3873,28 @@ def test_saving_a_prior_cannot_orphan_a_checkpoint():
         torch.save({"identity": ident}, d / "header.pt")
         torch.save({"batches_done": 3989, "complete": False, "rng": None}, d / "state.pt")
 
-        saved_pp, saved_cp = orchestrator.PRIOR_PATH, config.CHECKPOINT_PATH
+        saved_pp = orchestrator.PRIOR_PATH
         try:
             orchestrator.PRIOR_PATH = priors
-            config.CHECKPOINT_PATH = ckpts
+            with use_store(ArtifactStore(store_root)):
+                try:
+                    orchestrator._refuse_to_orphan_a_checkpoint("p", _gmm_from(m_new, w_new))
+                except ValueError as e:
+                    assert "3,989" in str(e), f"the message must name what would be lost: {e}"
+                    assert "UNRESUMABLE" in str(e).upper(), f"and why it matters: {e}"
+                else:
+                    raise AssertionError(
+                        "overwriting a prior that a 3989-batch checkpoint depends on must be refused")
 
-            try:
-                orchestrator._refuse_to_orphan_a_checkpoint("p", _gmm_from(m_new, w_new))
-            except ValueError as e:
-                assert "3,989" in str(e), f"the message must name what would be lost: {e}"
-                assert "UNRESUMABLE" in str(e).upper(), f"and why it matters: {e}"
-            else:
-                raise AssertionError(
-                    "overwriting a prior that a 3989-batch checkpoint depends on must be refused")
-
-            # Re-saving the SAME distribution changes nothing, so it must go through.
-            orchestrator._refuse_to_orphan_a_checkpoint("p", gmm_old)
-            # A name nothing depends on must go through.
-            orchestrator._refuse_to_orphan_a_checkpoint("something_else", _gmm_from(m_new, w_new))
-            # And a prior no COMMITTED checkpoint uses must go through.
-            torch.save({"means": m_new, "weights": w_new}, priors / "unused.pt")
-            orchestrator._refuse_to_orphan_a_checkpoint("unused", gmm_old)
+                # Re-saving the SAME distribution changes nothing, so it must go through.
+                orchestrator._refuse_to_orphan_a_checkpoint("p", gmm_old)
+                # A name nothing depends on must go through.
+                orchestrator._refuse_to_orphan_a_checkpoint("something_else", _gmm_from(m_new, w_new))
+                # And a prior no COMMITTED checkpoint uses must go through.
+                torch.save({"means": m_new, "weights": w_new}, priors / "unused.pt")
+                orchestrator._refuse_to_orphan_a_checkpoint("unused", gmm_old)
         finally:
-            orchestrator.PRIOR_PATH, config.CHECKPOINT_PATH = saved_pp, saved_cp
+            orchestrator.PRIOR_PATH = saved_pp
 
 
 def test_the_retry_does_not_wait_when_THIS_process_holds_the_card():
