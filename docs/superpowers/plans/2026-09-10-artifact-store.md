@@ -353,15 +353,16 @@ def validate(d: dict) -> Manifest:
     """A dict -> Manifest, refusing anything that is not a current, complete, finite manifest."""
     if not isinstance(d, dict):
         raise ManifestError(f"manifest must be a JSON object, got {type(d).__name__}")
+    # Schema FIRST: an older or foreign manifest is "not a current artifact", whatever else it lacks.
+    if d.get("schema") != SCHEMA:
+        raise ManifestError(f"manifest schema {d.get('schema')!r} is not the current schema {SCHEMA}; "
+                            f"not a current PRISM artifact")
     unknown = set(d) - set(HEADER_KEYS)
     if unknown:
         raise ManifestError(f"unknown manifest keys {sorted(unknown)}")
     missing = [k for k in HEADER_KEYS if k not in d]
     if missing:
         raise ManifestError(f"manifest is missing {missing}")
-    if d["schema"] != SCHEMA:
-        raise ManifestError(f"manifest schema {d['schema']!r} is not the current schema {SCHEMA}; "
-                            f"not a current PRISM artifact")
     if d["kind"] not in KINDS:
         raise ManifestError(f"unknown artifact kind {d['kind']!r}")
     if not isinstance(d["id"], str) or not ID_RE.match(d["id"]):
@@ -755,13 +756,17 @@ def test_store_fig_sink_saves_png_and_forwards(store):
 
 
 def test_default_store_is_swappable_and_resolves_from_the_root(monkeypatch, tmp_path):
-    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "R"))
-    st.set_default_store(None)
-    assert st.default_store().root == tmp_path / "R"
-    other = st.ArtifactStore(tmp_path / "O")
-    with st.use_store(other):
-        assert st.default_store() is other and st.resolve_store(None) is other
-    assert st.default_store().root == tmp_path / "R"
+    session_default = st.default_store()                 # the conftest sandbox; put it back at the end
+    try:
+        monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "R"))
+        st.set_default_store(None)
+        assert st.default_store().root == tmp_path / "R"
+        other = st.ArtifactStore(tmp_path / "O")
+        with st.use_store(other):
+            assert st.default_store() is other and st.resolve_store(None) is other
+        assert st.default_store().root == tmp_path / "R"
+    finally:
+        st.set_default_store(session_default)
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2106,6 +2111,12 @@ class _FakeDP(DirectPosterior):
         pass
 
 
+class _PriorWrap:
+    """SBIPriorWrapper's shape (.gen_dist), module-level so a payload carrying it pickles."""
+    def __init__(self, inner):
+        self.gen_dist = inner
+
+
 def _set_path(w, path, value):
     target = w.config if path[0] == "config" else w.body
     for key in path[1 if path[0] == "config" else 0:-1]:
@@ -2174,12 +2185,8 @@ def test_manifest_V_must_equal_the_rotation_in_the_pickled_prior(store):
     assert not torch.allclose(Q, Q.T)
     T_train = reparam.build_rotated_bijection(reparam.build_inferred_bijection(cfg, log_params=[]), Q)
     V = reparam.rotation_of(T_train)                      # what build_posterior records
-
-    class _Wrap:                                          # SBIPriorWrapper's shape: .gen_dist
-        def __init__(self, inner):
-            self.gen_dist = inner
     base = torch.distributions.MultivariateNormal(torch.zeros(P), torch.eye(P))
-    trained = _Wrap(reparam.RotatedLatentPrior(base, Q))
+    trained = _PriorWrap(reparam.RotatedLatentPrior(base, Q))   # module-level: it is pickled inside the payload
 
     _posterior_artifact(store, cfg, name="good", V=V, prior=trained)
     lp = store.load_posterior(cfg, "good")
