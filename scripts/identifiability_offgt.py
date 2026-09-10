@@ -32,7 +32,7 @@ import _common
 from core import orchestrator
 from core.config import CHUNK_LEN, POSTERIOR_PATH
 from core.SBI import pipeline
-from core.SBI.reparam import build_inferred_bijection, load_eval_bijection
+from core.SBI.reparam import build_inferred_bijection, load_eval_bijection, reconcile_loaded_rotation
 
 _common.enable_warnings()
 
@@ -167,7 +167,9 @@ latent_prior = base.prior.gen_dist                          # RotatedLatentPrior
 T = build_inferred_bijection(cfg)
 # Reconstruct POST's exact training bijection (log box + optional rotation) from its sidecar,
 # so latent draws map to physical θ consistently; falls back to plain linear T for legacy posteriors.
-T_eval = load_eval_bijection(cfg, POST, POSTERIOR_PATH)
+# Reconciled against the rotation inside the posterior's own prior: the GUI wrote every sidecar
+# transposed before 2026-09-09 (defect D6), and latent_prior above carries the true V.
+T_eval = reconcile_loaded_rotation(load_eval_bijection(cfg, POST, POSTERIOR_PATH), base.prior, name=POST)
 force_prior = orchestrator.build_forcing_prior(cfg)
 z = latent_prior.sample((K - 1,))
 theta = T_eval(z.to(device))

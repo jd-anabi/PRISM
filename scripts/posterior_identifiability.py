@@ -75,6 +75,27 @@ def main() -> None:
 
     names = list(d.get("param_keys") or [])
     V = d.get("V")
+    # THE SIDECAR ALONE CANNOT BE TRUSTED FOR THE ORIENTATION. Every sidecar the GUI wrote before
+    # 2026-09-09 holds V transposed (defect D6), and this script's columns-are-directions reading of
+    # such a file produced the transposed table in PRISM_HANDOFF section 4.6. The posterior's own
+    # training prior carries the true V; check against it and use it when they disagree.
+    try:
+        from core.SBI.reparam import rotation_of_prior
+        _post = torch.load(str(pt), map_location="cpu", weights_only=False)
+        V_net = rotation_of_prior(getattr(_post, "prior", None))
+    except Exception as e:                    # noqa: BLE001 -- an unreadable posterior is not fatal here
+        print(f"[V] could not read the rotation inside the posterior's prior ({e}); trusting the sidecar")
+        V_net = None
+    if V_net is not None:
+        V_net = V_net.detach().cpu()
+        if V is None or (V.shape == V_net.shape and not torch.allclose(V.cpu().double(), V_net.double(), atol=1e-6)):
+            how = ("absent from the sidecar" if V is None else
+                   "TRANSPOSED in the sidecar (a pre-2026-09-09 GUI save; defect D6)"
+                   if torch.allclose(V.cpu().double().T, V_net.double(), atol=1e-6) else
+                   "DIFFERENT from the sidecar's -- the artifact is inconsistent; using the prior's")
+            print(f"[V] the rotation inside the posterior's training prior is {how}; decomposing the "
+                  f"prior's V, which is the basis the flow was trained in.")
+            V = V_net
     if V is None:
         sys.exit("the sidecar records V=None (the rotation was off for this run); nothing to decompose.")
     V = V.double().numpy()

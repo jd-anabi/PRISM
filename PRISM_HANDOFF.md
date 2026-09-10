@@ -3747,6 +3747,49 @@ which is the only reason D4 did not also bias this round.
   without a region nothing is printed), plus the X1 end-to-end test pinning both `build_posterior`
   lines (the "not measured" wording when nothing was recorded) and the calibration test pinning the
   containment fragment and a 100 % containment for a `t_scale`-free region.
+- **X5 — the GUI stores V, not Vᵀ; the load path reconciles the three transposed artifacts.**
+  `PosteriorPanel._extract_rotation` returns `reparam.rotation_of(posterior.T)` — eigenvectors in
+  columns, the orientation `save_posterior_artifacts` writes and `load_eval_bijection`
+  re-transposes — instead of `parts[0].M`; `SbiSession.V`'s comment states the orientation, and a
+  tokenize-based source scan pins `reparam.py` as the only code that reads `parts[0].M`. The three
+  rotated artifacts on disk are NOT rewritten: the pickled posterior carries its training prior, whose
+  `RotatedLatentPrior` holds the true V (bitwise the checkpoint header's), so
+  `reparam.reconcile_loaded_rotation` repairs them at load — a sidecar that agrees passes through;
+  the transpose, or a sidecar with NO rotation beside a prior that has one (the review caught the
+  first draft passing that through, which would decode a rotated flow through the bare box), is
+  rebuilt from the prior's V with a warning and a printed `[d6]` line; any other disagreement is
+  refused; only a posterior whose PRIOR carries no rotation passes unchecked, since the sidecar
+  alone cannot say a posterior is unrotated. `rotation_of_prior` walks `gen_dist`, `base` and sbi's
+  own `prior` wrapper attribute. `build_posterior`'s load branch applies the reconcile before the
+  region check; `build_truncation_region` refuses a parent whose transform does not rotate by (or
+  lacks) the rotation inside its own prior; and **the offline readers are reconciled too**:
+  `scripts/_common.load_posterior` (behind `sbc_characterize`, `channel_ablation` and friends) and
+  `scripts/identifiability_offgt.py` go through the same function, and
+  `scripts/posterior_identifiability.py` checks the sidecar's V against the prior's and decomposes
+  the prior's when they disagree, saying so — so the §4.6-style table is no longer transposed for
+  the three old artifacts. **Verified on the real artifact:** loading `posterior_09022026` through
+  `build_posterior` and through the scripts' loader warns and rotates by `train_3780fd37a16a`'s V,
+  the identifiability script prints the correct-orientation table (direction 0 = `t_scale`), the
+  region built through the fixed path skips direction 0 and truncates 1–5, and the ground truth lies
+  inside it. Tests:
+  `test_nav_and_gating.py` +1 (`test_the_deferred_save_forwards_V_not_its_transpose`: a
+  non-symmetric rotation — `torch.eye` is transpose-blind, which is how the one sidecar test never
+  noticed — lands V, not Vᵀ, from both the Posterior tab's and the TSNPE tab's on_result, and the
+  save is handed it); `test_artifact_consistency.py` +2
+  (`test_a_gui_saved_rotation_reloads_as_the_training_bijection`, THE spec test: GUI-path save →
+  `load_eval_bijection` → equal bijection probes, with `parts[0].M` as the counterfactual that reloads a
+  different bijection; `test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior`: the
+  unit cases, then `build_posterior` on a real file whose sidecar holds Vᵀ beside a posterior carrying
+  the true V evaluates in the correct basis with the warning, and silently when the sidecar agrees);
+  `test_conditioning_repair.py` +1 (the source scan, code tokens only, over `core/` and `scripts/`),
+  plus the `build_truncation_region` test now covering the prior-versus-transform guard (a matching
+  prior passes; a transposed one, another size, and an unrotated transform for a rotated network
+  are refused) and the reconcile test covering the rotation-less sidecar, a size mismatch and the
+  REAL prior chain (`SBIPriorWrapper → TruncatedLatentPrior → RotatedLatentPrior`). Still open,
+  recorded rather than fixed: the GUI's deferred save passes no `fisher_eigenvalues`, so every
+  GUI-saved sidecar records None; a re-save from the GUI to repair a sidecar must be done with the
+  bounds file the posterior was trained under, because `save_posterior_artifacts` writes the box from
+  the live config.
 
 ## 2026-08-28 (second session) — the §6.1 refactor landed: 39 commits, zero drift, two new ladders
 

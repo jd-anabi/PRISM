@@ -396,7 +396,9 @@ def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_regio
         post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
         assert post.x_obs_digest == "d" * 16
         # ROTATED artifacts: the sidecar's V must be the region's V; its transpose (the GUI's D6
-        # sidecars) is named as such rather than blamed on the region
+        # sidecars) is named as such rather than blamed on the region. _FakeDP carries no prior, so
+        # reconcile_loaded_rotation cannot arbitrate and this branch stays reachable.
+        torch.manual_seed(5)                                  # independent of the runner's order
         Q, _ = torch.linalg.qr(torch.randn(P, P))
         T_rot = reparam.build_rotated_bijection(T, Q)
         rotated = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=Q,
@@ -413,6 +415,126 @@ def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_regio
             raise AssertionError("a sidecar holding V transposed was decoded")
         except ValueError as e:
             assert "TRANSPOSE" in str(e), e
+    finally:
+        for q in (pt, rot):
+            q.unlink(missing_ok=True)
+
+
+class _PriorWithRotation:
+    """A pickled training prior's shape, one level deep: gen_dist -> RotatedLatentPrior(base, V)."""
+
+    def __init__(self, V):
+        self.gen_dist = reparam.RotatedLatentPrior(None, V)
+
+
+def test_a_gui_saved_rotation_reloads_as_the_training_bijection():
+    """⚠ THE spec test for defect D6: save from the GUI's path -> load_eval_bijection -> the probe of
+    the reloaded bijection equals the in-memory training bijection's. The counterfactual is in the
+    test: forwarding parts[0].M (what the GUI did) reloads a DIFFERENT bijection."""
+    from core.gui.panels.inference.posterior_tab import PosteriorPanel
+    from core.SBI import training_checkpoint
+    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
+    name = "_ptest_rot"
+    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    # the same box resolver the writer uses, so a non-empty REPARAM_LOG_PARAMS cannot fail this test
+    # for a reason unrelated to the orientation it pins
+    T = reparam.build_inferred_bijection(cfg, log_params=orchestrator._log_params_for(cfg))
+    torch.manual_seed(3)
+    Q, _ = torch.linalg.qr(torch.randn(P, P))
+    T_train = reparam.build_rotated_bijection(T, Q)
+    post = reparam.TransformedPosterior(object(), T_train)
+    want = training_checkpoint.bijection_probe(T_train, P)
+    try:
+        V_gui = PosteriorPanel._extract_rotation(post)
+        assert torch.equal(V_gui, Q)
+        orchestrator.save_posterior_artifacts(name, {"generation": 1}, V_gui, None, cfg)
+        got = training_checkpoint.bijection_probe(reparam.load_eval_bijection(cfg, f"{name}.pt", POSTERIOR_PATH), P)
+        assert torch.allclose(got, want), f"the GUI-saved rotation reloads differently: max|diff| {float((got - want).abs().max())}"
+        # the counterfactual: what the GUI forwarded until 2026-09-09
+        orchestrator.save_posterior_artifacts(name, {"generation": 2}, T_train.parts[0].M, None, cfg)
+        wrong = training_checkpoint.bijection_probe(reparam.load_eval_bijection(cfg, f"{name}.pt", POSTERIOR_PATH), P)
+        assert float((wrong - want).abs().max()) > 1.0, "parts[0].M reloaded as the training bijection -- the test rotation is degenerate"
+    finally:
+        for q in (pt, rot):
+            q.unlink(missing_ok=True)
+
+
+def test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior():
+    """The three rotated artifacts on disk hold V transposed and are NOT rewritten. The pickled
+    posterior carries its training prior, whose RotatedLatentPrior holds the true V, so the load
+    path reconciles: a sidecar that agrees passes through as the same object, the transpose is
+    corrected with a warning, anything else is refused, and a posterior without a rotation or
+    without a prior is untouched. Then the same through build_posterior on a real file."""
+    from core.SBI import training_checkpoint
+    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    T = reparam.build_inferred_bijection(cfg, log_params=[])
+    torch.manual_seed(4)
+    Q, _ = torch.linalg.qr(torch.randn(P, P))
+    Q2, _ = torch.linalg.qr(torch.randn(P, P))
+    prior = _PriorWithRotation(Q)
+    right = reparam.build_rotated_bijection(T, Q)
+    want = training_checkpoint.bijection_probe(right, P)
+
+    assert reparam.reconcile_loaded_rotation(right, prior) is right
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        fixed = reparam.reconcile_loaded_rotation(reparam.build_rotated_bijection(T, Q.T.contiguous()), prior, name="x")
+    assert any("TRANSPOSED" in str(c.message) for c in w)
+    assert torch.allclose(training_checkpoint.bijection_probe(fixed, P), want)
+    assert torch.allclose(reparam.rotation_of(fixed), Q)
+    try:
+        reparam.reconcile_loaded_rotation(reparam.build_rotated_bijection(T, Q2), prior)
+        raise AssertionError("a sidecar rotation unrelated to the prior's was accepted")
+    except ValueError as e:
+        assert "inconsistent" in str(e)
+    try:
+        reparam.reconcile_loaded_rotation(right, _PriorWithRotation(torch.eye(P - 1)))
+        raise AssertionError("a prior rotation of another size was accepted")
+    except ValueError as e:
+        assert "inconsistent" in str(e)
+    # a sidecar that records NO rotation beside a prior that has one: the sidecar cannot say the
+    # posterior is unrotated, so the prior's rotation is restored (with the warning), not the bare box
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        restored = reparam.reconcile_loaded_rotation(T, prior, name="y")
+    assert any("NO rotation" in str(c.message) for c in w)
+    assert torch.allclose(training_checkpoint.bijection_probe(restored, P), want)
+    assert reparam.reconcile_loaded_rotation(T, None) is T                        # unrotated, no prior
+    assert reparam.reconcile_loaded_rotation(right, None) is right                # no prior at all
+    assert reparam.reconcile_loaded_rotation(right, object()) is right            # a prior with no rotation
+    assert reparam.rotation_of_prior(prior) is Q
+    # the walker on the REAL training-prior chain, both hops and both attribute names, plus sbi's
+    # own wrapper attribute
+    from core.SBI import truncate
+    from core.SBI.Priors import sbi_prior_wrapper
+    base = torch.distributions.MultivariateNormal(torch.zeros(P), torch.eye(P))
+    chain = sbi_prior_wrapper.SBIPriorWrapper(truncate.TruncatedLatentPrior(
+        reparam.RotatedLatentPrior(base, Q), truncate.TruncationRegion([0], [-10.0], [10.0], n_latent=P)))
+    assert reparam.rotation_of_prior(chain) is Q
+    assert reparam.rotation_of_prior(type("SbiWrap", (), {"prior": chain})()) is Q
+
+    # through build_posterior on disk: a D6 sidecar (V transposed) beside a posterior whose prior
+    # carries the true V evaluates in the CORRECT basis, with the warning
+    name = "_ptest_recon"
+    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
+    dp = _FakeDP()
+    dp.prior = prior
+    try:
+        torch.save(dp, str(pt))
+        torch.save(_sidecar(cfg, V=Q.T.contiguous()), str(rot))
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False)
+        assert any("TRANSPOSED" in str(c.message) for c in w)
+        assert torch.allclose(training_checkpoint.bijection_probe(post.T, P), want)
+        torch.save(_sidecar(cfg, V=Q), str(rot))
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False)
+        assert not any("TRANSPOSED" in str(c.message) for c in w)
+        assert torch.allclose(training_checkpoint.bijection_probe(post.T, P), want)
     finally:
         for q in (pt, rot):
             q.unlink(missing_ok=True)

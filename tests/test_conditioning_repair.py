@@ -642,6 +642,26 @@ def test_build_truncation_region_records_the_parents_basis():
         raise AssertionError("a region was built without knowing where t_scale is")
     except ValueError as e:
         assert "t_scale" in str(e)
+    # belt and braces against D6: the parent's transform must rotate by the rotation its own network
+    # was trained under, i.e. the one inside its training prior
+    class _WideWithPrior(_Wide):
+        def __init__(self, V):
+            self.prior = type("Pr", (), {"gen_dist": reparam.RotatedLatentPrior(None, V)})()
+
+    torch.manual_seed(12)
+    ok = orchestrator.build_truncation_region(reparam.TransformedPosterior(_WideWithPrior(Q), T_parent), rec, x)
+    assert torch.equal(ok.V, Q)
+    for V_net, tag in ((Q.T.contiguous(), "a transposed prior rotation"), (torch.eye(P - 1), "another size")):
+        try:
+            orchestrator.build_truncation_region(reparam.TransformedPosterior(_WideWithPrior(V_net), T_parent), rec, x)
+            raise AssertionError(f"{tag} was accepted as the parent's basis")
+        except ValueError as e:
+            assert "rotation" in str(e) and "D6" in str(e), e
+    try:
+        orchestrator.build_truncation_region(reparam.TransformedPosterior(_WideWithPrior(Q), box), rec, x)
+        raise AssertionError("an unrotated transform was accepted for a network trained rotated")
+    except ValueError as e:
+        assert "has no rotation" in str(e), e
     for bad, tag in ((_Wide(), "a posterior with no transform"),
                      (reparam.TransformedPosterior(_Wide(), torch.distributions.transforms.ComposeTransform(
                          [reparam.OrthogonalTransform(Q.T)])), "a transform with no box")):
@@ -750,6 +770,30 @@ def test_a_t_scale_loaded_direction_is_excluded_from_the_region():
     tp.note_recorded(3, 12)
     tp.note_recorded(1, 4)
     assert abs(tp.recorded_containment - 0.25) < 1e-12
+
+
+def test_reparam_is_the_only_reader_of_the_rotation_matrix():
+    """The transpose convention (parts[0].M == Vᵀ) is decoded in exactly one place, reparam.rotation_of.
+    A second reader is how the GUI came to write every sidecar transposed (D6); a source scan keeps
+    the count at one. The forbidden spelling is assembled so this file does not match itself."""
+    import io as _io
+    import tokenize
+    from pathlib import Path as _P
+    needle = "parts[0]" + ".M"
+    skip = {tokenize.COMMENT, tokenize.STRING, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
+            tokenize.DEDENT, tokenize.ENCODING}
+    skip |= {getattr(tokenize, n) for n in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END") if hasattr(tokenize, n)}
+
+    def _code_only(path):
+        # CODE tokens only: the comments and messages explaining D6 necessarily spell the needle
+        toks = tokenize.generate_tokens(_io.StringIO(path.read_text(encoding="utf-8")).readline)
+        return "".join(t.string for t in toks if t.type not in skip)
+
+    repo = _P(__file__).resolve().parents[1]
+    readers = sorted(str(p.relative_to(repo)).replace("\\", "/")
+                     for sub in ("core", "scripts") for p in (repo / sub).rglob("*.py")
+                     if needle in _code_only(p))
+    assert readers == ["core/SBI/reparam.py"], f"parts[0].M is read outside reparam: {readers}"
 
 
 def test_a_truncated_posterior_warns_on_a_foreign_observation_at_inference():

@@ -46,7 +46,7 @@ from .SBI.reparam import (
     build_inferred_bijection, TransformedPosterior, build_rescale_bijection,
     build_rotated_bijection, RotatedLatentPrior, load_eval_bijection,
     nd_log_mask, resolved_log_params, read_sidecar, posterior_mode as reparam_posterior_mode,
-    rotation_of, transform_device, UnitToBoxTransform,
+    rotation_of, rotation_of_prior, reconcile_loaded_rotation, transform_device, UnitToBoxTransform,
 )
 
 # Directories have spaces in their names, so use importlib for these imports
@@ -742,8 +742,18 @@ def build_posterior(
             _assert_amortization_understood(choice)
         # Reconstruct the exact training box (+ rotation) from the <name>.rot.pt sidecar — log-mask
         # and V are self-describing, so eval is correct regardless of the current config (single
-        # source of truth shared with the offline diagnostic scripts).
-        T_load = load_eval_bijection(cfg, choice, POSTERIOR_PATH)
+        # source of truth shared with the offline diagnostic scripts). Then RECONCILE the sidecar's
+        # rotation against the one pickled inside the posterior's own training prior: every sidecar
+        # the GUI wrote before 2026-09-09 holds V transposed (D6), and the three such artifacts on
+        # disk are repaired here at load, with a warning, rather than rewritten.
+        _T_raw = load_eval_bijection(cfg, choice, POSTERIOR_PATH)
+        T_load = reconcile_loaded_rotation(_T_raw, getattr(posterior_latent, "prior", None), name=choice)
+        if T_load is not _T_raw:
+            # Printed as well as warned: Python shows a warning once per site, and a second load of
+            # the same artifact in one GUI session would otherwise be silent about the repair.
+            print(f"[d6] Posterior '{choice}': the sidecar's rotation disagreed with the one inside the "
+                  f"posterior's own training prior and was reconciled at load (the artifact on disk is "
+                  f"unchanged).", flush=True)
         # A non-amortized artifact carries its region and observation into the session, so the
         # calibration prior can be restricted to the same region (guardrail 8) and inference can say
         # which observation it is valid near. The region's basis is checked against the bijection
@@ -756,11 +766,12 @@ def build_posterior(
                     and torch.allclose(_V_load.detach().cpu().double(), region.V.double().transpose(-1, -2),
                                        atol=1e-6)):
                 raise ValueError(
-                    f"Posterior '{choice}': its sidecar's V is the TRANSPOSE of the rotation its "
-                    f"truncation region records -- a sidecar written by the GUI's deferred save while it "
-                    f"still read parts[0].M directly (defect D6, Appendix A 2026-09-09). The region is "
-                    f"right and the sidecar is wrong; the artifact cannot be decoded until the load path "
-                    f"reconciles the two.")
+                    f"Posterior '{choice}': the rotation its sidecar rebuilds is the TRANSPOSE of the one "
+                    f"its truncation region records, and the posterior's own training prior carries no "
+                    f"rotation to arbitrate between them (reconcile_loaded_rotation could not run). One "
+                    f"of the two was written by the GUI's deferred save while it still read parts[0].M "
+                    f"directly (defect D6, Appendix A 2026-09-09); redraw the region from a reconciled "
+                    f"parent rather than trusting either.")
             region.check_basis(T_load, dim=len(cfg.params_dict) + len(cfg.rescale_params),
                                device=cfg.hw.device)
             print(f"[tsnpe] loaded a NON-AMORTIZED posterior: valid only near the observation with "
@@ -1207,13 +1218,29 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
             "carrier of the latent basis the region is measured in. A bare DirectPosterior cannot say "
             "which coordinate its samples are in, so a region drawn from it cannot be applied safely.")
     V = rotation_of(T_parent)
+    latent = getattr(posterior, "latent", posterior)
+    # Belt and braces against D6: the parent's transform must rotate by the rotation its own network
+    # was trained under (the one pickled in its prior). A posterior loaded through build_posterior
+    # has been reconciled already; an in-session one is consistent by construction; anything else
+    # would hand the whole round a self-consistent wrong basis.
+    _V_net = rotation_of_prior(getattr(latent, "prior", None))
+    if _V_net is not None and (
+            V is None or V.shape != _V_net.shape or not torch.allclose(
+                V.detach().cpu().to(torch.float64), _V_net.detach().cpu().to(torch.float64), atol=1e-6)):
+        raise ValueError(
+            f"The parent posterior's transform "
+            f"{'has no rotation' if V is None else 'does not rotate by the rotation'} "
+            f"{'although' if V is None else 'that'} its network was trained under (the one inside its "
+            f"training prior{'' if V is None else f', {tuple(_V_net.shape)} against {tuple(V.shape)}'}) "
+            f"-- a transposed, rotation-less or foreign sidecar (D6). Reload the posterior through "
+            f"build_posterior: it reconciles a transposed or missing sidecar rotation against the prior, "
+            f"and refuses one that is neither.")
     _box = next((p for p in T_parent.parts if isinstance(p, UnitToBoxTransform)), None)
     if _box is None:
         raise ValueError("The parent posterior's transform has no parameter box; the region's probe "
                          "cannot be sized from it.")
     probe = training_checkpoint.bijection_probe(T_parent, int(_box.lows.numel()),
                                                 device=transform_device(T_parent))
-    latent = getattr(posterior, "latent", posterior)
     return truncate.region_from_posterior(
         latent, x_obs,
         n_directions=truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions),

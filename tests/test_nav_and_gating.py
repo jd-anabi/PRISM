@@ -327,6 +327,44 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized():
     assert inf.session.truncation is None and inf.session.x_obs_digest is None,         "an amortized posterior inherited the previous round's truncation"
 
 
+def test_the_deferred_save_forwards_V_not_its_transpose():
+    """⚠ DEFECT D6. The transform stores OrthogonalTransform(Vᵀ) as parts[0], and the deferred save
+    used to forward parts[0].M -- so every sidecar the GUI ever wrote held V transposed and reloaded
+    in the inverse rotation (all three rotated artifacts on disk, verified 2026-09-09). A NON-symmetric
+    V is essential here: torch.eye is transpose-blind, which is how the one existing sidecar test
+    never noticed. Both the Posterior tab's on_result and the TSNPE tab's must land V itself."""
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from core.SBI.reparam import build_box_bijection, build_rotated_bijection
+
+    _app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=object())
+    pp = inf.posterior_panel
+    torch.manual_seed(0)
+    Q, _ = torch.linalg.qr(torch.randn(4, 4))
+    assert not torch.allclose(Q, Q.T), "the test rotation must not be symmetric"
+    T_train = build_rotated_bijection(build_box_bijection(torch.zeros(4), torch.ones(4)), Q)
+    stub = type("Post", (), {"T": T_train, "latent": object()})()
+
+    pp._on_posterior((stub, {"loss": []}))
+    assert torch.equal(inf.session.V, Q) and not torch.equal(inf.session.V, Q.T), \
+        "the deferred save would write V transposed"
+    captured = {}
+    pp.dispatch = lambda fn, *a, **k: captured.update(args=a, kwargs=k)
+    pp.post_name.setText("some_name")
+    inf.session.posterior_latent = object()
+    pp._save_posterior()
+    assert captured["args"][2] is inf.session.V, "save_posterior_artifacts was not handed session.V"
+    assert pp._extract_rotation(object()) is None
+    assert pp._extract_rotation(type("P", (), {"T": build_box_bijection(torch.zeros(4), torch.ones(4))})()) is None
+
+    inf.session.V = None                                     # so only _on_round itself can restore it
+    inf.tsnpe_panel._on_round(((stub, {"loss": []}), object(), "deadbeefdeadbeef"))
+    assert inf.session.V is not None and torch.equal(inf.session.V, Q), \
+        "the TSNPE tab's on_result did not land V (or landed it transposed)"
+
+
 def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session():
     """⚠ GUARDRAIL 8's GUI half. A non-amortized artifact is loaded through the Posterior tab, which
     opts in (accept_truncated) and installs the posterior's own region and observation digest on the

@@ -51,7 +51,7 @@ from core import cli, config, orchestrator, registry
 from core.config import (SimConfig, BOUNDS_PATH, CELL_PATH, POSTERIOR_PATH, T_MIN_EXP_S,
                          VALID_LABELS, VALID_MODELS)
 from core.SBI.reparam import (TransformedPosterior, load_eval_bijection, posterior_mode,
-                              read_sidecar)
+                              read_sidecar, reconcile_loaded_rotation)
 
 DEFAULT_CELL = str(CELL_PATH / "nadrowski" / "master_spont.txt")
 # Several diagnostics read cfg.forcing_idx["amp"] unconditionally, so they need a bounds file that
@@ -222,7 +222,11 @@ def load_posterior(name: str, cfg: SimConfig, *, check_mode: bool = True):
     sidecar = read_sidecar(name, POSTERIOR_PATH, map_location=cfg.hw.device)
     if check_mode:
         require_mode(cfg, posterior_latent, sidecar, name=name)
-    T_eval = load_eval_bijection(cfg, name, POSTERIOR_PATH)
+    # Reconciled against the rotation pickled inside the posterior's own training prior: every sidecar
+    # the GUI wrote before 2026-09-09 holds V transposed (defect D6), and the three such artifacts on
+    # disk are repaired at load, with a warning, rather than rewritten.
+    T_eval = reconcile_loaded_rotation(load_eval_bijection(cfg, name, POSTERIOR_PATH),
+                                       getattr(posterior_latent, "prior", None), name=name)
     return posterior_latent, T_eval, TransformedPosterior(posterior_latent, T_eval), sidecar
 
 

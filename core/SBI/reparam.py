@@ -352,6 +352,82 @@ def rotation_of(transform) -> torch.Tensor | None:
     return None
 
 
+def rotation_of_prior(prior, _depth: int = 0) -> torch.Tensor | None:
+    """The rotation V inside a TRAINING prior -- ``SBIPriorWrapper -> [TruncatedLatentPrior ->]
+    RotatedLatentPrior`` -- or None when the chain has no rotation.
+
+    A pickled DirectPosterior carries this object (sbi stores the prior it was trained with), and it
+    is the one copy of V no writer can get wrong: the flow was trained on ``w = z @ V`` from exactly
+    this matrix. It is what the load path checks a sidecar against (``reconcile_loaded_rotation``).
+    """
+    if prior is None or _depth > 6:
+        return None
+    if isinstance(prior, RotatedLatentPrior):
+        return prior.V
+    # gen_dist: SBIPriorWrapper; base: TruncatedLatentPrior / RotatedLatentPrior; prior: the wrappers
+    # sbi itself may insert around a user prior (PytorchReturnTypeWrapper, OneDimPriorWrapper).
+    for attr in ("gen_dist", "base", "prior"):
+        try:
+            inner = getattr(prior, attr, None)
+        except Exception:                       # noqa: BLE001 -- a forwarding __getattr__ may raise
+            inner = None
+        if inner is not None and inner is not prior:
+            v = rotation_of_prior(inner, _depth + 1)
+            if v is not None:
+                return v
+    return None
+
+
+def reconcile_loaded_rotation(T_load: ComposeTransform, prior, *, name: str = "posterior") -> ComposeTransform:
+    """The evaluation bijection a saved posterior REALLY trained under, given the one its sidecar
+    rebuilds and the training prior pickled inside the posterior itself.
+
+    Every sidecar the GUI's deferred save wrote up to 2026-09-09 holds V TRANSPOSED (defect D6):
+    ``load_eval_bijection`` then rebuilt those posteriors in the inverse rotation, and every physical
+    marginal they produced offline was decoded through V instead of V^T -- silently, because V^T has
+    the same shape and is just as orthogonal. The posterior's own prior carries the true V, so the
+    three affected artifacts on disk (``posterior_09022026``, ``posterior_08232026`` and the retired
+    08192026 one) are repaired by every reader that goes through here -- ``orchestrator.
+    build_posterior``'s load branch and the scripts' shared ``_common.load_posterior`` -- without
+    rewriting anything: a sidecar that agrees is returned as is; one that holds the transpose, or
+    none at all while the prior has one, is rebuilt from the prior's V with a warning; any other
+    disagreement is refused as an inconsistent artifact. Only a posterior whose PRIOR carries no
+    rotation passes through unchecked -- the sidecar alone cannot say the posterior is unrotated.
+    ``scripts/posterior_identifiability.py`` reads the sidecar's V directly and checks it the same way.
+    """
+    V_side, V_net = rotation_of(T_load), rotation_of_prior(prior)
+    if V_net is None:
+        return T_load                             # nothing to check against (a legacy prior)
+    if V_side is None:
+        warnings.warn(
+            f"Posterior '{name}': its sidecar records NO rotation, but the training prior pickled "
+            f"inside it holds a {tuple(V_net.shape)} one -- the flow was trained on w = z @ V and "
+            f"cannot be decoded through the bare box. Using the prior's rotation (defect D6, Appendix "
+            f"A 2026-09-09); re-save this posterior from the GUI, with the same bounds file it was "
+            f"trained under, to repair the sidecar.", stacklevel=2)
+        return build_rotated_bijection(T_load, V_net.detach().to(device=transform_device(T_load)))
+    V_net = V_net.detach().to(device=V_side.device, dtype=V_side.dtype)
+    if V_side.shape != V_net.shape:
+        raise ValueError(f"Posterior '{name}': its sidecar's rotation is {tuple(V_side.shape)} but the "
+                         f"rotation inside its training prior is {tuple(V_net.shape)}; the artifact is "
+                         f"inconsistent.")
+    if torch.allclose(V_side, V_net, atol=1e-6):
+        return T_load
+    if torch.allclose(V_side.transpose(-1, -2), V_net, atol=1e-6):
+        warnings.warn(
+            f"Posterior '{name}': the sidecar's V is TRANSPOSED (written by the GUI's deferred save "
+            f"before defect D6 was fixed, Appendix A 2026-09-09). Using the rotation stored inside the "
+            f"posterior's own training prior instead; re-save this posterior from the GUI, with the "
+            f"same bounds file it was trained under, to repair the sidecar. Any reader that rebuilt "
+            f"this artifact from its sidecar alone decoded every physical marginal through V instead "
+            f"of V^T.", stacklevel=2)
+        return ComposeTransform([OrthogonalTransform(V_net.transpose(-1, -2))] + list(T_load.parts[1:]))
+    raise ValueError(
+        f"Posterior '{name}': the sidecar's rotation is neither the rotation inside its training prior "
+        f"nor its transpose (max|diff| = {float((V_side - V_net).abs().max()):.3g}); the artifact is "
+        f"inconsistent and cannot be decoded.")
+
+
 def sidecar_path(choice: str, posterior_dir):
     """The '<name>.rot.pt' companion path for a posterior filename. One spelling, many callers."""
     base = choice[:-3] if choice.endswith(".pt") else choice

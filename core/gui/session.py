@@ -46,7 +46,9 @@ class SbiSession:
     posterior: Any = None           # TransformedPosterior (from build_posterior)
     diagnostics: Any = None         # training diagnostics dict (loss curve etc.)
     posterior_latent: Any = None    # raw latent DirectPosterior, for deferred save
-    V: Any = None                   # decorrelating rotation, for the deferred .rot.pt sidecar
+    # The decorrelating rotation for the deferred .rot.pt sidecar: eigenvectors in COLUMNS (w = z @ V),
+    # read through reparam.rotation_of -- NEVER the transform's parts[0].M, which is V transposed (D6).
+    V: Any = None
     # ⚠ WHAT THE DEFERRED SAVE MUST NOT FORGET. A TSNPE posterior is valid
     # only near the observation its region was drawn around. The GUI saves LATER, from a button, so
     # if the region does not travel with the posterior it will be written to disk marked

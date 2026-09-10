@@ -235,15 +235,19 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
 
     @staticmethod
     def _extract_rotation(posterior):
-        """Recover the decorrelating rotation V from the posterior's transform (for a deferred save)."""
+        """The decorrelating rotation V for the deferred save -- eigenvectors in COLUMNS, ``w = z @ V``,
+        the orientation ``save_posterior_artifacts`` writes and ``load_eval_bijection`` re-transposes.
+
+        Through ``reparam.rotation_of``, the ONE decoder of the transform's convention. This used to
+        return ``parts[0].M`` verbatim, which is V TRANSPOSED, so every sidecar the GUI ever saved held
+        Vᵀ and reloaded in the inverse rotation (defect D6, Appendix A 2026-09-09) -- and because
+        ``_on_posterior`` serves the LOAD path too, load → Save flipped a correct sidecar as well.
+        """
         try:
-            from core.SBI.reparam import OrthogonalTransform
-            parts = getattr(getattr(posterior, "T", None), "parts", [])
-            if parts and isinstance(parts[0], OrthogonalTransform):
-                return parts[0].M
+            from core.SBI.reparam import rotation_of
+            return rotation_of(getattr(posterior, "T", None))
         except Exception:
-            pass
-        return None
+            return None
 
     def save_settings(self, qs):
         qs.beginGroup("inference_posterior")
