@@ -1,10 +1,9 @@
 """Shared base classes and budget machinery for the inference tabs."""
-import subprocess
-
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel
 
 from core import config, forcing, orchestrator
+from core.artifacts.provenance import _nvidia_smi_free_gib  # noqa: F401 -- re-exported for inference_tabs
 from core.config import CELL_PATH
 from core.SBI import pipeline, training_checkpoint
 
@@ -46,26 +45,6 @@ def _hw_batch(cfg) -> int:
     """The rows-per-batch the run will actually use when the cap field is 0 (= auto)."""
     return (getattr(getattr(cfg, "hw", None), "batch_size", None)
             or config.detect_device().batch_size)
-
-
-def _nvidia_smi_free_gib() -> "float | None":
-    """Free VRAM in GiB according to ``nvidia-smi``, or None if it cannot be read.
-
-    ⚠ DELIBERATELY NOT ``torch.cuda.mem_get_info``. That reading overstates free VRAM on Windows by
-    roughly the size of the desktop -- measured 15037 MiB against nvidia-smi's 5814 at the same
-    instant -- and it is the number that green-lit the batch which killed the first chi
-    retrain. Showing it next to a field whose whole purpose is to bound VRAM would be handing the
-    user the exact lie the field exists to defend against.
-    """
-    try:
-        out = subprocess.run(
-            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=2.0)
-        if out.returncode != 0:
-            return None
-        return float(out.stdout.strip().splitlines()[0]) / 1024.0
-    except Exception:                        # noqa: BLE001 -- no driver, no binary, a timeout: all "unknown"
-        return None
 
 
 class _TrainingBudgetMixin:

@@ -237,6 +237,7 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
              the usual matched case; callers may surface it, and existing callers can ignore it.
     """
     inits, param_vals, rescale_vals, forcing_vals = file_manager.parse_values_file(cell_path)
+    cfg.sources["cell"] = str(cell_path)
     return cfg.inject_ground_truth(inits, param_vals, rescale_vals, forcing_vals)
 
 
@@ -506,9 +507,12 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
         params_dict, rescale_params, force_params_dict = (OrderedDict(d) for d in bounds_dicts)
     else:
         params_dict, rescale_params, force_params_dict, _ = file_manager.parse_bounds_file(bounds_file)
+    units_path = None
     if units_override is None:
-        units_dict = file_manager.parse_units_file(resolve_units_file(model))
+        units_path = resolve_units_file(model)
+        units_dict = file_manager.parse_units_file(units_path)
     elif isinstance(units_override, (str, Path)):
+        units_path = str(units_override)
         units_dict = file_manager.parse_units_file(str(units_override))
     else:
         units_dict = tuple(str(u) for u in units_override)
@@ -538,6 +542,7 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
         t_max_exp=T_MAX_EXP_S * s_to_cell,
         T_obs=None,                             # observation duration is prompted at the inference step
         hw=detect_device(),
+        sources={k: str(v) for k, v in (("bounds", bounds_file), ("units", units_path)) if v},
     )
 
 

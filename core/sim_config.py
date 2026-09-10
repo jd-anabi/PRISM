@@ -91,6 +91,12 @@ class SimConfig:
     # Hardware
     hw: DeviceConfig = field(default_factory=detect_device)
 
+    # The files this config was built from, as paths: {"bounds": ..., "units": ..., "cell": ...}.
+    # Filled by cli.make_sim_config (bounds, units) and cli.load_and_validate_gt (cell); a hand-entered
+    # bounds grid leaves "bounds" absent. Read by core.artifacts.provenance.inputs_from_cfg so every
+    # manifest names its inputs by path AND content hash.
+    sources: dict = field(default_factory=dict)
+
     def __post_init__(self):
         """Reject a chi geometry that cannot be represented, AT CONFIG BUILD.
 

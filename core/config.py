@@ -172,29 +172,32 @@ SIM_VRAM_CEILING_GIB = 0.0
 
 
 # === PATHS ===
-# Resources live at <repo-root>/Resources. The run scripts (run.bat/run.sh) cd to the repo root, so the
-# cwd-relative form is correct in normal use; the __file__ fallback keeps paths valid if the app is ever
-# launched from another directory (config.py is core/config.py, so parent.parent is the repo root).
-_ROOT = Path(os.getcwd()) / "Resources"
-if not _ROOT.exists():
-    _ROOT = Path(__file__).resolve().parent.parent / "Resources"
-CELL_PATH    = _ROOT / "Cells"
-BOUNDS_PATH  = _ROOT / "Bounds"
-UNITS_PATH   = _ROOT / "Units"
+# Inputs (the hand-edited Bounds / Cells / Units / Models) live at <repo-root>/Resources, resolved
+# from THIS FILE'S location -- never from the working directory, which used to decide it and moved
+# the store with whatever directory the app was launched from. PRISM_RESOURCES overrides.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RESOURCES_ROOT = Path(os.environ.get("PRISM_RESOURCES") or (REPO_ROOT / "Resources"))
+CELL_PATH    = RESOURCES_ROOT / "Cells"
+BOUNDS_PATH  = RESOURCES_ROOT / "Bounds"
+UNITS_PATH   = RESOURCES_ROOT / "Units"
+MODELS_PATH  = RESOURCES_ROOT / "Models"      # user-defined model definitions (see core/registry.py)
+
+
+def artifacts_root() -> Path:
+    """Where generated artifacts live: PRISM_ARTIFACTS, else <repo-root>/Artifacts. A FUNCTION, read
+    at every call, so a test or a script can point one process at a sandbox without rebinding
+    module names (the `from .config import X` snapshot trap)."""
+    return Path(os.environ.get("PRISM_ARTIFACTS") or (REPO_ROOT / "Artifacts"))
+
+
+# Generated-kind constants. REMOVED in piece 1's Task 12; until then every remaining reader is a
+# stage that has not yet moved to the store.
+_ROOT = RESOURCES_ROOT
 PRIOR_PATH   = _ROOT / "Priors"
 POSTERIOR_PATH = _ROOT / "Posteriors"
 PLOT_PATH    = _ROOT / "Plots"
-# Training-data checkpoints. Its OWN directory, not a subfolder of Priors/ or Posteriors/:
-# file_manager.list_dir walks recursively and the GUI's posterior picker keeps any *.pt that is not
-# *.rot.pt, so a checkpoint shard under Posteriors/ would appear in the dropdown as a loadable
-# posterior and fail an isinstance assert on selection.
 CHECKPOINT_PATH = _ROOT / "Checkpoints"
-# Observations persisted at INFERENCE time. Amortized NPE has no
-# observation when it is SAVED -- which is why `default_x` is None on posterior_08232026 and why
-# the posterior behind those figures cannot be re-sampled from the artifacts alone. TSNPE needs
-# one, so it is recorded where it first exists: at inference.
 OBSERVATION_PATH = _ROOT / "Observations"
-MODELS_PATH  = _ROOT / "Models"      # user-defined model definitions (see core/registry.py)
 
 # === PARAMETER LABELS (for plotting) ===
 HOPF_LABELS = [r"$\mu$", r"$\beta$", r"$\sigma_x$", r"$\sigma_y$"]
