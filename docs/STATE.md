@@ -65,7 +65,10 @@ all work happens directly on the local `main` branch)
    The drill that certifies the resume is run 1 `CHI=1 TOBS_S=4.5 BOUNDS=…/master.txt
    CELL=…/master_spont.txt CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke`, then run 2 with
    `PRIOR=smoke_prior STAGES=prior,posterior`, the same `NUM_RUNS`, `SAVE` unset.
-4. **Manual GUI check on a display** (plan §Verification, nine checks; `run.bat`): `Artifacts/`
+4. **Manual GUI check on a display** (plan §Verification, nine checks; `run.bat`). **Written out as
+   rows A1–A9 of `docs/checklists/display-walkthrough.md` (2026-09-11)** with the exact click
+   paths, the app's own log/dialog strings and the directory to inspect for each; record there,
+   then summarise here. In short: `Artifacts/`
    created at launch; prior from scratch → `priors/_unnamed__<id>/`, Save renames it; posterior
    at 2 batches → `posteriors/` with parents prior + simulation; load it (no dialog) and a
    posterior under another bounds file (refusal naming the field); Validate → `calibrations/`;
