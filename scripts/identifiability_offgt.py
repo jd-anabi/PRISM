@@ -1,4 +1,6 @@
 """
+⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+
 Step 5 decisive check: is local identifiability a GT-only artifact, or does it hold across
 the prior?
 

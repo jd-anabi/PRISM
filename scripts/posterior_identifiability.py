@@ -1,4 +1,6 @@
 """
+⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+
 What did a SAVED posterior actually measure? Reads the artifacts; simulates nothing.
 
 Answers the question a corner plot cannot: a 13-D posterior with four well-constrained directions and

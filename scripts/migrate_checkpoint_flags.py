@@ -1,4 +1,6 @@
-"""Widen a pre-flag training checkpoint with the derived valid-flag block. One-shot, additive.
+"""⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+
+Widen a pre-flag training checkpoint with the derived valid-flag block. One-shot, additive.
 
 WHY THIS EXISTS. Section 11.3 item 1.2 adds a valid-flag channel beside each summary feature whose
 value is a substituted sentinel. That is a change to the FEATURE SET, which normally means

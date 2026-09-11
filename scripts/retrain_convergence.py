@@ -1,4 +1,6 @@
 """
+⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+
 Convergence retrain.
 
 Trains a NEW posterior non-interactively and saves its per-epoch train/validation loss

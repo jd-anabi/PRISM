@@ -48,10 +48,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 
 from core import cli, config, orchestrator, registry
-from core.config import (SimConfig, BOUNDS_PATH, CELL_PATH, POSTERIOR_PATH, T_MIN_EXP_S,
+from core.config import (SimConfig, BOUNDS_PATH, CELL_PATH, T_MIN_EXP_S,
                          VALID_LABELS, VALID_MODELS)
-from core.SBI.reparam import (TransformedPosterior, load_eval_bijection, posterior_mode,
-                              read_sidecar, reconcile_loaded_rotation)
+from core.SBI.reparam import posterior_mode
 
 DEFAULT_CELL = str(CELL_PATH / "nadrowski" / "master_spont.txt")
 # Several diagnostics read cfg.forcing_idx["amp"] unconditionally, so they need a bounds file that
@@ -207,27 +206,15 @@ def describe(cfg: SimConfig, *, cell: str = None, bounds: str = None, ignored=()
 
 
 def load_posterior(name: str, cfg: SimConfig, *, check_mode: bool = True):
-    """Load a saved posterior + its exact evaluation bijection.
-
-    Collapses the ``torch.load`` / ``load_eval_bijection`` / ``TransformedPosterior`` boilerplate that
-    four scripts carried near-verbatim, and -- by default -- refuses a posterior whose observation
-    mode disagrees with ``cfg`` BEFORE any simulation is paid for.
-
-    :return: ``(posterior_latent, T_eval, posterior_physical, sidecar)``.
-    """
-    path = POSTERIOR_PATH / name
-    if not path.exists():
-        raise SystemExit(f"No such posterior: {path}")
-    posterior_latent = torch.load(str(path), map_location=cfg.hw.device, weights_only=False)
-    sidecar = read_sidecar(name, POSTERIOR_PATH, map_location=cfg.hw.device)
-    if check_mode:
-        require_mode(cfg, posterior_latent, sidecar, name=name)
-    # Reconciled against the rotation pickled inside the posterior's own training prior: every sidecar
-    # the GUI wrote before 2026-09-09 holds V transposed (defect D6), and the three such artifacts on
-    # disk are repaired at load, with a warning, rather than rewritten.
-    T_eval = reconcile_loaded_rotation(load_eval_bijection(cfg, name, POSTERIOR_PATH),
-                                       getattr(posterior_latent, "prior", None), name=name)
-    return posterior_latent, T_eval, TransformedPosterior(posterior_latent, T_eval), sidecar
+    """A posterior artifact (name or id) from the default store: ``(latent, T_eval, posterior, manifest)``.
+    Interim until piece 2 folds the scripts into the command-line tool: the store's loader performs
+    every check ``check_mode`` used to (and refuses rather than warns), so the flag is kept only for
+    the call sites' sake."""
+    from core.artifacts import Accept, default_store
+    lp = default_store().load_posterior(cfg, name, accept=Accept(truncated=True))
+    if lp.posterior.truncation is not None:
+        print(f"[mode] {name}: NON-AMORTIZED (TSNPE), valid near observation {lp.posterior.x_obs_digest}", flush=True)
+    return lp.latent, lp.posterior.T, lp.posterior, lp.manifest
 
 
 def require_mode(cfg: SimConfig, posterior_latent, sidecar: dict | None = None,
@@ -239,8 +226,14 @@ def require_mode(cfg: SimConfig, posterior_latent, sidecar: dict | None = None,
     ``Linear``. The three conditioning widths cannot collide, so the check is exact -- it just has to
     happen before the spend. Mirrors ``retrain_convergence``'s existing rotation guard.
 
+    ``sidecar`` accepts a ``Manifest`` too (since piece 1's artifact store): its posterior body is
+    reduced to the dict shape ``posterior_mode`` expects.
+
     :return: ``(mode, forcing_dim, K or None)``.
     """
+    if hasattr(sidecar, "body"):                       # a manifest, since piece 1
+        c = sidecar.body["conditioning"]
+        sidecar = {"mode": sidecar.body["mode"], "forcing_dim": c["forcing_dim"], "chi_k_pad": c["chi_k_pad"]}
     try:
         mode, forcing_dim, k = posterior_mode(posterior_latent, sidecar)
     except ValueError as e:

@@ -752,3 +752,19 @@ def test_no_literal_resource_paths_outside_config():
     assert not offenders, "literal store paths outside config.py:\n" + "\n".join(offenders)
     for name in ("PRIOR_PATH", "POSTERIOR_PATH", "PLOT_PATH", "CHECKPOINT_PATH", "OBSERVATION_PATH"):
         assert not hasattr(config, name), f"config.{name} still exists"
+
+
+def test_every_artifact_the_suite_wrote_is_complete_and_its_parents_resolve(tiny_run):
+    """Runs last: every artifact the module's tests wrote into the shared tiny store is complete, every
+    parent id resolves to an artifact of the right kind, and every payload still hashes to what its
+    manifest recorded -- the store's contract, checked over a whole session's worth of real writes."""
+    s = tiny_run.store
+    for kind in st.KIND_DIRS:
+        for row in s.list(kind):
+            assert row.complete, (kind, row.id, row.reason)
+            m = s.get(kind, row.id)
+            for pkind, pid in m.parents.items():
+                k = "posterior" if pkind == "parent_posterior" else pkind
+                assert s.get(k, pid).id == pid, (kind, row.id, pkind, pid)
+            for f, sha in m.payloads.items():
+                assert prov.sha256_file(row.path / f) == sha, (kind, row.id, f)

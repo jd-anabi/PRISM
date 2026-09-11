@@ -1,4 +1,6 @@
 """
+⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+
 Full characterization of the t_offset SBC anomaly.
 
 t_offset's SBC KS p-value swung 0.762 -> 0.001 between training runs, unlike the
