@@ -171,6 +171,23 @@ def conditioning_block(cfg) -> dict:
     }
 
 
+def region_to_json(region) -> dict:
+    """``TruncationRegion.to_dict()`` with its tensors (lo, hi, V, probe) as float64 lists."""
+    d = dict(region.to_dict())
+    for key in ("lo", "hi", "V", "probe"):
+        d[key] = tensor_to_json(d.get(key))
+    d["level"] = float(d["level"])
+    return d
+
+
+def region_from_json(d: dict) -> dict:
+    """The inverse: the dict ``TruncationRegion.from_dict`` takes (lists back to float64 tensors)."""
+    out = dict(d)
+    for key in ("lo", "hi", "V", "probe"):
+        out[key] = json_to_tensor(d.get(key))
+    return out
+
+
 def config_from_cfg(cfg) -> dict:
     """The SimConfig-derived identity vocabulary every manifest's ``config`` starts from. Stages
     ``.update()`` their own resolved knobs on top."""

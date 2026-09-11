@@ -448,6 +448,108 @@ class ArtifactStore:
         return LoadedPrior("prior", m.id, m.name, m, sub, prior=prior,
                            force_prior=_orch.build_forcing_prior(cfg), nd_prior=nd_prior, fingerprint=fp)
 
+    def load_posterior(self, cfg, ref: str, *, accept: "Accept | None" = None) -> LoadedPosterior:
+        """Every check _assert_mode_matches and build_posterior's load branch made, read from the
+        manifest instead of a sidecar, BEFORE the payload is unpickled; then the payload's own view of
+        its mode, the bijection rebuilt from the manifest, its rotation checked against the prior
+        pickled inside the posterior, and the amortization gate."""
+        import torch
+        from sbi.inference import DirectPosterior
+        from core import config as _config
+        from core.SBI import reparam, truncate
+        from core.SBI.run_guards import _assert_chi_config_is_deliberate, _gmm_fingerprint
+        from core.SBI.statistics import SUMMARY_WIDTH
+        from core.orchestrator import expected_forcing_dim
+        accept = accept or Accept()
+        sub, m = self._find("posterior", ref)
+        if m is None:
+            raise StoreError(f"no complete posterior named or id'd {ref!r} under {self.kind_dir('posterior')}")
+        label = m.name or m.id
+        # config.py is the one party that cannot go stale: a stale cfg agrees with the posterior
+        # trained under that same stale cfg (the 2026-08-19 band).
+        _assert_chi_config_is_deliberate(cfg)
+        body, cond, tr = m.body, m.body["conditioning"], m.body["transform"]
+
+        def _bad(msg):
+            raise ValueError(f"Posterior '{label}' {msg}")
+
+        if m.config.get("model") != cfg.model:
+            _bad(f"was trained for model {m.config.get('model')}, but this config is for {cfg.model}.")
+        want_keys = list(cfg.params_dict) + list(cfg.rescale_params)
+        if list(tr["param_keys"]) != want_keys:
+            _bad(f"was trained over a different inferred parameter set or ORDER.\n  posterior: {list(tr['param_keys'])}"
+                 f"\n  config:    {want_keys}\nColumns bind positionally, so every reported value would refer "
+                 f"to the wrong parameter. Pick the bounds file this posterior was trained with.")
+        want_lo = [float(b[0]) for _, b in cfg.params_dict.values()] + [float(b[0]) for _, b in cfg.rescale_params.values()]
+        want_hi = [float(b[1]) for _, b in cfg.params_dict.values()] + [float(b[1]) for _, b in cfg.rescale_params.values()]
+        got_lo, got_hi = list(tr["nd_lows"]) + list(tr["rescale_lows"]), list(tr["nd_highs"]) + list(tr["rescale_highs"])
+        if not (torch.allclose(torch.tensor(got_lo), torch.tensor(want_lo)) and
+                torch.allclose(torch.tensor(got_hi), torch.tensor(want_hi))):
+            diff = [f"{n}: posterior ({lo:g}, {hi:g}) vs config ({wl:g}, {wh:g})"
+                    for n, lo, hi, wl, wh in zip(want_keys, got_lo, got_hi, want_lo, want_hi) if lo != wl or hi != wh]
+            _bad(f"was trained in a different box than this config declares: {'; '.join(diff)}. The flow "
+                 f"decodes every latent sample through its training box, so pick the bounds file it was trained with.")
+        want_mode, want_dim = cfg.observation_mode, int(expected_forcing_dim(cfg))
+        if body["mode"] != want_mode:
+            _bad(f"was trained in {str(body['mode']).upper()} mode, but this config is {want_mode.upper()} mode "
+                 f"(the chi toggle and the bounds file's Forcing section are what select the mode).")
+        if body["mode"] == "chi":
+            if cond["chi_layout"] != _config.CHI_LAYOUT:
+                _bad(f"was trained under chi layout {cond['chi_layout']}; this build writes layout "
+                     f"{_config.CHI_LAYOUT} (a padded probe set, {_config.CHI_ELEM_W} channels per slot). Retrain.")
+            for key, want, what in (("chi_k_pad", int(cfg.chi_k_pad), "probe-slot capacity"),
+                                    ("chi_elem_w", int(_config.CHI_ELEM_W), "channels per slot")):
+                if int(cond[key]) != want:
+                    _bad(f"has {what} {cond[key]}, but this config declares {want}. It is frozen into the "
+                         f"trained network's input shape, so retrain or set {key} back to {cond[key]}.")
+            if [float(v) for v in cond["chi_freq_bounds"]] != [float(v) for v in cfg.chi_freq_bounds]:
+                _bad(f"was trained over chi band {tuple(cond['chi_freq_bounds'])}, but this config declares "
+                     f"{tuple(cfg.chi_freq_bounds)}. The band fixes the encoder's frequency normalization.")
+            if abs(float(cond["chi_max_cycles"]) - float(cfg.chi_max_cycles)) > 1e-9:
+                _bad(f"was trained with a {float(cond['chi_max_cycles']):g}-cycle lock-in ceiling, but this "
+                     f"config declares {float(cfg.chi_max_cycles):g}; logcyc is how the encoder weighs a probe.")
+        if int(cond["forcing_dim"]) != want_dim or int(cond["width"]) != SUMMARY_WIDTH + 1 + want_dim:
+            _bad(f"conditions on {cond['width']} features (forcing/chi block {cond['forcing_dim']}), but this "
+                 f"config expects {SUMMARY_WIDTH + 1 + want_dim} (block {want_dim}). Conditioning widths are "
+                 f"incompatible.")
+
+        latent = torch.load(str(sub / "posterior.pt"), map_location=cfg.hw.device, weights_only=False)
+        if not isinstance(latent, DirectPosterior):
+            raise StoreError(f"posterior '{label}': posterior.pt is a {type(latent).__name__}, not a DirectPosterior")
+        latent.device = latent._device = cfg.hw.device     # sbi caches the training device in both
+        try:                                                # the trained net's own view must agree
+            net_mode, net_dim, _ = reparam.posterior_mode(latent, None)
+        except ValueError:
+            net_mode = net_dim = None                       # a payload with no estimator (a stub): the manifest rules
+        if net_mode is not None and (net_mode != body["mode"] or int(net_dim) != int(cond["forcing_dim"])):
+            raise StoreError(f"posterior '{label}': the trained network is {net_mode} with a {net_dim}-wide block "
+                             f"but the manifest says {body['mode']} / {cond['forcing_dim']}; the artifact is inconsistent")
+        T = reparam.build_eval_bijection(cfg, tr)
+        reparam.assert_rotation_consistent(T, getattr(latent, "prior", None), name=label)
+        region = digest = None
+        if not body["amortized"]:
+            trd = body["truncation"] or {}
+            if not accept.truncated:
+                raise ValueError(
+                    f"Posterior '{label}' is NOT AMORTIZED: it was trained by TSNPE on a prior truncated to a "
+                    f"{trd.get('level', '?')}-HPD region along Fisher direction(s) {trd.get('dims')}, drawn around "
+                    f"the observation with digest {trd.get('x_obs_digest')}. It is only valid for observations in "
+                    f"that region -- outside it the flow has never seen a training row and will extrapolate "
+                    f"confidently rather than return the prior. Pass Accept(truncated=True) to load it anyway "
+                    f"(the Posterior tab does): its region then restricts calibration, and inference refuses any "
+                    f"other observation unless told to accept it.")
+            region = truncate.TruncationRegion.from_dict(mf.region_from_json(trd)) if trd else None
+            if region is None or region.probe is None:
+                _bad("declares itself NON-AMORTIZED but its manifest carries "
+                     + ("no truncation region" if region is None else "a region without its basis")
+                     + ", so the coordinate its box refers to cannot be verified. Run the round again.")
+            region.check_basis(T, dim=len(want_keys), device=cfg.hw.device)
+            digest = trd.get("x_obs_digest")
+        post = reparam.TransformedPosterior(latent, T, truncation=region, x_obs_digest=digest)
+        return LoadedPosterior("posterior", m.id, m.name, m, sub, posterior=post, latent=latent,
+                               fingerprint=_gmm_fingerprint(getattr(latent, "prior", None)),
+                               diagnostics=None, accepted=accept.used() if region is not None else [])
+
 
 def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None, hw=None,
                               batches_done: int = 0, complete: bool = False, rows=None, V=None) -> mf.Manifest:

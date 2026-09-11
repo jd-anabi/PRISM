@@ -570,6 +570,48 @@ def load_eval_bijection(cfg, choice: str, posterior_dir) -> ComposeTransform:
     return build_rotated_bijection(T, V) if V is not None else T
 
 
+def build_eval_bijection(cfg, transform: dict) -> ComposeTransform:
+    """The EXACT physical-space bijection a saved posterior trained under, rebuilt from its
+    manifest's ``transform`` block: the box and log mask recorded THERE (never the live config's),
+    then the rotation V -- eigenvectors in COLUMNS, the orientation build_rotated_bijection expects
+    and rotation_of returns. Successor of load_eval_bijection, which read the .rot.pt sidecar."""
+    dev, dt = cfg.hw.device, cfg.hw.dtype
+    lows = torch.tensor(list(transform["nd_lows"]) + list(transform["rescale_lows"]), dtype=dt, device=dev)
+    highs = torch.tensor(list(transform["nd_highs"]) + list(transform["rescale_highs"]), dtype=dt, device=dev)
+    names = list(transform["param_keys"])
+    T = build_box_bijection(lows, highs, _log_mask(names, lows, list(transform.get("log_params") or [])))
+    V = transform.get("V")
+    if V is None:
+        return T
+    return build_rotated_bijection(T, torch.tensor(V, dtype=dt, device=dev))
+
+
+def assert_rotation_consistent(T: ComposeTransform, prior, *, name: str = "posterior") -> None:
+    """Refuse a posterior whose evaluation bijection does not rotate by the rotation pickled inside
+    its own training prior. Successor of reconcile_loaded_rotation WITHOUT its repair branch: every
+    artifact is now written by a writer that records V through rotation_of, so a disagreement is an
+    inconsistent artifact, not a legacy sidecar. A prior with no rotation cannot arbitrate and passes."""
+    V_side, V_net = rotation_of(T), rotation_of_prior(prior)
+    if V_net is None:
+        return
+    if V_side is None:
+        raise ValueError(
+            f"Posterior '{name}': its manifest records NO rotation, but the training prior pickled "
+            f"inside it holds a {tuple(V_net.shape)} one -- the flow was trained on w = z @ V and cannot "
+            f"be decoded through the bare box. The artifact is inconsistent.")
+    V_net = V_net.detach().to(device=V_side.device, dtype=V_side.dtype)
+    if V_side.shape != V_net.shape:
+        raise ValueError(f"Posterior '{name}': its manifest's rotation is {tuple(V_side.shape)} but the "
+                         f"rotation inside its training prior is {tuple(V_net.shape)}; the artifact is inconsistent.")
+    if torch.allclose(V_side, V_net, atol=1e-6):
+        return
+    hint = " -- it is the TRANSPOSE" if torch.allclose(V_side.transpose(-1, -2), V_net, atol=1e-6) else ""
+    raise ValueError(
+        f"Posterior '{name}': the manifest's rotation is not the rotation inside its training prior"
+        f"{hint} (max|diff| = {float((V_side - V_net).abs().max()):.3g}); the artifact is inconsistent "
+        f"and cannot be decoded.")
+
+
 class RotatedLatentPrior:
     """
     Prior over the rotated flow coordinate w = z @ V, with z ~ base (the latent inferred

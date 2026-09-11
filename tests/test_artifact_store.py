@@ -431,3 +431,136 @@ def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, 
     assert ck["parents"] == {"prior": lp.id} and ck["inputs"]["model"] == "NADROWSKI" and ck["hw"] is cfg.hw
     assert ck["identity"] == SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
     assert ck["identity"]["prior_fingerprint"] == lp.fingerprint and ck["dir"].parent == store.kind_dir("simulation")
+
+
+from sbi.inference import DirectPosterior
+
+
+class _FakeDP(DirectPosterior):
+    """A DirectPosterior by type only (the loader's isinstance accepts it); module-level so it pickles."""
+    def __init__(self):
+        pass
+
+
+class _PriorWrap:
+    """SBIPriorWrapper's shape (.gen_dist), module-level so a payload carrying it pickles."""
+    def __init__(self, inner):
+        self.gen_dist = inner
+
+
+def _set_path(w, path, value):
+    target = w.config if path[0] == "config" else w.body
+    for key in path[1 if path[0] == "config" else 0:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+
+def _posterior_artifact(store, cfg, *, name="post", amortized=True, region=None, V=None, prior=None, over=None):
+    """A posterior artifact with a _FakeDP payload, laid out exactly as build_posterior writes it."""
+    keys = list(cfg.params_dict) + list(cfg.rescale_params)
+    with store.create("posterior", cfg, name=name) as w:
+        dp = _FakeDP()
+        dp.prior = prior
+        torch.save(dp, str(w.payload("posterior.pt")))
+        w.parents = {"prior": "20260910T100000"}
+        w.body = {
+            "mode": cfg.observation_mode, "conditioning": mf.conditioning_block(cfg),
+            "transform": {"param_keys": keys, "log_params": [],
+                          "nd_lows": [float(b[0]) for _, b in cfg.params_dict.values()],
+                          "nd_highs": [float(b[1]) for _, b in cfg.params_dict.values()],
+                          "rescale_lows": [float(b[0]) for _, b in cfg.rescale_params.values()],
+                          "rescale_highs": [float(b[1]) for _, b in cfg.rescale_params.values()],
+                          "V": mf.tensor_to_json(V), "V_orientation": "columns",
+                          "fisher_eigenvalues": None, "V_digest": mf.tensor_digest(V)},
+            "amortized": amortized, "truncation": None if region is None else mf.region_to_json(region),
+            "training": {}}
+        for path, value in (over or {}).items():
+            _set_path(w, path, value)
+    return w
+
+
+def test_load_posterior_refuses_each_mismatch_class(store):
+    cfg = _nad_cfg(chi_mode=True)
+    ok = _posterior_artifact(store, cfg, name="ok")
+    lp = store.load_posterior(cfg, "ok")
+    assert lp.id == ok.id and lp.posterior.truncation is None and lp.accepted == [] and lp.latent is not None
+    keys = list(cfg.params_dict) + list(cfg.rescale_params)
+    hi = [float(b[1]) for _, b in cfg.params_dict.values()]
+    cases = {
+        "model": ({("config", "model"): "HOPF"}, "trained for model"),
+        "order": ({("transform", "param_keys"): keys[1:] + keys[:1]}, "ORDER"),
+        "box": ({("transform", "nd_highs"): [hi[0] * 2] + hi[1:]}, "different box"),
+        "mode": ({("mode",): "forced"}, "mode"),
+        "layout": ({("conditioning", "chi_layout"): 1}, "layout"),
+        "k_pad": ({("conditioning", "chi_k_pad"): int(cfg.chi_k_pad) + 1}, "probe-slot"),
+        "elem_w": ({("conditioning", "chi_elem_w"): 5}, "channels per slot"),
+        "band": ({("conditioning", "chi_freq_bounds"): [0.1, 10.0]}, "band"),
+        "cycles": ({("conditioning", "chi_max_cycles"): 5.0}, "cycle"),
+        "width": ({("conditioning", "forcing_dim"): 3, ("conditioning", "width"): 53}, "incompatible"),
+    }
+    for tag, (over, why) in cases.items():
+        _posterior_artifact(store, cfg, name=tag, over=over)
+        with pytest.raises(ValueError, match=why):
+            store.load_posterior(cfg, tag)
+
+
+def test_manifest_V_must_equal_the_rotation_in_the_pickled_prior(store):
+    """The D6 spec test, moved: the V a manifest records is the one the posterior's own training prior
+    carries. With no legacy sidecars left, the transpose is REFUSED, not repaired."""
+    from core.SBI import reparam
+    from core.SBI.training_checkpoint import bijection_probe
+    cfg = _nad_cfg(chi_mode=True)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    torch.manual_seed(3)
+    Q = torch.linalg.qr(torch.randn(P, P))[0]
+    assert not torch.allclose(Q, Q.T)
+    T_train = reparam.build_rotated_bijection(reparam.build_inferred_bijection(cfg, log_params=[]), Q)
+    V = reparam.rotation_of(T_train)                      # what build_posterior records
+    base = torch.distributions.MultivariateNormal(torch.zeros(P), torch.eye(P))
+    trained = _PriorWrap(reparam.RotatedLatentPrior(base, Q))   # module-level: it is pickled inside the payload
+
+    _posterior_artifact(store, cfg, name="good", V=V, prior=trained)
+    lp = store.load_posterior(cfg, "good")
+    assert torch.allclose(bijection_probe(lp.posterior.T, P), bijection_probe(T_train, P))
+    _posterior_artifact(store, cfg, name="transposed", V=V.T, prior=trained)
+    with pytest.raises(ValueError, match="TRANSPOSE"):
+        store.load_posterior(cfg, "transposed")
+    _posterior_artifact(store, cfg, name="unrotated", V=None, prior=trained)
+    with pytest.raises(ValueError, match="NO rotation"):
+        store.load_posterior(cfg, "unrotated")
+    _posterior_artifact(store, cfg, name="plain", V=V, prior=None)   # a prior without a rotation cannot arbitrate
+    assert reparam.rotation_of(store.load_posterior(cfg, "plain").posterior.T) is not None
+
+
+def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store):
+    from core.artifacts import Accept
+    from core.SBI import reparam, truncate
+    from core.SBI.training_checkpoint import bijection_probe
+    cfg = _nad_cfg(chi_mode=True)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    T = reparam.build_inferred_bijection(cfg, log_params=[])
+    region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
+                                       probe=bijection_probe(T, P), x_obs_digest="d" * 16)
+    _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
+    with pytest.raises(ValueError, match="NOT AMORTIZED"):
+        store.load_posterior(cfg, "trunc")
+    lp = store.load_posterior(cfg, "trunc", accept=Accept(truncated=True))
+    assert lp.posterior.truncation.dims == [0, 1] and lp.posterior.x_obs_digest == "d" * 16
+    assert lp.accepted == ["truncated"] and torch.equal(lp.posterior.truncation.probe, region.probe)
+    no_basis = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=None, probe=None, x_obs_digest="e" * 16)
+    _posterior_artifact(store, cfg, name="noprobe", amortized=False, region=no_basis)
+    with pytest.raises(ValueError, match="basis"):
+        store.load_posterior(cfg, "noprobe", accept=Accept(truncated=True))
+    assert store.list("posterior")[0].amortized is not None
+
+
+def test_a_legacy_or_schemaless_directory_is_refused_as_not_a_current_artifact(store):
+    d = store.kind_dir("posterior") / "legacy__20200101T000000"
+    d.mkdir(parents=True)
+    torch.save(_FakeDP(), d / "posterior.pt")
+    (d / "posterior.rot.pt").write_bytes(b"")
+    with pytest.raises(st.StoreError, match="no complete posterior"):
+        store.load_posterior(_nad_cfg(), "legacy__20200101T000000")
+    assert store.list("posterior")[0].complete is False
+    (d / "manifest.json").write_text(json.dumps({"schema": 0}), encoding="utf-8")
+    assert "schema" in store.list("posterior")[0].reason
