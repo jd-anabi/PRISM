@@ -80,10 +80,13 @@ def file_ref(path, relative_to=None, *, missing_ok: bool = False) -> dict:
     if not p.is_file():
         if not missing_ok:
             raise FileNotFoundError(f"input file not found: {p}")
-        shown = str(p)
+        # Same convention as the found branch below (resolve, then try relative_to): a raw str(p)
+        # would show a relative or ".."-laden path as GIVEN, which a present file at the same
+        # location would never record.
+        shown = str(p.resolve())
         if relative_to is not None:
             try:
-                shown = Path(shown).relative_to(Path(relative_to).resolve()).as_posix()
+                shown = p.resolve().relative_to(Path(relative_to).resolve()).as_posix()
             except ValueError:
                 pass
         return {"path": shown, "sha256": None}

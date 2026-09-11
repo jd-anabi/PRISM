@@ -807,6 +807,16 @@ def build_posterior(
                     f"region was drawn around ({truncation.x_obs_digest}); a non-amortized artifact "
                     f"must name the observation its region came from.")
             x_obs_digest = truncation.x_obs_digest
+        # x_obs_digest is now final. Refuse HERE, before any simulation or training: a region built by
+        # hand (build_truncation_region always sets the digest) that names no observation would
+        # otherwise train and simulate the whole round only to have store.load_posterior refuse the
+        # finished artifact at read-back, because guardrail 2 could never fire for it.
+        if x_obs_digest is None:
+            raise ValueError(
+                "A non-amortized round's region must name the observation it was drawn around "
+                "(x_obs_digest is None): guardrail 2 could never fire for the posterior it would "
+                "produce, and the store would refuse to load it after the whole spend. Build the "
+                "region through build_truncation_region, or pass the observation.")
         # The box restricts the PARENT's training prior, and check_basis sees V and the box but not
         # the GMM: supplied another prior, the round would train that prior restricted to a box
         # nobody measured on it, with every basis check green. The region carries the parent's GMM

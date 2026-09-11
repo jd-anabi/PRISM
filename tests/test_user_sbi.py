@@ -2387,8 +2387,12 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         with contextlib.redirect_stdout(buf):
             _round(own_prior, observation=None)            # the region's own observation digest fills in
         assert "verified against the loaded one" in buf.getvalue(), buf.getvalue()[-400:]
+        # x_obs_digest, like `region` above (and `far`/`near` below): since the residual fix a
+        # non-amortized round's region must name the observation it was drawn around, checked before
+        # the prior-fingerprint refusal this leg means to exercise.
         foreign = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
-                                       probe=probe, prior_fingerprint="0" * 16)
+                                       probe=probe, prior_fingerprint="0" * 16,
+                                       x_obs_digest="deadbeefdeadbeef")
         try:
             _round(foreign)
             raise AssertionError("a round on a prior other than the region's parent's was accepted")
@@ -2398,8 +2402,10 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         # (ii) a region whose recorded probe does not describe the bijection its own V builds
         flip = torch.ones(P)
         flip[0] = -1.0
+        # x_obs_digest, like `region`/`foreign` above: the residual fix's refusal sits before
+        # check_basis, so this leg needs a digest too to reach the probe mismatch it means to test.
         inconsistent = _tr.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q @ torch.diag(flip),
-                                            probe=probe)
+                                            probe=probe, x_obs_digest="deadbeefdeadbeef")
         try:
             _round(inconsistent)
             raise AssertionError("a region whose probe disagrees with its own V was accepted")

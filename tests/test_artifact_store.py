@@ -2,6 +2,7 @@
 the store and its writer, the loaders' refusals, the simulation identity, and the stage contract."""
 import json
 import math
+import os
 import tempfile
 from pathlib import Path
 
@@ -183,6 +184,17 @@ def test_an_input_file_that_vanished_during_the_run_is_recorded_unhashed_not_los
     assert len(m.inputs["bounds"]["sha256"]) == 64, "the files that ARE there are still hashed"
     with pytest.raises(FileNotFoundError):
         prov.inputs_from_cfg(cfg)                      # the default is still to refuse
+    # provenance.file_ref's missing branch must show the path the SAME way the found branch does
+    # (resolve, then relative_to) -- a raw str(p) would leave a relative/".."-laden path exactly as
+    # given, which a PRESENT file at the same location would never record.
+    rel = os.path.relpath(gone, Path.cwd())
+    missing_path = prov.file_ref(rel, missing_ok=True)["path"]
+    gone.write_text("back", encoding="utf-8")
+    try:
+        present_path = prov.file_ref(rel)["path"]
+    finally:
+        gone.unlink()
+    assert missing_path == present_path and not missing_path.startswith(".")
 
 
 def test_a_name_shaped_like_an_id_is_refused(store):
@@ -889,6 +901,33 @@ def test_no_literal_resource_paths_outside_config():
     assert not offenders, "literal store paths outside config.py:\n" + "\n".join(offenders)
     for name in ("PRIOR_PATH", "POSTERIOR_PATH", "PLOT_PATH", "CHECKPOINT_PATH", "OBSERVATION_PATH"):
         assert not hasattr(config, name), f"config.{name} still exists"
+
+
+def test_a_round_whose_region_names_no_observation_is_refused_before_the_spend(tiny_run):
+    """A hand-built region without x_obs_digest used to train the whole round and fail only at the
+    store's read-back; the refusal now comes before any simulation. The region is built through
+    build_truncation_region -- matching the parent's rotation, basis, probe and prior fingerprint --
+    and then stripped of its x_obs_digest, so it is the NEW refusal that fires here rather than the
+    earlier rotate mismatch or check_basis, which a bare hand-built TruncationRegion(V=None,
+    probe=None) would trip first against this SBITEST posterior (trained with REPARAM_ROTATE on)."""
+    from core import orchestrator
+    from core.SBI import pipeline as pipeline_mod
+    r = tiny_run
+    obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="no_digest_obs")
+    region = orchestrator.build_truncation_region(r.posterior, obs, n_directions=1, level=0.99)
+    assert region.x_obs_digest == obs.digest              # sanity: build_truncation_region set it
+    region.x_obs_digest = None
+    calls = []
+    saved = pipeline_mod.train_nn
+    pipeline_mod.train_nn = lambda *a, **k: calls.append(1)
+    try:
+        with pytest.raises(ValueError, match="must name the observation"):
+            orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2,
+                                         hidden_features=8, num_transforms=1, stop_after_epochs=1,
+                                         truncation=region, store=r.store)
+    finally:
+        pipeline_mod.train_nn = saved
+    assert calls == []
 
 
 def test_every_artifact_the_suite_wrote_is_complete_and_its_parents_resolve(tiny_run):
