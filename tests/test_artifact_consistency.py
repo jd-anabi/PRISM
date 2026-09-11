@@ -29,10 +29,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import pytest
 import torch
 
 from core import cli, config, orchestrator, registry
-from core.config import BOUNDS_PATH, CELL_PATH, POSTERIOR_PATH, PRIOR_PATH, VALID_LABELS, VALID_MODELS
+from core.config import BOUNDS_PATH, CELL_PATH, VALID_LABELS, VALID_MODELS
 from core.Helpers import file_manager
 from core.SBI import reparam
 from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH
@@ -128,7 +129,7 @@ def _write_prior(path, lows, highs, keys, model="NADROWSKI"):
                                model=model, param_keys=keys)
 
 
-def test_a_prior_from_another_config_is_refused():
+def test_a_prior_from_another_config_is_refused(tmp_path):
     """build_prior's load path used to validate NOTHING. The GMM is fit in its box's own coordinate,
     so a prior from a different box trains the flow against a different distribution than the one its
     samples came from -- silently, because the means are latent and cannot be eyeballed."""
@@ -143,7 +144,7 @@ def test_a_prior_from_another_config_is_refused():
         "model": (lo, hi, keys, "HOPF"),
     }
     for tag, (l, h, k, m) in cases.items():
-        path = PRIOR_PATH / f"_ptest_{tag}.pt"
+        path = tmp_path / f"_ptest_{tag}.pt"
         try:
             _write_prior(path, l, h, k, m)
             if tag == "ok":
@@ -198,6 +199,26 @@ def test_a_prior_the_posterior_was_not_trained_with_is_refused():
 
 
 # ── posterior identity ────────────────────────────────────────────────────────────────────────────
+@pytest.fixture
+def posterior_dir(tmp_path, monkeypatch):
+    """A private stand-in for Resources/Posteriors, one per test.
+
+    The tests below write artifacts under FIXED names (_ptest.rot.pt, _ptest_trunc.pt, ...). In the real,
+    shared directory that is a race: two overlapping suite runs -- or the GUI saving while a run is on --
+    create, overwrite and unlink the same file, and four of these tests failed exactly once that way and
+    never again solo. A temp directory per test removes the shared name. It has to be REBOUND on
+    orchestrator and run_guards, not only on config: both do 'from ...config import POSTERIOR_PATH' at
+    import, so config.POSTERIOR_PATH is a snapshot they never read again.
+    """
+    from core.SBI import run_guards
+    d = tmp_path / "Posteriors"
+    d.mkdir()
+    monkeypatch.setattr(config, "POSTERIOR_PATH", d)
+    monkeypatch.setattr(orchestrator, "POSTERIOR_PATH", d)
+    monkeypatch.setattr(run_guards, "POSTERIOR_PATH", d)
+    return d
+
+
 def _sidecar(cfg, **over):
     """A sidecar that a CURRENT build would actually write, so an override tests what it names.
 
@@ -227,26 +248,26 @@ def _sidecar(cfg, **over):
     return d
 
 
-def test_eval_box_comes_from_the_posterior_not_the_config():
+def test_eval_box_comes_from_the_posterior_not_the_config(posterior_dir):
     """THE fix. load_eval_bijection's docstring always claimed eval was self-describing, but the box
     was rebuilt from cfg -- so a posterior trained against one bounds file and evaluated against
     another decoded every latent sample through the wrong edges, changing the physical value of every
     reported parameter with nothing raised."""
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    path = POSTERIOR_PATH / "_ptest.rot.pt"
+    path = posterior_dir / "_ptest.rot.pt"
     n = len(cfg.params_dict) + len(cfg.rescale_params)
     try:
         torch.save(_sidecar(cfg), str(path))
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            T_match = reparam.load_eval_bijection(cfg, "_ptest.pt", POSTERIOR_PATH)
+            T_match = reparam.load_eval_bijection(cfg, "_ptest.pt", posterior_dir)
         assert not w, "a matching box must not warn"
 
         # same posterior, config box widened: the SIDECAR must win, and it must say so
         torch.save(_sidecar(cfg, nd_highs=_sidecar(cfg)["nd_highs"] * 2), str(path))
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            T_other = reparam.load_eval_bijection(cfg, "_ptest.pt", POSTERIOR_PATH)
+            T_other = reparam.load_eval_bijection(cfg, "_ptest.pt", posterior_dir)
         assert any("DIFFERENT box" in str(x.message) for x in w), [str(x.message) for x in w]
         z = torch.zeros(1, n)
         assert not torch.allclose(T_match(z), T_other(z)), \
@@ -255,12 +276,12 @@ def test_eval_box_comes_from_the_posterior_not_the_config():
         path.unlink(missing_ok=True)
 
 
-def test_a_posterior_over_different_parameters_is_refused():
+def test_a_posterior_over_different_parameters_is_refused(posterior_dir):
     """Mode + conditioning width agreeing says only that the vectors are the same SHAPE, which many
     configs satisfy. Columns bind positionally, so a reordered parameter set makes every reported
     value refer to the wrong parameter."""
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    path = POSTERIOR_PATH / "_ptest.rot.pt"
+    path = posterior_dir / "_ptest.rot.pt"
     keys = list(cfg.params_dict) + list(cfg.rescale_params)
     try:
         # THE BASELINE, and the reason this test means anything: an unmodified sidecar must be
@@ -279,7 +300,7 @@ def test_a_posterior_over_different_parameters_is_refused():
         path.unlink(missing_ok=True)
 
 
-def test_a_posterior_trained_at_a_different_cycle_ceiling_is_refused():
+def test_a_posterior_trained_at_a_different_cycle_ceiling_is_refused(posterior_dir):
     """chi_max_cycles is frozen into an artifact for the same reason the band is.
 
     It decides how much of each recording is integrated, so the SAME bench data yields a different
@@ -292,7 +313,7 @@ def test_a_posterior_trained_at_a_different_cycle_ceiling_is_refused():
     turning those into a hard failure would strand every existing artifact.
     """
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    path = POSTERIOR_PATH / "_ptest.rot.pt"
+    path = posterior_dir / "_ptest.rot.pt"
     try:
         torch.save(_sidecar(cfg, chi_max_cycles=float(cfg.chi_max_cycles) * 2), str(path))
         try:
@@ -339,7 +360,7 @@ class _FakeDP(orchestrator.DirectPosterior):
         pass
 
 
-def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_region():
+def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_region(posterior_dir):
     """⚠ GUARDRAIL 2 and 8 on the load path. A non-amortized artifact is refused unless the caller
     opts in (accept_truncated), and then the posterior carries the sidecar's region and observation
     digest -- with the region's basis checked against the bijection just rebuilt, so a sidecar whose
@@ -347,7 +368,7 @@ def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_regio
     from core.SBI import training_checkpoint, truncate
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
     name = "_ptest_trunc"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
+    pt, rot = posterior_dir / f"{name}.pt", posterior_dir / f"{name}.rot.pt"
     P = len(cfg.params_dict) + len(cfg.rescale_params)
     T = reparam.build_inferred_bijection(cfg, log_params=[])
     region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
@@ -427,7 +448,7 @@ class _PriorWithRotation:
         self.gen_dist = reparam.RotatedLatentPrior(None, V)
 
 
-def test_a_gui_saved_rotation_reloads_as_the_training_bijection():
+def test_a_gui_saved_rotation_reloads_as_the_training_bijection(posterior_dir):
     """⚠ THE spec test for defect D6: save from the GUI's path -> load_eval_bijection -> the probe of
     the reloaded bijection equals the in-memory training bijection's. The counterfactual is in the
     test: forwarding parts[0].M (what the GUI did) reloads a DIFFERENT bijection."""
@@ -435,7 +456,7 @@ def test_a_gui_saved_rotation_reloads_as_the_training_bijection():
     from core.SBI import training_checkpoint
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
     name = "_ptest_rot"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
+    pt, rot = posterior_dir / f"{name}.pt", posterior_dir / f"{name}.rot.pt"
     P = len(cfg.params_dict) + len(cfg.rescale_params)
     # the same box resolver the writer uses, so a non-empty REPARAM_LOG_PARAMS cannot fail this test
     # for a reason unrelated to the orientation it pins
@@ -449,18 +470,18 @@ def test_a_gui_saved_rotation_reloads_as_the_training_bijection():
         V_gui = PosteriorPanel._extract_rotation(post)
         assert torch.equal(V_gui, Q)
         orchestrator.save_posterior_artifacts(name, {"generation": 1}, V_gui, None, cfg)
-        got = training_checkpoint.bijection_probe(reparam.load_eval_bijection(cfg, f"{name}.pt", POSTERIOR_PATH), P)
+        got = training_checkpoint.bijection_probe(reparam.load_eval_bijection(cfg, f"{name}.pt", posterior_dir), P)
         assert torch.allclose(got, want), f"the GUI-saved rotation reloads differently: max|diff| {float((got - want).abs().max())}"
         # the counterfactual: what the GUI forwarded until 2026-09-09
         orchestrator.save_posterior_artifacts(name, {"generation": 2}, T_train.parts[0].M, None, cfg)
-        wrong = training_checkpoint.bijection_probe(reparam.load_eval_bijection(cfg, f"{name}.pt", POSTERIOR_PATH), P)
+        wrong = training_checkpoint.bijection_probe(reparam.load_eval_bijection(cfg, f"{name}.pt", posterior_dir), P)
         assert float((wrong - want).abs().max()) > 1.0, "parts[0].M reloaded as the training bijection -- the test rotation is degenerate"
     finally:
         for q in (pt, rot):
             q.unlink(missing_ok=True)
 
 
-def test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior():
+def test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior(posterior_dir):
     """The three rotated artifacts on disk hold V transposed and are NOT rewritten. The pickled
     posterior carries its training prior, whose RotatedLatentPrior holds the true V, so the load
     path reconciles: a sidecar that agrees passes through as the same object, the transpose is
@@ -518,7 +539,7 @@ def test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior():
     # through build_posterior on disk: a D6 sidecar (V transposed) beside a posterior whose prior
     # carries the true V evaluates in the CORRECT basis, with the warning
     name = "_ptest_recon"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
+    pt, rot = posterior_dir / f"{name}.pt", posterior_dir / f"{name}.rot.pt"
     dp = _FakeDP()
     dp.prior = prior
     try:
@@ -540,7 +561,7 @@ def test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior():
             q.unlink(missing_ok=True)
 
 
-def test_the_sidecar_records_the_fisher_eigenvalues_beside_V():
+def test_the_sidecar_records_the_fisher_eigenvalues_beside_V(posterior_dir):
     """The rotation is saved so a later reader can say WHICH directions the run constrained. Without
     the eigenvalues it can only say which is worst, never by how much -- and the gap between "3x" and
     "1e6" is the gap between "uneven" and "nine of thirteen parameters are prior".
@@ -551,7 +572,7 @@ def test_the_sidecar_records_the_fisher_eigenvalues_beside_V():
     """
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
     name = "_ptest_evals"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
+    pt, rot = posterior_dir / f"{name}.pt", posterior_dir / f"{name}.rot.pt"
     evals = torch.tensor([9.0, 3.0, 0.5], dtype=torch.float64)
     try:
         orchestrator.save_posterior_artifacts(name, {"generation": 1}, torch.eye(3), None, cfg,
@@ -568,7 +589,7 @@ def test_the_sidecar_records_the_fisher_eigenvalues_beside_V():
         for q in (pt, rot):
             q.unlink(missing_ok=True)
 
-def test_a_torn_posterior_write_leaves_the_previous_artifact_intact():
+def test_a_torn_posterior_write_leaves_the_previous_artifact_intact(posterior_dir):
     """The posterior and its .rot.pt sidecar are the product of a multi-day run, and the GUI's Save
     button can be pressed a second time over the same name. A bare torch.save truncates the
     destination before it writes, so a failure there leaves a file that exists, has a plausible size,
@@ -578,7 +599,7 @@ def test_a_torn_posterior_write_leaves_the_previous_artifact_intact():
     not the helper (it has its own test) but a call site quietly reverting to torch.save."""
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
     name = "_ptest_atomic"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
+    pt, rot = posterior_dir / f"{name}.pt", posterior_dir / f"{name}.rot.pt"
     real_save = torch.save
     try:
         orchestrator.save_posterior_artifacts(name, {"generation": 1}, None, None, cfg)
@@ -596,19 +617,19 @@ def test_a_torn_posterior_write_leaves_the_previous_artifact_intact():
 
         assert torch.load(str(pt), weights_only=False)["generation"] == 1, \
             "a torn write clobbered the posterior it was replacing"
-        assert not (POSTERIOR_PATH / f"{name}.pt.tmp").exists(), "a failed write left its temp behind"
+        assert not (posterior_dir / f"{name}.pt.tmp").exists(), "a failed write left its temp behind"
     finally:
         torch.save = real_save
-        for p in (pt, rot, POSTERIOR_PATH / f"{name}.pt.tmp", POSTERIOR_PATH / f"{name}.rot.pt.tmp"):
+        for p in (pt, rot, posterior_dir / f"{name}.pt.tmp", posterior_dir / f"{name}.rot.pt.tmp"):
             p.unlink(missing_ok=True)
 
 
-def test_a_torn_prior_write_leaves_the_previous_prior_intact():
+def test_a_torn_prior_write_leaves_the_previous_prior_intact(tmp_path):
     """A prior is not just a file: it is what the training checkpoint's identity fingerprints and what
     SBC draws theta* from. Half-replacing one does not produce a broken run, it produces a run that
     resumes against a distribution nobody can name (2026-08-12: prior_fingerprint is in the checkpoint
     identity for exactly this reason)."""
-    path = PRIOR_PATH / "_ptest_atomic.pt"
+    path = tmp_path / "_ptest_atomic.pt"
     real_save = torch.save
     try:
         _write_prior(path, [0.0, 0.0], [1.0, 1.0], ["a", "b"])
@@ -626,14 +647,14 @@ def test_a_torn_prior_write_leaves_the_previous_prior_intact():
 
         assert file_manager.read_prior_metadata(str(path))["param_keys"] == ["a", "b"], \
             "a torn write clobbered the prior it was replacing"
-        assert not (PRIOR_PATH / "_ptest_atomic.pt.tmp").exists(), "a failed write left its temp behind"
+        assert not (tmp_path / "_ptest_atomic.pt.tmp").exists(), "a failed write left its temp behind"
     finally:
         torch.save = real_save
         path.unlink(missing_ok=True)
-        (PRIOR_PATH / "_ptest_atomic.pt.tmp").unlink(missing_ok=True)
+        (tmp_path / "_ptest_atomic.pt.tmp").unlink(missing_ok=True)
 
 
-def test_atomic_savez_round_trips_and_cannot_be_torn():
+def test_atomic_savez_round_trips_and_cannot_be_torn(tmp_path):
     """The .loss.npz is a zip, so a truncated one raises BadZipFile rather than reading short -- and it
     is the file scripts/retrain_convergence.py reads back for its convergence verdict.
 
@@ -641,7 +662,7 @@ def test_atomic_savez_round_trips_and_cannot_be_torn():
     when handed a HANDLE, which is the difference between landing on <name>.loss.npz and on
     <name>.loss.npz.tmp.npz."""
     import numpy as np
-    path = PRIOR_PATH / "_ptest_atomic.npz"
+    path = tmp_path / "_ptest_atomic.npz"
     real_savez = np.savez
     try:
         file_manager.atomic_savez(path, dict(validation_loss=np.arange(3.0), epochs_trained=7))
@@ -660,11 +681,11 @@ def test_atomic_savez_round_trips_and_cannot_be_torn():
 
         with np.load(str(path)) as z:
             assert int(z["epochs_trained"]) == 7, "a torn write clobbered the previous curve"
-        assert not (PRIOR_PATH / "_ptest_atomic.npz.tmp").exists(), "a failed write left its temp behind"
+        assert not (tmp_path / "_ptest_atomic.npz.tmp").exists(), "a failed write left its temp behind"
     finally:
         np.savez = real_savez
         path.unlink(missing_ok=True)
-        (PRIOR_PATH / "_ptest_atomic.npz.tmp").unlink(missing_ok=True)
+        (tmp_path / "_ptest_atomic.npz.tmp").unlink(missing_ok=True)
 
 
 # ── the chi band/drive preflight (2026-08-19 regression) ─────────────────────────────────────────
