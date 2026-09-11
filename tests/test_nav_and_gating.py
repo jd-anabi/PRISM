@@ -278,7 +278,7 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     panel.obs_picker.key = lambda: ""                    # nothing recorded yet
     panel.refresh_local_gates()
     assert not panel.btn_round.isEnabled(), "a round must be impossible without an observation"
-    panel.obs_picker.key = lambda: "obs_20260101T000000_deadbeefdeadbeef.pt"
+    panel.obs_picker.key = lambda: "20260910T120000"
     panel.refresh_local_gates()
     assert panel.btn_round.isEnabled(), "with a posterior, its prior and an observation, a round is allowed"
 

@@ -699,3 +699,26 @@ def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unles
     same.posterior = reparam.TransformedPosterior(r.posterior.latent, r.posterior.posterior.T,
                                                   truncation=None, x_obs_digest=obs.digest)
     assert orchestrator.infer_and_visualize(r.cfg, same, obs, fig_sink=r.sink, n_samples=20).results["accepted"] == []
+
+
+def test_a_round_records_parent_posterior_and_observation_as_parents(tiny_run):
+    from core import orchestrator
+    r = tiny_run
+    obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="round_obs")
+    region = orchestrator.build_truncation_region(r.posterior, obs, n_directions=1, level=0.99)
+    assert region.x_obs_digest == obs.digest and region.prior_fingerprint == r.posterior.fingerprint
+    child = orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2, hidden_features=8,
+                                         num_transforms=1, stop_after_epochs=1, truncation=region, observation=obs,
+                                         parent_posterior=r.posterior, name="round1")
+    m = child.manifest
+    assert m.body["amortized"] is False and child.posterior.truncation is not None
+    assert m.parents["parent_posterior"] == r.posterior.id and m.parents["observation"] == obs.id
+    assert m.parents["prior"] == r.prior.id and m.body["truncation"]["x_obs_digest"] == obs.digest
+    with pytest.raises(ValueError, match="NOT AMORTIZED"):
+        r.store.load_posterior(r.cfg, child.id)
+    assert r.store.get("posterior", child.id).body["training"]["tsnpe_acceptance"] is not None
+    with pytest.raises(ValueError, match="deleted prior support|does not match the observation"):
+        other = orchestrator.generate_observations(r.cfg, fig_sink=r.sink)   # new noise, new digest
+        orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2, hidden_features=8,
+                                     num_transforms=1, stop_after_epochs=1, truncation=region, observation=other,
+                                     parent_posterior=r.posterior)

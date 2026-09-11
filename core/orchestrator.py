@@ -536,7 +536,7 @@ def build_posterior(
     train_new: bool,
     *, name: str = "", note: str = "", fig_sink=None, store=None,
     num_runs: int | None = None, run_size_cap: int | None = None,
-    truncation=None, x_obs_digest: str | None = None,
+    truncation=None,
     observation=None, parent_posterior=None, accept=None,
     hidden_features: int | None = None, num_transforms: int | None = None,
     learning_rate: float | None = None, stop_after_epochs: int | None = None,
@@ -563,10 +563,9 @@ def build_posterior(
     :param truncation: a ``SBI.truncate.TruncationRegion`` to restrict the PRIOR to (TSNPE round 2+).
                      None = ordinary amortized NPE. The resulting artifact is marked NON-AMORTIZED in
                      its manifest and the load path refuses it for general inference.
-    :param x_obs_digest: the observation the region was drawn around (``observation_digest``), so the
-                     artifact records what it is valid near.
     :param observation / parent_posterior: for a TSNPE round, the LoadedObservation the region was
-                     drawn around and the LoadedPosterior it was drawn from; recorded as parents.
+                     drawn around (its ``.digest`` is what the artifact records as what it is valid
+                     near) and the LoadedPosterior it was drawn from; recorded as parents.
     :param accept: LOAD path only. An ``artifacts.Accept``; a NON-AMORTIZED artifact is refused unless
                      ``accept.truncated`` (the Posterior tab passes it), and the flag is recorded.
     :param hidden_features: flow width per transform; None = config.NSF_HIDDEN_FEATURES.
@@ -613,6 +612,9 @@ def build_posterior(
     from .artifacts import Accept
     from .artifacts.manifest import conditioning_block, region_to_json, tensor_digest, tensor_to_json
     accept = accept or Accept()
+    # The observation now carries its own digest (piece 1): a separately-supplied one is no longer
+    # taken as a parameter, it is read straight off the LoadedObservation guardrail 2 records against.
+    x_obs_digest = observation.digest if observation is not None else None
     _t0 = time.time()
     _spread = None
     inferred, force_prior = prior.prior, prior.force_prior
@@ -1087,58 +1089,57 @@ def observation_digest(x_obs: torch.Tensor) -> str:
     return tensor_digest(x_obs)
 
 
-def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
+def build_truncation_region(posterior, observation, *,
                             n_directions: int = None, level: float = None,
                             t_scale_idx: int | None = None):
-    """The TSNPE region for the NEXT round, with guardrail 1 enforced.
+    """The TSNPE region for the NEXT round, drawn from ``posterior`` around ``observation``.
 
-    ⚠ REFUSES unless the observation currently loaded is BITWISE the one the stored record describes.
-    A region drawn around one recording and applied to another deletes prior support on the strength
-    of the wrong data -- and truncation is a one-way ratchet, so a later round cannot undo it. This is
-    the check that makes "persist x_obs at inference time" worth doing at all.
+    GUARDRAIL 1 is now structural: the observation is an artifact whose payload the loader hashed
+    against its manifest, so the region can only ever be drawn around a recorded observation -- the
+    digest check below is a second, cheap look at the same payload the loader already checked, not a
+    substitute for it (an in-session ``LoadedObservation`` cannot have been tampered with in between).
+    The region also records the parent's basis (its V and a probe of its whole training transform,
+    guardrail 7) and the GMM fingerprint of the parent's TRAINING prior (the prior pickled inside the
+    posterior) -- the base prior its box restricts -- so ``build_posterior`` can refuse a round started
+    with another prior loaded; ``check_basis`` sees V and the box, not the GMM.
 
-    The region also records the GMM fingerprint of the parent's TRAINING prior (the prior pickled
-    inside the posterior) -- the base prior its box restricts -- so ``build_posterior`` can refuse a
-    round started with another prior loaded; ``check_basis`` sees V and the box, not the GMM.
-
-    :param posterior: the TransformedPosterior to draw the region from. Its ``.T`` is the only
-                      carrier of the latent basis the region is measured in, so a bare
-                      DirectPosterior is refused: it cannot say which coordinate its samples are in.
-    :param obs_record: the dict from :func:`load_observation`.
-    :param x_obs: the conditioning vector currently loaded.
+    :param posterior: the parent LoadedPosterior. Its ``.posterior.T`` is the only carrier of the
+                      latent basis the region is measured in, so a parent whose transform is missing
+                      is refused: it cannot say which coordinate its samples are in.
+    :param observation: the LoadedObservation the region is drawn around.
     :param t_scale_idx: t_scale's index in the latent, ``len(cfg.params_dict) + cfg.rescale_idx[
-                        "t_scale"]``; taken from the record's ``param_keys`` when not given. REQUIRED
-                        at this level: a direction that loads on t_scale is not truncated, because
-                        the per-batch t_scale override would turn its box into a reweighting (D4).
+                        "t_scale"]``; taken from the observation's recorded parameter order when not
+                        given. REQUIRED at this level: a direction that loads on t_scale is not
+                        truncated, because the per-batch t_scale override would turn its box into a
+                        reweighting (D4).
     """
-    want, got = obs_record.get("digest"), observation_digest(x_obs)
-    if want != got:
+    x_obs = observation.x_obs
+    if observation_digest(x_obs) != observation.digest:
         raise ValueError(
-            f"The stored observation (digest {want}) is not the one currently loaded (digest {got}), "
-            f"so a truncation region built from it would delete prior support on the strength of a "
-            f"DIFFERENT recording -- permanently, because truncation is one-way. Re-run inference on "
-            f"this dataset first so its observation is the one on record.")
-    if t_scale_idx is None:                 # AFTER guardrail 1: the observation check fires first
-        keys = list(obs_record.get("param_keys") or [])
+            f"Observation '{observation.name or observation.id}' does not hash to its own digest; "
+            f"a region drawn from it would delete prior support on the strength of data nobody "
+            f"recorded -- and truncation is one-way, so a later round cannot undo it.")
+    if t_scale_idx is None:
+        keys = list(observation.manifest.config.get("param_keys") or [])
         if "t_scale" not in keys:
             raise ValueError(
                 "build_truncation_region needs t_scale's latent index (t_scale_idx=len(cfg.params_dict) "
                 "+ cfg.rescale_idx['t_scale']) -- a direction that loads on t_scale must not be "
                 "truncated (D4) -- and "
-                + ("the observation record carries no param_keys to derive it from."
-                   if not keys else f"the record's param_keys {keys} contain no t_scale."))
+                + ("the observation carries no param_keys to derive it from." if not keys
+                   else f"its recorded parameter order {keys} contains no t_scale."))
         t_scale_idx = keys.index("t_scale")
     # GUARDRAIL 7: the region records the PARENT's basis -- its rotation V and the bijection probe of
     # its whole training transform -- so the retrain can reuse that V and refuse any other. Without
     # this the box's "direction j" is a number with no coordinate attached (defect D1).
-    T_parent = getattr(posterior, "T", None)
+    T_parent = getattr(posterior.posterior, "T", None)
     if T_parent is None:
         raise ValueError(
             "build_truncation_region needs the parent's TransformedPosterior: its .T is the only "
             "carrier of the latent basis the region is measured in. A bare DirectPosterior cannot say "
             "which coordinate its samples are in, so a region drawn from it cannot be applied safely.")
     V = rotation_of(T_parent)
-    latent = getattr(posterior, "latent", posterior)
+    latent = posterior.latent
     # Belt and braces against D6: the parent's transform must rotate by the rotation its own network
     # was trained under (the one pickled in its prior). A posterior loaded through build_posterior
     # has been reconciled already; an in-session one is consistent by construction; anything else
@@ -1163,12 +1164,22 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
                                                 device=transform_device(T_parent))
     # The base prior the box restricts, by fingerprint; None when the parent carries no GMM (a
     # legacy or stand-in posterior), which build_posterior treats as unverifiable, not as wrong.
+    # RECORDED from the prior pickled inside the parent, exactly as before R7 -- not from
+    # ``posterior.fingerprint`` -- with the two compared here: for every real wrapper they are the
+    # same value by construction (store.py's load_posterior computes .fingerprint by this same walk),
+    # so a mismatch means the artifact on disk is not what its own loader described.
+    _walked_fp = _gmm_fingerprint(getattr(latent, "prior", None))
+    _claimed_fp = getattr(posterior, "fingerprint", None)
+    if _claimed_fp is not None and _walked_fp is not None and _claimed_fp != _walked_fp:
+        raise ValueError(
+            f"the parent wrapper claims training prior {_claimed_fp} but pickles {_walked_fp}; "
+            f"the artifact is inconsistent")
     return truncate.region_from_posterior(
-        latent, x_obs,
+        latent, x_obs.to(transform_device(T_parent)),
         n_directions=truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions),
         level=truncate.DEFAULT_HPD if level is None else float(level),
-        V=V, probe=probe, x_obs_digest=got, t_scale_idx=int(t_scale_idx),
-        prior_fingerprint=_gmm_fingerprint(getattr(latent, "prior", None)))
+        V=V, probe=probe, x_obs_digest=observation.digest, t_scale_idx=int(t_scale_idx),
+        prior_fingerprint=_walked_fp)
 
 
 def expected_forcing_dim(cfg: SimConfig) -> int:
@@ -1604,14 +1615,14 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         # at a silently wrong amplitude.
         samples_rescale = derived.to_sim_rescale(samples_nd, samples_rescale, cfg.rescale_idx,
                                                 *cfg.tier1_args)
-        n_samples = samples.shape[0]
+        n_drawn = samples.shape[0]
         # Same for all samples. Prefer the length generate_observations actually resolved (post
         # cost-ceiling clip); fall back to the formula only on the experimental paths, which never call
         # generate_observations and take their length from the recording itself.
         N_points_obs = cfg.n_obs if cfg.n_obs is not None else int(cfg.T_obs / cfg.dt_exp)
 
         forcing_gt = torch.tensor([[val for val, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
-        forcing_gt_expanded = forcing_gt.expand(n_samples, -1)  # (n_samples, n_forcing); empty if no forcing
+        forcing_gt_expanded = forcing_gt.expand(n_drawn, -1)  # (n_drawn, n_forcing); empty if no forcing
         n_vars = inits.shape[-1]
         n_force_ch = forcing.n_force_channels(cfg.model, cfg.forcing_idx, n_vars)
 
@@ -1660,7 +1671,7 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
             results,
             ground_truth=(cfg.ground_truth if show_truth else None),
             param_names=cfg.inferred_labels,
-            n_samples=n_samples,
+            n_samples=n_drawn,
         )
         sink("Posterior predictive check", fig_ppc)
 
@@ -1737,12 +1748,12 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
             "posterior_summary": [{"name": k, "q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
                                   for i, k in enumerate(keys)],
             "ground_truth": {k: float(v) for k, v in zip(keys, cfg.ground_truth)} if show_truth else None,
-            "n_samples": int(n_samples), "accepted": accepted,
+            "n_samples": int(n_drawn), "accepted": accepted,
         }
         w.payload("results.json").write_text(json.dumps(out, indent=2, allow_nan=False), encoding="utf-8")
         w.parents = {"posterior": posterior.id, "observation": observation.id}
         w.fingerprints["x_obs"] = observation.digest
-        w.config.update({"n_samples": int(n_samples)})
+        w.config.update({"n_samples": int(n_drawn)})
         w.body = {"results": out}
     return store.load_inference(w.id)
 

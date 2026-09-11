@@ -444,6 +444,7 @@ def test_chi_mode_full_sbi_pipeline(tmp_path):
                            T_obs_s=1.0, F0_si=1.0)
         obs_e = orchestrator.build_experiment_observation(cfg, rec, fig_sink=sink)
         assert obs_e.width == SUMMARY_WIDTH + 1 + K3
+        assert torch.isfinite(obs_e.x_obs).all()
         orchestrator.infer_and_visualize(cfg, lp_post, obs_e, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
@@ -2266,11 +2267,22 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     """
     import contextlib
     import tempfile
+    from types import SimpleNamespace
     from core import config as _cfg
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
     # Module-level (not defined here) so it pickles: every build_posterior call now auto-persists
     # (piece 1, Task 7), and pickle cannot serialize a class defined inside a function.
     from tests._fixtures import _FakeDP
+
+    def _lp(post, latent=None, fingerprint=None, id_="p"):
+        """A LoadedPosterior-shaped stand-in, matching tests/test_conditioning_repair.py's helper."""
+        return SimpleNamespace(posterior=post, latent=latent if latent is not None else getattr(post, "latent", post),
+                               fingerprint=fingerprint, id=id_, name="")
+
+    def _lo(x, keys=None, digest=None):
+        """A LoadedObservation-shaped stand-in, matching tests/test_conditioning_repair.py's helper."""
+        return SimpleNamespace(x_obs=x, digest=digest or orchestrator.observation_digest(x), id="o", name="",
+                               manifest=SimpleNamespace(config={"param_keys": list(keys)} if keys is not None else {}))
 
     seen = {}
 
@@ -2315,12 +2327,12 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         region = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
                                       probe=probe, x_obs_digest="deadbeefdeadbeef")
 
-        def _round(reg, digest="deadbeefdeadbeef"):
+        def _round(reg, observation=None):
             """The TransformedPosterior (not the LoadedPosterior wrapper): every assertion below reads
             .truncation / .x_obs_digest / .T, which live on it."""
             return orchestrator.build_posterior(cfg, lp, None, True,
                                                 fig_sink=sink, num_runs=2, run_size_cap=8,
-                                                truncation=reg, x_obs_digest=digest).posterior
+                                                truncation=reg, observation=observation).posterior
 
         # (i) + (ii): the parent's basis is reused, the Fisher stub never fires, the plan's prior is
         # THIS region over a latent rotated by exactly Q, and the posterior carries the region
@@ -2346,10 +2358,10 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         assert torch.allclose(post.truncation.hi.double(), region.hi.double())
         assert torch.allclose(_rp.rotation_of(post.T).cpu(), Q)
         # the region's own digest fills in a missing one, and contradicts a wrong one
-        post2 = _round(region, digest=None)
+        post2 = _round(region, observation=None)
         assert post2.x_obs_digest == "deadbeefdeadbeef"
         try:
-            _round(region, digest="0" * 16)
+            _round(region, observation=_lo(torch.zeros(1, 4), digest="0" * 16))
             raise AssertionError("an artifact was allowed to name an observation its region did not come from")
         except ValueError as e:
             assert "x_obs_digest" in str(e)
@@ -2374,13 +2386,14 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
 
         x_obs = torch.zeros(1, 4)
         own_prior = orchestrator.build_truncation_region(
-            _rp.TransformedPosterior(_Parent(), T_train), {"digest": orchestrator.observation_digest(x_obs)},
-            x_obs, n_directions=1, t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
+            _lp(_rp.TransformedPosterior(_Parent(), T_train)),
+            _lo(x_obs, keys=list(cfg.params_dict) + list(cfg.rescale_params)),
+            n_directions=1, t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
         assert own_prior.prior_fingerprint == _fp(inferred_prior), \
             "the parent's pickled training prior and the supplied prior digest differently"
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            _round(own_prior, digest=None)                # the region's own observation digest fills in
+            _round(own_prior, observation=None)            # the region's own observation digest fills in
         assert "verified against the loaded one" in buf.getvalue(), buf.getvalue()[-400:]
         foreign = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
                                        probe=probe, prior_fingerprint="0" * 16)

@@ -2,10 +2,9 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QGroupBox, QLabel, QPushButton, QVBoxLayout)
 
 from core import config
-from core.config import OBSERVATION_PATH
 
 from ... import icons, settings
-from ...widgets.artifact_picker import ArtifactPicker
+from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
@@ -51,7 +50,7 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         v.addWidget(warn)
 
         form = make_form()
-        self.obs_picker = ArtifactPicker(OBSERVATION_PATH, keep=lambda fn: fn.endswith(".pt"))
+        self.obs_picker = StorePicker("observation")
         add_help_row(form, "Observation", self.obs_picker, HELP["tsnpe_obs"])
         self.hpd = FloatField(str(_tr.DEFAULT_HPD))
         self.n_dirs = IntField(str(_tr.DEFAULT_N_DIRECTIONS))
@@ -102,8 +101,8 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
                 f"HPD {level:g} is tighter than the recommended {0.999:g}. Truncation permanently "
                 f"deletes prior support; no later round can recover it.", "warning")
         n_runs, cap = self._budget_values()
-        self.dispatch(_run_tsnpe_round, s.cfg, s.posterior.posterior, s.inf_prior,
-                      OBSERVATION_PATH / self.obs_picker.key(), n_dirs, level,
+        self.dispatch(_run_tsnpe_round, s.cfg, s.posterior, s.inf_prior,
+                      self.obs_picker.key(), n_dirs, level,
                       max(1, n_runs), max(0, cap), provide_fig_sink=True,
                       on_result=self._on_round)
 
