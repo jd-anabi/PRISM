@@ -3,9 +3,10 @@
 **Last updated:** 2026-09-11 (piece 1 MERGED as `461d780`; the CLEAN-BREAK RUNBOOK is EXECUTED —
 `8dbd93e`, `e37df41`, `19363d2`, `d5c9fd3`; the POST-PIECE-1 GPU GATE is GREEN at `bb38f1a` after
 its first attempt found two piece-1 regressions, fixed in `896e8ff` and `bb38f1a` with a new
-gpu-marked suite; the NINE GUI CHECKS PASS on the user's screen, and the one defect they turned up —
-the taskbar showing the generic glyph — is fixed in `df7491e`; `Artifacts/` exists now with the
-walkthrough's artifacts; next: piece 2; all work happens directly on the local `main` branch)
+gpu-marked suite; the DISPLAY WALKTHROUGH IS DONE on the user's screen — rows A1–A9 and rows 1–20
+all pass at `df7491e`, the one defect it turned up (the taskbar showing the generic glyph) fixed in
+that commit and re-checked; `Artifacts/` exists now with the walkthrough's artifacts; **next: piece
+2**, brainstormed → spec → plan → implemented directly on the local `main` branch)
 
 ## Where things stand
 
@@ -72,8 +73,10 @@ walkthrough's artifacts; next: piece 2; all work happens directly on the local `
    taskbar button the generic Windows "application" glyph. Root-caused the same day by screenshot
    experiments (the "Taskbar icon" entry in the decisions log) and fixed by installing the mark as
    Qt's Win32 window-CLASS icon from a new `assets/app/prism.ico`
-   (`app_icon.set_windows_class_icon`); verified by a screenshot of the real launcher's button.
-   Re-check row 1 on the next launch.
+   (`app_icon.set_windows_class_icon`); verified by a screenshot of the real launcher's button
+   and then by the user on the next launch (row 1 PASS). **The user also ran rows 2–20 of the
+   piece-4 walkthrough table the same day: all pass** — piece 4's display walkthrough is therefore
+   already done once, on the code as of `df7491e`; piece 4 re-checks only what it changes.
 5. **Pieces 2 → 3 → (4 ∥ 5) → 6**, each brainstormed → spec → plan → implementation. Carried
    into them from piece 1 (spec §11 and the ledger): **piece 2** extends the source scan to
    `scripts/`, retires `_common.require_mode` and the unconditional `Accept(truncated=True)` in
@@ -144,7 +147,7 @@ walkthrough's artifacts; next: piece 2; all work happens directly on the local `
 | `core/Reduction/tests` under pytest | 2026-09-10: 5 passed (collected with the fast suite since) |
 | GPU `scripts/smoke_train.py` baseline (pre-piece-1 code, `BOUNDS=Resources/Bounds/nadrowski/master.txt`, `TOBS_S=4.5`, defaults NUM_RUNS=4 RUN_SIZE=32) | 2026-09-10: CHI=1 (cell `master_spont`): prior 102 s, posterior 747 s, validate 23 s, infer 68 s, exit 0, no OOM lines. CHI=0 (cell `master_weak`): prior 101 s, posterior 226 s, validate 12 s, infer 23 s, exit 0. |
 | **GPU gate after piece 1** (`scripts/smoke_train.py` at `bb38f1a`, same BOUNDS/TOBS_S/defaults, `CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke`, `PRISM_ARTIFACTS` pointed at scratch) | 2026-09-11: **run 1** CHI=1 `master_spont`: prior 99 s, posterior 750 s, validate 22 s, infer 59 s, exit 0 — within a few seconds of the baseline on every stage; wrote `smoke_prior`, `smoke_posterior`, `simulations/ff956b932534` (`"complete": true`, 4 batches, rows [128, 122]), an observation, a calibration and an inference. **run 2 as first recipe'd** (`PRIOR=smoke_prior NUM_RUNS=2 STAGES=prior,posterior`): exit 0 but NO resume — prior loaded in 1.4 s, then a new `simulations/294e1c3b81ec` (n_runs 2) and a recomputed Fisher, posterior 544 s (the recipe correction in item 3). **run 2 corrected** (`NUM_RUNS=4`): "Reusing the Fisher rotation stored with the training checkpoint (4/4 batches — COMPLETE, so generation will be skipped)", `[checkpoint] resuming at batch 4/4`, all stages in 3.3 s, exit 0 — the CPU→CUDA rehoming of the stored V is certified. **run 3** CHI=0 `master_weak` (own store `<scratch>/smoke_chi0`): prior 99 s, posterior 219 s, validate 12 s, infer 21 s, exit 0. No OOM lines, no OOD warnings in any leg; run 1's training masked-probe counts 121–159 of 300 (40–53 %), inside the documented ±12 pp band around 37 %. **First attempt at `19363d2`:** run 1 failed in infer (two devices in the PPC) after prior/posterior/validate passed; run 3 failed at the prior's own read-back (fingerprint) — both fixed, see item 3. Scratch stores deleted afterwards. |
-| display walkthrough (`docs/checklists/display-walkthrough.md`) | never done |
+| display walkthrough (`docs/checklists/display-walkthrough.md`) | 2026-09-11, the user on the real screen at `df7491e`: rows 1–20 all pass (row 1 after the taskbar-icon fix) and rows A1–A9 all pass. Piece 4 re-checks only the rows it changes |
 
 ## Decisions log
 
