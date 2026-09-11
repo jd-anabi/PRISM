@@ -1632,11 +1632,17 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
     observation.install(cfg)
     t, device, dtype, T_obs = cfg.t, cfg.hw.device, cfg.hw.dtype, cfg.T_obs
     inits = _observation_inits(cfg)
-    obs_stats, obs_data, t_dim = observation.x_obs.to(device), observation.obs_data, observation.t_dim
+    # obs_stats stays on the CPU: it is a conditioning row, and statistics.conditioning_rows builds
+    # every row on the CPU by contract -- the PPC below (analysis.posterior_predictive_check) and the
+    # overlay ranking (overlay.rank_by_stats) compare it against sim_stats assembled there. Only the
+    # flow's sample() needs it on the device, and it gets its own copy. Binding a device copy here put
+    # a CUDA row against CPU rows in the PPC; no CPU suite can see that (the 2026-09-11 GPU gate did,
+    # and tests/test_gpu_paths.py now pins it).
+    obs_stats, obs_data, t_dim = observation.x_obs, observation.obs_data, observation.t_dim
     keys = list(cfg.params_dict) + list(cfg.rescale_params)
     with store.create("inference", cfg, name=name, note=note) as w:
         sink = w.fig_sink(fig_sink)
-        samples = post.sample((int(n_samples),), x=obs_stats)
+        samples = post.sample((int(n_samples),), x=obs_stats.to(device))
         # Corner plot
         # Size the corner by the PARAMETER COUNT: a 13x13 grid at pairplot's default is cramped enough that
         # tick labels overlap and axis titles clip. Thin the ticks for the same reason.

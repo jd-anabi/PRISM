@@ -635,10 +635,13 @@ class ArtifactStore:
         """Refuses an observation whose model, parameter order, mode, conditioning width or chi
         layout/pad is not this config's; asserts the payload's digest is the manifest's, and that the
         payload's own width is the one the manifest declares. Casts the payload to the SESSION's
-        dtype/device: the artifact is written from the CPU in whatever dtype the run that made it
-        used, and every downstream consumer (the flow's conditioning row, the PPC's simulations)
-        multiplies it against tensors on cfg.hw -- a float32 row meeting a float64 network is a hard
-        RuntimeError, not a promotion."""
+        dtype -- the artifact is written in whatever dtype the run that made it used, and a float32
+        row meeting a float64 network is a hard RuntimeError, not a promotion -- but leaves it on the
+        CPU, where conditioning rows live by contract (statistics.conditioning_rows): the PPC and the
+        overlay ranking compare it against simulated rows assembled there, and the one consumer that
+        needs it on cfg.hw.device, the flow's sample(), moves its own copy. Handing it back on the
+        device put a CUDA row against CPU rows in the PPC (the 2026-09-11 GPU gate, invisible to every
+        CPU suite; tests/test_gpu_paths.py pins it)."""
         import torch
         from core import config as _config
         from core.SBI.statistics import SUMMARY_WIDTH
@@ -675,8 +678,8 @@ class ArtifactStore:
                              f"conditioning row but its manifest declares {int(cond['width'])}; the artifact "
                              f"is inconsistent (every width guard above compared the MANIFEST, not this row)")
         # The digest is over the float64 bytes, so it is computed on the payload as written and the
-        # cast below cannot change it.
-        x_obs = x_obs.to(device=cfg.hw.device, dtype=cfg.hw.dtype)
+        # cast below cannot change it. dtype only -- see the docstring for why the row stays on the CPU.
+        x_obs = x_obs.to(dtype=cfg.hw.dtype)
         return LoadedObservation("observation", m.id, m.name, m, sub, x_obs=x_obs,
                                  obs_data=payload["obs_data"].to(cfg.hw.dtype),
                                  t_dim=payload["t_dim"].to(cfg.hw.dtype), digest=body["x_obs_digest"],
