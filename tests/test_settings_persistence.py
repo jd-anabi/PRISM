@@ -69,6 +69,12 @@ def _budget_cfg():
         chi_k_pad = 12
         observation_mode = "spontaneous"
     return Cfg()
+def _prior_stub():
+    """A LoadedPrior-shaped stub: the Posterior tab now reads ``.prior``/``.force_prior`` off
+    session.inf_prior (piece 1, Task 4) rather than carrying the physical prior and forcing prior as
+    separate session fields, so a bare ``object()`` no longer stands in where a dispatched call is
+    actually reached."""
+    return type("LoadedPriorStub", (), {"prior": object(), "force_prior": object()})()
 def _budget_panel(cfg=None, prior=None):
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
@@ -171,7 +177,7 @@ def test_the_training_budget_reaches_build_posterior_as_arguments_not_via_config
     from core import config
 
     before = (config.TRAINING_NUM_RUNS, config.TRAINING_RUN_SIZE)
-    _inf, panel = _budget_panel(_budget_cfg(), prior=object())
+    _inf, panel = _budget_panel(_budget_cfg(), prior=_prior_stub())
     panel.num_runs.setText("777")
     panel.run_size_cap.setText("256")
 

@@ -101,7 +101,8 @@ def test_no_forcing_user_model_full_sbi_pipeline():
         orchestrator.TRAINING_NUM_RUNS = 2
         orchestrator.SBC_N_CAL = 60
 
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
         assert force_prior is None                               # no drive -> no forcing prior
 
         posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
@@ -188,7 +189,8 @@ def test_train_and_validate_without_a_loaded_cell():
         orchestrator.TRAINING_NUM_RUNS = 2
         orchestrator.SBC_N_CAL = 40
 
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
         posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
                                                     save=False, fig_sink=sink)
         orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
@@ -438,7 +440,8 @@ def test_chi_mode_full_sbi_pipeline():
         orchestrator.TRAINING_NUM_RUNS = 2
         orchestrator.SBC_N_CAL = 40
 
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
         posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
                                                     save=False, fig_sink=sink)
 
@@ -2311,7 +2314,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         cfg.hw = config.cpu_device()
         cfg.hw.batch_size = 8
         orchestrator.pipeline.gen_prior = _tiny_nadrowski_gen_prior
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
         orchestrator.decorrelate.build_latent_fisher_rotation = _fisher_stub
         pipeline_mod.train_nn = _train_stub
 
@@ -2561,7 +2565,8 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         cfg.hw.batch_size = 8
         torch.manual_seed(0)                      # the prior fit, the box and the rejection draws all read it
         orchestrator.pipeline.gen_prior = _tiny_nadrowski_gen_prior
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
         P = len(cfg.params_dict) + len(cfg.rescale_params)
         i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
         T = orchestrator.build_inferred_bijection(cfg, log_params=orchestrator._log_params_for(cfg))
@@ -3534,42 +3539,6 @@ def test_the_drive_is_charged_at_its_build_peak():
         f"{pipeline_mod._FORCE_BUILD_PEAK_MULTIPLE}x -- raise the constant")
 
 
-def test_an_unsaved_prior_cannot_start_a_long_checkpointed_run():
-    """training_identity fingerprints the prior's fitted GMM, and that fingerprint names the
-    checkpoint DIRECTORY. A prior that was never written to disk therefore produces a directory
-    nothing can ever resolve again once the process exits -- so the checkpoint it spends hours
-    writing is unresumable by construction, and a crash costs the entire run.
-
-    That happened: on 2026-08-27 a run reached 884 committed batches under fingerprint
-    bd307c079d14db0b, for which no file in Resources/Priors exists. Those rows are unrecoverable."""
-    # A REAL MixtureSameFamily, because _find_nd_gmm isinstance-checks for one and
-    # component_distribution is a read-only property. Random means guarantee it collides with
-    # nothing on disk.
-    _k, _d = 4, 3
-    unsaved = torch.distributions.MixtureSameFamily(
-        torch.distributions.Categorical(probs=torch.rand(_k, dtype=torch.float64)),
-        torch.distributions.MultivariateNormal(
-            torch.randn(_k, _d, dtype=torch.float64),
-            covariance_matrix=torch.eye(_d, dtype=torch.float64).expand(_k, _d, _d)))
-    fp = orchestrator._gmm_fingerprint(unsaved)
-    assert fp is not None, "the probe prior must be fingerprintable, or the test proves nothing"
-    assert fp not in orchestrator._saved_prior_fingerprints(), "random prior collided with a saved one"
-    try:
-        orchestrator._assert_prior_is_saved(unsaved, n_runs=5000, run_size=2048)
-    except ValueError as e:
-        assert "not saved" in str(e) and "unresumable" in str(e), f"unhelpful message: {e}"
-    else:
-        raise AssertionError("an unsaved prior must be refused before a long checkpointed run")
-
-    # A prior that IS on disk must pass, or the guard blocks the very run it exists to protect.
-    saved = orchestrator._saved_prior_fingerprints()
-    if saved:
-        import core.Helpers.file_manager as _fm
-        name = sorted(saved.values())[0]
-        dist = _fm.load_mix_dist(str(config.PRIOR_PATH / name), device=torch.device("cpu"))
-        orchestrator._assert_prior_is_saved(dist, n_runs=5000, run_size=2048)
-
-
 def test_the_batch_retry_waits_releases_and_restores_the_rng():
     """The outermost retry does not shrink the work -- it waits and runs the SAME batch again,
     because the failure the halving ladders cannot fix is a card that is momentarily full of
@@ -3806,95 +3775,6 @@ def test_the_planner_budget_survives_an_unreadable_card():
     finally:
         torch.cuda.mem_get_info = saved
     assert got == (1 * 1024 ** 3) // 4, f"expected the conservative fallback budget, got {got}"
-
-
-def _gmm_from(means, weights):
-    """A real MixtureSameFamily over the given means/weights -- what _gmm_fingerprint digests."""
-    k, d = means.shape
-    return torch.distributions.MixtureSameFamily(
-        torch.distributions.Categorical(probs=weights),
-        torch.distributions.MultivariateNormal(
-            means, covariance_matrix=torch.eye(d, dtype=means.dtype).expand(k, d, d)))
-
-
-def test_saving_a_prior_cannot_orphan_a_checkpoint():
-    """⚠ THIS IS HOW 3989 BATCHES (6.5 h) WERE LOST ON 2026-08-28.
-
-    A checkpoint's directory is named after a digest of the prior's fitted GMM, so the prior FILE is
-    the only thing that can reproduce it. `prior_08282026.pt` was overwritten, under the same name,
-    with a different distribution -- and the run that had been training against the old contents all
-    morning became unreachable. No error, no warning, one click. The same mechanism cost 884 batches
-    the day before, and `3d_master_08102026.pt` currently backs THREE 5000-batch checkpoints.
-
-    Narrow by construction: it fires only when the file exists, its contents would actually change,
-    AND a committed checkpoint depends on the old contents."""
-    import tempfile, hashlib
-    from pathlib import Path as _P
-    from core.artifacts.store import ArtifactStore, use_store
-    from core.SBI import training_checkpoint as tc
-
-    def fp_of(means, weights):
-        h = hashlib.sha256()
-        h.update(means.detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
-        h.update(weights.detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
-        return h.hexdigest()[:16]
-
-    torch.manual_seed(0)
-    # NORMALISED, because torch.distributions.Categorical normalises `probs` on construction: a file
-    # holding raw weights would fingerprint differently from the distribution rebuilt out of it, and
-    # the test would then "pass" by accident on a mismatch that production never sees (save_mix_dist
-    # writes `mixture_distribution.probs`, which is already normalised).
-    def _w(n):
-        w = torch.rand(n, dtype=torch.float64)
-        return w / w.sum()
-
-    m_old, w_old = torch.randn(4, 3, dtype=torch.float64), _w(4)
-    m_new, w_new = torch.randn(4, 3, dtype=torch.float64), _w(4)
-
-    with tempfile.TemporaryDirectory() as tmp:
-        # The checkpoint now lives under a store (piece 1); ckpts is that store's "simulations" kind
-        # dir, so _refuse_to_orphan_a_checkpoint's checkpoints_using_prior(old_fp) call -- which takes
-        # no root and reads the process default store -- finds the hand-built checkpoint below.
-        priors, store_root = _P(tmp) / "Priors", _P(tmp) / "Artifacts"
-        priors.mkdir()
-        ckpts = store_root / "simulations"
-        # Build the distribution FIRST and save what it exposes, exactly as save_mix_dist does.
-        # Constructing a Categorical normalises `probs` again, so saving the raw weights would make
-        # the file and the rebuilt distribution differ in the last bits -- a mismatch production
-        # never has, which would make this test assert the wrong thing.
-        gmm_old = _gmm_from(m_old, w_old)
-        f_means = gmm_old.component_distribution.loc.detach().clone()
-        f_weights = gmm_old.mixture_distribution.probs.detach().clone()
-        torch.save({"means": f_means, "weights": f_weights}, priors / "p.pt")
-
-        ident = {"format": "training-rows", "n_runs": 10000,
-                 "prior_fingerprint": fp_of(f_means, f_weights)}
-        d = tc.resolve_dir(ident, ckpts); (d / "shards").mkdir(parents=True)
-        torch.save({"identity": ident}, d / "header.pt")
-        torch.save({"batches_done": 3989, "complete": False, "rng": None}, d / "state.pt")
-
-        saved_pp = orchestrator.PRIOR_PATH
-        try:
-            orchestrator.PRIOR_PATH = priors
-            with use_store(ArtifactStore(store_root)):
-                try:
-                    orchestrator._refuse_to_orphan_a_checkpoint("p", _gmm_from(m_new, w_new))
-                except ValueError as e:
-                    assert "3,989" in str(e), f"the message must name what would be lost: {e}"
-                    assert "UNRESUMABLE" in str(e).upper(), f"and why it matters: {e}"
-                else:
-                    raise AssertionError(
-                        "overwriting a prior that a 3989-batch checkpoint depends on must be refused")
-
-                # Re-saving the SAME distribution changes nothing, so it must go through.
-                orchestrator._refuse_to_orphan_a_checkpoint("p", gmm_old)
-                # A name nothing depends on must go through.
-                orchestrator._refuse_to_orphan_a_checkpoint("something_else", _gmm_from(m_new, w_new))
-                # And a prior no COMMITTED checkpoint uses must go through.
-                torch.save({"means": m_new, "weights": w_new}, priors / "unused.pt")
-                orchestrator._refuse_to_orphan_a_checkpoint("unused", gmm_old)
-        finally:
-            orchestrator.PRIOR_PATH = saved_pp
 
 
 def test_the_retry_does_not_wait_when_THIS_process_holds_the_card():

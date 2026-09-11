@@ -21,7 +21,7 @@ from torch.distributions import Distribution, MixtureSameFamily
 from tqdm import tqdm
 
 from .config import (
-    SimConfig, PRIOR_PATH, POSTERIOR_PATH, PLOT_PATH, OBSERVATION_PATH,
+    SimConfig, POSTERIOR_PATH, PLOT_PATH, OBSERVATION_PATH,
     T_MIN_EXP_S, T_MAX_EXP_S,
     CHUNK_LEN, N_ND_MAX, SBC_N_CAL, STABILITY_SWEEP_ND_UNITS, TRAINING_NUM_RUNS,
     PRIOR_SWEEP_ITERATIONS, PRIOR_SWEEP_BATCH, TRAINING_RUN_SIZE, TRAINING_CHECKPOINT_EVERY,
@@ -33,11 +33,11 @@ from .config import (
 from . import cli, config, forcing
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
+from .artifacts import LoadedPrior, resolve_store
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
 from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint, truncation_from_sidecar,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches_region,
-                             _assert_prior_matches,
                              _assert_chi_config_is_deliberate,
                              _assert_amortization_understood, _log_params_for)
 from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derived, overlay, ppc,
@@ -75,7 +75,8 @@ def run(cfg: SimConfig):
     """
     # 1. Prior
     prior_choice, build_new = cli.select_or_build_prior()
-    inf_prior, force_prior = build_prior(cfg, prior_choice, build_new)
+    lp = build_prior(cfg, prior_choice, build_new)
+    inf_prior, force_prior = lp.prior, lp.force_prior
 
     # 2. Posterior (training is amortized and observation-independent)
     pos_choice, train_new = cli.select_or_train_posterior()
@@ -290,75 +291,6 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
 # ── Step 2: Prior construction ──────────────────────────────────────────────
 
 
-_UNSAVED_PRIOR_MIN_RUNS = 100
-
-
-def _saved_prior_fingerprints() -> dict:
-    """``{fingerprint: filename}`` over every saved ND prior in Resources/Priors.
-
-    Reads the stored ``means``/``weights`` directly rather than rebuilding a distribution: those are
-    exactly the two tensors `_gmm_fingerprint` digests (file_manager.save_prior writes them), so the
-    digests are comparable by construction, and this stays cheap enough to run before every training
-    round -- the files are tens of kilobytes.
-    """
-    out = {}
-    try:
-        candidates = sorted(PRIOR_PATH.glob("*.pt"))
-    except Exception:                        # noqa: BLE001 -- a missing directory is "none saved"
-        return out
-    for f in candidates:
-        try:
-            d = torch.load(str(f), map_location="cpu", weights_only=False)
-            if not (isinstance(d, dict) and "means" in d and "weights" in d):
-                continue
-            h = hashlib.sha256()
-            h.update(d["means"].detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
-            h.update(d["weights"].detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
-            out.setdefault(h.hexdigest()[:16], f.name)
-        except Exception:                    # noqa: BLE001 -- a stale or foreign .pt is not our problem
-            continue
-    return out
-
-
-def _assert_prior_is_saved(prior, n_runs: int, run_size: int) -> None:
-    """Refuse to start a long generation run from a prior that exists only in memory.
-
-    WHY THIS IS A HARD ERROR AND NOT A WARNING. `training_identity` fingerprints the prior's GMM, and
-    that fingerprint names the checkpoint DIRECTORY. A prior that was fitted but never written to
-    disk therefore produces a directory nobody can ever resolve again: the moment the process ends,
-    the fingerprint is unreproducible, so the checkpoint it has been faithfully writing for hours can
-    never be resumed by anything. It is not a degraded resume -- it is a guaranteed total loss of the
-    run, discovered only when you try to recover from a crash.
-
-    That is not hypothetical. On 2026-08-27 a run reached 884 committed batches under fingerprint
-    bd307c079d14db0b, for which no file in Resources/Priors exists; those rows are unrecoverable, and
-    a second run started minutes later under a third fingerprint. The cost of the check is reading a
-    few 30 KB files; the cost of not having it is a day of simulation.
-
-    Silent for short runs (see _UNSAVED_PRIOR_MIN_RUNS) and for anything with checkpointing off,
-    which is where the tests and the smoke train live.
-    """
-    fp = _gmm_fingerprint(prior)
-    if fp is None:
-        return                               # no GMM to identify (a stub or hand-built prior)
-    saved = _saved_prior_fingerprints()
-    if fp in saved:
-        return
-    raise ValueError(
-        f"This prior (fingerprint {fp}) is not saved anywhere in {PRIOR_PATH}. Training would "
-        f"write a {n_runs}-batch checkpoint ({n_runs * run_size:,} rows) into a directory named "
-        f"after that fingerprint -- and because the fingerprint is computed from the fitted GMM, "
-        f"nothing could ever reproduce it once this process exits. The checkpoint would be "
-        f"unresumable and a crash would cost the whole run.\n"
-        f"Save the prior first (it is what SBC later draws theta* from in any case), then train. "
-        f"Saved priors currently on disk: "
-        f"{', '.join(sorted(saved.values())) if saved else '(none)'}.")
-
-
-
-
-
-
 
 
 def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int, truncation=None) -> dict:
@@ -376,24 +308,29 @@ PERSIST_OBSERVATIONS = True
 
 
 
-def build_prior(cfg: SimConfig, choice: str | None, build_new: bool,
-                *, save: bool = True, save_name: str | None = None, fig_sink=None,
+def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
+                *, name: str = "", note: str = "", fig_sink=None, store=None,
                 num_iterations: int | None = None, sweep_batch: int | None = None,
                 max_sets: int | None = None, walk_step: float | None = None,
                 stability_units: float | None = None,
                 min_cluster_size: int | None = None,
-                min_samples: int | None = None) -> tuple[Distribution, Distribution]:
+                min_samples: int | None = None) -> LoadedPrior:
     """
-    Load an existing prior from disk, or construct a new product prior:
+    Load a prior artifact by name or id, or construct a new product prior and WRITE it at once:
         ProductPrior = ND parameter prior x rescaling prior x forcing prior
 
+    Returns a LoadedPrior -- the artifact's id and manifest travel with the prior, so a posterior
+    trained from it can name its parent. A built prior is unnamed until store.rename gives it a
+    name (the GUI's Save button); nothing is ever in memory only, which is what makes the
+    checkpoint identity's prior fingerprint reproducible after this process ends.
+
     :param cfg: Pipeline configuration.
-    :param choice: Filename of a saved prior, or None to build from scratch.
+    :param ref: a prior artifact's name or id; None when building.
     :param build_new: True to construct from scratch.
-    :param save: When building new, persist the ND prior (+corner PNG). Defaults True (CLI behavior).
-                 Pass False to defer saving (e.g. a GUI that saves via an explicit control).
-    :param save_name: Name to save under; when None (and save=True) the CLI prompt is used.
+    :param name: the artifact's name ("" = unnamed) when building.
+    :param note: free-text note recorded on the artifact when building.
     :param fig_sink: Optional (title, fig) -> None display callback for the corner plot; None => plt.show().
+    :param store: the ArtifactStore to read/write; None = the process default.
     :param num_iterations: GLOBAL sweep rounds; None = config.PRIOR_SWEEP_ITERATIONS.
     :param sweep_batch: candidates per global round; None = config.PRIOR_SWEEP_BATCH (0 = follow the
                      hardware batch). ⚠ NOT a speed knob -- see the note at the constant (527 s at
@@ -408,13 +345,14 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool,
                      ⚠ These two are the CLUSTERING stage, not the sweep: HDBSCAN's label count is
                      handed straight to the GMM's n_components, so they set how many modes the
                      prior has. A prior with a different component count is a different prior.
-    :return: A Distribution that can be sampled and scored.
+    :return: A LoadedPrior wrapping the artifact's ProductPrior (ND x rescale x forcing).
 
     ⚠ WHY THESE ARE PARAMETERS AND NOT "JUST SET THE CONFIG CONSTANT" -- the same reason
     build_posterior's budget is: this module does `from .config import PRIOR_SWEEP_ITERATIONS, ...`,
     which SNAPSHOTS them at import, so a caller writing `config.PRIOR_SWEEP_ITERATIONS = 10` is a
     silent no-op and the sweep runs at 50 anyway with nothing to say otherwise.
     """
+    store = resolve_store(store)
     # FIRST, before the ~9-minute stability sweep: is this chi configuration the one you meant? The
     # prior itself is chi-independent, so this is here purely to fail at the START of a session
     # rather than after its first expensive stage.
@@ -432,28 +370,13 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool,
                 f"Model '{cfg.model}' is out of sync with its bounds file: definition uses {expected}, "
                 f"bounds file lists {actual}. Re-save the model from the Settings model builder.")
 
-    # 1. Forcing prior
-    force_prior = build_forcing_prior(cfg)
-
-    # 2. Rescaling prior
-    rescale_prior = build_rescale_prior(cfg)
-
-    if not build_new and choice is not None:
-        _assert_prior_matches(cfg, str(PRIOR_PATH / choice), choice)
-        nd_prior = file_manager.load_mix_dist(str(PRIOR_PATH / choice), device=cfg.hw.device)
-        visualizers.visualize_dist(nd_prior, labels=cfg.labels, title="Prior (loaded)", sink=fig_sink)
-        nd_dim = len(cfg.params_dict)
-        rescale_dim = len(cfg.rescale_params)
-        inferred_prior = ProductPrior(
-            distributions=[nd_prior, rescale_prior],
-            dims=[nd_dim, rescale_dim],
-        )
-        return inferred_prior, force_prior
+    if not build_new and ref is not None:
+        loaded = store.load_prior(cfg, ref)
+        visualizers.visualize_dist(loaded.nd_prior, labels=cfg.labels, title="Prior (loaded)", sink=fig_sink)
+        return loaded
 
     # --- Build from scratch ---
-    print("No prior found. Going to construct prior from scratch.")
-    time.sleep(5)
-    helpers.clear_screen()
+    print("Constructing the prior from scratch.")
 
     # 3. ND parameter prior (stability-filtered GMM)
     # Stability is a per-parameter property — screen on a short fixed-length trajectory
@@ -488,23 +411,28 @@ def build_prior(cfg: SimConfig, choice: str | None, build_new: bool,
         dtype=cfg.hw.dtype, device=cfg.hw.device,
     )
 
-    # Save the ND prior (GMM) with the existing serializer -- or defer (GUI) and just display it.
-    if save:
-        nd_name = save_name if save_name is not None else cli.prompt_save_name("ND parameter prior")
-        save_prior_artifacts(nd_name, nd_prior, cfg, fig_sink=fig_sink)
-    else:
-        visualizers.visualize_dist(nd_prior, labels=cfg.labels, title="Prior", sink=fig_sink)
-
-    # 4. Compose into product prior
-    nd_dim = len(cfg.params_dict)
-    rescale_dim = len(cfg.rescale_params)
-
-    inferred_prior = ProductPrior(
-        distributions=[nd_prior, rescale_prior],
-        dims=[nd_dim, rescale_dim],
-    )
-
-    return inferred_prior, force_prior
+    nd_log = nd_log_mask(cfg, log_params=_log_params_for(cfg))
+    gmm = _find_nd_gmm(nd_prior)
+    with store.create("prior", cfg, name=name, note=note) as w:
+        file_manager.save_mix_dist(nd_prior, str(w.payload("prior.pt")),
+                                   model=cfg.model, param_keys=list(cfg.params_dict.keys()))
+        visualizers.visualize_dist(nd_prior, labels=cfg.labels, title="Prior", sink=w.fig_sink(fig_sink))
+        w.fingerprints["gmm"] = _gmm_fingerprint(nd_prior)
+        knobs = {"num_iterations": n_iter, "sweep_batch": sweep_batch, "max_sets": max_sets,
+                 "walk_step": walk_step, "stability_units": stab_units,
+                 "min_cluster_size": min_cluster_size, "min_samples": min_samples}
+        w.config.update(knobs)
+        w.body = {
+            "gmm": {"n_components": int(gmm.mixture_distribution.probs.numel()) if gmm is not None else None,
+                    "param_keys": list(cfg.params_dict),
+                    "box": {"nd_lows": [float(b[0]) for _, b in cfg.params_dict.values()],
+                            "nd_highs": [float(b[1]) for _, b in cfg.params_dict.values()],
+                            "log_mask": [bool(v) for v in nd_log.tolist()]}},
+            "sweep": dict(knobs),
+            # gen_prior does not return the accepted count; recorded honestly as unknown.
+            "stability": {"accepted_sets": None, "iterations": n_iter},
+        }
+    return store.load_prior(cfg, w.id)
 
 
 def build_rescale_prior(cfg: SimConfig) -> Distribution:
@@ -798,9 +726,6 @@ def build_posterior(
     # pre-training cost.
     ckpt_dir = ckpt_resumed = None
     if TRAINING_CHECKPOINT_EVERY and train_new:
-        # BEFORE the digest is computed, because the digest is the thing an unsaved prior poisons.
-        if n_runs >= _UNSAVED_PRIOR_MIN_RUNS:
-            _assert_prior_is_saved(prior, n_runs, run_size)
         # The region is part of the identity (omitted for an amortized run), so a TSNPE round has its
         # OWN directory and can never resume the amortized run's rows, nor the other way round (D3).
         ident = training_identity(cfg, prior, run_size, n_runs, truncation=truncation)
@@ -852,10 +777,9 @@ def build_posterior(
         try:
             _assert_prior_matches_region(truncation, prior, "A truncated round")
         except ValueError as _e:
-            # The digest alone is not actionable; the file it belongs to is, when it is on disk.
-            _file = _saved_prior_fingerprints().get(_want)
-            raise ValueError(f"{_e} The region's fingerprint is that of Resources/Priors/{_file}."
-                             if _file else str(_e)) from None
+            _hit = resolve_store(None).find_prior_by_fingerprint(_want)
+            raise ValueError(f"{_e} The region's fingerprint is that of prior '{_hit.label}' [{_hit.id}]."
+                             if _hit else str(_e)) from None
         if _want is not None and _gmm_fingerprint(prior) is not None:
             print(f"[tsnpe] prior: the parent's training prior ({_want}), "
                   f"verified against the loaded one.", flush=True)
@@ -1210,70 +1134,6 @@ def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
         level=truncate.DEFAULT_HPD if level is None else float(level),
         V=V, probe=probe, x_obs_digest=got, t_scale_idx=int(t_scale_idx),
         prior_fingerprint=_gmm_fingerprint(getattr(latent, "prior", None)))
-
-
-def _refuse_to_orphan_a_checkpoint(name: str, nd_prior) -> None:
-    """Refuse to overwrite a prior file that an existing checkpoint is the only copy of.
-
-    ⚠ THIS IS HOW 3989 BATCHES WERE LOST. A checkpoint's directory is named after a digest of the
-    prior's fitted GMM, so the prior FILE is the only thing that can reproduce it. On 2026-08-28
-    ``prior_08282026.pt`` was overwritten, under the same name, with a different distribution -- and
-    the 3989-batch run that had been training against the old contents for six and a half hours
-    became unreachable. No error, no warning, one click. The same mechanism cost 884 batches the day
-    before.
-
-    Only fires when ALL of: the file exists, its current contents differ from what is being written,
-    and a COMMITTED checkpoint depends on those contents. Saving under a new name, re-saving the
-    same distribution, or overwriting a prior nothing references are all untouched.
-    """
-    path = PRIOR_PATH / (name + ".pt")
-    if not path.exists():
-        return
-    try:
-        existing = torch.load(str(path), map_location="cpu", weights_only=False)
-        if not (isinstance(existing, dict) and "means" in existing and "weights" in existing):
-            return
-        h = hashlib.sha256()
-        h.update(existing["means"].detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
-        h.update(existing["weights"].detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
-        old_fp = h.hexdigest()[:16]
-        new_fp = _gmm_fingerprint(nd_prior)
-    except Exception:                        # noqa: BLE001 -- an unreadable existing file is not ours to judge
-        return
-    if new_fp is None or old_fp == new_fp:
-        return                               # same distribution: overwriting changes nothing
-    users = training_checkpoint.checkpoints_using_prior(old_fp)
-    if not users:
-        return
-    listed = "; ".join(f"{n} ({b:,} batches)" for n, b in users)
-    raise ValueError(
-        f"Refusing to overwrite {path.name}: it is the only copy of the prior that "
-        f"{len(users)} checkpoint(s) were generated against -- {listed}.\n"
-        f"  A checkpoint's directory is named after a digest of the prior's fitted GMM, so replacing "
-        f"this file makes those runs UNRESUMABLE -- the simulation is still on disk but nothing can "
-        f"ever match it again. That is how 3989 batches (6.5 h) were lost on 2026-08-28.\n"
-        f"  Save under a different name. If you really mean to discard those checkpoints, delete "
-        f"them first and the save will go through.")
-
-
-def save_prior_artifacts(name: str, nd_prior, cfg: SimConfig, *, fig_sink=None) -> None:
-    """
-    Persist an ND prior GMM to Resources/Priors/<name>.pt and its corner PNG to Resources/Plots.
-    Shared by build_prior (CLI, save=True) and a GUI's explicit "Save prior" control. With no
-    fig_sink the corner plot falls back to plt.show() (a no-op under the GUI's Agg backend).
-
-    The .pt write is ATOMIC (file_manager.save_mix_dist -> atomic_torch_save). The PNG beside it is
-    not, deliberately: a half-written PNG is loud and free to regenerate, whereas a half-written prior
-    is the file a checkpointed resume fingerprints and SBC later draws theta* from.
-    """
-    _refuse_to_orphan_a_checkpoint(name, nd_prior)
-    # model + the ND parameter ORDER travel with the file so _assert_prior_matches can refuse a
-    # cross-config load. Without them a prior is identifiable only by its box edges, which several
-    # cells happened to share.
-    file_manager.save_mix_dist(nd_prior, str(PRIOR_PATH / (name + ".pt")),
-                               model=cfg.model, param_keys=list(cfg.params_dict.keys()))
-    visualizers.visualize_dist(nd_prior, labels=cfg.labels,
-                               save_path=str(PLOT_PATH / (name + ".png")), title="Prior", sink=fig_sink)
 
 
 def expected_forcing_dim(cfg: SimConfig) -> int:

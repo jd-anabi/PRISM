@@ -117,6 +117,8 @@ def test_bounds_resolution_prefers_a_sibling_then_falls_back_to_master():
 
 # ── prior identity ────────────────────────────────────────────────────────────────────────────────
 def _write_prior(path, lows, highs, keys, model="NADROWSKI"):
+    """A minimal on-disk prior file, still used by the atomic-write test below (build_prior's load
+    path validation moved to store.load_prior; this helper is just a convenient writer)."""
     d = len(lows)
     base = torch.distributions.MixtureSameFamily(
         torch.distributions.Categorical(probs=torch.ones(2)),
@@ -126,36 +128,6 @@ def _write_prior(path, lows, highs, keys, model="NADROWSKI"):
                                     torch.zeros(d, dtype=torch.bool))
     file_manager.save_mix_dist(torch.distributions.TransformedDistribution(base, T), str(path),
                                model=model, param_keys=keys)
-
-
-def test_a_prior_from_another_config_is_refused():
-    """build_prior's load path used to validate NOTHING. The GMM is fit in its box's own coordinate,
-    so a prior from a different box trains the flow against a different distribution than the one its
-    samples came from -- silently, because the means are latent and cannot be eyeballed."""
-    cfg = _cfg()
-    keys = list(cfg.params_dict)
-    lo = [b[0] for _, b in cfg.params_dict.values()]
-    hi = [b[1] for _, b in cfg.params_dict.values()]
-    cases = {
-        "ok": (lo, hi, keys, "NADROWSKI"),
-        "box": (lo, [hi[0] * 2] + hi[1:], keys, "NADROWSKI"),
-        "order": (lo, hi, keys[1:] + keys[:1], "NADROWSKI"),
-        "model": (lo, hi, keys, "HOPF"),
-    }
-    for tag, (l, h, k, m) in cases.items():
-        path = PRIOR_PATH / f"_ptest_{tag}.pt"
-        try:
-            _write_prior(path, l, h, k, m)
-            if tag == "ok":
-                orchestrator._assert_prior_matches(cfg, str(path), path.name)   # must not raise
-            else:
-                try:
-                    orchestrator._assert_prior_matches(cfg, str(path), path.name)
-                    raise AssertionError(f"a prior with the wrong {tag} was accepted")
-                except ValueError:
-                    pass
-        finally:
-            path.unlink(missing_ok=True)
 
 
 def test_a_prior_the_posterior_was_not_trained_with_is_refused():

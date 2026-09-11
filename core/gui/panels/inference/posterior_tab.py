@@ -125,8 +125,8 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         # so setting the constant here would be a silent no-op and the run would use the default.
         # accept_truncated: a NON-AMORTIZED artifact loads here and carries its region into the
         # session, so Validate restricts its prior to it and Infer warns on another observation.
-        self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
-                      self.session.force_prior, entry, is_new, save=False,
+        self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior.prior,
+                      self.session.inf_prior.force_prior, entry, is_new, save=False,
                       num_runs=n_runs, run_size_cap=cap, accept_truncated=True,
                       hidden_features=max(1, self.flow_hidden.value()),
                       num_transforms=max(1, self.flow_transforms.value()),

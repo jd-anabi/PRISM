@@ -5,13 +5,13 @@ from core.Helpers import file_manager, labels, visualizers
 
 
 # ── worker-callable runners (module-level so a Worker can call them with an injected fig_sink) ─────
-def _run_simulated_inference(cfg, posterior, cell_path, T_obs_s, *, gt_dicts=None, inferred_prior=None,
-                             force_prior=None, fig_sink=None):
+def _run_simulated_inference(cfg, posterior, cell_path, T_obs_s, *, gt_dicts=None, prior=None,
+                             fig_sink=None):
     """Mirror orchestrator.run's simulated branch: inject GT + T_obs, simulate, show GT trace + infer.
 
     ``gt_dicts`` is the hand-entered alternative to ``cell_path``: an (inits, params, rescale, forcing)
     tuple in parse_values_file's shape. It goes through the SAME inject_ground_truth validation, so
-    typed values are bounds-checked exactly like a file's."""
+    typed values are bounds-checked exactly like a file's. ``prior`` is a LoadedPrior."""
     ignored = (cfg.inject_ground_truth(*gt_dicts) if gt_dicts is not None
                else cli.load_and_validate_gt(cfg, cell_path))
     if ignored:
@@ -19,8 +19,8 @@ def _run_simulated_inference(cfg, posterior, cell_path, T_obs_s, *, gt_dicts=Non
               f"ignored (the bounds file defines the inferred set).")
     cfg.T_obs = T_obs_s * cfg.get_unit_conversion_factor("s")
     # Is this observation actually in the region the network trained on? Bounds-checking cannot tell.
-    if inferred_prior is not None:
-        for msg in orchestrator.check_observation_in_distribution(cfg, inferred_prior, force_prior):
+    if prior is not None:
+        for msg in orchestrator.check_observation_in_distribution(cfg, prior.prior, prior.force_prior):
             print(f"WARNING: {msg}")
     x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
     visualizers.plot(t_dim.squeeze(0).cpu().detach().numpy(), x_dim[0, :].cpu().detach().numpy(),

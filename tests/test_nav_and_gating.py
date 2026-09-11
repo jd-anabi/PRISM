@@ -43,6 +43,12 @@ import contextlib                                                  # noqa: E402
 
 def _app():
     return QApplication.instance() or QApplication([])
+def _prior_stub(id_="p1", name=""):
+    """A LoadedPrior-shaped stub: the tabs now read ``.prior``/``.force_prior`` off session.inf_prior
+    (piece 1, Task 4) rather than carrying the physical prior and forcing prior as separate session
+    fields, so a bare ``object()`` no longer stands in wherever a dispatched call is actually reached."""
+    return type("LoadedPriorStub", (), {"prior": object(), "force_prior": object(),
+                                         "id": id_, "name": name})()
 # ── Phase 3: QSettings persistence ───────────────────────────────────────────────────────────────
 def _temp_settings():
     import tempfile
@@ -375,7 +381,7 @@ def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session():
 
     _app()
     inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=object())
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub())
     pp, vp = inf.posterior_panel, inf.validate_panel
 
     region = object()
@@ -410,7 +416,7 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
 
     _app()
     inf = InferenceScreen()
-    inf.session = SbiSession(draft=object(), cfg=object(), inf_prior=object(), posterior=object())
+    inf.session = SbiSession(draft=object(), cfg=object(), inf_prior=_prior_stub(), posterior=object())
 
     cap = {}
     for panel in (inf.prior_panel, inf.posterior_panel, inf.validate_panel):

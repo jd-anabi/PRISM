@@ -397,6 +397,57 @@ class ArtifactStore:
         d = self.kind_dir("simulation") / identity_digest(identity)
         return d if peek(d) else None
 
+    # ── loaders ──────────────────────────────────────────────────────────────────────────────────
+    def load_prior(self, cfg, ref: str) -> LoadedPrior:
+        """Refuses model, ND parameter set/order, box and log-mask mismatches BEFORE reading the
+        payload -- the GMM is fit in its box's own coordinate, so a prior is meaningful only against
+        the exact (model, parameter set + ORDER, box) it was built for -- then asserts the payload's
+        GMM is the one the manifest fingerprinted."""
+        import torch
+        from core import orchestrator as _orch
+        from core.SBI.reparam import nd_log_mask
+        from core.SBI.run_guards import _gmm_fingerprint, _log_params_for
+        sub, m = self._find("prior", ref)
+        if m is None:
+            raise StoreError(f"no complete prior named or id'd {ref!r} under {self.kind_dir('prior')}")
+        label = m.name or m.id
+        gmm = m.body["gmm"]
+
+        def _bad(what, got, want):
+            raise ValueError(
+                f"Prior '{label}' does not match this configuration: {what} differs.\n"
+                f"  prior:  {got}\n  config: {want}\n"
+                f"A prior's GMM is fit in its own box coordinate, so loading it here would train the "
+                f"flow against a different distribution than the one the samples came from. Build a new "
+                f"prior for this bounds file, or pick the prior that belongs to it.")
+
+        if m.config.get("model") != cfg.model:
+            _bad("the model", m.config.get("model"), cfg.model)
+        keys = list(cfg.params_dict)
+        if list(gmm["param_keys"]) != keys:
+            _bad("the ND parameter set or ORDER", list(gmm["param_keys"]), keys)
+        want_lo = torch.tensor([b[0] for _, b in cfg.params_dict.values()], dtype=torch.float64)
+        want_hi = torch.tensor([b[1] for _, b in cfg.params_dict.values()], dtype=torch.float64)
+        got_lo = torch.tensor(gmm["box"]["nd_lows"], dtype=torch.float64)
+        got_hi = torch.tensor(gmm["box"]["nd_highs"], dtype=torch.float64)
+        if not (torch.allclose(got_lo, want_lo) and torch.allclose(got_hi, want_hi)):
+            diff = [f"{n}: prior ({lo:g}, {hi:g}) vs config ({wl:g}, {wh:g})"
+                    for n, lo, hi, wl, wh in zip(keys, got_lo.tolist(), got_hi.tolist(),
+                                                 want_lo.tolist(), want_hi.tolist()) if lo != wl or hi != wh]
+            _bad("the ND box", "; ".join(diff), "the bounds file in use")
+        want_mask = [bool(v) for v in nd_log_mask(cfg, log_params=_log_params_for(cfg)).tolist()]
+        if [bool(v) for v in gmm["box"]["log_mask"]] != want_mask:
+            _bad("the log-box mask (which ND parameters use a geometric box)", gmm["box"]["log_mask"], want_mask)
+        nd_prior = file_manager.load_mix_dist(str(sub / "prior.pt"), device=cfg.hw.device)
+        fp = _gmm_fingerprint(nd_prior)
+        if fp != m.fingerprints.get("gmm"):
+            raise StoreError(f"prior '{label}': prior.pt holds GMM {fp}, not the one the manifest records "
+                             f"({m.fingerprints.get('gmm')}); the artifact is inconsistent")
+        prior = _orch.ProductPrior(distributions=[nd_prior, _orch.build_rescale_prior(cfg)],
+                                   dims=[len(cfg.params_dict), len(cfg.rescale_params)])
+        return LoadedPrior("prior", m.id, m.name, m, sub, prior=prior,
+                           force_prior=_orch.build_forcing_prior(cfg), nd_prior=nd_prior, fingerprint=fp)
+
 
 def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None, hw=None,
                               batches_done: int = 0, complete: bool = False, rows=None, V=None) -> mf.Manifest:

@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout)
 
 from core import config, forcing, orchestrator
+from core.artifacts import default_store
 from core.Helpers import file_manager
-from core.config import BOUNDS_PATH, PRIOR_PATH
+from core.config import BOUNDS_PATH
 
 from ... import icons, settings
-from ...widgets.artifact_picker import ArtifactPicker
+from ...widgets.artifact_picker import ArtifactPicker, StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
@@ -38,7 +39,7 @@ class PriorPanel(_StagePanel):
                                           file_label="Use file", direct_label="Edit values")
         self.bounds_source.changed.connect(self._on_bounds_source_changed)
         add_help_row(form, "Bounds", self.bounds_source, HELP["bounds_source"])
-        self.prior_picker = ArtifactPicker(PRIOR_PATH, keep=lambda fn: fn.endswith(".pt"), allow_new=True)
+        self.prior_picker = StorePicker("prior", allow_new=True)
         add_help_row(form, "Prior", self.prior_picker, HELP["prior"])
         v.addLayout(form)
         self.btn_prior = QPushButton("Build / Load prior")
@@ -176,7 +177,7 @@ class PriorPanel(_StagePanel):
         entry, is_new = self.prior_picker.selected()
         # Passed, never written to config: orchestrator does `from .config import
         # PRIOR_SWEEP_ITERATIONS, ...`, so assigning to the constants here would be a silent no-op.
-        self.dispatch(orchestrator.build_prior, cfg, entry, is_new, save=False,
+        self.dispatch(orchestrator.build_prior, cfg, entry, is_new,
                       provide_fig_sink=True, on_result=self._on_prior,
                       num_iterations=max(1, self.sweep_iters.value()),
                       sweep_batch=max(0, self.sweep_batch.value()),
@@ -209,19 +210,27 @@ class PriorPanel(_StagePanel):
             self.sweep_note.setText(f"Sweep summary unavailable: {type(e).__name__}: {e}")
 
     def _on_prior(self, payload):
-        self.session.inf_prior, self.session.force_prior = payload
-        self.log_pane.append_line("Prior ready.")
+        self.session.inf_prior = payload                   # a LoadedPrior
+        self.session.force_prior = payload.force_prior     # removed with the field in Task 7
+        self.log_pane.append_line(f"Prior ready: {payload.name or '(unnamed, id ' + payload.id + ')'}. "
+                                  f"Name it below to keep it.")
         self._screen.refresh_gates()
 
     def _save_prior(self):
         name = self.prior_name.text().strip()
-        if not name or self.session.inf_prior is None:
+        lp = self.session.inf_prior
+        if not name or lp is None:
             self.log_pane.append_line("Build a prior and enter a name first.", "warning")
             return
-        nd_prior = self.session.inf_prior.distributions[0]
-        self.dispatch(orchestrator.save_prior_artifacts, name, nd_prior, self.session.cfg,
-                      on_finished=lambda: (self.prior_picker.refresh(),
-                                           self.log_pane.append_line(f"Saved prior '{name}'.")))
+        try:
+            lp.manifest = default_store().rename("prior", lp.id, name)
+        except Exception as e:                       # noqa: BLE001 -- a bad or duplicate name is user input
+            self._config_error(e)
+            return
+        lp.name = name
+        self.prior_picker.refresh()
+        self.prior_picker.restore_key(lp.id)
+        self.log_pane.append_line(f"Prior named '{name}'.")
 
     def refresh_local_gates(self):
         self.btn_prior.setEnabled(self.session.draft is not None)

@@ -4,9 +4,10 @@ Prior identity (a GMM's box does not identify it -- two sweeps over one box prod
 fits), the load-side prior/posterior agreement checks, the chi band/drive deliberateness gate, the
 amortization gate for TSNPE artifacts, and the log-box resolution rule. orchestrator re-imports
 every name, so the suites keep calling them as orchestrator._* and every existing call site is
-unchanged. The guards that scan Resources through a test-sandboxable path (PRIOR_PATH rebinds on
-orchestrator) stay in orchestrator: _saved_prior_fingerprints, _assert_prior_is_saved,
-_refuse_to_orphan_a_checkpoint, and the width-computing _assert_mode_matches.
+unchanged. _saved_prior_fingerprints, _assert_prior_is_saved, _refuse_to_orphan_a_checkpoint and
+_assert_prior_matches were retired with the artifact store (piece 1, Task 4): store.load_prior and
+store.delete's dependents check are their successors. The width-computing _assert_mode_matches
+still stays in orchestrator.
 """
 import hashlib
 import os
@@ -15,7 +16,6 @@ import torch
 
 from core import config, registry
 from core.config import POSTERIOR_PATH, SimConfig
-from core.Helpers import file_manager
 from core.SBI.reparam import read_sidecar
 
 CHI_OVERRIDE_ENV = "PRISM_CHI_OVERRIDE"
@@ -64,11 +64,6 @@ def _gmm_fingerprint(obj) -> str | None:
     return h.hexdigest()[:16]
 
 
-
-# Below this many batches a generation run is short enough that losing it is an inconvenience rather
-# than a day, so the unsaved-prior guard stays out of the way of smoke runs and experiments.
-
-
 def _assert_prior_used_matches_posterior(posterior, inferred_prior, what: str) -> None:
     """Refuse to run a posterior against a prior it was not trained with.
 
@@ -111,54 +106,6 @@ def _assert_prior_matches_region(region, inferred_prior, what: str) -> None:
         f"trained with (prior {supplied} vs the region's {want}). A truncated round restricts the "
         f"PARENT's prior; on another base prior the box selects a slab of a distribution nobody "
         f"measured. Load the prior that belongs to the parent posterior.")
-
-
-def _assert_prior_matches(cfg: SimConfig, path: str, choice: str) -> None:
-    """Fail LOUDLY when a saved ND prior does not belong to this config.
-
-    The latent GMM is fit in its box's OWN coordinate, so a prior is meaningful only against the
-    exact (model, parameter set + ORDER, box) it was built for. None of that was checked here, and
-    the consequences are silent rather than loud: the box edges rescale every sample the flow is
-    trained on, and a reordered parameter set mis-binds columns positionally. The one guard that did
-    exist lives in ``build_posterior`` and covers only the log-mask.
-
-    Legacy priors carry no ``model``/``param_keys``; those WARN rather than raise, because the box
-    comparison below is still exact and is the part that actually rescales the samples.
-    """
-    meta = file_manager.read_prior_metadata(path)
-    if not meta:
-        return                                    # pre-reparam file: nothing recorded to check
-
-    def _bad(what, got, want):
-        raise ValueError(
-            f"Prior '{choice}' does not match this configuration: {what} differs.\n"
-            f"  prior:  {got}\n  config: {want}\n"
-            f"A prior's GMM is fit in its own box coordinate, so loading it here would train the "
-            f"flow against a different distribution than the one the samples came from. Build a new "
-            f"prior for this bounds file, or pick the prior that belongs to it.")
-
-    if "model" in meta and str(meta["model"]) != cfg.model:
-        _bad("the model", meta["model"], cfg.model)
-    keys = list(cfg.params_dict.keys())
-    if "param_keys" in meta and list(meta["param_keys"]) != keys:
-        _bad("the ND parameter set or ORDER", list(meta["param_keys"]), keys)
-    if "lows" in meta and "highs" in meta:
-        want_lo = torch.tensor([b[0] for _, b in cfg.params_dict.values()], dtype=torch.float64)
-        want_hi = torch.tensor([b[1] for _, b in cfg.params_dict.values()], dtype=torch.float64)
-        got_lo = meta["lows"].detach().cpu().to(torch.float64)
-        got_hi = meta["highs"].detach().cpu().to(torch.float64)
-        if got_lo.shape != want_lo.shape:
-            _bad("the ND parameter COUNT", tuple(got_lo.shape), tuple(want_lo.shape))
-        if not (torch.allclose(got_lo, want_lo) and torch.allclose(got_hi, want_hi)):
-            diff = [f"{n}: prior ({lo:g}, {hi:g}) vs config ({wl:g}, {wh:g})"
-                    for n, lo, hi, wl, wh in zip(keys, got_lo.tolist(), got_hi.tolist(),
-                                                 want_lo.tolist(), want_hi.tolist())
-                    if lo != wl or hi != wh]
-            _bad("the ND box", "; ".join(diff), "the bounds file in use")
-    if "model" not in meta or "param_keys" not in meta:
-        warnings.warn(
-            f"Prior '{choice}' predates model/param_keys recording, so only its box could be "
-            f"verified. Re-save it to make it fully self-describing.", stacklevel=2)
 
 
 def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:

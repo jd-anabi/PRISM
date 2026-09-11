@@ -328,9 +328,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                         "Fix the cell selection first: " + "; ".join(self._cell_problems), "warning")
                     return
             self.dispatch(_run_simulated_inference, cfg, post, cell, self.sim_tobs.value(),
-                          gt_dicts=gt_dicts,
-                          inferred_prior=self.session.inf_prior, force_prior=self.session.force_prior,
-                          provide_fig_sink=True)
+                          gt_dicts=gt_dicts, prior=self.session.inf_prior, provide_fig_sink=True)
         elif cfg.observation_mode == "chi":          # experimental, χ(ω): 1 passive + K forced
             if not self.chi_spont.value():
                 self.log_pane.append_line("Select the passive recording first — it sets Ω₀.",

@@ -313,3 +313,97 @@ def test_simulation_manifest_written_at_create_and_refreshed_on_save_and_complet
     m3 = store.get("simulation", d.name)
     assert m3.body["complete"] is True and m3.body["rows"] == [12, 5] and m3.body["wall_seconds"] >= 0.0
     assert store.simulation_for(ident) == d and store.list("simulation")[0].complete
+
+
+def _gmm_in_box(lows, highs, mask, seed=0):
+    from core.SBI import reparam
+    torch.manual_seed(seed)
+    d = len(lows)
+    base = torch.distributions.MixtureSameFamily(
+        torch.distributions.Categorical(probs=torch.tensor([0.5, 0.5])),
+        torch.distributions.MultivariateNormal(torch.randn(2, d), covariance_matrix=torch.eye(d).expand(2, d, d)))
+    T = reparam.build_box_bijection(torch.tensor(lows, dtype=torch.float32), torch.tensor(highs, dtype=torch.float32), mask)
+    return torch.distributions.TransformedDistribution(base, T)
+
+
+def _prior_artifact(store, cfg, *, name="p", lows=None, highs=None, keys=None, model=None, seed=0):
+    """A prior artifact with a real 2-component GMM payload, laid out exactly as build_prior writes it."""
+    from core.Helpers import file_manager
+    from core.SBI.reparam import nd_log_mask
+    from core.SBI.run_guards import _gmm_fingerprint, _log_params_for
+    keys = keys or list(cfg.params_dict)
+    lows = lows or [b[0] for _, b in cfg.params_dict.values()]
+    highs = highs or [b[1] for _, b in cfg.params_dict.values()]
+    mask = nd_log_mask(cfg, log_params=_log_params_for(cfg))
+    dist = _gmm_in_box(lows, highs, mask, seed)
+    with store.create("prior", cfg, name=name) as w:
+        file_manager.save_mix_dist(dist, str(w.payload("prior.pt")), model=model or cfg.model, param_keys=keys)
+        if model:
+            w.config["model"] = model
+        w.fingerprints["gmm"] = _gmm_fingerprint(dist)
+        w.body = {"gmm": {"n_components": 2, "param_keys": list(keys),
+                          "box": {"nd_lows": [float(v) for v in lows], "nd_highs": [float(v) for v in highs],
+                                  "log_mask": [bool(v) for v in mask.tolist()]}},
+                  "sweep": {}, "stability": {"accepted_sets": None, "iterations": 1}}
+    return w
+
+
+def test_load_prior_refuses_model_param_order_and_box_and_returns_a_wrapper(store):
+    cfg = _nad_cfg()
+    ok = _prior_artifact(store, cfg, name="ok")
+    lp = store.load_prior(cfg, "ok")
+    assert lp.id == ok.id and lp.name == "ok" and lp.fingerprint == store.get("prior", ok.id).fingerprints["gmm"]
+    assert lp.prior.distributions[0] is lp.nd_prior and lp.force_prior is not None   # master.txt has a drive
+    keys = list(cfg.params_dict)
+    hi = [b[1] for _, b in cfg.params_dict.values()]
+    for tag, kw, why in (("model", dict(model="HOPF"), "the model"),
+                         ("order", dict(keys=keys[1:] + keys[:1]), "ORDER"),
+                         ("box", dict(highs=[hi[0] * 2] + hi[1:]), "the ND box")):
+        _prior_artifact(store, cfg, name=tag, **kw)
+        with pytest.raises(ValueError, match=why):
+            store.load_prior(cfg, tag)
+    other = _prior_artifact(store, cfg, name="other", seed=1)
+    (ok.dir / "prior.pt").write_bytes((other.dir / "prior.pt").read_bytes())
+    with pytest.raises(st.StoreError, match="not the one the manifest records"):
+        store.load_prior(cfg, "ok")
+
+
+def test_build_prior_auto_persists_and_loads_back(store, monkeypatch):
+    from core import orchestrator
+    from core.SBI.reparam import nd_log_mask
+    from core.SBI.run_guards import _log_params_for
+    cfg = _nad_cfg()
+
+    def stub_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds, **kw):
+        lows = [float(b[0]) for b in prior_bounds]
+        highs = [float(b[1]) for b in prior_bounds]
+        return _gmm_in_box(lows, highs, kw.get("log_mask"))
+
+    monkeypatch.setattr(orchestrator.pipeline, "gen_prior", stub_gen_prior)
+    seen = []
+    lp = orchestrator.build_prior(cfg, None, True, fig_sink=lambda title, fig: seen.append(title), num_iterations=1)
+    assert lp.name == "" and [r.id for r in store.list("prior")] == [lp.id]
+    assert (lp.path / "figures" / "prior.png").stat().st_size > 0 and seen == ["Prior"]
+    m = lp.manifest
+    assert m.body["gmm"]["param_keys"] == list(cfg.params_dict) and m.config["num_iterations"] == 1
+    assert m.body["gmm"]["box"]["log_mask"] == nd_log_mask(cfg, log_params=_log_params_for(cfg)).tolist()
+    assert m.inputs["bounds"]["path"] == "Bounds/nadrowski/master.txt" and m.fingerprints["gmm"] == lp.fingerprint
+    again = orchestrator.build_prior(cfg, lp.id, False, fig_sink=lambda title, fig: None)
+    assert again.id == lp.id and again.fingerprint == lp.fingerprint
+    store.rename("prior", lp.id, "master_prior")
+    assert orchestrator.build_prior(cfg, "master_prior", False, fig_sink=lambda title, fig: None).name == "master_prior"
+
+
+def test_delete_refuses_a_prior_a_simulation_was_generated_against(store):
+    from core.SBI import training_checkpoint as tc
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="p")
+    fp = store.get("prior", p.id).fingerprints["gmm"]
+    ident = {"format": "training-rows/2", "prior_fingerprint": fp, "n_runs": 3, "truncation": None}
+    d = tc.resolve_dir(ident)
+    tc.create(d, ident, schedule_t_scales=torch.ones(3), schedule_Ts=torch.ones(3), inits=torch.zeros(1, 2),
+              V=None, probe=torch.zeros(7, 2, dtype=torch.float64), run_size=4, n_runs=3,
+              parents={"prior": p.id}, hw=config.cpu_device())
+    with pytest.raises(st.StoreError, match="simulation"):
+        store.delete("prior", p.id)
+    assert store.find_prior_by_fingerprint(fp).id == p.id
