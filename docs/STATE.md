@@ -17,9 +17,10 @@ recorded below; the merge to `main` and the clean-break runbook are the user's n
   `.worktrees/piece-1-artifact-store/` (forked from `main` at `8ec18aa`): the 14 tasks of
   `docs/superpowers/plans/2026-09-10-artifact-store.md`, one commit each with a per-task review
   and fix loop, then a whole-branch review ("ready with fixes"), one fix wave (`830cee1`) and one
-  residual fix (`3f1a1b3`). The ledger with rulings R1–R7 and every parked finding is
-  `.worktrees/piece-1-artifact-store/.superpowers/sdd/2026-09-10-artifact-store/progress.md`
-  (git-ignored scratch; keep it until the branch is merged). What landed: `core/artifacts/`
+  residual fix (`3f1a1b3`). The execution ledger (rulings R1–R7, every parked finding, every
+  review verdict) was git-ignored scratch and is deleted with the workspace once the branch is
+  finished; its rulings live on in the decisions log below and in the design spec's §11, and
+  the items it carried forward are in "Owed" item 5. What landed: `core/artifacts/`
   (store, writer, manifests, provenance, identity); every stage takes and returns `Loaded*`
   wrappers and writes its artifact at completion under `Artifacts/<kind>/<name>__<id>/`; the
   `.rot.pt` sidecar, the save/load helpers and the generated-path constants are gone; loading
@@ -84,9 +85,9 @@ recorded below; the merge to `main` and the clean-break runbook are the user's n
 
 | gate | result |
 |---|---|
-| `pytest --collect-only -q` | 2026-09-11 at `3f1a1b3`: see the fast-suite line (Reduction's 5 are collected with it) |
-| fast suite, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `3f1a1b3`: running when this file was written — result appended below when it exits |
-| slow test `pytest tests/test_user_sbi.py -m slow -q` | 2026-09-11 at `e4e60eb` (Task 13): **1 passed**, 93 deselected, 31 min 16 s, exit 0; re-run at `3f1a1b3` after the fix wave: running when this file was written — result appended below |
+| `pytest --collect-only -q` | 2026-09-11 at `3f1a1b3`: 356 (355 run by the fast suite + the slow one; Reduction's 5 are collected with it) |
+| fast suite, ONE process, `pytest -m "not slow" -q` | 2026-09-11 08:20 UTC at `3f1a1b3`: **355 passed, 1 deselected**, 115 warnings, 10 min 36 s, exit 0; the real `Artifacts/` gained nothing (the conftest teardown assertion) |
+| slow test `pytest tests/test_user_sbi.py -m slow -q` | 2026-09-11 at `e4e60eb` (Task 13): 1 passed, 31 min 16 s, exit 0; re-run at `3f1a1b3` after the fix wave: **1 passed**, 93 deselected, 30 min 11 s, exit 0 — the full suite is green on the branch as it stands |
 | five-part fast gate (per task; last at `830cee1`) | store suite 42–43 passed; `--ignore=test_user_sbi` 261; `test_user_sbi` non-slow 1 / 16 / 12 / 64 — all green |
 | `core/Reduction/tests` under pytest | 2026-09-10: 5 passed (collected with the fast suite since) |
 | GPU `scripts/smoke_train.py` baseline (pre-piece-1 code, `BOUNDS=Resources/Bounds/nadrowski/master.txt`, `TOBS_S=4.5`, defaults NUM_RUNS=4 RUN_SIZE=32) | 2026-09-10: CHI=1 (cell `master_spont`): prior 102 s, posterior 747 s, validate 23 s, infer 68 s, exit 0, no OOM lines. CHI=0 (cell `master_weak`): prior 101 s, posterior 226 s, validate 12 s, infer 23 s, exit 0. **Post-piece-1 run owed (item 3 above).** |
