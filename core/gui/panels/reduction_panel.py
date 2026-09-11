@@ -72,7 +72,8 @@ class ReductionPanel(BasePanel):
 
         # run_reduction_map saves its sweep table and its diagnostic PNG itself and returns only the
         # Part-A record, so the figure comes back via the plot watcher rather than the return value.
-        self.dispatch(run_reduction_map, cfg, watch_dir=config.artifacts_root() / "reduction", on_result=self._on_result)
+        watch = config.artifacts_root() / "reduction"
+        self.dispatch(run_reduction_map, cfg, watch_dir=watch, on_result=self._on_result)
 
     def _on_result(self, record):
         self.record = record

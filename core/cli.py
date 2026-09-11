@@ -134,6 +134,9 @@ def _pick_artifact(kind: str, what: str, prompt: str, allow_new: bool) -> tuple:
     returns (id_or_None, build_new)."""
     from core.artifacts import default_store
     rows = [s for s in default_store().list(kind) if s.complete]
+    if not rows and allow_new:
+        helpers.clear_screen()
+        return None, True
     if allow_new:
         print(f"  0) build/train a new {what}")
     for i, s in enumerate(rows, 1):

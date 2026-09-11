@@ -154,7 +154,8 @@ class CrossValPanel(BasePanel):
 
         # run_param_study_cli returns the two HDF5 DATA paths, not the figures -- the plots are saved
         # to disk (the S-sweep one at the study's midpoint, deliberately) and arrive via the watcher.
-        self.dispatch(run_param_study_cli, cfg, s_grid, temp_grid, watch_dir=config.artifacts_root() / "crossval",
+        watch = config.artifacts_root() / "crossval"
+        self.dispatch(run_param_study_cli, cfg, s_grid, temp_grid, watch_dir=watch,
                       on_result=self._on_result)
 
     def _on_result(self, paths):
