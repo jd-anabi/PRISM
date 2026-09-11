@@ -3223,8 +3223,8 @@ def test_inference_records_ppc_summary_and_ground_truth(tiny_run):
     m, res = inf.manifest, inf.results
     keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
     assert m.parents == {"posterior": r.posterior.id, "observation": obs.id} and res["n_samples"] == 50
-    assert res["accepted"] == [] and list(res["posterior_summary"]) == keys
-    assert set(res["posterior_summary"][keys[0]]) == {"q05", "median", "q95"}
+    assert res["accepted"] == [] and [r["name"] for r in res["posterior_summary"]] == keys
+    assert set(res["posterior_summary"][0]) == {"name", "q05", "median", "q95"}
     assert res["ground_truth"] == {k: float(v) for k, v in zip(keys, r.cfg.ground_truth)}
     assert {"mean_abs_z", "max_abs_z", "coverage_90", "num_outside", "num_invalid"} <= set(res["ppc"])
     assert {"figures/posterior_corner.png", "figures/posterior_predictive_check.png", "figures/eye_test.png"} <= set(m.figures)
@@ -3313,8 +3313,10 @@ Then the existing body follows, indented under the `with`, with `posterior.sampl
                     "coverage_90": _num(results["coverage_90"]), "num_outside": int(results["num_outside"]),
                     "num_invalid": int(results["num_invalid"]),
                     "invalid_breakdown": results.get("invalid_breakdown"), "note": _note or ""},
-            "posterior_summary": {k: {"q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
-                                  for i, k in enumerate(keys)},
+            # A LIST of records, not a dict keyed by name: manifest JSON sorts keys, so a dict would lose
+            # the parameter order (Task 9's review; the same rule as sbc.per_param).
+            "posterior_summary": [{"name": k, "q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
+                                  for i, k in enumerate(keys)],
             "ground_truth": {k: float(v) for k, v in zip(keys, cfg.ground_truth)} if show_truth else None,
             "n_samples": int(n_samples), "accepted": accepted,
         }
