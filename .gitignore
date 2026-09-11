@@ -2,33 +2,17 @@
 /archive/
 /.claude/
 
-# A 6.9 MB run log that was committed to the repo root. Ignoring it stops it coming back;
-# it is still TRACKED, so untracking is a separate, deliberate step (see PRISM_HANDOFF 9.7).
+# A 6.9 MB run log that was once committed to the repo root; untracked and deleted by the clean
+# break (2026-09-11). Ignoring it stops it coming back.
 /sbc_run.log
 *.pyc
 __pycache__/
 
-# Resources/ GENERATED OUTPUTS (PRISM_HANDOFF 9.7).
-# Resources/ interleaves the hand-written inputs a user edits -- Bounds/ Cells/ Units/ Models/ --
-# with everything the pipeline writes, so the two were indistinguishable in the same tree. The
-# directories below are outputs only; the input .txt/.json files stay tracked.
-# Some of these are still TRACKED from before this rule; untracking them is a separate, deliberate
-# step (same reasoning as sbc_run.log above), and ignoring them stops NEW ones being added.
-/Resources/Plots/
-/Resources/Priors/
-/Resources/Posteriors/
-/Resources/CrossValidation/
-/Resources/ReductionMap/
-# Training-data checkpoints (C-11): several GiB per run, and a cache of a run rather than a result.
-/Resources/Checkpoints/
-# Observations persisted at INFERENCE time (section 11.6 guardrail 1). A record of what a particular
-# run was shown, not an input anyone edits -- and it can carry real experimental data.
-/Resources/Observations/
-
-# Generated artifacts (piece 1 of the 2026-09-10 hardening programme). The /Resources/* lines above
-# stay until the clean-break runbook deletes those trees; then they go.
+# Generated artifacts (piece 1 of the 2026-09-10 hardening programme): every generated file lives
+# under Artifacts/<kind>/<name>__<id>/ with a manifest.json. The old Resources/{Plots,Priors,
+# Posteriors,CrossValidation,ReductionMap,Checkpoints,Observations} trees were deleted by the
+# clean-break runbook on 2026-09-11; Resources/ now holds only the hand-edited inputs.
 /Artifacts/
 
 # pytest
 /.pytest_cache/
-
