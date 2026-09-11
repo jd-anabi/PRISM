@@ -25,7 +25,9 @@ what is on disk, the last gate). Update it at the end of every session.
 
 - pytest. Fast gate: `pytest -m "not slow"` (minutes). Full: `pytest` (about an hour; the chi
   full-pipeline test in `tests/test_user_sbi.py`). Count: `pytest --collect-only -q`.
-- Markers: `slow`; `gpu` (skipped when CUDA is absent); `display` (skipped offscreen).
+- Markers: `slow`; `gpu` (skipped when CUDA is absent); `display` (skipped offscreen). The
+  display-marked tests run on the real screen with `QT_QPA_PLATFORM=windows pytest -m display`
+  (the root conftest only DEFAULTS the variable); they create hidden native windows, nothing shows.
 - Do not edit a source file while a suite is running. Several tests assert on
   `inspect.getsource`, which reads the file as it is now with the line numbers the function was
   loaded with; an edit mid-run produces a failure that is not real. Never run two pytest

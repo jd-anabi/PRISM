@@ -3,8 +3,9 @@
 **Last updated:** 2026-09-11 (piece 1 MERGED as `461d780`; the CLEAN-BREAK RUNBOOK is EXECUTED —
 `8dbd93e`, `e37df41`, `19363d2`, `d5c9fd3`; the POST-PIECE-1 GPU GATE is GREEN at `bb38f1a` after
 its first attempt found two piece-1 regressions, fixed in `896e8ff` and `bb38f1a` with a new
-gpu-marked suite; `Artifacts/` starts empty; next: the nine GUI checks on a display, then piece 2;
-all work happens directly on the local `main` branch)
+gpu-marked suite; the NINE GUI CHECKS PASS on the user's screen, and the one defect they turned up —
+the taskbar showing the generic glyph — is fixed in `df7491e`; `Artifacts/` exists now with the
+walkthrough's artifacts; next: piece 2; all work happens directly on the local `main` branch)
 
 ## Where things stand
 
@@ -65,17 +66,14 @@ all work happens directly on the local `main` branch)
    The drill that certifies the resume is run 1 `CHI=1 TOBS_S=4.5 BOUNDS=…/master.txt
    CELL=…/master_spont.txt CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke`, then run 2 with
    `PRIOR=smoke_prior STAGES=prior,posterior`, the same `NUM_RUNS`, `SAVE` unset.
-4. **Manual GUI check on a display** (plan §Verification, nine checks; `run.bat`). **Written out as
-   rows A1–A9 of `docs/checklists/display-walkthrough.md` (2026-09-11)** with the exact click
-   paths, the app's own log/dialog strings and the directory to inspect for each; record there,
-   then summarise here. In short: `Artifacts/`
-   created at launch; prior from scratch → `priors/_unnamed__<id>/`, Save renames it; posterior
-   at 2 batches → `posteriors/` with parents prior + simulation; load it (no dialog) and a
-   posterior under another bounds file (refusal naming the field); Validate → `calibrations/`;
-   Infer → `observations/` then `inferences/`; TSNPE round → `amortized: false`, four parents,
-   loading logs NON-AMORTIZED, Infer on another cell refused naming `Accept(other_observation=True)`;
-   cancel during training → no `posteriors/` directory, `simulations/<digest>/manifest.json`
-   `"complete": false`; a hand-truncated `manifest.json` is omitted by the picker. Record here.
+4. ~~Manual GUI check on a display~~ — done 2026-09-11 by the user on the real screen: rows A1–A9
+   of `docs/checklists/display-walkthrough.md` all pass (reported "everything passes"). The one
+   failure was the walkthrough's row 1, the APP ICON: the window's title bar showed the mark, the
+   taskbar button the generic Windows "application" glyph. Root-caused the same day by screenshot
+   experiments (the "Taskbar icon" entry in the decisions log) and fixed by installing the mark as
+   Qt's Win32 window-CLASS icon from a new `assets/app/prism.ico`
+   (`app_icon.set_windows_class_icon`); verified by a screenshot of the real launcher's button.
+   Re-check row 1 on the next launch.
 5. **Pieces 2 → 3 → (4 ∥ 5) → 6**, each brainstormed → spec → plan → implementation. Carried
    into them from piece 1 (spec §11 and the ledger): **piece 2** extends the source scan to
    `scripts/`, retires `_common.require_mode` and the unconditional `Accept(truncated=True)` in
@@ -138,6 +136,8 @@ all work happens directly on the local `main` branch)
 | fast suite, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `3f1a1b3` (branch tip): 355 passed, 1 deselected, 10 min 36 s, exit 0. **On merged `main` `461d780`: 355 passed, 1 deselected**, 115 warnings, 10 min 56 s, exit 0; the real `Artifacts/` gained nothing and the user-model suite's temporary `Resources/*/sbitest` inputs were cleaned up (the conftest teardown assertion and `git status` both clean afterwards) |
 | fast suite AFTER THE CLEAN BREAK, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `19363d2` (trees deleted, scripts archived, `.gitignore` trimmed; `CLAUDE.md` and this file edited in the working tree): **355 passed, 1 deselected**, 115 warnings, 10 min 54 s, exit 0; the real `Artifacts/` still absent afterwards and the user-model suite's temporary `Resources/*/sbitest` inputs cleaned up (`git status` showed only the two doc edits) |
 | fast suite AFTER THE GPU-GATE FIXES, ONE process, `pytest -m "not slow" -q` | 2026-09-11 on the working tree that became `896e8ff`+`bb38f1a` (identical content): **358 passed, 1 deselected** (355 + the three new tests, one of them the gpu-marked CUDA inference test), 125 warnings, 11 min 13 s, exit 0; the real `Artifacts/` still absent |
+| fast suite AFTER THE TASKBAR-ICON FIX, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `df7491e` (the tree was committed before the run finished; identical content): **359 passed, 1 skipped** (the display-marked class-icon test, offscreen), 1 deselected, 125 warnings, 11 min 08 s, exit 0; the real `Artifacts/` — which exists now, created by the user's walkthrough launch — gained nothing |
+| display-marked tests, `QT_QPA_PLATFORM=windows pytest -m display` (real screen, hidden native windows only) | 2026-09-11: `test_the_window_class_icon_becomes_ours_on_a_real_windows_display` 1 passed (RED before `df7491e` at the missing function, with the premise assertion — Qt's class icon is the stock IDI_APPLICATION handle — already passing) |
 | `tests/test_gpu_paths.py` (gpu-marked; skipped without CUDA) | 2026-09-11: 1 passed on the RTX 5070 Ti, ~10 s fixture + 2 s test; RED before `bb38f1a` with the gate's exact RuntimeError (two devices in `analysis.posterior_predictive_check`) |
 | slow test `pytest tests/test_user_sbi.py -m slow -q` | 2026-09-11 at `e4e60eb` (Task 13): 1 passed, 31 min 16 s, exit 0; re-run at `3f1a1b3` after the fix wave: **1 passed**, 93 deselected, 30 min 11 s, exit 0 — the full suite is green on the branch as it stands |
 | five-part fast gate (per task; last at `830cee1`) | store suite 42–43 passed; `--ignore=test_user_sbi` 261; `test_user_sbi` non-slow 1 / 16 / 12 / 64 — all green |
@@ -181,3 +181,24 @@ all work happens directly on the local `main` branch)
   the smoke gate exists for: run it after every piece, before any record run; the gpu-marked
   suite covers the inference path cheaply but is not a substitute (no checkpoint resume, no real
   bounds/cell files).
+- **2026-09-11** — **Taskbar icon** (walkthrough row 1, found by the user; fixed in `df7491e`).
+  What was seen: the title bar showed the mark, the taskbar button Windows' generic "application"
+  glyph — not python's icon either. Ruled out by measurement, each with a launch and a screenshot
+  of the button: the PNG set (loads, seven sizes), the AppUserModelID (set and read back; removing
+  it or using a fresh id changed nothing), the shell's icon cache, and the multi-size QIcon (a
+  minimal window using the very same QIcon got the mark). What decided it: a minimal window idle
+  right after showing got the mark; the same window blocked 4 s after showing got the glyph; PRISM's
+  `show()` keeps the thread busy ~150 ms AFTER the native show (Qt lays out the whole tree —
+  profiled: all inside `QWidget.show`), and the shell's icon query at button creation times out
+  and falls back to the window CLASS icon, which Qt registers as the stock IDI_APPLICATION glyph
+  because python.exe has no icon resource (the class handle read back equals `LoadIcon(NULL,
+  IDI_APPLICATION)`). With the class icon set to ours, the blocked window got the mark too.
+  Rulings: (1) the mark is installed as Qt's window-CLASS icon before the first show
+  (`app_icon.set_windows_class_icon`, from the new `assets/app/prism.ico` that
+  `build_app_icon.py` assembles from the PNG set — LoadImage cannot read a PNG); re-asserting
+  `setWindowIcon` on the first loop turn also worked but depends on timing piece 4's start-up work
+  could break; (2) the AppUserModelID stays for grouping/pinning and its docstring no longer
+  claims it decides the icon; (3) a display-marked test pins the class-icon change on the real
+  platform (`QT_QPA_PLATFORM=windows pytest -m display`), an offscreen test pins that prism.ico's
+  256 frame IS prism-256.png; (4) verified by screenshot of the fixed launcher's button; the user
+  re-checks row 1 on the next launch.
