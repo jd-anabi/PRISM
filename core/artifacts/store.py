@@ -11,7 +11,6 @@ survive an interrupted run, which a writer's remove-on-exception would delete.
 from __future__ import annotations
 
 import contextlib
-import json
 import re
 import shutil
 import time
@@ -593,12 +592,13 @@ class ArtifactStore:
         sub, m = self._find("calibration", ref)
         if m is None:
             raise StoreError(f"no complete calibration named or id'd {ref!r}")
-        # From results.json, NOT m.body["results"]: to_json_text writes the manifest with
-        # sort_keys=True (so the file diffs deterministically), which -- being recursive -- would
-        # alphabetize the nested per-param dict's keys on every load and silently decouple them from
-        # cfg.params_dict's order. results.json (json.dumps with no sort_keys) round-trips as written.
-        results = json.loads((sub / "results.json").read_text(encoding="utf-8"))
-        return LoadedCalibration("calibration", m.id, m.name, m, sub, results=results)
+        # From the manifest body, like load_inference: the manifest is the authoritative description
+        # of the artifact, and results.json is only the human-readable copy (never read back here).
+        # to_json_text writes the manifest with sort_keys=True (so the file diffs deterministically),
+        # which -- being recursive -- would alphabetize a dict keyed by parameter name on every load
+        # and silently decouple it from cfg.params_dict's order; sbc.per_param is therefore a list of
+        # {name, ks_p, c2st_ranks, c2st_dap} records, not a dict, so order survives the round trip.
+        return LoadedCalibration("calibration", m.id, m.name, m, sub, results=dict(m.body["results"]))
 
     def load_inference(self, ref: str) -> LoadedInference:
         sub, m = self._find("inference", ref)

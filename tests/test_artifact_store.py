@@ -647,8 +647,8 @@ def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(ti
     m, res = cal.manifest, cal.results
     keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
     assert m.parents == {"posterior": r.posterior.id, "prior": r.prior.id} and m.config["n_cal"] == 8
-    assert list(res["sbc"]["per_param"]) == keys
-    assert set(res["sbc"]["per_param"][keys[0]]) == {"ks_p", "c2st_ranks", "c2st_dap"}
+    assert [r["name"] for r in res["sbc"]["per_param"]] == keys
+    assert set(res["sbc"]["per_param"][0]) == {"name", "ks_p", "c2st_ranks", "c2st_dap"}
     assert set(res["tarp"]) == {"atc", "ks_p"} and res["num_posterior_samples"] == 40 and res["kept_fraction"] is None
     assert res["informativeness"] is None or "total_nats" in res["informativeness"]
     assert set(m.payloads) == {"ranks.npz", "results.json"}

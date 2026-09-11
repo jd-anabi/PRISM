@@ -2581,7 +2581,7 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         lp_post = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T, truncation=region), id="stub_post")
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
+            cal = orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         assert isinstance(cap["prior"], _tr.TruncatedLatentPrior) and cap["prior"].region is region
         z_star = T.inv(cap["thetas"].cpu()).double()
         assert z_star.shape[0] > 0 and bool(region.contains(z_star).all()), \
@@ -2596,6 +2596,10 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         assert math.isfinite(float(out.split("-log P(A) = ")[1].split(" nats")[0]))
         assert "of the recorded calibration targets lie inside it after the override" in out, out[-800:]
         assert cap["prior"].recorded_containment == 1.0, "a t_scale-free region must contain every recorded target"
+        kf = cal.results["kept_fraction"]
+        assert kf is not None and 0.0 < kf["acceptance"] <= 1.0, kf
+        assert kf["containment"] is None or 0.0 <= kf["containment"] <= 1.0, kf
+        assert cal.manifest.body["results"]["kept_fraction"] == kf
 
         # the ROTATED leg: t_scale IS truncated direction 0, an ND parameter is direction 1
         V = torch.zeros(P, P)

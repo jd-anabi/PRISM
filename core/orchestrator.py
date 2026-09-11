@@ -1478,7 +1478,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
                 post, theta_star_dev, x_cal_dev, inferred_prior,
                 param_names=list(cfg.params_dict) + list(cfg.rescale_params))
             print(analysis.describe_informativeness(info))
-        except Exception as _e:                      # noqa: BLE001
+        except Exception as _e:                      # noqa: BLE001 -- a diagnostic must never lose a multi-day run's other results
             # A diagnostic must never be the thing that loses a multi-day run's other results. The
             # sample-based decomposition in particular reaches into the posterior's transform stack.
             warnings.warn(f"informativeness could not be computed ({type(_e).__name__}: {_e}); the "
@@ -1490,8 +1490,9 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             "ecp": ecp.detach().cpu().numpy(), "alpha_grid": alpha_grid.detach().cpu().numpy()})
         keys = list(cfg.params_dict) + list(cfg.rescale_params)
         results = {
-            "sbc": {"per_param": {k: {"ks_p": _num(sbc_stats["ks_pvals"][j]), "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
-                                      "c2st_dap": _num(sbc_stats["c2st_dap"][j])} for j, k in enumerate(keys)}},
+            "sbc": {"per_param": [{"name": k, "ks_p": _num(sbc_stats["ks_pvals"][j]),
+                                   "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
+                                   "c2st_dap": _num(sbc_stats["c2st_dap"][j])} for j, k in enumerate(keys)]},
             "tarp": {"atc": _num(atc), "ks_p": _num(tarp_kspval)},
             "informativeness": None if info is None else {
                 "total_nats": _num(info["total_nats"]), "sem_nats": _num(info["sem_nats"]),
