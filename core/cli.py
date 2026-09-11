@@ -14,7 +14,7 @@ from .config import (
     SimConfig, FDTConfig, detect_device, cpu_device,
     DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S,
     VALID_MODELS, VALID_LABELS,
-    CELL_PATH, BOUNDS_PATH, UNITS_PATH, PRIOR_PATH, POSTERIOR_PATH,
+    CELL_PATH, BOUNDS_PATH, UNITS_PATH,
 )
 from .Helpers import helpers, file_manager
 
@@ -129,47 +129,55 @@ def get_time_params() -> float:
     return T_obs_s
 
 # ── Prior / posterior selection ──────────────────────────────────────────────
+def _pick_artifact(kind: str, what: str, prompt: str, allow_new: bool) -> tuple:
+    """Interim until piece 2 retires this CLI: the store's complete artifacts of one kind, numbered;
+    returns (id_or_None, build_new)."""
+    from core.artifacts import default_store
+    rows = [s for s in default_store().list(kind) if s.complete]
+    if not rows and allow_new:
+        helpers.clear_screen()
+        return None, True
+    if allow_new:
+        print(f"  0) build/train a new {what}")
+    for i, s in enumerate(rows, 1):
+        print(f"  {i}) {s.label}   [{s.id}, {s.created}]")
+    if not rows and not allow_new:
+        raise SystemExit(f"No {what} artifacts exist yet.")
+    # allow_zero: '0' is the documented "make from scratch" answer here. _prompt_index returns None
+    # for it and a 0-based index (choice - 1) otherwise -- rows is 0-indexed the same way.
+    idx = _prompt_index(len(rows), prompt, allow_zero=allow_new)
+    return (None, True) if idx is None else (rows[idx].id, False)
+
+
 def select_or_build_prior() -> tuple[str | None, bool]:
     """
     Ask the user whether to load an existing prior or build a new one.
 
-    :return: (filename_or_None, build_new). If build_new is True, filename is None.
+    :return: (id_or_None, build_new). If build_new is True, id is None.
     """
     print("Available priors: ")
-    saved = file_manager.list_dir(str(PRIOR_PATH), keep=lambda f: f.endswith(".pt"))
-    if not saved:
-        helpers.clear_screen()
-        return None, True
-    # allow_zero: '0' is the documented "make from scratch" answer here. An out-of-range POSITIVE
-    # used to raise a bare IndexError that the surrounding `except ValueError` did not catch, and a
-    # NEGATIVE silently selected from the end of the list.
-    idx = _prompt_index(len(saved),
-                        "\nWhich prior would you like to use? "
-                        "Select a file number ('0' if you want to make from scratch): ",
-                        allow_zero=True)
+    id_, build_new = _pick_artifact(
+        "prior", "prior",
+        "\nWhich prior would you like to use? "
+        "Select a file number ('0' if you want to make from scratch): ",
+        allow_new=True)
     helpers.clear_screen()
-    return (None, True) if idx is None else (saved[idx], False)
+    return id_, build_new
 
 def select_or_train_posterior() -> tuple[str | None, bool]:
     """
     Ask the user whether to load an existing posterior or train a new one.
 
-    :return: (filename_or_None, train_new). If train_new is True, filename is None.
+    :return: (id_or_None, train_new). If train_new is True, id is None.
     """
     print("Available posteriors: ")
-    # Show only loadable posteriors -- hide the .rot.pt reparam sidecars and .loss.npz curves that
-    # live alongside each <name>.pt (picking one would fail to load).
-    saved = file_manager.list_dir(str(POSTERIOR_PATH),
-                                  keep=lambda f: f.endswith(".pt") and not f.endswith(".rot.pt"))
-    if not saved:
-        helpers.clear_screen()
-        return None, True
-    idx = _prompt_index(len(saved),
-                        "\nWhich posterior would you like to use? "
-                        "Select a file number (or '0' if you would like to make it from scratch): ",
-                        allow_zero=True)
+    id_, train_new = _pick_artifact(
+        "posterior", "posterior",
+        "\nWhich posterior would you like to use? "
+        "Select a file number (or '0' if you would like to make it from scratch): ",
+        allow_new=True)
     helpers.clear_screen()
-    return (None, True) if idx is None else (saved[idx], False)
+    return id_, train_new
 
 def prompt_save_name(artifact_type: str) -> str:
     """
@@ -237,6 +245,7 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
              the usual matched case; callers may surface it, and existing callers can ignore it.
     """
     inits, param_vals, rescale_vals, forcing_vals = file_manager.parse_values_file(cell_path)
+    cfg.sources["cell"] = str(cell_path)
     return cfg.inject_ground_truth(inits, param_vals, rescale_vals, forcing_vals)
 
 
@@ -506,9 +515,12 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
         params_dict, rescale_params, force_params_dict = (OrderedDict(d) for d in bounds_dicts)
     else:
         params_dict, rescale_params, force_params_dict, _ = file_manager.parse_bounds_file(bounds_file)
+    units_path = None
     if units_override is None:
-        units_dict = file_manager.parse_units_file(resolve_units_file(model))
+        units_path = resolve_units_file(model)
+        units_dict = file_manager.parse_units_file(units_path)
     elif isinstance(units_override, (str, Path)):
+        units_path = str(units_override)
         units_dict = file_manager.parse_units_file(str(units_override))
     else:
         units_dict = tuple(str(u) for u in units_override)
@@ -538,6 +550,7 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
         t_max_exp=T_MAX_EXP_S * s_to_cell,
         T_obs=None,                             # observation duration is prompted at the inference step
         hw=detect_device(),
+        sources={k: str(v) for k, v in (("bounds", bounds_file), ("units", units_path)) if v},
     )
 
 

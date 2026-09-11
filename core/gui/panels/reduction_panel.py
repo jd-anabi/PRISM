@@ -9,8 +9,8 @@ sanity-check the whole panel -> worker -> figure path.
 """
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel, QPushButton
 
-from core import cli
-from core.config import CELL_PATH, PLOT_PATH
+from core import cli, config
+from core.config import CELL_PATH
 from core.Reduction.sweep import run_reduction_map
 
 from .base_panel import BasePanel
@@ -72,7 +72,8 @@ class ReductionPanel(BasePanel):
 
         # run_reduction_map saves its sweep table and its diagnostic PNG itself and returns only the
         # Part-A record, so the figure comes back via the plot watcher rather than the return value.
-        self.dispatch(run_reduction_map, cfg, watch_dir=PLOT_PATH, on_result=self._on_result)
+        watch = config.artifacts_root() / "reduction"
+        self.dispatch(run_reduction_map, cfg, watch_dir=watch, on_result=self._on_result)
 
     def _on_result(self, record):
         self.record = record

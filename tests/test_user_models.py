@@ -886,25 +886,35 @@ def test_the_app_icon_loads_at_several_sizes():
     app_icon.set_windows_app_user_model_id()                       # must never raise, on any platform
 
 
-def test_build_app_starts_and_sets_the_window_icon():
+def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     """`core.gui.app.build_app` had NO test at all -- the suite builds MainWindow directly and skips
     the whole application-level setup (style, font, appearance, matplotlib theme, icon). So an
     exception in any of that would have shipped with every panel test still green and the app simply
     refusing to start.
 
     Asserting the icon specifically because it is the piece with a silent failure mode: a null QIcon
-    is not an error, the window just shows Qt's default mark.
+    is not an error, the window just shows Qt's default mark. build_app also installs the process
+    default store, so this test points PRISM_ARTIFACTS at a temp root and wraps the call in
+    use_store -- without that shield, build_app would repoint the session's sandboxed default store
+    at the real Artifacts/ for every suite that runs after this one in the same pytest invocation.
     """
     from core import config as core_config
     from core.gui import app as gui_app
     _app()
     saved_quiet = core_config.QUIET_SEGMENT_BAR
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
+    from core.artifacts import ArtifactStore, default_store, use_store
+    before = default_store()
     try:
-        app, window = gui_app.build_app([])
-        icon = app.windowIcon()
-        assert not icon.isNull(), "build_app left the application with no window icon"
-        assert {16, 32, 256} <= {s.width() for s in icon.availableSizes()}
-        assert window.windowTitle() == "PRISM", window.windowTitle()
-        window.close()
+        with use_store(ArtifactStore(tmp_path / "shield")):
+            app, window = gui_app.build_app([])
+            icon = app.windowIcon()
+            assert not icon.isNull(), "build_app left the application with no window icon"
+            assert {16, 32, 256} <= {s.width() for s in icon.availableSizes()}
+            assert window.windowTitle() == "PRISM", window.windowTitle()
+            assert default_store().root == tmp_path / "Artifacts"
+            assert (tmp_path / "Artifacts").is_dir()
+            window.close()
+        assert default_store() is before, "build_app's store install leaked past the test"
     finally:
         core_config.QUIET_SEGMENT_BAR = saved_quiet

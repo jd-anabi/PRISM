@@ -68,21 +68,32 @@ Env knobs (CELL / BOUNDS / MODEL / TOBS_S / CHI* are handled by _common.script_c
   N_CAL      calibration datasets for SBC/TARP                 (default 40)
   EPOCHS     max training epochs                               (default 5)
   SEED       RNG seed                                          (default 0)
-  SAVE       "1" to persist prior/posterior artifacts          (default 0)
-             ⚠ NOT "nothing touches disk", which this used to claim. The infer stage always
-             writes an observation record to Resources/Observations:
-             an amortized posterior has no observation at SAVE time, so recording one is the
-             job of INFERENCE and is deliberately not skippable -- TSNPE keys on it. They are
-             a few KB each; delete the `obs_*` files a smoke run leaves behind.
+  SAVE       "1" to NAME the prior/posterior artifacts this run writes (default 0)
+             ⚠ NOT "nothing touches disk" -- every stage always WRITES its artifact into the store
+             (CKPT_DIR, or the temp root); SAVE only decides whether the prior/posterior get a name
+             (`smoke_prior` / `smoke_posterior`) instead of staying unnamed. The infer stage always
+             writes an observation artifact regardless of SAVE: an amortized posterior has no
+             observation at SAVE time, so recording one is the job of INFERENCE and is deliberately
+             not skippable -- TSNPE keys on it. A temp-dir run discards all of it on exit; a
+             CKPT_DIR run leaves it on disk -- delete the unnamed artifacts a smoke run leaves behind.
+             ⚠ A SECOND SAVE=1 RUN AGAINST THE SAME CKPT_DIR IS REFUSED BY NAME: `smoke_prior` /
+             `smoke_posterior` are already there, and every stage calls store.assert_name_free at its
+             ENTRY now, so the refusal comes before the spend rather than after it. That is why run 2
+             of the resume drill below leaves SAVE unset -- it loads the prior by name and its own
+             posterior stays unnamed. A temp-dir run is unaffected: its store is new every time.
   STAGES     comma list to run a subset, e.g. "prior,posterior"
              (default prior,posterior,validate,infer)
   CHECKPOINT "1" to exercise the training-data checkpoint into a fresh temp dir (default 0;
              see the note at the rebinding below for why OFF is the default and why you should
              nonetheless run it ONCE on the GPU before a record run)
-  CKPT_DIR   checkpoint ROOT to use instead of a fresh temp dir, so a SECOND run can find the
-             first's checkpoint and RESUME (default unset -> temp dir). Requires PRIOR; see below.
-  PRIOR      name of a SAVED prior in Resources/Priors to LOAD instead of building a new one
-             (default unset -> build). Also cuts ~9 min off a run.
+  CKPT_DIR   ROOT of the artifact store this run uses -- prior, simulation cache, posterior,
+             observation, calibration and inference all go here -- instead of a fresh temp dir, so
+             a SECOND run pointed at the same CKPT_DIR can find the first's prior and checkpoint and
+             RESUME (default unset -> temp dir, never reused). Resuming the checkpoint requires
+             PRIOR too; see below.
+  PRIOR      name or id of a prior artifact in the store this run uses (CKPT_DIR) to LOAD instead
+             of building a new one (default unset -> build). Also cuts ~9 min off a run. A loaded
+             prior is never renamed, so this run names only a prior it actually built.
 
 Run (chi mode, the case this was written for -- this is the RETRAIN's configuration, and the
 `BOUNDS` is not optional; see the warning above):
@@ -92,12 +103,22 @@ Run (chi mode, the case this was written for -- this is the RETRAIN's configurat
   & "C:\\Users\\J\\anaconda3\\envs\\biophys-env\\python.exe" scripts/smoke_train.py
 
 Once on the GPU before a record run, add `$env:CHECKPOINT=1` (exercises the checkpoint on the card, which no
-CPU test can) and `$env:SAVE=1` (exercises the artifact writes; delete the `_smoke_*` files after).
+CPU test can) and `$env:SAVE=1` (exercises the artifact writes; delete the `smoke_*` artifacts after).
 
-THE RESUME DRILL -- run the SAME command twice with CKPT_DIR and PRIOR both set:
+THE RESUME DRILL -- run 1 BUILDS and SAVES a prior into CKPT_DIR (naming it `smoke_prior`); run 2
+LOADS that prior by name and so RESUMES the checkpoint (CKPT_DIR without a matching PRIOR is a
+silent no-op -- see the warning at the rebinding below):
 
-  $env:CHECKPOINT=1; $env:CKPT_DIR="<scratch>/ckpt"; $env:PRIOR="3d_master_08102026.pt"
+  # run 1
+  $env:CHECKPOINT=1; $env:CKPT_DIR="<scratch>/ckpt"; $env:SAVE=1
   $env:NUM_RUNS=2; $env:STAGES="prior,posterior"        # + the chi/BOUNDS/CELL block above
+  & "C:\\Users\\J\\anaconda3\\envs\\biophys-env\\python.exe" scripts/smoke_train.py
+
+  # run 2 -- same CKPT_DIR, now with PRIOR set to what run 1 named, and SAVE CLEARED: the names run
+  # 1 wrote are taken, and every stage refuses a taken name at its entry
+  $env:CHECKPOINT=1; $env:CKPT_DIR="<scratch>/ckpt"; $env:PRIOR="smoke_prior"; $env:SAVE=""
+  $env:NUM_RUNS=2; $env:STAGES="prior,posterior"        # + the chi/BOUNDS/CELL block above
+  & "C:\\Users\\J\\anaconda3\\envs\\biophys-env\\python.exe" scripts/smoke_train.py
 
 Run 2 must print `Reusing the Fisher rotation stored with the training checkpoint` and finish in a
 fraction of run 1's time. That is the ONLY way to execute orchestrator.py's CPU->CUDA rehoming of the
@@ -108,6 +129,7 @@ no CPU test can certify. Delete CKPT_DIR afterwards; it must not be somewhere a 
 import os
 import pathlib
 import sys
+import tempfile
 import time
 import traceback
 
@@ -176,10 +198,12 @@ def main():
     # exactly wrong here: the second smoke run of a given config would skip the simulation path this
     # script exists to exercise and report a cheerful pass without having run it.
     #
-    # CHECKPOINT=1 turns it back on into a FRESH TEMP DIRECTORY, so the path is exercised and nothing
-    # is ever reused. Worth doing on the GPU before a record run: the checkpoint tests are CPU-only, and a
-    # CPU test cannot catch a tensor on the wrong device -- a CPU-built probe grid meeting the CUDA
-    # rotation matrix is what this script caught on 2026-08-12, an hour into the Fisher.
+    # CHECKPOINT=1 turns it back on. The cache lives under the store root resolved just above --
+    # CKPT_DIR when it is set, otherwise the fresh temp directory created unconditionally for every
+    # run -- so by default nothing is ever reused, and only CKPT_DIR makes a second run able to find
+    # the first's rows. Worth doing on the GPU before a record run: the checkpoint tests are CPU-only,
+    # and a CPU test cannot catch a tensor on the wrong device -- a CPU-built probe grid meeting the
+    # CUDA rotation matrix is what this script caught on 2026-08-12, an hour into the Fisher.
     #
     # CKPT_DIR overrides the temp dir so a SECOND run can find the first's checkpoint and RESUME --
     # the only way to reach the CPU->CUDA rehoming of the stored V, which fires on a GPU resume with
@@ -192,18 +216,15 @@ def main():
     # "N other checkpoint(s) exist and do NOT match this run: ... differs in prior_fingerprint", and
     # the drill passes having tested nothing. Loading one saved prior pins the fingerprint -- which is
     # also exactly the rule for resuming a real retrain: keep the prior it started with.
+    from core.artifacts import ArtifactStore, set_default_store
+    _root = pathlib.Path(CKPT_DIR) if CKPT_DIR else pathlib.Path(tempfile.mkdtemp(prefix="prism_smoke_"))
+    _root.mkdir(parents=True, exist_ok=True)
+    set_default_store(ArtifactStore(_root))
+    print(f"[smoke] artifacts (prior, cache, posterior, observation, calibration, inference) go to {_root}"
+          f"{' (CKPT_DIR; REUSED across runs, so a resume is possible)' if CKPT_DIR else ' (a temp dir, never reused)'}",
+          flush=True)
     if CHECKPOINT:
-        if CKPT_DIR:
-            config.CHECKPOINT_PATH = pathlib.Path(CKPT_DIR)
-            config.CHECKPOINT_PATH.mkdir(parents=True, exist_ok=True)
-            where = f"{config.CHECKPOINT_PATH} (CKPT_DIR; REUSED across runs, so a resume is possible)"
-        else:
-            import tempfile
-            config.CHECKPOINT_PATH = pathlib.Path(tempfile.mkdtemp(prefix="prism_smoke_ckpt_"))
-            where = f"{config.CHECKPOINT_PATH} (a temp dir, so never reused)"
         orchestrator.TRAINING_CHECKPOINT_EVERY = max(1, NUM_RUNS // 2)
-        print(f"[smoke] checkpointing ON into {where} "
-              f"(every {orchestrator.TRAINING_CHECKPOINT_EVERY} batches)", flush=True)
         if CKPT_DIR and not PRIOR:
             print("[smoke] ⚠ CKPT_DIR is set but PRIOR is not. Each run will BUILD its own prior, and "
                   "the checkpoint identity includes prior_fingerprint -- so run 2 will route to a "
@@ -236,40 +257,35 @@ def main():
 
     # PRIOR names a saved prior to LOAD (build_new=False); unset builds a new one, the old behaviour.
     # Loading is not merely a time saver -- it is what makes the checkpoint identity stable across
-    # runs, see the CKPT_DIR note above. A loaded prior is never re-saved: save_name is None so the
-    # _smoke_prior artifact only ever describes a prior this run actually built.
+    # runs, see the CKPT_DIR note above. A built prior is unnamed unless SAVE is set, so a loaded
+    # prior is never overwritten: this run only ever names a prior it actually built.
+    # The names have NO leading underscore: store.assert_name_free requires an artifact name to start
+    # with a letter or digit (`_unnamed__<id>` is the unnamed directory's own prefix, so a name that
+    # begins with one is reserved), and a refused name would fail the stage.
     prior = _stage("prior", lambda: orchestrator.build_prior(
-        cfg, PRIOR, PRIOR is None,
-        save=SAVE and PRIOR is None,
-        save_name="_smoke_prior" if (SAVE and PRIOR is None) else None, fig_sink=_sink))
+        cfg, PRIOR, PRIOR is None, name="smoke_prior" if (SAVE and PRIOR is None) else "", fig_sink=_sink))
     if prior is None:
         print("\n[smoke] nothing further to run without a prior.")
         return 0
-    inferred_prior, force_prior = prior
 
     def _posterior():
         cfg.hw.batch_size = RUN_SIZE          # training/calibration batch only -- see the note above
-        return orchestrator.build_posterior(
-            cfg, inferred_prior, force_prior, None, True,
-            save=SAVE, save_name="_smoke_posterior" if SAVE else None, fig_sink=_sink)
+        return orchestrator.build_posterior(cfg, prior, None, True,
+                                            name="smoke_posterior" if SAVE else "", fig_sink=_sink)
 
     post = _stage("posterior", _posterior)
     if post is None:
         print("\n[smoke] prior only; stopping before training.")
         return 0
-    posterior, _diag = post
 
-    _stage("validate", lambda: orchestrator.validate_calibration(
-        cfg, posterior, inferred_prior, force_prior, fig_sink=_sink))
+    _stage("validate", lambda: orchestrator.validate_calibration(cfg, post, prior, fig_sink=_sink))
 
     def _infer():
-        x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
+        obs = orchestrator.generate_observations(cfg, fig_sink=_sink)
         want = SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg)
-        assert obs_stats.shape[-1] == want, \
-            f"observation width {obs_stats.shape[-1]} != the mode's {want}"
-        assert torch.isfinite(obs_stats).all(), "the observation carries non-finite conditioning"
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim,
-                                         show_truth=True, fig_sink=_sink)
+        assert obs.width == want, f"observation width {obs.width} != the mode's {want}"
+        assert torch.isfinite(obs.x_obs).all(), "the observation carries non-finite conditioning"
+        return orchestrator.infer_and_visualize(cfg, post, obs, fig_sink=_sink)
 
     _stage("infer", _infer)
 

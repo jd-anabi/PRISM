@@ -6,5 +6,7 @@ truth for the pipeline logic). The GUI drives the already-decomposed orchestrato
 directly, reusing the pure ``cli.make_*`` config cores and the ``orchestrator`` stages, with heavy
 work on a background thread and matplotlib figures embedded inline.
 
-Launch: ``python -m core.gui`` (from the repo root, so Resources/ resolves).
+Launch: ``python -m core.gui`` (or ``run.bat``), from any working directory -- ``core/config.py``
+resolves ``Resources/`` and the artifact store from its own location, and ``PRISM_RESOURCES`` /
+``PRISM_ARTIFACTS`` override either.
 """

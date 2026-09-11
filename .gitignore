@@ -25,6 +25,10 @@ __pycache__/
 # run was shown, not an input anyone edits -- and it can carry real experimental data.
 /Resources/Observations/
 
+# Generated artifacts (piece 1 of the 2026-09-10 hardening programme). The /Resources/* lines above
+# stay until the clean-break runbook deletes those trees; then they go.
+/Artifacts/
+
 # pytest
 /.pytest_cache/
 

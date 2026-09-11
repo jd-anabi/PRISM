@@ -1,4 +1,6 @@
 """
+⚠ BROKEN since piece 1 (2026-09-10): writes Resources/Plots (PLOT_PATH); folded into the command-line tool in piece 2.
+
 Gate the chi(omega) probe BAND and drive amplitude on the axes that actually vary in training:
 probe frequency, drive amplitude F0, and -- since 2026-08-06 -- OBSERVATION LENGTH T_obs.
 

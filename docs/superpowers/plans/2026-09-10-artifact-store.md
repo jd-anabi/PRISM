@@ -353,15 +353,16 @@ def validate(d: dict) -> Manifest:
     """A dict -> Manifest, refusing anything that is not a current, complete, finite manifest."""
     if not isinstance(d, dict):
         raise ManifestError(f"manifest must be a JSON object, got {type(d).__name__}")
+    # Schema FIRST: an older or foreign manifest is "not a current artifact", whatever else it lacks.
+    if d.get("schema") != SCHEMA:
+        raise ManifestError(f"manifest schema {d.get('schema')!r} is not the current schema {SCHEMA}; "
+                            f"not a current PRISM artifact")
     unknown = set(d) - set(HEADER_KEYS)
     if unknown:
         raise ManifestError(f"unknown manifest keys {sorted(unknown)}")
     missing = [k for k in HEADER_KEYS if k not in d]
     if missing:
         raise ManifestError(f"manifest is missing {missing}")
-    if d["schema"] != SCHEMA:
-        raise ManifestError(f"manifest schema {d['schema']!r} is not the current schema {SCHEMA}; "
-                            f"not a current PRISM artifact")
     if d["kind"] not in KINDS:
         raise ManifestError(f"unknown artifact kind {d['kind']!r}")
     if not isinstance(d["id"], str) or not ID_RE.match(d["id"]):
@@ -755,13 +756,17 @@ def test_store_fig_sink_saves_png_and_forwards(store):
 
 
 def test_default_store_is_swappable_and_resolves_from_the_root(monkeypatch, tmp_path):
-    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "R"))
-    st.set_default_store(None)
-    assert st.default_store().root == tmp_path / "R"
-    other = st.ArtifactStore(tmp_path / "O")
-    with st.use_store(other):
-        assert st.default_store() is other and st.resolve_store(None) is other
-    assert st.default_store().root == tmp_path / "R"
+    session_default = st.default_store()                 # the conftest sandbox; put it back at the end
+    try:
+        monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "R"))
+        st.set_default_store(None)
+        assert st.default_store().root == tmp_path / "R"
+        other = st.ArtifactStore(tmp_path / "O")
+        with st.use_store(other):
+            assert st.default_store() is other and st.resolve_store(None) is other
+        assert st.default_store().root == tmp_path / "R"
+    finally:
+        st.set_default_store(session_default)
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -2106,6 +2111,12 @@ class _FakeDP(DirectPosterior):
         pass
 
 
+class _PriorWrap:
+    """SBIPriorWrapper's shape (.gen_dist), module-level so a payload carrying it pickles."""
+    def __init__(self, inner):
+        self.gen_dist = inner
+
+
 def _set_path(w, path, value):
     target = w.config if path[0] == "config" else w.body
     for key in path[1 if path[0] == "config" else 0:-1]:
@@ -2174,12 +2185,8 @@ def test_manifest_V_must_equal_the_rotation_in_the_pickled_prior(store):
     assert not torch.allclose(Q, Q.T)
     T_train = reparam.build_rotated_bijection(reparam.build_inferred_bijection(cfg, log_params=[]), Q)
     V = reparam.rotation_of(T_train)                      # what build_posterior records
-
-    class _Wrap:                                          # SBIPriorWrapper's shape: .gen_dist
-        def __init__(self, inner):
-            self.gen_dist = inner
     base = torch.distributions.MultivariateNormal(torch.zeros(P), torch.eye(P))
-    trained = _Wrap(reparam.RotatedLatentPrior(base, Q))
+    trained = _PriorWrap(reparam.RotatedLatentPrior(base, Q))   # module-level: it is pickled inside the payload
 
     _posterior_artifact(store, cfg, name="good", V=V, prior=trained)
     lp = store.load_posterior(cfg, "good")
@@ -3080,8 +3087,8 @@ def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(ti
     m, res = cal.manifest, cal.results
     keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
     assert m.parents == {"posterior": r.posterior.id, "prior": r.prior.id} and m.config["n_cal"] == 8
-    assert list(res["sbc"]["per_param"]) == keys
-    assert set(res["sbc"]["per_param"][keys[0]]) == {"ks_p", "c2st_ranks", "c2st_dap"}
+    assert [r["name"] for r in res["sbc"]["per_param"]] == keys
+    assert set(res["sbc"]["per_param"][0]) == {"name", "ks_p", "c2st_ranks", "c2st_dap"}
     assert set(res["tarp"]) == {"atc", "ks_p"} and res["num_posterior_samples"] == 40 and res["kept_fraction"] is None
     assert res["informativeness"] is None or "total_nats" in res["informativeness"]
     assert set(m.payloads) == {"ranks.npz", "results.json"}
@@ -3117,8 +3124,10 @@ then `with store.create("calibration", cfg, name=name, note=note) as w:` wrappin
             "ecp": ecp.detach().cpu().numpy(), "alpha_grid": alpha_grid.detach().cpu().numpy()})
         keys = list(cfg.params_dict) + list(cfg.rescale_params)
         results = {
-            "sbc": {"per_param": {k: {"ks_p": _num(sbc_stats["ks_pvals"][j]), "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
-                                      "c2st_dap": _num(sbc_stats["c2st_dap"][j])} for j, k in enumerate(keys)}},
+            # An ordered LIST of records: manifest JSON sorts keys, so a dict keyed by name would lose
+            # the parameter order (ruling R6; the loader reads the manifest body, results.json is a copy).
+            "sbc": {"per_param": [{"name": k, "ks_p": _num(sbc_stats["ks_pvals"][j]), "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
+                                   "c2st_dap": _num(sbc_stats["c2st_dap"][j])} for j, k in enumerate(keys)]},
             "tarp": {"atc": _num(atc), "ks_p": _num(tarp_kspval)},
             "informativeness": None if info is None else {
                 "total_nats": _num(info["total_nats"]), "sem_nats": _num(info["sem_nats"]),
@@ -3216,8 +3225,8 @@ def test_inference_records_ppc_summary_and_ground_truth(tiny_run):
     m, res = inf.manifest, inf.results
     keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
     assert m.parents == {"posterior": r.posterior.id, "observation": obs.id} and res["n_samples"] == 50
-    assert res["accepted"] == [] and list(res["posterior_summary"]) == keys
-    assert set(res["posterior_summary"][keys[0]]) == {"q05", "median", "q95"}
+    assert res["accepted"] == [] and [r["name"] for r in res["posterior_summary"]] == keys
+    assert set(res["posterior_summary"][0]) == {"name", "q05", "median", "q95"}
     assert res["ground_truth"] == {k: float(v) for k, v in zip(keys, r.cfg.ground_truth)}
     assert {"mean_abs_z", "max_abs_z", "coverage_90", "num_outside", "num_invalid"} <= set(res["ppc"])
     assert {"figures/posterior_corner.png", "figures/posterior_predictive_check.png", "figures/eye_test.png"} <= set(m.figures)
@@ -3306,8 +3315,10 @@ Then the existing body follows, indented under the `with`, with `posterior.sampl
                     "coverage_90": _num(results["coverage_90"]), "num_outside": int(results["num_outside"]),
                     "num_invalid": int(results["num_invalid"]),
                     "invalid_breakdown": results.get("invalid_breakdown"), "note": _note or ""},
-            "posterior_summary": {k: {"q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
-                                  for i, k in enumerate(keys)},
+            # A LIST of records, not a dict keyed by name: manifest JSON sorts keys, so a dict would lose
+            # the parameter order (Task 9's review; the same rule as sbc.per_param).
+            "posterior_summary": [{"name": k, "q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
+                                  for i, k in enumerate(keys)],
             "ground_truth": {k: float(v) for k, v in zip(keys, cfg.ground_truth)} if show_truth else None,
             "n_samples": int(n_samples), "accepted": accepted,
         }
@@ -3698,7 +3709,7 @@ No code. Run in this order, from the repo root, with nothing else running:
               for f, sha in m.payloads.items():
                   assert prov.sha256_file(row.path / f) == sha, (kind, row.id, f)
   ```
-- **GPU gate** (after Task 13): `CHI=1 TOBS_S=4.5 BOUNDS=Resources/Bounds/nadrowski/master.txt CELL=Resources/Cells/nadrowski/master_spont.txt CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke python scripts/smoke_train.py`, then the same command with `PRIOR=_smoke_prior NUM_RUNS=2 STAGES=prior,posterior`: run 2 prints `Reusing the Fisher rotation stored with the training checkpoint` and `<scratch>/smoke/simulations/<digest>/manifest.json` reads `"complete": true`. Also `CHI=0 ... CELL=Resources/Cells/nadrowski/master_weak.txt`. Compare stage times with piece 0's baseline in `docs/STATE.md`.
+- **GPU gate** (after Task 13): `CHI=1 TOBS_S=4.5 BOUNDS=Resources/Bounds/nadrowski/master.txt CELL=Resources/Cells/nadrowski/master_spont.txt CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke python scripts/smoke_train.py`, then the same command with `PRIOR=smoke_prior NUM_RUNS=2 STAGES=prior,posterior` **and `SAVE` unset** (run 1's `smoke_prior` / `smoke_posterior` are taken, and every stage refuses a taken name at its entry now): run 2 prints `Reusing the Fisher rotation stored with the training checkpoint` and `<scratch>/smoke/simulations/<digest>/manifest.json` reads `"complete": true`. Also `CHI=0 ... CELL=Resources/Cells/nadrowski/master_weak.txt`. Compare stage times with piece 0's baseline in `docs/STATE.md`. (The names lost their leading underscore in the final fix wave: `NAME_RE` requires a name to start with a letter or digit, so `_smoke_prior` was refused by `create`.)
 - **Manual GUI check on a display** (`run.bat`): (1) `Artifacts/` is created at launch; (2) Config → Prior, "(from scratch)": `priors/_unnamed__<id>/` appears with `manifest.json`, `prior.pt`, `figures/prior.png`; Save with a name renames the directory and the picker shows the name with the id in the tooltip; (3) Posterior "(from scratch)" at 2 batches: the checkpoint line names `simulations/<digest>`; after training `posteriors/_unnamed__<id>/` has `posterior.pt`, `loss.npz`, `figures/training_loss.png`, manifest `amortized: true` with parents `prior` and `simulation`; (4) load that posterior from the picker: no dialog; a posterior built under another bounds file: a refusal dialog naming the field; (5) Validate: `calibrations/` with three PNGs and `results.json`; (6) Infer on a simulated cell: `observations/` then `inferences/`, parents `posterior` and `observation`, and the log line naming both; (7) TSNPE tab lists the observation; a round produces a posterior with `amortized: false` and four parents; loading it logs the NON-AMORTIZED line; Infer on another cell with it is refused by a dialog naming `Accept(other_observation=True)`; (8) Cancel during training: no `posteriors/` directory appears and `simulations/<digest>/manifest.json` reads `"complete": false`; (9) hand-truncate a `manifest.json`: the picker omits it. Record the result in `docs/STATE.md`.
 
 ## Notes for the executor
@@ -3707,4 +3718,4 @@ No code. Run in this order, from the repo root, with nothing else running:
 - The `tiny_run` fixture builds a real posterior once per module; keep every test that needs a sampling posterior in `tests/test_artifact_store.py` so it is built once.
 - The Reduction package is out of scope; only its output directory moves (Task 12).
 - Interim breakages, all closed by piece 2: `scripts/{sbc_characterize,retrain_convergence,identifiability_offgt,posterior_identifiability,channel_ablation,degeneracy_map,chi_f0_sweep,feature_candidate_test,chi_mask_audit}.py` (marked in Task 13); the prompt CLI's `run()` shows no figures (the writer's sink saves and closes them).
-- Deviation log (each deliberate): manifest bodies are validated dicts; the posterior `transform` block carries `param_keys`; the simulation kind's `id` is its digest and `ID_RE` allows both forms; `.gitignore` keeps the `/Resources/*` lines until the runbook; `env_info` records `"absent"` for a missing optional package.
+- Deviation log (each deliberate): manifest bodies are validated dicts; the posterior `transform` block carries `param_keys`; the simulation kind's `id` is its digest and `ID_RE` allows both forms; `.gitignore` keeps the `/Resources/*` lines until the runbook; `env_info` records `"absent"` for a missing optional package. Added during execution (design spec §11 carries the full list): parameter-keyed results bodies are ordered lists of records (R6); the region's `prior_fingerprint` is the walk over the parent's pickled prior with the wrapper cross-checked (R7); the source scan covers `core/` only until piece 2 (the spec says `core/` and `scripts/`); `LoadedPosterior.accepted` is informational and the calibration body has no `accepted`; Save = rename, annotate is piece 4's.

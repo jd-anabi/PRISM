@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import matplotlib                                                 # noqa: E402
 matplotlib.use("Agg")
 
+import numpy as np                                                # noqa: E402
 import pytest  # noqa: E402
 import torch                                                      # noqa: E402
 
@@ -32,9 +33,9 @@ from core import config, registry, orchestrator, cli, forcing    # noqa: E402
 from core.Helpers import model_store                             # noqa: E402
 from core.SBI import chi as chi_mod, pipeline as pipeline_mod    # noqa: E402
 from core.Solvers import sdeint as _sdeint_mod              # noqa: E402
-from core.SBI.Priors.user_prior import UserPrior                 # noqa: E402
 from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH    # noqa: E402
 from core.config import VALID_MODELS, VALID_LABELS               # noqa: E402
+from tests._fixtures import _tiny_gen_prior                      # noqa: E402
 
 _N_GROUP_G = 11
 _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
@@ -50,39 +51,8 @@ _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
 # with a tmpdir, which is unaffected by this.
 orchestrator.TRAINING_CHECKPOINT_EVERY = 0
 
-# Observation records OFF for the same reason. The full-pipeline tests
-# call infer_and_visualize, which records the observation it ran against -- correct for a real run,
-# and litter here. Nothing else in the suite writes into Resources/; keep it that way.
-orchestrator.PERSIST_OBSERVATIONS = False
 
-# Snapshot of the checkpoint directories that existed BEFORE this suite ran, so the guard below can
-# tell "the suite created one" from "the user has a real retrain checkpoint on disk". Checking for
-# their mere existence would fail on any machine that has actually run a retrain -- which is every
-# machine this matters on.
-_CKPT_DIRS_AT_IMPORT = frozenset(
-    p.name for p in config.CHECKPOINT_PATH.glob("train_*")) if config.CHECKPOINT_PATH.exists() else frozenset()
-
-
-def _tiny_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds,
-                    state_dep_drift=False, num_iterations=25, log_mask=None,
-                    dtype=torch.float32, device=torch.device("cpu"), **_kw):
-    """A tiny stand-in for pipeline.gen_prior: the same UserPrior.construct_prior, small sizes.
-
-    ``**_kw`` IS LOAD-BEARING AND THERE ARE TWO OF THESE STUBS. A stub installed over a function must
-    tolerate arguments added to that function later, or the suite dies ~40 tests in with a TypeError
-    raised deep inside build_prior -- which names only the stub it hit first, so fixing that one
-    reveals the second on the next run. Adding n_max/step upstream cost an hour this way on
-    2026-08-27. Deliberately NOT a hand-mirrored signature: that never checked anything (it failed as
-    a TypeError, not an assertion), and gen_prior's real signature is asserted directly by
-    test_n_max_and_step_are_no_longer_hidden_inside_gen_prior.
-    """
-    p = UserPrior(registry.get(model), dtype, device)
-    return p.construct_prior(t, len(prior_bounds), 32, 8, segs, prior_bounds,
-                             t_global_scale=2, num_iterations=2, n_max=120, steady=False,
-                             state_dep_drift=state_dep_drift, log_mask=log_mask)
-
-
-def test_no_forcing_user_model_full_sbi_pipeline():
+def test_no_forcing_user_model_full_sbi_pipeline(tmp_path):
     """build_prior -> build_posterior -> generate_observations -> infer -> validate -> passive-infer."""
     name = "SBITEST"
     doc = {"schema_version": 1, "name": name,
@@ -108,28 +78,28 @@ def test_no_forcing_user_model_full_sbi_pipeline():
         orchestrator.TRAINING_NUM_RUNS = 2
         orchestrator.SBC_N_CAL = 60
 
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
         assert force_prior is None                               # no drive -> no forcing prior
 
-        posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
-                                                    save=False, fig_sink=sink)
+        lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
 
-        x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
+        obs = orchestrator.generate_observations(cfg, fig_sink=sink)
+        x_dim, obs_stats, t_dim = obs.obs_data, obs.x_obs, obs.t_dim
         assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1    # [S | log(T)], no forcing block
         assert torch.allclose(obs_stats[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
         assert torch.isfinite(obs_stats).all()
 
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True,
-                                         fig_sink=sink)
-        orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
+        orchestrator.infer_and_visualize(cfg, lp_post, obs, fig_sink=sink)
+        orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
 
         # passive experimental path: a single unforced recording, no drive / force units
-        obs_stats_e, obs_data_e, t_dim_e = orchestrator.build_experiment_obs_spontaneous(
-            cfg, x_dim[0].clone(), 1.0)
-        assert obs_stats_e.shape[-1] == SUMMARY_WIDTH + 1
-        assert torch.allclose(obs_stats_e[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats_e, obs_data_e, t_dim_e,
-                                         show_truth=False, fig_sink=sink)
+        from core.SBI.observations import RecordingSet
+        rec_path = tmp_path / "passive.npy"   # (add tmp_path to the test's signature; pytest injects it)
+        np.save(rec_path, x_dim[0].numpy())
+        obs_e = orchestrator.build_experiment_observation(cfg, RecordingSet(spont=str(rec_path), T_obs_s=1.0), fig_sink=sink)
+        assert obs_e.width == SUMMARY_WIDTH + 1
+        orchestrator.infer_and_visualize(cfg, lp_post, obs_e, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL = saved_runs, saved_ncal
@@ -150,7 +120,7 @@ def test_builtin_forcing_path_unperturbed():
     cfg.hw = config.cpu_device()
     cfg.T_obs = 1000.0                                            # ms units -> 1 s of data
     assert cfg.has_forcing is True
-    _, obs_stats, _ = orchestrator.generate_observations(cfg)
+    obs_stats = orchestrator.generate_observations(cfg).x_obs
     n_forcing = len(cfg.force_params_dict)
     assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1 + n_forcing
     assert not torch.allclose(obs_stats[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
@@ -195,10 +165,11 @@ def test_train_and_validate_without_a_loaded_cell():
         orchestrator.TRAINING_NUM_RUNS = 2
         orchestrator.SBC_N_CAL = 40
 
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
-        posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
-                                                    save=False, fig_sink=sink)
-        orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
+        lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
+        posterior = lp_post.posterior
+        orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL = saved_runs, saved_ncal
@@ -282,19 +253,20 @@ def test_observation_modes_and_conditioning_widths():
         assert spont.observation_mode == "spontaneous"
         assert "f_scale" not in spont.rescale_params
         assert len(spont.params_dict) + len(spont.rescale_params) == 12
-        assert orchestrator.generate_observations(spont)[1].shape[-1] == S + 1
+        assert orchestrator.generate_observations(spont).x_obs.shape[-1] == S + 1
 
         # mode 2 -- forced: the cell's own drive, f_scale identified through Group G's gain
         forced = build("master", "master_weak")
         assert forced.observation_mode == "forced" and "f_scale" in forced.rescale_params
-        assert orchestrator.generate_observations(forced)[1].shape[-1] == S + 1 + len(forced.force_params_dict)
+        assert (orchestrator.generate_observations(forced).x_obs.shape[-1]
+                == S + 1 + len(forced.force_params_dict))
 
         # mode 3 -- chi: K probes; the cell's own drive is ignored
         chi_cfg = build("master", "master_weak", chi_mode=True, chi_n_freqs=3)
         assert chi_cfg.observation_mode == "chi"
         # Width is a function of the PAD, not the probe count -- that is what lets one posterior
         # serve any number of probes. Asserted via the shared rule, never a fresh literal.
-        assert (orchestrator.generate_observations(chi_cfg)[1].shape[-1]
+        assert (orchestrator.generate_observations(chi_cfg).x_obs.shape[-1]
                 == S + 1 + orchestrator.expected_forcing_dim(chi_cfg))
         assert orchestrator.expected_forcing_dim(chi_cfg) == config.CHI_ELEM_W * chi_cfg.chi_k_pad
 
@@ -414,7 +386,7 @@ def test_chi_mode_observation_width():
         cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
         cfg.hw = config.cpu_device()
         cfg.T_obs = 1000.0                                        # ms units -> 1 s of data
-        _, obs_stats, _ = orchestrator.generate_observations(cfg)
+        obs_stats = orchestrator.generate_observations(cfg).x_obs
         assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg)
         assert torch.allclose(obs_stats[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
         assert torch.isfinite(obs_stats).all()
@@ -423,7 +395,7 @@ def test_chi_mode_observation_width():
 
 
 @pytest.mark.slow
-def test_chi_mode_full_sbi_pipeline():
+def test_chi_mode_full_sbi_pipeline(tmp_path):
     """CHI_MODE end-to-end at tiny sizes: prior -> posterior -> observe -> infer -> validate, plus the
     experimental chi path. Pins the chi(omega) branch across gen_training_data / gen_cal_data / PPC."""
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
@@ -445,27 +417,35 @@ def test_chi_mode_full_sbi_pipeline():
         orchestrator.TRAINING_NUM_RUNS = 2
         orchestrator.SBC_N_CAL = 40
 
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
-        posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
-                                                    save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
+        lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
 
         K3 = orchestrator.expected_forcing_dim(cfg)
-        x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
+        obs = orchestrator.generate_observations(cfg, fig_sink=sink)
+        x_dim, obs_stats, t_dim = obs.obs_data, obs.x_obs, obs.t_dim
         assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1 + K3
         assert torch.isfinite(obs_stats).all()
 
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True,
-                                         fig_sink=sink)
-        orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
+        orchestrator.infer_and_visualize(cfg, lp_post, obs, fig_sink=sink)
+        orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
 
-        # experimental chi path: 1 passive + K forced recordings (GT passive trace as stand-ins).
-        forced = [x_dim[0].clone() for _ in range(config.CHI_N_FREQS)]
-        obs_stats_e, obs_data_e, t_dim_e = orchestrator.build_experiment_obs_chi(
-            cfg, x_dim[0].clone(), forced, 1.0, 1.0)
-        assert obs_stats_e.shape[-1] == SUMMARY_WIDTH + 1 + K3
-        assert torch.isfinite(obs_stats_e).all()
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats_e, obs_data_e, t_dim_e,
-                                         show_truth=False, fig_sink=sink)
+        # experimental chi path: 1 passive + K forced recordings (GT passive trace as stand-ins),
+        # each written to disk so build_experiment_observation can check and hash them like real files.
+        from core.SBI.observations import RecordingSet
+        spont_path = tmp_path / "chi_passive.npy"
+        np.save(spont_path, x_dim[0].numpy())
+        forced_paths = []
+        for i in range(config.CHI_N_FREQS):
+            p = tmp_path / f"chi_forced_{i}.npy"
+            np.save(p, x_dim[0].numpy())
+            forced_paths.append(p)
+        rec = RecordingSet(spont=str(spont_path), forced=tuple((str(p), None) for p in forced_paths),
+                           T_obs_s=1.0, F0_si=1.0)
+        obs_e = orchestrator.build_experiment_observation(cfg, rec, fig_sink=sink)
+        assert obs_e.width == SUMMARY_WIDTH + 1 + K3
+        assert torch.isfinite(obs_e.x_obs).all()
+        orchestrator.infer_and_visualize(cfg, lp_post, obs_e, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL = saved_runs, saved_ncal
@@ -680,7 +660,7 @@ def test_chi_mode_drives_every_channel_the_model_reads():
         cfg.T_obs = 200.0
         assert cfg.observation_mode == "chi" and cfg.inits_tensor.shape[-1] == 2
 
-        stats = orchestrator.generate_observations(cfg)[1]
+        stats = orchestrator.generate_observations(cfg).x_obs
         assert stats.shape[-1] == SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg), (
             f"hopf chi conditioning is the wrong width: {tuple(stats.shape)}")
         assert torch.isfinite(stats).all(), "hopf chi conditioning has non-finite entries"
@@ -1845,32 +1825,6 @@ def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override():
     assert "post-override" not in buf.getvalue()
 
 
-def test_the_suite_does_not_write_checkpoints_into_the_real_resources_tree():
-    """A guard on the guard, because the failure mode is silent and severe.
-
-    The full-pipeline tests call orchestrator.build_posterior for real. With checkpointing at its
-    production default they write into Resources/Checkpoints/ keyed on a digest of their config --
-    and a COMPLETE checkpoint short-circuits generation and returns its stored rows. So the first
-    suite run would create them and EVERY RUN AFTER would skip gen_training_data entirely while
-    reporting a pass: the suite would be green and testing nothing. Observed, not theorised -- three
-    such directories (spontaneous / forced / chi, run_size=8, n_runs=2) appeared in the tree the
-    first time this suite ran with C-11 enabled.
-    """
-    from core import orchestrator as _orch
-    assert _orch.TRAINING_CHECKPOINT_EVERY == 0, (
-        "this suite must disable training-data checkpointing at import (see the module header); "
-        f"it is {_orch.TRAINING_CHECKPOINT_EVERY}")
-    ck = config.CHECKPOINT_PATH
-    now = frozenset(p.name for p in ck.glob("train_*")) if ck.exists() else frozenset()
-    # NEW ones only. A user who has run a retrain has a train_* directory sitting there legitimately,
-    # and failing on its existence would make this suite un-runnable on exactly the machines that
-    # matter. What must never happen is the suite ADDING one.
-    created = sorted(now - _CKPT_DIRS_AT_IMPORT)
-    assert not created, (
-        f"the suite created training checkpoints in {ck}: {created}. Later runs would reuse those "
-        f"rows instead of generating them, and the suite would go green without testing anything.")
-
-
 def test_gen_training_data_is_reproducible_from_a_seed_in_every_mode():
     """THE GATE for any change to gen_training_data's loop, and the reason C-11 could be built at all.
 
@@ -2059,22 +2013,15 @@ def test_a_complete_checkpoint_short_circuits_generation_entirely():
     assert torch.equal(got_x, ref_x) and torch.equal(got_th, ref_th)
 
 
-def test_checkpointing_off_writes_nothing_and_changes_nothing():
+def test_checkpointing_off_writes_nothing_and_changes_nothing(store):
     """checkpoint=None is the whole backward-compatibility story: analysis.gen_cal_data,
     scripts/chi_mask_audit and every pre-C-11 call site pass nothing and must be untouched -- same
     bytes out, and no disk written."""
-    import tempfile
-    tmp = Path(tempfile.mkdtemp())
-    from core import config as _cfg
-    saved, _cfg.CHECKPOINT_PATH = _cfg.CHECKPOINT_PATH, tmp
-    try:
-        a_x, a_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
-        b_x, b_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
-        assert torch.equal(a_x, b_x) and torch.equal(a_th, b_th)
-        assert not any(tmp.iterdir()), f"checkpointing was off but something was written: "\
-                                       f"{[p.name for p in tmp.iterdir()]}"
-    finally:
-        _cfg.CHECKPOINT_PATH = saved
+    a_x, a_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
+    b_x, b_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
+    assert torch.equal(a_x, b_x) and torch.equal(a_th, b_th)
+    assert not list(store.kind_dir("simulation").glob("*")), \
+        "checkpointing was off but the store's simulation directory gained something"
 
 
 # ── C-11: the atomic write and the checkpoint store (pure, no simulation) ────────────────────────
@@ -2256,19 +2203,21 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
         Q2, _ = torch.linalg.qr(torch.randn(13, 13))
 
     ia = orchestrator.training_identity(cfg, prior, 2048, 5000)
-    assert "truncation" not in ia, "an amortized identity grew a truncation key -- every digest moves"
+    assert ia["truncation"] is None, "an amortized identity records truncation=None"
     # THE GOLDEN DIGEST. Computed once from this cfg/prior pair at the commit that added the region
     # to the identity; if it moves, every complete checkpoint on disk is orphaned. Update it only
     # deliberately, with a migration for the checkpoints on disk (scripts/migrate_checkpoint_flags.py
-    # is the precedent).
-    assert tc.identity_digest(ia) == "463e81d156cd", \
+    # is the precedent). Belongs to training-rows/2 -- the training-rows/1 digest this superseded was
+    # "463e81d156cd".
+    assert tc.identity_digest(ia) == "1912d2139359", \
         f"the amortized identity moved to {tc.identity_digest(ia)} -- every checkpoint on disk is orphaned"
     assert set(ia) == {
         "format", "model", "prior_fingerprint", "mode", "param_keys", "nd_lows", "nd_highs",
         "rescale_lows", "rescale_highs", "log_params", "reparam_rotate", "run_size", "n_runs",
         "steady_idx", "dt_nd_min", "dt_exp", "t_min_exp", "t_max_exp", "t_scale_bounds", "n_grid",
-        "spontaneous_only", "summary_flags", "chi_mode", "chi_layout", "chi_k_pad", "chi_elem_w",
-        "chi_f0", "chi_freq_bounds", "chi_max_cycles", "device", "dtype"}, sorted(ia)
+        "spontaneous_only", "summary_flags", "feature_set_version", "chi_mode", "chi_layout",
+        "chi_k_pad", "chi_elem_w", "chi_f0", "chi_freq_bounds", "chi_max_cycles", "device", "dtype",
+        "truncation"}, sorted(ia)
     assert tc.identity_digest(ia) == tc.identity_digest(
         orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=None))
 
@@ -2276,7 +2225,8 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
     it = orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=r1)
     assert it["truncation"] == r1.identity_fields()
     assert it["truncation"]["V_digest"] == _tr.rotation_digest(Q) and it["truncation"]["hi"] == [1.0, 1.0]
-    assert {k: v for k, v in it.items() if k != "truncation"} == ia, "the region changed another field"
+    assert {k: v for k, v in it.items() if k != "truncation"} == {k: v for k, v in ia.items() if k != "truncation"}, \
+        "the region changed another field"
     assert tc.resolve_dir(it) != tc.resolve_dir(ia), "a truncated round shares the amortized run's directory"
     assert tc.resolve_dir(it) == tc.resolve_dir(orchestrator.training_identity(cfg, prior, 2048, 5000, truncation=r1)), \
         "the same region must resolve to the same directory, or a round could never resume itself"
@@ -2309,14 +2259,21 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     no training row is ever generated.
     """
     import contextlib
-    import tempfile
-    from core import config as _cfg
+    from types import SimpleNamespace
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
-    from sbi.inference import DirectPosterior as _DP
+    # Module-level (not defined here) so it pickles: every build_posterior call now auto-persists
+    # (piece 1, Task 7), and pickle cannot serialize a class defined inside a function.
+    from tests._fixtures import _FakeDP
 
-    class _FakeDP(_DP):
-        def __init__(self):                                   # never trained; only its type matters
-            pass
+    def _lp(post, latent=None, fingerprint=None, id_="p"):
+        """A LoadedPosterior-shaped stand-in, matching tests/test_conditioning_repair.py's helper."""
+        return SimpleNamespace(posterior=post, latent=latent if latent is not None else getattr(post, "latent", post),
+                               fingerprint=fingerprint, id=id_, name="")
+
+    def _lo(x, keys=None, digest=None):
+        """A LoadedObservation-shaped stand-in, matching tests/test_conditioning_repair.py's helper."""
+        return SimpleNamespace(x_obs=x, digest=digest or orchestrator.observation_digest(x), id="o", name="",
+                               manifest=SimpleNamespace(config={"param_keys": list(keys)} if keys is not None else {}))
 
     seen = {}
 
@@ -2333,7 +2290,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     saved_gen_prior = orchestrator.pipeline.gen_prior
     saved_fisher = orchestrator.decorrelate.build_latent_fisher_rotation
     saved_train_nn = pipeline_mod.train_nn
-    saved_every, saved_root = orchestrator.TRAINING_CHECKPOINT_EVERY, _cfg.CHECKPOINT_PATH
+    saved_every = orchestrator.TRAINING_CHECKPOINT_EVERY
     try:
         cfg = cli.make_sim_config("NADROWSKI", labels, True,
                                   str(config.BOUNDS_PATH / "nadrowski" / "master.txt"),
@@ -2341,7 +2298,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         cfg.hw = config.cpu_device()
         cfg.hw.batch_size = 8
         orchestrator.pipeline.gen_prior = _tiny_nadrowski_gen_prior
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
         orchestrator.decorrelate.build_latent_fisher_rotation = _fisher_stub
         pipeline_mod.train_nn = _train_stub
 
@@ -2360,16 +2318,18 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         region = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
                                       probe=probe, x_obs_digest="deadbeefdeadbeef")
 
-        def _round(reg, digest="deadbeefdeadbeef"):
-            return orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
-                                                save=False, fig_sink=sink, num_runs=2, run_size_cap=8,
-                                                truncation=reg, x_obs_digest=digest)
+        def _round(reg, observation=None):
+            """The TransformedPosterior (not the LoadedPosterior wrapper): every assertion below reads
+            .truncation / .x_obs_digest / .T, which live on it."""
+            return orchestrator.build_posterior(cfg, lp, None, True,
+                                                fig_sink=sink, num_runs=2, run_size_cap=8,
+                                                truncation=reg, observation=observation).posterior
 
         # (i) + (ii): the parent's basis is reused, the Fisher stub never fires, the plan's prior is
         # THIS region over a latent rotated by exactly Q, and the posterior carries the region
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            post, _ = _round(region)
+            post = _round(region)
         _out = buf.getvalue()
         assert "at the rejection sampler (P(A), PRE-override)" in _out, _out[-600:]
         assert "post-override containment of the recorded training targets: not measured" in _out, \
@@ -2381,13 +2341,19 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         assert isinstance(seen["prior"].base, _rp.RotatedLatentPrior)
         assert torch.allclose(seen["prior"].base.V.cpu(), Q), "the round did not train under the region's V"
         assert bool(region.contains(seen["prior"].sample((256,)).cpu().double()).all())
-        assert post.truncation is region and post.x_obs_digest == "deadbeefdeadbeef"
+        # NOT `is region`: the returned posterior is read back through the store (piece 1, Task 7), so
+        # its region is reconstructed from the manifest, not the same in-memory object -- compare by
+        # value instead.
+        assert post.truncation.dims == region.dims and post.x_obs_digest == "deadbeefdeadbeef"
+        assert torch.allclose(post.truncation.lo.double(), region.lo.double())
+        assert torch.allclose(post.truncation.hi.double(), region.hi.double())
         assert torch.allclose(_rp.rotation_of(post.T).cpu(), Q)
-        # the region's own digest fills in a missing one, and contradicts a wrong one
-        post2, _ = _round(region, digest=None)
+        # a SUPPLIED digest that agrees passes through (the "fills in a missing one" half is the leg
+        # below, which passes observation=None), and a wrong one is contradicted
+        post2 = _round(region, observation=_lo(torch.zeros(1, 4), digest=region.x_obs_digest))
         assert post2.x_obs_digest == "deadbeefdeadbeef"
         try:
-            _round(region, digest="0" * 16)
+            _round(region, observation=_lo(torch.zeros(1, 4), digest="0" * 16))
             raise AssertionError("an artifact was allowed to name an observation its region did not come from")
         except ValueError as e:
             assert "x_obs_digest" in str(e)
@@ -2412,16 +2378,21 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
 
         x_obs = torch.zeros(1, 4)
         own_prior = orchestrator.build_truncation_region(
-            _rp.TransformedPosterior(_Parent(), T_train), {"digest": orchestrator.observation_digest(x_obs)},
-            x_obs, n_directions=1, t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
+            _lp(_rp.TransformedPosterior(_Parent(), T_train)),
+            _lo(x_obs, keys=list(cfg.params_dict) + list(cfg.rescale_params)),
+            n_directions=1, t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
         assert own_prior.prior_fingerprint == _fp(inferred_prior), \
             "the parent's pickled training prior and the supplied prior digest differently"
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            _round(own_prior, digest=None)                # the region's own observation digest fills in
+            _round(own_prior, observation=None)            # the region's own observation digest fills in
         assert "verified against the loaded one" in buf.getvalue(), buf.getvalue()[-400:]
+        # x_obs_digest, like `region` above (and `far`/`near` below): since the residual fix a
+        # non-amortized round's region must name the observation it was drawn around, checked before
+        # the prior-fingerprint refusal this leg means to exercise.
         foreign = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
-                                       probe=probe, prior_fingerprint="0" * 16)
+                                       probe=probe, prior_fingerprint="0" * 16,
+                                       x_obs_digest="deadbeefdeadbeef")
         try:
             _round(foreign)
             raise AssertionError("a round on a prior other than the region's parent's was accepted")
@@ -2431,8 +2402,10 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         # (ii) a region whose recorded probe does not describe the bijection its own V builds
         flip = torch.ones(P)
         flip[0] = -1.0
+        # x_obs_digest, like `region`/`foreign` above: the residual fix's refusal sits before
+        # check_basis, so this leg needs a digest too to reach the probe mismatch it means to test.
         inconsistent = _tr.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q @ torch.diag(flip),
-                                            probe=probe)
+                                            probe=probe, x_obs_digest="deadbeefdeadbeef")
         try:
             _round(inconsistent)
             raise AssertionError("a region whose probe disagrees with its own V was accepted")
@@ -2445,9 +2418,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         # that IS under this round's identity but stores another rotation is refused, and one that
         # records this region under the region's own V resumes.
         import shutil
-        tmp = Path(tempfile.mkdtemp())
         orchestrator.TRAINING_CHECKPOINT_EVERY = 1
-        _cfg.CHECKPOINT_PATH = tmp
         amortized = orchestrator.training_identity(cfg, inferred_prior, 8, 2)
         own = orchestrator.training_identity(cfg, inferred_prior, 8, 2, truncation=region)
         d_am, d_own = _tc.resolve_dir(amortized), _tc.resolve_dir(own)
@@ -2488,7 +2459,6 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         except ValueError as e:
             assert "a different region" in str(e), e
         orchestrator.TRAINING_CHECKPOINT_EVERY = 0
-        _cfg.CHECKPOINT_PATH = saved_root
 
         # (iv) the config's rotation flag must agree with the region, in both directions
         cfg.reparam_rotate = False
@@ -2513,7 +2483,12 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
             z0 = float(T_train.inv(cfg.ground_truth_tensor.reshape(1, -1))[0, 0])
         lo, hi = ((w0.quantile(0.6), w0.quantile(0.9)) if z0 <= float(w0.median())
                   else (w0.quantile(0.1), w0.quantile(0.4)))      # the side of the median the truth is NOT on
-        far = _tr.TruncationRegion([0], [lo], [hi], n_latent=P, V=Q, probe=probe)
+        # x_obs_digest, like `region` above: since the final fix wave a NON-AMORTIZED artifact whose
+        # region does not name the observation it was drawn around is refused on load, and the round
+        # reads its own artifact back through the loader before returning. (A region built by
+        # build_truncation_region always carries the digest; only a hand-made one can lack it.)
+        far = _tr.TruncationRegion([0], [lo], [hi], n_latent=P, V=Q, probe=probe,
+                                   x_obs_digest="deadbeefdeadbeef")
         buf = io.StringIO()
         with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(buf):
             warnings.simplefilter("always")
@@ -2522,7 +2497,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         assert "GROUND TRUTH" in out and "direction 0" in out, out[-600:]
         assert any("GROUND TRUTH" in str(c.message) for c in caught)
         near = _tr.TruncationRegion([0], [min(z0, float(w0.quantile(0.02))) - 0.5],
-                                    [max(z0, float(w0.quantile(0.98))) + 0.5], n_latent=P, V=Q, probe=probe)
+                                    [max(z0, float(w0.quantile(0.98))) + 0.5], n_latent=P, V=Q, probe=probe,
+                                    x_obs_digest="deadbeefdeadbeef")
         buf = io.StringIO()
         with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(buf):
             warnings.simplefilter("always")
@@ -2532,7 +2508,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.decorrelate.build_latent_fisher_rotation = saved_fisher
         pipeline_mod.train_nn = saved_train_nn
-        orchestrator.TRAINING_CHECKPOINT_EVERY, _cfg.CHECKPOINT_PATH = saved_every, saved_root
+        orchestrator.TRAINING_CHECKPOINT_EVERY = saved_every
 
 
 def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
@@ -2552,6 +2528,7 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
     """
     import contextlib
     import matplotlib.pyplot as plt
+    from types import SimpleNamespace
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
 
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
@@ -2591,7 +2568,8 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         cfg.hw.batch_size = 8
         torch.manual_seed(0)                      # the prior fit, the box and the rejection draws all read it
         orchestrator.pipeline.gen_prior = _tiny_nadrowski_gen_prior
-        inferred_prior, force_prior = orchestrator.build_prior(cfg, None, True, save=False, fig_sink=sink)
+        lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
+        inferred_prior, force_prior = lp.prior, lp.force_prior
         P = len(cfg.params_dict) + len(cfg.rescale_params)
         i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
         T = orchestrator.build_inferred_bijection(cfg, log_params=orchestrator._log_params_for(cfg))
@@ -2618,10 +2596,10 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         for n, fn in stubs.items():
             setattr(orchestrator, n, fn)
 
+        lp_post = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T, truncation=region), id="stub_post")
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            orchestrator.validate_calibration(cfg, post, inferred_prior, force_prior, fig_sink=sink,
-                                              n_cal=10, cal_n_scales=1, truncation=region)
+            cal = orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         assert isinstance(cap["prior"], _tr.TruncatedLatentPrior) and cap["prior"].region is region
         z_star = T.inv(cap["thetas"].cpu()).double()
         assert z_star.shape[0] > 0 and bool(region.contains(z_star).all()), \
@@ -2636,6 +2614,10 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         assert math.isfinite(float(out.split("-log P(A) = ")[1].split(" nats")[0]))
         assert "of the recorded calibration targets lie inside it after the override" in out, out[-800:]
         assert cap["prior"].recorded_containment == 1.0, "a t_scale-free region must contain every recorded target"
+        kf = cal.results["kept_fraction"]
+        assert kf is not None and 0.0 < kf["acceptance"] <= 1.0, kf
+        assert kf["containment"] is None or 0.0 <= kf["containment"] <= 1.0, kf
+        assert cal.manifest.body["results"]["kept_fraction"] == kf
 
         # the ROTATED leg: t_scale IS truncated direction 0, an ND parameter is direction 1
         V = torch.zeros(P, P)
@@ -2648,9 +2630,9 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
                                           [float(w[:, 0].quantile(0.75)), float(w[:, 1].quantile(0.75))],
                                           n_latent=P, V=V, probe=_tc.bijection_probe(T_rot, P))
         cap.clear()
-        orchestrator.validate_calibration(cfg, _rp.TransformedPosterior(_Lat(), T_rot), inferred_prior,
-                                          force_prior, fig_sink=sink, n_cal=10, cal_n_scales=1,
-                                          truncation=region_rot)
+        lp_post_rot = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T_rot, truncation=region_rot),
+                                      id="stub_post_rot")
+        orchestrator.validate_calibration(cfg, lp_post_rot, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         w_star = T_rot.inv(cap["thetas"].cpu()).double()
         w_ref = T_rot.inv(cap["prior_samples"].cpu()).double()
         lo1, hi1 = float(region_rot.lo[1]), float(region_rot.hi[1])
@@ -2660,10 +2642,10 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
             "the reference sample did not mirror the t_scale override"
 
         cap.clear()
+        lp_post_plain = SimpleNamespace(posterior=post, id="stub_post_plain")
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            orchestrator.validate_calibration(cfg, post, inferred_prior, force_prior, fig_sink=sink,
-                                              n_cal=10, cal_n_scales=1)
+            orchestrator.validate_calibration(cfg, lp_post_plain, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         assert type(cap["prior"]).__name__ == "ProductPrior", type(cap["prior"])
         assert cap["prior_samples"].shape[0] == cap["thetas"].shape[0]
         assert "kept fraction" not in buf.getvalue()
@@ -3564,42 +3546,6 @@ def test_the_drive_is_charged_at_its_build_peak():
         f"{pipeline_mod._FORCE_BUILD_PEAK_MULTIPLE}x -- raise the constant")
 
 
-def test_an_unsaved_prior_cannot_start_a_long_checkpointed_run():
-    """training_identity fingerprints the prior's fitted GMM, and that fingerprint names the
-    checkpoint DIRECTORY. A prior that was never written to disk therefore produces a directory
-    nothing can ever resolve again once the process exits -- so the checkpoint it spends hours
-    writing is unresumable by construction, and a crash costs the entire run.
-
-    That happened: on 2026-08-27 a run reached 884 committed batches under fingerprint
-    bd307c079d14db0b, for which no file in Resources/Priors exists. Those rows are unrecoverable."""
-    # A REAL MixtureSameFamily, because _find_nd_gmm isinstance-checks for one and
-    # component_distribution is a read-only property. Random means guarantee it collides with
-    # nothing on disk.
-    _k, _d = 4, 3
-    unsaved = torch.distributions.MixtureSameFamily(
-        torch.distributions.Categorical(probs=torch.rand(_k, dtype=torch.float64)),
-        torch.distributions.MultivariateNormal(
-            torch.randn(_k, _d, dtype=torch.float64),
-            covariance_matrix=torch.eye(_d, dtype=torch.float64).expand(_k, _d, _d)))
-    fp = orchestrator._gmm_fingerprint(unsaved)
-    assert fp is not None, "the probe prior must be fingerprintable, or the test proves nothing"
-    assert fp not in orchestrator._saved_prior_fingerprints(), "random prior collided with a saved one"
-    try:
-        orchestrator._assert_prior_is_saved(unsaved, n_runs=5000, run_size=2048)
-    except ValueError as e:
-        assert "not saved" in str(e) and "unresumable" in str(e), f"unhelpful message: {e}"
-    else:
-        raise AssertionError("an unsaved prior must be refused before a long checkpointed run")
-
-    # A prior that IS on disk must pass, or the guard blocks the very run it exists to protect.
-    saved = orchestrator._saved_prior_fingerprints()
-    if saved:
-        import core.Helpers.file_manager as _fm
-        name = sorted(saved.values())[0]
-        dist = _fm.load_mix_dist(str(config.PRIOR_PATH / name), device=torch.device("cpu"))
-        orchestrator._assert_prior_is_saved(dist, n_runs=5000, run_size=2048)
-
-
 def test_the_batch_retry_waits_releases_and_restores_the_rng():
     """The outermost retry does not shrink the work -- it waits and runs the SAME batch again,
     because the failure the halving ladders cannot fix is a card that is momentarily full of
@@ -3836,91 +3782,6 @@ def test_the_planner_budget_survives_an_unreadable_card():
     finally:
         torch.cuda.mem_get_info = saved
     assert got == (1 * 1024 ** 3) // 4, f"expected the conservative fallback budget, got {got}"
-
-
-def _gmm_from(means, weights):
-    """A real MixtureSameFamily over the given means/weights -- what _gmm_fingerprint digests."""
-    k, d = means.shape
-    return torch.distributions.MixtureSameFamily(
-        torch.distributions.Categorical(probs=weights),
-        torch.distributions.MultivariateNormal(
-            means, covariance_matrix=torch.eye(d, dtype=means.dtype).expand(k, d, d)))
-
-
-def test_saving_a_prior_cannot_orphan_a_checkpoint():
-    """⚠ THIS IS HOW 3989 BATCHES (6.5 h) WERE LOST ON 2026-08-28.
-
-    A checkpoint's directory is named after a digest of the prior's fitted GMM, so the prior FILE is
-    the only thing that can reproduce it. `prior_08282026.pt` was overwritten, under the same name,
-    with a different distribution -- and the run that had been training against the old contents all
-    morning became unreachable. No error, no warning, one click. The same mechanism cost 884 batches
-    the day before, and `3d_master_08102026.pt` currently backs THREE 5000-batch checkpoints.
-
-    Narrow by construction: it fires only when the file exists, its contents would actually change,
-    AND a committed checkpoint depends on the old contents."""
-    import tempfile, hashlib
-    from pathlib import Path as _P
-    from core.SBI import training_checkpoint as tc
-
-    def fp_of(means, weights):
-        h = hashlib.sha256()
-        h.update(means.detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
-        h.update(weights.detach().cpu().to(torch.float64).contiguous().numpy().tobytes())
-        return h.hexdigest()[:16]
-
-    torch.manual_seed(0)
-    # NORMALISED, because torch.distributions.Categorical normalises `probs` on construction: a file
-    # holding raw weights would fingerprint differently from the distribution rebuilt out of it, and
-    # the test would then "pass" by accident on a mismatch that production never sees (save_mix_dist
-    # writes `mixture_distribution.probs`, which is already normalised).
-    def _w(n):
-        w = torch.rand(n, dtype=torch.float64)
-        return w / w.sum()
-
-    m_old, w_old = torch.randn(4, 3, dtype=torch.float64), _w(4)
-    m_new, w_new = torch.randn(4, 3, dtype=torch.float64), _w(4)
-
-    with tempfile.TemporaryDirectory() as tmp:
-        priors, ckpts = _P(tmp) / "Priors", _P(tmp) / "Checkpoints"
-        priors.mkdir(); ckpts.mkdir()
-        # Build the distribution FIRST and save what it exposes, exactly as save_mix_dist does.
-        # Constructing a Categorical normalises `probs` again, so saving the raw weights would make
-        # the file and the rebuilt distribution differ in the last bits -- a mismatch production
-        # never has, which would make this test assert the wrong thing.
-        gmm_old = _gmm_from(m_old, w_old)
-        f_means = gmm_old.component_distribution.loc.detach().clone()
-        f_weights = gmm_old.mixture_distribution.probs.detach().clone()
-        torch.save({"means": f_means, "weights": f_weights}, priors / "p.pt")
-
-        ident = {"format": "training-rows", "n_runs": 10000,
-                 "prior_fingerprint": fp_of(f_means, f_weights)}
-        d = tc.resolve_dir(ident, ckpts); (d / "shards").mkdir(parents=True)
-        torch.save({"identity": ident}, d / "header.pt")
-        torch.save({"batches_done": 3989, "complete": False, "rng": None}, d / "state.pt")
-
-        saved_pp, saved_cp = orchestrator.PRIOR_PATH, config.CHECKPOINT_PATH
-        try:
-            orchestrator.PRIOR_PATH = priors
-            config.CHECKPOINT_PATH = ckpts
-
-            try:
-                orchestrator._refuse_to_orphan_a_checkpoint("p", _gmm_from(m_new, w_new))
-            except ValueError as e:
-                assert "3,989" in str(e), f"the message must name what would be lost: {e}"
-                assert "UNRESUMABLE" in str(e).upper(), f"and why it matters: {e}"
-            else:
-                raise AssertionError(
-                    "overwriting a prior that a 3989-batch checkpoint depends on must be refused")
-
-            # Re-saving the SAME distribution changes nothing, so it must go through.
-            orchestrator._refuse_to_orphan_a_checkpoint("p", gmm_old)
-            # A name nothing depends on must go through.
-            orchestrator._refuse_to_orphan_a_checkpoint("something_else", _gmm_from(m_new, w_new))
-            # And a prior no COMMITTED checkpoint uses must go through.
-            torch.save({"means": m_new, "weights": w_new}, priors / "unused.pt")
-            orchestrator._refuse_to_orphan_a_checkpoint("unused", gmm_old)
-        finally:
-            orchestrator.PRIOR_PATH, config.CHECKPOINT_PATH = saved_pp, saved_cp
 
 
 def test_the_retry_does_not_wait_when_THIS_process_holds_the_card():

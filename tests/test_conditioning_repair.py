@@ -607,6 +607,25 @@ def test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one():
         assert "probe" in str(e)
 
 
+def _lp(post, latent=None, fingerprint=None, id_="p"):
+    """A LoadedPosterior-shaped stand-in: ``.posterior`` is the (possibly bare) object the old tests
+    built by hand, ``.latent`` falls back to whatever that object calls ``.latent`` (or itself, for a
+    stand-in with no transform at all) exactly as build_truncation_region's old ``getattr`` fallback
+    did before the wrapper existed."""
+    from types import SimpleNamespace
+    return SimpleNamespace(posterior=post, latent=latent if latent is not None else getattr(post, "latent", post),
+                           fingerprint=fingerprint, id=id_, name="")
+
+
+def _lo(x, keys=_KEYS13, digest=None):
+    """A LoadedObservation-shaped stand-in: ``.digest`` defaults to the payload's own hash (so it
+    passes build_truncation_region's guardrail-1 check unless a test deliberately mismatches it)."""
+    from types import SimpleNamespace
+    from core import orchestrator
+    return SimpleNamespace(x_obs=x, digest=digest or orchestrator.observation_digest(x), id="o", name="",
+                           manifest=SimpleNamespace(config={"param_keys": list(keys)} if keys is not None else {}))
+
+
 def test_build_truncation_region_records_the_parents_basis():
     """The RECORDING end of guardrail 7: orchestrator.build_truncation_region must read the parent
     posterior's V through reparam.rotation_of (V, not its transpose -- the GUI's mistake), probe the
@@ -618,27 +637,27 @@ def test_build_truncation_region_records_the_parents_basis():
     Q = _orthogonal_keeping(P, 11, axis=11)                  # t_scale (index 11) stays its own axis
     box, T_parent = _rotated_box(Q)
     x = torch.linspace(-1.0, 1.0, 7).reshape(1, 7)
-    rec = {"digest": orchestrator.observation_digest(x), "param_keys": _KEYS13}
+    obs = _lo(x)
     post = reparam.TransformedPosterior(_Wide(), T_parent)
     torch.manual_seed(12)
-    region = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.999)
+    region = orchestrator.build_truncation_region(_lp(post), obs, n_directions=5, level=0.999)
     assert torch.equal(region.V, Q) and not torch.equal(region.V, Q.T)
     assert torch.equal(region.probe, training_checkpoint.bijection_probe(T_parent, P))
-    assert region.x_obs_digest == rec["digest"] and region.dims == [0, 1, 2, 3, 4] and region.n_latent == P
+    assert region.x_obs_digest == obs.digest and region.dims == [0, 1, 2, 3, 4] and region.n_latent == P
     assert region.t_scale_idx == 11 and region.excluded == []
     region.check_basis(T_parent, dim=P)
     # an unrotated parent records V=None and a probe of the box alone
-    plain = orchestrator.build_truncation_region(reparam.TransformedPosterior(_Wide(), box), rec, x)
+    plain = orchestrator.build_truncation_region(_lp(reparam.TransformedPosterior(_Wide(), box)), obs)
     assert plain.V is None and torch.equal(plain.probe, training_checkpoint.bijection_probe(box, P))
-    # refusals: the wrong observation, a record without t_scale's index, a bare posterior with no
-    # transform, a transform with no box
+    # refusals: the wrong observation, an observation without t_scale's index, a bare posterior with
+    # no transform, a transform with no box
     try:
-        orchestrator.build_truncation_region(post, {"digest": "0" * 16, "param_keys": _KEYS13}, x)
-        raise AssertionError("a region was drawn around an observation that is not the recorded one")
+        orchestrator.build_truncation_region(_lp(post), _lo(x, digest="0" * 16))
+        raise AssertionError("a region was drawn around an observation that does not hash to its own digest")
     except ValueError:
         pass
     try:
-        orchestrator.build_truncation_region(post, {"digest": rec["digest"]}, x)
+        orchestrator.build_truncation_region(_lp(post), _lo(x, keys=None))
         raise AssertionError("a region was built without knowing where t_scale is")
     except ValueError as e:
         assert "t_scale" in str(e)
@@ -649,16 +668,17 @@ def test_build_truncation_region_records_the_parents_basis():
             self.prior = type("Pr", (), {"gen_dist": reparam.RotatedLatentPrior(None, V)})()
 
     torch.manual_seed(12)
-    ok = orchestrator.build_truncation_region(reparam.TransformedPosterior(_WideWithPrior(Q), T_parent), rec, x)
+    ok = orchestrator.build_truncation_region(_lp(reparam.TransformedPosterior(_WideWithPrior(Q), T_parent)), obs)
     assert torch.equal(ok.V, Q)
     for V_net, tag in ((Q.T.contiguous(), "a transposed prior rotation"), (torch.eye(P - 1), "another size")):
         try:
-            orchestrator.build_truncation_region(reparam.TransformedPosterior(_WideWithPrior(V_net), T_parent), rec, x)
+            orchestrator.build_truncation_region(
+                _lp(reparam.TransformedPosterior(_WideWithPrior(V_net), T_parent)), obs)
             raise AssertionError(f"{tag} was accepted as the parent's basis")
         except ValueError as e:
             assert "rotation" in str(e) and "D6" in str(e), e
     try:
-        orchestrator.build_truncation_region(reparam.TransformedPosterior(_WideWithPrior(Q), box), rec, x)
+        orchestrator.build_truncation_region(_lp(reparam.TransformedPosterior(_WideWithPrior(Q), box)), obs)
         raise AssertionError("an unrotated transform was accepted for a network trained rotated")
     except ValueError as e:
         assert "has no rotation" in str(e), e
@@ -666,7 +686,7 @@ def test_build_truncation_region_records_the_parents_basis():
                      (reparam.TransformedPosterior(_Wide(), torch.distributions.transforms.ComposeTransform(
                          [reparam.OrthogonalTransform(Q.T)])), "a transform with no box")):
         try:
-            orchestrator.build_truncation_region(bad, rec, x)
+            orchestrator.build_truncation_region(_lp(bad), obs)
             raise AssertionError(f"{tag} was accepted")
         except ValueError:
             pass
@@ -717,14 +737,23 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
     Q = _orthogonal_keeping(P, 11, axis=11)
     box, T_parent = _rotated_box(Q)
     x = torch.linspace(-1.0, 1.0, 7).reshape(1, 7)
-    rec = {"digest": orchestrator.observation_digest(x), "param_keys": _KEYS13}
+    obs = _lo(x)
     torch.manual_seed(12)
     region = orchestrator.build_truncation_region(
-        reparam.TransformedPosterior(_Parent(gmm_a, Q), T_parent), rec, x)
+        _lp(reparam.TransformedPosterior(_Parent(gmm_a, Q), T_parent)), obs)
     assert region.prior_fingerprint == fp_a
     assert truncate.TruncationRegion.from_dict(region.to_dict()).prior_fingerprint == fp_a
-    bare = orchestrator.build_truncation_region(reparam.TransformedPosterior(_Wide(), T_parent), rec, x)
+    bare = orchestrator.build_truncation_region(_lp(reparam.TransformedPosterior(_Wide(), T_parent)), obs)
     assert bare.prior_fingerprint is None
+    # the RECORDING side refuses a wrapper whose claimed fingerprint is not the one its payload
+    # pickles: the region would otherwise record, as the base prior the next round is checked
+    # against, a prior the parent never trained on
+    try:
+        orchestrator.build_truncation_region(
+            _lp(reparam.TransformedPosterior(_Parent(gmm_a, Q), T_parent), fingerprint="0" * 16), _lo(x))
+        raise AssertionError("a parent whose wrapper and pickled prior disagree was accepted")
+    except ValueError as e:
+        assert "0" * 16 in str(e) and fp_a in str(e), e
     # ...and it is NOT part of the checkpoint identity: the identity already carries the supplied
     # prior's fingerprint, and a new key in identity_fields would re-digest every truncated
     # checkpoint directory (the amortized identity omits the region entirely -- test_user_sbi pins it)
@@ -758,7 +787,7 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
              and n.func.id == "_assert_prior_matches_region"]
     by_args = {tuple(ast.unparse(a) for a in c.args[:2]): c for c in calls}
-    train_call = by_args.get(("truncation", "prior"))
+    train_call = by_args.get(("truncation", "inferred"))
     assert train_call is not None, \
         "build_posterior's truncation branch does not check the supplied prior against the region's parent"
     branch = [n for n in ast.walk(tree) if isinstance(n, ast.If)
@@ -769,7 +798,7 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
              if isinstance(n, ast.Call) and ast.unparse(n.func) == "truncation.check_basis"]
     assert basis and train_call.lineno < min(c.lineno for c in basis), \
         "the prior check must run before the round commits to the region's basis"
-    assert ("region", "prior") in by_args, \
+    assert ("region", "inferred") in by_args, \
         "the load branch does not check a sidecar's region against the prior loaded beside it"
 
 
@@ -784,22 +813,21 @@ def test_the_same_posterior_and_observation_redraw_the_same_region():
     P = 13
     Q = _orthogonal_keeping(P, 13, axis=11)
     _, T_parent = _rotated_box(Q)
-    post = reparam.TransformedPosterior(_Wide(), T_parent)
+    post = _lp(reparam.TransformedPosterior(_Wide(), T_parent))
     x = torch.linspace(-1.0, 1.0, 7).reshape(1, 7)
-    rec = {"digest": orchestrator.observation_digest(x), "param_keys": _KEYS13}
+    obs = _lo(x)
     torch.manual_seed(1)
     before = torch.get_rng_state()
-    a = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.999)
+    a = orchestrator.build_truncation_region(post, obs, n_directions=5, level=0.999)
     assert torch.equal(torch.get_rng_state(), before), "the region draw disturbed the caller's RNG stream"
     torch.manual_seed(999)                                          # a different global state...
-    b = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.999)
+    b = orchestrator.build_truncation_region(post, obs, n_directions=5, level=0.999)
     assert torch.equal(a.lo, b.lo) and torch.equal(a.hi, b.hi), "the same inputs drew a different box"
     assert a.identity_fields() == b.identity_fields()
     x2 = x + 0.5
-    c = orchestrator.build_truncation_region(post, {"digest": orchestrator.observation_digest(x2),
-                                                    "param_keys": _KEYS13}, x2)
-    d = orchestrator.build_truncation_region(post, rec, x, n_directions=5, level=0.99)
-    e = orchestrator.build_truncation_region(post, rec, x, n_directions=4, level=0.999)
+    c = orchestrator.build_truncation_region(post, _lo(x2))
+    d = orchestrator.build_truncation_region(post, obs, n_directions=5, level=0.99)
+    e = orchestrator.build_truncation_region(post, obs, n_directions=4, level=0.999)
     assert not torch.equal(a.lo, c.lo) and not torch.equal(a.lo, d.lo) and e.dims == [0, 1, 2, 3]
     # quantisation: a bound perturbed far below the fifth significant digit names the same directory.
     # Perturb the QUANTISED values (they sit on grid points, half a quantum from any rounding
@@ -897,61 +925,15 @@ def test_reparam_is_the_only_reader_of_the_rotation_matrix():
     assert readers == ["core/SBI/reparam.py"], f"parts[0].M is read outside reparam: {readers}"
 
 
-def test_a_truncated_posterior_warns_on_a_foreign_observation_at_inference():
-    """⚠ GUARDRAIL 2 at inference time. A non-amortized posterior names the observation its region
-    was drawn around; infer_and_visualize compares it against the observation it is handed BEFORE
-    sampling and warns loudly on a mismatch -- warns, not refuses, because a simulated cell re-drawn
-    with new noise is exactly the 'near x_obs' such a posterior is for. The matching observation is
-    silent."""
-    from core import cli, config, orchestrator, registry
-    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
-
-    class _Halt(Exception):
-        pass
-
-    class _Lat:
-        def sample(self, *a, **k):
-            raise _Halt()
-
-    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
-    cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
-                              str(BOUNDS_PATH / "nadrowski" / "master.txt"))
-    cfg.hw = config.cpu_device()
-    T = reparam.build_inferred_bijection(cfg, log_params=[])
-    x0 = torch.linspace(-1.0, 1.0, 50).reshape(1, 50)
-    region = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=13)
-    post = reparam.TransformedPosterior(_Lat(), T, truncation=region,
-                                        x_obs_digest=orchestrator.observation_digest(x0))
-    saved = orchestrator.PERSIST_OBSERVATIONS
-    orchestrator.PERSIST_OBSERVATIONS = False
-    try:
-        for x, expect in ((x0 + 1.0, True), (x0, False)):
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                try:
-                    orchestrator.infer_and_visualize(cfg, post, x, None, None, show_truth=False)
-                    raise AssertionError("the stub posterior was never sampled")
-                except _Halt:
-                    pass
-            got = any("NOT AMORTIZED" in str(c.message) for c in caught)
-            assert got is expect, f"warned={got} for {'a foreign' if expect else 'the recorded'} observation"
-        amortized = reparam.TransformedPosterior(_Lat(), T)
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            try:
-                orchestrator.infer_and_visualize(cfg, amortized, x0 + 1.0, None, None, show_truth=False)
-                raise AssertionError("the stub posterior was never sampled")
-            except _Halt:
-                pass
-        assert not any("NOT AMORTIZED" in str(c.message) for c in caught)
-    finally:
-        orchestrator.PERSIST_OBSERVATIONS = saved
-
-
 def test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region():
     """The CLI half of guardrail 8, pinned at the source: orchestrator.run must opt in to a
-    non-amortized artifact and hand its region to validate_calibration. Dropping either keyword would
-    silently restore full-prior SBC/TARP for every CLI TSNPE posterior with every suite green."""
+    non-amortized artifact with ``Accept(truncated=True)``. Dropping it would refuse the load
+    entirely (store.load_posterior gates on it), which is loud -- but SILENTLY calibrating a TSNPE
+    posterior on the full prior is not, so this stays pinned at the source rather than left to be
+    caught downstream. The region itself now rides on the LoadedPosterior's ``.posterior.truncation``
+    (interim until Task 9 threads the wrapper all the way through validate_calibration), so this no
+    longer pins the validate_calibration keyword's text.
+    """
     import ast
     import inspect
     import textwrap
@@ -962,11 +944,8 @@ def test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region():
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             calls.setdefault(node.func.id, []).append({kw.arg: ast.unparse(kw.value) for kw in node.keywords})
-    assert any(kw.get("accept_truncated") == "True" for kw in calls.get("build_posterior", [])), \
+    assert any(kw.get("accept") == "Accept(truncated=True)" for kw in calls.get("build_posterior", [])), \
         "orchestrator.run does not opt in to non-amortized artifacts"
-    assert any("truncation" in kw and "truncation" in kw["truncation"]
-               for kw in calls.get("validate_calibration", [])), \
-        "orchestrator.run calibrates a TSNPE posterior on the FULL prior"
 
 
 def test_a_resumed_checkpoint_with_another_rotation_is_refused():

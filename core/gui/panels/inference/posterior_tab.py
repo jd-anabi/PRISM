@@ -1,11 +1,11 @@
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLineEdit, QMessageBox, QPushButton, QVBoxLayout)
 
 from core import config, orchestrator
+from core.artifacts import Accept, default_store
 from core.SBI import training_checkpoint
-from core.config import POSTERIOR_PATH
 
 from ... import icons, settings
-from ...widgets.artifact_picker import ArtifactPicker
+from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
@@ -34,8 +34,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         box = QGroupBox("Posterior")
         v = QVBoxLayout(box)
         form = make_form()
-        self.post_picker = ArtifactPicker(
-            POSTERIOR_PATH, keep=lambda fn: fn.endswith(".pt") and not fn.endswith(".rot.pt"), allow_new=True)
+        self.post_picker = StorePicker("posterior", allow_new=True)
         self.post_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_train_button())
         add_help_row(form, "Posterior", self.post_picker, HELP["posterior"])
         v.addLayout(form)
@@ -123,11 +122,11 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self._screen.refresh_gates()
         # Passed, never written to config: orchestrator does `from .config import TRAINING_NUM_RUNS`,
         # so setting the constant here would be a silent no-op and the run would use the default.
-        # accept_truncated: a NON-AMORTIZED artifact loads here and carries its region into the
-        # session, so Validate restricts its prior to it and Infer warns on another observation.
+        # accept=Accept(truncated=True): a NON-AMORTIZED artifact loads here and carries its region
+        # into the session, so Validate restricts its prior to it and Infer warns on another observation.
         self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
-                      self.session.force_prior, entry, is_new, save=False,
-                      num_runs=n_runs, run_size_cap=cap, accept_truncated=True,
+                      entry, is_new,
+                      num_runs=n_runs, run_size_cap=cap, accept=Accept(truncated=True),
                       hidden_features=max(1, self.flow_hidden.value()),
                       num_transforms=max(1, self.flow_transforms.value()),
                       learning_rate=self.flow_lr.value() or config.TRAINING_LEARNING_RATE,
@@ -189,34 +188,32 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         return box.clickedButton() is go
 
     def _on_posterior(self, payload):
-        self.session.posterior, self.session.diagnostics = payload
-        self.session.posterior_latent = getattr(self.session.posterior, "latent", None)
-        self.session.V = self._extract_rotation(self.session.posterior)
-        # Taken FROM THE POSTERIOR, which carries its own region (None for an amortized one). So a
-        # freshly trained amortized posterior clears the previous round's region -- the mislabelling
-        # runs in both directions, and that is the direction that is easy to miss -- while a loaded
-        # non-amortized artifact installs its region for Validate and its digest for Infer.
-        self.session.truncation = getattr(self.session.posterior, "truncation", None)
-        self.session.x_obs_digest = getattr(self.session.posterior, "x_obs_digest", None)
-        if self.session.truncation is not None:
+        self.session.posterior = payload                 # a LoadedPosterior
+        region = payload.posterior.truncation
+        if region is not None:
             self.log_pane.append_line(
-                f"This posterior is NON-AMORTIZED (observation digest {self.session.x_obs_digest}): "
-                f"Validate restricts its prior to the region it was trained on; Infer warns on any "
-                f"other observation.", "warning")
-        self.log_pane.append_line("Posterior ready.")
+                f"This posterior is NON-AMORTIZED (observation digest {payload.posterior.x_obs_digest}): "
+                f"Validate restricts its prior to the region it was trained on; Infer refuses any other "
+                f"observation unless told to accept it.", "warning")
+        self.log_pane.append_line(f"Posterior ready: {payload.name or '(unnamed, id ' + payload.id + ')'}. "
+                                  f"Name it below to keep it.")
         self._screen.refresh_gates()
 
     def _save_posterior(self):
         name = self.post_name.text().strip()
-        if not name or self.session.posterior_latent is None:
+        lp = self.session.posterior
+        if not name or lp is None:
             self.log_pane.append_line("Train a posterior and enter a name first.", "warning")
             return
-        self.dispatch(orchestrator.save_posterior_artifacts, name, self.session.posterior_latent,
-                      self.session.V, self.session.diagnostics, self.session.cfg,
-                      truncation=self.session.truncation,
-                      x_obs_digest=self.session.x_obs_digest,
-                      on_finished=lambda: (self.post_picker.refresh(),
-                                           self.log_pane.append_line(f"Saved posterior '{name}'.")))
+        try:
+            lp.manifest = default_store().rename("posterior", lp.id, name)
+        except Exception as e:                       # noqa: BLE001 -- a bad or duplicate name is user input
+            self._config_error(e)
+            return
+        lp.name = name
+        self.post_picker.refresh()
+        self.post_picker.restore_key(lp.id)
+        self.log_pane.append_line(f"Posterior named '{name}'.")
 
     def _sync_train_button(self):
         """Disable the Train button when the "(from scratch)" option is selected but no prior exists --
@@ -228,26 +225,10 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
 
     def refresh_local_gates(self):
         self._sync_train_button()
-        self.btn_save_post.setEnabled(self.session.posterior_latent is not None)
+        self.btn_save_post.setEnabled(self.session.posterior is not None)
         # A config or a prior arriving changes every derived line, and the checkpoint line cannot be
         # computed without both.
         self._sync_budget()
-
-    @staticmethod
-    def _extract_rotation(posterior):
-        """The decorrelating rotation V for the deferred save -- eigenvectors in COLUMNS, ``w = z @ V``,
-        the orientation ``save_posterior_artifacts`` writes and ``load_eval_bijection`` re-transposes.
-
-        Through ``reparam.rotation_of``, the ONE decoder of the transform's convention. This used to
-        return ``parts[0].M`` verbatim, which is V TRANSPOSED, so every sidecar the GUI ever saved held
-        Vᵀ and reloaded in the inverse rotation (defect D6, Appendix A 2026-09-09) -- and because
-        ``_on_posterior`` serves the LOAD path too, load → Save flipped a correct sidecar as well.
-        """
-        try:
-            from core.SBI.reparam import rotation_of
-            return rotation_of(getattr(posterior, "T", None))
-        except Exception:
-            return None
 
     def save_settings(self, qs):
         qs.beginGroup("inference_posterior")

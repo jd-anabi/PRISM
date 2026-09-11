@@ -63,11 +63,11 @@ def atomic_torch_save(obj, path, *, retries: int = 3, backoff_s: float = 0.1) ->
 
     Added for the training checkpoint (C-11), which rewrites its state file every N batches and so
     turns "non-atomic torch.save against a cancel" from a catalogued low-priority risk into a real
-    one. It now also carries the END-OF-RUN artifacts -- ``save_mix_dist`` (the ND prior) and
-    ``orchestrator.save_posterior_artifacts`` (the posterior and its ``.rot.pt`` sidecar). The window
-    there is one write rather than one every 50 batches, but what it protects is the product of a
-    multi-day run, and a torn ``.pt`` is not detectably torn: it is an unpickling error hours later,
-    or a sidecar that loads with half its keys and decodes every latent sample through a default.
+    one. It now also carries the END-OF-RUN artifacts -- ``save_mix_dist`` (the ND prior) and every
+    artifact writer's payload (a posterior's ``posterior.pt``, through ``ArtifactWriter.payload``).
+    The window there is one write rather than one every 50 batches, but what it protects is the
+    product of a multi-day run, and a torn ``.pt`` is not detectably torn: it is an unpickling error
+    hours later.
     """
     return _atomic_write(path, lambda fh: torch.save(obj, fh), retries=retries, backoff_s=backoff_s)
 

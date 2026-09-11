@@ -1,4 +1,6 @@
-"""Which conditioning channels can the flow actually SEE? Reads the artifacts; simulates nothing.
+"""⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+
+Which conditioning channels can the flow actually SEE? Reads the artifacts; simulates nothing.
 
 THE TEST HAD TO BE CORRECTED BEFORE IT WOULD ANSWER. The
 2026-08-25 addendum nominates this as its decisive test and specifies it as: replace channel i with

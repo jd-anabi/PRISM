@@ -41,13 +41,20 @@ class ValidatePanel(_StagePanel):
         s = self.session
         if s.posterior is None or s.inf_prior is None:   # force_prior is legitimately None (no drive)
             return
-        # truncation: a TSNPE posterior is calibrated on the prior RESTRICTED to its region
-        # (guardrail 8); None for an amortized one leaves the battery exactly as it was.
-        self.dispatch(orchestrator.validate_calibration, s.cfg, s.posterior,
-                      s.inf_prior, s.force_prior, provide_fig_sink=True,
-                      n_cal=max(1, self.cal_n.value()),
-                      cal_n_scales=max(1, self.cal_scales.value()),
-                      truncation=s.truncation)
+        # the region (a TSNPE posterior calibrates on the prior RESTRICTED to it -- guardrail 8) comes
+        # off s.posterior.posterior.truncation inside validate_calibration; None for an amortized one
+        # leaves the battery exactly as it was.
+        self.dispatch(orchestrator.validate_calibration, s.cfg, s.posterior, s.inf_prior, provide_fig_sink=True,
+                      n_cal=max(1, self.cal_n.value()), cal_n_scales=max(1, self.cal_scales.value()),
+                      on_result=self._on_calibration)
+
+    def _on_calibration(self, payload):
+        res = payload.results
+        info = res.get("informativeness") or {}
+        self.log_pane.append_line(
+            f"Calibration recorded as {payload.name or '(unnamed, id ' + payload.id + ')'}: TARP ATC="
+            f"{res['tarp']['atc']}, KS p={res['tarp']['ks_p']}"
+            + (f"; informativeness {info['total_nats']:.2f} nats" if info.get("total_nats") is not None else ""))
 
     def refresh_local_gates(self):
         s = self.session

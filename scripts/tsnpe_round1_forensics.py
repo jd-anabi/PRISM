@@ -1,4 +1,6 @@
-"""Forensics for the 2026-09-02 TSNPE round (F1-F4 of the round-1 post-mortem). READ-ONLY.
+"""⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+
+Forensics for the 2026-09-02 TSNPE round (F1-F4 of the round-1 post-mortem). READ-ONLY.
 
 Reproduces, from the artifacts on this machine, every number in the 2026-09-09 Appendix A entry of
 PRISM_HANDOFF.md -- so the verdict there is a measurement anyone can re-run, not a recollection.

@@ -25,7 +25,8 @@ WHAT IS DELIBERATELY NOT PERSISTED
     CONSTRUCTION, and ``_draw_and_filter``'s accept count depends on the geometry, so the schedule
     cannot be re-derived from a seed. The drawn arrays are persisted and the engine is never rebuilt.
 
-LAYOUT.  ``<root>/train_<digest12>/``
+LAYOUT.  ``<Artifacts>/simulations/<digest12>/``   (core.artifacts.store.KIND_DIRS["simulation"])
+    manifest.json  the store's record: identity, parents, batches_done, complete, rows, wall time
     header.pt      write-once: identity + the (t_scale, T) schedule + inits + V + the bijection probe
     state.pt       rewritten atomically; its ``batches_done`` is THE COMMIT POINT
     state.prev.pt  one generation back, a few KB, for the case where state.pt is lost mid-write
@@ -54,7 +55,6 @@ from pathlib import Path
 
 import torch
 
-from core import config
 from core.Helpers.file_manager import atomic_torch_save
 
 # Bumped when the on-disk layout changes in a way an older/newer PRISM cannot read. It rides in the
@@ -90,10 +90,23 @@ def identity_digest(identity: dict) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
 
 
+def _default_root() -> Path:
+    from core.artifacts.store import default_store   # lazy: the store imports this module lazily too
+    return default_store().kind_dir("simulation")
+
+
 def resolve_dir(identity: dict, root=None) -> Path:
-    """The directory this identity's checkpoint lives in. Pure; creates nothing."""
-    root = Path(root) if root is not None else config.CHECKPOINT_PATH
-    return root / f"train_{identity_digest(identity)}"
+    """The directory this identity's checkpoint lives in: ``<root>/<digest12>``. Pure; creates nothing.
+    ``root`` defaults to the process default store's simulations directory."""
+    root = Path(root) if root is not None else _default_root()
+    return root / identity_digest(identity)
+
+
+def _committed_dirs(root: Path):
+    """Every directory under ``root`` that holds a checkpoint header, sorted."""
+    if not root.is_dir():
+        return []
+    return sorted(d for d in root.iterdir() if d.is_dir() and (d / _HEADER).exists())
 
 
 def bijection_probe(theta_transform, dim: int, n: int = 7, device=None) -> torch.Tensor:
@@ -144,7 +157,7 @@ def peek(path) -> dict | None:
 
 
 def create(path, identity: dict, *, schedule_t_scales, schedule_Ts, inits, V, probe,
-           run_size: int, n_runs: int) -> None:
+           run_size: int, n_runs: int, parents=None, inputs=None, hw=None) -> None:
     """Write the write-once header and a zeroed state. Called BEFORE the first simulation.
 
     Doing this up front is the cheapest insurance in the feature: a read-only Resources/, a
@@ -166,6 +179,9 @@ def create(path, identity: dict, *, schedule_t_scales, schedule_Ts, inits, V, pr
         "n_runs": int(n_runs),
     }, path / _HEADER)
     atomic_torch_save({"batches_done": 0, "complete": False, "rng": None}, path / _STATE)
+    from core.artifacts.store import write_simulation_manifest
+    write_simulation_manifest(path, identity, parents=parents, inputs=inputs, hw=hw,
+                              batches_done=0, complete=False, V=V)
 
 
 def read_header(path) -> dict:
@@ -175,10 +191,10 @@ def read_header(path) -> dict:
 def verify(path, identity: dict, probe=None, *, probe_atol: float = 1e-6) -> dict:
     """Validate a checkpoint against the config that wants to resume it; return its header.
 
-    Field by field, naming the field and BOTH values, in the voice of
-    ``orchestrator._assert_mode_matches``. The digest already routed us here, so anything caught below
-    is a hand-moved directory, a format skew, or a collision -- all of which deserve a message that
-    says what is wrong rather than "digest mismatch".
+    Field by field, naming the field and BOTH values, in the voice of the store's own load-side
+    refusals (``ArtifactStore.load_posterior``, ``load_prior``). The digest already routed us here,
+    so anything caught below is a hand-moved directory, a format skew, or a collision -- all of which
+    deserve a message that says what is wrong rather than "digest mismatch".
     """
     path = Path(path)
     header = read_header(path)
@@ -219,11 +235,9 @@ def _sibling_diffs(identity: dict, root=None):
     Extracted so describe_siblings and near_miss_siblings cannot drift: they ask the same question of
     the same directories and differ only in what they do with the answer.
     """
-    root = Path(root) if root is not None else config.CHECKPOINT_PATH
-    if not root.is_dir():
-        return
+    root = Path(root) if root is not None else _default_root()
     mine = resolve_dir(identity, root).name
-    for d in sorted(root.glob("train_*")):
+    for d in _committed_dirs(root):
         if d.name == mine:
             continue
         st = peek(d)
@@ -260,11 +274,11 @@ def checkpoints_using_prior(fingerprint: str, root=None) -> list:
     now happened twice: 884 batches on 2026-08-27 (a prior built and never saved) and 3989 batches on
     2026-08-28 (prior_08282026.pt overwritten with a different distribution under the same name).
     """
-    root = Path(root) if root is not None else config.CHECKPOINT_PATH
-    if not fingerprint or not root.is_dir():
+    root = Path(root) if root is not None else _default_root()
+    if not fingerprint:
         return []
     out = []
-    for d in sorted(root.glob("train_*")):
+    for d in _committed_dirs(root):
         st = peek(d)
         if not st or not st.get("batches_done"):
             continue
@@ -325,13 +339,27 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
     if prev.exists():
         shutil.copyfile(prev, path / _STATE_PREV)
     atomic_torch_save({"batches_done": int(batch_k), "complete": False, "rng": rng}, prev)
+    _refresh_manifest(path, batches_done=batch_k)
 
 
-def mark_complete(path, batch_k: int) -> None:
+def mark_complete(path, batch_k: int, rows=None) -> None:
     path = Path(path)
     st = peek(path) or {}
     atomic_torch_save({"batches_done": int(batch_k), "complete": True,
                        "rng": st.get("rng")}, path / _STATE)
+    _refresh_manifest(path, batches_done=batch_k, complete=True, rows=rows)
+
+
+def _refresh_manifest(path: Path, *, batches_done: int, complete: bool = False, rows=None) -> None:
+    """Best-effort: the manifest is the store's view of the cache, never its commit point (that is
+    state.pt). Read the identity back from the header rather than threading it through save()."""
+    try:
+        from core.artifacts.store import write_simulation_manifest
+        header = read_header(path)
+        write_simulation_manifest(path, header.get("identity", {}), batches_done=batches_done,
+                                  complete=complete, rows=rows, V=header.get("V"))
+    except Exception:                        # noqa: BLE001 -- never lose a committed batch over the index
+        pass
 
 
 def load_rows(path, batches_done: int, run_size: int):

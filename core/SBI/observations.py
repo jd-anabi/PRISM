@@ -7,12 +7,26 @@ Re-exported by orchestrator under the same names for the GUI runners and the scr
 """
 import math
 import warnings
+from dataclasses import dataclass
 
 import torch
 
 from core import config
 from core.config import SimConfig
 from core.SBI import chi, pipeline, statistics
+
+
+@dataclass(frozen=True)
+class RecordingSet:
+    """What the bench produced, by FILE: the passive recording, the forced recordings with the
+    frequency each was actually driven at (None in single-drive forced mode, whose drive is
+    ``forcing_params_si``), the duration, and the drive. The observation stage hashes every file
+    into the artifact's manifest, so a posterior's inputs are on record."""
+    spont: str
+    forced: tuple = ()                    # ((path, drive frequency in Hz or None), ...)
+    T_obs_s: float = 0.0
+    forcing_params_si: "dict | None" = None   # forced mode: {"amp", "freq", "phase", ...} in SI
+    F0_si: "float | None" = None              # chi mode: physical drive amplitude (N)
 
 
 # ── Step 5: Inference on real experimental data ────────────────────────────
@@ -65,7 +79,7 @@ def build_experiment_obs(
     #   steady_idx + (T_k / dt_exp) * (t_scale_hi / t_scale_k) <= N_ND_MAX
     # Solving for t_scale_k given T_k = T_obs:
     t_scale_lo_prior, t_scale_hi = cfg.t_scale_bounds
-    budget = N_ND_MAX - cfg.steady_idx
+    budget = config.N_ND_MAX - cfg.steady_idx
     if budget > 0:
         t_scale_min_feasible = (T_obs / cfg.dt_exp) * t_scale_hi / budget
         if t_scale_min_feasible > t_scale_lo_prior:
@@ -79,7 +93,7 @@ def build_experiment_obs(
     # Build forcing tensor generically: iterate cfg.force_params_dict and apply the appropriate SI->cell
     # conversion per parameter name (config.FORCING_SI_UNITS is the single source of truth; the CLI/GUI
     # display hints derive from it). Unknown names raise. "Hz" is SPECIAL-CASED below -- see that map.
-    _FORCING_SI_UNITS = FORCING_SI_UNITS
+    _FORCING_SI_UNITS = config.FORCING_SI_UNITS
     forcing_t = torch.empty((1, len(cfg.force_params_dict)), dtype=dtype)
     for name in cfg.force_params_dict.keys():
         if name not in forcing_params_si:

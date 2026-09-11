@@ -43,6 +43,18 @@ import contextlib                                                  # noqa: E402
 
 def _app():
     return QApplication.instance() or QApplication([])
+def _prior_stub(id_="p1", name=""):
+    """A LoadedPrior-shaped stub: the tabs now read ``.prior``/``.force_prior`` off session.inf_prior
+    (piece 1, Task 4) rather than carrying the physical prior and forcing prior as separate session
+    fields, so a bare ``object()`` no longer stands in wherever a dispatched call is actually reached."""
+    return type("LoadedPriorStub", (), {"prior": object(), "force_prior": object(),
+                                         "id": id_, "name": name})()
+def _posterior_stub(id_="post1", name="", truncation=None, x_obs_digest=None):
+    """A LoadedPosterior-shaped stub: the tabs now read ``.posterior`` (the TransformedPosterior) off
+    session.posterior (piece 1, Task 7) rather than carrying it directly, so a bare ``object()`` no
+    longer stands in wherever a dispatched call actually reaches ``session.posterior.posterior``."""
+    post = type("Post", (), {"truncation": truncation, "x_obs_digest": x_obs_digest, "latent": object()})()
+    return type("LoadedPosteriorStub", (), {"posterior": post, "id": id_, "name": name})()
 # ── Phase 3: QSettings persistence ───────────────────────────────────────────────────────────────
 def _temp_settings():
     import tempfile
@@ -266,7 +278,7 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     panel.obs_picker.key = lambda: ""                    # nothing recorded yet
     panel.refresh_local_gates()
     assert not panel.btn_round.isEnabled(), "a round must be impossible without an observation"
-    panel.obs_picker.key = lambda: "obs_20260101T000000_deadbeefdeadbeef.pt"
+    panel.obs_picker.key = lambda: "20260910T120000"
     panel.refresh_local_gates()
     assert panel.btn_round.isEnabled(), "with a posterior, its prior and an observation, a round is allowed"
 
@@ -286,119 +298,93 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
             f"the TSNPE runner's CODE references '{banned}' -- it must sample the truncated PRIOR, "
             f"never the posterior; that is tempering, and SBC cannot detect it")
 
-def test_a_tsnpe_posterior_cannot_be_saved_as_amortized():
+def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     """⚠ SECTION 11.6 GUARDRAIL 2, at the seam where it is easiest to lose.
 
-    The GUI trains with save=False and saves LATER from a button, so the truncation region has to
-    survive on the session or the deferred save writes the artifact marked `amortized: True` --
-    indistinguishable, in the same ArtifactPicker, from a genuinely amortized posterior. That is the
-    class of confusion the retired-band posterior already cost a five-day run for.
-
-    Three things, and the third is the one that is easy to miss: the round INSTALLS the region, the
-    save PASSES it, and training an ordinary posterior afterwards CLEARS it.
+    Every posterior is now WRITTEN at completion (piece 1, Task 7), so there is no deferred-save
+    window for a region to fall out of on the way to disk -- but the SESSION must still carry the
+    right LoadedPosterior after a TSNPE round, after its Save (a rename, which must not touch the
+    body), and after an ordinary train replaces it. Three things, and the third is the one that is
+    easy to miss: the round installs a NON-AMORTIZED posterior, the Save renames it in place, and
+    training an ordinary posterior afterwards installs an AMORTIZED one.
     """
+    from core.artifacts import Accept
+    from core.SBI import reparam, truncate
+    from core.SBI.training_checkpoint import bijection_probe
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
-    from core.gui.panels import inference_tabs
+    from tests._fixtures import _nad_cfg, _posterior_artifact
+
+    cfg = _nad_cfg(chi_mode=True)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    T = reparam.build_inferred_bijection(cfg, log_params=[])
+    region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
+                                       probe=bijection_probe(T, P), x_obs_digest="d" * 16)
+    trunc_artifact = _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
+    loaded = store.load_posterior(cfg, trunc_artifact.id, accept=Accept(truncated=True))
 
     _app()
     inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=object())
+    inf.session = SbiSession(cfg=cfg, inf_prior=object())
     panel = inf.tsnpe_panel
 
-    region = object()
-    panel._on_round(((object(), {"loss": []}), region, "deadbeefdeadbeef"))
-    assert inf.session.truncation is region, "the round did not install its truncation region"
-    assert inf.session.x_obs_digest == "deadbeefdeadbeef"
-    assert inf.session.posterior is not None, "the round's posterior never reached the session"
+    panel._on_round(loaded)
+    assert inf.session.posterior is loaded, "the round's LoadedPosterior never reached the session"
+    assert inf.session.posterior.manifest.body["amortized"] is False,         "the round's posterior was not installed as NON-AMORTIZED"
 
-    # the deferred save must forward both
-    captured = {}
+    # the Save button is a RENAME now -- it must not touch the body, so it stays non-amortized on disk
     pp = inf.posterior_panel
-    pp.dispatch = lambda fn, *a, **k: captured.update(args=a, kwargs=k)
     pp.post_name.setText("some_name")
-    inf.session.posterior_latent = object()
     pp._save_posterior()
-    assert captured.get("kwargs", {}).get("truncation") is region,         "save_posterior_artifacts was called WITHOUT the truncation -- it would be marked amortized"
-    assert captured["kwargs"].get("x_obs_digest") == "deadbeefdeadbeef"
+    assert store.get("posterior", loaded.id).name == "some_name"
+    assert store.get("posterior", loaded.id).body["amortized"] is False
 
-    # and an ordinary train afterwards must CLEAR it, or the mislabelling runs the other way
-    pp._on_posterior((object(), {"loss": []}))
-    assert inf.session.truncation is None and inf.session.x_obs_digest is None,         "an amortized posterior inherited the previous round's truncation"
-
-
-def test_the_deferred_save_forwards_V_not_its_transpose():
-    """⚠ DEFECT D6. The transform stores OrthogonalTransform(Vᵀ) as parts[0], and the deferred save
-    used to forward parts[0].M -- so every sidecar the GUI ever wrote held V transposed and reloaded
-    in the inverse rotation (all three rotated artifacts on disk, verified 2026-09-09). A NON-symmetric
-    V is essential here: torch.eye is transpose-blind, which is how the one existing sidecar test
-    never noticed. Both the Posterior tab's on_result and the TSNPE tab's must land V itself."""
-    from core.gui.screens.inference_screen import InferenceScreen
-    from core.gui.session import SbiSession
-    from core.SBI.reparam import build_box_bijection, build_rotated_bijection
-
-    _app()
-    inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=object())
-    pp = inf.posterior_panel
-    torch.manual_seed(0)
-    Q, _ = torch.linalg.qr(torch.randn(4, 4))
-    assert not torch.allclose(Q, Q.T), "the test rotation must not be symmetric"
-    T_train = build_rotated_bijection(build_box_bijection(torch.zeros(4), torch.ones(4)), Q)
-    stub = type("Post", (), {"T": T_train, "latent": object()})()
-
-    pp._on_posterior((stub, {"loss": []}))
-    assert torch.equal(inf.session.V, Q) and not torch.equal(inf.session.V, Q.T), \
-        "the deferred save would write V transposed"
-    captured = {}
-    pp.dispatch = lambda fn, *a, **k: captured.update(args=a, kwargs=k)
-    pp.post_name.setText("some_name")
-    inf.session.posterior_latent = object()
-    pp._save_posterior()
-    assert captured["args"][2] is inf.session.V, "save_posterior_artifacts was not handed session.V"
-    assert pp._extract_rotation(object()) is None
-    assert pp._extract_rotation(type("P", (), {"T": build_box_bijection(torch.zeros(4), torch.ones(4))})()) is None
-
-    inf.session.V = None                                     # so only _on_round itself can restore it
-    inf.tsnpe_panel._on_round(((stub, {"loss": []}), object(), "deadbeefdeadbeef"))
-    assert inf.session.V is not None and torch.equal(inf.session.V, Q), \
-        "the TSNPE tab's on_result did not land V (or landed it transposed)"
+    # and an ordinary train afterwards must install an AMORTIZED posterior, or the mislabelling runs
+    # the other way
+    amortized_artifact = _posterior_artifact(store, cfg, name="amortized")
+    amortized_loaded = store.load_posterior(cfg, amortized_artifact.id)
+    pp._on_posterior(amortized_loaded)
+    assert inf.session.posterior.manifest.body["amortized"] is True
 
 
 def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session():
     """⚠ GUARDRAIL 8's GUI half. A non-amortized artifact is loaded through the Posterior tab, which
-    opts in (accept_truncated) and installs the posterior's own region and observation digest on the
-    session; Validate forwards the region so calibration draws from the truncated prior; a plain
-    posterior (an object with neither attribute) still clears both."""
+    opts in (``Accept(truncated=True)``) and installs the LoadedPosterior on the session; Validate
+    passes that LoadedPosterior straight through to validate_calibration, which itself reads the
+    region off ``posterior.posterior.truncation`` so calibration draws from the truncated prior; an
+    amortized LoadedPosterior clears it."""
+    from core.artifacts import Accept
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
     _app()
     inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=object())
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub())
     pp, vp = inf.posterior_panel, inf.validate_panel
 
     region = object()
     stub = type("Post", (), {"truncation": region, "x_obs_digest": "feedfacefeedface", "latent": object()})()
-    pp._on_posterior((stub, {"loss": []}))
-    assert inf.session.truncation is region and inf.session.x_obs_digest == "feedfacefeedface"
+    loaded = type("LoadedPosterior", (), {"posterior": stub, "name": "", "id": "p1"})()
+    pp._on_posterior(loaded)
+    assert inf.session.posterior.posterior.truncation is region
+    assert inf.session.posterior.posterior.x_obs_digest == "feedfacefeedface"
 
     captured = {}
-    vp.dispatch = lambda fn, *a, **k: captured.update(kwargs=k)
+    vp.dispatch = lambda fn, *a, **k: captured.update(args=a, kwargs=k)
     vp._validate()
-    assert captured["kwargs"].get("truncation") is region, \
-        "Validate ran on the FULL prior for a truncated posterior"
+    assert captured["args"][1] is inf.session.posterior and captured["args"][1].posterior.truncation is region,         "Validate did not pass the posterior whose region restricts calibration"
 
     load = {}
     pp.dispatch = lambda fn, *a, **k: load.update(args=a, kwargs=k)
-    pp.post_picker.selected = lambda: ("posterior_x.pt", False)
+    pp.post_picker.selected = lambda: ("posterior_x", False)
     pp._build_posterior()
-    assert load["kwargs"].get("accept_truncated") is True and load["args"][4] is False, \
-        "the Posterior tab's LOAD does not opt in to non-amortized artifacts"
+    accept = load["kwargs"].get("accept")
+    assert isinstance(accept, Accept) and accept.truncated is True and load["args"][3] is False,         "the Posterior tab's LOAD does not opt in to non-amortized artifacts"
 
-    pp._on_posterior((object(), {"loss": []}))
-    assert inf.session.truncation is None and inf.session.x_obs_digest is None
-
+    amortized_stub = type("Post", (), {"truncation": None, "x_obs_digest": None, "latent": object()})()
+    amortized_loaded = type("LoadedPosterior", (), {"posterior": amortized_stub, "name": "", "id": "p2"})()
+    pp._on_posterior(amortized_loaded)
+    assert inf.session.posterior.posterior.truncation is None
 
 def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     """Prior, Posterior and Validate all gained fields. Each must reach its orchestrator function as
@@ -410,7 +396,7 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
 
     _app()
     inf = InferenceScreen()
-    inf.session = SbiSession(draft=object(), cfg=object(), inf_prior=object(), posterior=object())
+    inf.session = SbiSession(draft=object(), cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
 
     cap = {}
     for panel in (inf.prior_panel, inf.posterior_panel, inf.validate_panel):
@@ -460,7 +446,7 @@ def test_posterior_from_scratch_is_gated_on_a_prior():
     assert pp.post_picker.selected()[1] is True, "index 0 should be the from-scratch sentinel"
     pp.refresh_local_gates()
     assert not pp.btn_post.isEnabled(), "training from scratch must be disabled without a prior"
-    inf.session.inf_prior = object(); inf.session.force_prior = object()
+    inf.session.inf_prior = object()
     pp.refresh_local_gates()
     assert pp.btn_post.isEnabled(), "with a prior, training from scratch is allowed"
 
@@ -801,7 +787,11 @@ def test_help_badge_carries_its_text():
 def test_simulated_inference_runner_emits_the_ground_truth_figure():
     """The simulated-inference runner shows the 'Ground-truth trace' figure before inferring (the old
     Simulate tab did only the first half; the tab is gone, the figure is not). A real SDE sim is too slow
-    for a unit test, so stub the heavy pieces and assert the fig_sink wiring."""
+    for a unit test, so stub the heavy pieces and assert the fig_sink wiring. The figure now comes from
+    the observation stage itself (generate_observations writes the artifact and its trace figure), so
+    the stub emits it exactly as the real stage would before handing back a LoadedObservation-shaped
+    stand-in."""
+    import types
     import torch
     from core import cli, orchestrator
     from core.gui.panels import inference_tabs
@@ -815,12 +805,19 @@ def test_simulated_inference_runner_emits_the_ground_truth_figure():
             return 1.0
 
     seen = []
+
+    def stub_generate_observations(cfg, *, fig_sink=None, **kw):
+        if fig_sink is not None:
+            fig_sink("Ground-truth trace", None)
+        return types.SimpleNamespace(x_obs=torch.zeros(1, 5), obs_data=None,
+                                     t_dim=torch.linspace(0, 1, 5).unsqueeze(0), id="o", name="")
+
     real_gt, real_go = cli.load_and_validate_gt, orchestrator.generate_observations
     real_iv = orchestrator.infer_and_visualize
     cli.load_and_validate_gt = lambda cfg, path: []
-    orchestrator.generate_observations = lambda cfg: (
-        torch.zeros(1, 5), None, torch.linspace(0, 1, 5).unsqueeze(0))
-    orchestrator.infer_and_visualize = lambda *a, **k: None
+    orchestrator.generate_observations = stub_generate_observations
+    orchestrator.infer_and_visualize = lambda *a, **k: types.SimpleNamespace(
+        id="i", name="", results={"ppc": {"coverage_90": 0.9}})
     try:
         inference_tabs._run_simulated_inference(
             Cfg(), object(), "cell.txt", 0.1, fig_sink=lambda title, fig: seen.append(title))

@@ -1,12 +1,14 @@
 """Run guards, split out of orchestrator: the checks that stop an expensive run before the spend.
 
 Prior identity (a GMM's box does not identify it -- two sweeps over one box produce different
-fits), the load-side prior/posterior agreement checks, the chi band/drive deliberateness gate, the
-amortization gate for TSNPE artifacts, and the log-box resolution rule. orchestrator re-imports
-every name, so the suites keep calling them as orchestrator._* and every existing call site is
-unchanged. The guards that scan Resources through a test-sandboxable path (PRIOR_PATH rebinds on
-orchestrator) stay in orchestrator: _saved_prior_fingerprints, _assert_prior_is_saved,
-_refuse_to_orphan_a_checkpoint, and the width-computing _assert_mode_matches.
+fits), the load-side prior/posterior agreement checks, and the chi band/drive deliberateness gate.
+orchestrator re-imports every name, so the suites keep calling them as orchestrator._* and every
+existing call site is unchanged. _saved_prior_fingerprints, _assert_prior_is_saved,
+_refuse_to_orphan_a_checkpoint and _assert_prior_matches were retired with the artifact store
+(piece 1, Task 4): store.load_prior and store.delete's dependents check are their successors. The
+two functions that read a posterior's '.rot.pt' companion file for its truncation region and its
+amortization flag were retired the same way (piece 1, Task 7): store.load_posterior's Accept gate
+is their successor.
 """
 import hashlib
 import os
@@ -14,9 +16,7 @@ import os
 import torch
 
 from core import config, registry
-from core.config import POSTERIOR_PATH, SimConfig
-from core.Helpers import file_manager
-from core.SBI.reparam import read_sidecar
+from core.config import SimConfig
 
 CHI_OVERRIDE_ENV = "PRISM_CHI_OVERRIDE"
 
@@ -64,11 +64,6 @@ def _gmm_fingerprint(obj) -> str | None:
     return h.hexdigest()[:16]
 
 
-
-# Below this many batches a generation run is short enough that losing it is an inconvenience rather
-# than a day, so the unsaved-prior guard stays out of the way of smoke runs and experiments.
-
-
 def _assert_prior_used_matches_posterior(posterior, inferred_prior, what: str) -> None:
     """Refuse to run a posterior against a prior it was not trained with.
 
@@ -113,54 +108,6 @@ def _assert_prior_matches_region(region, inferred_prior, what: str) -> None:
         f"measured. Load the prior that belongs to the parent posterior.")
 
 
-def _assert_prior_matches(cfg: SimConfig, path: str, choice: str) -> None:
-    """Fail LOUDLY when a saved ND prior does not belong to this config.
-
-    The latent GMM is fit in its box's OWN coordinate, so a prior is meaningful only against the
-    exact (model, parameter set + ORDER, box) it was built for. None of that was checked here, and
-    the consequences are silent rather than loud: the box edges rescale every sample the flow is
-    trained on, and a reordered parameter set mis-binds columns positionally. The one guard that did
-    exist lives in ``build_posterior`` and covers only the log-mask.
-
-    Legacy priors carry no ``model``/``param_keys``; those WARN rather than raise, because the box
-    comparison below is still exact and is the part that actually rescales the samples.
-    """
-    meta = file_manager.read_prior_metadata(path)
-    if not meta:
-        return                                    # pre-reparam file: nothing recorded to check
-
-    def _bad(what, got, want):
-        raise ValueError(
-            f"Prior '{choice}' does not match this configuration: {what} differs.\n"
-            f"  prior:  {got}\n  config: {want}\n"
-            f"A prior's GMM is fit in its own box coordinate, so loading it here would train the "
-            f"flow against a different distribution than the one the samples came from. Build a new "
-            f"prior for this bounds file, or pick the prior that belongs to it.")
-
-    if "model" in meta and str(meta["model"]) != cfg.model:
-        _bad("the model", meta["model"], cfg.model)
-    keys = list(cfg.params_dict.keys())
-    if "param_keys" in meta and list(meta["param_keys"]) != keys:
-        _bad("the ND parameter set or ORDER", list(meta["param_keys"]), keys)
-    if "lows" in meta and "highs" in meta:
-        want_lo = torch.tensor([b[0] for _, b in cfg.params_dict.values()], dtype=torch.float64)
-        want_hi = torch.tensor([b[1] for _, b in cfg.params_dict.values()], dtype=torch.float64)
-        got_lo = meta["lows"].detach().cpu().to(torch.float64)
-        got_hi = meta["highs"].detach().cpu().to(torch.float64)
-        if got_lo.shape != want_lo.shape:
-            _bad("the ND parameter COUNT", tuple(got_lo.shape), tuple(want_lo.shape))
-        if not (torch.allclose(got_lo, want_lo) and torch.allclose(got_hi, want_hi)):
-            diff = [f"{n}: prior ({lo:g}, {hi:g}) vs config ({wl:g}, {wh:g})"
-                    for n, lo, hi, wl, wh in zip(keys, got_lo.tolist(), got_hi.tolist(),
-                                                 want_lo.tolist(), want_hi.tolist())
-                    if lo != wl or hi != wh]
-            _bad("the ND box", "; ".join(diff), "the bounds file in use")
-    if "model" not in meta or "param_keys" not in meta:
-        warnings.warn(
-            f"Prior '{choice}' predates model/param_keys recording, so only its box could be "
-            f"verified. Re-save it to make it fully self-describing.", stacklevel=2)
-
-
 def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     """Refuse a chi run whose BAND or DRIVE silently disagrees with config.py's defaults.
 
@@ -173,7 +120,7 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     every launch afterwards with nothing to say so. A persisted preference is the right behaviour;
     a persisted MEASUREMENT DEFINITION needs comparing against the module default before the spend.
 
-    ``_assert_mode_matches`` already catches the same disagreement -- but only when a posterior is
+    ``store.load_posterior`` already catches the same disagreement -- but only when a posterior is
     LOADED, i.e. after the days are spent. This fires before the first simulation.
 
     SCOPE IS DELIBERATELY NARROW. Only the band and the drive amplitude are checked, because only
@@ -216,68 +163,6 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         f"and then restores them from QSettings, so a value saved before a config change wins silently."
         f" Check the [inference_config] chi_lo / chi_hi / chi_f0 keys in PRISM.ini.\n"
         f"  If the difference is DELIBERATE (a band sweep, say), re-run with {CHI_OVERRIDE_ENV}=1.")
-
-
-def truncation_from_sidecar(choice: str) -> tuple:
-    """``(TruncationRegion, x_obs_digest)`` recorded in a posterior's sidecar, or ``(None, None)`` for
-    an amortized or a legacy artifact.
-
-    REFUSES a sidecar that declares itself non-amortized but carries no region, or a region without
-    its basis (a sidecar written before the basis travelled with the region). Such an artifact would
-    otherwise load looking amortized -- no region for calibration to restrict to, no digest for
-    inference to warn on -- which is strictly weaker than the refusal ``accept_truncated`` bypasses.
-    The digest comes from the sidecar's own key or, failing that, from the region, which records the
-    observation it was drawn around.
-    """
-    side = read_sidecar(choice, POSTERIOR_PATH, map_location="cpu")
-    if not side or side.get("amortized", True):
-        return None, None
-    from core.SBI import truncate                        # kept lazy so run_guards imports without the TSNPE stack
-    tr = side.get("truncation")
-    region = truncate.TruncationRegion.from_dict(tr) if tr else None
-    if region is None or region.probe is None:
-        raise ValueError(
-            f"Posterior '{choice}' declares itself NON-AMORTIZED but its sidecar carries "
-            f"{'no truncation region' if region is None else 'a region without its basis (written before the basis travelled with the region)'}"
-            f", so the coordinate its box refers to cannot be verified and calibration could not "
-            f"restrict its prior correctly. It cannot be loaded; run the round again from its parent.")
-    return region, side.get("x_obs_digest") or region.x_obs_digest
-
-
-def _assert_amortization_understood(choice: str) -> None:
-    """Refuse a TRUNCATED (non-amortized) posterior unless the caller opted into one.
-
-    SECTION 11.6 GUARDRAIL 2. A truncated posterior is valid only near the observation its region was
-    drawn around: outside that region the flow saw ZERO training rows, so it does not return the
-    prior there, it returns whatever the flow extrapolates -- confidently. Amortized and truncated
-    artifacts sit side by side in one ArtifactPicker, with nothing in the filename to tell them
-    apart, which is precisely how the retired-band posterior cost a five-day run.
-
-    A missing or amortized sidecar passes silently, so every existing artifact is unaffected.
-    """
-    side = read_sidecar(choice, POSTERIOR_PATH, map_location="cpu")
-    if not side or side.get("amortized", True):
-        return
-    tr = side.get("truncation") or {}
-    dims = tr.get("dims", [])
-    raise ValueError(
-        f"Posterior '{choice}' is NOT AMORTIZED: it was trained by TSNPE on a prior truncated to a "
-        f"{tr.get('level', '?')}-HPD region along Fisher direction(s) {dims}, drawn around the "
-        f"observation with digest {side.get('x_obs_digest')}. It is only valid for observations in "
-        f"that region -- outside it the flow has never seen a training row and will extrapolate "
-        f"confidently rather than return the prior. The Posterior tab and the CLI's run() load it "
-        f"anyway (build_posterior(..., accept_truncated=True)), installing its region for calibration "
-        f"and its observation digest for inference, which warns on any other observation; pick an "
-        f"amortized posterior for general inference.")
-
-
-# Whether infer_and_visualize records the observation it ran against.
-# A MODULE global so the suites can rebind it, exactly as they rebind TRAINING_CHECKPOINT_EVERY and
-# for the same reason: the full-pipeline tests call infer_and_visualize, and left on they scatter a
-# record into Resources/Observations on every run. Nothing else in the suite writes into Resources,
-# and that property is worth keeping. It is NOT a user-facing switch -- a real inference always
-# records, because TSNPE keys on the digest and an amortized posterior has no observation at save
-# time.
 
 
 def _log_params_for(cfg: SimConfig):

@@ -14,7 +14,8 @@ from datetime import datetime
 
 import torch
 
-from core.config import FDTConfig, PLOT_PATH
+from core import config
+from core.config import FDTConfig
 from core.FDT.campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
 from core.FDT.spectral import gen_freqs_log, eff_temp_ratio, find_spectral_peak
 from core.FDT.sanity import run_all_sanity, _interp_log
@@ -22,6 +23,14 @@ from core.FDT.plots import (
     plot_eff_temp_ratio, plot_chi_components, plot_psd,
     plot_spontaneous_trajectory,
 )
+
+
+def _out_dir():
+    """Where FDT saves its plots: <artifacts root>/fdt, created on demand (piece 5 wraps FDT in the
+    store; until then this is a plain directory)."""
+    d = config.artifacts_root() / "fdt"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def _estimate_omega_0(cfg: FDTConfig) -> tuple[float, str]:
@@ -61,7 +70,6 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
     print(f"Cell file natural-frequency estimate: omega_0 ~= {omega_0_desc}")
 
     # Single plot dir + timestamp for all outputs from this run (incl. sanity plots).
-    PLOT_PATH.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # 2. Sanity checks (optional skip). skip_sanity/confirm_production default to None => prompt (CLI);
@@ -71,7 +79,7 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
     if skip_sanity:
         print("Skipping sanity checks.")
     else:
-        passive_plot_path = PLOT_PATH / f"fdt_ratio_passive_{timestamp}.png"
+        passive_plot_path = _out_dir() / f"fdt_ratio_passive_{timestamp}.png"
         results = run_all_sanity(cfg, passive_plot_path=passive_plot_path)
         if not all(passed for passed, _ in results.values()):
             print("WARNING: one or more sanity checks failed (see metrics above).")
@@ -91,8 +99,8 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
     freqs_psd, G, t_traj, x_mean_traj = run_campaign1_psd(cfg, return_trajectory=True)
 
     # Save the ensemble-mean unforced trajectory as a diagnostic before moving on.
-    # (PLOT_PATH and timestamp set at the top of run_fdt.)
-    traj_path = PLOT_PATH / f"spontaneous_trajectory_{timestamp}.png"
+    # (timestamp set at the top of run_fdt.)
+    traj_path = _out_dir() / f"spontaneous_trajectory_{timestamp}.png"
     plot_spontaneous_trajectory(
         t_traj.cpu().numpy(), x_mean_traj.cpu().numpy(),
         save_path=traj_path,
@@ -125,10 +133,10 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
     prefactor = observable_noise_prefactor(cfg)
     ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), prefactor)
 
-    # 9. Plot + save (PLOT_PATH and timestamp set at the top of run_fdt)
-    ratio_path = PLOT_PATH / f"fdt_ratio_{timestamp}.png"
-    chi_path = PLOT_PATH / f"chi_components_{timestamp}.png"
-    psd_path = PLOT_PATH / f"psd_{timestamp}.png"
+    # 9. Plot + save (timestamp set at the top of run_fdt)
+    ratio_path = _out_dir() / f"fdt_ratio_{timestamp}.png"
+    chi_path = _out_dir() / f"chi_components_{timestamp}.png"
+    psd_path = _out_dir() / f"psd_{timestamp}.png"
 
     plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
               save_path=psd_path,

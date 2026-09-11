@@ -1,4 +1,6 @@
 """
+⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+
 WHY are chi probes being masked, and which knob would recover them?
 
 The smoke train found 77 % of training probes masked. The runtime warning
