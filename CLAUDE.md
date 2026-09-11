@@ -62,8 +62,10 @@ what is on disk, the last gate). Update it at the end of every session.
   this code and are deleted by the clean-break runbook (design spec §9).
 - The science guardrails are in `PRISM_HANDOFF.md` §11.6 (TSNPE) and the traps in §5; the
   handoff is being split into `docs/` by piece 6 but is still the reference until then.
-- Git: make local commits only; the user handles remote operations. Do not amend; one commit
-  per logical step; end messages with the Co-Authored-By line the harness provides.
+- Git: work directly on the local `main` branch — no feature branches, no worktrees (decided
+  2026-09-11 after piece 1's merge). Local commits only, one per logical step, never amended,
+  ending with the Co-Authored-By line the harness provides; the user pushes and handles every
+  other remote operation.
 
 ## Where things are
 

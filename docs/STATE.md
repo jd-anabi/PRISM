@@ -1,7 +1,7 @@
 # PRISM — state
 
-**Last updated:** 2026-09-11 (piece 1 executed on branch `piece-1-artifact-store`; closing gates
-recorded below; the merge to `main` and the clean-break runbook are the user's next two steps)
+**Last updated:** 2026-09-11 (piece 1 MERGED into `main` as `461d780`; the clean-break runbook is
+the user's next step; from now on all work happens directly on the local `main` branch)
 
 ## Where things stand
 
@@ -13,8 +13,10 @@ recorded below; the merge to `main` and the clean-break runbook are the user's n
   specs (`aff8f7e`), piece 0 (`4b1834a`..`d05d3cd`, `3913a1b`), the piece-1 plan (`afa484f`).
 - **Piece 0 is DONE** (2026-09-10): pytest, `CLAUDE.md`, this file, the launchers, the display
   checklist, the GPU smoke baseline (table below).
-- **Piece 1 is EXECUTED** (2026-09-10/11) on branch `piece-1-artifact-store` in the worktree
-  `.worktrees/piece-1-artifact-store/` (forked from `main` at `8ec18aa`): the 14 tasks of
+- **Piece 1 is MERGED** (2026-09-11, merge commit `461d780`; the branch and its worktree are
+  deleted). It was built on branch `piece-1-artifact-store` (forked from `main` at `8ec18aa`,
+  28 commits, tip `7bce752`; `main`'s own `70cd11a` sandboxed the old artifact-consistency tests
+  and is superseded by the branch's rewrite of that file): the 14 tasks of
   `docs/superpowers/plans/2026-09-10-artifact-store.md`, one commit each with a per-task review
   and fix loop, then a whole-branch review ("ready with fixes"), one fix wave (`830cee1`) and one
   residual fix (`3f1a1b3`). The execution ledger (rulings R1–R7, every parked finding, every
@@ -34,9 +36,8 @@ recorded below; the merge to `main` and the clean-break runbook are the user's n
 
 ## Owed, in order
 
-1. **Merge piece 1** (user; the worktree cannot move `main`): from the main checkout,
-   `git merge --no-ff piece-1-artifact-store`, then `git worktree remove .worktrees/piece-1-artifact-store`
-   and `git branch -d piece-1-artifact-store`. The branch's own gates are in the table below.
+1. ~~Merge piece 1~~ — done 2026-09-11 (`461d780`); the one-process fast gate on merged `main`
+   is recorded in the table below.
 2. **Clean-break runbook** (user-executed; destructive): design spec §9 / plan Task 14 — untrack
    the generated files and `sbc_run.log`, delete `Resources/{Priors,Posteriors,Checkpoints,
    Observations,Plots,CrossValidation,ReductionMap}`, archive `scripts/tsnpe_round1_forensics.py`
@@ -86,7 +87,7 @@ recorded below; the merge to `main` and the clean-break runbook are the user's n
 | gate | result |
 |---|---|
 | `pytest --collect-only -q` | 2026-09-11 at `3f1a1b3`: 356 (355 run by the fast suite + the slow one; Reduction's 5 are collected with it) |
-| fast suite, ONE process, `pytest -m "not slow" -q` | 2026-09-11 08:20 UTC at `3f1a1b3`: **355 passed, 1 deselected**, 115 warnings, 10 min 36 s, exit 0; the real `Artifacts/` gained nothing (the conftest teardown assertion) |
+| fast suite, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `3f1a1b3` (branch tip): 355 passed, 1 deselected, 10 min 36 s, exit 0. **On merged `main` `461d780`: 355 passed, 1 deselected**, 115 warnings, 10 min 56 s, exit 0; the real `Artifacts/` gained nothing and the user-model suite's temporary `Resources/*/sbitest` inputs were cleaned up (the conftest teardown assertion and `git status` both clean afterwards) |
 | slow test `pytest tests/test_user_sbi.py -m slow -q` | 2026-09-11 at `e4e60eb` (Task 13): 1 passed, 31 min 16 s, exit 0; re-run at `3f1a1b3` after the fix wave: **1 passed**, 93 deselected, 30 min 11 s, exit 0 — the full suite is green on the branch as it stands |
 | five-part fast gate (per task; last at `830cee1`) | store suite 42–43 passed; `--ignore=test_user_sbi` 261; `test_user_sbi` non-slow 1 / 16 / 12 / 64 — all green |
 | `core/Reduction/tests` under pytest | 2026-09-10: 5 passed (collected with the fast suite since) |
@@ -108,3 +109,7 @@ recorded below; the merge to `main` and the clean-break runbook are the user's n
   refused at stage entry. The recorded fast gate is one process (a split gate hid a
   default-store leak once). The smoke-train artifact names are `smoke_prior`/`smoke_posterior`
   (a leading underscore is not a legal name).
+- **2026-09-11** — after the merge: **no more feature branches or worktrees.** Every piece from
+  here on is built directly on the local `main` branch in the one checkout; the user pushes.
+  (The branch cost a merge, a conflict on a file both sides touched, and a stale copy of this file
+  on `main` while it was open.)
