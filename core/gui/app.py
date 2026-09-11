@@ -87,4 +87,9 @@ def build_app(argv=None):
         traceback.print_exc()
         raise SystemExit(1) from e
     window_ref["w"] = window
+    # The taskbar draws the window CLASS icon whenever its icon query goes unanswered, and Qt's class
+    # carries python.exe's generic glyph; PRISM's first show is busy long enough for that to happen
+    # every time (app_icon.set_windows_class_icon has the measurements). Before the first show --
+    # __main__ shows the window after this returns -- and winId() creates the HWND hidden.
+    app_icon.set_windows_class_icon(window)
     return app, window

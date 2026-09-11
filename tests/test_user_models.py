@@ -30,6 +30,7 @@ import matplotlib                                                 # noqa: E402
 matplotlib.use("Agg")                                            # match the app (core/gui/__main__.py forces it)
 
 import numpy as np                                                # noqa: E402
+import pytest                                                     # noqa: E402
 import torch                                                      # noqa: E402
 from PySide6.QtGui import QPalette                                # noqa: E402
 from PySide6.QtWidgets import QApplication                        # noqa: E402
@@ -884,6 +885,64 @@ def test_the_app_icon_loads_at_several_sizes():
     assert len(sizes) >= 4, sizes
     assert 16 in sizes and 256 in sizes, sizes
     app_icon.set_windows_app_user_model_id()                       # must never raise, on any platform
+
+
+def test_the_ico_is_the_png_set_and_the_class_icon_call_is_harmless_offscreen():
+    """The Windows taskbar shows the window CLASS icon whenever its icon query is not answered in time,
+    and Qt registers its class with the stock generic glyph because python.exe carries no icon
+    resource (the 2026-09-11 walkthrough, row 1). The class icon has to come from a real .ico, so
+    assets/app/prism.ico ships beside the PNGs and must BE the PNG set: its 256 frame is
+    prism-256.png pixel for pixel, or an SVG edit that regenerated the PNGs but not the .ico would put
+    two different marks on the title bar and the taskbar. Off a real Windows display the call is a
+    no-op that reports False and never raises."""
+    from PIL import Image
+    from PySide6.QtWidgets import QMainWindow
+    from core.gui import app_icon
+    _app()
+    ico = app_icon._APP_DIR / "prism.ico"
+    assert ico.is_file(), "no prism.ico: re-run core/gui/assets/app/build_app_icon.py"
+    with Image.open(ico) as im:
+        sizes = set(im.info.get("sizes") or {im.size})
+        assert {(16, 16), (32, 32), (48, 48), (256, 256)} <= sizes, sizes
+        im.size = (256, 256)
+        im.load()
+        frame = im.convert("RGBA")
+    with Image.open(app_icon._APP_DIR / "prism-256.png") as png:
+        assert frame.tobytes() == png.convert("RGBA").tobytes(), "prism.ico's 256 frame is not prism-256.png"
+    w = QMainWindow()
+    assert app_icon.set_windows_class_icon(w) is False       # offscreen: no real HWND, so nothing to set
+
+
+@pytest.mark.display
+def test_the_window_class_icon_becomes_ours_on_a_real_windows_display():
+    """Needs QT_QPA_PLATFORM=windows (the root conftest defaults to offscreen, where this is skipped):
+    ``set QT_QPA_PLATFORM=windows && pytest tests/test_user_models.py -m display``.
+
+    Before the call the class icon is the stock IDI_APPLICATION handle -- the generic glyph the
+    taskbar showed for PRISM -- and after it the class carries a different, non-null icon. The window
+    is never shown, so nothing flashes on screen; the taskbar itself is row 1 of
+    docs/checklists/display-walkthrough.md."""
+    import ctypes
+    from ctypes import wintypes
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QMainWindow
+    from core.gui import app_icon
+    _app()
+    if QGuiApplication.platformName() != "windows":
+        pytest.skip(f"needs the windows platform plugin, got {QGuiApplication.platformName()!r}")
+    user32 = ctypes.windll.user32
+    user32.GetClassLongPtrW.restype = ctypes.c_void_p
+    user32.GetClassLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.LoadIconW.restype = ctypes.c_void_p
+    user32.LoadIconW.argtypes = [wintypes.HINSTANCE, ctypes.c_void_p]
+    w = QMainWindow()
+    hwnd = int(w.winId())
+    before = user32.GetClassLongPtrW(hwnd, -14)                          # GCLP_HICON
+    assert before == user32.LoadIconW(None, 32512), "Qt's class icon is no longer IDI_APPLICATION; re-check the walkthrough"
+    assert app_icon.set_windows_class_icon(w) is True
+    after = user32.GetClassLongPtrW(hwnd, -14)
+    assert after and after != before, (before, after)
+    assert user32.GetClassLongPtrW(hwnd, -34) not in (0, None)          # GCLP_HICONSM
 
 
 def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
