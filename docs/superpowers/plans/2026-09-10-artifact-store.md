@@ -3087,8 +3087,8 @@ def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(ti
     m, res = cal.manifest, cal.results
     keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
     assert m.parents == {"posterior": r.posterior.id, "prior": r.prior.id} and m.config["n_cal"] == 8
-    assert list(res["sbc"]["per_param"]) == keys
-    assert set(res["sbc"]["per_param"][keys[0]]) == {"ks_p", "c2st_ranks", "c2st_dap"}
+    assert [r["name"] for r in res["sbc"]["per_param"]] == keys
+    assert set(res["sbc"]["per_param"][0]) == {"name", "ks_p", "c2st_ranks", "c2st_dap"}
     assert set(res["tarp"]) == {"atc", "ks_p"} and res["num_posterior_samples"] == 40 and res["kept_fraction"] is None
     assert res["informativeness"] is None or "total_nats" in res["informativeness"]
     assert set(m.payloads) == {"ranks.npz", "results.json"}
@@ -3124,8 +3124,10 @@ then `with store.create("calibration", cfg, name=name, note=note) as w:` wrappin
             "ecp": ecp.detach().cpu().numpy(), "alpha_grid": alpha_grid.detach().cpu().numpy()})
         keys = list(cfg.params_dict) + list(cfg.rescale_params)
         results = {
-            "sbc": {"per_param": {k: {"ks_p": _num(sbc_stats["ks_pvals"][j]), "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
-                                      "c2st_dap": _num(sbc_stats["c2st_dap"][j])} for j, k in enumerate(keys)}},
+            # An ordered LIST of records: manifest JSON sorts keys, so a dict keyed by name would lose
+            # the parameter order (ruling R6; the loader reads the manifest body, results.json is a copy).
+            "sbc": {"per_param": [{"name": k, "ks_p": _num(sbc_stats["ks_pvals"][j]), "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
+                                   "c2st_dap": _num(sbc_stats["c2st_dap"][j])} for j, k in enumerate(keys)]},
             "tarp": {"atc": _num(atc), "ks_p": _num(tarp_kspval)},
             "informativeness": None if info is None else {
                 "total_nats": _num(info["total_nats"]), "sem_nats": _num(info["sem_nats"]),
