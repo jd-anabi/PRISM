@@ -33,7 +33,8 @@ from .config import (
 from . import cli, config, forcing
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
-from .artifacts import LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration, resolve_store
+from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
+                        LoadedInference, resolve_store)
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .artifacts.provenance import file_ref as _file_ref
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
@@ -84,7 +85,6 @@ def run(cfg: SimConfig):
     # accept: a NON-AMORTIZED artifact may be loaded here -- its region then restricts the
     # calibration prior below, and step 4 warns if the observation is not the one it was drawn around.
     lp_post = build_posterior(cfg, lp, pos_choice, train_new, accept=Accept(truncated=True))
-    posterior = lp_post.posterior
     helpers.clear_screen()
 
     # 3. Calibration (data-free): SBC + expected coverage -- on the posterior's own region, if it has
@@ -112,7 +112,7 @@ def run(cfg: SimConfig):
                 f"T_obs={T_obs_s:.2f}s exceeds the training range maximum T_MAX_EXP_S="
                 f"{T_MAX_EXP_S:.2f}s; the posterior may extrapolate poorly.", stacklevel=2)
         obs = generate_observations(cfg)
-        infer_and_visualize(cfg, posterior, obs.x_obs, obs.obs_data, obs.t_dim, show_truth=True)
+        infer_and_visualize(cfg, lp_post, obs)
     elif mode == "experimental":
         if cfg.chi_mode:
             spont_path, forced_paths, T_obs_s, F0_si = cli.get_inference_inputs_chi()
@@ -127,7 +127,7 @@ def run(cfg: SimConfig):
             rec = RecordingSet(spont=spont_path, forced=((forced_path, None),), T_obs_s=T_obs_s,
                                forcing_params_si=forcing_params_si)
         obs = build_experiment_observation(cfg, rec)
-        infer_and_visualize(cfg, posterior, obs.x_obs, obs.obs_data, obs.t_dim, show_truth=False)
+        infer_and_visualize(cfg, lp_post, obs)
     # mode == "none": stop after calibration
 
 
@@ -1524,187 +1524,228 @@ def _num(x):
 
 
 # ── Step 4b: Inference visualization (requires a chosen observation) ─────────
-def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior,
-                        obs_stats: torch.Tensor, obs_data: torch.Tensor, t_dim: torch.Tensor,
-                        show_truth: bool, *, fig_sink=None) -> None:
+def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation: LoadedObservation,
+                        *, name: str = "", note: str = "", fig_sink=None, store=None, accept=None,
+                        n_samples: int = 1000) -> LoadedInference:
     """
     Observation-dependent posterior plots for a chosen observation (a simulated ground-truth cell or
-    experimental data): corner plot, posterior-predictive check (PPC), and the eye test. show_truth
-    overlays the ground truth (simulated branch) or omits it (experimental branch).
+    experimental data): corner plot, posterior-predictive check (PPC), and the eye test. WRITES an
+    inference artifact (samples.pt, results.json, every figure) inside ``store.create``, so a failure
+    partway through leaves no half-artifact, naming the posterior and observation as parents.
 
+    :param posterior / observation: the wrappers; the observation's context (T_obs, n_obs, the drive,
+                     a simulated cell's truth) is put back on cfg by observation.install, so this runs
+                     in a fresh session too. show_truth = the observation is a simulated cell.
+    :param accept: Accept(other_observation=True) lets a NON-AMORTIZED posterior run on an observation
+                     other than its region's; the flag is recorded in the artifact.
+    :param n_samples: posterior draws for the corner, the PPC and the summary (1000 = the historical
+                     constant).
     :param fig_sink: Optional (title, fig) -> None display callback (a GUI embeds the figures); when
                      None each plot falls back to the legacy blocking plt.show() (CLI unchanged).
     """
-    t = cfg.t
-    device = cfg.hw.device
-    dtype = cfg.hw.dtype
-    T_obs = cfg.T_obs
+    from .artifacts import Accept
+    store = resolve_store(store)
+    accept = accept or Accept()
+    post = posterior.posterior
+    observation.install(cfg)
+    show_truth = observation.manifest.body["source"]["kind"] == "simulated"
+    p_body = posterior.manifest.body
+    if observation.mode != p_body["mode"] or observation.width != int(p_body["conditioning"]["width"]):
+        raise ValueError(
+            f"Observation '{observation.name or observation.id}' is {observation.mode} / {observation.width} wide, "
+            f"but posterior '{posterior.name or posterior.id}' conditions on {p_body['mode']} / "
+            f"{p_body['conditioning']['width']}. They do not describe the same measurement.")
+    t, device, dtype, T_obs = cfg.t, cfg.hw.device, cfg.hw.dtype, cfg.T_obs
     inits = _observation_inits(cfg)
-
-    # GUARDRAIL 2 at the one place every inference passes through: a NON-AMORTIZED posterior says
-    # which observation its region was drawn around, and this is where the observation first exists.
-    # A hard WARNING, not a refusal -- a simulated cell re-drawn with new noise legitimately has a new
-    # digest and is exactly the "near x_obs" such a posterior is for; a different recording is not,
-    # and the flow saw no training row there.
-    _want = getattr(posterior, "x_obs_digest", None)
-    if _want is not None:
-        _got = observation_digest(obs_stats)
-        if _got != _want:
-            _msg = (f"[tsnpe] WARNING: this posterior is NOT AMORTIZED. TSNPE trained it on a prior "
-                    f"restricted to a region drawn around the observation with digest {_want}; the "
-                    f"observation supplied has digest {_got}. Near that observation (the same cell "
-                    f"re-simulated with new noise, say) it is valid; anywhere else the flow has never "
-                    f"seen a training row and extrapolates confidently rather than returning the prior. "
-                    f"Use the recorded observation, or an amortized posterior, for anything else.")
-            print(_msg, flush=True)
-            warnings.warn(_msg, stacklevel=2)
-
-    # Corner plot
-    samples = posterior.sample((1000,), x=obs_stats.to(device))
-    # Size the corner by the PARAMETER COUNT: a 13x13 grid at pairplot's default is cramped enough that
-    # tick labels overlap and axis titles clip. Thin the ticks for the same reason.
-    n_p = len(cfg.inferred_labels)
-    fig, ax = pairplot(
-        samples.cpu().numpy(),
-        points=(np.array([cfg.ground_truth]) if show_truth else None),
-        labels=cfg.inferred_labels,
-        figsize=(min(24, max(8, 1.35 * n_p)), min(24, max(8, 1.35 * n_p))),
-    )
-    _thin_ticks(fig)
-    _emit(fig_sink, "Posterior corner", fig)
-
-    # PPC - Option B: sort posterior samples by t_scale, process in mini-batches
-    # Each sample gets its own subsample_factor based on its t_scale; all samples
-    # share physical duration T_obs at dt_exp sampling (matching the observation).
-    nd_dim = len(cfg.params_dict)
-    samples_nd = samples[:, :nd_dim]
-    samples_rescale = samples[:, nd_dim:]
-    # TIER 1 (a box that declares T instead of f_scale): substitute the DERIVED f_scale into T's column before anything
-    # simulates. A no-op for a box that declares f_scale. `sim_rescale_idx` is what the force
-    # builders and gen_chi_raw must then be given -- handed the INFERRED index they would not
-    # find 'f_scale', would fall into the Hopf-style x_scale/t_scale branch, and would drive
-    # at a silently wrong amplitude.
-    samples_rescale = derived.to_sim_rescale(samples_nd, samples_rescale, cfg.rescale_idx,
-                                            *cfg.tier1_args)
-    n_samples = samples.shape[0]
-    # Same for all samples. Prefer the length generate_observations actually resolved (post
-    # cost-ceiling clip); fall back to the formula only on the experimental paths, which never call
-    # generate_observations and take their length from the recording itself.
-    N_points_obs = cfg.n_obs if cfg.n_obs is not None else int(cfg.T_obs / cfg.dt_exp)
-
-    forcing_gt = torch.tensor([[val for val, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
-    forcing_gt_expanded = forcing_gt.expand(n_samples, -1)  # (n_samples, n_forcing); empty if no forcing
-    n_vars = inits.shape[-1]
-    n_force_ch = forcing.n_force_channels(cfg.model, cfg.forcing_idx, n_vars)
-
-    (x_dim_sorted, x_spont_sorted, chi_block_sorted,
-     inv_sort_idx) = ppc.simulate_ppc_bins(cfg, t, inits, samples_nd, samples_rescale,
-                                           forcing_gt, N_points_obs, expected_forcing_dim(cfg),
-                                           dtype, device)
-
-    # Restore original sample order
-    x_spont = x_spont_sorted[inv_sort_idx]
-    # Layout [S | log(T) | forcing|chi] — must match the observation in generate_observations.
-    if cfg.chi_mode:
-        x_dim = x_spont                                 # PPC "sample trajectories" = passive spontaneous trace
-        sim_stats = pipeline.gen_stats(x_spont, None, cfg.dt_exp, None, None, None,
-                                       device=device, spontaneous_only=True)
-        sim_stats = statistics.conditioning_rows(sim_stats, T_obs, chi_block_sorted[inv_sort_idx].cpu())
-    elif cfg.has_forcing:
-        x_dim = x_dim_sorted[inv_sort_idx]
-        n_drive = x_dim.shape[0]
-        sim_stats = pipeline.gen_stats(
-            x_spont, x_dim, cfg.dt_exp,
-            forcing_gt[:, cfg.forcing_idx["amp"]].expand(n_drive),
-            forcing_gt[:, cfg.forcing_idx["freq"]].expand(n_drive),
-            forcing_gt[:, cfg.forcing_idx["phase"]].expand(n_drive),
-            device=device,
+    obs_stats, obs_data, t_dim = observation.x_obs.to(device), observation.obs_data, observation.t_dim
+    # GUARDRAIL 2 at the one place every inference passes through -- a REFUSAL now, not a warning:
+    # outside its region a truncated flow extrapolates confidently. Accept(other_observation=True)
+    # is the recorded exception (a simulated cell re-drawn with new noise is the legitimate case).
+    _want, accepted = post.x_obs_digest, []
+    if _want is not None and observation.digest != _want:
+        _msg = (f"[tsnpe] this posterior is NOT AMORTIZED. TSNPE trained it on a prior restricted to a "
+                f"region drawn around the observation with digest {_want}; the observation supplied has digest "
+                f"{observation.digest}. Near that observation (the same cell re-simulated with new noise, say) it is "
+                f"valid; anywhere else the flow has never seen a training row and extrapolates confidently rather "
+                f"than returning the prior.")
+        if not accept.other_observation:
+            raise ValueError(_msg + " Use the recorded observation, an amortized posterior, or pass "
+                             "Accept(other_observation=True) to run anyway -- the inference will record it.")
+        print(_msg + " Running anyway (accepted).", flush=True)
+        warnings.warn(_msg, stacklevel=2)
+        accepted = accept.used()
+    keys = list(cfg.params_dict) + list(cfg.rescale_params)
+    with store.create("inference", cfg, name=name, note=note) as w:
+        sink = w.fig_sink(fig_sink)
+        samples = post.sample((int(n_samples),), x=obs_stats)
+        # Corner plot
+        # Size the corner by the PARAMETER COUNT: a 13x13 grid at pairplot's default is cramped enough that
+        # tick labels overlap and axis titles clip. Thin the ticks for the same reason.
+        n_p = len(cfg.inferred_labels)
+        fig, ax = pairplot(
+            samples.cpu().numpy(),
+            points=(np.array([cfg.ground_truth]) if show_truth else None),
+            labels=cfg.inferred_labels,
+            figsize=(min(24, max(8, 1.35 * n_p)), min(24, max(8, 1.35 * n_p))),
         )
-        sim_stats = statistics.conditioning_rows(sim_stats, T_obs, forcing_gt_expanded.cpu())
-    else:
-        x_dim = x_spont                                 # the PPC "sample trajectories" are spontaneous
-        sim_stats = pipeline.gen_stats(x_spont, None, cfg.dt_exp, None, None, None,
-                                       device=device, spontaneous_only=True)
-        sim_stats = statistics.conditioning_rows(sim_stats, T_obs)
-    # Conditioning layout, so the zero-variance count can be split by origin rather than reported as
-    # one number. See analysis.invalid_breakdown: most of a big "invalid" count is normally empty chi
-    # probe slots, which is a fact about the run's K, not a defect.
-    from .SBI.statistics import SUMMARY_WIDTH
-    ppc_layout = {"input_dim": SUMMARY_WIDTH + 1,
-                  "chi_k_pad": cfg.chi_k_pad if cfg.chi_mode else None,
-                  "chi_elem_w": config.CHI_ELEM_W if cfg.chi_mode else None,
-                  "chi_n_freqs": cfg.chi_n_freqs if cfg.chi_mode else None}
-    results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats, layout=ppc_layout)
-    _note = analysis.describe_invalid(results.get("invalid_breakdown"))
-    if _note:
-        print(f"[ppc] {_note}", flush=True)
-    fig_ppc = visualizers.plot_ppc(
-        results,
-        ground_truth=(cfg.ground_truth if show_truth else None),
-        param_names=cfg.inferred_labels,
-        n_samples=n_samples,
-    )
-    _emit(fig_sink, "Posterior predictive check", fig_ppc)
+        _thin_ticks(fig)
+        sink("Posterior corner", fig)
 
-    # Eye test: central-estimate trajectories (posterior mean & median) vs ground truth.
-    # The MAP (argmax-log-prob sample) is a poor summary of a wide posterior, so instead we
-    # simulate the trajectories of the posterior MEAN and MEDIAN parameter vectors. Averaging
-    # the sample trajectories pointwise would destructively cancel the oscillation (samples
-    # differ in freq/phase), so we simulate the central PARAMETERS and keep a coherent drive
-    # response. Each central vector is simulated on the same physical grid as the observation
-    # (T_obs at dt_exp), mirroring one row of the per-sample PPC path above.
-    def _simulate_central_trajectory(theta_central: torch.Tensor) -> np.ndarray:
-        """Forced-run trajectory of a single (nd + rescale) param vector, on the obs grid."""
-        theta_central = theta_central.unsqueeze(0)                       # (1, n_inferred)
-        central_nd = theta_central[:, :nd_dim]
-        central_rescale = theta_central[:, nd_dim:]
-        central_rescale = derived.to_sim_rescale(central_nd, central_rescale, cfg.rescale_idx,
-                                                *cfg.tier1_args)              # tier 1, as above
-        t_scale_c = central_rescale[0, cfg.rescale_idx["t_scale"]].item()
-        subsample_c = max(1, round((cfg.dt_exp / t_scale_c) / cfg.dt_nd_min))
-        n_fine_c = min(cfg.steady_idx + N_points_obs * subsample_c, len(t))
-        t_fine_c = t[:n_fine_c]
-        n_segs_c = max(1, math.ceil(n_fine_c / CHUNK_LEN))
-        if cfg.has_forcing and not cfg.chi_mode:
-            force_c = pipeline.build_nondim_sin_force_tensor(
-                forcing_gt, t_fine_c, central_rescale, cfg.forcing_idx, cfg.sim_rescale_idx)
+        # PPC - Option B: sort posterior samples by t_scale, process in mini-batches
+        # Each sample gets its own subsample_factor based on its t_scale; all samples
+        # share physical duration T_obs at dt_exp sampling (matching the observation).
+        nd_dim = len(cfg.params_dict)
+        samples_nd = samples[:, :nd_dim]
+        samples_rescale = samples[:, nd_dim:]
+        # TIER 1 (a box that declares T instead of f_scale): substitute the DERIVED f_scale into T's column before anything
+        # simulates. A no-op for a box that declares f_scale. `sim_rescale_idx` is what the force
+        # builders and gen_chi_raw must then be given -- handed the INFERRED index they would not
+        # find 'f_scale', would fall into the Hopf-style x_scale/t_scale branch, and would drive
+        # at a silently wrong amplitude.
+        samples_rescale = derived.to_sim_rescale(samples_nd, samples_rescale, cfg.rescale_idx,
+                                                *cfg.tier1_args)
+        n_samples = samples.shape[0]
+        # Same for all samples. Prefer the length generate_observations actually resolved (post
+        # cost-ceiling clip); fall back to the formula only on the experimental paths, which never call
+        # generate_observations and take their length from the recording itself.
+        N_points_obs = cfg.n_obs if cfg.n_obs is not None else int(cfg.T_obs / cfg.dt_exp)
+
+        forcing_gt = torch.tensor([[val for val, _ in cfg.force_params_dict.values()]], dtype=dtype, device=device)
+        forcing_gt_expanded = forcing_gt.expand(n_samples, -1)  # (n_samples, n_forcing); empty if no forcing
+        n_vars = inits.shape[-1]
+        n_force_ch = forcing.n_force_channels(cfg.model, cfg.forcing_idx, n_vars)
+
+        (x_dim_sorted, x_spont_sorted, chi_block_sorted,
+         inv_sort_idx) = ppc.simulate_ppc_bins(cfg, t, inits, samples_nd, samples_rescale,
+                                               forcing_gt, N_points_obs, expected_forcing_dim(cfg),
+                                               dtype, device)
+
+        # Restore original sample order
+        x_spont = x_spont_sorted[inv_sort_idx]
+        # Layout [S | log(T) | forcing|chi] — must match the observation in generate_observations.
+        if cfg.chi_mode:
+            x_dim = x_spont                                 # PPC "sample trajectories" = passive spontaneous trace
+            sim_stats = pipeline.gen_stats(x_spont, None, cfg.dt_exp, None, None, None,
+                                           device=device, spontaneous_only=True)
+            sim_stats = statistics.conditioning_rows(sim_stats, T_obs, chi_block_sorted[inv_sort_idx].cpu())
+        elif cfg.has_forcing:
+            x_dim = x_dim_sorted[inv_sort_idx]
+            n_drive = x_dim.shape[0]
+            sim_stats = pipeline.gen_stats(
+                x_spont, x_dim, cfg.dt_exp,
+                forcing_gt[:, cfg.forcing_idx["amp"]].expand(n_drive),
+                forcing_gt[:, cfg.forcing_idx["freq"]].expand(n_drive),
+                forcing_gt[:, cfg.forcing_idx["phase"]].expand(n_drive),
+                device=device,
+            )
+            sim_stats = statistics.conditioning_rows(sim_stats, T_obs, forcing_gt_expanded.cpu())
         else:
-            force_c = torch.zeros((1, n_force_ch, t_fine_c.shape[0]), dtype=dtype, device=device)
-        x_nd_c = pipeline.gen_obs(
-            model=cfg.model, params=central_nd, t=t_fine_c, inits=inits,
-            force=force_c, n_segs=n_segs_c, steady_idx=cfg.steady_idx,
-            state_dep_drift=cfg.state_dep_drift, var_idx=0, dtype=dtype, device=device,
-        )[0, :, :]                                                       # (1, n_fine_c - steady_idx)
-        idx_c = torch.clamp(
-            torch.arange(N_points_obs, device=device) * subsample_c, max=x_nd_c.shape[1] - 1
+            x_dim = x_spont                                 # the PPC "sample trajectories" are spontaneous
+            sim_stats = pipeline.gen_stats(x_spont, None, cfg.dt_exp, None, None, None,
+                                           device=device, spontaneous_only=True)
+            sim_stats = statistics.conditioning_rows(sim_stats, T_obs)
+        # Conditioning layout, so the zero-variance count can be split by origin rather than reported as
+        # one number. See analysis.invalid_breakdown: most of a big "invalid" count is normally empty chi
+        # probe slots, which is a fact about the run's K, not a defect.
+        from .SBI.statistics import SUMMARY_WIDTH
+        ppc_layout = {"input_dim": SUMMARY_WIDTH + 1,
+                      "chi_k_pad": cfg.chi_k_pad if cfg.chi_mode else None,
+                      "chi_elem_w": config.CHI_ELEM_W if cfg.chi_mode else None,
+                      "chi_n_freqs": cfg.chi_n_freqs if cfg.chi_mode else None}
+        results = analysis.posterior_predictive_check(obs_stats.squeeze(), sim_stats, layout=ppc_layout)
+        _note = analysis.describe_invalid(results.get("invalid_breakdown"))
+        if _note:
+            print(f"[ppc] {_note}", flush=True)
+        fig_ppc = visualizers.plot_ppc(
+            results,
+            ground_truth=(cfg.ground_truth if show_truth else None),
+            param_names=cfg.inferred_labels,
+            n_samples=n_samples,
         )
-        x_nd_c_ds = x_nd_c[:, idx_c]                                     # (1, N_points_obs)
-        x_scale_c = central_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
-        x_offset_c = central_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
-        return (x_scale_c * x_nd_c_ds + x_offset_c)[0].cpu().numpy()     # (N_points_obs,)
+        sink("Posterior predictive check", fig_ppc)
 
-    with torch.no_grad():
-        x_mean = _simulate_central_trajectory(samples.mean(dim=0))
-        x_median = _simulate_central_trajectory(samples.median(dim=0).values)
+        # Eye test: central-estimate trajectories (posterior mean & median) vs ground truth.
+        # The MAP (argmax-log-prob sample) is a poor summary of a wide posterior, so instead we
+        # simulate the trajectories of the posterior MEAN and MEDIAN parameter vectors. Averaging
+        # the sample trajectories pointwise would destructively cancel the oscillation (samples
+        # differ in freq/phase), so we simulate the central PARAMETERS and keep a coherent drive
+        # response. Each central vector is simulated on the same physical grid as the observation
+        # (T_obs at dt_exp), mirroring one row of the per-sample PPC path above.
+        def _simulate_central_trajectory(theta_central: torch.Tensor) -> np.ndarray:
+            """Forced-run trajectory of a single (nd + rescale) param vector, on the obs grid."""
+            theta_central = theta_central.unsqueeze(0)                       # (1, n_inferred)
+            central_nd = theta_central[:, :nd_dim]
+            central_rescale = theta_central[:, nd_dim:]
+            central_rescale = derived.to_sim_rescale(central_nd, central_rescale, cfg.rescale_idx,
+                                                    *cfg.tier1_args)              # tier 1, as above
+            t_scale_c = central_rescale[0, cfg.rescale_idx["t_scale"]].item()
+            subsample_c = max(1, round((cfg.dt_exp / t_scale_c) / cfg.dt_nd_min))
+            n_fine_c = min(cfg.steady_idx + N_points_obs * subsample_c, len(t))
+            t_fine_c = t[:n_fine_c]
+            n_segs_c = max(1, math.ceil(n_fine_c / CHUNK_LEN))
+            if cfg.has_forcing and not cfg.chi_mode:
+                force_c = pipeline.build_nondim_sin_force_tensor(
+                    forcing_gt, t_fine_c, central_rescale, cfg.forcing_idx, cfg.sim_rescale_idx)
+            else:
+                force_c = torch.zeros((1, n_force_ch, t_fine_c.shape[0]), dtype=dtype, device=device)
+            x_nd_c = pipeline.gen_obs(
+                model=cfg.model, params=central_nd, t=t_fine_c, inits=inits,
+                force=force_c, n_segs=n_segs_c, steady_idx=cfg.steady_idx,
+                state_dep_drift=cfg.state_dep_drift, var_idx=0, dtype=dtype, device=device,
+            )[0, :, :]                                                       # (1, n_fine_c - steady_idx)
+            idx_c = torch.clamp(
+                torch.arange(N_points_obs, device=device) * subsample_c, max=x_nd_c.shape[1] - 1
+            )
+            x_nd_c_ds = x_nd_c[:, idx_c]                                     # (1, N_points_obs)
+            x_scale_c = central_rescale[:, cfg.rescale_idx["x_scale"]].unsqueeze(1)
+            x_offset_c = central_rescale[:, cfg.rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in cfg.rescale_idx else 0.0
+            return (x_scale_c * x_nd_c_ds + x_offset_c)[0].cpu().numpy()     # (N_points_obs,)
 
-    # ── Posterior-overlay figures ────────────────────────────────────────────────────────────────
-    # Phase is set by the noise realisation, not by theta, so a draw can never match the observation
-    # pointwise; these figures either align that away explicitly or avoid depending on it. See
-    # core/SBI/overlay.py.
-    _emit_overlay_figures(cfg, obs_data, x_dim, sim_stats, obs_stats, samples, show_truth, fig_sink)
+        with torch.no_grad():
+            x_mean = _simulate_central_trajectory(samples.mean(dim=0))
+            x_median = _simulate_central_trajectory(samples.median(dim=0).values)
 
-    t_plot = t_dim.squeeze(0).cpu().numpy()
-    fig = visualizers.plot_posterior_vs_truth(
-        t=t_plot,
-        x_true=obs_data[0, :].cpu().numpy(),
-        x_mean=x_mean,
-        x_median=x_median,
-        x_samples=x_dim.cpu().numpy(),
-        n_show=10,
-        xlabel=labels.axis_label("t", "s"),
-        ylabel=labels.axis_label("x", cfg.length_unit),
-    )
-    _emit(fig_sink, "Eye test", fig)
+        # ── Posterior-overlay figures ────────────────────────────────────────────────────────────────
+        # Phase is set by the noise realisation, not by theta, so a draw can never match the observation
+        # pointwise; these figures either align that away explicitly or avoid depending on it. See
+        # core/SBI/overlay.py.
+        _emit_overlay_figures(cfg, obs_data, x_dim, sim_stats, obs_stats, samples, show_truth, sink)
+
+        t_plot = t_dim.squeeze(0).cpu().numpy()
+        fig = visualizers.plot_posterior_vs_truth(
+            t=t_plot,
+            x_true=obs_data[0, :].cpu().numpy(),
+            x_mean=x_mean,
+            x_median=x_median,
+            x_samples=x_dim.cpu().numpy(),
+            n_show=10,
+            xlabel=labels.axis_label("t", "s"),
+            ylabel=labels.axis_label("x", cfg.length_unit),
+        )
+        sink("Eye test", fig)
+
+        file_manager.atomic_torch_save(samples.detach().cpu(), w.payload("samples.pt"))
+        q = torch.quantile(samples.detach().cpu().to(torch.float64),
+                           torch.tensor([0.05, 0.5, 0.95], dtype=torch.float64), dim=0)
+        out = {
+            "ppc": {"mean_abs_z": _num(results["mean_abs_z"]), "max_abs_z": _num(results["max_abs_z"]),
+                    "coverage_90": _num(results["coverage_90"]), "num_outside": int(results["num_outside"]),
+                    "num_invalid": int(results["num_invalid"]),
+                    "invalid_breakdown": results.get("invalid_breakdown"), "note": _note or ""},
+            # A LIST of records, not a dict keyed by name: manifest JSON sorts keys, so a dict would lose
+            # the parameter order (Task 9's review; the same rule as sbc.per_param).
+            "posterior_summary": [{"name": k, "q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
+                                  for i, k in enumerate(keys)],
+            "ground_truth": {k: float(v) for k, v in zip(keys, cfg.ground_truth)} if show_truth else None,
+            "n_samples": int(n_samples), "accepted": accepted,
+        }
+        w.payload("results.json").write_text(json.dumps(out, indent=2, allow_nan=False), encoding="utf-8")
+        w.parents = {"posterior": posterior.id, "observation": observation.id}
+        w.fingerprints["x_obs"] = observation.digest
+        w.config.update({"n_samples": int(n_samples)})
+        w.body = {"results": out}
+    return store.load_inference(w.id)
+
 
 def _build_latent_prior_for_validation(cfg, inferred_prior):
     """Mirror of the latent-prior construction in build_posterior, for gen_cal_data in validate."""

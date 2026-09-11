@@ -329,7 +329,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                     self.log_pane.append_line(
                         "Fix the cell selection first: " + "; ".join(self._cell_problems), "warning")
                     return
-            self.dispatch(_run_simulated_inference, cfg, post.posterior, cell, self.sim_tobs.value(),
+            self.dispatch(_run_simulated_inference, cfg, post, cell, self.sim_tobs.value(),
                           gt_dicts=gt_dicts, prior=self.session.inf_prior, provide_fig_sink=True,
                           on_result=self._on_observation)
         elif cfg.observation_mode == "chi":          # experimental, χ(ω): 1 passive + K forced
@@ -356,26 +356,30 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             pairs = [r.pair() for r in self._chi_forced_fields]
             rec = RecordingSet(spont=self.chi_spont.value(), forced=tuple(pairs),
                                T_obs_s=self.chi_tobs.value(), F0_si=self.chi_f0_si.value())
-            self.dispatch(_run_experimental_inference, cfg, post.posterior, rec, provide_fig_sink=True,
+            self.dispatch(_run_experimental_inference, cfg, post, rec, provide_fig_sink=True,
                           on_result=self._on_observation)
         elif not cfg.has_forcing:                    # experimental, passive (no drive)
             if not self.exp_spont.value():
                 self.log_pane.append_line("Select a passive recording first.", "warning")
                 return
             rec = RecordingSet(spont=self.exp_spont.value(), T_obs_s=self.exp_tobs.value())
-            self.dispatch(_run_experimental_inference, cfg, post.posterior, rec, provide_fig_sink=True,
+            self.dispatch(_run_experimental_inference, cfg, post, rec, provide_fig_sink=True,
                           on_result=self._on_observation)
         else:                                        # experimental, driven
             forcing_si = {name: fld.value() for name, fld in self._forcing_fields.items()}
             rec = RecordingSet(spont=self.exp_spont.value(), forced=((self.exp_forced.value(), None),),
                                T_obs_s=self.exp_tobs.value(), forcing_params_si=forcing_si)
-            self.dispatch(_run_experimental_inference, cfg, post.posterior, rec, provide_fig_sink=True,
+            self.dispatch(_run_experimental_inference, cfg, post, rec, provide_fig_sink=True,
                           on_result=self._on_observation)
 
     def _on_observation(self, payload):
-        self.session.observation = payload
-        self.log_pane.append_line(f"Observation recorded as {payload.name or '(unnamed, id ' + payload.id + ')'}; "
+        obs, inf = payload
+        self.session.observation = obs
+        self.log_pane.append_line(f"Observation recorded as {obs.name or '(unnamed, id ' + obs.id + ')'}; "
                                   f"the TSNPE tab can build a region around it.")
+        cov = inf.results["ppc"]["coverage_90"]
+        self.log_pane.append_line(f"Inference {inf.name or '(unnamed, id ' + inf.id + ')'} written; "
+                                  f"90% PPC coverage {'n/a' if cov is None else f'{cov:.3f}'}.")
         self._screen.refresh_gates()
 
     def refresh_local_gates(self):

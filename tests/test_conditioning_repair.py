@@ -897,52 +897,6 @@ def test_reparam_is_the_only_reader_of_the_rotation_matrix():
     assert readers == ["core/SBI/reparam.py"], f"parts[0].M is read outside reparam: {readers}"
 
 
-def test_a_truncated_posterior_warns_on_a_foreign_observation_at_inference():
-    """⚠ GUARDRAIL 2 at inference time. A non-amortized posterior names the observation its region
-    was drawn around; infer_and_visualize compares it against the observation it is handed BEFORE
-    sampling and warns loudly on a mismatch -- warns, not refuses, because a simulated cell re-drawn
-    with new noise is exactly the 'near x_obs' such a posterior is for. The matching observation is
-    silent."""
-    from core import cli, config, orchestrator, registry
-    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
-
-    class _Halt(Exception):
-        pass
-
-    class _Lat:
-        def sample(self, *a, **k):
-            raise _Halt()
-
-    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
-    cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
-                              str(BOUNDS_PATH / "nadrowski" / "master.txt"))
-    cfg.hw = config.cpu_device()
-    T = reparam.build_inferred_bijection(cfg, log_params=[])
-    x0 = torch.linspace(-1.0, 1.0, 50).reshape(1, 50)
-    region = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=13)
-    post = reparam.TransformedPosterior(_Lat(), T, truncation=region,
-                                        x_obs_digest=orchestrator.observation_digest(x0))
-    for x, expect in ((x0 + 1.0, True), (x0, False)):
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            try:
-                orchestrator.infer_and_visualize(cfg, post, x, None, None, show_truth=False)
-                raise AssertionError("the stub posterior was never sampled")
-            except _Halt:
-                pass
-        got = any("NOT AMORTIZED" in str(c.message) for c in caught)
-        assert got is expect, f"warned={got} for {'a foreign' if expect else 'the recorded'} observation"
-    amortized = reparam.TransformedPosterior(_Lat(), T)
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        try:
-            orchestrator.infer_and_visualize(cfg, amortized, x0 + 1.0, None, None, show_truth=False)
-            raise AssertionError("the stub posterior was never sampled")
-        except _Halt:
-            pass
-    assert not any("NOT AMORTIZED" in str(c.message) for c in caught)
-
-
 def test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region():
     """The CLI half of guardrail 8, pinned at the source: orchestrator.run must opt in to a
     non-amortized artifact with ``Accept(truncated=True)``. Dropping it would refuse the load

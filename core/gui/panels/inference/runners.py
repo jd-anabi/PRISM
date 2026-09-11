@@ -22,17 +22,15 @@ def _run_simulated_inference(cfg, posterior, cell_path, T_obs_s, *, gt_dicts=Non
         for msg in orchestrator.check_observation_in_distribution(cfg, prior.prior, prior.force_prior):
             print(f"WARNING: {msg}")
     obs = orchestrator.generate_observations(cfg, fig_sink=fig_sink)     # writes the artifact + the trace
-    orchestrator.infer_and_visualize(cfg, posterior, obs.x_obs, obs.obs_data, obs.t_dim, show_truth=True,
-                                     fig_sink=fig_sink)
-    return obs
+    inf = orchestrator.infer_and_visualize(cfg, posterior, obs, fig_sink=fig_sink)
+    return obs, inf
 
 
 def _run_experimental_inference(cfg, posterior, rec, *, fig_sink=None):
     """Any bench recording set (passive, driven, chi): the stage checks and hashes the files first."""
     obs = orchestrator.build_experiment_observation(cfg, rec, fig_sink=fig_sink)
-    orchestrator.infer_and_visualize(cfg, posterior, obs.x_obs, obs.obs_data, obs.t_dim, show_truth=False,
-                                     fig_sink=fig_sink)
-    return obs
+    inf = orchestrator.infer_and_visualize(cfg, posterior, obs, fig_sink=fig_sink)
+    return obs, inf
 
 
 def _run_tsnpe_round(cfg, posterior, prior, obs_path, n_directions, level,

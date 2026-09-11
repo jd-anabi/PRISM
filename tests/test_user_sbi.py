@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import matplotlib                                                 # noqa: E402
 matplotlib.use("Agg")
 
+import numpy as np                                                # noqa: E402
 import pytest  # noqa: E402
 import torch                                                      # noqa: E402
 
@@ -51,7 +52,7 @@ _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
 orchestrator.TRAINING_CHECKPOINT_EVERY = 0
 
 
-def test_no_forcing_user_model_full_sbi_pipeline():
+def test_no_forcing_user_model_full_sbi_pipeline(tmp_path):
     """build_prior -> build_posterior -> generate_observations -> infer -> validate -> passive-infer."""
     name = "SBITEST"
     doc = {"schema_version": 1, "name": name,
@@ -82,7 +83,6 @@ def test_no_forcing_user_model_full_sbi_pipeline():
         assert force_prior is None                               # no drive -> no forcing prior
 
         lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
-        posterior = lp_post.posterior
 
         obs = orchestrator.generate_observations(cfg, fig_sink=sink)
         x_dim, obs_stats, t_dim = obs.obs_data, obs.x_obs, obs.t_dim
@@ -90,17 +90,16 @@ def test_no_forcing_user_model_full_sbi_pipeline():
         assert torch.allclose(obs_stats[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
         assert torch.isfinite(obs_stats).all()
 
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True,
-                                         fig_sink=sink)
+        orchestrator.infer_and_visualize(cfg, lp_post, obs, fig_sink=sink)
         orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
 
         # passive experimental path: a single unforced recording, no drive / force units
-        obs_stats_e, obs_data_e, t_dim_e = orchestrator.build_experiment_obs_spontaneous(
-            cfg, x_dim[0].clone(), 1.0)
-        assert obs_stats_e.shape[-1] == SUMMARY_WIDTH + 1
-        assert torch.allclose(obs_stats_e[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats_e, obs_data_e, t_dim_e,
-                                         show_truth=False, fig_sink=sink)
+        from core.SBI.observations import RecordingSet
+        rec_path = tmp_path / "passive.npy"   # (add tmp_path to the test's signature; pytest injects it)
+        np.save(rec_path, x_dim[0].numpy())
+        obs_e = orchestrator.build_experiment_observation(cfg, RecordingSet(spont=str(rec_path), T_obs_s=1.0), fig_sink=sink)
+        assert obs_e.width == SUMMARY_WIDTH + 1
+        orchestrator.infer_and_visualize(cfg, lp_post, obs_e, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL = saved_runs, saved_ncal
@@ -396,7 +395,7 @@ def test_chi_mode_observation_width():
 
 
 @pytest.mark.slow
-def test_chi_mode_full_sbi_pipeline():
+def test_chi_mode_full_sbi_pipeline(tmp_path):
     """CHI_MODE end-to-end at tiny sizes: prior -> posterior -> observe -> infer -> validate, plus the
     experimental chi path. Pins the chi(omega) branch across gen_training_data / gen_cal_data / PPC."""
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
@@ -421,7 +420,6 @@ def test_chi_mode_full_sbi_pipeline():
         lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
         inferred_prior, force_prior = lp.prior, lp.force_prior
         lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
-        posterior = lp_post.posterior
 
         K3 = orchestrator.expected_forcing_dim(cfg)
         obs = orchestrator.generate_observations(cfg, fig_sink=sink)
@@ -429,18 +427,24 @@ def test_chi_mode_full_sbi_pipeline():
         assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1 + K3
         assert torch.isfinite(obs_stats).all()
 
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True,
-                                         fig_sink=sink)
+        orchestrator.infer_and_visualize(cfg, lp_post, obs, fig_sink=sink)
         orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
 
-        # experimental chi path: 1 passive + K forced recordings (GT passive trace as stand-ins).
-        forced = [x_dim[0].clone() for _ in range(config.CHI_N_FREQS)]
-        obs_stats_e, obs_data_e, t_dim_e = orchestrator.build_experiment_obs_chi(
-            cfg, x_dim[0].clone(), forced, 1.0, 1.0)
-        assert obs_stats_e.shape[-1] == SUMMARY_WIDTH + 1 + K3
-        assert torch.isfinite(obs_stats_e).all()
-        orchestrator.infer_and_visualize(cfg, posterior, obs_stats_e, obs_data_e, t_dim_e,
-                                         show_truth=False, fig_sink=sink)
+        # experimental chi path: 1 passive + K forced recordings (GT passive trace as stand-ins),
+        # each written to disk so build_experiment_observation can check and hash them like real files.
+        from core.SBI.observations import RecordingSet
+        spont_path = tmp_path / "chi_passive.npy"
+        np.save(spont_path, x_dim[0].numpy())
+        forced_paths = []
+        for i in range(config.CHI_N_FREQS):
+            p = tmp_path / f"chi_forced_{i}.npy"
+            np.save(p, x_dim[0].numpy())
+            forced_paths.append(p)
+        rec = RecordingSet(spont=str(spont_path), forced=tuple((str(p), None) for p in forced_paths),
+                           T_obs_s=1.0, F0_si=1.0)
+        obs_e = orchestrator.build_experiment_observation(cfg, rec, fig_sink=sink)
+        assert obs_e.width == SUMMARY_WIDTH + 1 + K3
+        orchestrator.infer_and_visualize(cfg, lp_post, obs_e, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL = saved_runs, saved_ncal

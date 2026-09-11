@@ -658,3 +658,44 @@ def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(ti
     assert r.store.load_calibration(cal.id).results == res
     with pytest.raises(ValueError, match="not the one this posterior was trained with"):
         orchestrator.validate_calibration(r.cfg, r.posterior, r.other_prior(), fig_sink=r.sink, n_cal=4, cal_n_scales=1)
+
+
+def test_inference_records_ppc_summary_and_ground_truth(tiny_run):
+    from core import orchestrator
+    r = tiny_run
+    obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="obs")
+    inf = orchestrator.infer_and_visualize(r.cfg, r.posterior, obs, fig_sink=r.sink, n_samples=50, name="inf")
+    m, res = inf.manifest, inf.results
+    keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
+    assert m.parents == {"posterior": r.posterior.id, "observation": obs.id} and res["n_samples"] == 50
+    assert res["accepted"] == [] and [r["name"] for r in res["posterior_summary"]] == keys
+    assert set(res["posterior_summary"][0]) == {"name", "q05", "median", "q95"}
+    assert res["ground_truth"] == {k: float(v) for k, v in zip(keys, r.cfg.ground_truth)}
+    assert {"mean_abs_z", "max_abs_z", "coverage_90", "num_outside", "num_invalid"} <= set(res["ppc"])
+    assert {"figures/posterior_corner.png", "figures/posterior_predictive_check.png", "figures/eye_test.png"} <= set(m.figures)
+    assert set(m.payloads) == {"samples.pt", "results.json"}
+    assert tuple(torch.load(inf.samples_path, weights_only=False).shape) == (50, len(keys))
+    assert r.store.load_inference(inf.id).results == res and m.fingerprints["x_obs"] == obs.digest
+
+
+def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unless_accepted(tiny_run):
+    """Successor of test_conditioning_repair's warning test: a NON-AMORTIZED posterior on an observation
+    other than its region's is a REFUSAL now, and accepting it is written into the inference."""
+    from copy import copy
+    from core import orchestrator
+    from core.artifacts import Accept
+    from core.SBI import reparam
+    r = tiny_run
+    obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink)
+    claims_another = copy(r.posterior)
+    claims_another.posterior = reparam.TransformedPosterior(r.posterior.latent, r.posterior.posterior.T,
+                                                             truncation=None, x_obs_digest="f" * 16)
+    with pytest.raises(ValueError, match="NOT AMORTIZED"):
+        orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20)
+    inf = orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20,
+                                           accept=Accept(other_observation=True))
+    assert inf.results["accepted"] == ["other_observation"]
+    same = copy(r.posterior)
+    same.posterior = reparam.TransformedPosterior(r.posterior.latent, r.posterior.posterior.T,
+                                                  truncation=None, x_obs_digest=obs.digest)
+    assert orchestrator.infer_and_visualize(r.cfg, same, obs, fig_sink=r.sink, n_samples=20).results["accepted"] == []

@@ -816,7 +816,8 @@ def test_simulated_inference_runner_emits_the_ground_truth_figure():
     real_iv = orchestrator.infer_and_visualize
     cli.load_and_validate_gt = lambda cfg, path: []
     orchestrator.generate_observations = stub_generate_observations
-    orchestrator.infer_and_visualize = lambda *a, **k: None
+    orchestrator.infer_and_visualize = lambda *a, **k: types.SimpleNamespace(
+        id="i", name="", results={"ppc": {"coverage_90": 0.9}})
     try:
         inference_tabs._run_simulated_inference(
             Cfg(), object(), "cell.txt", 0.1, fig_sink=lambda title, fig: seen.append(title))
