@@ -1,7 +1,9 @@
 # PRISM — state
 
-**Last updated:** 2026-09-11 (piece 1 MERGED into `main` as `461d780`; the clean-break runbook is
-the user's next step; from now on all work happens directly on the local `main` branch)
+**Last updated:** 2026-09-11 (piece 1 MERGED as `461d780`; the CLEAN-BREAK RUNBOOK is EXECUTED —
+`8dbd93e`, `e37df41`, `19363d2` and the docs commit that carries this file; `Artifacts/` starts
+empty; next: the post-piece-1 GPU gate and the GUI checks, then piece 2; all work happens
+directly on the local `main` branch)
 
 ## Where things stand
 
@@ -33,16 +35,15 @@ the user's next step; from now on all work happens directly on the local `main` 
 - **Decision 2026-09-10: CLEAN BREAK.** Every generated artifact is deleted once piece 1 is
   merged (runbook: design spec §9 = plan Task 14). The old runbook's Run A, Run B and the TSNPE
   round (`PRISM_HANDOFF.md` §11.9) are ABANDONED; the retrain restarts from scratch after piece 6.
+  **Executed 2026-09-11** (section "Clean break" below).
 
 ## Owed, in order
 
 1. ~~Merge piece 1~~ — done 2026-09-11 (`461d780`); the one-process fast gate on merged `main`
    is recorded in the table below.
-2. **Clean-break runbook** (user-executed; destructive): design spec §9 / plan Task 14 — untrack
-   the generated files and `sbc_run.log`, delete `Resources/{Priors,Posteriors,Checkpoints,
-   Observations,Plots,CrossValidation,ReductionMap}`, archive `scripts/tsnpe_round1_forensics.py`
-   and `scripts/migrate_checkpoint_flags.py`, drop the seven `/Resources/*` lines from
-   `.gitignore`, record it here.
+2. ~~Clean-break runbook~~ — done 2026-09-11 (design spec §9 / plan Task 14, run by Claude at
+   the user's request; the "Clean break" section below records every step, the one deviation
+   and the fast gate afterwards).
 3. **GPU gate after piece 1** (plan §Verification): run 1 `CHI=1 TOBS_S=4.5
    BOUNDS=Resources/Bounds/nadrowski/master.txt CELL=Resources/Cells/nadrowski/master_spont.txt
    CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke python scripts/smoke_train.py`; run 2 the same
@@ -61,26 +62,53 @@ the user's next step; from now on all work happens directly on the local `main` 
 5. **Pieces 2 → 3 → (4 ∥ 5) → 6**, each brainstormed → spec → plan → implementation. Carried
    into them from piece 1 (spec §11 and the ledger): **piece 2** extends the source scan to
    `scripts/`, retires `_common.require_mode` and the unconditional `Accept(truncated=True)` in
-   `_common.load_posterior`, threads the store into the TSNPE runner; **piece 3** copy-on-run
-   session config (a refused stage must leave nothing on the session), `tsnpe_tab.restore_settings`;
-   **piece 4** annotate (`set_note` has no GUI caller), cleanup of incomplete directories,
+   `_common.load_posterior`, threads the store into the TSNPE runner, and fixes the stale
+   comments the clean break left (listed below); **piece 3** copy-on-run session config (a
+   refused stage must leave nothing on the session), `tsnpe_tab.restore_settings`; **piece 4**
+   annotate (`set_note` has no GUI caller), cleanup of incomplete directories,
    `Summary.complete` for simulations means "has a manifest", the observation width guard in
    `load_observation` has no isolated test.
 6. **The retrain.**
 
-## Artifacts on disk (`Resources/`, gitignored) — ALL to be deleted by the clean break
+## Clean break — EXECUTED 2026-09-11 (design spec §9 / plan Task 14)
 
-- Priors: `3d_master_08102026.pt`, `prior_08272026.pt`, `prior_08282026.pt`,
-  `prior_08282026_1.pt`, `shm.pt`.
-- Posteriors: `posterior_09022026` (+ `.rot.pt`; the TSNPE parent, 50-wide),
-  `posterior_08232026` (42-wide), `08192026_posterior_RETIRED_band_0p1_to_10`.
-- Checkpoints: 8 directories incl. `QUARANTINED_tsnpe_round1_truncated_rows_train_0b471d560271`
-  (5.2 GiB), `train_230ae7cb5fc2` (Run A's cache), `train_3780fd37a16a` (posterior_09022026's).
-- Observations: two `obs_*.pt` plus smoke-train litter.
-- None of it is readable by the piece-1 code: the sidecars, the `train_*` caches and the bare
-  `.pt` priors/posteriors have no manifest, and the store refuses a directory without one. The
-  `.rot.pt` sidecars hold V transposed (the load-time repair that reconciled them is deleted).
-- Nothing above must be kept. `Artifacts/` starts empty after the merge.
+- **Pre-flight.** A read-only four-lens audit (runtime code, tests, scripts and imports,
+  Reduction and misc) found NO live dependency on the seven trees, on `sbc_run.log` or on the
+  two scripts: every generated kind resolves through the store or `artifacts_root()`, the only
+  on-disk assertion in the suites is that `Resources/Bounds` is a directory, the one source scan
+  that walks `scripts/` (`tests/test_conditioning_repair.py:923`) has no needle in either script,
+  and `core/Reduction` writes only under `artifacts_root()/reduction`. Only stale comments (below).
+- **`8dbd93e`** — `git rm --cached` of the 20 tracked-but-ignored files: 7 `CrossValidation/*.h5`,
+  5 `Plots/*`, `Priors/shm.pt`, 6 `ReductionMap/*.parquet`, `sbc_run.log` (6.9 MB, still in
+  history). `git ls-files -i -c --exclude-standard` is empty since.
+- **Deleted from disk** (no commit; all gitignored): `Resources/{Priors,Posteriors,Checkpoints,
+  Observations,Plots,CrossValidation,ReductionMap}` — 1351 files, ~32 GB (Checkpoints alone:
+  `QUARANTINED_tsnpe_round1_truncated_rows_train_0b471d560271` 5.2 G, `train_3780fd37a16a` 11 G,
+  `train_230ae7cb5fc2` 5.2 G, `train_6c80f7d8037d` 4.9 G, `train_98aebd93ed17` 4.9 G,
+  `train_85226b80f5d1` 933 M, `train_005ff030d387` 371 M, `train_24922afa61da` 98 M) — and
+  `sbc_run.log`. `Resources/` now holds only `Bounds/ Cells/ Units/ Models/` (9 / 10 / 5 / 2
+  files). `archive/` untouched. `Artifacts/` does not exist yet; the GUI creates it at launch.
+- **`e37df41`** — `scripts/tsnpe_round1_forensics.py` and `scripts/migrate_checkpoint_flags.py`
+  moved on disk into the gitignored `archive/scripts/` and `git rm --cached`. **The one deviation
+  from the plan's letter:** the plan said `git mv`, but `archive/` is ignored and holds nothing
+  tracked, so a `git mv` would have re-created exactly the tracked-but-ignored class step 1
+  removed; `0a84fc8` archived the five diagnostics already there the same way. Nothing imported
+  either script; `scripts/` keeps 13 files.
+- **`19363d2`** — `.gitignore`: the seven `/Resources/*` lines and their comment block are gone;
+  `/sbc_run.log` stays ignored (its comment now says untracked and deleted); `/Artifacts/` stays.
+- **Docs** — this file; `CLAUDE.md`'s sentence about the old trees is past tense now.
+- **Left alone, for piece 2** (stale comments, none a code path): `core/gui/screens/
+  inference_screen.py:122` and `tests/test_nav_and_gating.py:273` (say the observation gate reads
+  `Resources/Observations`), `core/SBI/pipeline.py:1411` and `core/SBI/training_checkpoint.py:163`
+  ("a read-only `Resources/`" for a write that goes under `Artifacts/`), `core/SBI/statistics.py:506`
+  (the substitution-rate table's provenance was `Resources/Checkpoints/train_98aebd93ed17`, now
+  deleted — the numbers stand as history), `tests/test_user_sbi.py:47` (checkpoints "into
+  `Resources/Checkpoints`") and `:2209` (cites the archived `migrate_checkpoint_flags.py` as the
+  digest-migration precedent), `scripts/smoke_train.py:6`, and `run.sh:4-5` plus
+  `scripts/generate_bundle_videos.py:82-84` (both claim `config.py` resolves `Resources/` from the
+  CWD; it resolves from its own location). Also seen and left alone: stale
+  `.claude/worktrees/{jolly-jang,trusting-einstein,upbeat-rhodes-c8d30f}` directories (git lists
+  no worktrees) and six old `claude/*` branches.
 
 ## Last gate
 
@@ -88,6 +116,7 @@ the user's next step; from now on all work happens directly on the local `main` 
 |---|---|
 | `pytest --collect-only -q` | 2026-09-11 at `3f1a1b3`: 356 (355 run by the fast suite + the slow one; Reduction's 5 are collected with it) |
 | fast suite, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `3f1a1b3` (branch tip): 355 passed, 1 deselected, 10 min 36 s, exit 0. **On merged `main` `461d780`: 355 passed, 1 deselected**, 115 warnings, 10 min 56 s, exit 0; the real `Artifacts/` gained nothing and the user-model suite's temporary `Resources/*/sbitest` inputs were cleaned up (the conftest teardown assertion and `git status` both clean afterwards) |
+| fast suite AFTER THE CLEAN BREAK, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `19363d2` (trees deleted, scripts archived, `.gitignore` trimmed; `CLAUDE.md` and this file edited in the working tree): **355 passed, 1 deselected**, 115 warnings, 10 min 54 s, exit 0; the real `Artifacts/` still absent afterwards and the user-model suite's temporary `Resources/*/sbitest` inputs cleaned up (`git status` showed only the two doc edits) |
 | slow test `pytest tests/test_user_sbi.py -m slow -q` | 2026-09-11 at `e4e60eb` (Task 13): 1 passed, 31 min 16 s, exit 0; re-run at `3f1a1b3` after the fix wave: **1 passed**, 93 deselected, 30 min 11 s, exit 0 — the full suite is green on the branch as it stands |
 | five-part fast gate (per task; last at `830cee1`) | store suite 42–43 passed; `--ignore=test_user_sbi` 261; `test_user_sbi` non-slow 1 / 16 / 12 / 64 — all green |
 | `core/Reduction/tests` under pytest | 2026-09-10: 5 passed (collected with the fast suite since) |
@@ -113,3 +142,8 @@ the user's next step; from now on all work happens directly on the local `main` 
   here on is built directly on the local `main` branch in the one checkout; the user pushes.
   (The branch cost a merge, a conflict on a file both sides touched, and a stale copy of this file
   on `main` while it was open.)
+- **2026-09-11** — clean break executed (section above). Ruling: archiving into the gitignored
+  `archive/` means a move on disk plus `git rm --cached`, never `git mv` — the repository holds no
+  tracked-but-ignored file again. `/sbc_run.log` stays in `.gitignore`. A file changed with an
+  editor is NOT staged: `git commit` without `git add` commits nothing and says so only in its
+  output (the runbook's step 4 needed a second attempt because of it; always check the log).

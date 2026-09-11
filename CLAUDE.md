@@ -58,8 +58,9 @@ what is on disk, the last gate). Update it at the end of every session.
   wrapper; Save is a rename; loading refuses any verifiable mismatch, and `Accept(truncated,
   other_observation)` are the only escape hatches (each use is recorded downstream). No code
   outside `core/config.py` builds a literal `Resources/` or `Artifacts/` path (a test pins it).
-  The old `Resources/{Priors,Posteriors,Checkpoints,Observations,Plots}` trees are unreadable by
-  this code and are deleted by the clean-break runbook (design spec §9).
+  The old `Resources/{Priors,Posteriors,Checkpoints,Observations,Plots,CrossValidation,
+  ReductionMap}` trees were deleted by the clean-break runbook on 2026-09-11 (design spec §9);
+  `Resources/` holds only the four input folders and `Artifacts/` started empty.
 - The science guardrails are in `PRISM_HANDOFF.md` §11.6 (TSNPE) and the traps in §5; the
   handoff is being split into `docs/` by piece 6 but is still the reference until then.
 - Git: work directly on the local `main` branch — no feature branches, no worktrees (decided
