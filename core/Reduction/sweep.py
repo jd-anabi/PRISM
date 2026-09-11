@@ -7,11 +7,11 @@ varies; `run_reduction_map` is the interactive entry point that does Part A
 """
 from __future__ import annotations
 from datetime import datetime
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from .. import config
 from ..config import FDTConfig
 from .fixed_point import solve_fixed_point
 from .reduce import reduce_nwk_to_hopf, ReductionRecord, ReductionFailure, NWK_KEYS
@@ -161,7 +161,7 @@ def _print_part_a_report(rec: ReductionRecord) -> None:
 def run_reduction_map(cfg: FDTConfig) -> ReductionRecord:
     """
     CLI entry point. Runs Part A (cell-file report) then Part B (f_max sweep),
-    saves the sweep table to Resources/ReductionMap/, and returns the Part A
+    saves the sweep table to <artifacts root>/reduction/, and returns the Part A
     record so callers can chain further work.
     """
     nwk_params = _nwk_params_from_cfg(cfg)
@@ -181,7 +181,7 @@ def run_reduction_map(cfg: FDTConfig) -> ReductionRecord:
     df = sweep_f_max(cfg, grid, F_amplitude=cfg.F0)
 
     # Save table
-    out_dir = Path("Resources/ReductionMap")
+    out_dir = config.artifacts_root() / "reduction"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = out_dir / f"sweep_{stamp}.parquet"

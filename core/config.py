@@ -190,15 +190,6 @@ def artifacts_root() -> Path:
     return Path(os.environ.get("PRISM_ARTIFACTS") or (REPO_ROOT / "Artifacts"))
 
 
-# Generated-kind constants. REMOVED in piece 1's Task 12; until then every remaining reader is a
-# stage that has not yet moved to the store.
-_ROOT = RESOURCES_ROOT
-PRIOR_PATH   = _ROOT / "Priors"
-POSTERIOR_PATH = _ROOT / "Posteriors"
-PLOT_PATH    = _ROOT / "Plots"
-CHECKPOINT_PATH = _ROOT / "Checkpoints"
-OBSERVATION_PATH = _ROOT / "Observations"
-
 # === PARAMETER LABELS (for plotting) ===
 HOPF_LABELS = [r"$\mu$", r"$\beta$", r"$\sigma_x$", r"$\sigma_y$"]
 BP_LABELS = [r"$\tau_{hb}$", r"$\tau_m$", r"$\tau_{gs}$", r"$\tau_t$",

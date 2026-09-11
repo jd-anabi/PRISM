@@ -722,3 +722,33 @@ def test_a_round_records_parent_posterior_and_observation_as_parents(tiny_run):
         orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2, hidden_features=8,
                                      num_transforms=1, stop_after_epochs=1, truncation=region, observation=other,
                                      parent_posterior=r.posterior)
+
+
+def test_no_literal_resource_paths_outside_config():
+    """Every path under Resources/ or Artifacts/ is built from core.config. A literal anywhere else is a
+    store that moves with the working directory -- what Resources/ used to do. Docstrings and
+    comments are not Path() calls or `/` operands, so they do not trip this."""
+    import ast
+    root = Path(__file__).resolve().parents[1]
+    roots = ("Resources/", "Resources\\", "Artifacts/", "Artifacts\\", "Resources", "Artifacts")
+
+    def _lit(node):
+        return isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith(roots)
+
+    offenders = []
+    for py in sorted((root / "core").rglob("*.py")):
+        if py == root / "core" / "config.py":
+            continue
+        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+            hit = False
+            if isinstance(node, ast.Call):
+                fn = node.func
+                fname = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+                hit = fname in ("Path", "join") and node.args and _lit(node.args[0])
+            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                hit = _lit(node.left) or _lit(node.right)
+            if hit:
+                offenders.append(f"{py.relative_to(root)}:{node.lineno}")
+    assert not offenders, "literal store paths outside config.py:\n" + "\n".join(offenders)
+    for name in ("PRIOR_PATH", "POSTERIOR_PATH", "PLOT_PATH", "CHECKPOINT_PATH", "OBSERVATION_PATH"):
+        assert not hasattr(config, name), f"config.{name} still exists"

@@ -28,6 +28,7 @@ import h5py
 import numpy as np
 import torch
 
+from .. import config
 from ..config import FDTConfig
 from .campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
 from .spectral import gen_freqs_log, eff_temp_ratio
@@ -35,7 +36,9 @@ from .sanity import _interp_log
 from .fdt_pipeline import _estimate_omega_0
 
 
-_OUT_DIR = Path("Resources/CrossValidation")
+def _out_dir() -> Path:
+    """Where the FDT parameter-sweep study saves its HDF5 output: <artifacts root>/crossval."""
+    return config.artifacts_root() / "crossval"
 
 
 def _detect_resonance(omegas, G, omega_0_lin: float) -> tuple[float, bool]:
@@ -181,14 +184,15 @@ def run_fdt_param_sweep(
     :param sweep_grid: 1D array of values for sweep_param.
     :param fixed_overrides: other params pinned for the whole sweep
                             (e.g. {"temp": 1.0} for the S sweep, {"s": 0.0} for the T sweep).
-    :param output_path: target .h5. Defaults to Resources/CrossValidation/sweep_<param>_<stamp>.h5.
+    :param output_path: target .h5. Defaults to <artifacts root>/crossval/sweep_<param>_<stamp>.h5.
     :returns: the HDF5 output path.
     """
     fixed_overrides = fixed_overrides or {}
     if output_path is None:
-        _OUT_DIR.mkdir(parents=True, exist_ok=True)
+        out_dir = _out_dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = _OUT_DIR / f"sweep_{sweep_param}_{stamp}.h5"
+        output_path = out_dir / f"sweep_{sweep_param}_{stamp}.h5"
 
     fixed_str = ", ".join(f"{k}={v}" for k, v in fixed_overrides.items())
 

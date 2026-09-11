@@ -10,8 +10,8 @@ FDT.cross_validation.run_param_study_cli on a worker. Model is fixed to NADROWSK
 from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QWidget)
 
-from core import cli
-from core.config import CELL_PATH, PLOT_PATH
+from core import cli, config
+from core.config import CELL_PATH
 from core.FDT.cross_validation import run_param_study_cli
 
 from .base_panel import BasePanel
@@ -154,7 +154,7 @@ class CrossValPanel(BasePanel):
 
         # run_param_study_cli returns the two HDF5 DATA paths, not the figures -- the plots are saved
         # to disk (the S-sweep one at the study's midpoint, deliberately) and arrive via the watcher.
-        self.dispatch(run_param_study_cli, cfg, s_grid, temp_grid, watch_dir=PLOT_PATH,
+        self.dispatch(run_param_study_cli, cfg, s_grid, temp_grid, watch_dir=config.artifacts_root() / "crossval",
                       on_result=self._on_result)
 
     def _on_result(self, paths):

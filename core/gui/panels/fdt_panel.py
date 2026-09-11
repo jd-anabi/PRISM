@@ -9,8 +9,8 @@ explicit booleans; leaving them None would block the worker forever on an input(
 """
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPushButton
 
-from core import cli, registry
-from core.config import CELL_PATH, PLOT_PATH, VALID_MODELS
+from core import cli, config, registry
+from core.config import CELL_PATH, VALID_MODELS
 from core.FDT.campaigns import FDTModelError
 from core.FDT.fdt_pipeline import run_fdt
 
@@ -130,7 +130,7 @@ class FdtPanel(BasePanel):
             return
 
         # Explicit bools, never None -- see the module docstring.
-        self.dispatch(_run_fdt_guarded, cfg, watch_dir=PLOT_PATH,
+        self.dispatch(_run_fdt_guarded, cfg, watch_dir=config.artifacts_root() / "fdt",
                       skip_sanity=self.skip_sanity.isChecked(),
                       confirm_production=self.confirm_production.isChecked(),
                       on_finished=lambda: self.log_pane.append_line("FDT run finished."))

@@ -43,6 +43,13 @@ def build_app(argv=None):
     # construction. Per-file failures land in registry.load_errors (shown on the Settings screen).
     registry.load_user_models()
 
+    # The artifact store, resolved once: a root that cannot be created fails HERE, at launch, not at
+    # the first write hours into a run.
+    from core.artifacts import ArtifactStore, set_default_store
+    root = config.artifacts_root()
+    root.mkdir(parents=True, exist_ok=True)
+    set_default_store(ArtifactStore(root))
+
     # Before the QApplication, and so before any window: this is the Windows shell's grouping key, and
     # setting it late leaves the taskbar button showing the interpreter's icon instead of ours.
     app_icon.set_windows_app_user_model_id()

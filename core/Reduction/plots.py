@@ -9,15 +9,18 @@ Two kinds:
 """
 from __future__ import annotations
 from datetime import datetime
-from pathlib import Path
 
 import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from .. import config
 
-_PLOT_DIR = Path("Resources/Plots")
+
+def _plot_dir():
+    """Where the reduction-map plots are saved: <artifacts root>/reduction."""
+    return config.artifacts_root() / "reduction"
 
 
 def _overlay_halo() -> list:
@@ -94,9 +97,10 @@ def plot_sweep_summary(df: pd.DataFrame, save: bool = True, show: bool = False) 
     fig.tight_layout()
 
     if save:
-        _PLOT_DIR.mkdir(parents=True, exist_ok=True)
+        plot_dir = _plot_dir()
+        plot_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = _PLOT_DIR / f"reduction_sweep_{stamp}.png"
+        path = plot_dir / f"reduction_sweep_{stamp}.png"
         fig.savefig(path, dpi=160, bbox_inches="tight")
         if not show:
             plt.close(fig)
@@ -182,9 +186,10 @@ def plot_cross_validation_3d(
     fig.tight_layout()
 
     if save:
-        _PLOT_DIR.mkdir(parents=True, exist_ok=True)
+        plot_dir = _plot_dir()
+        plot_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = _PLOT_DIR / f"reduction_crossval_{stamp}.png"
+        path = plot_dir / f"reduction_crossval_{stamp}.png"
         fig.savefig(path, dpi=160, bbox_inches="tight")
         if not show:
             plt.close(fig)

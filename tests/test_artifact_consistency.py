@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 
 from core import cli, config, orchestrator, registry
-from core.config import BOUNDS_PATH, CELL_PATH, PRIOR_PATH, VALID_LABELS, VALID_MODELS
+from core.config import BOUNDS_PATH, CELL_PATH, VALID_LABELS, VALID_MODELS
 from core.Helpers import file_manager
 from core.SBI import reparam
 
@@ -173,12 +173,12 @@ def test_a_prior_the_posterior_was_not_trained_with_is_refused():
 
 
 # ── the end-of-run artifact writes are atomic ─────────────────────────────────────────────────────
-def test_a_torn_prior_write_leaves_the_previous_prior_intact():
+def test_a_torn_prior_write_leaves_the_previous_prior_intact(tmp_path):
     """A prior is not just a file: it is what the training checkpoint's identity fingerprints and what
     SBC draws theta* from. Half-replacing one does not produce a broken run, it produces a run that
     resumes against a distribution nobody can name (2026-08-12: prior_fingerprint is in the checkpoint
     identity for exactly this reason)."""
-    path = PRIOR_PATH / "_ptest_atomic.pt"
+    path = tmp_path / "_ptest_atomic.pt"
     real_save = torch.save
     try:
         _write_prior(path, [0.0, 0.0], [1.0, 1.0], ["a", "b"])
@@ -196,14 +196,12 @@ def test_a_torn_prior_write_leaves_the_previous_prior_intact():
 
         assert file_manager.read_prior_metadata(str(path))["param_keys"] == ["a", "b"], \
             "a torn write clobbered the prior it was replacing"
-        assert not (PRIOR_PATH / "_ptest_atomic.pt.tmp").exists(), "a failed write left its temp behind"
+        assert not (tmp_path / "_ptest_atomic.pt.tmp").exists(), "a failed write left its temp behind"
     finally:
         torch.save = real_save
-        path.unlink(missing_ok=True)
-        (PRIOR_PATH / "_ptest_atomic.pt.tmp").unlink(missing_ok=True)
 
 
-def test_atomic_savez_round_trips_and_cannot_be_torn():
+def test_atomic_savez_round_trips_and_cannot_be_torn(tmp_path):
     """The .loss.npz is a zip, so a truncated one raises BadZipFile rather than reading short -- and it
     is the file scripts/retrain_convergence.py reads back for its convergence verdict.
 
@@ -211,7 +209,7 @@ def test_atomic_savez_round_trips_and_cannot_be_torn():
     when handed a HANDLE, which is the difference between landing on <name>.loss.npz and on
     <name>.loss.npz.tmp.npz."""
     import numpy as np
-    path = PRIOR_PATH / "_ptest_atomic.npz"
+    path = tmp_path / "_ptest_atomic.npz"
     real_savez = np.savez
     try:
         file_manager.atomic_savez(path, dict(validation_loss=np.arange(3.0), epochs_trained=7))
@@ -230,11 +228,9 @@ def test_atomic_savez_round_trips_and_cannot_be_torn():
 
         with np.load(str(path)) as z:
             assert int(z["epochs_trained"]) == 7, "a torn write clobbered the previous curve"
-        assert not (PRIOR_PATH / "_ptest_atomic.npz.tmp").exists(), "a failed write left its temp behind"
+        assert not (tmp_path / "_ptest_atomic.npz.tmp").exists(), "a failed write left its temp behind"
     finally:
         np.savez = real_savez
-        path.unlink(missing_ok=True)
-        (PRIOR_PATH / "_ptest_atomic.npz.tmp").unlink(missing_ok=True)
 
 
 # ── the chi band/drive preflight (2026-08-19 regression) ─────────────────────────────────────────

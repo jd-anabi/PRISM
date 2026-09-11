@@ -10,13 +10,16 @@ is T_eff/T = 1.
 """
 from __future__ import annotations
 from datetime import datetime
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 
+from .. import config
 
-_PLOT_DIR = Path("Resources/Plots")
+
+def _plot_dir():
+    """Where the crossval 3D plots are saved: <artifacts root>/crossval."""
+    return config.artifacts_root() / "crossval"
 
 # Default linear x-window. omega/omega_0 spans [0.1, 30] but the structure
 # (deviation from FDT) lives near resonance; a linear axis out to 30 squashes it.
@@ -126,9 +129,10 @@ def plot_fdt_3d_vs_param(
     fig.tight_layout()
 
     if save:
-        _PLOT_DIR.mkdir(parents=True, exist_ok=True)
+        plot_dir = _plot_dir()
+        plot_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = _PLOT_DIR / f"{filename_tag}_{stamp}.png"
+        out = plot_dir / f"{filename_tag}_{stamp}.png"
         fig.savefig(out, dpi=160, bbox_inches="tight")
         if not show:
             plt.close(fig)

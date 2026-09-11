@@ -2013,22 +2013,15 @@ def test_a_complete_checkpoint_short_circuits_generation_entirely():
     assert torch.equal(got_x, ref_x) and torch.equal(got_th, ref_th)
 
 
-def test_checkpointing_off_writes_nothing_and_changes_nothing():
+def test_checkpointing_off_writes_nothing_and_changes_nothing(store):
     """checkpoint=None is the whole backward-compatibility story: analysis.gen_cal_data,
     scripts/chi_mask_audit and every pre-C-11 call site pass nothing and must be untouched -- same
     bytes out, and no disk written."""
-    import tempfile
-    tmp = Path(tempfile.mkdtemp())
-    from core import config as _cfg
-    saved, _cfg.CHECKPOINT_PATH = _cfg.CHECKPOINT_PATH, tmp
-    try:
-        a_x, a_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
-        b_x, b_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
-        assert torch.equal(a_x, b_x) and torch.equal(a_th, b_th)
-        assert not any(tmp.iterdir()), f"checkpointing was off but something was written: "\
-                                       f"{[p.name for p in tmp.iterdir()]}"
-    finally:
-        _cfg.CHECKPOINT_PATH = saved
+    a_x, a_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
+    b_x, b_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
+    assert torch.equal(a_x, b_x) and torch.equal(a_th, b_th)
+    assert not list(store.kind_dir("simulation").glob("*")), \
+        "checkpointing was off but the store's simulation directory gained something"
 
 
 # ── C-11: the atomic write and the checkpoint store (pure, no simulation) ────────────────────────
@@ -2266,9 +2259,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     no training row is ever generated.
     """
     import contextlib
-    import tempfile
     from types import SimpleNamespace
-    from core import config as _cfg
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
     # Module-level (not defined here) so it pickles: every build_posterior call now auto-persists
     # (piece 1, Task 7), and pickle cannot serialize a class defined inside a function.
@@ -2299,7 +2290,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     saved_gen_prior = orchestrator.pipeline.gen_prior
     saved_fisher = orchestrator.decorrelate.build_latent_fisher_rotation
     saved_train_nn = pipeline_mod.train_nn
-    saved_every, saved_root = orchestrator.TRAINING_CHECKPOINT_EVERY, _cfg.CHECKPOINT_PATH
+    saved_every = orchestrator.TRAINING_CHECKPOINT_EVERY
     try:
         cfg = cli.make_sim_config("NADROWSKI", labels, True,
                                   str(config.BOUNDS_PATH / "nadrowski" / "master.txt"),
@@ -2420,9 +2411,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         # that IS under this round's identity but stores another rotation is refused, and one that
         # records this region under the region's own V resumes.
         import shutil
-        tmp = Path(tempfile.mkdtemp())
         orchestrator.TRAINING_CHECKPOINT_EVERY = 1
-        _cfg.CHECKPOINT_PATH = tmp
         amortized = orchestrator.training_identity(cfg, inferred_prior, 8, 2)
         own = orchestrator.training_identity(cfg, inferred_prior, 8, 2, truncation=region)
         d_am, d_own = _tc.resolve_dir(amortized), _tc.resolve_dir(own)
@@ -2463,7 +2452,6 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         except ValueError as e:
             assert "a different region" in str(e), e
         orchestrator.TRAINING_CHECKPOINT_EVERY = 0
-        _cfg.CHECKPOINT_PATH = saved_root
 
         # (iv) the config's rotation flag must agree with the region, in both directions
         cfg.reparam_rotate = False
@@ -2507,7 +2495,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.decorrelate.build_latent_fisher_rotation = saved_fisher
         pipeline_mod.train_nn = saved_train_nn
-        orchestrator.TRAINING_CHECKPOINT_EVERY, _cfg.CHECKPOINT_PATH = saved_every, saved_root
+        orchestrator.TRAINING_CHECKPOINT_EVERY = saved_every
 
 
 def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
