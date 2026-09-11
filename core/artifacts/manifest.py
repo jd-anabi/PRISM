@@ -134,6 +134,15 @@ def validate(d: dict) -> Manifest:
     want = set(BODY_KEYS[d["kind"]])
     if set(d["body"]) != want:
         raise ManifestError(f"{d['kind']} body keys are {sorted(d['body'])}, expected {sorted(want)}")
+    if d["kind"] == "posterior" and bool(d["body"]["amortized"]) != (d["body"]["truncation"] is None):
+        # DEFECT D3's signature, refused at the schema: the amortization flag and the region are two
+        # views of one fact, and the load path gates on the flag while calibration and inference gate
+        # on the region. A manifest where they disagree is a posterior that is truncated in one
+        # reader's eyes and amortized in another's -- which is how a "0.000%" round passed every check.
+        raise ManifestError(
+            f"posterior body says amortized={d['body']['amortized']!r} beside "
+            f"{'a truncation region' if d['body']['truncation'] is not None else 'no truncation region'}; "
+            f"a truncated posterior carries its region and an amortized one carries none (defect D3)")
     _check_finite(d["body"], "body")
     _check_finite(d["config"], "config")
     return Manifest(**d)

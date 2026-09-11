@@ -143,6 +143,8 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     to match the physical sampling rate dt_exp and duration T_obs — exactly
     mirroring what the training loop produces.
     """
+    store = resolve_store(store)
+    store.assert_name_free("observation", name)      # before the simulation, not at the write
     t = cfg.t  # full pre-simulated ND time vector at dt_nd_min
 
     # Ground-truth rescale and forcing params as (1, n) tensors
@@ -286,7 +288,7 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     }
     forcing_vals = ({k: float(v) for k, (v, _) in cfg.force_params_dict.items()}
                     if (cfg.has_forcing and not cfg.chi_mode) else {})
-    return _write_observation(resolve_store(store), cfg, name, note, fig_sink, obs_stats, x_dim, t_dim,
+    return _write_observation(store, cfg, name, note, fig_sink, obs_stats, x_dim, t_dim,
                               title="Ground-truth trace", source=source, forcing_vals=forcing_vals)
 
 
@@ -296,6 +298,7 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
     compute (a missing recording is a FileNotFoundError here, not a traceback inside a worker), then
     the mode's builder runs and the artifact records the recordings, the drive and the context."""
     store = resolve_store(store)
+    store.assert_name_free("observation", name)      # with the file checks, before any compute
     named = [(rec.spont, "spont", None)] + [(p, "forced", f) for p, f in rec.forced]
     refs = []
     for p, role, f in named:
@@ -383,7 +386,9 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     :param cfg: Pipeline configuration.
     :param ref: a prior artifact's name or id; None when building.
     :param build_new: True to construct from scratch.
-    :param name: the artifact's name ("" = unnamed) when building.
+    :param name: the artifact's name ("" = unnamed) when building. A name already taken is refused
+                     HERE, at the entry, not by the write at the end: the stability sweep is ~9
+                     minutes and there is no reason to spend it to learn the name is in use.
     :param note: free-text note recorded on the artifact when building.
     :param fig_sink: Optional (title, fig) -> None display callback for the corner plot; None => plt.show().
     :param store: the ArtifactStore to read/write; None = the process default.
@@ -409,6 +414,10 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     silent no-op and the sweep runs at 50 anyway with nothing to say otherwise.
     """
     store = resolve_store(store)
+    # BEFORE THE SPEND, not at the write: create() refuses a duplicate name, and it runs after the
+    # sweep. Uniform across every stage (see build_posterior, the observation stages, validate and
+    # infer), and a no-op for the unnamed default.
+    store.assert_name_free("prior", name)
     # FIRST, before the ~9-minute stability sweep: is this chi configuration the one you meant? The
     # prior itself is chi-independent, so this is here purely to fail at the START of a session
     # rather than after its first expensive stage.
@@ -609,6 +618,10 @@ def build_posterior(
     so narrowing it does not speed anything up, it trades training rows for peak VRAM about 1:1.
     """
     store = resolve_store(store)
+    # Before anything is spent, on BOTH branches. A LOAD with a name is not a thing the GUI does, but
+    # the check is cheap and uniform, and a load that would end in a refused rename is worth refusing
+    # up front too. Days of training, in the training branch's case.
+    store.assert_name_free("posterior", name)
     from .artifacts import Accept
     from .artifacts.manifest import conditioning_block, region_to_json, tensor_digest, tensor_to_json
     accept = accept or Accept()
@@ -784,9 +797,9 @@ def build_posterior(
                 f"round trains in the parent posterior's basis: load the config the parent was trained "
                 f"with, or rebuild the region from a posterior trained under this one.")
         # GUARDRAIL 2's binding: the region already knows which observation it was drawn around
-        # (build_truncation_region records it from the same record it checked the digest of), so
-        # the artifact's digest is that one -- a separately supplied one must agree, and None is
-        # filled in rather than written into a sidecar as "valid near observation None".
+        # (build_truncation_region records it from the same observation artifact it checked the digest
+        # of), so the artifact's digest is that one -- a separately supplied one must agree, and None
+        # is filled in rather than recorded as "valid near observation None".
         if truncation.x_obs_digest is not None:
             if x_obs_digest is not None and x_obs_digest != truncation.x_obs_digest:
                 raise ValueError(
@@ -1045,9 +1058,13 @@ def build_posterior(
         if observation is not None:
             w.parents["observation"] = observation.id
         w.fingerprints = {"gmm": prior.fingerprint, "V": tensor_digest(V_rec), "probe": tensor_digest(probe)}
-        _fm = config.REPARAM_FISHER_M if fisher_m is None else fisher_m
+        # RESOLVED exactly as decorrelate.build_latent_fisher_rotation resolves them (`m or
+        # REPARAM_FISHER_M`, `dz if dz is not None else ...`, `n_points or ...`), so the manifest
+        # records the value the Fisher actually used: a 0 passed for m or n_points is falsy and falls
+        # back to the constant there, and recording the 0 would describe a run nobody made.
+        _fm = fisher_m or config.REPARAM_FISHER_M
         _fdz = config.REPARAM_FISHER_DZ if fisher_dz is None else fisher_dz
-        _fp = config.REPARAM_FISHER_POINTS if fisher_points is None else fisher_points
+        _fp = fisher_points or config.REPARAM_FISHER_POINTS
         w.config.update({"num_runs": n_runs, "run_size": run_size, "hidden_features": hf, "num_transforms": nt,
                          "learning_rate": lr, "stop_after_epochs": patience, "fisher_m": _fm,
                          "fisher_dz": _fdz, "fisher_points": _fp})
@@ -1169,11 +1186,14 @@ def build_truncation_region(posterior, observation, *,
     # same value by construction (store.py's load_posterior computes .fingerprint by this same walk),
     # so a mismatch means the artifact on disk is not what its own loader described.
     _walked_fp = _gmm_fingerprint(getattr(latent, "prior", None))
-    _claimed_fp = getattr(posterior, "fingerprint", None)
+    _claimed_fp = posterior.fingerprint
     if _claimed_fp is not None and _walked_fp is not None and _claimed_fp != _walked_fp:
         raise ValueError(
-            f"the parent wrapper claims training prior {_claimed_fp} but pickles {_walked_fp}; "
-            f"the artifact is inconsistent")
+            f"the parent wrapper claims training prior {_claimed_fp} but pickles {_walked_fp}: reload "
+            f"the parent through the store (ArtifactStore.load_posterior, i.e. build_posterior's load "
+            f"branch), which computes the fingerprint by this same walk. A wrapper whose fingerprint "
+            f"disagrees with the prior it pickles is not a current PRISM artifact, and the region would "
+            f"record the wrong base prior for the next round to be checked against.")
     return truncate.region_from_posterior(
         latent, x_obs.to(transform_device(T_parent)),
         n_directions=truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions),
@@ -1345,6 +1365,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
                      constant).
     """
     store = resolve_store(store)
+    store.assert_name_free("calibration", name)   # before the calibration set is simulated
     post, inferred_prior, force_prior = posterior.posterior, prior.prior, prior.force_prior
     truncation = post.truncation
     nps = int(num_posterior_samples)
@@ -1517,12 +1538,24 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             "n_cal": int(n_cal_used), "cal_n_scales": None if cal_n_scales is None else int(cal_n_scales),
             "num_posterior_samples": nps,
         }
-        w.payload("results.json").write_text(json.dumps(results, indent=2, allow_nan=False), encoding="utf-8")
+        _write_results_json(w.payload("results.json"), results)
         w.parents = {"posterior": posterior.id, "prior": prior.id}
         w.fingerprints["gmm"] = prior.fingerprint
         w.config.update({"n_cal": int(n_cal_used), "cal_n_scales": results["cal_n_scales"], "num_posterior_samples": nps})
         w.body = {"results": results}
     return store.load_calibration(w.id)
+
+
+def _write_results_json(path, payload: dict) -> None:
+    """The human-readable copy of a calibration/inference body, written ATOMICALLY.
+
+    Through file_manager's one mechanism like every other write in the store: a plain write_text can
+    leave a truncated file if the process dies mid-write, and the writer would then hash that
+    truncation into the manifest as the payload's sha256 -- an artifact that is permanently,
+    verifiably inconsistent with itself.
+    """
+    text = json.dumps(payload, indent=2, allow_nan=False).encode("utf-8")
+    file_manager._atomic_write(path, lambda fh: fh.write(text))
 
 
 def _num(x):
@@ -1556,9 +1589,11 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
     """
     from .artifacts import Accept
     store = resolve_store(store)
+    store.assert_name_free("inference", name)     # before the PPC's simulations
     accept = accept or Accept()
     post = posterior.posterior
-    observation.install(cfg)
+    # NOT installed yet: both refusals below come first. show_truth reads the MANIFEST, so it does not
+    # need the install either.
     show_truth = observation.manifest.body["source"]["kind"] == "simulated"
     p_body = posterior.manifest.body
     if observation.mode != p_body["mode"] or observation.width != int(p_body["conditioning"]["width"]):
@@ -1566,9 +1601,6 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
             f"Observation '{observation.name or observation.id}' is {observation.mode} / {observation.width} wide, "
             f"but posterior '{posterior.name or posterior.id}' conditions on {p_body['mode']} / "
             f"{p_body['conditioning']['width']}. They do not describe the same measurement.")
-    t, device, dtype, T_obs = cfg.t, cfg.hw.device, cfg.hw.dtype, cfg.T_obs
-    inits = _observation_inits(cfg)
-    obs_stats, obs_data, t_dim = observation.x_obs.to(device), observation.obs_data, observation.t_dim
     # GUARDRAIL 2 at the one place every inference passes through -- a REFUSAL now, not a warning:
     # outside its region a truncated flow extrapolates confidently. Accept(other_observation=True)
     # is the recorded exception (a simulated cell re-drawn with new noise is the legitimate case).
@@ -1585,6 +1617,12 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         print(_msg + " Running anyway (accepted).", flush=True)
         warnings.warn(_msg, stacklevel=2)
         accepted = accept.used()
+    # ONLY NOW: a refused inference must not leave the rejected observation's T_obs, probe frequencies
+    # or ground truth on the session's cfg, where the next stage would silently run against them.
+    observation.install(cfg)
+    t, device, dtype, T_obs = cfg.t, cfg.hw.device, cfg.hw.dtype, cfg.T_obs
+    inits = _observation_inits(cfg)
+    obs_stats, obs_data, t_dim = observation.x_obs.to(device), observation.obs_data, observation.t_dim
     keys = list(cfg.params_dict) + list(cfg.rescale_params)
     with store.create("inference", cfg, name=name, note=note) as w:
         sink = w.fig_sink(fig_sink)
@@ -1747,10 +1785,12 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
             # the parameter order (Task 9's review; the same rule as sbc.per_param).
             "posterior_summary": [{"name": k, "q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
                                   for i, k in enumerate(keys)],
-            "ground_truth": {k: float(v) for k, v in zip(keys, cfg.ground_truth)} if show_truth else None,
+            # _num like every other float in this body: the manifest refuses a non-finite number, and
+            # a cell file is hand-edited -- a bare float() would make the WRITE the place that fails.
+            "ground_truth": {k: _num(v) for k, v in zip(keys, cfg.ground_truth)} if show_truth else None,
             "n_samples": int(n_drawn), "accepted": accepted,
         }
-        w.payload("results.json").write_text(json.dumps(out, indent=2, allow_nan=False), encoding="utf-8")
+        _write_results_json(w.payload("results.json"), out)
         w.parents = {"posterior": posterior.id, "observation": observation.id}
         w.fingerprints["x_obs"] = observation.digest
         w.config.update({"n_samples": int(n_drawn)})

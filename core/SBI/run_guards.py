@@ -165,15 +165,6 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         f"  If the difference is DELIBERATE (a band sweep, say), re-run with {CHI_OVERRIDE_ENV}=1.")
 
 
-# Whether infer_and_visualize records the observation it ran against.
-# A MODULE global so the suites can rebind it, exactly as they rebind TRAINING_CHECKPOINT_EVERY and
-# for the same reason: the full-pipeline tests call infer_and_visualize, and left on they scatter a
-# record into Resources/Observations on every run. Nothing else in the suite writes into Resources,
-# and that property is worth keeping. It is NOT a user-facing switch -- a real inference always
-# records, because TSNPE keys on the digest and an amortized posterior has no observation at save
-# time.
-
-
 def _log_params_for(cfg: SimConfig):
     """Which ND parameter names go in a LOG box, for this config's model.
 

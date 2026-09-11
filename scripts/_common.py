@@ -45,8 +45,6 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import torch
-
 from core import cli, config, orchestrator, registry
 from core.config import (SimConfig, BOUNDS_PATH, CELL_PATH, T_MIN_EXP_S,
                          VALID_LABELS, VALID_MODELS)
@@ -220,6 +218,10 @@ def load_posterior(name: str, cfg: SimConfig, *, check_mode: bool = True):
 def require_mode(cfg: SimConfig, posterior_latent, sidecar: dict | None = None,
                  name: str = "posterior") -> tuple:
     """Fail LOUDLY and EARLY when a posterior's observation mode disagrees with ``cfg``.
+
+    KEPT FOR PIECE 2's command-line tool; it has no caller on this branch -- ``load_posterior`` now
+    goes through the store's loader, which makes every check this one made and refuses rather than
+    warns, so the scripts that used to call this no longer need to.
 
     Without this, ``sbc_characterize`` generated an entire calibration set (K x N_CAL simulations)
     and only then died on a raw matrix-shape ``RuntimeError`` from inside ``EmbeddedNet``'s first

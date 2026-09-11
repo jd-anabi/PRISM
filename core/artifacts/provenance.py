@@ -66,12 +66,27 @@ def sha256_file(path) -> str:
     return h.hexdigest()
 
 
-def file_ref(path, relative_to=None) -> dict:
+def file_ref(path, relative_to=None, *, missing_ok: bool = False) -> dict:
     """``{"path": <relative when under relative_to, else absolute>, "sha256": ...}``. Refuses a missing
-    file: an artifact must never claim an input it could not read."""
+    file: an artifact must never claim an input it could not read.
+
+    ``missing_ok`` records ``sha256: None`` instead of raising, for the ONE caller that must not fail:
+    the writer's commit at the END of a run. A bounds or cell file edited or moved during a multi-day
+    training run would otherwise turn the commit itself into the thing that loses the run -- an
+    unhashed input is a gap in the provenance, not a reason to throw the artifact away. Every other
+    caller checks its inputs BEFORE the spend, where refusing is the right answer.
+    """
     p = Path(path)
     if not p.is_file():
-        raise FileNotFoundError(f"input file not found: {p}")
+        if not missing_ok:
+            raise FileNotFoundError(f"input file not found: {p}")
+        shown = str(p)
+        if relative_to is not None:
+            try:
+                shown = Path(shown).relative_to(Path(relative_to).resolve()).as_posix()
+            except ValueError:
+                pass
+        return {"path": shown, "sha256": None}
     shown = str(p.resolve())
     if relative_to is not None:
         try:
@@ -81,13 +96,15 @@ def file_ref(path, relative_to=None) -> dict:
     return {"path": shown, "sha256": sha256_file(p)}
 
 
-def inputs_from_cfg(cfg) -> dict:
-    """The bounds / cell / units files a config was built from (``SimConfig.sources``), hashed."""
+def inputs_from_cfg(cfg, *, missing_ok: bool = False) -> dict:
+    """The bounds / cell / units files a config was built from (``SimConfig.sources``), hashed.
+    ``missing_ok`` passes through to :func:`file_ref` -- see there for why the writer's commit uses it."""
     from core import config
     src = getattr(cfg, "sources", None) or {}
     out = {"model": cfg.model}
     for key in ("bounds", "cell", "units"):
-        out[key] = file_ref(src[key], relative_to=config.RESOURCES_ROOT) if src.get(key) else None
+        out[key] = (file_ref(src[key], relative_to=config.RESOURCES_ROOT, missing_ok=missing_ok)
+                    if src.get(key) else None)
     return out
 
 

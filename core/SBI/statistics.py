@@ -488,6 +488,12 @@ class SummaryStatistics:
             return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
 
+# Bumped whenever the DEFINITION of any summary feature changes (a fix like section 7.6's FWHM, a
+# new feature, a changed winsor rule). It rides in the simulation identity, so a cache of
+# conditioning rows computed under the old definition is never resumed onto: only the flag LABELS
+# were digested before, and a changed definition behind an unchanged label re-keyed nothing.
+FEATURE_SET_VERSION = 1
+
 # === VALID FLAGS =================================================================================
 # A binary companion channel for each feature whose value is a SUBSTITUTED SENTINEL rather than a
 # measurement, mirroring the mask channel ChiSetEncoder already carries for the probe block.
@@ -518,12 +524,6 @@ class SummaryStatistics:
 # from the internal booleans that produced them, so the source path and the cache-migration path run
 # literally the same function on the same numbers -- they cannot drift, and there is no assertion to
 # maintain because there is no second implementation to disagree with.
-# Bumped whenever the DEFINITION of any summary feature changes (a fix like section 7.6's FWHM, a
-# new feature, a changed winsor rule). It rides in the simulation identity, so a cache of
-# conditioning rows computed under the old definition is never resumed onto: only the flag LABELS
-# were digested before, and a changed definition behind an unchanged label re-keyed nothing.
-FEATURE_SET_VERSION = 1
-
 VALID_FLAG_LABELS = [
     "V_B1_Q",             # the spontaneous peak never drops to half power -> no FWHM, no Q
     "V_B7_secondary",     # no secondary spectral peak above 5% of the main one

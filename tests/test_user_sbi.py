@@ -2348,8 +2348,9 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         assert torch.allclose(post.truncation.lo.double(), region.lo.double())
         assert torch.allclose(post.truncation.hi.double(), region.hi.double())
         assert torch.allclose(_rp.rotation_of(post.T).cpu(), Q)
-        # the region's own digest fills in a missing one, and contradicts a wrong one
-        post2 = _round(region, observation=None)
+        # a SUPPLIED digest that agrees passes through (the "fills in a missing one" half is the leg
+        # below, which passes observation=None), and a wrong one is contradicted
+        post2 = _round(region, observation=_lo(torch.zeros(1, 4), digest=region.x_obs_digest))
         assert post2.x_obs_digest == "deadbeefdeadbeef"
         try:
             _round(region, observation=_lo(torch.zeros(1, 4), digest="0" * 16))
@@ -2476,7 +2477,12 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
             z0 = float(T_train.inv(cfg.ground_truth_tensor.reshape(1, -1))[0, 0])
         lo, hi = ((w0.quantile(0.6), w0.quantile(0.9)) if z0 <= float(w0.median())
                   else (w0.quantile(0.1), w0.quantile(0.4)))      # the side of the median the truth is NOT on
-        far = _tr.TruncationRegion([0], [lo], [hi], n_latent=P, V=Q, probe=probe)
+        # x_obs_digest, like `region` above: since the final fix wave a NON-AMORTIZED artifact whose
+        # region does not name the observation it was drawn around is refused on load, and the round
+        # reads its own artifact back through the loader before returning. (A region built by
+        # build_truncation_region always carries the digest; only a hand-made one can lack it.)
+        far = _tr.TruncationRegion([0], [lo], [hi], n_latent=P, V=Q, probe=probe,
+                                   x_obs_digest="deadbeefdeadbeef")
         buf = io.StringIO()
         with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(buf):
             warnings.simplefilter("always")
@@ -2485,7 +2491,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         assert "GROUND TRUTH" in out and "direction 0" in out, out[-600:]
         assert any("GROUND TRUTH" in str(c.message) for c in caught)
         near = _tr.TruncationRegion([0], [min(z0, float(w0.quantile(0.02))) - 0.5],
-                                    [max(z0, float(w0.quantile(0.98))) + 0.5], n_latent=P, V=Q, probe=probe)
+                                    [max(z0, float(w0.quantile(0.98))) + 0.5], n_latent=P, V=Q, probe=probe,
+                                    x_obs_digest="deadbeefdeadbeef")
         buf = io.StringIO()
         with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(buf):
             warnings.simplefilter("always")

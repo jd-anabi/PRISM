@@ -1,5 +1,5 @@
 """
-⚠ BROKEN since piece 1 (2026-09-10): reads Resources/Posteriors; folded into the command-line tool in piece 2.
+⚠ BROKEN since piece 1 (2026-09-10): writes Resources/Plots (PLOT_PATH); folded into the command-line tool in piece 2.
 
 Degeneracy / sloppiness map over ALL 16 inferred params.
 

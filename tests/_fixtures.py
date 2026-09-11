@@ -1,8 +1,10 @@
 """Shared test helpers for the artifact-store suites (piece 1 of the 2026-09-10 hardening programme).
 
-A plain module -- importing it has NO side effects (no simulation, no file I/O, no torch seeding);
-everything here is a function or class definition, imported lazily inside each helper exactly as it
-was before the move so the import graph a bare ``import tests._fixtures`` pulls in stays light.
+A plain module: importing it imports torch and sbi (``DirectPosterior`` has to be imported at module
+level for ``_FakeDP`` to pickle) and does NOTHING ELSE -- no simulation, no file I/O, no torch
+seeding, no store writes. Everything else here is a function or class definition whose own imports
+stay lazy, exactly as they were before the move, so a bare ``import tests._fixtures`` costs the torch
+import and nothing more.
 Moved out of ``tests/test_artifact_store.py`` (Task 7) so ``tests/test_user_sbi.py``,
 ``tests/test_nav_and_gating.py`` and others can share them without importing a whole other test
 module (which pytest would then also collect a second time under a different name).
@@ -37,16 +39,25 @@ def _gmm_in_box(lows, highs, mask, seed=0):
     return torch.distributions.TransformedDistribution(base, T)
 
 
-def _prior_artifact(store, cfg, *, name="p", lows=None, highs=None, keys=None, model=None, seed=0):
-    """A prior artifact with a real 2-component GMM payload, laid out exactly as build_prior writes it."""
+def _prior_artifact(store, cfg, *, name="p", lows=None, highs=None, keys=None, model=None, seed=0,
+                    mask=None):
+    """A prior artifact with a real 2-component GMM payload, laid out exactly as build_prior writes it.
+
+    ``mask`` records a DIFFERENT log-box mask in the manifest than the one the payload's box was
+    actually built in. It is the only way to provoke load_prior's log-mask refusal: the mask is
+    derived from the config, so a prior written from this config can never disagree with it by
+    accident -- only a prior built when REPARAM_LOG_PARAMS (or a user model's box field) said
+    something else can, and that is exactly what the refusal exists for.
+    """
     from core.Helpers import file_manager
     from core.SBI.reparam import nd_log_mask
     from core.SBI.run_guards import _gmm_fingerprint, _log_params_for
     keys = keys or list(cfg.params_dict)
     lows = lows or [b[0] for _, b in cfg.params_dict.values()]
     highs = highs or [b[1] for _, b in cfg.params_dict.values()]
-    mask = nd_log_mask(cfg, log_params=_log_params_for(cfg))
-    dist = _gmm_in_box(lows, highs, mask, seed)
+    box_mask = nd_log_mask(cfg, log_params=_log_params_for(cfg))
+    recorded = [bool(v) for v in (box_mask.tolist() if mask is None else mask)]
+    dist = _gmm_in_box(lows, highs, box_mask, seed)
     with store.create("prior", cfg, name=name) as w:
         file_manager.save_mix_dist(dist, str(w.payload("prior.pt")), model=model or cfg.model, param_keys=keys)
         if model:
@@ -54,7 +65,7 @@ def _prior_artifact(store, cfg, *, name="p", lows=None, highs=None, keys=None, m
         w.fingerprints["gmm"] = _gmm_fingerprint(dist)
         w.body = {"gmm": {"n_components": 2, "param_keys": list(keys),
                           "box": {"nd_lows": [float(v) for v in lows], "nd_highs": [float(v) for v in highs],
-                                  "log_mask": [bool(v) for v in mask.tolist()]}},
+                                  "log_mask": recorded}},
                   "sweep": {}, "stability": {"accepted_sets": None, "iterations": 1}}
     return w
 

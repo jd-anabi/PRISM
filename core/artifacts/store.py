@@ -14,6 +14,7 @@ import contextlib
 import re
 import shutil
 import time
+import warnings
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -56,6 +57,9 @@ class Summary:
     created: str
     note: str
     path: Path
+    # "has a valid manifest", i.e. the directory describes a real artifact -- NOT "the run finished".
+    # For the simulation kind those differ: a cache is manifested from its first batch on, and
+    # ``body["complete"]`` is the field that says whether its rows are all there.
     complete: bool
     reason: "str | None"
     mode: "str | None" = None
@@ -105,14 +109,20 @@ class LoadedObservation(Loaded):
 
     def install(self, cfg) -> None:
         """Put the observation's context back on ``cfg`` -- what infer_and_visualize reads from it:
-        T_obs, n_obs, the chi probe frequencies, the forcing values, and for a simulated observation
-        the ground truth and initial conditions (so show_truth works in a fresh session)."""
+        T_obs, n_obs, the chi probe frequencies (and their COUNT), the forcing values, and for a
+        simulated observation the ground truth and initial conditions (so show_truth works in a fresh
+        session)."""
         import torch
         body = self.manifest.body
         cfg.T_obs = float(body["T_obs_cell"])
         cfg.n_obs = int(body["n_obs"]) if body["n_obs"] is not None else None
         cfg.chi_obs_freqs = (None if body["chi_obs_freqs"] is None else
                              torch.tensor(body["chi_obs_freqs"], dtype=cfg.hw.dtype, device=cfg.hw.device))
+        if body["chi_obs_freqs"] is not None:
+            # cfg.chi_n_freqs is "how many probes THIS OBSERVATION supplies" (it sets no width -- the
+            # pad does), and the PPC re-drives the experiment from it, so a fresh session must take it
+            # from the observation rather than from config.CHI_N_FREQS.
+            cfg.chi_n_freqs = len(body["chi_obs_freqs"])
         src = body["source"]
         if src["kind"] == "simulated":
             cfg.inject_ground_truth(dict(src["inits"]), dict(src["params"]), dict(src["rescale"]),
@@ -212,19 +222,39 @@ class ArtifactWriter:
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is not None:
-            _rmtree_retry(self.dir)
+            # The cleanup must never REPLACE the exception that ended the run -- the one the operator
+            # needs -- with a PermissionError about a directory the index already ignores (it has no
+            # manifest, so it is incomplete by definition and nothing will ever load it).
+            try:
+                _rmtree_retry(self.dir)
+            except OSError as e:              # noqa: BLE001 -- the in-flight cause must propagate, not this
+                warnings.warn(f"could not remove the incomplete artifact directory {self.dir} "
+                              f"({type(e).__name__}: {e}); it has no manifest, so the store ignores it.",
+                              stacklevel=2)
             return False
         self._commit()
         return False
 
     def _commit(self) -> None:
         hw = getattr(self.cfg, "hw", None)
+        # missing_ok: this runs at the END of a run that may have taken days, and an input file moved
+        # or edited meanwhile must be recorded as unhashed rather than raise here and lose everything
+        # the run produced. Named in a warning so the gap is not silent.
+        inputs = (prov.inputs_from_cfg(self.cfg, missing_ok=True) if self.cfg is not None
+                  else {"bounds": None, "cell": None, "units": None, "model": None})
+        gone = [k for k, v in inputs.items() if isinstance(v, dict) and v.get("sha256") is None]
+        if gone:
+            warnings.warn(
+                f"{self.kind} artifact {self.id}: input file(s) "
+                + ", ".join(f"{k} ({inputs[k]['path']})" for k in gone)
+                + " could not be read at commit, so the manifest records them unhashed. The artifact "
+                  "is written anyway -- losing a finished run to a moved input file would be worse.",
+                stacklevel=3)
         d = dict(
             schema=mf.SCHEMA, kind=self.kind, id=self.id, name=self.name, created=self.created.isoformat(),
             note=self.note, prism=prov.git_info(config.REPO_ROOT),
             env=prov.env_info(hw if hw is not None else config.cpu_device()),
-            inputs=(prov.inputs_from_cfg(self.cfg) if self.cfg is not None
-                    else {"bounds": None, "cell": None, "units": None, "model": None}),
+            inputs=inputs,
             config=self.config, parents=dict(self.parents), fingerprints=dict(self.fingerprints),
             payloads={f: prov.sha256_file(self.dir / f) for f in self._payloads},
             figures=list(self._figures), body=self.body,
@@ -312,24 +342,46 @@ class ArtifactStore:
             cand, n = f"{stamp}-{n}", n + 1
         return cand
 
+    def assert_name_free(self, kind: str, name: str, *, allow: "str | None" = None) -> None:
+        """Refuse a bad or taken artifact name for ``kind``, raising the same StoreError ``create``
+        would raise at the END of the stage.
+
+        PUBLIC, and called at every stage's entry, because ``create`` runs after the expensive part:
+        a prior sweep is ~9 minutes and a training run is days, and learning that the name is taken
+        only once the writer opens is how a finished run gets thrown away. Cheap (it reads the kind's
+        manifests) and idempotent, so a stage may call it and ``create`` may check again.
+
+        An empty name is always free -- unnamed is the default, and a kind may hold any number of
+        unnamed artifacts. ``allow`` is the id already entitled to the name (``rename``'s own
+        artifact), which is not a collision with itself.
+        """
+        if not name:
+            return
+        if not mf.NAME_RE.match(name):
+            raise StoreError(f"bad artifact name {name!r}: letters, digits, _ . - and at most 64 characters")
+        if mf.ID_RE.match(name):
+            # get()/path()/_find resolve a ref as an id OR a name, and the id is tried first: a name
+            # shaped like an id would shadow the artifact whose id it is, which could then never be
+            # addressed at all.
+            raise StoreError(f"bad artifact name {name!r}: it is shaped like an artifact id, which would "
+                             f"shadow the artifact whose id it is in get() and path()")
+        other = self._find(kind, name)[1]
+        if other is not None and (allow is None or other.id != allow):
+            raise StoreError(f"a {kind} named {name!r} already exists; rename or delete it first")
+
     def create(self, kind: str, cfg=None, *, name: str = "", note: str = "") -> ArtifactWriter:
         if kind == "simulation":
             raise StoreError("simulation manifests are written by training_checkpoint (write_simulation_manifest)")
-        if name and not mf.NAME_RE.match(name):
-            raise StoreError(f"bad artifact name {name!r}: letters, digits, _ . - and at most 64 characters")
-        if name and self._find(kind, name)[1] is not None:
-            raise StoreError(f"a {kind} named {name!r} already exists; rename or delete it first")
+        self.assert_name_free(kind, name)
         return ArtifactWriter(self, kind, cfg, name=name, note=note, id=self._new_id(kind), created=self._clock())
 
     def rename(self, kind: str, ref: str, new_name: str) -> mf.Manifest:
-        if not mf.NAME_RE.match(new_name or ""):
+        if not new_name:
             raise StoreError(f"bad artifact name {new_name!r}: letters, digits, _ . - and at most 64 characters")
         sub, m = self._find(kind, ref)
         if m is None:
             raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}")
-        other = self._find(kind, new_name)[1]
-        if other is not None and other.id != m.id:
-            raise StoreError(f"a {kind} named {new_name!r} already exists; rename or delete it first")
+        self.assert_name_free(kind, new_name, allow=m.id)      # the same rules as create's
         m.name = new_name
         _write_manifest(sub, m)                       # the index first; the directory name is convenience
         target = sub.with_name(m.dir_name)
@@ -353,12 +405,30 @@ class ArtifactStore:
         return m
 
     def dependents(self, kind: str, id_: str) -> list:
-        """``[(kind, id, name)]`` of every artifact whose parents name this one."""
-        out = []
+        """``[(kind, id, name)]`` of every artifact whose parents name this one.
+
+        For a PRIOR, also every simulation cache GENERATED AGAINST it -- its identity's
+        ``prior_fingerprint`` is this prior's GMM -- whether or not it names the prior as a parent
+        (a cache created before the parent was recorded, or by a script that passed a stand-in). The
+        cache directory is keyed on that fingerprint and its rows are meaningless without the prior
+        they were drawn from, so deleting the prior would orphan days of simulation. Either side
+        being None (a pre-fingerprint manifest, a stand-in prior) is not a match: unverifiable is
+        not the same as equal.
+        """
+        out, seen = [], set()
         for k in KIND_DIRS:
             for _, m, _ in self._entries(k):
                 if m is not None and any(m.parents.get(pk) == id_ for pk in _PARENT_KEYS.get(kind, ())):
                     out.append((k, m.id, m.name))
+                    seen.add((k, m.id))
+        if kind == "prior":
+            owner = self._find("prior", id_)[1]
+            want = owner.fingerprints.get("gmm") if owner is not None else None
+            if want is not None:
+                for _, m, _ in self._entries("simulation"):
+                    if m is not None and ("simulation", m.id) not in seen \
+                            and m.fingerprints.get("gmm") == want:
+                        out.append(("simulation", m.id, m.name))
         return out
 
     def delete(self, kind: str, ref: str, *, force: bool = False) -> None:
@@ -539,10 +609,21 @@ class ArtifactStore:
                     f"(the Posterior tab does): its region then restricts calibration, and inference refuses any "
                     f"other observation unless told to accept it.")
             region = truncate.TruncationRegion.from_dict(mf.region_from_json(trd)) if trd else None
-            if region is None or region.probe is None:
-                _bad("declares itself NON-AMORTIZED but its manifest carries "
-                     + ("no truncation region" if region is None else "a region without its basis")
-                     + ", so the coordinate its box refers to cannot be verified. Run the round again.")
+            # The digest is refused alongside the basis and for the same class of reason: without a
+            # probe the coordinate the box refers to cannot be verified, and without a digest the
+            # region does not say which observation it was drawn around -- so GUARDRAIL 2 (the G2
+            # refusal in infer_and_visualize) could never fire and the artifact would serve any
+            # observation as if it were the one it is valid near.
+            if region is None:
+                _bad("declares itself NON-AMORTIZED but its manifest carries no truncation region, so "
+                     "the coordinate its box refers to cannot be verified. Run the round again.")
+            if region.probe is None:
+                _bad("declares itself NON-AMORTIZED but its region carries no basis, so the coordinate "
+                     "its box refers to cannot be verified. Run the round again.")
+            if region.x_obs_digest is None:
+                _bad("declares itself NON-AMORTIZED but its region does not name the observation it was "
+                     "drawn around, so the one observation it is valid near cannot be verified and no "
+                     "inference could ever be refused for being somewhere else. Run the round again.")
             region.check_basis(T, dim=len(want_keys), device=cfg.hw.device)
             digest = trd.get("x_obs_digest")
         post = reparam.TransformedPosterior(latent, T, truncation=region, x_obs_digest=digest)
@@ -552,7 +633,12 @@ class ArtifactStore:
 
     def load_observation(self, cfg, ref: str) -> LoadedObservation:
         """Refuses an observation whose model, parameter order, mode, conditioning width or chi
-        layout/pad is not this config's; asserts the payload's digest is the manifest's."""
+        layout/pad is not this config's; asserts the payload's digest is the manifest's, and that the
+        payload's own width is the one the manifest declares. Casts the payload to the SESSION's
+        dtype/device: the artifact is written from the CPU in whatever dtype the run that made it
+        used, and every downstream consumer (the flow's conditioning row, the PPC's simulations)
+        multiplies it against tensors on cfg.hw -- a float32 row meeting a float64 network is a hard
+        RuntimeError, not a promotion."""
         import torch
         from core import config as _config
         from core.SBI.statistics import SUMMARY_WIDTH
@@ -584,9 +670,17 @@ class ArtifactStore:
         if mf.tensor_digest(x_obs) != body["x_obs_digest"]:
             raise StoreError(f"observation '{label}': observation.pt does not hash to the manifest's digest; "
                              f"the artifact is inconsistent")
-        return LoadedObservation("observation", m.id, m.name, m, sub, x_obs=x_obs, obs_data=payload["obs_data"],
-                                 t_dim=payload["t_dim"], digest=body["x_obs_digest"], mode=body["mode"],
-                                 width=int(cond["width"]))
+        if int(x_obs.shape[-1]) != int(cond["width"]):
+            raise StoreError(f"observation '{label}': observation.pt holds a {int(x_obs.shape[-1])}-wide "
+                             f"conditioning row but its manifest declares {int(cond['width'])}; the artifact "
+                             f"is inconsistent (every width guard above compared the MANIFEST, not this row)")
+        # The digest is over the float64 bytes, so it is computed on the payload as written and the
+        # cast below cannot change it.
+        x_obs = x_obs.to(device=cfg.hw.device, dtype=cfg.hw.dtype)
+        return LoadedObservation("observation", m.id, m.name, m, sub, x_obs=x_obs,
+                                 obs_data=payload["obs_data"].to(cfg.hw.dtype),
+                                 t_dim=payload["t_dim"].to(cfg.hw.dtype), digest=body["x_obs_digest"],
+                                 mode=body["mode"], width=int(cond["width"]))
 
     def load_calibration(self, ref: str) -> LoadedCalibration:
         sub, m = self._find("calibration", ref)

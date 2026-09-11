@@ -1,4 +1,6 @@
-"""Entry point: ``python -m core.gui`` (run from the repo root so Resources/ resolves).
+"""Entry point: ``python -m core.gui``, from any working directory (``core/config.py`` resolves
+``Resources/`` and the artifact store from its own location; ``PRISM_RESOURCES`` / ``PRISM_ARTIFACTS``
+override them).
 
 The FIRST thing we do is force the Agg matplotlib backend, BEFORE importing any core.* module that
 imports pyplot. Under Agg, figures are still created (and we embed them via FigureCanvasQTAgg), while

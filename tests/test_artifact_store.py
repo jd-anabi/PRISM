@@ -2,7 +2,6 @@
 the store and its writer, the loaders' refusals, the simulation identity, and the stage contract."""
 import json
 import math
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -34,6 +33,27 @@ def _header(**over):
              fingerprints={}, payloads={}, figures=[], body={"results": {"n_cal": 10}})
     d.update(over)
     return d
+
+
+def _post_body(**over):
+    d = {"mode": "chi", "conditioning": {"width": 50}, "transform": {}, "amortized": True,
+         "truncation": None, "training": {}}
+    d.update(over)
+    return d
+
+
+def test_a_posterior_manifests_amortized_flag_must_agree_with_its_region():
+    """Defect D3 at the schema: the flag and the region are two views of one fact, and different
+    readers gate on different ones -- the load path on the flag, calibration and inference on the
+    region. A manifest where they disagree cannot be written or read."""
+    ok = _header(kind="posterior", body=_post_body())
+    assert mf.validate(ok).body["amortized"] is True
+    region = {"dims": [0], "lo": [-1.0], "hi": [1.0], "level": 0.99}
+    for bad in (_post_body(truncation=region),                          # amortized beside a region
+                _post_body(amortized=False)):                           # truncated with none
+        with pytest.raises(mf.ManifestError, match="D3"):
+            mf.validate(_header(kind="posterior", body=bad))
+    assert mf.validate(_header(kind="posterior", body=_post_body(amortized=False, truncation=region))).id
 
 
 def test_manifest_validation_refuses_missing_header_wrong_schema_bad_name_bad_id_and_nan():
@@ -144,6 +164,42 @@ def test_writer_removes_the_directory_on_exception(store):
             w.payload("results.json").write_text("{}")
             raise _Cancel()
     assert not w.dir.exists() and store.list("calibration") == []
+
+
+def test_an_input_file_that_vanished_during_the_run_is_recorded_unhashed_not_lost(store, tmp_path):
+    """The commit runs at the END of a run that may have taken days. An input file moved or edited
+    meanwhile must be recorded as unhashed (and warned about), never raise out of the writer -- losing
+    a finished run to a renamed cell file would be the worst possible failure mode of provenance."""
+    cfg = _nad_cfg()
+    gone = tmp_path / "vanished_cell.txt"
+    gone.write_text("not a real cell", encoding="utf-8")
+    cfg.sources["cell"] = str(gone)
+    gone.unlink()
+    with pytest.warns(UserWarning, match="vanished_cell"):
+        with store.create("calibration", cfg) as w:
+            w.body = _cal_body()
+    m = store.get("calibration", w.id)
+    assert m.inputs["cell"]["sha256"] is None and "vanished_cell" in m.inputs["cell"]["path"]
+    assert len(m.inputs["bounds"]["sha256"]) == 64, "the files that ARE there are still hashed"
+    with pytest.raises(FileNotFoundError):
+        prov.inputs_from_cfg(cfg)                      # the default is still to refuse
+
+
+def test_a_name_shaped_like_an_id_is_refused(store):
+    """get()/path() resolve a ref as an id OR a name, so a name shaped like an id would shadow the
+    artifact whose id it is -- which could then never be addressed at all."""
+    cfg = _nad_cfg()
+    for bad in ("20260910T120000", "20260910T120000-2", "abcdef012345"):
+        assert mf.ID_RE.match(bad)
+        with pytest.raises(st.StoreError, match="shaped like an artifact id"):
+            store.create("prior", cfg, name=bad)
+    w = _make(store, "prior", name="p", body={
+        "gmm": {"n_components": 2, "param_keys": ["a"],
+                "box": {"nd_lows": [0.0], "nd_highs": [1.0], "log_mask": [False]}},
+        "sweep": {}, "stability": {"accepted_sets": None, "iterations": 1}})
+    with pytest.raises(st.StoreError, match="shaped like an artifact id"):
+        store.rename("prior", w.id, "20260910T120000")
+    assert store.rename("prior", w.id, "p").name == "p", "a rename to its OWN name is not a collision"
 
 
 def test_a_truncated_manifest_is_listed_incomplete_and_never_loadable(store):
@@ -315,9 +371,16 @@ def test_load_prior_refuses_model_param_order_and_box_and_returns_a_wrapper(stor
     assert lp.prior.distributions[0] is lp.nd_prior and lp.force_prior is not None   # master.txt has a drive
     keys = list(cfg.params_dict)
     hi = [b[1] for _, b in cfg.params_dict.values()]
+    from core.SBI.reparam import nd_log_mask
+    from core.SBI.run_guards import _log_params_for
+    # The log mask says WHICH coordinate the GMM was fit in, so a prior built when
+    # REPARAM_LOG_PARAMS said something else is a distribution over different numbers entirely --
+    # and unlike the box, nothing downstream would ever notice.
+    flipped = [not bool(v) for v in nd_log_mask(cfg, log_params=_log_params_for(cfg)).tolist()]
     for tag, kw, why in (("model", dict(model="HOPF"), "the model"),
                          ("order", dict(keys=keys[1:] + keys[:1]), "ORDER"),
-                         ("box", dict(highs=[hi[0] * 2] + hi[1:]), "the ND box")):
+                         ("box", dict(highs=[hi[0] * 2] + hi[1:]), "the ND box"),
+                         ("mask", dict(mask=flipped), "log-box")):
         _prior_artifact(store, cfg, name=tag, **kw)
         with pytest.raises(ValueError, match=why):
             store.load_prior(cfg, tag)
@@ -353,6 +416,30 @@ def test_build_prior_auto_persists_and_loads_back(store, monkeypatch):
     assert orchestrator.build_prior(cfg, "master_prior", False, fig_sink=lambda title, fig: None).name == "master_prior"
 
 
+def test_a_taken_name_is_refused_before_the_spend(store, tiny_run, monkeypatch):
+    """A duplicate name is refused at the stage's ENTRY, not by the write at the end. store.create is
+    where the collision used to surface, and it runs after the ~9-minute sweep / the days of
+    training -- so the stage would do all of its work and then throw it away. monkeypatch restores
+    both stubs on its own, including on failure."""
+    from core import orchestrator
+    cfg = _nad_cfg()
+    _prior_artifact(store, cfg, name="p")
+    swept = []
+    monkeypatch.setattr(orchestrator.pipeline, "gen_prior", lambda *a, **k: swept.append(1))
+    with pytest.raises(st.StoreError, match="already exists"):
+        orchestrator.build_prior(cfg, None, True, name="p")
+    assert swept == [], "the stability sweep ran before the name was checked"
+
+    r = tiny_run
+    assert r.posterior.name, "the fixture's posterior must be named for this to test anything"
+    trained = []
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: trained.append(1))
+    with pytest.raises(st.StoreError, match="already exists"):
+        orchestrator.build_posterior(r.cfg, r.prior, None, True, name=r.posterior.name, store=r.store,
+                                     num_runs=2, run_size_cap=8, fig_sink=r.sink)
+    assert trained == [], "the training run started before the name was checked"
+
+
 def test_delete_refuses_a_prior_a_simulation_was_generated_against(store):
     from core.SBI import training_checkpoint as tc
     cfg = _nad_cfg()
@@ -366,6 +453,27 @@ def test_delete_refuses_a_prior_a_simulation_was_generated_against(store):
     with pytest.raises(st.StoreError, match="simulation"):
         store.delete("prior", p.id)
     assert store.find_prior_by_fingerprint(fp).id == p.id
+
+
+def test_delete_refuses_a_prior_a_simulation_was_generated_against_by_fingerprint(store):
+    """The spec's prior-fingerprint clause. The cache directory is KEYED on the prior's GMM and its
+    rows are meaningless without the prior they were drawn from, so a simulation generated against
+    this prior blocks the delete whether or not it names it as a PARENT -- a cache written before the
+    parent was recorded, or by a script holding a stand-in prior, names none."""
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="p")
+    fp = store.get("prior", p.id).fingerprints["gmm"]
+    ident = {"format": "training-rows/2", "prior_fingerprint": fp, "n_runs": 3, "truncation": None}
+    m = st.write_simulation_manifest(store.kind_dir("simulation") / "abcdef012345", ident, parents=None)
+    assert m.parents == {} and m.fingerprints["gmm"] == fp
+    assert store.dependents("prior", p.id) == [("simulation", m.id, "")]
+    with pytest.raises(st.StoreError, match=m.id):
+        store.delete("prior", p.id)
+    other = _prior_artifact(store, cfg, name="other", seed=7)      # another GMM is not a dependency
+    assert store.dependents("prior", other.id) == []
+    store.delete("prior", p.id, force=True)
+    with pytest.raises(st.StoreError):
+        store.get("prior", p.id)
 
 
 def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, monkeypatch):
@@ -470,6 +578,14 @@ def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store):
     _posterior_artifact(store, cfg, name="noprobe", amortized=False, region=no_basis)
     with pytest.raises(ValueError, match="basis"):
         store.load_posterior(cfg, "noprobe", accept=Accept(truncated=True))
+    # ... and a region that does not say WHICH observation it was drawn around is refused the same
+    # way: guardrail 2's refusal in infer_and_visualize compares against that digest, so without it
+    # the artifact would serve any observation as if it were the one it is valid near.
+    no_digest = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=None,
+                                          probe=bijection_probe(T, P), x_obs_digest=None)
+    _posterior_artifact(store, cfg, name="nodigest", amortized=False, region=no_digest)
+    with pytest.raises(ValueError, match="does not name the observation"):
+        store.load_posterior(cfg, "nodigest", accept=Accept(truncated=True))
     assert store.list("posterior")[0].amortized is not None
 
 
@@ -690,8 +806,17 @@ def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unles
     claims_another = copy(r.posterior)
     claims_another.posterior = reparam.TransformedPosterior(r.posterior.latent, r.posterior.posterior.T,
                                                              truncation=None, x_obs_digest="f" * 16)
-    with pytest.raises(ValueError, match="NOT AMORTIZED"):
-        orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20)
+    # A REFUSED inference must not install the rejected observation's context: T_obs, the probe
+    # frequencies and the truth would stay on cfg for whatever the session does next. Perturbed first
+    # so the assertion has teeth (install would overwrite it with the observation's own value).
+    was = r.cfg.T_obs
+    r.cfg.T_obs = was + 7.0
+    try:
+        with pytest.raises(ValueError, match="NOT AMORTIZED"):
+            orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20)
+        assert r.cfg.T_obs == was + 7.0, "a refused inference installed the observation's context anyway"
+    finally:
+        r.cfg.T_obs = was
     inf = orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20,
                                            accept=Accept(other_observation=True))
     assert inf.results["accepted"] == ["other_observation"]
@@ -707,18 +832,30 @@ def test_a_round_records_parent_posterior_and_observation_as_parents(tiny_run):
     obs = orchestrator.generate_observations(r.cfg, fig_sink=r.sink, name="round_obs")
     region = orchestrator.build_truncation_region(r.posterior, obs, n_directions=1, level=0.99)
     assert region.x_obs_digest == obs.digest and region.prior_fingerprint == r.posterior.fingerprint
-    child = orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2, hidden_features=8,
-                                         num_transforms=1, stop_after_epochs=1, truncation=region, observation=obs,
-                                         parent_posterior=r.posterior, name="round1")
+    # CHECKPOINTED every batch, so this round writes a REAL simulation cache: without it the kind is
+    # empty for the whole module and the integrity test at the end of this file has no simulation row
+    # to walk (its manifest, its prior parent, its completion).
+    saved = orchestrator.TRAINING_CHECKPOINT_EVERY
+    orchestrator.TRAINING_CHECKPOINT_EVERY = 1
+    try:
+        child = orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2,
+                                             hidden_features=8, num_transforms=1, stop_after_epochs=1,
+                                             truncation=region, observation=obs,
+                                             parent_posterior=r.posterior, name="round1")
+    finally:
+        orchestrator.TRAINING_CHECKPOINT_EVERY = saved
     m = child.manifest
     assert m.body["amortized"] is False and child.posterior.truncation is not None
     assert m.parents["parent_posterior"] == r.posterior.id and m.parents["observation"] == obs.id
     assert m.parents["prior"] == r.prior.id and m.body["truncation"]["x_obs_digest"] == obs.digest
+    sim = m.parents["simulation"]
+    assert len(sim) == 12 and set(sim) <= set("0123456789abcdef"), sim
+    assert r.store.get("simulation", sim).body["complete"] is True
     with pytest.raises(ValueError, match="NOT AMORTIZED"):
         r.store.load_posterior(r.cfg, child.id)
     assert r.store.get("posterior", child.id).body["training"]["tsnpe_acceptance"] is not None
-    with pytest.raises(ValueError, match="deleted prior support|does not match the observation"):
-        other = orchestrator.generate_observations(r.cfg, fig_sink=r.sink)   # new noise, new digest
+    other = orchestrator.generate_observations(r.cfg, fig_sink=r.sink)   # new noise, new digest
+    with pytest.raises(ValueError, match="does not match the observation"):
         orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2, hidden_features=8,
                                      num_transforms=1, stop_after_epochs=1, truncation=region, observation=other,
                                      parent_posterior=r.posterior)

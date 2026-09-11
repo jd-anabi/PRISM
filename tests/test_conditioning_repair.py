@@ -745,6 +745,15 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
     assert truncate.TruncationRegion.from_dict(region.to_dict()).prior_fingerprint == fp_a
     bare = orchestrator.build_truncation_region(_lp(reparam.TransformedPosterior(_Wide(), T_parent)), obs)
     assert bare.prior_fingerprint is None
+    # the RECORDING side refuses a wrapper whose claimed fingerprint is not the one its payload
+    # pickles: the region would otherwise record, as the base prior the next round is checked
+    # against, a prior the parent never trained on
+    try:
+        orchestrator.build_truncation_region(
+            _lp(reparam.TransformedPosterior(_Parent(gmm_a, Q), T_parent), fingerprint="0" * 16), _lo(x))
+        raise AssertionError("a parent whose wrapper and pickled prior disagree was accepted")
+    except ValueError as e:
+        assert "0" * 16 in str(e) and fp_a in str(e), e
     # ...and it is NOT part of the checkpoint identity: the identity already carries the supplied
     # prior's fingerprint, and a new key in identity_fields would re-digest every truncated
     # checkpoint directory (the amortized identity omits the region entirely -- test_user_sbi pins it)
