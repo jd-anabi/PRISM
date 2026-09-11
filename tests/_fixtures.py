@@ -26,15 +26,18 @@ def _nad_cfg(**over):
     return cfg
 
 
-def _gmm_in_box(lows, highs, mask, seed=0):
+def _gmm_in_box(lows, highs, mask, seed=0, weights=None):
     """A tiny 2-component MixtureSameFamily pushed through a box bijection -- a real GMM prior payload,
-    small enough to build and pickle in a test."""
+    small enough to build and pickle in a test. ``weights`` replaces the two equal weights with a
+    vector of its own length (one component per entry)."""
     from core.SBI import reparam
     torch.manual_seed(seed)
     d = len(lows)
+    w = torch.tensor([0.5, 0.5]) if weights is None else torch.as_tensor(weights, dtype=torch.float32)
+    n = int(w.numel())
     base = torch.distributions.MixtureSameFamily(
-        torch.distributions.Categorical(probs=torch.tensor([0.5, 0.5])),
-        torch.distributions.MultivariateNormal(torch.randn(2, d), covariance_matrix=torch.eye(d).expand(2, d, d)))
+        torch.distributions.Categorical(probs=w),
+        torch.distributions.MultivariateNormal(torch.randn(n, d), covariance_matrix=torch.eye(d).expand(n, d, d)))
     T = reparam.build_box_bijection(torch.tensor(lows, dtype=torch.float32), torch.tensor(highs, dtype=torch.float32), mask)
     return torch.distributions.TransformedDistribution(base, T)
 
@@ -157,10 +160,12 @@ def _tiny_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_b
                              state_dep_drift=state_dep_drift, log_mask=log_mask)
 
 
-def build_tiny_run(store):
+def build_tiny_run(store, hw=None):
     """A REAL SBITEST prior and posterior at tiny size, inside ``store`` (make it the default first).
     Mirrors test_user_sbi.test_no_forcing_user_model_full_sbi_pipeline's setup -- and its teardown:
-    read that test's finally block and do the same in ``teardown``."""
+    read that test's finally block and do the same in ``teardown``. ``hw`` is the DeviceConfig to run
+    on (default the CPU); tests/test_gpu_paths.py passes config.detect_device() to reach the paths a
+    CPU run cannot see."""
     from types import SimpleNamespace
     from core import cli, config, orchestrator, registry
     from core.Helpers import model_store
@@ -173,7 +178,7 @@ def build_tiny_run(store):
     cfg = cli.make_sim_config(name, registry.get(name).labels, registry.state_dep_drift(name),
                               str(config.BOUNDS_PATH / name.lower() / "default.txt"))
     cli.load_and_validate_gt(cfg, str(config.CELL_PATH / name.lower() / "default.txt"))
-    cfg.hw = config.cpu_device()
+    cfg.hw = hw if hw is not None else config.cpu_device()
     cfg.hw.batch_size = 8
     cfg.T_obs = 1.0
     saved = (orchestrator.pipeline.gen_prior, orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL,

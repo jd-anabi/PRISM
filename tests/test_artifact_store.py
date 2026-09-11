@@ -428,6 +428,67 @@ def test_build_prior_auto_persists_and_loads_back(store, monkeypatch):
     assert orchestrator.build_prior(cfg, "master_prior", False, fig_sink=lambda title, fig: None).name == "master_prior"
 
 
+def _weights_that_renormalise_inexactly(n=64):
+    """Float32 mixture weights whose SAVED form is not a fixed point of torch's Categorical
+    re-normalisation on this CPU. ``Categorical(probs=w)`` stores ``w / w.sum()``; the sum of an
+    already-normalised float32 vector is 1 +/- 1 ulp, so re-normalising what was saved moves bits
+    for some vectors and not others, depending on the values and the device's reduction order.
+    Searched rather than hard-coded, so a change in torch's summation cannot silently make the tests
+    below vacuous; the raise is the precondition they rely on."""
+    for seed in range(500):
+        q = torch.rand(n, generator=torch.Generator().manual_seed(seed))
+        saved = torch.distributions.Categorical(probs=q).probs        # what _gmm_in_box holds and save_mix_dist writes
+        reloaded = torch.distributions.Categorical(probs=saved).probs  # what a naive loader rebuilds
+        if not torch.equal(reloaded, saved):
+            return q
+    raise AssertionError("no seed produced weights that re-normalise inexactly on this CPU; the round-trip "
+                         "tests would be vacuous")
+
+
+def test_load_mix_dist_is_the_exact_inverse_of_save_mix_dist(tmp_path):
+    """A prior's fingerprint hashes its GMM's weight and mean BYTES, so a save/load round trip has to
+    return exactly what was saved -- on every device. The 2026-09-11 GPU gate found a prior that
+    reloaded bit-exactly on CUDA but not on the CPU, and another that reloaded on neither and was
+    refused as 'inconsistent' by its own store the moment build_prior read it back."""
+    from core.Helpers import file_manager
+    from core.SBI.reparam import nd_log_mask
+    from core.SBI.run_guards import _find_nd_gmm, _gmm_fingerprint, _log_params_for
+    cfg = _nad_cfg()
+    lows = [float(b[0]) for _, b in cfg.params_dict.values()]
+    highs = [float(b[1]) for _, b in cfg.params_dict.values()]
+    dist = _gmm_in_box(lows, highs, nd_log_mask(cfg, log_params=_log_params_for(cfg)),
+                       weights=_weights_that_renormalise_inexactly())
+    path = tmp_path / "prior.pt"
+    file_manager.save_mix_dist(dist, str(path), model=cfg.model, param_keys=list(cfg.params_dict))
+    back = file_manager.load_mix_dist(str(path), device=torch.device("cpu"))
+    g0, g1 = _find_nd_gmm(dist), _find_nd_gmm(back)
+    assert torch.equal(g1.mixture_distribution.probs, g0.mixture_distribution.probs), "weights changed on reload"
+    assert torch.equal(g1.component_distribution.loc, g0.component_distribution.loc), "means changed on reload"
+    assert _gmm_fingerprint(back) == _gmm_fingerprint(dist)
+    # Still a working distribution: it samples, and an expanded copy carries the exact weights too
+    # (Categorical.expand copies _param, which is why the loader restores both attributes).
+    assert back.sample((3,)).shape == (3, len(lows))
+    assert torch.equal(g1.mixture_distribution.expand(torch.Size([2])).probs[0], g0.mixture_distribution.probs)
+
+
+def test_build_prior_reloads_a_gmm_whose_weights_do_not_renormalise_exactly(store, monkeypatch):
+    """The gate failure of 2026-09-11 reproduced on the CPU: build_prior writes the prior, records its
+    fingerprint and reads it straight back through store.load_prior, which refused the artifact it
+    had just written ("prior.pt holds GMM ..., not the one the manifest records")."""
+    from core import orchestrator
+    w = _weights_that_renormalise_inexactly()
+
+    def stub_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds, **kw):
+        return _gmm_in_box([float(b[0]) for b in prior_bounds], [float(b[1]) for b in prior_bounds],
+                           kw.get("log_mask"), weights=w)
+
+    monkeypatch.setattr(orchestrator.pipeline, "gen_prior", stub_gen_prior)
+    cfg = _nad_cfg()
+    lp = orchestrator.build_prior(cfg, None, True, fig_sink=lambda title, fig: None, num_iterations=1)
+    assert lp.fingerprint == lp.manifest.fingerprints["gmm"]
+    assert store.load_prior(cfg, lp.id).fingerprint == lp.fingerprint
+
+
 def test_a_taken_name_is_refused_before_the_spend(store, tiny_run, monkeypatch):
     """A duplicate name is refused at the stage's ENTRY, not by the write at the end. store.create is
     where the collision used to surface, and it runs after the ~9-minute sweep / the days of

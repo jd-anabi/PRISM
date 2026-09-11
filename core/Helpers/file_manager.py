@@ -459,6 +459,17 @@ def load_mix_dist(filename: str, device: torch.device = torch.device('cpu')):
     weights = data['weights']
     comp_dist = torch.distributions.MultivariateNormal(means, covariance_matrix=covs)
     mix_dist  = torch.distributions.Categorical(probs=weights)
+    # EXACT inverse of save_mix_dist, bit for bit. Categorical.__init__ stores probs / probs.sum(),
+    # and the float32 sum of an already-normalised vector is 1 +/- 1 ulp -- so whether that division
+    # returns the stored bits depends on the values AND on the device's reduction order (2026-09-11,
+    # the GPU gate: one prior reloaded bit-exactly on CUDA and not on the CPU, another on neither, and
+    # build_prior's own read-back refused it as "inconsistent"). Every fingerprint that identifies a
+    # prior (the manifest, the simulation identity, the region's parent) hashes these bytes, so a
+    # reload must return exactly what was written. ``_param`` is what Categorical.expand copies and
+    # sample() reads through .probs (torch 2.9, categorical.py:76-92); ``logits`` is lazy and derives
+    # from .probs, so it follows. tests/test_artifact_store.py pins the round trip.
+    mix_dist.probs = weights
+    mix_dist._param = weights
     latent_prior = torch.distributions.MixtureSameFamily(mix_dist, comp_dist)
 
     if 'lows' in data and 'highs' in data:
