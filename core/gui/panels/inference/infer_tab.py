@@ -327,7 +327,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                     self.log_pane.append_line(
                         "Fix the cell selection first: " + "; ".join(self._cell_problems), "warning")
                     return
-            self.dispatch(_run_simulated_inference, cfg, post, cell, self.sim_tobs.value(),
+            self.dispatch(_run_simulated_inference, cfg, post.posterior, cell, self.sim_tobs.value(),
                           gt_dicts=gt_dicts, prior=self.session.inf_prior, provide_fig_sink=True)
         elif cfg.observation_mode == "chi":          # experimental, χ(ω): 1 passive + K forced
             if not self.chi_spont.value():
@@ -351,17 +351,17 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             # sinc. Pairs come straight off each row widget, so they cannot be mismatched by an
             # add/remove in the middle of the table.
             pairs = [r.pair() for r in self._chi_forced_fields]
-            self.dispatch(_run_experimental_inference_chi, cfg, post, self.chi_spont.value(), pairs,
+            self.dispatch(_run_experimental_inference_chi, cfg, post.posterior, self.chi_spont.value(), pairs,
                           self.chi_tobs.value(), self.chi_f0_si.value(), provide_fig_sink=True)
         elif not cfg.has_forcing:                    # experimental, passive (no drive)
             if not self.exp_spont.value():
                 self.log_pane.append_line("Select a passive recording first.", "warning")
                 return
-            self.dispatch(_run_experimental_inference_spontaneous, cfg, post,
+            self.dispatch(_run_experimental_inference_spontaneous, cfg, post.posterior,
                           self.exp_spont.value(), self.exp_tobs.value(), provide_fig_sink=True)
         else:                                        # experimental, driven
             forcing_si = {name: fld.value() for name, fld in self._forcing_fields.items()}
-            self.dispatch(_run_experimental_inference, cfg, post, self.exp_spont.value(),
+            self.dispatch(_run_experimental_inference, cfg, post.posterior, self.exp_spont.value(),
                           self.exp_forced.value(), self.exp_tobs.value(), forcing_si, provide_fig_sink=True)
 
     def refresh_local_gates(self):

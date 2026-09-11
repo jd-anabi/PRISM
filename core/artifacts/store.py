@@ -449,10 +449,10 @@ class ArtifactStore:
                            force_prior=_orch.build_forcing_prior(cfg), nd_prior=nd_prior, fingerprint=fp)
 
     def load_posterior(self, cfg, ref: str, *, accept: "Accept | None" = None) -> LoadedPosterior:
-        """Every check _assert_mode_matches and build_posterior's load branch made, read from the
-        manifest instead of a sidecar, BEFORE the payload is unpickled; then the payload's own view of
-        its mode, the bijection rebuilt from the manifest, its rotation checked against the prior
-        pickled inside the posterior, and the amortization gate."""
+        """Every check the old width-computing mode guard and build_posterior's load branch made, read
+        from the manifest instead of a '.rot.pt' sidecar, BEFORE the payload is unpickled; then the
+        payload's own view of its mode, the bijection rebuilt from the manifest, its rotation checked
+        against the prior pickled inside the posterior, and the amortization gate."""
         import torch
         from sbi.inference import DirectPosterior
         from core import config as _config

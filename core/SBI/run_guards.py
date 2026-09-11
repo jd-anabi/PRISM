@@ -1,13 +1,14 @@
 """Run guards, split out of orchestrator: the checks that stop an expensive run before the spend.
 
 Prior identity (a GMM's box does not identify it -- two sweeps over one box produce different
-fits), the load-side prior/posterior agreement checks, the chi band/drive deliberateness gate, the
-amortization gate for TSNPE artifacts, and the log-box resolution rule. orchestrator re-imports
-every name, so the suites keep calling them as orchestrator._* and every existing call site is
-unchanged. _saved_prior_fingerprints, _assert_prior_is_saved, _refuse_to_orphan_a_checkpoint and
-_assert_prior_matches were retired with the artifact store (piece 1, Task 4): store.load_prior and
-store.delete's dependents check are their successors. The width-computing _assert_mode_matches
-still stays in orchestrator.
+fits), the load-side prior/posterior agreement checks, and the chi band/drive deliberateness gate.
+orchestrator re-imports every name, so the suites keep calling them as orchestrator._* and every
+existing call site is unchanged. _saved_prior_fingerprints, _assert_prior_is_saved,
+_refuse_to_orphan_a_checkpoint and _assert_prior_matches were retired with the artifact store
+(piece 1, Task 4): store.load_prior and store.delete's dependents check are their successors. The
+two functions that read a posterior's '.rot.pt' companion file for its truncation region and its
+amortization flag were retired the same way (piece 1, Task 7): store.load_posterior's Accept gate
+is their successor.
 """
 import hashlib
 import os
@@ -15,8 +16,7 @@ import os
 import torch
 
 from core import config, registry
-from core.config import POSTERIOR_PATH, SimConfig
-from core.SBI.reparam import read_sidecar
+from core.config import SimConfig
 
 CHI_OVERRIDE_ENV = "PRISM_CHI_OVERRIDE"
 
@@ -120,7 +120,7 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     every launch afterwards with nothing to say so. A persisted preference is the right behaviour;
     a persisted MEASUREMENT DEFINITION needs comparing against the module default before the spend.
 
-    ``_assert_mode_matches`` already catches the same disagreement -- but only when a posterior is
+    ``store.load_posterior`` already catches the same disagreement -- but only when a posterior is
     LOADED, i.e. after the days are spent. This fires before the first simulation.
 
     SCOPE IS DELIBERATELY NARROW. Only the band and the drive amplitude are checked, because only
@@ -163,59 +163,6 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         f"and then restores them from QSettings, so a value saved before a config change wins silently."
         f" Check the [inference_config] chi_lo / chi_hi / chi_f0 keys in PRISM.ini.\n"
         f"  If the difference is DELIBERATE (a band sweep, say), re-run with {CHI_OVERRIDE_ENV}=1.")
-
-
-def truncation_from_sidecar(choice: str) -> tuple:
-    """``(TruncationRegion, x_obs_digest)`` recorded in a posterior's sidecar, or ``(None, None)`` for
-    an amortized or a legacy artifact.
-
-    REFUSES a sidecar that declares itself non-amortized but carries no region, or a region without
-    its basis (a sidecar written before the basis travelled with the region). Such an artifact would
-    otherwise load looking amortized -- no region for calibration to restrict to, no digest for
-    inference to warn on -- which is strictly weaker than the refusal ``accept_truncated`` bypasses.
-    The digest comes from the sidecar's own key or, failing that, from the region, which records the
-    observation it was drawn around.
-    """
-    side = read_sidecar(choice, POSTERIOR_PATH, map_location="cpu")
-    if not side or side.get("amortized", True):
-        return None, None
-    from core.SBI import truncate                        # kept lazy so run_guards imports without the TSNPE stack
-    tr = side.get("truncation")
-    region = truncate.TruncationRegion.from_dict(tr) if tr else None
-    if region is None or region.probe is None:
-        raise ValueError(
-            f"Posterior '{choice}' declares itself NON-AMORTIZED but its sidecar carries "
-            f"{'no truncation region' if region is None else 'a region without its basis (written before the basis travelled with the region)'}"
-            f", so the coordinate its box refers to cannot be verified and calibration could not "
-            f"restrict its prior correctly. It cannot be loaded; run the round again from its parent.")
-    return region, side.get("x_obs_digest") or region.x_obs_digest
-
-
-def _assert_amortization_understood(choice: str) -> None:
-    """Refuse a TRUNCATED (non-amortized) posterior unless the caller opted into one.
-
-    SECTION 11.6 GUARDRAIL 2. A truncated posterior is valid only near the observation its region was
-    drawn around: outside that region the flow saw ZERO training rows, so it does not return the
-    prior there, it returns whatever the flow extrapolates -- confidently. Amortized and truncated
-    artifacts sit side by side in one ArtifactPicker, with nothing in the filename to tell them
-    apart, which is precisely how the retired-band posterior cost a five-day run.
-
-    A missing or amortized sidecar passes silently, so every existing artifact is unaffected.
-    """
-    side = read_sidecar(choice, POSTERIOR_PATH, map_location="cpu")
-    if not side or side.get("amortized", True):
-        return
-    tr = side.get("truncation") or {}
-    dims = tr.get("dims", [])
-    raise ValueError(
-        f"Posterior '{choice}' is NOT AMORTIZED: it was trained by TSNPE on a prior truncated to a "
-        f"{tr.get('level', '?')}-HPD region along Fisher direction(s) {dims}, drawn around the "
-        f"observation with digest {side.get('x_obs_digest')}. It is only valid for observations in "
-        f"that region -- outside it the flow has never seen a training row and will extrapolate "
-        f"confidently rather than return the prior. The Posterior tab and the CLI's run() load it "
-        f"anyway (build_posterior(..., accept_truncated=True)), installing its region for calibration "
-        f"and its observation digest for inference, which warns on any other observation; pick an "
-        f"amortized posterior for general inference.")
 
 
 # Whether infer_and_visualize records the observation it ran against.

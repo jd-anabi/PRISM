@@ -211,7 +211,6 @@ class PriorPanel(_StagePanel):
 
     def _on_prior(self, payload):
         self.session.inf_prior = payload                   # a LoadedPrior
-        self.session.force_prior = payload.force_prior     # removed with the field in Task 7
         self.log_pane.append_line(f"Prior ready: {payload.name or '(unnamed, id ' + payload.id + ')'}. "
                                   f"Name it below to keep it.")
         self._screen.refresh_gates()

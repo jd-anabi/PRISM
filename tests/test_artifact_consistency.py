@@ -5,9 +5,11 @@ WHAT THESE LOCK DOWN
     A posterior is only meaningful against the exact (model, parameter set + ORDER, box) it was
     trained in -- the flow learns a density over the LATENT coordinate, so the box is what turns its
     output back into physical values. None of that used to be checked. `build_prior` validated
-    NOTHING on its load path, `build_posterior` checked only the log-mask, `_assert_mode_matches`
-    checked only the observation mode and the conditioning WIDTH, and `load_eval_bijection` rebuilt
-    the box from whatever config happened to be loaded rather than from the posterior.
+    NOTHING on its load path, `build_posterior` checked only the log-mask, the old width-computing
+    mode guard checked only the observation mode and the conditioning WIDTH, and the old sidecar
+    loader rebuilt the box from whatever config happened to be loaded rather than from the posterior.
+    (The load-side checks now live in ``core.artifacts.store.ArtifactStore.load_prior/load_posterior``,
+    pinned in ``tests/test_artifact_store.py``.)
 
     The cost of that was paid once already: a chi posterior trained on one cell's bounds could be
     loaded, validated and inferred against another's, with every reported parameter silently decoded
@@ -32,10 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import torch
 
 from core import cli, config, orchestrator, registry
-from core.config import BOUNDS_PATH, CELL_PATH, POSTERIOR_PATH, PRIOR_PATH, VALID_LABELS, VALID_MODELS
+from core.config import BOUNDS_PATH, CELL_PATH, PRIOR_PATH, VALID_LABELS, VALID_MODELS
 from core.Helpers import file_manager
 from core.SBI import reparam
-from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH
 
 _NAD = "nadrowski"
 _LABELS = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
@@ -47,12 +48,6 @@ def _cfg(bounds="master.txt", **kw):
                               str(BOUNDS_PATH / _NAD / bounds), **kw)
     cfg.hw = config.cpu_device()
     return cfg
-
-
-class _LoadedStub:
-    """The LoadedPrior shape with no GMM: fails open through every fingerprint check."""
-    id, name, fingerprint, force_prior = None, "", None, None
-    def __init__(self, prior=None): self.prior = prior if prior is not None else object()
 
 
 # ── the master Bounds/Cells triple ────────────────────────────────────────────────────────────────
@@ -175,118 +170,6 @@ def test_a_prior_the_posterior_was_not_trained_with_is_refused():
     orchestrator._assert_prior_used_matches_posterior(_Post(None), _Product([phys1]), "t")
 
 
-# ── posterior identity ────────────────────────────────────────────────────────────────────────────
-def _sidecar(cfg, **over):
-    """A sidecar that a CURRENT build would actually write, so an override tests what it names.
-
-    Every field the chi block of ``_assert_mode_matches`` gates on has to be here and has to be
-    RIGHT. It is checked in order and the first mismatch raises, so one missing key makes every test
-    built on this helper pass on that key instead of on its own override -- which is what happened:
-    ``chi_layout``/``chi_k_pad``/``chi_elem_w`` were absent, so the baseline sidecar was rejected as
-    "trained under chi layout 1" and the model / param-order cases below were never reached.
-    """
-    keys = list(cfg.params_dict) + list(cfg.rescale_params)
-    d = dict(
-        V=None, log_params=[], mode="chi", chi_n_freqs=4,
-        # DERIVED, never literals. These were `input_dim=42, forcing_dim=12` -- 12 being 3K at K=4
-        # under the retired layout-1 grid, stale since the probe set landed and silently wrong ever
-        # since. Deriving them from the same helpers the writer uses is what keeps a fixture honest.
-        input_dim=SUMMARY_WIDTH + 1, forcing_dim=orchestrator.expected_forcing_dim(cfg),
-        chi_layout=config.CHI_LAYOUT, chi_k_pad=cfg.chi_k_pad, chi_elem_w=config.CHI_ELEM_W,
-        chi_max_cycles=float(cfg.chi_max_cycles),
-        chi_f0=cfg.chi_f0, chi_freq_bounds=tuple(cfg.chi_freq_bounds), param_keys=keys,
-        model="NADROWSKI",
-        nd_lows=torch.tensor([b[0] for _, b in cfg.params_dict.values()], dtype=torch.float64),
-        nd_highs=torch.tensor([b[1] for _, b in cfg.params_dict.values()], dtype=torch.float64),
-        rescale_lows=torch.tensor([b[0] for _, b in cfg.rescale_params.values()], dtype=torch.float64),
-        rescale_highs=torch.tensor([b[1] for _, b in cfg.rescale_params.values()], dtype=torch.float64),
-    )
-    d.update(over)
-    return d
-
-
-def test_eval_box_comes_from_the_posterior_not_the_config():
-    """THE fix. load_eval_bijection's docstring always claimed eval was self-describing, but the box
-    was rebuilt from cfg -- so a posterior trained against one bounds file and evaluated against
-    another decoded every latent sample through the wrong edges, changing the physical value of every
-    reported parameter with nothing raised."""
-    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    path = POSTERIOR_PATH / "_ptest.rot.pt"
-    n = len(cfg.params_dict) + len(cfg.rescale_params)
-    try:
-        torch.save(_sidecar(cfg), str(path))
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            T_match = reparam.load_eval_bijection(cfg, "_ptest.pt", POSTERIOR_PATH)
-        assert not w, "a matching box must not warn"
-
-        # same posterior, config box widened: the SIDECAR must win, and it must say so
-        torch.save(_sidecar(cfg, nd_highs=_sidecar(cfg)["nd_highs"] * 2), str(path))
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            T_other = reparam.load_eval_bijection(cfg, "_ptest.pt", POSTERIOR_PATH)
-        assert any("DIFFERENT box" in str(x.message) for x in w), [str(x.message) for x in w]
-        z = torch.zeros(1, n)
-        assert not torch.allclose(T_match(z), T_other(z)), \
-            "the two boxes decode the same latent identically -- the sidecar box was ignored"
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def test_a_posterior_over_different_parameters_is_refused():
-    """Mode + conditioning width agreeing says only that the vectors are the same SHAPE, which many
-    configs satisfy. Columns bind positionally, so a reordered parameter set makes every reported
-    value refer to the wrong parameter."""
-    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    path = POSTERIOR_PATH / "_ptest.rot.pt"
-    keys = list(cfg.params_dict) + list(cfg.rescale_params)
-    try:
-        # THE BASELINE, and the reason this test means anything: an unmodified sidecar must be
-        # ACCEPTED. Without it every case below can pass on some unrelated field being wrong.
-        torch.save(_sidecar(cfg), str(path))
-        orchestrator._assert_mode_matches(cfg, object(), "_ptest.pt")
-        for tag, over in (("model", {"model": "HOPF"}),
-                          ("param order", {"param_keys": keys[1:] + keys[:1]})):
-            torch.save(_sidecar(cfg, **over), str(path))
-            try:
-                orchestrator._assert_mode_matches(cfg, object(), "_ptest.pt")
-                raise AssertionError(f"a posterior with the wrong {tag} was accepted")
-            except ValueError:
-                pass
-    finally:
-        path.unlink(missing_ok=True)
-
-
-def test_a_posterior_trained_at_a_different_cycle_ceiling_is_refused():
-    """chi_max_cycles is frozen into an artifact for the same reason the band is.
-
-    It decides how much of each recording is integrated, so the SAME bench data yields a different
-    |chi| and -- the part that bites -- a different ``logcyc`` under two ceilings. logcyc is the
-    channel the encoder uses to decide how much to trust a probe, so evaluating at a foreign ceiling
-    feeds it a value the training set never contained, on precisely the channel whose job is
-    calibration. Nothing about the shapes disagrees, so without this check it loads clean.
-
-    An ABSENT ceiling must stay silent: posteriors written before 2026-08-06 have no such field, and
-    turning those into a hard failure would strand every existing artifact.
-    """
-    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    path = POSTERIOR_PATH / "_ptest.rot.pt"
-    try:
-        torch.save(_sidecar(cfg, chi_max_cycles=float(cfg.chi_max_cycles) * 2), str(path))
-        try:
-            orchestrator._assert_mode_matches(cfg, object(), "_ptest.pt")
-            raise AssertionError("a posterior trained at a different cycle ceiling was accepted")
-        except ValueError as e:
-            assert "ceiling" in str(e), f"the message must name the ceiling, got: {e}"
-
-        d = _sidecar(cfg)
-        d.pop("chi_max_cycles")
-        torch.save(d, str(path))
-        orchestrator._assert_mode_matches(cfg, object(), "_ptest.pt")   # legacy: must not raise
-    finally:
-        path.unlink(missing_ok=True)
-
-
 # ── the end-of-run artifact writes are atomic ─────────────────────────────────────────────────────
 class _WriteFailed(RuntimeError):
     """Injected mid-write failure. Not OSError, so a handler that swallows disk errors cannot hide it."""
@@ -306,279 +189,6 @@ def _failing(real):
         real(*a, **k)
         raise _WriteFailed("disk full")
     return _boom
-
-
-
-class _FakeDP(orchestrator.DirectPosterior):
-    """A DirectPosterior by type only, so torch.save/load and build_posterior's isinstance accept it.
-    Module-level so it pickles."""
-
-    def __init__(self):
-        pass
-
-
-def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_region():
-    """⚠ GUARDRAIL 2 and 8 on the load path. A non-amortized artifact is refused unless the caller
-    opts in (accept_truncated), and then the posterior carries the sidecar's region and observation
-    digest -- with the region's basis checked against the bijection just rebuilt, so a sidecar whose
-    region and box disagree is refused rather than decoded."""
-    from core.SBI import training_checkpoint, truncate
-    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    name = "_ptest_trunc"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
-    P = len(cfg.params_dict) + len(cfg.rescale_params)
-    T = reparam.build_inferred_bijection(cfg, log_params=[])
-    region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
-                                       probe=training_checkpoint.bijection_probe(T, P),
-                                       x_obs_digest="d" * 16)
-    try:
-        torch.save(_FakeDP(), str(pt))
-        torch.save(_sidecar(cfg, amortized=False, truncation=region.to_dict(), x_obs_digest="d" * 16),
-                   str(rot))
-        try:
-            orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False)
-            raise AssertionError("a non-amortized artifact was loaded without opting in")
-        except ValueError as e:
-            assert "NOT AMORTIZED" in str(e), e
-        post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False,
-                                               accept_truncated=True)
-        assert post.truncation.dims == [0, 1] and post.x_obs_digest == "d" * 16
-        assert torch.equal(post.truncation.probe, region.probe) and post.truncation.V is None
-        # an amortized sidecar loads with neither
-        torch.save(_sidecar(cfg), str(rot))
-        post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
-        assert post.truncation is None and post.x_obs_digest is None
-        # a region measured over a DIFFERENT box than the sidecar rebuilds is refused on load
-        other_box = reparam.build_box_bijection(torch.zeros(P), torch.ones(P))
-        other = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
-                                          probe=training_checkpoint.bijection_probe(other_box, P))
-        torch.save(_sidecar(cfg, amortized=False, truncation=other.to_dict(), x_obs_digest="d" * 16),
-                   str(rot))
-        try:
-            orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
-            raise AssertionError("a region whose probe disagrees with the artifact's box was loaded")
-        except ValueError as e:
-            assert "probe max|diff|" in str(e), e
-        # a non-amortized sidecar whose region cannot be verified is refused EVEN when accepted:
-        # no region at all, and a region without its basis (the pre-2026-09-09 shape)
-        for tr, tag in ((None, "no region"),
-                        (truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P).to_dict(), "no probe")):
-            torch.save(_sidecar(cfg, amortized=False, truncation=tr, x_obs_digest="d" * 16), str(rot))
-            try:
-                orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
-                raise AssertionError(f"a non-amortized artifact with {tag} loaded as if amortized")
-            except ValueError as e:
-                assert "cannot be verified" in str(e), e
-        # the digest survives being recorded only inside the region
-        torch.save(_sidecar(cfg, amortized=False, truncation=region.to_dict()), str(rot))
-        post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
-        assert post.x_obs_digest == "d" * 16
-        # ROTATED artifacts: the sidecar's V must be the region's V; its transpose (the GUI's D6
-        # sidecars) is named as such rather than blamed on the region. _FakeDP carries no prior, so
-        # reconcile_loaded_rotation cannot arbitrate and this branch stays reachable.
-        torch.manual_seed(5)                                  # independent of the runner's order
-        Q, _ = torch.linalg.qr(torch.randn(P, P))
-        T_rot = reparam.build_rotated_bijection(T, Q)
-        rotated = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=Q,
-                                            probe=training_checkpoint.bijection_probe(T_rot, P),
-                                            x_obs_digest="d" * 16)
-        torch.save(_sidecar(cfg, V=Q, amortized=False, truncation=rotated.to_dict(), x_obs_digest="d" * 16),
-                   str(rot))
-        post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
-        assert torch.allclose(reparam.rotation_of(post.T).cpu(), Q) and torch.equal(post.truncation.V, Q)
-        torch.save(_sidecar(cfg, V=Q.T.contiguous(), amortized=False, truncation=rotated.to_dict(),
-                            x_obs_digest="d" * 16), str(rot))
-        try:
-            orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
-            raise AssertionError("a sidecar holding V transposed was decoded")
-        except ValueError as e:
-            assert "TRANSPOSE" in str(e), e
-    finally:
-        for q in (pt, rot):
-            q.unlink(missing_ok=True)
-
-
-class _PriorWithRotation:
-    """A pickled training prior's shape, one level deep: gen_dist -> RotatedLatentPrior(base, V)."""
-
-    def __init__(self, V):
-        self.gen_dist = reparam.RotatedLatentPrior(None, V)
-
-
-def test_a_gui_saved_rotation_reloads_as_the_training_bijection():
-    """⚠ THE spec test for defect D6: save from the GUI's path -> load_eval_bijection -> the probe of
-    the reloaded bijection equals the in-memory training bijection's. The counterfactual is in the
-    test: forwarding parts[0].M (what the GUI did) reloads a DIFFERENT bijection."""
-    from core.gui.panels.inference.posterior_tab import PosteriorPanel
-    from core.SBI import training_checkpoint
-    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    name = "_ptest_rot"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
-    P = len(cfg.params_dict) + len(cfg.rescale_params)
-    # the same box resolver the writer uses, so a non-empty REPARAM_LOG_PARAMS cannot fail this test
-    # for a reason unrelated to the orientation it pins
-    T = reparam.build_inferred_bijection(cfg, log_params=orchestrator._log_params_for(cfg))
-    torch.manual_seed(3)
-    Q, _ = torch.linalg.qr(torch.randn(P, P))
-    T_train = reparam.build_rotated_bijection(T, Q)
-    post = reparam.TransformedPosterior(object(), T_train)
-    want = training_checkpoint.bijection_probe(T_train, P)
-    try:
-        V_gui = PosteriorPanel._extract_rotation(post)
-        assert torch.equal(V_gui, Q)
-        orchestrator.save_posterior_artifacts(name, {"generation": 1}, V_gui, None, cfg)
-        got = training_checkpoint.bijection_probe(reparam.load_eval_bijection(cfg, f"{name}.pt", POSTERIOR_PATH), P)
-        assert torch.allclose(got, want), f"the GUI-saved rotation reloads differently: max|diff| {float((got - want).abs().max())}"
-        # the counterfactual: what the GUI forwarded until 2026-09-09
-        orchestrator.save_posterior_artifacts(name, {"generation": 2}, T_train.parts[0].M, None, cfg)
-        wrong = training_checkpoint.bijection_probe(reparam.load_eval_bijection(cfg, f"{name}.pt", POSTERIOR_PATH), P)
-        assert float((wrong - want).abs().max()) > 1.0, "parts[0].M reloaded as the training bijection -- the test rotation is degenerate"
-    finally:
-        for q in (pt, rot):
-            q.unlink(missing_ok=True)
-
-
-def test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior():
-    """The three rotated artifacts on disk hold V transposed and are NOT rewritten. The pickled
-    posterior carries its training prior, whose RotatedLatentPrior holds the true V, so the load
-    path reconciles: a sidecar that agrees passes through as the same object, the transpose is
-    corrected with a warning, anything else is refused, and a posterior without a rotation or
-    without a prior is untouched. Then the same through build_posterior on a real file."""
-    from core.SBI import training_checkpoint
-    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    P = len(cfg.params_dict) + len(cfg.rescale_params)
-    T = reparam.build_inferred_bijection(cfg, log_params=[])
-    torch.manual_seed(4)
-    Q, _ = torch.linalg.qr(torch.randn(P, P))
-    Q2, _ = torch.linalg.qr(torch.randn(P, P))
-    prior = _PriorWithRotation(Q)
-    right = reparam.build_rotated_bijection(T, Q)
-    want = training_checkpoint.bijection_probe(right, P)
-
-    assert reparam.reconcile_loaded_rotation(right, prior) is right
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        fixed = reparam.reconcile_loaded_rotation(reparam.build_rotated_bijection(T, Q.T.contiguous()), prior, name="x")
-    assert any("TRANSPOSED" in str(c.message) for c in w)
-    assert torch.allclose(training_checkpoint.bijection_probe(fixed, P), want)
-    assert torch.allclose(reparam.rotation_of(fixed), Q)
-    try:
-        reparam.reconcile_loaded_rotation(reparam.build_rotated_bijection(T, Q2), prior)
-        raise AssertionError("a sidecar rotation unrelated to the prior's was accepted")
-    except ValueError as e:
-        assert "inconsistent" in str(e)
-    try:
-        reparam.reconcile_loaded_rotation(right, _PriorWithRotation(torch.eye(P - 1)))
-        raise AssertionError("a prior rotation of another size was accepted")
-    except ValueError as e:
-        assert "inconsistent" in str(e)
-    # a sidecar that records NO rotation beside a prior that has one: the sidecar cannot say the
-    # posterior is unrotated, so the prior's rotation is restored (with the warning), not the bare box
-    with warnings.catch_warnings(record=True) as w:
-        warnings.simplefilter("always")
-        restored = reparam.reconcile_loaded_rotation(T, prior, name="y")
-    assert any("NO rotation" in str(c.message) for c in w)
-    assert torch.allclose(training_checkpoint.bijection_probe(restored, P), want)
-    assert reparam.reconcile_loaded_rotation(T, None) is T                        # unrotated, no prior
-    assert reparam.reconcile_loaded_rotation(right, None) is right                # no prior at all
-    assert reparam.reconcile_loaded_rotation(right, object()) is right            # a prior with no rotation
-    assert reparam.rotation_of_prior(prior) is Q
-    # the walker on the REAL training-prior chain, both hops and both attribute names, plus sbi's
-    # own wrapper attribute
-    from core.SBI import truncate
-    from core.SBI.Priors import sbi_prior_wrapper
-    base = torch.distributions.MultivariateNormal(torch.zeros(P), torch.eye(P))
-    chain = sbi_prior_wrapper.SBIPriorWrapper(truncate.TruncatedLatentPrior(
-        reparam.RotatedLatentPrior(base, Q), truncate.TruncationRegion([0], [-10.0], [10.0], n_latent=P)))
-    assert reparam.rotation_of_prior(chain) is Q
-    assert reparam.rotation_of_prior(type("SbiWrap", (), {"prior": chain})()) is Q
-
-    # through build_posterior on disk: a D6 sidecar (V transposed) beside a posterior whose prior
-    # carries the true V evaluates in the CORRECT basis, with the warning
-    name = "_ptest_recon"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
-    dp = _FakeDP()
-    dp.prior = prior
-    try:
-        torch.save(dp, str(pt))
-        torch.save(_sidecar(cfg, V=Q.T.contiguous()), str(rot))
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False)
-        assert any("TRANSPOSED" in str(c.message) for c in w)
-        assert torch.allclose(training_checkpoint.bijection_probe(post.T, P), want)
-        torch.save(_sidecar(cfg, V=Q), str(rot))
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False)
-        assert not any("TRANSPOSED" in str(c.message) for c in w)
-        assert torch.allclose(training_checkpoint.bijection_probe(post.T, P), want)
-    finally:
-        for q in (pt, rot):
-            q.unlink(missing_ok=True)
-
-
-def test_the_sidecar_records_the_fisher_eigenvalues_beside_V():
-    """The rotation is saved so a later reader can say WHICH directions the run constrained. Without
-    the eigenvalues it can only say which is worst, never by how much -- and the gap between "3x" and
-    "1e6" is the gap between "uneven" and "nine of thirteen parameters are prior".
-
-    The None case is asserted too, and deliberately: the key must be PRESENT-and-None when the
-    rotation came from a resumed checkpoint (which stores V but not them), so a reader can tell "not
-    recorded" from "this artifact predates the field".
-    """
-    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    name = "_ptest_evals"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
-    evals = torch.tensor([9.0, 3.0, 0.5], dtype=torch.float64)
-    try:
-        orchestrator.save_posterior_artifacts(name, {"generation": 1}, torch.eye(3), None, cfg,
-                                              fisher_eigenvalues=evals)
-        d = torch.load(str(rot), weights_only=False)
-        assert "fisher_eigenvalues" in d, "the sidecar dropped the eigenvalues"
-        assert torch.allclose(d["fisher_eigenvalues"], evals)
-
-        orchestrator.save_posterior_artifacts(name, {"generation": 2}, None, None, cfg)
-        d2 = torch.load(str(rot), weights_only=False)
-        assert "fisher_eigenvalues" in d2 and d2["fisher_eigenvalues"] is None, \
-            "an un-rotated run must record the field as None, not omit it"
-    finally:
-        for q in (pt, rot):
-            q.unlink(missing_ok=True)
-
-def test_a_torn_posterior_write_leaves_the_previous_artifact_intact():
-    """The posterior and its .rot.pt sidecar are the product of a multi-day run, and the GUI's Save
-    button can be pressed a second time over the same name. A bare torch.save truncates the
-    destination before it writes, so a failure there leaves a file that exists, has a plausible size,
-    and cannot be unpickled -- discovered whenever someone next tries to load it.
-
-    Routed through save_posterior_artifacts rather than the helper directly, because what regresses is
-    not the helper (it has its own test) but a call site quietly reverting to torch.save."""
-    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
-    name = "_ptest_atomic"
-    pt, rot = POSTERIOR_PATH / f"{name}.pt", POSTERIOR_PATH / f"{name}.rot.pt"
-    real_save = torch.save
-    try:
-        orchestrator.save_posterior_artifacts(name, {"generation": 1}, None, None, cfg)
-        assert torch.load(str(pt), weights_only=False)["generation"] == 1
-        assert torch.load(str(rot), weights_only=False)["mode"] == "chi", "no sidecar was written"
-
-        torch.save = _failing(real_save)
-        try:
-            orchestrator.save_posterior_artifacts(name, {"generation": 2}, None, None, cfg)
-            raise AssertionError("the injected failure did not propagate")
-        except _WriteFailed:
-            pass
-        finally:
-            torch.save = real_save
-
-        assert torch.load(str(pt), weights_only=False)["generation"] == 1, \
-            "a torn write clobbered the posterior it was replacing"
-        assert not (POSTERIOR_PATH / f"{name}.pt.tmp").exists(), "a failed write left its temp behind"
-    finally:
-        torch.save = real_save
-        for p in (pt, rot, POSTERIOR_PATH / f"{name}.pt.tmp", POSTERIOR_PATH / f"{name}.rot.pt.tmp"):
-            p.unlink(missing_ok=True)
 
 
 def test_a_torn_prior_write_leaves_the_previous_prior_intact():
@@ -648,7 +258,7 @@ def test_atomic_savez_round_trips_and_cannot_be_torn():
 # ── the chi band/drive preflight (2026-08-19 regression) ─────────────────────────────────────────
 def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend():
     """A ~5-day retrain was spent at the RETIRED band (0.1, 10.0) because QSettings restored a value
-    saved before C-5 changed it. `_assert_mode_matches` catches that disagreement only when a
+    saved before C-5 changed it. ``store.load_posterior`` catches that disagreement only when a
     posterior is LOADED, i.e. after the days are gone.
 
     The subtle half is the LOAD path: it compares the posterior against cfg, so a stale cfg loading

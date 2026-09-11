@@ -191,10 +191,10 @@ def read_header(path) -> dict:
 def verify(path, identity: dict, probe=None, *, probe_atol: float = 1e-6) -> dict:
     """Validate a checkpoint against the config that wants to resume it; return its header.
 
-    Field by field, naming the field and BOTH values, in the voice of
-    ``orchestrator._assert_mode_matches``. The digest already routed us here, so anything caught below
-    is a hand-moved directory, a format skew, or a collision -- all of which deserve a message that
-    says what is wrong rather than "digest mismatch".
+    Field by field, naming the field and BOTH values, in the voice of the store's own load-side
+    refusals (``ArtifactStore.load_posterior``, ``load_prior``). The digest already routed us here,
+    so anything caught below is a hand-moved directory, a format skew, or a collision -- all of which
+    deserve a message that says what is wrong rather than "digest mismatch".
     """
     path = Path(path)
     header = read_header(path)

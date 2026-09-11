@@ -9,7 +9,6 @@ from ...widgets.artifact_picker import ArtifactPicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
-from .posterior_tab import PosteriorPanel
 from .runners import (_run_tsnpe_round)
 from .base import _StagePanel, _TrainingBudgetMixin
 from .help_text import HELP
@@ -45,7 +44,7 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         v = QVBoxLayout(box)
         warn = QLabel("Restricts the PRIOR to the posterior's credible region and retrains there. It "
                       "never proposes from the posterior itself. The result is NON-AMORTIZED and is "
-                      "marked as such in its sidecar, so the load path will refuse it for general "
+                      "marked as such in its manifest, so the load path will refuse it for general "
                       "inference.")
         warn.setWordWrap(True)
         warn.setTextFormat(Qt.PlainText)
@@ -103,27 +102,24 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
                 f"HPD {level:g} is tighter than the recommended {0.999:g}. Truncation permanently "
                 f"deletes prior support; no later round can recover it.", "warning")
         n_runs, cap = self._budget_values()
-        self.dispatch(_run_tsnpe_round, s.cfg, s.posterior, s.inf_prior,
+        self.dispatch(_run_tsnpe_round, s.cfg, s.posterior.posterior, s.inf_prior,
                       OBSERVATION_PATH / self.obs_picker.key(), n_dirs, level,
                       max(1, n_runs), max(0, cap), provide_fig_sink=True,
                       on_result=self._on_round)
 
     def _on_round(self, payload):
-        """Install the round's posterior AND the region that makes it non-amortized.
-
-        Without an on_result the round trains for hours and the result is discarded -- and without
-        the region travelling with it, the deferred Save writes it marked amortized. Both halves
-        matter; the second is the one that produces a wrong artifact rather than no artifact.
+        """Install the round's LoadedPosterior -- it carries its own region and observation digest
+        (None for an amortized one), so Validate restricts its prior and Infer can warn about any
+        other observation. Without an on_result the round trains for hours and the result is
+        discarded; without the region riding on the returned wrapper, a later Save (a rename) would
+        write it marked amortized -- but the region is already on disk from build_posterior's own
+        write, not something this handler has to remember to carry.
         """
-        (posterior, diagnostics), region, digest = payload
         s = self.session
-        s.posterior, s.diagnostics = posterior, diagnostics
-        s.posterior_latent = getattr(posterior, "latent", None)
-        s.V = PosteriorPanel._extract_rotation(posterior)
-        s.truncation, s.x_obs_digest = region, digest
+        s.posterior = payload
         self.log_pane.append_line(
             f"TSNPE round complete. This posterior is NON-AMORTIZED: it is valid near the "
-            f"observation {digest}, and its sidecar will say so.", "warning")
+            f"observation {payload.posterior.x_obs_digest}, and its manifest records so.", "warning")
         self._screen.refresh_gates()
 
     def _budget_checkpoint(self, cfg, width: int, n_runs: int) -> str:

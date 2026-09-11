@@ -105,8 +105,8 @@ def test_no_forcing_user_model_full_sbi_pipeline():
         inferred_prior, force_prior = lp.prior, lp.force_prior
         assert force_prior is None                               # no drive -> no forcing prior
 
-        posterior, _ = orchestrator.build_posterior(cfg, lp, None, True,
-                                                    save=False, fig_sink=sink)
+        lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
+        posterior = lp_post.posterior
 
         x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
         assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1    # [S | log(T)], no forcing block
@@ -191,8 +191,8 @@ def test_train_and_validate_without_a_loaded_cell():
 
         lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
         inferred_prior, force_prior = lp.prior, lp.force_prior
-        posterior, _ = orchestrator.build_posterior(cfg, lp, None, True,
-                                                    save=False, fig_sink=sink)
+        lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
+        posterior = lp_post.posterior
         orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
@@ -442,8 +442,8 @@ def test_chi_mode_full_sbi_pipeline():
 
         lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
         inferred_prior, force_prior = lp.prior, lp.force_prior
-        posterior, _ = orchestrator.build_posterior(cfg, lp, None, True,
-                                                    save=False, fig_sink=sink)
+        lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
+        posterior = lp_post.posterior
 
         K3 = orchestrator.expected_forcing_dim(cfg)
         x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
@@ -2285,11 +2285,9 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     import tempfile
     from core import config as _cfg
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
-    from sbi.inference import DirectPosterior as _DP
-
-    class _FakeDP(_DP):
-        def __init__(self):                                   # never trained; only its type matters
-            pass
+    # Module-level (not defined here) so it pickles: every build_posterior call now auto-persists
+    # (piece 1, Task 7), and pickle cannot serialize a class defined inside a function.
+    from tests._fixtures import _FakeDP
 
     seen = {}
 
@@ -2335,15 +2333,17 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
                                       probe=probe, x_obs_digest="deadbeefdeadbeef")
 
         def _round(reg, digest="deadbeefdeadbeef"):
+            """The TransformedPosterior (not the LoadedPosterior wrapper): every assertion below reads
+            .truncation / .x_obs_digest / .T, which live on it."""
             return orchestrator.build_posterior(cfg, lp, None, True,
-                                                save=False, fig_sink=sink, num_runs=2, run_size_cap=8,
-                                                truncation=reg, x_obs_digest=digest)
+                                                fig_sink=sink, num_runs=2, run_size_cap=8,
+                                                truncation=reg, x_obs_digest=digest).posterior
 
         # (i) + (ii): the parent's basis is reused, the Fisher stub never fires, the plan's prior is
         # THIS region over a latent rotated by exactly Q, and the posterior carries the region
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            post, _ = _round(region)
+            post = _round(region)
         _out = buf.getvalue()
         assert "at the rejection sampler (P(A), PRE-override)" in _out, _out[-600:]
         assert "post-override containment of the recorded training targets: not measured" in _out, \
@@ -2355,10 +2355,15 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         assert isinstance(seen["prior"].base, _rp.RotatedLatentPrior)
         assert torch.allclose(seen["prior"].base.V.cpu(), Q), "the round did not train under the region's V"
         assert bool(region.contains(seen["prior"].sample((256,)).cpu().double()).all())
-        assert post.truncation is region and post.x_obs_digest == "deadbeefdeadbeef"
+        # NOT `is region`: the returned posterior is read back through the store (piece 1, Task 7), so
+        # its region is reconstructed from the manifest, not the same in-memory object -- compare by
+        # value instead.
+        assert post.truncation.dims == region.dims and post.x_obs_digest == "deadbeefdeadbeef"
+        assert torch.allclose(post.truncation.lo.double(), region.lo.double())
+        assert torch.allclose(post.truncation.hi.double(), region.hi.double())
         assert torch.allclose(_rp.rotation_of(post.T).cpu(), Q)
         # the region's own digest fills in a missing one, and contradicts a wrong one
-        post2, _ = _round(region, digest=None)
+        post2 = _round(region, digest=None)
         assert post2.x_obs_digest == "deadbeefdeadbeef"
         try:
             _round(region, digest="0" * 16)

@@ -43,11 +43,10 @@ class ValidatePanel(_StagePanel):
             return
         # truncation: a TSNPE posterior is calibrated on the prior RESTRICTED to its region
         # (guardrail 8); None for an amortized one leaves the battery exactly as it was.
-        self.dispatch(orchestrator.validate_calibration, s.cfg, s.posterior,
+        self.dispatch(orchestrator.validate_calibration, s.cfg, s.posterior.posterior,
                       s.inf_prior.prior, s.inf_prior.force_prior, provide_fig_sink=True,
-                      n_cal=max(1, self.cal_n.value()),
-                      cal_n_scales=max(1, self.cal_scales.value()),
-                      truncation=s.truncation)
+                      n_cal=max(1, self.cal_n.value()), cal_n_scales=max(1, self.cal_scales.value()),
+                      truncation=s.posterior.posterior.truncation)
 
     def refresh_local_gates(self):
         s = self.session

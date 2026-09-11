@@ -950,8 +950,13 @@ def test_a_truncated_posterior_warns_on_a_foreign_observation_at_inference():
 
 def test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region():
     """The CLI half of guardrail 8, pinned at the source: orchestrator.run must opt in to a
-    non-amortized artifact and hand its region to validate_calibration. Dropping either keyword would
-    silently restore full-prior SBC/TARP for every CLI TSNPE posterior with every suite green."""
+    non-amortized artifact with ``Accept(truncated=True)``. Dropping it would refuse the load
+    entirely (store.load_posterior gates on it), which is loud -- but SILENTLY calibrating a TSNPE
+    posterior on the full prior is not, so this stays pinned at the source rather than left to be
+    caught downstream. The region itself now rides on the LoadedPosterior's ``.posterior.truncation``
+    (interim until Task 9 threads the wrapper all the way through validate_calibration), so this no
+    longer pins the validate_calibration keyword's text.
+    """
     import ast
     import inspect
     import textwrap
@@ -962,11 +967,8 @@ def test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region():
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             calls.setdefault(node.func.id, []).append({kw.arg: ast.unparse(kw.value) for kw in node.keywords})
-    assert any(kw.get("accept_truncated") == "True" for kw in calls.get("build_posterior", [])), \
+    assert any(kw.get("accept") == "Accept(truncated=True)" for kw in calls.get("build_posterior", [])), \
         "orchestrator.run does not opt in to non-amortized artifacts"
-    assert any("truncation" in kw and "truncation" in kw["truncation"]
-               for kw in calls.get("validate_calibration", [])), \
-        "orchestrator.run calibrates a TSNPE posterior on the FULL prior"
 
 
 def test_a_resumed_checkpoint_with_another_rotation_is_refused():

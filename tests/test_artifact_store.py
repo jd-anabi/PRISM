@@ -13,6 +13,8 @@ from core import config
 from core.artifacts import manifest as mf
 from core.artifacts import provenance as prov
 
+from tests._fixtures import _FakeDP, _gmm_in_box, _nad_cfg, _posterior_artifact, _prior_artifact, _set_path
+
 
 def test_manifest_json_round_trips_tensors_exactly():
     V = torch.linalg.qr(torch.randn(13, 13, dtype=torch.float64))[0]
@@ -235,16 +237,6 @@ def test_default_store_is_swappable_and_resolves_from_the_root(monkeypatch, tmp_
         st.set_default_store(session_default)
 
 
-def _nad_cfg(**over):
-    from core import cli, registry
-    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
-    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
-    cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
-                              str(BOUNDS_PATH / "nadrowski" / "master.txt"), **over)
-    cfg.hw = config.cpu_device()
-    return cfg
-
-
 _IDENTITY_KEYS = {
     "format", "model", "prior_fingerprint", "mode", "param_keys", "nd_lows", "nd_highs", "rescale_lows",
     "rescale_highs", "log_params", "reparam_rotate", "run_size", "n_runs", "steady_idx", "dt_nd_min",
@@ -313,39 +305,6 @@ def test_simulation_manifest_written_at_create_and_refreshed_on_save_and_complet
     m3 = store.get("simulation", d.name)
     assert m3.body["complete"] is True and m3.body["rows"] == [12, 5] and m3.body["wall_seconds"] >= 0.0
     assert store.simulation_for(ident) == d and store.list("simulation")[0].complete
-
-
-def _gmm_in_box(lows, highs, mask, seed=0):
-    from core.SBI import reparam
-    torch.manual_seed(seed)
-    d = len(lows)
-    base = torch.distributions.MixtureSameFamily(
-        torch.distributions.Categorical(probs=torch.tensor([0.5, 0.5])),
-        torch.distributions.MultivariateNormal(torch.randn(2, d), covariance_matrix=torch.eye(d).expand(2, d, d)))
-    T = reparam.build_box_bijection(torch.tensor(lows, dtype=torch.float32), torch.tensor(highs, dtype=torch.float32), mask)
-    return torch.distributions.TransformedDistribution(base, T)
-
-
-def _prior_artifact(store, cfg, *, name="p", lows=None, highs=None, keys=None, model=None, seed=0):
-    """A prior artifact with a real 2-component GMM payload, laid out exactly as build_prior writes it."""
-    from core.Helpers import file_manager
-    from core.SBI.reparam import nd_log_mask
-    from core.SBI.run_guards import _gmm_fingerprint, _log_params_for
-    keys = keys or list(cfg.params_dict)
-    lows = lows or [b[0] for _, b in cfg.params_dict.values()]
-    highs = highs or [b[1] for _, b in cfg.params_dict.values()]
-    mask = nd_log_mask(cfg, log_params=_log_params_for(cfg))
-    dist = _gmm_in_box(lows, highs, mask, seed)
-    with store.create("prior", cfg, name=name) as w:
-        file_manager.save_mix_dist(dist, str(w.payload("prior.pt")), model=model or cfg.model, param_keys=keys)
-        if model:
-            w.config["model"] = model
-        w.fingerprints["gmm"] = _gmm_fingerprint(dist)
-        w.body = {"gmm": {"n_components": 2, "param_keys": list(keys),
-                          "box": {"nd_lows": [float(v) for v in lows], "nd_highs": [float(v) for v in highs],
-                                  "log_mask": [bool(v) for v in mask.tolist()]}},
-                  "sweep": {}, "stability": {"accepted_sets": None, "iterations": 1}}
-    return w
 
 
 def test_load_prior_refuses_model_param_order_and_box_and_returns_a_wrapper(store):
@@ -426,57 +385,17 @@ def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, 
     monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
     monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 1)
     with pytest.raises(RuntimeError, match="stop before training"):
-        orchestrator.build_posterior(cfg, lp, None, True, save=False, num_runs=2, run_size_cap=4)
+        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4)
     ck = captured["plan"].checkpoint
     assert ck["parents"] == {"prior": lp.id} and ck["inputs"]["model"] == "NADROWSKI" and ck["hw"] is cfg.hw
     assert ck["identity"] == SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
     assert ck["identity"]["prior_fingerprint"] == lp.fingerprint and ck["dir"].parent == store.kind_dir("simulation")
 
 
-from sbi.inference import DirectPosterior
-
-
-class _FakeDP(DirectPosterior):
-    """A DirectPosterior by type only (the loader's isinstance accepts it); module-level so it pickles."""
-    def __init__(self):
-        pass
-
-
 class _PriorWrap:
     """SBIPriorWrapper's shape (.gen_dist), module-level so a payload carrying it pickles."""
     def __init__(self, inner):
         self.gen_dist = inner
-
-
-def _set_path(w, path, value):
-    target = w.config if path[0] == "config" else w.body
-    for key in path[1 if path[0] == "config" else 0:-1]:
-        target = target[key]
-    target[path[-1]] = value
-
-
-def _posterior_artifact(store, cfg, *, name="post", amortized=True, region=None, V=None, prior=None, over=None):
-    """A posterior artifact with a _FakeDP payload, laid out exactly as build_posterior writes it."""
-    keys = list(cfg.params_dict) + list(cfg.rescale_params)
-    with store.create("posterior", cfg, name=name) as w:
-        dp = _FakeDP()
-        dp.prior = prior
-        torch.save(dp, str(w.payload("posterior.pt")))
-        w.parents = {"prior": "20260910T100000"}
-        w.body = {
-            "mode": cfg.observation_mode, "conditioning": mf.conditioning_block(cfg),
-            "transform": {"param_keys": keys, "log_params": [],
-                          "nd_lows": [float(b[0]) for _, b in cfg.params_dict.values()],
-                          "nd_highs": [float(b[1]) for _, b in cfg.params_dict.values()],
-                          "rescale_lows": [float(b[0]) for _, b in cfg.rescale_params.values()],
-                          "rescale_highs": [float(b[1]) for _, b in cfg.rescale_params.values()],
-                          "V": mf.tensor_to_json(V), "V_orientation": "columns",
-                          "fisher_eigenvalues": None, "V_digest": mf.tensor_digest(V)},
-            "amortized": amortized, "truncation": None if region is None else mf.region_to_json(region),
-            "training": {}}
-        for path, value in (over or {}).items():
-            _set_path(w, path, value)
-    return w
 
 
 def test_load_posterior_refuses_each_mismatch_class(store):
@@ -564,3 +483,71 @@ def test_a_legacy_or_schemaless_directory_is_refused_as_not_a_current_artifact(s
     assert store.list("posterior")[0].complete is False
     (d / "manifest.json").write_text(json.dumps({"schema": 0}), encoding="utf-8")
     assert "schema" in store.list("posterior")[0].reason
+
+
+def test_build_posterior_auto_persists_and_returns_the_loaded_wrapper(store, monkeypatch):
+    """train_nn is stubbed to return a _FakeDP carrying the training prior; everything around it --
+    the identity, the parents, the transform block, the loss curve, the figure, the load-back -- is real."""
+    from core import orchestrator
+    from core.artifacts import Accept
+    from core.SBI import reparam
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = False
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+
+    def fake_train_nn(plan, **kw):
+        dp = _FakeDP()
+        dp.prior = kw["prior"]                    # the SBIPriorWrapper build_posterior passed in
+        return dp, {"training_loss": [1.0, 0.5], "validation_loss": [1.1, 0.6],
+                    "best_validation_loss": 0.6, "epochs_trained": 2, "stop_after_epochs": 1}
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data",
+                        lambda plan, **kw: (torch.zeros(8, 50), torch.zeros(8, 13)))
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 0)
+    seen = []
+    out = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=lambda t, f: seen.append(t),
+                                       num_runs=2, run_size_cap=4, hidden_features=8, num_transforms=1,
+                                       stop_after_epochs=1, note="tiny")
+    assert isinstance(out, st.LoadedPosterior) and out.name == "" and out.diagnostics["epochs_trained"] == 2
+    m = store.get("posterior", out.id)
+    assert m.parents == {"prior": lp.id} and m.note == "tiny" and m.body["amortized"] is True
+    assert m.body["transform"]["V"] is None and m.body["transform"]["param_keys"][-1] in cfg.rescale_params
+    assert m.body["training"]["hidden_features"] == 8 and m.body["training"]["best_validation_loss"] == 0.6
+    assert m.config["num_runs"] == 2 and m.fingerprints["gmm"] == lp.fingerprint
+    assert set(m.payloads) == {"posterior.pt", "loss.npz"} and m.figures == ["figures/training_loss.png"]
+    assert seen == ["Training loss"]
+    back = orchestrator.build_posterior(cfg, lp, out.id, False)
+    assert back.id == out.id and reparam.rotation_of(back.posterior.T) is None
+    with pytest.raises(ValueError, match="already carries"):
+        orchestrator.build_posterior(cfg, lp, out.id, False, truncation=object())
+
+    # The store suite's successor to the retired sidecar test: a ROTATED run's manifest carries the
+    # Fisher eigenvalues descending, the same field the retired '.rot.pt' sidecar used to hold.
+    cfg.reparam_rotate = True
+    Q, _ = torch.linalg.qr(torch.randn(13, 13))
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation",
+                        lambda *a, **k: (Q, torch.arange(13, 0, -1).float()))
+    out2 = orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
+                                        hidden_features=8, num_transforms=1, stop_after_epochs=1)
+    m2 = store.get("posterior", out2.id)
+    assert m2.body["transform"]["fisher_eigenvalues"][0] == 13.0
+
+
+def test_a_torn_posterior_write_leaves_no_half_artifact(store):
+    """The end-of-run write is one ``store.create`` block: a failure mid-write must leave no half
+    artifact directory and must not disturb an already-complete sibling."""
+    from core.Helpers import file_manager
+    from tests.test_artifact_consistency import _WriteFailed, _failing
+    cfg = _nad_cfg(chi_mode=True)
+    first = _posterior_artifact(store, cfg, name="first")
+    real_save = torch.save
+    torch.save = _failing(real_save)
+    try:
+        with pytest.raises(_WriteFailed):
+            with store.create("posterior", cfg, name="second") as w:
+                file_manager.atomic_torch_save({"generation": 2}, w.payload("posterior.pt"))
+    finally:
+        torch.save = real_save
+    assert [r.name for r in store.list("posterior")] == ["first"] and not (w.dir).exists()
+    assert not list(first.dir.glob("*.tmp"))

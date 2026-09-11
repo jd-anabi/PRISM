@@ -69,7 +69,12 @@ def _run_tsnpe_round(cfg, posterior, prior, obs_path, n_directions, level,
 
     The proposal is the TRUNCATED PRIOR and never the posterior -- see core/SBI/truncate.py, which
     owns that rule, and tests/test_conditioning_repair.py, which pins it. Nothing here reimplements
-    it; this function only carries the GUI's choices into orchestrator. ``prior`` is a LoadedPrior.
+    it; this function only carries the GUI's choices into orchestrator. ``prior`` is a LoadedPrior;
+    ``posterior`` is the TransformedPosterior the region is drawn from (session.posterior.posterior).
+
+    :return: the LoadedPosterior build_posterior just wrote and read back -- its own
+             ``.posterior.truncation`` and ``.posterior.x_obs_digest`` carry the region and the
+             observation the round is valid near, so nothing here needs to return them separately.
     """
     rec = orchestrator.load_observation(obs_path)
     x_obs = rec["x_obs"].to(cfg.hw.device)
@@ -79,12 +84,7 @@ def _run_tsnpe_round(cfg, posterior, prior, obs_path, n_directions, level,
                                                   n_directions=n_directions, level=level,
                                                   t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
     print(f"[tsnpe] region from {getattr(obs_path, 'name', obs_path)}: {region!r}", flush=True)
-    out = orchestrator.build_posterior(
-        cfg, prior, None, True, save=False,
-        fig_sink=fig_sink, num_runs=num_runs, run_size_cap=run_size_cap,
+    return orchestrator.build_posterior(
+        cfg, prior, None, True, fig_sink=fig_sink, num_runs=num_runs, run_size_cap=run_size_cap,
         truncation=region, x_obs_digest=rec.get("digest"))
-    # The region and digest ride back with the posterior. save=False here because the GUI saves from
-    # a button, and a deferred save that does not know about the region writes an artifact marked
-    # amortized -- see TSNPEPanel._on_round.
-    return out, region, rec.get("digest")
 

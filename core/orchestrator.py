@@ -21,7 +21,7 @@ from torch.distributions import Distribution, MixtureSameFamily
 from tqdm import tqdm
 
 from .config import (
-    SimConfig, POSTERIOR_PATH, PLOT_PATH, OBSERVATION_PATH,
+    SimConfig, OBSERVATION_PATH,
     T_MIN_EXP_S, T_MAX_EXP_S,
     CHUNK_LEN, N_ND_MAX, SBC_N_CAL, STABILITY_SWEEP_ND_UNITS, TRAINING_NUM_RUNS,
     PRIOR_SWEEP_ITERATIONS, PRIOR_SWEEP_BATCH, TRAINING_RUN_SIZE, TRAINING_CHECKPOINT_EVERY,
@@ -33,22 +33,21 @@ from .config import (
 from . import cli, config, forcing
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
-from .artifacts import LoadedPrior, resolve_store
+from .artifacts import LoadedPrior, LoadedPosterior, resolve_store
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
-from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint, truncation_from_sidecar,  # noqa: E402
+from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches_region,
-                             _assert_chi_config_is_deliberate,
-                             _assert_amortization_understood, _log_params_for)
+                             _assert_chi_config_is_deliberate, _log_params_for)
 from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derived, overlay, ppc,
                   truncate,
                   statistics, training_checkpoint)
 from .SBI.Priors import sbi_prior_wrapper
 from .SBI.reparam import (
     build_inferred_bijection, TransformedPosterior, build_rescale_bijection,
-    build_rotated_bijection, RotatedLatentPrior, load_eval_bijection,
-    nd_log_mask, resolved_log_params, read_sidecar, posterior_mode as reparam_posterior_mode,
-    rotation_of, rotation_of_prior, reconcile_loaded_rotation, transform_device, UnitToBoxTransform,
+    build_rotated_bijection, RotatedLatentPrior,
+    nd_log_mask, resolved_log_params,
+    rotation_of, rotation_of_prior, transform_device, UnitToBoxTransform,
 )
 
 # Directories have spaces in their names, so use importlib for these imports
@@ -79,16 +78,17 @@ def run(cfg: SimConfig):
     inf_prior, force_prior = lp.prior, lp.force_prior
 
     # 2. Posterior (training is amortized and observation-independent)
+    from .artifacts import Accept
     pos_choice, train_new = cli.select_or_train_posterior()
-    # accept_truncated: a NON-AMORTIZED artifact may be loaded here -- its region then restricts the
+    # accept: a NON-AMORTIZED artifact may be loaded here -- its region then restricts the
     # calibration prior below, and step 4 warns if the observation is not the one it was drawn around.
-    posterior, pos_diagnostics = build_posterior(cfg, lp, pos_choice, train_new,
-                                                 accept_truncated=True)
+    lp_post = build_posterior(cfg, lp, pos_choice, train_new, accept=Accept(truncated=True))
+    posterior = lp_post.posterior
     helpers.clear_screen()
 
     # 3. Calibration (data-free): SBC + expected coverage -- on the truncated prior for a TSNPE posterior
     validate_calibration(cfg, posterior, inf_prior, force_prior,
-                         truncation=getattr(posterior, "truncation", None))
+                         truncation=posterior.truncation)
 
     # 4. Optional inference on a chosen observation
     mode = cli.select_inference_mode()
@@ -478,22 +478,24 @@ def build_posterior(
     prior: LoadedPrior,                  # the built/loaded prior wrapper; .prior is the physical inferred prior
     ref: str | None,
     train_new: bool,
-    *, save: bool = True, save_name: str | None = None, fig_sink=None, store=None,
+    *, name: str = "", note: str = "", fig_sink=None, store=None,
     num_runs: int | None = None, run_size_cap: int | None = None,
-    truncation=None, x_obs_digest: str | None = None, accept_truncated: bool = False,
+    truncation=None, x_obs_digest: str | None = None,
+    observation=None, parent_posterior=None, accept=None,
     hidden_features: int | None = None, num_transforms: int | None = None,
     learning_rate: float | None = None, stop_after_epochs: int | None = None,
     fisher_m: int | None = None, fisher_dz: float | None = None,
     fisher_points: int | None = None,
-) -> tuple[TransformedPosterior, dict | None]:
+) -> LoadedPosterior:
     """
-    Load an existing latent DirectPosterior from disk and wrap with T, or train a new one
-    via NPE in latent space. Returns a TransformedPosterior whose .sample/.log_prob operate
-    in physical-parameter coordinates for downstream code.
+    Load an existing posterior artifact through the store, or train a new one via NPE in latent
+    space -- writing it to the store at completion, the moment it is read back. Either way the
+    return is a LoadedPosterior whose ``.posterior`` (a TransformedPosterior) is what every
+    downstream stage samples/log_probs in physical-parameter coordinates.
 
-    :param save: When training new, persist <name>.pt / .rot.pt / .loss.npz / _loss.png. Defaults
-                 True (CLI behavior). Pass False to defer saving (GUI saves via an explicit control).
-    :param save_name: Name to save under; when None (and save=True) the CLI prompt is used.
+    :param name / note: the artifact's name ("" = unnamed) and note. Every training run is WRITTEN at
+                     completion -- the Save button is a rename -- so a multi-day run can no longer be
+                     lost to a forgotten click, and every posterior has an id its children can name.
     :param fig_sink: Optional (title, fig) -> None display callback for the training-loss curve
                      (a GUI embeds it); None keeps the CLI behavior (loss saved to PNG, not shown).
     :param store: the ArtifactStore the simulation cache and the region-fingerprint lookup read/write
@@ -504,14 +506,13 @@ def build_posterior(
                      config.TRAINING_RUN_SIZE.
     :param truncation: a ``SBI.truncate.TruncationRegion`` to restrict the PRIOR to (TSNPE round 2+).
                      None = ordinary amortized NPE. The resulting artifact is marked NON-AMORTIZED in
-                     its sidecar and the load path refuses it for general inference.
+                     its manifest and the load path refuses it for general inference.
     :param x_obs_digest: the observation the region was drawn around (``observation_digest``), so the
                      artifact records what it is valid near.
-    :param accept_truncated: LOAD path only. By default a NON-AMORTIZED artifact is refused (guardrail
-                     2: it is valid only near one observation). True loads it anyway and hands back a
-                     posterior carrying ``.truncation`` and ``.x_obs_digest`` from its sidecar, so
-                     calibration can restrict its prior to the same region and inference can warn on
-                     any other observation -- the GUI's Posterior tab and the CLI's ``run`` opt in.
+    :param observation / parent_posterior: for a TSNPE round, the LoadedObservation the region was
+                     drawn around and the LoadedPosterior it was drawn from; recorded as parents.
+    :param accept: LOAD path only. An ``artifacts.Accept``; a NON-AMORTIZED artifact is refused unless
+                     ``accept.truncated`` (the Posterior tab passes it), and the flag is recorded.
     :param hidden_features: flow width per transform; None = config.NSF_HIDDEN_FEATURES.
     :param num_transforms: flow depth; None = config.NSF_NUM_TRANSFORMS.
     :param learning_rate: Adam LR; None = config.TRAINING_LEARNING_RATE.
@@ -528,6 +529,7 @@ def build_posterior(
                      ⚠ So does a TRUNCATED run (``truncation=``): it reuses the region's V and never
                      runs the Fisher at all -- the box is measured in the parent's basis and is
                      meaningless in any other (guardrail 7).
+    :return: a LoadedPosterior; ``.posterior`` is the TransformedPosterior every downstream stage samples.
 
     ⚠ THESE FOUR ARE WHAT A COMPLETE C-11 CHECKPOINT IS FOR. Its own docstring says a finished
     checkpoint "is a cache of the whole simulation run, so you can retrain the flow at a different
@@ -552,6 +554,11 @@ def build_posterior(
     so narrowing it does not speed anything up, it trades training rows for peak VRAM about 1:1.
     """
     store = resolve_store(store)
+    from .artifacts import Accept
+    from .artifacts.manifest import conditioning_block, region_to_json, tensor_digest, tensor_to_json
+    accept = accept or Accept()
+    _t0 = time.time()
+    _spread = None
     inferred, force_prior = prior.prior, prior.force_prior
     # Tier 1: announce the DERIVED force scale before the first simulation, for the
     # same reason the chi banner exists -- a training distribution that changed silently is what cost
@@ -575,14 +582,14 @@ def build_posterior(
     if size_cap < 0:
         raise ValueError(
             f"run_size_cap must be >= 0 (0 = follow the hardware default), got {size_cap}")
-    # Above BOTH branches, and the load branch is the subtle half. _assert_mode_matches compares the
+    # Above BOTH branches, and the load branch is the subtle half. store.load_posterior compares the
     # posterior against cfg -- so a STALE cfg loading the posterior trained under that same stale cfg
     # agrees with itself and says nothing, while every inference it serves is at a retired band. This
     # check is against config.py, which is the only party to the comparison that cannot go stale.
     _assert_chi_config_is_deliberate(cfg)
 
     # The TRAINING bijection. Its log box must be the one gen_prior fitted the latent GMM in, hence
-    # the same resolver the guard below and the sidecar use (_log_params_for).
+    # the same resolver the guard below and the manifest use (_log_params_for).
     T = build_inferred_bijection(cfg, log_params=_log_params_for(cfg))
 
     if not train_new and ref is not None:
@@ -591,60 +598,17 @@ def build_posterior(
                 "build_posterior(truncation=...) restricts the prior for a NEW training run; a loaded "
                 "posterior already carries whatever region it was trained under. Load it without a "
                 "region, or train a new round from it.")
-        # map_location rehomes every stored tensor onto this machine's device, so a posterior trained
-        # on a CUDA box (e.g. a Windows GPU) loads on a CPU/MPS-only Mac instead of raising
-        # "Attempting to deserialize object on a CUDA device". sbi caches the training device in two
-        # scalar attributes it does NOT refresh on load, so repoint both: .device drives sampling and
-        # ._device drives log_prob (sbi DirectPosterior.log_prob builds tensors on ._device).
-        posterior_latent = torch.load(str(POSTERIOR_PATH / ref),
-                                      map_location=cfg.hw.device, weights_only=False)
-        assert isinstance(posterior_latent, DirectPosterior)
-        posterior_latent.device = posterior_latent._device = cfg.hw.device
-        _assert_mode_matches(cfg, posterior_latent, ref)
-        if not accept_truncated:
-            _assert_amortization_understood(ref)
-        # Reconstruct the exact training box (+ rotation) from the <name>.rot.pt sidecar — log-mask
-        # and V are self-describing, so eval is correct regardless of the current config (single
-        # source of truth shared with the offline diagnostic scripts). Then RECONCILE the sidecar's
-        # rotation against the one pickled inside the posterior's own training prior: every sidecar
-        # the GUI wrote before 2026-09-09 holds V transposed (D6), and the three such artifacts on
-        # disk are repaired here at load, with a warning, rather than rewritten.
-        _T_raw = load_eval_bijection(cfg, ref, POSTERIOR_PATH)
-        T_load = reconcile_loaded_rotation(_T_raw, getattr(posterior_latent, "prior", None), name=ref)
-        if T_load is not _T_raw:
-            # Printed as well as warned: Python shows a warning once per site, and a second load of
-            # the same artifact in one GUI session would otherwise be silent about the repair.
-            print(f"[d6] Posterior '{ref}': the sidecar's rotation disagreed with the one inside the "
-                  f"posterior's own training prior and was reconciled at load (the artifact on disk is "
-                  f"unchanged).", flush=True)
-        # A non-amortized artifact carries its region and observation into the session, so the
-        # calibration prior can be restricted to the same region (guardrail 8) and inference can say
-        # which observation it is valid near. The region's basis is checked against the bijection
-        # just rebuilt: a sidecar whose V and region disagree is refused, not decoded.
-        region, digest = truncation_from_sidecar(ref)          # raises for an unverifiable region
+        loaded = store.load_posterior(cfg, ref, accept=accept)
+        region = loaded.posterior.truncation
         if region is not None:
-            _V_load = rotation_of(T_load)
-            if (region.V is not None and _V_load is not None
-                    and not torch.allclose(_V_load.detach().cpu().double(), region.V.double(), atol=1e-6)
-                    and torch.allclose(_V_load.detach().cpu().double(), region.V.double().transpose(-1, -2),
-                                       atol=1e-6)):
-                raise ValueError(
-                    f"Posterior '{ref}': the rotation its sidecar rebuilds is the TRANSPOSE of the one "
-                    f"its truncation region records, and the posterior's own training prior carries no "
-                    f"rotation to arbitrate between them (reconcile_loaded_rotation could not run). One "
-                    f"of the two was written by the GUI's deferred save while it still read parts[0].M "
-                    f"directly (defect D6, Appendix A 2026-09-09); redraw the region from a reconciled "
-                    f"parent rather than trusting either.")
-            region.check_basis(T_load, dim=len(cfg.params_dict) + len(cfg.rescale_params),
-                               device=cfg.hw.device)
-            # The sidecar's region names the base prior its parent restricted; the prior loaded beside
-            # this artifact must be that one (silent when either side is unverifiable, as in training).
-            _assert_prior_matches_region(region, inferred, f"Posterior '{ref}'")
+            # The region names the base prior its parent restricted; the prior loaded beside this
+            # artifact must be that one (silent when either side is unverifiable, as in training).
+            _assert_prior_matches_region(region, inferred, f"Posterior '{loaded.name or loaded.id}'")
             print(f"[tsnpe] loaded a NON-AMORTIZED posterior: valid only near the observation with "
-                  f"digest {digest if digest is not None else '(not recorded)'} ({region!r}). "
+                  f"digest {loaded.posterior.x_obs_digest or '(not recorded)'} ({region!r}). "
                   f"Calibration restricts its prior to that region; inference on any other observation "
-                  f"warns.", flush=True)
-        return TransformedPosterior(posterior_latent, T_load, truncation=region, x_obs_digest=digest), None
+                  f"refuses unless told to accept it.", flush=True)
+        return loaded
 
     # --- Build a LATENT product prior for SBI to train on ---
     # Physical prior layout: ProductPrior([nd_prior_physical, rescale_prior_physical]).
@@ -944,7 +908,7 @@ def build_posterior(
     # params form the separate forcing pathway.
     # chi-mode routes the padded probe SET through the EmbeddedNet's second pathway in place of the
     # single-frequency forcing block, as a permutation-invariant set encoder.
-    forcing_dim = expected_forcing_dim(cfg)        # shared with the sidecar + the load-side mode guard
+    forcing_dim = expected_forcing_dim(cfg)        # shared with the manifest + store.load_posterior's mode guard
     from .SBI.statistics import SUMMARY_WIDTH
     input_dim = SUMMARY_WIDTH + 1            # n_summary_stats + log(T); observation-independent
 
@@ -956,6 +920,13 @@ def build_posterior(
     # feed training-time diagnostics, so we pass None — no ground-truth observation needed to train.
     theta_obs_latent = None
 
+    # Resolved BEFORE train_nn -- not inlined into its call -- so the manifest can record what was
+    # actually used rather than re-deriving the same None-fallback logic a second time.
+    hf = NSF_HIDDEN_FEATURES if hidden_features is None else int(hidden_features)
+    nt = NSF_NUM_TRANSFORMS if num_transforms is None else int(num_transforms)
+    lr = TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate)
+    patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else int(stop_after_epochs)
+
     posterior_latent, pos_diagnostics = pipeline.train_nn(
         training_params, model=DENSITY_ESTIMATOR, prior=sbi_prior,
         embedding_net=embedded_net, forcing_prior=force_prior,
@@ -963,29 +934,14 @@ def build_posterior(
         x_obs=None, theta_obs=theta_obs_latent, num_rounds=TRAINING_NUM_ROUNDS,
         return_diagnostics=True,
         theta_transform=T_train,
-        hidden_features=NSF_HIDDEN_FEATURES if hidden_features is None else int(hidden_features),
-        num_transforms=NSF_NUM_TRANSFORMS if num_transforms is None else int(num_transforms),
-        num_bins=NSF_NUM_BINS,
-        learning_rate=TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate),
-        stop_after_epochs=(TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None
-                           else int(stop_after_epochs)),
+        hidden_features=hf, num_transforms=nt, num_bins=NSF_NUM_BINS,
+        learning_rate=lr, stop_after_epochs=patience,
         max_num_epochs=TRAINING_MAX_NUM_EPOCHS, show_train_summary=TRAINING_SHOW_SUMMARY,
         batch_size=TRAINING_BATCH_SIZE, device=cfg.hw.device,
     )
 
-    if save:
-        name = save_name if save_name is not None else cli.prompt_save_name("posterior")
-        save_posterior_artifacts(name, posterior_latent, V, pos_diagnostics, cfg,
-                                 fisher_eigenvalues=fisher_evals, truncation=truncation,
-                                 x_obs_digest=x_obs_digest)
-
-    # Display the training-loss curve (a GUI embeds it via the sink; the CLI historically saved it to
-    # PNG without showing, so with no sink we do nothing here to preserve that behavior).
-    if fig_sink is not None and pos_diagnostics is not None and pos_diagnostics.get("validation_loss"):
-        fig_loss = visualizers.plot_training_loss(pos_diagnostics)
-        if fig_loss is not None:
-            fig_sink("Training loss", fig_loss)
-
+    # The tsnpe kept-fraction lines stay exactly as they were (guardrail 5); they run before the write.
+    _acc = _in = _tot = None
     if truncation is not None and hasattr(train_prior, "acceptance_rate"):
         # GUARDRAIL 5: the fraction of prior mass this round threw away, measured rather than
         # assumed. Deleted support is a one-way ratchet -- no later round can recover it -- so the
@@ -993,7 +949,7 @@ def build_posterior(
         # differ: the rejection sampler's acceptance is P(A) of the draws BEFORE gen_training_data's
         # per-batch t_scale override; the recorded containment is what the training set holds after
         # it, and only the second says how much of the set actually lies in the region (D4).
-        _acc = train_prior.acceptance_rate
+        _acc = float(train_prior.acceptance_rate)
         _in, _tot = getattr(train_prior, "recorded_counts", (0, 0))
         print(f"[tsnpe] the truncation accepted {_acc:.3%} of prior draws at the rejection sampler "
               f"(P(A), PRE-override); {1 - _acc:.3%} of the prior's mass along the truncated "
@@ -1005,11 +961,65 @@ def build_posterior(
               flush=True)
 
     assert isinstance(posterior_latent, DirectPosterior)
-    # The region and the observation it was drawn around ride on the posterior (None when amortized),
-    # so calibration can restrict its prior to the same region and inference can tell what this
-    # posterior is valid near.
-    return (TransformedPosterior(posterior_latent, T_train, truncation=truncation,
-                                 x_obs_digest=x_obs_digest), pos_diagnostics)
+
+    keys = list(cfg.params_dict) + list(cfg.rescale_params)
+    V_rec = rotation_of(T_train)             # THE one decoder of the convention (D6); None when unrotated
+    probe = training_checkpoint.bijection_probe(T_train, len(keys), device=cfg.hw.device)
+    diag = pos_diagnostics or {}
+    _best = diag.get("best_validation_loss")
+    with store.create("posterior", cfg, name=name, note=note) as w:
+        file_manager.atomic_torch_save(posterior_latent, w.payload("posterior.pt"))
+        if diag.get("validation_loss"):
+            file_manager.atomic_savez(w.payload("loss.npz"), dict(
+                training_loss=np.asarray(diag.get("training_loss", []), dtype=float),
+                validation_loss=np.asarray(diag.get("validation_loss", []), dtype=float),
+                best_validation_loss=float(_best if _best is not None else float("nan")),
+                epochs_trained=int(diag.get("epochs_trained") or -1),
+                stop_after_epochs=int(diag.get("stop_after_epochs") or -1)))
+            fig_loss = visualizers.plot_training_loss(diag)
+            if fig_loss is not None:
+                w.fig_sink(fig_sink)("Training loss", fig_loss)
+        w.parents = {"prior": prior.id}
+        if ckpt_dir is not None:
+            w.parents["simulation"] = ckpt_dir.name
+        if parent_posterior is not None:
+            w.parents["parent_posterior"] = parent_posterior.id
+        if observation is not None:
+            w.parents["observation"] = observation.id
+        w.fingerprints = {"gmm": prior.fingerprint, "V": tensor_digest(V_rec), "probe": tensor_digest(probe)}
+        w.config.update({"num_runs": n_runs, "run_size": run_size, "hidden_features": hf, "num_transforms": nt,
+                         "learning_rate": lr, "stop_after_epochs": patience, "fisher_m": fisher_m,
+                         "fisher_dz": fisher_dz, "fisher_points": fisher_points})
+        w.body = {
+            "mode": cfg.observation_mode,
+            "conditioning": conditioning_block(cfg),
+            "transform": {"param_keys": keys,
+                          "log_params": list(resolved_log_params(cfg, log_params=_log_params_for(cfg))),
+                          "nd_lows": [float(b[0]) for _, b in cfg.params_dict.values()],
+                          "nd_highs": [float(b[1]) for _, b in cfg.params_dict.values()],
+                          "rescale_lows": [float(b[0]) for _, b in cfg.rescale_params.values()],
+                          "rescale_highs": [float(b[1]) for _, b in cfg.rescale_params.values()],
+                          "V": tensor_to_json(V_rec), "V_orientation": "columns",
+                          "fisher_eigenvalues": tensor_to_json(fisher_evals), "V_digest": tensor_digest(V_rec)},
+            "amortized": truncation is None,
+            "truncation": None if truncation is None else region_to_json(truncation),
+            "training": {"n_runs": n_runs, "run_size": run_size,
+                         "resumed_from_batch": int(_st["batches_done"]) if ckpt_resumed is not None else None,
+                         "hidden_features": hf, "num_transforms": nt, "learning_rate": lr,
+                         "stop_after_epochs": patience,
+                         "epochs_trained": diag.get("epochs_trained"),
+                         "best_validation_loss": (float(_best) if _best is not None and math.isfinite(float(_best)) else None),
+                         "fisher_spread": (_spread if _spread is not None and math.isfinite(_spread) else None),
+                         "tsnpe_acceptance": _acc,
+                         "tsnpe_containment": None if _tot is None else {"inside": int(_in), "total": int(_tot)},
+                         "wall_seconds": time.time() - _t0},
+        }
+    # Read back through the loader: the freshly written artifact is verified exactly as a later load
+    # would verify it (box, width, the rotation against the pickled prior, the region's basis).
+    loaded = store.load_posterior(cfg, w.id, accept=Accept(truncated=True))
+    loaded.diagnostics = pos_diagnostics
+    loaded.accepted = []                     # a round just trained is not an "accepted" load
+    return loaded
 
 
 def observation_digest(x_obs: torch.Tensor) -> str:
@@ -1027,7 +1037,7 @@ def save_observation(cfg: SimConfig, x_obs: torch.Tensor, *, tag: str = "") -> t
     when the posterior is saved -- which is exactly why ``default_x`` is None on
     ``posterior_08232026``, and why the posterior behind that run's figures cannot be re-sampled from
     the artifacts alone. The fix therefore belongs at INFERENCE time, not at save time; bolting it
-    onto save_posterior_artifacts would record a None.
+    onto the posterior's own write in build_posterior would record a None.
 
     TSNPE then refuses to build a truncation region unless the stored digest matches the dataset
     currently loaded -- a region drawn around one recording and applied to another deletes prior
@@ -1176,192 +1186,6 @@ def build_embedding_net(cfg: SimConfig, input_dim: int = None, forcing_dim: int 
         forcing_layer_dims=(forcing_dim * 4, forcing_dim * 2),
         merge_layer_dim=2 * input_dim,
     )
-
-
-def _assert_mode_matches(cfg: SimConfig, posterior_latent, choice: str) -> None:
-    """
-    Fail LOUDLY and IMMEDIATELY when a saved posterior's observation mode disagrees with this config.
-
-    Without this the mismatch surfaced as a raw matrix-shape RuntimeError from inside EmbeddedNet's
-    first Linear -- but only at the FIRST SAMPLE, i.e. after an entire calibration set had already
-    been simulated. The three conditioning widths (42 / 42+n_f / 42+6*K_PAD) cannot collide, so the
-    check is exact; it just needs to happen before the simulation spend rather than after it.
-    """
-    sidecar = read_sidecar(choice, POSTERIOR_PATH, map_location=cfg.hw.device)
-
-    # LAYOUT GATE FIRST -- ahead of the decode below, whose `except ValueError: warn; return` would
-    # otherwise let a layout-1 posterior through on a decode failure. Keyed on the SIDECAR's own mode,
-    # not cfg's: a forced posterior loaded against a chi config must be told it is forced, not that it
-    # was "trained under chi layout 1".
-    sc_mode = (sidecar or {}).get("mode")
-    if sc_mode == "chi" or cfg.observation_mode == "chi":
-        if sc_mode == "chi":
-            got_layout = (sidecar or {}).get("chi_layout")
-            if got_layout != config.CHI_LAYOUT:
-                raise ValueError(
-                    f"Posterior '{choice}' was trained under chi layout {got_layout or 1} -- the "
-                    f"retired fixed-3K grid, where the probe's frequency was implied by its slot "
-                    f"index. This build writes layout {config.CHI_LAYOUT} (a padded probe set, "
-                    f"{config.CHI_ELEM_W} channels per slot, frequency carried explicitly). The two "
-                    f"are not interchangeable and their widths can collide exactly "
-                    f"(6*5 == 3*10 == 30), so this cannot be auto-detected. Retrain.")
-            for key, want, what in (("chi_k_pad", cfg.chi_k_pad, "probe-slot capacity"),
-                                    ("chi_elem_w", config.CHI_ELEM_W, "channels per slot")):
-                got = (sidecar or {}).get(key)
-                if got is not None and int(got) != int(want):
-                    raise ValueError(
-                        f"Posterior '{choice}' has {what} {got}, but this config declares {want}. "
-                        f"It is frozen into the trained network's input shape, so retrain or set "
-                        f"{key} back to {got}.")
-            got_band = (sidecar or {}).get("chi_freq_bounds")
-            if got_band is not None and tuple(got_band) != tuple(cfg.chi_freq_bounds):
-                raise ValueError(
-                    f"Posterior '{choice}' was trained over chi band {tuple(got_band)}, but this "
-                    f"config declares {tuple(cfg.chi_freq_bounds)}. The band fixes the encoder's "
-                    f"frequency normalization and is baked into its weights.")
-            got_cyc = (sidecar or {}).get("chi_max_cycles")
-            if got_cyc is not None and abs(float(got_cyc) - float(cfg.chi_max_cycles)) > 1e-9:
-                raise ValueError(
-                    f"Posterior '{choice}' was trained with a {float(got_cyc):g}-cycle lock-in "
-                    f"ceiling, but this config declares {float(cfg.chi_max_cycles):g}. The ceiling "
-                    f"decides how much of each recording is integrated, so the same bench data "
-                    f"produces different |chi| AND a different logcyc under the two -- and logcyc is "
-                    f"how the encoder weighs a probe. Set chi_max_cycles back to {float(got_cyc):g}, "
-                    f"or retrain.")
-
-    try:
-        mode, forcing_dim, k = reparam_posterior_mode(posterior_latent, sidecar)
-    except ValueError as e:                                  # undecodable: warn, do not block a load
-        warnings.warn(f"Could not verify the observation mode of '{choice}': {e}", stacklevel=2)
-        return
-    # Identity checks first: mode + width agreeing says only that the conditioning vectors are the
-    # same SHAPE, which several different configs satisfy. The model, the parameter ORDER and the
-    # training box are what make a posterior's numbers mean anything, and none of them were checked
-    # -- which is how a posterior trained on one cell's bounds was evaluated against another's.
-    if sidecar:
-        if sidecar.get("model") is not None and str(sidecar["model"]) != cfg.model:
-            raise ValueError(
-                f"Posterior '{choice}' was trained for model {sidecar['model']}, but this config is "
-                f"for {cfg.model}.")
-        want_keys = list(cfg.params_dict.keys()) + list(cfg.rescale_params.keys())
-        got_keys = list(sidecar.get("param_keys") or [])
-        if got_keys and got_keys != want_keys:
-            raise ValueError(
-                f"Posterior '{choice}' was trained over a different inferred parameter set or ORDER.\n"
-                f"  posterior: {got_keys}\n  config:    {want_keys}\n"
-                f"Columns bind positionally, so every reported value would refer to the wrong "
-                f"parameter. Pick the bounds file this posterior was trained with.")
-
-    want_mode, want_dim = cfg.observation_mode, expected_forcing_dim(cfg)
-    if mode == want_mode and forcing_dim == want_dim:
-        return
-    from .SBI.statistics import SUMMARY_WIDTH
-    summary_w = SUMMARY_WIDTH + 1
-    detail = f" (K={k})" if k else ""
-    raise ValueError(
-        f"Posterior '{choice}' was trained in {mode.upper()} mode{detail} with a forcing/chi block of "
-        f"{forcing_dim} features, but this config is {want_mode.upper()} mode expecting {want_dim}. "
-        f"Conditioning widths {summary_w + forcing_dim} vs {summary_w + want_dim} are incompatible. "
-        f"Pick a posterior trained in this mode, or rebuild the config to match "
-        f"(the chi toggle and the bounds file's Forcing section are what select the mode)."
-    )
-
-
-def save_posterior_artifacts(name: str, posterior_latent, V, diagnostics: dict | None, cfg: SimConfig,
-                            fisher_eigenvalues=None, truncation=None, x_obs_digest=None) -> None:
-    """
-    Persist a trained posterior and its companions: <name>.pt (raw latent DirectPosterior), the
-    <name>.rot.pt reparam sidecar (rotation V + log params, when either is active), and the
-    <name>.loss.npz curve + <name>_loss.png. Shared by build_posterior (CLI) and a GUI's explicit
-    "Save posterior" control.
-
-    Every write here is ATOMIC (file_manager._atomic_write: sibling tmp -> fsync -> os.replace). These
-    are one-shot end-of-run writes, so the window is narrow -- but the ``.pt`` and its ``.rot.pt`` are
-    the product of a multi-day run, the GUI's Save button can be pressed twice over the same name, and
-    a torn artifact does not announce itself: it is an unpickling error hours later, or a sidecar that
-    loads with half its keys and silently decodes every latent sample through a default box.
-    """
-    file_manager.atomic_torch_save(posterior_latent, POSTERIOR_PATH / (name + ".pt"))
-    # Self-describing sidecar so eval reconstructs the exact training box (log-mask + rotation V) AND
-    # knows which observation mode produced this posterior.
-    #
-    # Written UNCONDITIONALLY. It used to be skipped when V was None and no log params were active --
-    # which is exactly the chi case (chi is deliberately unrotated, and REPARAM_LOG_PARAMS is []), so
-    # a multi-hour chi posterior landed on disk BYTE-INDISTINGUISHABLE from the legacy forced
-    # posteriors sitting beside it, with nothing on the load path checking width or mode. A missing
-    # sidecar still means "pre-reparam, linear box" for the old artifacts; from here on, absence is
-    # only ever a legacy signal, never an ambiguous new one.
-    # Same resolver as build_prior/build_posterior, so what the sidecar records is what the flow was
-    # trained in. load_eval_bijection rebuilds the box from THIS list, not from the live config, so a
-    # divergence here would be invisible until the posterior evaluated in the wrong coordinate.
-    log_params_used = resolved_log_params(cfg, log_params=_log_params_for(cfg))
-    from .SBI.statistics import SUMMARY_WIDTH
-    file_manager.atomic_torch_save({
-        "V": V,
-        # GUARDRAIL 2. An amortized posterior serves any observation; a TRUNCATED one
-        # is valid only near the observation its region was drawn around, and outside it the flow has
-        # never seen a single training row. With both workflows live the two sit side by side in one
-        # ArtifactPicker -- the same class of confusion as the retired-band posterior that already
-        # cost a five-day run -- so the distinction is recorded rather than left to a filename.
-        "amortized": truncation is None,
-        "truncation": None if truncation is None else truncation.to_dict(),
-        "x_obs_digest": x_obs_digest,
-        # The eigenvalues V's columns were sorted by, descending. None when the rotation came from a
-        # resumed training checkpoint (which stores V but not them) or when the rotation is off.
-        # Without these the sidecar records an ORDERING of directions but no scale, and the scale is
-        # the question -- see reparam.fisher_eigenbasis and scripts/identifiability.py.
-        "fisher_eigenvalues": (fisher_eigenvalues.detach().cpu()
-                               if hasattr(fisher_eigenvalues, "detach") else fisher_eigenvalues),
-        "log_params": log_params_used,
-        # Observation mode + conditioning geometry -- see SBI/reparam.posterior_mode, which prefers
-        # these over decoding the trained net (that decoding cannot distinguish chi at K=2 from a
-        # hypothetical 6-parameter drive).
-        "mode": cfg.observation_mode,
-        "input_dim": SUMMARY_WIDTH + 1,
-        "forcing_dim": expected_forcing_dim(cfg),
-        # LAYOUT is what the load path gates on. Width cannot be trusted to identify it: 6*K_PAD at
-        # K_PAD=5 is exactly 30, an exact collision with the retired layout-1 3*K at K=10.
-        "chi_layout": config.CHI_LAYOUT if cfg.chi_mode else None,
-        "chi_k_pad": cfg.chi_k_pad if cfg.chi_mode else None,
-        "chi_elem_w": config.CHI_ELEM_W if cfg.chi_mode else None,
-        # A TRAINING RECORD only -- never read as "the K this posterior needs". That is the payoff.
-        "chi_n_freqs": cfg.chi_n_freqs if cfg.chi_mode else None,
-        "chi_f0": cfg.chi_f0 if cfg.chi_mode else None,
-        "chi_freq_bounds": tuple(cfg.chi_freq_bounds) if cfg.chi_mode else None,
-        # The lock-in duration ceiling. Recorded for the same reason as the band: it sets the logcyc
-        # a given recording reports, and logcyc is the channel the encoder uses to decide how much to
-        # trust a probe. Evaluating at a different ceiling feeds it a value the training set never
-        # contained, on the one channel whose job is calibration.
-        "chi_max_cycles": float(cfg.chi_max_cycles) if cfg.chi_mode else None,
-        # Parameter ORDER is load-bearing (simulators bind columns positionally), so record it.
-        "param_keys": list(cfg.params_dict.keys()) + list(cfg.rescale_params.keys()),
-        # THE TRAINING BOX. The flow learns a density over the LATENT coordinate, so the box is what
-        # turns its output back into physical parameters -- and eval used to rebuild that box from
-        # whatever config happened to be loaded rather than from the posterior. Two configs sharing a
-        # mode and a conditioning width therefore looked interchangeable while decoding the same
-        # latent sample to different physical values. Recorded here, load_eval_bijection can
-        # reconstruct the box the flow was actually trained in.
-        "model": cfg.model,
-        "nd_lows": torch.tensor([b[0] for _, b in cfg.params_dict.values()], dtype=torch.float64),
-        "nd_highs": torch.tensor([b[1] for _, b in cfg.params_dict.values()], dtype=torch.float64),
-        "rescale_lows": torch.tensor([b[0] for _, b in cfg.rescale_params.values()], dtype=torch.float64),
-        "rescale_highs": torch.tensor([b[1] for _, b in cfg.rescale_params.values()], dtype=torch.float64),
-    }, POSTERIOR_PATH / (name + ".rot.pt"))
-    # Loss curve: persisted so the convergence check is reproducible (sbi keeps it only in the trainer).
-    if diagnostics is not None and diagnostics.get("validation_loss"):
-        file_manager.atomic_savez(
-            PLOT_PATH / (name + ".loss.npz"),
-            dict(
-                training_loss=np.asarray(diagnostics.get("training_loss", []), dtype=float),
-                validation_loss=np.asarray(diagnostics.get("validation_loss", []), dtype=float),
-                best_validation_loss=float(diagnostics.get("best_validation_loss") or float("nan")),
-                epochs_trained=int(diagnostics.get("epochs_trained") or -1),
-                stop_after_epochs=int(diagnostics.get("stop_after_epochs") or -1),
-            ),
-        )
-        fig_loss = visualizers.plot_training_loss(diagnostics, save_path=str(PLOT_PATH / (name + "_loss.png")))
-        if fig_loss is not None:
-            plt.close(fig_loss)
 
 
 def check_observation_in_distribution(cfg: SimConfig, inferred_prior, force_prior,

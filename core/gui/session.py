@@ -41,28 +41,17 @@ class ConfigDraft:
 class SbiSession:
     draft: Any = None               # ConfigDraft from the Config tab (model + units + knobs)
     cfg: Any = None                 # SimConfig (built at the Prior stage, once bounds are chosen)
-    inf_prior: Any = None           # physical inferred product prior (from build_prior)
-    force_prior: Any = None         # forcing prior (from build_prior)
-    posterior: Any = None           # TransformedPosterior (from build_posterior)
-    diagnostics: Any = None         # training diagnostics dict (loss curve etc.)
-    posterior_latent: Any = None    # raw latent DirectPosterior, for deferred save
-    # The decorrelating rotation for the deferred .rot.pt sidecar: eigenvectors in COLUMNS (w = z @ V),
-    # read through reparam.rotation_of -- NEVER the transform's parts[0].M, which is V transposed (D6).
-    V: Any = None
-    # ⚠ WHAT THE DEFERRED SAVE MUST NOT FORGET. A TSNPE posterior is valid
-    # only near the observation its region was drawn around. The GUI saves LATER, from a button, so
-    # if the region does not travel with the posterior it will be written to disk marked
-    # `amortized: True` -- indistinguishable from a real amortized artifact in the same picker, which
-    # is exactly the class of confusion that cost a five-day run once already.
-    truncation: Any = None          # SBI.truncate.TruncationRegion, or None for an amortized run
-    x_obs_digest: Any = None        # the observation that region was drawn around
+    inf_prior: Any = None           # artifacts.LoadedPrior -- .prior (ProductPrior), .force_prior, .id, .manifest
+    posterior: Any = None           # artifacts.LoadedPosterior -- .posterior (TransformedPosterior, carrying
+                                    # .T, .truncation, .x_obs_digest), .latent, .id, .manifest, .diagnostics
+    observation: Any = None         # artifacts.LoadedObservation -- the Infer tab's last product; the TSNPE tab's input
 
     def reset_downstream(self, from_stage: str) -> None:
-        """Invalidate artifacts that depend on an earlier stage when it is re-run."""
+        """Invalidate artifacts that depend on an earlier stage when it is re-run. Everything here is
+        already on disk (every stage writes at completion), so this only drops the session's handles."""
         order = ["config", "prior", "posterior", "validate"]
         i = order.index(from_stage)
         if i <= order.index("prior"):
-            self.inf_prior = self.force_prior = None
+            self.inf_prior = self.observation = None     # an observation is tied to a config's conditioning
         if i <= order.index("posterior"):
-            self.posterior = self.diagnostics = self.posterior_latent = self.V = None
-            self.truncation = self.x_obs_digest = None
+            self.posterior = None
