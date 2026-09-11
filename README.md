@@ -142,7 +142,7 @@ The `requirements.txt` torch/torchvision lines pin `+cu130` for Linux, so for a 
 
 ## Running the app
 
-Always launch from the **repository root** — the launchers `cd` there for you, and `core/config.py` builds all `Resources/` paths from the current working directory.
+Use the launchers below (they `cd` to the repository root for you). The working directory does not matter to the code: `core/config.py` resolves the `Resources/` inputs and the `Artifacts/` root from its own location, and `PRISM_RESOURCES` / `PRISM_ARTIFACTS` override them.
 
 | Platform        | Launch the GUI            |
 | --------------- | ------------------------- |
