@@ -105,7 +105,7 @@ def test_no_forcing_user_model_full_sbi_pipeline():
         inferred_prior, force_prior = lp.prior, lp.force_prior
         assert force_prior is None                               # no drive -> no forcing prior
 
-        posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
+        posterior, _ = orchestrator.build_posterior(cfg, lp, None, True,
                                                     save=False, fig_sink=sink)
 
         x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
@@ -191,7 +191,7 @@ def test_train_and_validate_without_a_loaded_cell():
 
         lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
         inferred_prior, force_prior = lp.prior, lp.force_prior
-        posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
+        posterior, _ = orchestrator.build_posterior(cfg, lp, None, True,
                                                     save=False, fig_sink=sink)
         orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
     finally:
@@ -442,7 +442,7 @@ def test_chi_mode_full_sbi_pipeline():
 
         lp = orchestrator.build_prior(cfg, None, True, fig_sink=sink)
         inferred_prior, force_prior = lp.prior, lp.force_prior
-        posterior, _ = orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
+        posterior, _ = orchestrator.build_posterior(cfg, lp, None, True,
                                                     save=False, fig_sink=sink)
 
         K3 = orchestrator.expected_forcing_dim(cfg)
@@ -2335,7 +2335,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
                                       probe=probe, x_obs_digest="deadbeefdeadbeef")
 
         def _round(reg, digest="deadbeefdeadbeef"):
-            return orchestrator.build_posterior(cfg, inferred_prior, force_prior, None, True,
+            return orchestrator.build_posterior(cfg, lp, None, True,
                                                 save=False, fig_sink=sink, num_runs=2, run_size_cap=8,
                                                 truncation=reg, x_obs_digest=digest)
 

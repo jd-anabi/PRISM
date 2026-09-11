@@ -407,3 +407,27 @@ def test_delete_refuses_a_prior_a_simulation_was_generated_against(store):
     with pytest.raises(st.StoreError, match="simulation"):
         store.delete("prior", p.id)
     assert store.find_prior_by_fingerprint(fp).id == p.id
+
+
+def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, monkeypatch):
+    """The checkpoint dict build_posterior hands gen_training_data names the LoadedPrior's id, and the
+    identity's prior fingerprint is the wrapper's -- checked at the seam, with train_nn stubbed."""
+    from core import orchestrator
+    from core.artifacts.identity import SimulationIdentity
+    cfg = _nad_cfg()
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    cfg.reparam_rotate = False
+    captured = {}
+
+    def fake_train_nn(plan, **kw):
+        captured["plan"] = plan
+        raise RuntimeError("stop before training")
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 1)
+    with pytest.raises(RuntimeError, match="stop before training"):
+        orchestrator.build_posterior(cfg, lp, None, True, save=False, num_runs=2, run_size_cap=4)
+    ck = captured["plan"].checkpoint
+    assert ck["parents"] == {"prior": lp.id} and ck["inputs"]["model"] == "NADROWSKI" and ck["hw"] is cfg.hw
+    assert ck["identity"] == SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
+    assert ck["identity"]["prior_fingerprint"] == lp.fingerprint and ck["dir"].parent == store.kind_dir("simulation")

@@ -103,7 +103,7 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
                 f"HPD {level:g} is tighter than the recommended {0.999:g}. Truncation permanently "
                 f"deletes prior support; no later round can recover it.", "warning")
         n_runs, cap = self._budget_values()
-        self.dispatch(_run_tsnpe_round, s.cfg, s.posterior, s.inf_prior.prior, s.inf_prior.force_prior,
+        self.dispatch(_run_tsnpe_round, s.cfg, s.posterior, s.inf_prior,
                       OBSERVATION_PATH / self.obs_picker.key(), n_dirs, level,
                       max(1, n_runs), max(0, cap), provide_fig_sink=True,
                       on_result=self._on_round)

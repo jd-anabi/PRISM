@@ -399,7 +399,7 @@ def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session():
     pp.dispatch = lambda fn, *a, **k: load.update(args=a, kwargs=k)
     pp.post_picker.selected = lambda: ("posterior_x.pt", False)
     pp._build_posterior()
-    assert load["kwargs"].get("accept_truncated") is True and load["args"][4] is False, \
+    assert load["kwargs"].get("accept_truncated") is True and load["args"][3] is False, \
         "the Posterior tab's LOAD does not opt in to non-amortized artifacts"
 
     pp._on_posterior((object(), {"loss": []}))

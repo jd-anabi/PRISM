@@ -82,7 +82,7 @@ def run(cfg: SimConfig):
     pos_choice, train_new = cli.select_or_train_posterior()
     # accept_truncated: a NON-AMORTIZED artifact may be loaded here -- its region then restricts the
     # calibration prior below, and step 4 warns if the observation is not the one it was drawn around.
-    posterior, pos_diagnostics = build_posterior(cfg, inf_prior, force_prior, pos_choice, train_new,
+    posterior, pos_diagnostics = build_posterior(cfg, lp, pos_choice, train_new,
                                                  accept_truncated=True)
     helpers.clear_screen()
 
@@ -475,11 +475,10 @@ def build_forcing_prior(cfg: SimConfig) -> Distribution:
 # ── Step 3: Posterior construction ──────────────────────────────────────────
 def build_posterior(
     cfg: SimConfig,
-    prior: Distribution,                 # physical inferred prior from build_prior
-    force_prior: Distribution,
-    choice: str | None,
+    prior: LoadedPrior,                  # the built/loaded prior wrapper; .prior is the physical inferred prior
+    ref: str | None,
     train_new: bool,
-    *, save: bool = True, save_name: str | None = None, fig_sink=None,
+    *, save: bool = True, save_name: str | None = None, fig_sink=None, store=None,
     num_runs: int | None = None, run_size_cap: int | None = None,
     truncation=None, x_obs_digest: str | None = None, accept_truncated: bool = False,
     hidden_features: int | None = None, num_transforms: int | None = None,
@@ -497,6 +496,8 @@ def build_posterior(
     :param save_name: Name to save under; when None (and save=True) the CLI prompt is used.
     :param fig_sink: Optional (title, fig) -> None display callback for the training-loss curve
                      (a GUI embeds it); None keeps the CLI behavior (loss saved to PNG, not shown).
+    :param store: the ArtifactStore the simulation cache and the region-fingerprint lookup read/write
+                     under; None = the process default.
     :param num_runs: Training BATCHES to simulate; None (the default) = config.TRAINING_NUM_RUNS,
                      which is the CLI's behaviour and what every script and test gets.
     :param run_size_cap: CEILING on simulations per batch, 0 = follow the hardware default; None =
@@ -550,13 +551,15 @@ def build_posterior(
     wall-clock -- the solver is kernel-launch-bound; measured 7.37 s at 2048 against 7.74 s at 1024 --
     so narrowing it does not speed anything up, it trades training rows for peak VRAM about 1:1.
     """
+    store = resolve_store(store)
+    inferred, force_prior = prior.prior, prior.force_prior
     # Tier 1: announce the DERIVED force scale before the first simulation, for the
     # same reason the chi banner exists -- a training distribution that changed silently is what cost
     # the 2026-08-19 run. Reports rather than refuses: whether ~1e4 pN is reasonable is a judgement
     # about the preparation, not something a threshold in this file should decide.
     if derived.uses_derived_f_scale(cfg.rescale_idx):
         try:
-            _s = prior.sample((4096,)).to("cpu")
+            _s = inferred.sample((4096,)).to("cpu")
             print(derived.describe_derived_f_scale(
                 _s[:, :len(cfg.params_dict)], _s[:, len(cfg.params_dict):],
                 cfg.rescale_idx, cfg.nd_idx, cfg.k_b_cell,
@@ -582,7 +585,7 @@ def build_posterior(
     # the same resolver the guard below and the sidecar use (_log_params_for).
     T = build_inferred_bijection(cfg, log_params=_log_params_for(cfg))
 
-    if not train_new and choice is not None:
+    if not train_new and ref is not None:
         if truncation is not None:
             raise ValueError(
                 "build_posterior(truncation=...) restricts the prior for a NEW training run; a loaded "
@@ -593,32 +596,32 @@ def build_posterior(
         # "Attempting to deserialize object on a CUDA device". sbi caches the training device in two
         # scalar attributes it does NOT refresh on load, so repoint both: .device drives sampling and
         # ._device drives log_prob (sbi DirectPosterior.log_prob builds tensors on ._device).
-        posterior_latent = torch.load(str(POSTERIOR_PATH / choice),
+        posterior_latent = torch.load(str(POSTERIOR_PATH / ref),
                                       map_location=cfg.hw.device, weights_only=False)
         assert isinstance(posterior_latent, DirectPosterior)
         posterior_latent.device = posterior_latent._device = cfg.hw.device
-        _assert_mode_matches(cfg, posterior_latent, choice)
+        _assert_mode_matches(cfg, posterior_latent, ref)
         if not accept_truncated:
-            _assert_amortization_understood(choice)
+            _assert_amortization_understood(ref)
         # Reconstruct the exact training box (+ rotation) from the <name>.rot.pt sidecar — log-mask
         # and V are self-describing, so eval is correct regardless of the current config (single
         # source of truth shared with the offline diagnostic scripts). Then RECONCILE the sidecar's
         # rotation against the one pickled inside the posterior's own training prior: every sidecar
         # the GUI wrote before 2026-09-09 holds V transposed (D6), and the three such artifacts on
         # disk are repaired here at load, with a warning, rather than rewritten.
-        _T_raw = load_eval_bijection(cfg, choice, POSTERIOR_PATH)
-        T_load = reconcile_loaded_rotation(_T_raw, getattr(posterior_latent, "prior", None), name=choice)
+        _T_raw = load_eval_bijection(cfg, ref, POSTERIOR_PATH)
+        T_load = reconcile_loaded_rotation(_T_raw, getattr(posterior_latent, "prior", None), name=ref)
         if T_load is not _T_raw:
             # Printed as well as warned: Python shows a warning once per site, and a second load of
             # the same artifact in one GUI session would otherwise be silent about the repair.
-            print(f"[d6] Posterior '{choice}': the sidecar's rotation disagreed with the one inside the "
+            print(f"[d6] Posterior '{ref}': the sidecar's rotation disagreed with the one inside the "
                   f"posterior's own training prior and was reconciled at load (the artifact on disk is "
                   f"unchanged).", flush=True)
         # A non-amortized artifact carries its region and observation into the session, so the
         # calibration prior can be restricted to the same region (guardrail 8) and inference can say
         # which observation it is valid near. The region's basis is checked against the bijection
         # just rebuilt: a sidecar whose V and region disagree is refused, not decoded.
-        region, digest = truncation_from_sidecar(choice)      # raises for an unverifiable region
+        region, digest = truncation_from_sidecar(ref)          # raises for an unverifiable region
         if region is not None:
             _V_load = rotation_of(T_load)
             if (region.V is not None and _V_load is not None
@@ -626,7 +629,7 @@ def build_posterior(
                     and torch.allclose(_V_load.detach().cpu().double(), region.V.double().transpose(-1, -2),
                                        atol=1e-6)):
                 raise ValueError(
-                    f"Posterior '{choice}': the rotation its sidecar rebuilds is the TRANSPOSE of the one "
+                    f"Posterior '{ref}': the rotation its sidecar rebuilds is the TRANSPOSE of the one "
                     f"its truncation region records, and the posterior's own training prior carries no "
                     f"rotation to arbitrate between them (reconcile_loaded_rotation could not run). One "
                     f"of the two was written by the GUI's deferred save while it still read parts[0].M "
@@ -636,7 +639,7 @@ def build_posterior(
                                device=cfg.hw.device)
             # The sidecar's region names the base prior its parent restricted; the prior loaded beside
             # this artifact must be that one (silent when either side is unverifiable, as in training).
-            _assert_prior_matches_region(region, prior, f"Posterior '{choice}'")
+            _assert_prior_matches_region(region, inferred, f"Posterior '{ref}'")
             print(f"[tsnpe] loaded a NON-AMORTIZED posterior: valid only near the observation with "
                   f"digest {digest if digest is not None else '(not recorded)'} ({region!r}). "
                   f"Calibration restricts its prior to that region; inference on any other observation "
@@ -646,13 +649,13 @@ def build_posterior(
     # --- Build a LATENT product prior for SBI to train on ---
     # Physical prior layout: ProductPrior([nd_prior_physical, rescale_prior_physical]).
     # Extract latent ND (the MixtureSameFamily inside the TransformedDistribution):
-    nd_prior_physical      = prior.distributions[0]      # TransformedDistribution(latent_gmm, T_nd)
+    nd_prior_physical      = inferred.distributions[0]   # TransformedDistribution(latent_gmm, T_nd)
     if not isinstance(nd_prior_physical, torch.distributions.TransformedDistribution):
         raise ValueError(
             "Loaded ND prior is not a TransformedDistribution — it was saved with the pre-reparameterization "
             "pipeline. Regenerate the prior with the current `gen_prior` before training a new posterior."
         )
-    rescale_prior_physical = prior.distributions[1]      # MultipleIndependent
+    rescale_prior_physical = inferred.distributions[1]   # MultipleIndependent
     latent_nd = nd_prior_physical.base_dist              # the raw latent MixtureSameFamily
 
     # The latent ND GMM was fit in its box's coordinate. If we now train with a different ND log
@@ -728,8 +731,9 @@ def build_posterior(
     if TRAINING_CHECKPOINT_EVERY and train_new:
         # The region is part of the identity (omitted for an amortized run), so a TSNPE round has its
         # OWN directory and can never resume the amortized run's rows, nor the other way round (D3).
-        ident = training_identity(cfg, prior, run_size, n_runs, truncation=truncation)
-        ckpt_dir = training_checkpoint.resolve_dir(ident)
+        from .artifacts.identity import SimulationIdentity
+        ident = SimulationIdentity.from_cfg(cfg, prior, run_size, n_runs, truncation=truncation).to_dict()
+        ckpt_dir = training_checkpoint.resolve_dir(ident, store.kind_dir("simulation"))
         _st = training_checkpoint.peek(ckpt_dir)
         # A COMPLETE checkpoint counts too, and deliberately so. Its rows are already expressed in the
         # V they were generated under, so recomputing V here would make gen_training_data's probe
@@ -775,12 +779,12 @@ def build_posterior(
         # stand-in prior), the same policy as validate_calibration's prior check.
         _want = getattr(truncation, "prior_fingerprint", None)
         try:
-            _assert_prior_matches_region(truncation, prior, "A truncated round")
+            _assert_prior_matches_region(truncation, inferred, "A truncated round")
         except ValueError as _e:
-            _hit = resolve_store(None).find_prior_by_fingerprint(_want)
+            _hit = store.find_prior_by_fingerprint(_want)
             raise ValueError(f"{_e} The region's fingerprint is that of prior '{_hit.label}' [{_hit.id}]."
                              if _hit else str(_e)) from None
-        if _want is not None and _gmm_fingerprint(prior) is not None:
+        if _want is not None and _gmm_fingerprint(inferred) is not None:
             print(f"[tsnpe] prior: the parent's training prior ({_want}), "
                   f"verified against the loaded one.", flush=True)
         else:
@@ -931,7 +935,7 @@ def build_posterior(
             "probe": training_checkpoint.bijection_probe(
                 T_train, len(cfg.params_dict) + len(cfg.rescale_params), device=cfg.hw.device),
             "V": V, "every": TRAINING_CHECKPOINT_EVERY, "resume": "auto",
-            "parents": {"prior": getattr(prior, "id", None)} if getattr(prior, "id", None) else {},
+            "parents": {"prior": prior.id},
             "inputs": _inputs_from_cfg(cfg), "hw": cfg.hw,
         }
 

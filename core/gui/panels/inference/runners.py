@@ -63,13 +63,13 @@ def _run_experimental_inference_spontaneous(cfg, posterior, path, T_obs_s, *, fi
     orchestrator.infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False, fig_sink=fig_sink)
 
 
-def _run_tsnpe_round(cfg, posterior, inferred_prior, force_prior, obs_path, n_directions, level,
+def _run_tsnpe_round(cfg, posterior, prior, obs_path, n_directions, level,
                      num_runs, run_size_cap, *, fig_sink=None):
     """One TSNPE round: region from the posterior -> prior RESTRICTED to it -> simulate -> retrain.
 
     The proposal is the TRUNCATED PRIOR and never the posterior -- see core/SBI/truncate.py, which
     owns that rule, and tests/test_conditioning_repair.py, which pins it. Nothing here reimplements
-    it; this function only carries the GUI's choices into orchestrator.
+    it; this function only carries the GUI's choices into orchestrator. ``prior`` is a LoadedPrior.
     """
     rec = orchestrator.load_observation(obs_path)
     x_obs = rec["x_obs"].to(cfg.hw.device)
@@ -80,7 +80,7 @@ def _run_tsnpe_round(cfg, posterior, inferred_prior, force_prior, obs_path, n_di
                                                   t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
     print(f"[tsnpe] region from {getattr(obs_path, 'name', obs_path)}: {region!r}", flush=True)
     out = orchestrator.build_posterior(
-        cfg, inferred_prior, force_prior, choice=None, train_new=True, save=False,
+        cfg, prior, None, True, save=False,
         fig_sink=fig_sink, num_runs=num_runs, run_size_cap=run_size_cap,
         truncation=region, x_obs_digest=rec.get("digest"))
     # The region and digest ride back with the posterior. save=False here because the GUI saves from

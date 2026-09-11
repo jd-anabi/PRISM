@@ -758,7 +758,7 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
              and n.func.id == "_assert_prior_matches_region"]
     by_args = {tuple(ast.unparse(a) for a in c.args[:2]): c for c in calls}
-    train_call = by_args.get(("truncation", "prior"))
+    train_call = by_args.get(("truncation", "inferred"))
     assert train_call is not None, \
         "build_posterior's truncation branch does not check the supplied prior against the region's parent"
     branch = [n for n in ast.walk(tree) if isinstance(n, ast.If)
@@ -769,7 +769,7 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
              if isinstance(n, ast.Call) and ast.unparse(n.func) == "truncation.check_basis"]
     assert basis and train_call.lineno < min(c.lineno for c in basis), \
         "the prior check must run before the round commits to the region's basis"
-    assert ("region", "prior") in by_args, \
+    assert ("region", "inferred") in by_args, \
         "the load branch does not check a sidecar's region against the prior loaded beside it"
 
 

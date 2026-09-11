@@ -49,6 +49,12 @@ def _cfg(bounds="master.txt", **kw):
     return cfg
 
 
+class _LoadedStub:
+    """The LoadedPrior shape with no GMM: fails open through every fingerprint check."""
+    id, name, fingerprint, force_prior = None, "", None, None
+    def __init__(self, prior=None): self.prior = prior if prior is not None else object()
+
+
 # ── the master Bounds/Cells triple ────────────────────────────────────────────────────────────────
 def test_master_bounds_pair_share_one_nd_section():
     """master_spont.txt exists ONLY to drop f_scale and the Forcing section (mode 1 drops f_scale
@@ -330,17 +336,17 @@ def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_regio
         torch.save(_sidecar(cfg, amortized=False, truncation=region.to_dict(), x_obs_digest="d" * 16),
                    str(rot))
         try:
-            orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False)
+            orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False)
             raise AssertionError("a non-amortized artifact was loaded without opting in")
         except ValueError as e:
             assert "NOT AMORTIZED" in str(e), e
-        post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False,
+        post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False,
                                                accept_truncated=True)
         assert post.truncation.dims == [0, 1] and post.x_obs_digest == "d" * 16
         assert torch.equal(post.truncation.probe, region.probe) and post.truncation.V is None
         # an amortized sidecar loads with neither
         torch.save(_sidecar(cfg), str(rot))
-        post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+        post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
         assert post.truncation is None and post.x_obs_digest is None
         # a region measured over a DIFFERENT box than the sidecar rebuilds is refused on load
         other_box = reparam.build_box_bijection(torch.zeros(P), torch.ones(P))
@@ -349,7 +355,7 @@ def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_regio
         torch.save(_sidecar(cfg, amortized=False, truncation=other.to_dict(), x_obs_digest="d" * 16),
                    str(rot))
         try:
-            orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+            orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
             raise AssertionError("a region whose probe disagrees with the artifact's box was loaded")
         except ValueError as e:
             assert "probe max|diff|" in str(e), e
@@ -359,13 +365,13 @@ def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_regio
                         (truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P).to_dict(), "no probe")):
             torch.save(_sidecar(cfg, amortized=False, truncation=tr, x_obs_digest="d" * 16), str(rot))
             try:
-                orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+                orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
                 raise AssertionError(f"a non-amortized artifact with {tag} loaded as if amortized")
             except ValueError as e:
                 assert "cannot be verified" in str(e), e
         # the digest survives being recorded only inside the region
         torch.save(_sidecar(cfg, amortized=False, truncation=region.to_dict()), str(rot))
-        post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+        post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
         assert post.x_obs_digest == "d" * 16
         # ROTATED artifacts: the sidecar's V must be the region's V; its transpose (the GUI's D6
         # sidecars) is named as such rather than blamed on the region. _FakeDP carries no prior, so
@@ -378,12 +384,12 @@ def test_a_non_amortized_artifact_loads_only_when_accepted_and_carries_its_regio
                                             x_obs_digest="d" * 16)
         torch.save(_sidecar(cfg, V=Q, amortized=False, truncation=rotated.to_dict(), x_obs_digest="d" * 16),
                    str(rot))
-        post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+        post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
         assert torch.allclose(reparam.rotation_of(post.T).cpu(), Q) and torch.equal(post.truncation.V, Q)
         torch.save(_sidecar(cfg, V=Q.T.contiguous(), amortized=False, truncation=rotated.to_dict(),
                             x_obs_digest="d" * 16), str(rot))
         try:
-            orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False, accept_truncated=True)
+            orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False, accept_truncated=True)
             raise AssertionError("a sidecar holding V transposed was decoded")
         except ValueError as e:
             assert "TRANSPOSE" in str(e), e
@@ -498,13 +504,13 @@ def test_a_transposed_sidecar_is_reconciled_from_the_posteriors_own_prior():
         torch.save(_sidecar(cfg, V=Q.T.contiguous()), str(rot))
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False)
+            post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False)
         assert any("TRANSPOSED" in str(c.message) for c in w)
         assert torch.allclose(training_checkpoint.bijection_probe(post.T, P), want)
         torch.save(_sidecar(cfg, V=Q), str(rot))
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            post, _ = orchestrator.build_posterior(cfg, object(), None, f"{name}.pt", False)
+            post, _ = orchestrator.build_posterior(cfg, _LoadedStub(), f"{name}.pt", False)
         assert not any("TRANSPOSED" in str(c.message) for c in w)
         assert torch.allclose(training_checkpoint.bijection_probe(post.T, P), want)
     finally:
