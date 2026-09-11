@@ -38,6 +38,8 @@ from core.config import BOUNDS_PATH, CELL_PATH, PRIOR_PATH, VALID_LABELS, VALID_
 from core.Helpers import file_manager
 from core.SBI import reparam
 
+from tests._fixtures import _WriteFailed, _failing
+
 _NAD = "nadrowski"
 _LABELS = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
 _MASTER_CELLS = ("master_spont", "master_weak", "master_entrained")
@@ -171,26 +173,6 @@ def test_a_prior_the_posterior_was_not_trained_with_is_refused():
 
 
 # ── the end-of-run artifact writes are atomic ─────────────────────────────────────────────────────
-class _WriteFailed(RuntimeError):
-    """Injected mid-write failure. Not OSError, so a handler that swallows disk errors cannot hide it."""
-
-
-def _failing(real):
-    """Wrap a serializer so it writes its bytes and THEN fails -- the tear that atomicity must absorb.
-
-    Failing before writing anything would pass against a plain `torch.save` too: the destination is
-    only clobbered once the writer has begun. The bytes have to land first for the test to mean
-    anything.
-
-    Signature-agnostic (`*a, **k`) because the two serialisers order their arguments differently --
-    ``torch.save(obj, file)`` against ``np.savez(file, **arrays)``.
-    """
-    def _boom(*a, **k):
-        real(*a, **k)
-        raise _WriteFailed("disk full")
-    return _boom
-
-
 def test_a_torn_prior_write_leaves_the_previous_prior_intact():
     """A prior is not just a file: it is what the training checkpoint's identity fingerprints and what
     SBC draws theta* from. Half-replacing one does not produce a broken run, it produces a run that

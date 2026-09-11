@@ -103,3 +103,23 @@ class _LoadedStub:
     """The LoadedPrior shape with no GMM: fails open through every fingerprint check."""
     id, name, fingerprint, force_prior = None, "", None, None
     def __init__(self, prior=None): self.prior = prior if prior is not None else object()
+
+
+class _WriteFailed(RuntimeError):
+    """Injected mid-write failure. Not OSError, so a handler that swallows disk errors cannot hide it."""
+
+
+def _failing(real):
+    """Wrap a serializer so it writes its bytes and THEN fails -- the tear that atomicity must absorb.
+
+    Failing before writing anything would pass against a plain `torch.save` too: the destination is
+    only clobbered once the writer has begun. The bytes have to land first for the test to mean
+    anything.
+
+    Signature-agnostic (`*a, **k`) because the two serialisers order their arguments differently --
+    ``torch.save(obj, file)`` against ``np.savez(file, **arrays)``.
+    """
+    def _boom(*a, **k):
+        real(*a, **k)
+        raise _WriteFailed("disk full")
+    return _boom

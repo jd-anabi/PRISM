@@ -987,9 +987,12 @@ def build_posterior(
         if observation is not None:
             w.parents["observation"] = observation.id
         w.fingerprints = {"gmm": prior.fingerprint, "V": tensor_digest(V_rec), "probe": tensor_digest(probe)}
+        _fm = config.REPARAM_FISHER_M if fisher_m is None else fisher_m
+        _fdz = config.REPARAM_FISHER_DZ if fisher_dz is None else fisher_dz
+        _fp = config.REPARAM_FISHER_POINTS if fisher_points is None else fisher_points
         w.config.update({"num_runs": n_runs, "run_size": run_size, "hidden_features": hf, "num_transforms": nt,
-                         "learning_rate": lr, "stop_after_epochs": patience, "fisher_m": fisher_m,
-                         "fisher_dz": fisher_dz, "fisher_points": fisher_points})
+                         "learning_rate": lr, "stop_after_epochs": patience, "fisher_m": _fm,
+                         "fisher_dz": _fdz, "fisher_points": _fp})
         w.body = {
             "mode": cfg.observation_mode,
             "conditioning": conditioning_block(cfg),

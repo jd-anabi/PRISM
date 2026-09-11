@@ -515,6 +515,7 @@ def test_build_posterior_auto_persists_and_returns_the_loaded_wrapper(store, mon
     assert m.body["transform"]["V"] is None and m.body["transform"]["param_keys"][-1] in cfg.rescale_params
     assert m.body["training"]["hidden_features"] == 8 and m.body["training"]["best_validation_loss"] == 0.6
     assert m.config["num_runs"] == 2 and m.fingerprints["gmm"] == lp.fingerprint
+    assert m.config["fisher_m"] == config.REPARAM_FISHER_M, "an unpassed fisher_m must record the value used"
     assert set(m.payloads) == {"posterior.pt", "loss.npz"} and m.figures == ["figures/training_loss.png"]
     assert seen == ["Training loss"]
     back = orchestrator.build_posterior(cfg, lp, out.id, False)
@@ -534,11 +535,40 @@ def test_build_posterior_auto_persists_and_returns_the_loaded_wrapper(store, mon
     assert m2.body["transform"]["fisher_eigenvalues"][0] == 13.0
 
 
+def test_a_torn_posterior_write_at_the_stage_leaves_no_half_artifact(store, monkeypatch):
+    """The stage's own posterior.pt write must stay atomic: a failing torch.save inside build_posterior
+    propagates and leaves NO posterior directory behind (the writer removes it) -- the property the
+    retired save_posterior_artifacts test pinned at its call site, pinned again at the new one."""
+    from core import orchestrator
+    from tests._fixtures import _FakeDP, _WriteFailed, _failing, _nad_cfg, _prior_artifact
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = False
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+
+    def fake_train_nn(plan, **kw):
+        dp = _FakeDP()
+        dp.prior = kw["prior"]
+        return dp, {"training_loss": [1.0], "validation_loss": [1.0], "best_validation_loss": 1.0,
+                    "epochs_trained": 1, "stop_after_epochs": 1}
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 0)
+    before = [r.id for r in store.list("posterior")]
+    real_save = torch.save
+    monkeypatch.setattr(torch, "save", _failing(real_save))
+    with pytest.raises(_WriteFailed):
+        orchestrator.build_posterior(cfg, lp, None, True, fig_sink=lambda t, f: None, num_runs=2, run_size_cap=4,
+                                     hidden_features=8, num_transforms=1, stop_after_epochs=1)
+    monkeypatch.setattr(torch, "save", real_save)
+    assert [r.id for r in store.list("posterior")] == before, "a torn write left a posterior directory behind"
+    assert not list(store.kind_dir("posterior").rglob("*.tmp"))
+
+
 def test_a_torn_posterior_write_leaves_no_half_artifact(store):
     """The end-of-run write is one ``store.create`` block: a failure mid-write must leave no half
     artifact directory and must not disturb an already-complete sibling."""
     from core.Helpers import file_manager
-    from tests.test_artifact_consistency import _WriteFailed, _failing
+    from tests._fixtures import _WriteFailed, _failing
     cfg = _nad_cfg(chi_mode=True)
     first = _posterior_artifact(store, cfg, name="first")
     real_save = torch.save
