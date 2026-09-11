@@ -550,6 +550,44 @@ class ArtifactStore:
                                fingerprint=_gmm_fingerprint(getattr(latent, "prior", None)),
                                diagnostics=None, accepted=accept.used() if region is not None else [])
 
+    def load_observation(self, cfg, ref: str) -> LoadedObservation:
+        """Refuses an observation whose model, parameter order, mode, conditioning width or chi
+        layout/pad is not this config's; asserts the payload's digest is the manifest's."""
+        import torch
+        from core import config as _config
+        from core.SBI.statistics import SUMMARY_WIDTH
+        from core.orchestrator import expected_forcing_dim
+        sub, m = self._find("observation", ref)
+        if m is None:
+            raise StoreError(f"no complete observation named or id'd {ref!r} under {self.kind_dir('observation')}")
+        label = m.name or m.id
+        body, cond = m.body, m.body["conditioning"]
+        want_keys = list(cfg.params_dict) + list(cfg.rescale_params)
+        if m.config.get("model") != cfg.model:
+            raise ValueError(f"Observation '{label}' was recorded for model {m.config.get('model')}, not {cfg.model}.")
+        if list(m.config.get("param_keys") or []) != want_keys:
+            raise ValueError(f"Observation '{label}' was recorded over parameters {m.config.get('param_keys')}, "
+                             f"not this config's {want_keys}.")
+        if body["mode"] != cfg.observation_mode:
+            raise ValueError(f"Observation '{label}' is a {str(body['mode']).upper()}-mode observation, but this "
+                             f"config is {cfg.observation_mode.upper()} mode.")
+        want_dim = int(expected_forcing_dim(cfg))
+        if int(cond["forcing_dim"]) != want_dim or int(cond["width"]) != SUMMARY_WIDTH + 1 + want_dim:
+            raise ValueError(f"Observation '{label}' is {cond['width']} wide (block {cond['forcing_dim']}); this "
+                             f"config conditions on {SUMMARY_WIDTH + 1 + want_dim} (block {want_dim}).")
+        if body["mode"] == "chi" and (cond["chi_layout"] != _config.CHI_LAYOUT
+                                      or int(cond["chi_k_pad"]) != int(cfg.chi_k_pad)):
+            raise ValueError(f"Observation '{label}' was packed under chi layout {cond['chi_layout']} with "
+                             f"{cond['chi_k_pad']} slots; this config is layout {_config.CHI_LAYOUT} / {cfg.chi_k_pad}.")
+        payload = torch.load(str(sub / "observation.pt"), map_location="cpu", weights_only=False)
+        x_obs = payload["x_obs"]
+        if mf.tensor_digest(x_obs) != body["x_obs_digest"]:
+            raise StoreError(f"observation '{label}': observation.pt does not hash to the manifest's digest; "
+                             f"the artifact is inconsistent")
+        return LoadedObservation("observation", m.id, m.name, m, sub, x_obs=x_obs, obs_data=payload["obs_data"],
+                                 t_dim=payload["t_dim"], digest=body["x_obs_digest"], mode=body["mode"],
+                                 width=int(cond["width"]))
+
 
 def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None, hw=None,
                               batches_done: int = 0, complete: bool = False, rows=None, V=None) -> mf.Manifest:

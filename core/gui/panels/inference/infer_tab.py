@@ -13,8 +13,10 @@ from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
 from ...widgets.param_grid import BoundsGrid, ValuesGrid
 from ...widgets.source_toggle import SourceToggle
+from core.SBI.observations import RecordingSet
+
 from .rows import _ChiProbeRow
-from .runners import (_run_experimental_inference, _run_experimental_inference_chi, _run_experimental_inference_spontaneous, _run_simulated_inference)
+from .runners import (_run_experimental_inference, _run_simulated_inference)
 from .base import _CellPreviewMixin, _StagePanel
 from .help_text import HELP
 
@@ -328,7 +330,8 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                         "Fix the cell selection first: " + "; ".join(self._cell_problems), "warning")
                     return
             self.dispatch(_run_simulated_inference, cfg, post.posterior, cell, self.sim_tobs.value(),
-                          gt_dicts=gt_dicts, prior=self.session.inf_prior, provide_fig_sink=True)
+                          gt_dicts=gt_dicts, prior=self.session.inf_prior, provide_fig_sink=True,
+                          on_result=self._on_observation)
         elif cfg.observation_mode == "chi":          # experimental, χ(ω): 1 passive + K forced
             if not self.chi_spont.value():
                 self.log_pane.append_line("Select the passive recording first — it sets Ω₀.",
@@ -351,18 +354,29 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             # sinc. Pairs come straight off each row widget, so they cannot be mismatched by an
             # add/remove in the middle of the table.
             pairs = [r.pair() for r in self._chi_forced_fields]
-            self.dispatch(_run_experimental_inference_chi, cfg, post.posterior, self.chi_spont.value(), pairs,
-                          self.chi_tobs.value(), self.chi_f0_si.value(), provide_fig_sink=True)
+            rec = RecordingSet(spont=self.chi_spont.value(), forced=tuple(pairs),
+                               T_obs_s=self.chi_tobs.value(), F0_si=self.chi_f0_si.value())
+            self.dispatch(_run_experimental_inference, cfg, post.posterior, rec, provide_fig_sink=True,
+                          on_result=self._on_observation)
         elif not cfg.has_forcing:                    # experimental, passive (no drive)
             if not self.exp_spont.value():
                 self.log_pane.append_line("Select a passive recording first.", "warning")
                 return
-            self.dispatch(_run_experimental_inference_spontaneous, cfg, post.posterior,
-                          self.exp_spont.value(), self.exp_tobs.value(), provide_fig_sink=True)
+            rec = RecordingSet(spont=self.exp_spont.value(), T_obs_s=self.exp_tobs.value())
+            self.dispatch(_run_experimental_inference, cfg, post.posterior, rec, provide_fig_sink=True,
+                          on_result=self._on_observation)
         else:                                        # experimental, driven
             forcing_si = {name: fld.value() for name, fld in self._forcing_fields.items()}
-            self.dispatch(_run_experimental_inference, cfg, post.posterior, self.exp_spont.value(),
-                          self.exp_forced.value(), self.exp_tobs.value(), forcing_si, provide_fig_sink=True)
+            rec = RecordingSet(spont=self.exp_spont.value(), forced=((self.exp_forced.value(), None),),
+                               T_obs_s=self.exp_tobs.value(), forcing_params_si=forcing_si)
+            self.dispatch(_run_experimental_inference, cfg, post.posterior, rec, provide_fig_sink=True,
+                          on_result=self._on_observation)
+
+    def _on_observation(self, payload):
+        self.session.observation = payload
+        self.log_pane.append_line(f"Observation recorded as {payload.name or '(unnamed, id ' + payload.id + ')'}; "
+                                  f"the TSNPE tab can build a region around it.")
+        self._screen.refresh_gates()
 
     def refresh_local_gates(self):
         simulated = self.infer_mode.currentIndex() == 0

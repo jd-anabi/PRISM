@@ -19,8 +19,7 @@ stage completes.
 from .inference.help_text import HELP  # noqa: F401
 from .inference.rows import _ChiRangeRow, _ChiProbeRow  # noqa: F401
 from .inference.runners import (_run_simulated_inference, _run_experimental_inference,  # noqa: F401
-                                _run_experimental_inference_chi,
-                                _run_experimental_inference_spontaneous, _run_tsnpe_round)
+                                _run_tsnpe_round)
 from .inference.base import (_StagePanel, _CellPreviewMixin, _TrainingBudgetMixin,  # noqa: F401
                              _hw_batch, _nvidia_smi_free_gib)
 from .inference.config_tab import ConfigPanel  # noqa: F401

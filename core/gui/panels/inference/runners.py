@@ -1,7 +1,6 @@
 """Worker-callable inference runners: module-level so a Worker can call them with an injected
 fig_sink, and free of Qt so they stay testable headless."""
 from core import cli, orchestrator
-from core.Helpers import file_manager, labels, visualizers
 
 
 # ── worker-callable runners (module-level so a Worker can call them with an injected fig_sink) ─────
@@ -22,45 +21,18 @@ def _run_simulated_inference(cfg, posterior, cell_path, T_obs_s, *, gt_dicts=Non
     if prior is not None:
         for msg in orchestrator.check_observation_in_distribution(cfg, prior.prior, prior.force_prior):
             print(f"WARNING: {msg}")
-    x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
-    visualizers.plot(t_dim.squeeze(0).cpu().detach().numpy(), x_dim[0, :].cpu().detach().numpy(),
-                     title="Ground-truth trace",
-                     labels=(labels.axis_label("t", "s"), labels.axis_label("x", cfg.length_unit)),
-                     sink=fig_sink)
-    orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True, fig_sink=fig_sink)
-
-
-def _run_experimental_inference(cfg, posterior, spont_path, forced_path, T_obs_s, forcing_si, *, fig_sink=None):
-    """Mirror orchestrator.run's experimental branch."""
-    x_spont = file_manager.load_experimental_data(spont_path, dtype=cfg.hw.dtype)
-    x_forced = file_manager.load_experimental_data(forced_path, dtype=cfg.hw.dtype)
-    obs_stats, obs_data, t_dim = orchestrator.build_experiment_obs(cfg, x_spont, x_forced, T_obs_s, forcing_si)
-    orchestrator.infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False, fig_sink=fig_sink)
-
-
-def _run_experimental_inference_chi(cfg, posterior, spont_path, forced_pairs, T_obs_s, F0_si,
-                                    *, fig_sink=None):
-    """chi(omega) experimental inference: ONE passive recording (which sets Omega_0) plus ANY NUMBER
-    of single-tone forced recordings, each locked in at THE FREQUENCY IT WAS ACTUALLY DRIVEN AT.
-
-    ``forced_pairs`` is a list of ``(path, drive_frequency_Hz)``. It used to be a bare list of paths
-    whose frequencies were assumed to be ``chi.chi_multipliers_for(cfg)``: the core has accepted
-    per-probe frequencies at any count for some time, and the GUI was the only thing still forcing
-    a fixed grid on it."""
-    x_spont = file_manager.load_experimental_data(spont_path, dtype=cfg.hw.dtype)
-    x_forced = [(file_manager.load_experimental_data(p, dtype=cfg.hw.dtype), float(f))
-                for p, f in forced_pairs]
-    obs_stats, obs_data, t_dim = orchestrator.build_experiment_obs_chi(
-        cfg, x_spont, x_forced, T_obs_s, F0_si)
-    orchestrator.infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False,
+    obs = orchestrator.generate_observations(cfg, fig_sink=fig_sink)     # writes the artifact + the trace
+    orchestrator.infer_and_visualize(cfg, posterior, obs.x_obs, obs.obs_data, obs.t_dim, show_truth=True,
                                      fig_sink=fig_sink)
+    return obs
 
 
-def _run_experimental_inference_spontaneous(cfg, posterior, path, T_obs_s, *, fig_sink=None):
-    """Passive-recording inference for a no-forcing model: a single unforced recording, no drive."""
-    x_obs = file_manager.load_experimental_data(path, dtype=cfg.hw.dtype)
-    obs_stats, obs_data, t_dim = orchestrator.build_experiment_obs_spontaneous(cfg, x_obs, T_obs_s)
-    orchestrator.infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False, fig_sink=fig_sink)
+def _run_experimental_inference(cfg, posterior, rec, *, fig_sink=None):
+    """Any bench recording set (passive, driven, chi): the stage checks and hashes the files first."""
+    obs = orchestrator.build_experiment_observation(cfg, rec, fig_sink=fig_sink)
+    orchestrator.infer_and_visualize(cfg, posterior, obs.x_obs, obs.obs_data, obs.t_dim, show_truth=False,
+                                     fig_sink=fig_sink)
+    return obs
 
 
 def _run_tsnpe_round(cfg, posterior, prior, obs_path, n_directions, level,

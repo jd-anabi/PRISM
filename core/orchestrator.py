@@ -4,7 +4,6 @@ Pipeline orchestration for the SBI pipeline.
 No input() calls live here -- all user interaction is delegated to cli.py.
 This module owns the pipeline flow: observe -> prior -> posterior -> validate.
 """
-import hashlib
 import importlib
 import math
 import os
@@ -21,7 +20,7 @@ from torch.distributions import Distribution, MixtureSameFamily
 from tqdm import tqdm
 
 from .config import (
-    SimConfig, OBSERVATION_PATH,
+    SimConfig,
     T_MIN_EXP_S, T_MAX_EXP_S,
     CHUNK_LEN, N_ND_MAX, SBC_N_CAL, STABILITY_SWEEP_ND_UNITS, TRAINING_NUM_RUNS,
     PRIOR_SWEEP_ITERATIONS, PRIOR_SWEEP_BATCH, TRAINING_RUN_SIZE, TRAINING_CHECKPOINT_EVERY,
@@ -33,8 +32,9 @@ from .config import (
 from . import cli, config, forcing
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
-from .artifacts import LoadedPrior, LoadedPosterior, resolve_store
+from .artifacts import LoadedPrior, LoadedPosterior, LoadedObservation, resolve_store
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
+from .artifacts.provenance import file_ref as _file_ref
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
 from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches_region,
@@ -110,50 +110,37 @@ def run(cfg: SimConfig):
             warnings.warn(
                 f"T_obs={T_obs_s:.2f}s exceeds the training range maximum T_MAX_EXP_S="
                 f"{T_MAX_EXP_S:.2f}s; the posterior may extrapolate poorly.", stacklevel=2)
-        x_dim, obs_stats, t_dim = generate_observations(cfg)
-        visualizers.plot(
-            t_dim.squeeze(0).cpu().detach().numpy(),
-            x_dim[0, :].cpu().detach().numpy(),
-            title="Ground-truth trace",
-            labels=(labels.axis_label("t", "s"), labels.axis_label("x", cfg.length_unit)),
-        )
-        infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True)
-    elif mode == "experimental" and cfg.chi_mode:
-        # chi(omega): one passive recording + K single-tone forced recordings (one per relative freq).
-        spont_path, forced_paths, T_obs_s, F0_si = cli.get_inference_inputs_chi()
-        X_spont = file_manager.load_experimental_data(spont_path, dtype=cfg.hw.dtype)
-        X_forced = [file_manager.load_experimental_data(p, dtype=cfg.hw.dtype) for p in forced_paths]
-        obs_stats, obs_data, t_dim = build_experiment_obs_chi(cfg, X_spont, X_forced, T_obs_s, F0_si)
-        infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False)
-    elif mode == "experimental" and not cfg.has_forcing:
-        # Passive recording: a single unforced trace, no drive.
-        path, T_obs_s = cli.get_inference_inputs_spontaneous()
-        X_obs = file_manager.load_experimental_data(path, dtype=cfg.hw.dtype)
-        obs_stats, obs_data, t_dim = build_experiment_obs_spontaneous(cfg, X_obs, T_obs_s)
-        infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False)
+        obs = generate_observations(cfg)
+        infer_and_visualize(cfg, posterior, obs.x_obs, obs.obs_data, obs.t_dim, show_truth=True)
     elif mode == "experimental":
-        spont_path, forced_path, T_obs_s, forcing_params_si = cli.get_inference_inputs(
-            list(cfg.force_params_dict.keys()))
-        X_obs_spont = file_manager.load_experimental_data(spont_path, dtype=cfg.hw.dtype)
-        X_obs_forced = file_manager.load_experimental_data(forced_path, dtype=cfg.hw.dtype)
-        obs_stats, obs_data, t_dim = build_experiment_obs(
-            cfg, X_obs_spont, X_obs_forced, T_obs_s, forcing_params_si)
-        infer_and_visualize(cfg, posterior, obs_stats, obs_data, t_dim, show_truth=False)
+        if cfg.chi_mode:
+            spont_path, forced_paths, T_obs_s, F0_si = cli.get_inference_inputs_chi()
+            rec = RecordingSet(spont=spont_path, forced=tuple((p, None) for p in forced_paths),
+                               T_obs_s=T_obs_s, F0_si=F0_si)
+        elif not cfg.has_forcing:
+            path, T_obs_s = cli.get_inference_inputs_spontaneous()
+            rec = RecordingSet(spont=path, T_obs_s=T_obs_s)
+        else:
+            spont_path, forced_path, T_obs_s, forcing_params_si = cli.get_inference_inputs(
+                list(cfg.force_params_dict.keys()))
+            rec = RecordingSet(spont=spont_path, forced=((forced_path, None),), T_obs_s=T_obs_s,
+                               forcing_params_si=forcing_params_si)
+        obs = build_experiment_observation(cfg, rec)
+        infer_and_visualize(cfg, posterior, obs.x_obs, obs.obs_data, obs.t_dim, show_truth=False)
     # mode == "none": stop after calibration
 
 
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
-def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig_sink=None,
+                          store=None) -> LoadedObservation:
     """
-    Simulate a ground-truth observation matching experimental conditions.
+    Simulate a ground-truth observation matching experimental conditions, and WRITE it as an
+    observation artifact (the trace figure, the payload, and a manifest carrying the source cell,
+    its ground truth and its inits) so a fresh session can put itself back where inference ran.
 
     Simulates at fine ND resolution (dt_nd_min, stable for EM), then downsamples
     to match the physical sampling rate dt_exp and duration T_obs — exactly
     mirroring what the training loop produces.
-
-    :return: (obs_data, obs_stats, t_dim) where obs_data has shape (1, N_obs),
-             obs_stats has shape (1, n_stats + n_forcing + 1), and t_dim is the
-             dimensional time vector.
     """
     t = cfg.t  # full pre-simulated ND time vector at dt_nd_min
 
@@ -285,7 +272,80 @@ def generate_observations(cfg: SimConfig) -> tuple[torch.Tensor, torch.Tensor, t
         obs_stats = pipeline.gen_stats(x_spont_dim, None, cfg.dt_exp, None, None, None,
                                        device=cfg.hw.device, spontaneous_only=True)
         obs_stats = statistics.conditioning_rows(obs_stats, cfg.T_obs)
-    return x_dim, obs_stats, t_dim
+
+    src = getattr(cfg, "sources", {}).get("cell")
+    source = {
+        "kind": "simulated",
+        "cell": _file_ref(src, relative_to=config.RESOURCES_ROOT) if src else None,
+        "params": {k: float(v) for k, (v, _) in cfg.params_dict.items()},
+        "rescale": {k: float(v) for k, (v, _) in cfg.rescale_params.items()},
+        "forcing": {k: float(v) for k, (v, _) in cfg.force_params_dict.items()},
+        "inits": {k: float(v) for k, v in cfg.inits_dict.items()},
+        "T_obs_s": float(cfg.T_obs / cfg.get_unit_conversion_factor("s")),
+    }
+    forcing_vals = ({k: float(v) for k, (v, _) in cfg.force_params_dict.items()}
+                    if (cfg.has_forcing and not cfg.chi_mode) else {})
+    return _write_observation(resolve_store(store), cfg, name, note, fig_sink, obs_stats, x_dim, t_dim,
+                              title="Ground-truth trace", source=source, forcing_vals=forcing_vals)
+
+
+def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: str = "", note: str = "",
+                                 fig_sink=None, store=None) -> LoadedObservation:
+    """A bench recording set -> the observation artifact. Every file is checked and hashed BEFORE any
+    compute (a missing recording is a FileNotFoundError here, not a traceback inside a worker), then
+    the mode's builder runs and the artifact records the recordings, the drive and the context."""
+    store = resolve_store(store)
+    named = [(rec.spont, "spont", None)] + [(p, "forced", f) for p, f in rec.forced]
+    refs = []
+    for p, role, f in named:
+        if not p or not os.path.isfile(str(p)):
+            raise FileNotFoundError(f"the {role} recording was not found: {p!r}")
+        r = _file_ref(p)
+        r.update({"role": role, "freq_Hz": None if f is None else float(f)})
+        refs.append(r)
+    X_spont = file_manager.load_experimental_data(rec.spont, dtype=cfg.hw.dtype)
+    if cfg.observation_mode == "chi":
+        loaded = [(file_manager.load_experimental_data(p, dtype=cfg.hw.dtype), f) for p, f in rec.forced]
+        forced = [(x, float(f)) if f is not None else x for x, f in loaded]
+        obs_stats, obs_data, t_dim = build_experiment_obs_chi(cfg, X_spont, forced, rec.T_obs_s, rec.F0_si)
+    elif cfg.has_forcing:
+        if len(rec.forced) != 1:
+            raise ValueError(f"forced mode takes exactly one forced recording, got {len(rec.forced)}")
+        X_forced = file_manager.load_experimental_data(rec.forced[0][0], dtype=cfg.hw.dtype)
+        obs_stats, obs_data, t_dim = build_experiment_obs(cfg, X_spont, X_forced, rec.T_obs_s,
+                                                          rec.forcing_params_si or {})
+    else:
+        obs_stats, obs_data, t_dim = build_experiment_obs_spontaneous(cfg, X_spont, rec.T_obs_s)
+    forcing_vals = ({k: float(v) for k, (v, _) in cfg.force_params_dict.items()}
+                    if (cfg.has_forcing and not cfg.chi_mode) else {})
+    source = {"kind": "experimental", "recordings": refs, "T_obs_s": float(rec.T_obs_s),
+              "F0_si": None if rec.F0_si is None else float(rec.F0_si),
+              "forcing_params_si": None if rec.forcing_params_si is None else
+              {k: float(v) for k, v in rec.forcing_params_si.items()}}
+    return _write_observation(store, cfg, name, note, fig_sink, obs_stats, obs_data, t_dim,
+                              title="Observed trace", source=source, forcing_vals=forcing_vals)
+
+
+def _write_observation(store, cfg, name, note, fig_sink, x_obs, obs_data, t_dim, *, title, source, forcing_vals):
+    """The one write site for both observation stages: the payload, the trace figure, and the manifest
+    carrying the mode, the conditioning geometry, the digest, the context and the source. Read back
+    through the loader, exactly as a later load would verify it."""
+    from .artifacts.manifest import conditioning_block, tensor_digest, tensor_to_json
+    digest = tensor_digest(x_obs)
+    with store.create("observation", cfg, name=name, note=note) as w:
+        file_manager.atomic_torch_save({"x_obs": x_obs.detach().cpu(), "obs_data": obs_data.detach().cpu(),
+                                        "t_dim": t_dim.detach().cpu()}, w.payload("observation.pt"))
+        visualizers.plot(t_dim.squeeze(0).cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy(),
+                         title=title, labels=(labels.axis_label("t", "s"), labels.axis_label("x", cfg.length_unit)),
+                         sink=w.fig_sink(fig_sink))
+        w.fingerprints["x_obs"] = digest
+        w.body = {"mode": cfg.observation_mode, "conditioning": conditioning_block(cfg), "x_obs_digest": digest,
+                  "T_obs_cell": float(cfg.T_obs),
+                  "n_obs": int(cfg.n_obs) if cfg.n_obs is not None else int(obs_data.shape[-1]),
+                  "forcing_vals": forcing_vals,
+                  "chi_obs_freqs": tensor_to_json(getattr(cfg, "chi_obs_freqs", None)),
+                  "source": source}
+    return store.load_observation(cfg, w.id)
 
 
 # ── Step 2: Prior construction ──────────────────────────────────────────────
@@ -300,11 +360,6 @@ def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int, truncat
     whatever it holds for a prior -- a LoadedPrior, or a stub that must fail open."""
     from .artifacts.identity import SimulationIdentity
     return SimulationIdentity.from_cfg(cfg, prior, run_size, n_runs, truncation=truncation).to_dict()
-
-
-PERSIST_OBSERVATIONS = True
-
-
 
 
 
@@ -1026,47 +1081,9 @@ def build_posterior(
 
 
 def observation_digest(x_obs: torch.Tensor) -> str:
-    """Stable 16-hex digest of a conditioning vector. Same shape as _gmm_fingerprint, and exact
-    rather than tolerance-based for the same reason: this answers "is this the same observation",
-    not "are these observations similar"."""
-    b = x_obs.detach().cpu().to(torch.float64).contiguous().numpy().tobytes()
-    return hashlib.sha256(b).hexdigest()[:16]
-
-
-def save_observation(cfg: SimConfig, x_obs: torch.Tensor, *, tag: str = "") -> tuple:
-    """Persist the observation an inference was actually run against. Returns (path, digest).
-
-    SECTION 11.6 GUARDRAIL 1, and the timing is the whole point. Amortized NPE has NO observation
-    when the posterior is saved -- which is exactly why ``default_x`` is None on
-    ``posterior_08232026``, and why the posterior behind that run's figures cannot be re-sampled from
-    the artifacts alone. The fix therefore belongs at INFERENCE time, not at save time; bolting it
-    onto the posterior's own write in build_posterior would record a None.
-
-    TSNPE then refuses to build a truncation region unless the stored digest matches the dataset
-    currently loaded -- a region drawn around one recording and applied to another deletes prior
-    support on the strength of the wrong data, and truncation is a one-way ratchet.
-    """
-    dig = observation_digest(x_obs)
-    stamp = time.strftime("%Y%m%dT%H%M%S")
-    name = f"obs_{stamp}_{dig}{('_' + tag) if tag else ''}.pt"
-    path = OBSERVATION_PATH / name
-    file_manager.atomic_torch_save({
-        "x_obs": x_obs.detach().cpu(),
-        "digest": dig,
-        "mode": cfg.observation_mode,
-        "input_dim": statistics.SUMMARY_WIDTH + 1,
-        "forcing_dim": expected_forcing_dim(cfg),
-        "param_keys": list(cfg.params_dict) + list(cfg.rescale_params),
-        "chi_k_pad": cfg.chi_k_pad if cfg.chi_mode else None,
-        "chi_n_freqs": cfg.chi_n_freqs if cfg.chi_mode else None,
-        "model": cfg.model,
-    }, path)
-    return path, dig
-
-
-def load_observation(path) -> dict:
-    """Read a record written by :func:`save_observation`."""
-    return torch.load(str(path), map_location="cpu", weights_only=False)
+    """16-hex digest of a conditioning vector -- the store's tensor_digest, kept under this name."""
+    from .artifacts.manifest import tensor_digest
+    return tensor_digest(x_obs)
 
 
 def build_truncation_region(posterior, obs_record: dict, x_obs: torch.Tensor, *,
@@ -1495,18 +1512,6 @@ def infer_and_visualize(cfg: SimConfig, posterior: DirectPosterior | Transformed
             print(_msg, flush=True)
             warnings.warn(_msg, stacklevel=2)
 
-    # GUARDRAIL 1: record the observation this inference actually ran against, here,
-    # where it first exists. Written before the figures, so an interrupted or crashed inference still
-    # leaves behind the thing needed to reproduce or extend it.
-    if PERSIST_OBSERVATIONS:
-        try:
-            _obs_path, _obs_dig = save_observation(cfg, obs_stats)
-            print(f"[obs] observation persisted as {_obs_path.name} (digest {_obs_dig})", flush=True)
-        except Exception as _e:                  # noqa: BLE001 -- never lose the inference over this
-            warnings.warn(f"could not persist the observation ({type(_e).__name__}: {_e}); "
-                          f"inference continues, but TSNPE will have nothing to key on.",
-                          stacklevel=2)
-
     # Corner plot
     samples = posterior.sample((1000,), x=obs_stats.to(device))
     # Size the corner by the PARAMETER COUNT: a 13x13 grid at pairplot's default is cramped enough that
@@ -1671,7 +1676,8 @@ def _build_latent_prior_for_validation(cfg, inferred_prior):
     )
 
 
-# The experimental observation builders live in SBI/observations.py; re-exported here because
-# the GUI runners and the diagnostic scripts call them as orchestrator.build_experiment_obs*.
+# The experimental observation builders (and RecordingSet) live in SBI/observations.py; re-exported
+# here because the GUI runners and the diagnostic scripts call them as orchestrator.build_experiment_obs*
+# / orchestrator.RecordingSet.
 from .SBI.observations import (build_experiment_obs, build_experiment_obs_spontaneous,  # noqa: E402
-                               build_experiment_obs_chi)
+                               build_experiment_obs_chi, RecordingSet)

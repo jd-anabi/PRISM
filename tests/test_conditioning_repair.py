@@ -922,30 +922,25 @@ def test_a_truncated_posterior_warns_on_a_foreign_observation_at_inference():
     region = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=13)
     post = reparam.TransformedPosterior(_Lat(), T, truncation=region,
                                         x_obs_digest=orchestrator.observation_digest(x0))
-    saved = orchestrator.PERSIST_OBSERVATIONS
-    orchestrator.PERSIST_OBSERVATIONS = False
-    try:
-        for x, expect in ((x0 + 1.0, True), (x0, False)):
-            with warnings.catch_warnings(record=True) as caught:
-                warnings.simplefilter("always")
-                try:
-                    orchestrator.infer_and_visualize(cfg, post, x, None, None, show_truth=False)
-                    raise AssertionError("the stub posterior was never sampled")
-                except _Halt:
-                    pass
-            got = any("NOT AMORTIZED" in str(c.message) for c in caught)
-            assert got is expect, f"warned={got} for {'a foreign' if expect else 'the recorded'} observation"
-        amortized = reparam.TransformedPosterior(_Lat(), T)
+    for x, expect in ((x0 + 1.0, True), (x0, False)):
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             try:
-                orchestrator.infer_and_visualize(cfg, amortized, x0 + 1.0, None, None, show_truth=False)
+                orchestrator.infer_and_visualize(cfg, post, x, None, None, show_truth=False)
                 raise AssertionError("the stub posterior was never sampled")
             except _Halt:
                 pass
-        assert not any("NOT AMORTIZED" in str(c.message) for c in caught)
-    finally:
-        orchestrator.PERSIST_OBSERVATIONS = saved
+        got = any("NOT AMORTIZED" in str(c.message) for c in caught)
+        assert got is expect, f"warned={got} for {'a foreign' if expect else 'the recorded'} observation"
+    amortized = reparam.TransformedPosterior(_Lat(), T)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        try:
+            orchestrator.infer_and_visualize(cfg, amortized, x0 + 1.0, None, None, show_truth=False)
+            raise AssertionError("the stub posterior was never sampled")
+        except _Halt:
+            pass
+    assert not any("NOT AMORTIZED" in str(c.message) for c in caught)
 
 
 def test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region():

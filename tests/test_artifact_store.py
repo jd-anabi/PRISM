@@ -581,3 +581,58 @@ def test_a_torn_posterior_write_leaves_no_half_artifact(store):
         torch.save = real_save
     assert [r.name for r in store.list("posterior")] == ["first"] and not (w.dir).exists()
     assert not list(first.dir.glob("*.tmp"))
+
+
+def _forced_cfg():
+    from core import cli
+    from core.config import CELL_PATH
+    cfg = _nad_cfg()                                         # master.txt declares a drive -> forced mode
+    cli.load_and_validate_gt(cfg, str(CELL_PATH / "nadrowski" / "master_weak.txt"))
+    cfg.T_obs = 200.0                                        # cell units: 200 frames at dt_exp = 1
+    return cfg
+
+
+def test_generate_observations_writes_an_artifact_that_reinstalls_its_context(store):
+    from core import orchestrator
+    cfg = _forced_cfg()
+    seen = []
+    obs = orchestrator.generate_observations(cfg, fig_sink=lambda t, f: seen.append(t), name="cell")
+    assert obs.name == "cell" and obs.mode == "forced" and obs.width == obs.x_obs.shape[-1]
+    assert seen == ["Ground-truth trace"] and obs.manifest.figures == ["figures/ground_truth_trace.png"]
+    src = obs.manifest.body["source"]
+    assert src["kind"] == "simulated" and src["cell"]["path"] == "Cells/nadrowski/master_weak.txt"
+    assert src["params"] == {k: float(v) for k, (v, _) in cfg.params_dict.items()}
+    assert obs.manifest.fingerprints["x_obs"] == obs.digest == mf.tensor_digest(obs.x_obs)
+    fresh = _nad_cfg()
+    assert not fresh.has_ground_truth
+    store.load_observation(fresh, obs.id).install(fresh)
+    assert fresh.has_ground_truth and fresh.T_obs == cfg.T_obs and fresh.n_obs == cfg.n_obs
+    assert fresh.ground_truth == cfg.ground_truth
+    with pytest.raises(ValueError, match="mode"):
+        store.load_observation(_nad_cfg(chi_mode=True), obs.id)
+
+
+def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_file(store, tmp_path):
+    """Defects 3-4: the forced-recording path raised NameError before this task. It now runs, and the
+    artifact names every recording by path and hash."""
+    import numpy as np
+    from core import orchestrator
+    from core.SBI.observations import RecordingSet
+    cfg = _forced_cfg()
+    sim = orchestrator.generate_observations(cfg, fig_sink=lambda t, f: None)
+    trace = sim.obs_data[0].numpy()
+    spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
+    np.save(spont, trace)
+    np.save(forced, trace)
+    T_obs_s = cfg.T_obs / cfg.get_unit_conversion_factor("s")
+    si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in cfg.force_params_dict}
+    rec = RecordingSet(spont=str(spont), forced=((str(forced), None),), T_obs_s=T_obs_s, forcing_params_si=si)
+    obs = orchestrator.build_experiment_observation(cfg, rec, fig_sink=lambda t, f: None)
+    recs = obs.manifest.body["source"]["recordings"]
+    assert [r["role"] for r in recs] == ["spont", "forced"] and all(len(r["sha256"]) == 64 for r in recs)
+    assert obs.width == sim.width and obs.manifest.body["source"]["kind"] == "experimental"
+    assert obs.manifest.body["forcing_vals"]["freq"] > 0
+    with pytest.raises(FileNotFoundError):
+        orchestrator.build_experiment_observation(
+            cfg, RecordingSet(spont=str(tmp_path / "nope.npy"), forced=((str(forced), None),), T_obs_s=T_obs_s,
+                              forcing_params_si=si), fig_sink=lambda t, f: None)

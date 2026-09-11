@@ -50,11 +50,6 @@ _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
 # with a tmpdir, which is unaffected by this.
 orchestrator.TRAINING_CHECKPOINT_EVERY = 0
 
-# Observation records OFF for the same reason. The full-pipeline tests
-# call infer_and_visualize, which records the observation it ran against -- correct for a real run,
-# and litter here. Nothing else in the suite writes into Resources/; keep it that way.
-orchestrator.PERSIST_OBSERVATIONS = False
-
 
 def _tiny_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds,
                     state_dep_drift=False, num_iterations=25, log_mask=None,
@@ -108,7 +103,8 @@ def test_no_forcing_user_model_full_sbi_pipeline():
         lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
         posterior = lp_post.posterior
 
-        x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
+        obs = orchestrator.generate_observations(cfg, fig_sink=sink)
+        x_dim, obs_stats, t_dim = obs.obs_data, obs.x_obs, obs.t_dim
         assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1    # [S | log(T)], no forcing block
         assert torch.allclose(obs_stats[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
         assert torch.isfinite(obs_stats).all()
@@ -144,7 +140,7 @@ def test_builtin_forcing_path_unperturbed():
     cfg.hw = config.cpu_device()
     cfg.T_obs = 1000.0                                            # ms units -> 1 s of data
     assert cfg.has_forcing is True
-    _, obs_stats, _ = orchestrator.generate_observations(cfg)
+    obs_stats = orchestrator.generate_observations(cfg).x_obs
     n_forcing = len(cfg.force_params_dict)
     assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1 + n_forcing
     assert not torch.allclose(obs_stats[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
@@ -277,19 +273,20 @@ def test_observation_modes_and_conditioning_widths():
         assert spont.observation_mode == "spontaneous"
         assert "f_scale" not in spont.rescale_params
         assert len(spont.params_dict) + len(spont.rescale_params) == 12
-        assert orchestrator.generate_observations(spont)[1].shape[-1] == S + 1
+        assert orchestrator.generate_observations(spont).x_obs.shape[-1] == S + 1
 
         # mode 2 -- forced: the cell's own drive, f_scale identified through Group G's gain
         forced = build("master", "master_weak")
         assert forced.observation_mode == "forced" and "f_scale" in forced.rescale_params
-        assert orchestrator.generate_observations(forced)[1].shape[-1] == S + 1 + len(forced.force_params_dict)
+        assert (orchestrator.generate_observations(forced).x_obs.shape[-1]
+                == S + 1 + len(forced.force_params_dict))
 
         # mode 3 -- chi: K probes; the cell's own drive is ignored
         chi_cfg = build("master", "master_weak", chi_mode=True, chi_n_freqs=3)
         assert chi_cfg.observation_mode == "chi"
         # Width is a function of the PAD, not the probe count -- that is what lets one posterior
         # serve any number of probes. Asserted via the shared rule, never a fresh literal.
-        assert (orchestrator.generate_observations(chi_cfg)[1].shape[-1]
+        assert (orchestrator.generate_observations(chi_cfg).x_obs.shape[-1]
                 == S + 1 + orchestrator.expected_forcing_dim(chi_cfg))
         assert orchestrator.expected_forcing_dim(chi_cfg) == config.CHI_ELEM_W * chi_cfg.chi_k_pad
 
@@ -409,7 +406,7 @@ def test_chi_mode_observation_width():
         cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
         cfg.hw = config.cpu_device()
         cfg.T_obs = 1000.0                                        # ms units -> 1 s of data
-        _, obs_stats, _ = orchestrator.generate_observations(cfg)
+        obs_stats = orchestrator.generate_observations(cfg).x_obs
         assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg)
         assert torch.allclose(obs_stats[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
         assert torch.isfinite(obs_stats).all()
@@ -446,7 +443,8 @@ def test_chi_mode_full_sbi_pipeline():
         posterior = lp_post.posterior
 
         K3 = orchestrator.expected_forcing_dim(cfg)
-        x_dim, obs_stats, t_dim = orchestrator.generate_observations(cfg)
+        obs = orchestrator.generate_observations(cfg, fig_sink=sink)
+        x_dim, obs_stats, t_dim = obs.obs_data, obs.x_obs, obs.t_dim
         assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1 + K3
         assert torch.isfinite(obs_stats).all()
 
@@ -676,7 +674,7 @@ def test_chi_mode_drives_every_channel_the_model_reads():
         cfg.T_obs = 200.0
         assert cfg.observation_mode == "chi" and cfg.inits_tensor.shape[-1] == 2
 
-        stats = orchestrator.generate_observations(cfg)[1]
+        stats = orchestrator.generate_observations(cfg).x_obs
         assert stats.shape[-1] == SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg), (
             f"hopf chi conditioning is the wrong width: {tuple(stats.shape)}")
         assert torch.isfinite(stats).all(), "hopf chi conditioning has non-finite entries"

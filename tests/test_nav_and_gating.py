@@ -786,7 +786,11 @@ def test_help_badge_carries_its_text():
 def test_simulated_inference_runner_emits_the_ground_truth_figure():
     """The simulated-inference runner shows the 'Ground-truth trace' figure before inferring (the old
     Simulate tab did only the first half; the tab is gone, the figure is not). A real SDE sim is too slow
-    for a unit test, so stub the heavy pieces and assert the fig_sink wiring."""
+    for a unit test, so stub the heavy pieces and assert the fig_sink wiring. The figure now comes from
+    the observation stage itself (generate_observations writes the artifact and its trace figure), so
+    the stub emits it exactly as the real stage would before handing back a LoadedObservation-shaped
+    stand-in."""
+    import types
     import torch
     from core import cli, orchestrator
     from core.gui.panels import inference_tabs
@@ -800,11 +804,17 @@ def test_simulated_inference_runner_emits_the_ground_truth_figure():
             return 1.0
 
     seen = []
+
+    def stub_generate_observations(cfg, *, fig_sink=None, **kw):
+        if fig_sink is not None:
+            fig_sink("Ground-truth trace", None)
+        return types.SimpleNamespace(x_obs=torch.zeros(1, 5), obs_data=None,
+                                     t_dim=torch.linspace(0, 1, 5).unsqueeze(0), id="o", name="")
+
     real_gt, real_go = cli.load_and_validate_gt, orchestrator.generate_observations
     real_iv = orchestrator.infer_and_visualize
     cli.load_and_validate_gt = lambda cfg, path: []
-    orchestrator.generate_observations = lambda cfg: (
-        torch.zeros(1, 5), None, torch.linspace(0, 1, 5).unsqueeze(0))
+    orchestrator.generate_observations = stub_generate_observations
     orchestrator.infer_and_visualize = lambda *a, **k: None
     try:
         inference_tabs._run_simulated_inference(
