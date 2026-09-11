@@ -219,3 +219,38 @@ consolidation (piece 2) — interim, `scripts/_common.load_posterior` is re-poin
 the scripts that import a removed path constant stay broken until piece 2; FDT/CrossVal outputs
 as store kinds (piece 5); `logging` (piece 3). The prompt CLI's `run()` loses interactive figure
 display (figures are on disk); it is retired in piece 2.
+
+## 11. Amendments made during execution (2026-09-10/11, piece 1)
+
+Each is a deliberate deviation from the text above, ruled during the task-by-task execution and
+confirmed by the final whole-branch review; the ledger of the run holds the reasoning in full.
+
+1. **Results keyed by parameter are ordered LISTS of records, not dicts** (ruling R6): the
+   calibration body's `sbc.per_param` is `[{"name", "ks_p", "c2st_ranks", "c2st_dap"}, ...]` and
+   the inference body's `posterior_summary` is `[{"name", "q05", "median", "q95"}, ...]`, in the
+   bounds file's parameter order. The manifest is written with sorted keys, so a dict keyed by name
+   cannot carry the order, and in this code the order is the binding. The loaders read the manifest
+   body; `results.json` is the human-readable copy and is never read back.
+2. **The region's `prior_fingerprint` is the fingerprint of the prior pickled inside the parent
+   posterior** (ruling R7), the one copy no writer can get wrong, and the parent wrapper's own
+   fingerprint is cross-checked against it (a disagreement is refused).
+3. **Manifest bodies are validated dicts** (key sets per kind in `manifest.BODY_KEYS`), not per-kind
+   dataclasses. Same contract, less code.
+4. **The source scan covers `core/` only** for now (§8 says `core/` and `scripts/`): nine scripts
+   legitimately import the removed path constants until piece 2 folds them into the command-line
+   tool, and each carries a banner saying so. Piece 2 extends the scan to `scripts/`.
+5. **`LoadedPosterior.accepted` is informational.** Only the flags the inference stage itself is
+   given reach a body (`results.accepted` of the inference); the calibration body carries no
+   `accepted` field (§3 and §5 disagreed; this is the resolution — a calibration on a
+   non-amortized posterior is recognisable from its parent's `amortized: false`).
+6. **Save = rename.** `set_note` exists and is tested; the GUI's "annotate" field and the cleanup
+   action for incomplete directories ("offered for cleanup", §3) are piece 4's browser. The store
+   lists incomplete directories with a `reason` so the browser has what it needs.
+7. **`.gitignore` keeps the `/Resources/*` lines until the clean-break runbook** (ruling R5), so
+   the still-existing trees do not flood `git status`; the runbook's step 4 removes them.
+8. **The simulation kind's id is its identity digest** (12 hex) and the id pattern admits both
+   forms; `Summary.complete` for a simulation means "has a valid manifest" — `body["complete"]`
+   says whether the cache is finished.
+9. **`env_info` records `"absent"`** for an optional package that is not installed.
+10. **The TSNPE runner resolves the process default store** (`runners._run_tsnpe_round` takes no
+    `store` argument); piece 2's stage API threads it like the other stages.
