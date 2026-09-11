@@ -1,9 +1,10 @@
 # PRISM — state
 
 **Last updated:** 2026-09-11 (piece 1 MERGED as `461d780`; the CLEAN-BREAK RUNBOOK is EXECUTED —
-`8dbd93e`, `e37df41`, `19363d2` and the docs commit that carries this file; `Artifacts/` starts
-empty; next: the post-piece-1 GPU gate and the GUI checks, then piece 2; all work happens
-directly on the local `main` branch)
+`8dbd93e`, `e37df41`, `19363d2`, `d5c9fd3`; the POST-PIECE-1 GPU GATE is GREEN at `bb38f1a` after
+its first attempt found two piece-1 regressions, fixed in `896e8ff` and `bb38f1a` with a new
+gpu-marked suite; `Artifacts/` starts empty; next: the nine GUI checks on a display, then piece 2;
+all work happens directly on the local `main` branch)
 
 ## Where things stand
 
@@ -44,13 +45,26 @@ directly on the local `main` branch)
 2. ~~Clean-break runbook~~ — done 2026-09-11 (design spec §9 / plan Task 14, run by Claude at
    the user's request; the "Clean break" section below records every step, the one deviation
    and the fast gate afterwards).
-3. **GPU gate after piece 1** (plan §Verification): run 1 `CHI=1 TOBS_S=4.5
-   BOUNDS=Resources/Bounds/nadrowski/master.txt CELL=Resources/Cells/nadrowski/master_spont.txt
-   CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke python scripts/smoke_train.py`; run 2 the same
-   with `PRIOR=smoke_prior NUM_RUNS=2 STAGES=prior,posterior` and **`SAVE` unset** (a second
-   `SAVE=1` is refused by name). Expect "Reusing the Fisher rotation stored with the training
-   checkpoint" and `<scratch>/smoke/simulations/<digest>/manifest.json` with `"complete": true`;
-   then the `CHI=0 … master_weak` leg. Compare stage times with the baseline row below.
+3. ~~GPU gate after piece 1~~ — done 2026-09-11, GREEN at `bb38f1a` (table below). **The first
+   attempt at `19363d2` FAILED twice** and both failures were piece-1 regressions on paths no CPU
+   suite can reach: (a) infer's PPC met a CUDA observation row and CPU simulated rows —
+   `store.load_observation` handed the row back on `cfg.hw.device` and `infer_and_visualize` bound
+   it, while `statistics.conditioning_rows` assembles every row on the CPU by contract; (b) the
+   forced-mode prior was refused by its own store the moment `build_prior` read it back
+   ("prior.pt holds GMM …, not the one the manifest records") — `file_manager.load_mix_dist`
+   rebuilt `Categorical(probs=w)`, whose re-normalisation `w / w.sum()` is not a bitwise fixed
+   point in float32 and depends on the device's reduction order (the chi prior round-tripped
+   exactly on CUDA and not on the CPU; the forced one on neither). Fixes, each with a failing test
+   first: `896e8ff` the loader restores the saved weights into `.probs`/`._param` (exact round
+   trip; two CPU tests reproduce the refusal); `bb38f1a` the row stays on the CPU and `sample()`
+   moves its own copy, pinned by the new gpu-marked `tests/test_gpu_paths.py` (the tiny SBITEST
+   chain on `config.detect_device()`, ~12 s; `build_tiny_run(store, hw=None)`).
+   **Recipe correction:** run 2 must use the SAME `NUM_RUNS` as run 1 — the simulation identity
+   includes `n_runs`, so `NUM_RUNS=2` after a `NUM_RUNS=4` run 1 keys a NEW cache directory,
+   rebuilds the Fisher rotation and never resumes (it did exactly that here, silently, exit 0).
+   The drill that certifies the resume is run 1 `CHI=1 TOBS_S=4.5 BOUNDS=…/master.txt
+   CELL=…/master_spont.txt CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke`, then run 2 with
+   `PRIOR=smoke_prior STAGES=prior,posterior`, the same `NUM_RUNS`, `SAVE` unset.
 4. **Manual GUI check on a display** (plan §Verification, nine checks; `run.bat`): `Artifacts/`
    created at launch; prior from scratch → `priors/_unnamed__<id>/`, Save renames it; posterior
    at 2 batches → `posteriors/` with parents prior + simulation; load it (no dialog) and a
@@ -62,8 +76,11 @@ directly on the local `main` branch)
 5. **Pieces 2 → 3 → (4 ∥ 5) → 6**, each brainstormed → spec → plan → implementation. Carried
    into them from piece 1 (spec §11 and the ledger): **piece 2** extends the source scan to
    `scripts/`, retires `_common.require_mode` and the unconditional `Accept(truncated=True)` in
-   `_common.load_posterior`, threads the store into the TSNPE runner, and fixes the stale
-   comments the clean break left (listed below); **piece 3** copy-on-run session config (a
+   `_common.load_posterior`, threads the store into the TSNPE runner, fixes the stale
+   comments the clean break left (listed below), and makes the resume drill loud: with
+   `CKPT_DIR` and `PRIOR` set, a run whose identity resolves to a NEW simulation directory beside
+   a complete one should say which field differs (`n_runs` here) instead of quietly regenerating;
+   **piece 3** copy-on-run session config (a
    refused stage must leave nothing on the session), `tsnpe_tab.restore_settings`; **piece 4**
    annotate (`set_note` has no GUI caller), cleanup of incomplete directories,
    `Summary.complete` for simulations means "has a manifest", the observation width guard in
@@ -117,10 +134,13 @@ directly on the local `main` branch)
 | `pytest --collect-only -q` | 2026-09-11 at `3f1a1b3`: 356 (355 run by the fast suite + the slow one; Reduction's 5 are collected with it) |
 | fast suite, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `3f1a1b3` (branch tip): 355 passed, 1 deselected, 10 min 36 s, exit 0. **On merged `main` `461d780`: 355 passed, 1 deselected**, 115 warnings, 10 min 56 s, exit 0; the real `Artifacts/` gained nothing and the user-model suite's temporary `Resources/*/sbitest` inputs were cleaned up (the conftest teardown assertion and `git status` both clean afterwards) |
 | fast suite AFTER THE CLEAN BREAK, ONE process, `pytest -m "not slow" -q` | 2026-09-11 at `19363d2` (trees deleted, scripts archived, `.gitignore` trimmed; `CLAUDE.md` and this file edited in the working tree): **355 passed, 1 deselected**, 115 warnings, 10 min 54 s, exit 0; the real `Artifacts/` still absent afterwards and the user-model suite's temporary `Resources/*/sbitest` inputs cleaned up (`git status` showed only the two doc edits) |
+| fast suite AFTER THE GPU-GATE FIXES, ONE process, `pytest -m "not slow" -q` | 2026-09-11 on the working tree that became `896e8ff`+`bb38f1a` (identical content): **358 passed, 1 deselected** (355 + the three new tests, one of them the gpu-marked CUDA inference test), 125 warnings, 11 min 13 s, exit 0; the real `Artifacts/` still absent |
+| `tests/test_gpu_paths.py` (gpu-marked; skipped without CUDA) | 2026-09-11: 1 passed on the RTX 5070 Ti, ~10 s fixture + 2 s test; RED before `bb38f1a` with the gate's exact RuntimeError (two devices in `analysis.posterior_predictive_check`) |
 | slow test `pytest tests/test_user_sbi.py -m slow -q` | 2026-09-11 at `e4e60eb` (Task 13): 1 passed, 31 min 16 s, exit 0; re-run at `3f1a1b3` after the fix wave: **1 passed**, 93 deselected, 30 min 11 s, exit 0 — the full suite is green on the branch as it stands |
 | five-part fast gate (per task; last at `830cee1`) | store suite 42–43 passed; `--ignore=test_user_sbi` 261; `test_user_sbi` non-slow 1 / 16 / 12 / 64 — all green |
 | `core/Reduction/tests` under pytest | 2026-09-10: 5 passed (collected with the fast suite since) |
-| GPU `scripts/smoke_train.py` baseline (pre-piece-1 code, `BOUNDS=Resources/Bounds/nadrowski/master.txt`, `TOBS_S=4.5`, defaults NUM_RUNS=4 RUN_SIZE=32) | 2026-09-10: CHI=1 (cell `master_spont`): prior 102 s, posterior 747 s, validate 23 s, infer 68 s, exit 0, no OOM lines. CHI=0 (cell `master_weak`): prior 101 s, posterior 226 s, validate 12 s, infer 23 s, exit 0. **Post-piece-1 run owed (item 3 above).** |
+| GPU `scripts/smoke_train.py` baseline (pre-piece-1 code, `BOUNDS=Resources/Bounds/nadrowski/master.txt`, `TOBS_S=4.5`, defaults NUM_RUNS=4 RUN_SIZE=32) | 2026-09-10: CHI=1 (cell `master_spont`): prior 102 s, posterior 747 s, validate 23 s, infer 68 s, exit 0, no OOM lines. CHI=0 (cell `master_weak`): prior 101 s, posterior 226 s, validate 12 s, infer 23 s, exit 0. |
+| **GPU gate after piece 1** (`scripts/smoke_train.py` at `bb38f1a`, same BOUNDS/TOBS_S/defaults, `CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke`, `PRISM_ARTIFACTS` pointed at scratch) | 2026-09-11: **run 1** CHI=1 `master_spont`: prior 99 s, posterior 750 s, validate 22 s, infer 59 s, exit 0 — within a few seconds of the baseline on every stage; wrote `smoke_prior`, `smoke_posterior`, `simulations/ff956b932534` (`"complete": true`, 4 batches, rows [128, 122]), an observation, a calibration and an inference. **run 2 as first recipe'd** (`PRIOR=smoke_prior NUM_RUNS=2 STAGES=prior,posterior`): exit 0 but NO resume — prior loaded in 1.4 s, then a new `simulations/294e1c3b81ec` (n_runs 2) and a recomputed Fisher, posterior 544 s (the recipe correction in item 3). **run 2 corrected** (`NUM_RUNS=4`): "Reusing the Fisher rotation stored with the training checkpoint (4/4 batches — COMPLETE, so generation will be skipped)", `[checkpoint] resuming at batch 4/4`, all stages in 3.3 s, exit 0 — the CPU→CUDA rehoming of the stored V is certified. **run 3** CHI=0 `master_weak` (own store `<scratch>/smoke_chi0`): prior 99 s, posterior 219 s, validate 12 s, infer 21 s, exit 0. No OOM lines, no OOD warnings in any leg; run 1's training masked-probe counts 121–159 of 300 (40–53 %), inside the documented ±12 pp band around 37 %. **First attempt at `19363d2`:** run 1 failed in infer (two devices in the PPC) after prior/posterior/validate passed; run 3 failed at the prior's own read-back (fingerprint) — both fixed, see item 3. Scratch stores deleted afterwards. |
 | display walkthrough (`docs/checklists/display-walkthrough.md`) | never done |
 
 ## Decisions log
@@ -147,3 +167,14 @@ directly on the local `main` branch)
   tracked-but-ignored file again. `/sbc_run.log` stays in `.gitignore`. A file changed with an
   editor is NOT staged: `git commit` without `git add` commits nothing and says so only in its
   output (the runbook's step 4 needed a second attempt because of it; always check the log).
+- **2026-09-11** — GPU gate rulings. (1) A prior's save/load round trip is the IDENTITY, bit for
+  bit: `load_mix_dist` restores the saved weights rather than letting `Categorical` re-normalise
+  them, because every fingerprint that names a prior hashes those bytes and torch's
+  re-normalisation is device-dependent at the last ulp. Every other fingerprint comparison (the
+  posterior's pickled training prior, the region, the run guards) is unchanged and now agrees
+  across devices for free. (2) A loaded observation row lives on the CPU like every conditioning
+  row; the flow's `sample()` is the one consumer that moves a copy. (3) The resume drill's two
+  runs share `NUM_RUNS` (the identity includes `n_runs`). (4) GPU-only device errors are the class
+  the smoke gate exists for: run it after every piece, before any record run; the gpu-marked
+  suite covers the inference path cheaply but is not a substitute (no checkpoint resume, no real
+  bounds/cell files).
