@@ -5,6 +5,7 @@ No input() calls live here -- all user interaction is delegated to cli.py.
 This module owns the pipeline flow: observe -> prior -> posterior -> validate.
 """
 import importlib
+import json
 import math
 import os
 import time
@@ -32,7 +33,7 @@ from .config import (
 from . import cli, config, forcing
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
-from .artifacts import LoadedPrior, LoadedPosterior, LoadedObservation, resolve_store
+from .artifacts import LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration, resolve_store
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .artifacts.provenance import file_ref as _file_ref
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
@@ -86,9 +87,9 @@ def run(cfg: SimConfig):
     posterior = lp_post.posterior
     helpers.clear_screen()
 
-    # 3. Calibration (data-free): SBC + expected coverage -- on the truncated prior for a TSNPE posterior
-    validate_calibration(cfg, posterior, inf_prior, force_prior,
-                         truncation=posterior.truncation)
+    # 3. Calibration (data-free): SBC + expected coverage -- on the posterior's own region, if it has
+    # one (guardrail 8); validate_calibration reads truncation off lp_post.posterior.truncation.
+    validate_calibration(cfg, lp_post, lp)
 
     # 4. Optional inference on a chosen observation
     mode = cli.select_inference_mode()
@@ -1285,14 +1286,16 @@ def _observation_inits(cfg: SimConfig) -> torch.Tensor:
 
 
 # ── Step 4a: Calibration diagnostics (data-free — no chosen observation) ─────
-def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | TransformedPosterior,
-                         inferred_prior: Distribution, force_prior: Distribution,
-                         *, fig_sink=None, n_cal: int | None = None,
-                         cal_n_scales: int | None = None, truncation=None) -> None:
+def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
+                         *, name: str = "", note: str = "", fig_sink=None, store=None,
+                         n_cal: int | None = None, cal_n_scales: int | None = None,
+                         num_posterior_samples: int = 1000) -> LoadedCalibration:
     """
     Data-free posterior calibration: SBC (Talts 2018, marginals) + expected coverage (TARP, Lemos
     2023). Both draw their calibration set from the PRIOR (theta_star ~ prior, x_cal simulated), so
-    this runs right after training with no chosen observation.
+    this runs right after training with no chosen observation. WRITES a calibration artifact
+    (results.json, ranks.npz, the three figures, a manifest naming the posterior and prior as
+    parents) inside ``store.create``, so a failure partway through leaves no half-artifact.
 
     ⚠ FOR A TSNPE POSTERIOR THE PRIOR IS THE TRUNCATED ONE (guardrail 8). With pt = p·1_A/P(A), NPE
     trained on pt(θ)p(x|θ) converges to pt(θ|x) = p(θ|x)·1_A(θ)/P(A|x) -- exact, but equal to p(θ|x)
@@ -1318,13 +1321,8 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
     prints; the kept fraction below is the pure region's P(A) at the rejection sampler, and the
     containment of the recorded calibration targets printed beside it is what the override left.
 
-    :param inferred_prior: the actual training prior (ND x rescale product prior) — SBC draws
-                           theta_star from it, not from the posterior.
-    :param truncation: the ``TruncationRegion`` a TSNPE posterior was trained on (``posterior.
-                       truncation``); None for an amortized posterior. When given, the calibration
-                       prior is restricted to it AFTER the rotation wrap (the region's dims index
-                       the rotated latent) and check_sbc's reference sample comes from the same
-                       restricted prior, mapped to physical through the posterior's own bijection.
+    :param posterior / prior: the LoadedPosterior and the LoadedPrior it was trained from; the region
+                     comes off the posterior.
     :param n_cal: calibration datasets for SBC/TARP; None = config.SBC_N_CAL.
     :param cal_n_scales: (t_scale, T) operating points the calibration set is spread over; None =
                      config.CAL_N_SCALES.
@@ -1332,148 +1330,196 @@ def validate_calibration(cfg: SimConfig, posterior: DirectPosterior | Transforme
                      it is a DIFFERENT measurement, not a faster one -- "SBC flat on all 13" is
                      strong for 11 of them and materially weaker for `t_scale` and anything the probe
                      design controls, and this number is why.
+    :param num_posterior_samples: draws per calibration point for SBC and TARP (1000 = the historical
+                     constant).
     """
-    _assert_prior_used_matches_posterior(posterior, inferred_prior, "SBC/TARP calibration")
-    t = cfg.t
-    device = cfg.hw.device
-    dtype = cfg.hw.dtype
-    # Posterior's actual transform (rotated if REPARAM_ROTATE) so the cal prior + theta_transform match.
-    T = (posterior.T if isinstance(posterior, TransformedPosterior)
-         else build_inferred_bijection(cfg, log_params=_log_params_for(cfg)))
+    store = resolve_store(store)
+    post, inferred_prior, force_prior = posterior.posterior, prior.prior, prior.force_prior
+    truncation = post.truncation
+    nps = int(num_posterior_samples)
+    _assert_prior_used_matches_posterior(post, inferred_prior, "SBC/TARP calibration")
+    with store.create("calibration", cfg, name=name, note=note) as w:
+        t = cfg.t
+        device = cfg.hw.device
+        dtype = cfg.hw.dtype
+        # Posterior's actual transform (rotated if REPARAM_ROTATE) so the cal prior + theta_transform match.
+        T = (post.T if isinstance(post, TransformedPosterior)
+             else build_inferred_bijection(cfg, log_params=_log_params_for(cfg)))
 
-    # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
-    val_latent_prior = _build_latent_prior_for_validation(cfg, inferred_prior)
-    # If the posterior uses a decorrelating rotation, rotate the calibration prior to match it.
-    # rotation_of is the ONE decoder of parts[0].M == V^T; reading the attribute here directly is
-    # how the GUI's deferred save came to write V transposed (defect D6).
-    _V_post = rotation_of(T)
-    if _V_post is not None:
-        val_latent_prior = RotatedLatentPrior(val_latent_prior, _V_post)
-    if truncation is not None:
-        # AFTER the rotation wrap: the region's dims index the rotated latent w = z @ V, and its basis
-        # must be the one this posterior evaluates in -- the same check a training round makes.
-        truncation.check_basis(T, dim=len(cfg.params_dict) + len(cfg.rescale_params), device=device)
-        val_latent_prior = truncate.TruncatedLatentPrior(val_latent_prior, truncation)
-        print(f"[tsnpe] calibration draws theta* from the PRIOR RESTRICTED to {truncation!r}: SBC and "
-              f"TARP certify calibration ON THE REGION -- they cannot tell whether the region cut real "
-              f"mass at x_obs.", flush=True)
-    x_cal, theta_star = analysis.gen_cal_data(
-        model=cfg.model, prior=val_latent_prior,
-        forcing_prior=force_prior,
-        t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min,
-        n_cal=SBC_N_CAL if n_cal is None else int(n_cal),
-        cal_n_scales=cal_n_scales,
-        nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
-        dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
-        t_scale_bounds=cfg.t_scale_bounds,
-        theta_transform=T,
-        state_dep_drift=cfg.state_dep_drift,
-        # _observation_inits: SBC/TARP draw theta from the PRIOR and need no ground truth, so this must
-        # work on a cell-free config (cfg.inits_tensor would raise). See build_posterior.
-        spontaneous_only=not cfg.has_forcing, chi_mode=cfg.chi_mode,
-        chi_f0=cfg.chi_f0, chi_freq_bounds=cfg.chi_freq_bounds,
-        chi_k_pad=cfg.chi_k_pad, chi_max_cycles=cfg.chi_max_cycles,
-        # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
-        # mixture of probe counts training saw. Stratifying by count is scripts/sbc_characterize.py's
-        # CHI_K_FIXED, run per stratum (a pooled SBC over a mixture of counts can be flat while
-        # each count is miscalibrated in compensating directions).
-        chi_k_fixed=None,
-        n_vars=_observation_inits(cfg).shape[-1],
-        nd_idx=cfg.tier1_args[0], k_b_cell=cfg.tier1_args[1],
-        dtype=dtype, device=device,
-    )
-    x_cal_dev = x_cal.to(device)
-    theta_star_dev = theta_star.to(device)
+        # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
+        val_latent_prior = _build_latent_prior_for_validation(cfg, inferred_prior)
+        # If the posterior uses a decorrelating rotation, rotate the calibration prior to match it.
+        # rotation_of is the ONE decoder of parts[0].M == V^T; reading the attribute here directly is
+        # how the GUI's deferred save came to write V transposed (defect D6).
+        _V_post = rotation_of(T)
+        if _V_post is not None:
+            val_latent_prior = RotatedLatentPrior(val_latent_prior, _V_post)
+        if truncation is not None:
+            # AFTER the rotation wrap: the region's dims index the rotated latent w = z @ V, and its basis
+            # must be the one this posterior evaluates in -- the same check a training round makes.
+            truncation.check_basis(T, dim=len(cfg.params_dict) + len(cfg.rescale_params), device=device)
+            val_latent_prior = truncate.TruncatedLatentPrior(val_latent_prior, truncation)
+            print(f"[tsnpe] calibration draws theta* from the PRIOR RESTRICTED to {truncation!r}: SBC and "
+                  f"TARP certify calibration ON THE REGION -- they cannot tell whether the region cut real "
+                  f"mass at x_obs.", flush=True)
+        n_cal_used = SBC_N_CAL if n_cal is None else int(n_cal)
+        x_cal, theta_star = analysis.gen_cal_data(
+            model=cfg.model, prior=val_latent_prior,
+            forcing_prior=force_prior,
+            t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min,
+            n_cal=n_cal_used,
+            cal_n_scales=cal_n_scales,
+            nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+            dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+            t_scale_bounds=cfg.t_scale_bounds,
+            theta_transform=T,
+            state_dep_drift=cfg.state_dep_drift,
+            # _observation_inits: SBC/TARP draw theta from the PRIOR and need no ground truth, so this must
+            # work on a cell-free config (cfg.inits_tensor would raise). See build_posterior.
+            spontaneous_only=not cfg.has_forcing, chi_mode=cfg.chi_mode,
+            chi_f0=cfg.chi_f0, chi_freq_bounds=cfg.chi_freq_bounds,
+            chi_k_pad=cfg.chi_k_pad, chi_max_cycles=cfg.chi_max_cycles,
+            # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
+            # mixture of probe counts training saw. Stratifying by count is scripts/sbc_characterize.py's
+            # CHI_K_FIXED, run per stratum (a pooled SBC over a mixture of counts can be flat while
+            # each count is miscalibrated in compensating directions).
+            chi_k_fixed=None,
+            n_vars=_observation_inits(cfg).shape[-1],
+            nd_idx=cfg.tier1_args[0], k_b_cell=cfg.tier1_args[1],
+            dtype=dtype, device=device,
+        )
+        x_cal_dev = x_cal.to(device)
+        theta_star_dev = theta_star.to(device)
 
-    # --- SBC (Talts 2018, marginals) via sbi.diagnostics ---
-    ranks, dap_samples = run_sbc(
-        thetas=theta_star_dev, xs=x_cal_dev, posterior=posterior,
-        num_posterior_samples=1000, reduce_fns="marginals",
-        use_batched_sampling=True, show_progress_bar=True,
-    )
-    if truncation is not None:
-        # check_sbc's reference sample must come from the SAME proposal theta* did -- the data-averaged
-        # posterior converges to that proposal, and against the full prior c2st_dap reports a
-        # miscalibration that is not one. That proposal is the restricted prior mapped through the
-        # posterior's own bijection AND THEN the per-batch t_scale override theta* went through in
-        # gen_training_data: without mirroring it, a region that constrains a t_scale-loaded
-        # direction pins the reference's t_scale while theta*'s spans the whole schedule, and
-        # c2st_dap[t_scale] reads ~1 by construction. A permutation of theta*'s own t_scale column IS
-        # the schedule's marginal, drawn independently of the other coordinates -- exactly the
-        # override's effect.
-        with torch.no_grad():
-            _z_ref = val_latent_prior.sample((theta_star.shape[0],)).to(device=device, dtype=dtype)
-            _ref = T(_z_ref).detach().cpu()
-        _i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
-        _ref[:, _i_t] = theta_star[torch.randperm(theta_star.shape[0]), _i_t].to(_ref)
-        prior_samples = _ref
-    else:
-        prior_samples = inferred_prior.sample((theta_star.shape[0],)).cpu()
-    sbc_stats = check_sbc(
-        ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
-        num_posterior_samples=1000,
-    )
-    print("SBC uniformity checks:")
-    for j, label in enumerate(cfg.inferred_labels):
-        print(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
-              f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
-              f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
-    if truncation is not None:
-        _acc = val_latent_prior.acceptance_rate
-        _rec = val_latent_prior.recorded_containment
-        print(f"[tsnpe] kept fraction: the region accepted {_acc:.3%} of prior draws at the rejection "
-              f"sampler (P(A), before the per-batch t_scale override, which re-opens any t_scale-loaded "
-              f"direction); {'' if _rec is None else f'{_rec:.3%} of the recorded calibration targets lie inside it after the override. '}"
-              f"The JOINT KL in the informativeness block below is measured against the "
-              f"FULL prior, so for this truncated posterior it is inflated by -log P(A) = "
-              f"{-math.log(max(_acc, 1e-300)):.2f} nats; its per-parameter entropy reductions are "
-              f"against the full prior too, each by its own offset.", flush=True)
+        # --- SBC (Talts 2018, marginals) via sbi.diagnostics ---
+        ranks, dap_samples = run_sbc(
+            thetas=theta_star_dev, xs=x_cal_dev, posterior=post,
+            num_posterior_samples=nps, reduce_fns="marginals",
+            use_batched_sampling=True, show_progress_bar=True,
+        )
+        if truncation is not None:
+            # check_sbc's reference sample must come from the SAME proposal theta* did -- the data-averaged
+            # posterior converges to that proposal, and against the full prior c2st_dap reports a
+            # miscalibration that is not one. That proposal is the restricted prior mapped through the
+            # posterior's own bijection AND THEN the per-batch t_scale override theta* went through in
+            # gen_training_data: without mirroring it, a region that constrains a t_scale-loaded
+            # direction pins the reference's t_scale while theta*'s spans the whole schedule, and
+            # c2st_dap[t_scale] reads ~1 by construction. A permutation of theta*'s own t_scale column IS
+            # the schedule's marginal, drawn independently of the other coordinates -- exactly the
+            # override's effect.
+            with torch.no_grad():
+                _z_ref = val_latent_prior.sample((theta_star.shape[0],)).to(device=device, dtype=dtype)
+                _ref = T(_z_ref).detach().cpu()
+            _i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
+            _ref[:, _i_t] = theta_star[torch.randperm(theta_star.shape[0]), _i_t].to(_ref)
+            prior_samples = _ref
+        else:
+            prior_samples = inferred_prior.sample((theta_star.shape[0],)).cpu()
+        sbc_stats = check_sbc(
+            ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
+            num_posterior_samples=nps,
+        )
+        print("SBC uniformity checks:")
+        for j, label in enumerate(cfg.inferred_labels):
+            print(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
+                  f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
+                  f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
+        if truncation is not None:
+            _acc = val_latent_prior.acceptance_rate
+            _rec = val_latent_prior.recorded_containment
+            print(f"[tsnpe] kept fraction: the region accepted {_acc:.3%} of prior draws at the rejection "
+                  f"sampler (P(A), before the per-batch t_scale override, which re-opens any t_scale-loaded "
+                  f"direction); {'' if _rec is None else f'{_rec:.3%} of the recorded calibration targets lie inside it after the override. '}"
+                  f"The JOINT KL in the informativeness block below is measured against the "
+                  f"FULL prior, so for this truncated posterior it is inflated by -log P(A) = "
+                  f"{-math.log(max(_acc, 1e-300)):.2f} nats; its per-parameter entropy reductions are "
+                  f"against the full prior too, each by its own offset.", flush=True)
 
-    # Both SBC figures are grids of small panels, so give each ROW enough height for its own x-label --
-    # at the previous 2.75 in/row the per-panel "posterior rank <param>" label was clipped by the row
-    # beneath it -- and add explicit vertical spacing rather than relying on tight_layout alone.
-    n_sbc_rows = math.ceil(len(cfg.inferred_labels) / 4)
-    f_cdf, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=1000, plot_type="cdf",
-                             parameter_labels=cfg.inferred_labels, figsize=(16, 3.4 * n_sbc_rows))
-    f_cdf.subplots_adjust(hspace=0.75, wspace=0.3)
-    _thin_ticks(f_cdf, max_ticks=4, rotation=0)
-    f_hist, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=1000, plot_type="hist",
-                              parameter_labels=cfg.inferred_labels, figsize=(16, 3.4 * n_sbc_rows))
-    f_hist.subplots_adjust(hspace=0.75, wspace=0.3)
-    _thin_ticks(f_hist, max_ticks=4, rotation=0)
-    if fig_sink is not None:
-        fig_sink("SBC ranks (CDF)", f_cdf)
-        fig_sink("SBC ranks (histogram)", f_hist)
-    else:
-        plt.show()   # CLI: a single blocking show for both open SBC figures (unchanged)
+        # Both SBC figures are grids of small panels, so give each ROW enough height for its own x-label --
+        # at the previous 2.75 in/row the per-panel "posterior rank <param>" label was clipped by the row
+        # beneath it -- and add explicit vertical spacing rather than relying on tight_layout alone.
+        n_sbc_rows = math.ceil(len(cfg.inferred_labels) / 4)
+        # sbc_rank_plot's own default is num_sbc_runs // 20 (Talts et al.'s recommendation) -- 0 for a
+        # calibration set smaller than 20 (a tiny test run), which numpy/matplotlib then refuse outright.
+        # Passed explicitly so it floors at 1 and is otherwise IDENTICAL to sbi's default at any
+        # n_cal >= 20 (every real run: SBC_N_CAL defaults to 2000).
+        num_bins = max(1, n_cal_used // 20)
+        f_cdf, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=nps, plot_type="cdf", num_bins=num_bins,
+                                 parameter_labels=cfg.inferred_labels, figsize=(16, 3.4 * n_sbc_rows))
+        f_cdf.subplots_adjust(hspace=0.75, wspace=0.3)
+        _thin_ticks(f_cdf, max_ticks=4, rotation=0)
+        f_hist, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=nps, plot_type="hist", num_bins=num_bins,
+                                  parameter_labels=cfg.inferred_labels, figsize=(16, 3.4 * n_sbc_rows))
+        f_hist.subplots_adjust(hspace=0.75, wspace=0.3)
+        _thin_ticks(f_hist, max_ticks=4, rotation=0)
+        sink = w.fig_sink(fig_sink)
+        sink("SBC ranks (CDF)", f_cdf)
+        sink("SBC ranks (histogram)", f_hist)
 
-    # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
-    ecp, alpha_grid = run_tarp(
-        thetas=theta_star_dev, xs=x_cal_dev, posterior=posterior,
-        num_posterior_samples=1000, use_batched_sampling=True,
-        z_score_theta=True, show_progress_bar=True,
-    )
-    atc, tarp_kspval = check_tarp(ecp.cpu(), alpha_grid.cpu())
-    print(f"TARP: ATC={atc:.3f}  KS p={tarp_kspval:.3f}")
-    plot_tarp(ecp.cpu(), alpha_grid.cpu(),
-              title=f"TARP (ATC={atc:.3f}, KS p={tarp_kspval:.3f})")
-    _emit(fig_sink, "TARP coverage", plt.gcf())
+        # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
+        ecp, alpha_grid = run_tarp(
+            thetas=theta_star_dev, xs=x_cal_dev, posterior=post,
+            num_posterior_samples=nps, use_batched_sampling=True,
+            z_score_theta=True, show_progress_bar=True,
+        )
+        atc, tarp_kspval = check_tarp(ecp.cpu(), alpha_grid.cpu())
+        print(f"TARP: ATC={atc:.3f}  KS p={tarp_kspval:.3f}")
+        plot_tarp(ecp.cpu(), alpha_grid.cpu(),
+                  title=f"TARP (ATC={atc:.3f}, KS p={tarp_kspval:.3f})")
+        sink("TARP coverage", plt.gcf())
 
-    # --- Informativeness --------------------------------------------------------------------------
-    # Everything above measures CALIBRATION, and a posterior that simply returns the prior passes all
-    # of it. This is the scalar that says whether the run learned anything, on the calibration set
-    # just simulated, so it costs nothing extra. Reported alongside rather than instead: a run wants
-    # both numbers, and the pair is what distinguishes "honest and useful" from "honest and vacuous".
+        # --- Informativeness --------------------------------------------------------------------------
+        # Everything above measures CALIBRATION, and a posterior that simply returns the prior passes all
+        # of it. This is the scalar that says whether the run learned anything, on the calibration set
+        # just simulated, so it costs nothing extra. Reported alongside rather than instead: a run wants
+        # both numbers, and the pair is what distinguishes "honest and useful" from "honest and vacuous".
+        try:
+            info = analysis.informativeness(
+                post, theta_star_dev, x_cal_dev, inferred_prior,
+                param_names=list(cfg.params_dict) + list(cfg.rescale_params))
+            print(analysis.describe_informativeness(info))
+        except Exception as _e:                      # noqa: BLE001
+            # A diagnostic must never be the thing that loses a multi-day run's other results. The
+            # sample-based decomposition in particular reaches into the posterior's transform stack.
+            warnings.warn(f"informativeness could not be computed ({type(_e).__name__}: {_e}); the "
+                          f"calibration results above are unaffected.", stacklevel=2)
+            info = None
+
+        file_manager.atomic_savez(w.payload("ranks.npz"), {
+            "ranks": ranks.detach().cpu().numpy(), "theta_star": theta_star.detach().cpu().numpy(),
+            "ecp": ecp.detach().cpu().numpy(), "alpha_grid": alpha_grid.detach().cpu().numpy()})
+        keys = list(cfg.params_dict) + list(cfg.rescale_params)
+        results = {
+            "sbc": {"per_param": {k: {"ks_p": _num(sbc_stats["ks_pvals"][j]), "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
+                                      "c2st_dap": _num(sbc_stats["c2st_dap"][j])} for j, k in enumerate(keys)}},
+            "tarp": {"atc": _num(atc), "ks_p": _num(tarp_kspval)},
+            "informativeness": None if info is None else {
+                "total_nats": _num(info["total_nats"]), "sem_nats": _num(info["sem_nats"]),
+                "per_param": None if info["per_param"] is None else [_num(v) for v in info["per_param"]],
+                "per_direction": None if info["per_direction"] is None else [_num(v) for v in info["per_direction"]],
+                "n_used": int(info["n_used"]), "n_dropped": int(info["n_dropped"]),
+                "description": analysis.describe_informativeness(info)},
+            "kept_fraction": None if truncation is None else {
+                "acceptance": _num(val_latent_prior.acceptance_rate),
+                "containment": _num(val_latent_prior.recorded_containment)},
+            "n_cal": int(n_cal_used), "cal_n_scales": None if cal_n_scales is None else int(cal_n_scales),
+            "num_posterior_samples": nps,
+        }
+        w.payload("results.json").write_text(json.dumps(results, indent=2, allow_nan=False), encoding="utf-8")
+        w.parents = {"posterior": posterior.id, "prior": prior.id}
+        w.fingerprints["gmm"] = prior.fingerprint
+        w.config.update({"n_cal": int(n_cal_used), "cal_n_scales": results["cal_n_scales"], "num_posterior_samples": nps})
+        w.body = {"results": results}
+    return store.load_calibration(w.id)
+
+
+def _num(x):
+    """A finite float, or None -- manifests refuse NaN/inf and a diagnostic may legitimately produce one."""
     try:
-        info = analysis.informativeness(
-            posterior, theta_star_dev, x_cal_dev, inferred_prior,
-            param_names=list(cfg.params_dict) + list(cfg.rescale_params))
-        print(analysis.describe_informativeness(info))
-    except Exception as _e:                      # noqa: BLE001
-        # A diagnostic must never be the thing that loses a multi-day run's other results. The
-        # sample-based decomposition in particular reaches into the posterior's transform stack.
-        warnings.warn(f"informativeness could not be computed ({type(_e).__name__}: {_e}); the "
-                      f"calibration results above are unaffected.", stacklevel=2)
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
 
 
 # ── Step 4b: Inference visualization (requires a chosen observation) ─────────

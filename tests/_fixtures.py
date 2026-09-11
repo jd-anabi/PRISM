@@ -123,3 +123,68 @@ def _failing(real):
         real(*a, **k)
         raise _WriteFailed("disk full")
     return _boom
+
+
+def _tiny_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds,
+                    state_dep_drift=False, num_iterations=25, log_mask=None,
+                    dtype=torch.float32, device=torch.device("cpu"), **_kw):
+    """A tiny stand-in for pipeline.gen_prior: the same UserPrior.construct_prior, small sizes.
+
+    ``**_kw`` IS LOAD-BEARING AND THERE ARE TWO OF THESE STUBS. A stub installed over a function must
+    tolerate arguments added to that function later, or the suite dies ~40 tests in with a TypeError
+    raised deep inside build_prior -- which names only the stub it hit first, so fixing that one
+    reveals the second on the next run. Adding n_max/step upstream cost an hour this way on
+    2026-08-27. Deliberately NOT a hand-mirrored signature: that never checked anything (it failed as
+    a TypeError, not an assertion), and gen_prior's real signature is asserted directly by
+    test_n_max_and_step_are_no_longer_hidden_inside_gen_prior.
+    """
+    from core import registry
+    from core.SBI.Priors.user_prior import UserPrior
+    p = UserPrior(registry.get(model), dtype, device)
+    return p.construct_prior(t, len(prior_bounds), 32, 8, segs, prior_bounds,
+                             t_global_scale=2, num_iterations=2, n_max=120, steady=False,
+                             state_dep_drift=state_dep_drift, log_mask=log_mask)
+
+
+def build_tiny_run(store):
+    """A REAL SBITEST prior and posterior at tiny size, inside ``store`` (make it the default first).
+    Mirrors test_user_sbi.test_no_forcing_user_model_full_sbi_pipeline's setup -- and its teardown:
+    read that test's finally block and do the same in ``teardown``."""
+    from types import SimpleNamespace
+    from core import cli, config, orchestrator, registry
+    from core.Helpers import model_store
+    name = "SBITEST"
+    doc = {"schema_version": 1, "name": name,
+           "variables": [{"name": "x", "drift": "-k*x", "D": "d0", "init": 0.5, "forcing": None}],
+           "params": {"k": 1.0, "d0": 0.05}, "rescale": {"x_scale": 10.0, "t_scale": 0.01}}
+    model_store.save_user_model(doc)
+    registry.load_user_models()
+    cfg = cli.make_sim_config(name, registry.get(name).labels, registry.state_dep_drift(name),
+                              str(config.BOUNDS_PATH / name.lower() / "default.txt"))
+    cli.load_and_validate_gt(cfg, str(config.CELL_PATH / name.lower() / "default.txt"))
+    cfg.hw = config.cpu_device()
+    cfg.hw.batch_size = 8
+    cfg.T_obs = 1.0
+    saved = (orchestrator.pipeline.gen_prior, orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL,
+             orchestrator.TRAINING_CHECKPOINT_EVERY)
+    orchestrator.pipeline.gen_prior = _tiny_gen_prior
+    orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL, orchestrator.TRAINING_CHECKPOINT_EVERY = 2, 60, 0
+    sink = lambda title, fig: None                                   # noqa: E731
+    prior = orchestrator.build_prior(cfg, None, True, fig_sink=sink, name="tiny_prior")
+    posterior = orchestrator.build_posterior(cfg, prior, None, True, fig_sink=sink, name="tiny_post",
+                                             hidden_features=8, num_transforms=1, stop_after_epochs=1)
+
+    def other_prior():
+        return orchestrator.build_prior(cfg, None, True, fig_sink=sink)   # another fit, another GMM
+
+    def teardown():
+        (orchestrator.pipeline.gen_prior, orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL,
+         orchestrator.TRAINING_CHECKPOINT_EVERY) = saved
+        # + whatever test_no_forcing_user_model_full_sbi_pipeline's finally does to unregister SBITEST
+        try:
+            model_store.delete_user_model(name)
+        except Exception:                                        # noqa: BLE001 -- best-effort cleanup
+            pass
+        registry.unregister(name)
+    return SimpleNamespace(cfg=cfg, prior=prior, posterior=posterior, store=store, sink=sink,
+                           other_prior=other_prior, teardown=teardown)

@@ -35,3 +35,17 @@ def store(tmp_path):
     from core.artifacts import ArtifactStore, use_store
     with use_store(ArtifactStore(tmp_path / "Artifacts")) as s:
         yield s
+
+
+@pytest.fixture(scope="module")
+def tiny_run(tmp_path_factory):
+    """A real prior + posterior for the SBITEST user model at tiny size, in a store of its own that is
+    the process default for the module. Minutes on CPU, built once per module."""
+    from core.artifacts import ArtifactStore, use_store
+    from tests._fixtures import build_tiny_run
+    with use_store(ArtifactStore(tmp_path_factory.mktemp("tiny"))) as s:
+        run = build_tiny_run(s)
+        try:
+            yield run
+        finally:
+            run.teardown()

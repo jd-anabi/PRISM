@@ -32,9 +32,9 @@ from core import config, registry, orchestrator, cli, forcing    # noqa: E402
 from core.Helpers import model_store                             # noqa: E402
 from core.SBI import chi as chi_mod, pipeline as pipeline_mod    # noqa: E402
 from core.Solvers import sdeint as _sdeint_mod              # noqa: E402
-from core.SBI.Priors.user_prior import UserPrior                 # noqa: E402
 from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH    # noqa: E402
 from core.config import VALID_MODELS, VALID_LABELS               # noqa: E402
+from tests._fixtures import _tiny_gen_prior                      # noqa: E402
 
 _N_GROUP_G = 11
 _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
@@ -49,25 +49,6 @@ _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
 # stay green while testing nothing. Tests that want checkpointing pass an explicit `checkpoint=` dict
 # with a tmpdir, which is unaffected by this.
 orchestrator.TRAINING_CHECKPOINT_EVERY = 0
-
-
-def _tiny_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds,
-                    state_dep_drift=False, num_iterations=25, log_mask=None,
-                    dtype=torch.float32, device=torch.device("cpu"), **_kw):
-    """A tiny stand-in for pipeline.gen_prior: the same UserPrior.construct_prior, small sizes.
-
-    ``**_kw`` IS LOAD-BEARING AND THERE ARE TWO OF THESE STUBS. A stub installed over a function must
-    tolerate arguments added to that function later, or the suite dies ~40 tests in with a TypeError
-    raised deep inside build_prior -- which names only the stub it hit first, so fixing that one
-    reveals the second on the next run. Adding n_max/step upstream cost an hour this way on
-    2026-08-27. Deliberately NOT a hand-mirrored signature: that never checked anything (it failed as
-    a TypeError, not an assertion), and gen_prior's real signature is asserted directly by
-    test_n_max_and_step_are_no_longer_hidden_inside_gen_prior.
-    """
-    p = UserPrior(registry.get(model), dtype, device)
-    return p.construct_prior(t, len(prior_bounds), 32, 8, segs, prior_bounds,
-                             t_global_scale=2, num_iterations=2, n_max=120, steady=False,
-                             state_dep_drift=state_dep_drift, log_mask=log_mask)
 
 
 def test_no_forcing_user_model_full_sbi_pipeline():
@@ -111,7 +92,7 @@ def test_no_forcing_user_model_full_sbi_pipeline():
 
         orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True,
                                          fig_sink=sink)
-        orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
+        orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
 
         # passive experimental path: a single unforced recording, no drive / force units
         obs_stats_e, obs_data_e, t_dim_e = orchestrator.build_experiment_obs_spontaneous(
@@ -189,7 +170,7 @@ def test_train_and_validate_without_a_loaded_cell():
         inferred_prior, force_prior = lp.prior, lp.force_prior
         lp_post = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=sink)
         posterior = lp_post.posterior
-        orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
+        orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL = saved_runs, saved_ncal
@@ -450,7 +431,7 @@ def test_chi_mode_full_sbi_pipeline():
 
         orchestrator.infer_and_visualize(cfg, posterior, obs_stats, x_dim, t_dim, show_truth=True,
                                          fig_sink=sink)
-        orchestrator.validate_calibration(cfg, posterior, inferred_prior, force_prior, fig_sink=sink)
+        orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink)
 
         # experimental chi path: 1 passive + K forced recordings (GT passive trace as stand-ins).
         forced = [x_dim[0].clone() for _ in range(config.CHI_N_FREQS)]
@@ -2529,6 +2510,7 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
     """
     import contextlib
     import matplotlib.pyplot as plt
+    from types import SimpleNamespace
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
 
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
@@ -2596,10 +2578,10 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         for n, fn in stubs.items():
             setattr(orchestrator, n, fn)
 
+        lp_post = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T, truncation=region), id="stub_post")
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            orchestrator.validate_calibration(cfg, post, inferred_prior, force_prior, fig_sink=sink,
-                                              n_cal=10, cal_n_scales=1, truncation=region)
+            orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         assert isinstance(cap["prior"], _tr.TruncatedLatentPrior) and cap["prior"].region is region
         z_star = T.inv(cap["thetas"].cpu()).double()
         assert z_star.shape[0] > 0 and bool(region.contains(z_star).all()), \
@@ -2626,9 +2608,9 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
                                           [float(w[:, 0].quantile(0.75)), float(w[:, 1].quantile(0.75))],
                                           n_latent=P, V=V, probe=_tc.bijection_probe(T_rot, P))
         cap.clear()
-        orchestrator.validate_calibration(cfg, _rp.TransformedPosterior(_Lat(), T_rot), inferred_prior,
-                                          force_prior, fig_sink=sink, n_cal=10, cal_n_scales=1,
-                                          truncation=region_rot)
+        lp_post_rot = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T_rot, truncation=region_rot),
+                                      id="stub_post_rot")
+        orchestrator.validate_calibration(cfg, lp_post_rot, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         w_star = T_rot.inv(cap["thetas"].cpu()).double()
         w_ref = T_rot.inv(cap["prior_samples"].cpu()).double()
         lo1, hi1 = float(region_rot.lo[1]), float(region_rot.hi[1])
@@ -2638,10 +2620,10 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
             "the reference sample did not mirror the t_scale override"
 
         cap.clear()
+        lp_post_plain = SimpleNamespace(posterior=post, id="stub_post_plain")
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            orchestrator.validate_calibration(cfg, post, inferred_prior, force_prior, fig_sink=sink,
-                                              n_cal=10, cal_n_scales=1)
+            orchestrator.validate_calibration(cfg, lp_post_plain, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         assert type(cap["prior"]).__name__ == "ProductPrior", type(cap["prior"])
         assert cap["prior_samples"].shape[0] == cap["thetas"].shape[0]
         assert "kept fraction" not in buf.getvalue()

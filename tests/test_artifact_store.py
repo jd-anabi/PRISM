@@ -636,3 +636,25 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
         orchestrator.build_experiment_observation(
             cfg, RecordingSet(spont=str(tmp_path / "nope.npy"), forced=((str(forced), None),), T_obs_s=T_obs_s,
                               forcing_params_si=si), fig_sink=lambda t, f: None)
+
+
+def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(tiny_run):
+    import numpy as np
+    from core import orchestrator
+    r = tiny_run
+    cal = orchestrator.validate_calibration(r.cfg, r.posterior, r.prior, fig_sink=r.sink, n_cal=8, cal_n_scales=2,
+                                            num_posterior_samples=40, name="cal")
+    m, res = cal.manifest, cal.results
+    keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
+    assert m.parents == {"posterior": r.posterior.id, "prior": r.prior.id} and m.config["n_cal"] == 8
+    assert list(res["sbc"]["per_param"]) == keys
+    assert set(res["sbc"]["per_param"][keys[0]]) == {"ks_p", "c2st_ranks", "c2st_dap"}
+    assert set(res["tarp"]) == {"atc", "ks_p"} and res["num_posterior_samples"] == 40 and res["kept_fraction"] is None
+    assert res["informativeness"] is None or "total_nats" in res["informativeness"]
+    assert set(m.payloads) == {"ranks.npz", "results.json"}
+    assert sorted(m.figures) == ["figures/sbc_ranks_cdf.png", "figures/sbc_ranks_histogram.png", "figures/tarp_coverage.png"]
+    assert np.load(cal.path / "ranks.npz")["ranks"].shape[0] == 8
+    assert json.loads((cal.path / "results.json").read_text(encoding="utf-8"))["tarp"] == res["tarp"]
+    assert r.store.load_calibration(cal.id).results == res
+    with pytest.raises(ValueError, match="not the one this posterior was trained with"):
+        orchestrator.validate_calibration(r.cfg, r.posterior, r.other_prior(), fig_sink=r.sink, n_cal=4, cal_n_scales=1)

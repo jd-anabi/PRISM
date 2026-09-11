@@ -11,6 +11,7 @@ survive an interrupted run, which a writer's remove-on-exception would delete.
 from __future__ import annotations
 
 import contextlib
+import json
 import re
 import shutil
 import time
@@ -587,6 +588,24 @@ class ArtifactStore:
         return LoadedObservation("observation", m.id, m.name, m, sub, x_obs=x_obs, obs_data=payload["obs_data"],
                                  t_dim=payload["t_dim"], digest=body["x_obs_digest"], mode=body["mode"],
                                  width=int(cond["width"]))
+
+    def load_calibration(self, ref: str) -> LoadedCalibration:
+        sub, m = self._find("calibration", ref)
+        if m is None:
+            raise StoreError(f"no complete calibration named or id'd {ref!r}")
+        # From results.json, NOT m.body["results"]: to_json_text writes the manifest with
+        # sort_keys=True (so the file diffs deterministically), which -- being recursive -- would
+        # alphabetize the nested per-param dict's keys on every load and silently decouple them from
+        # cfg.params_dict's order. results.json (json.dumps with no sort_keys) round-trips as written.
+        results = json.loads((sub / "results.json").read_text(encoding="utf-8"))
+        return LoadedCalibration("calibration", m.id, m.name, m, sub, results=results)
+
+    def load_inference(self, ref: str) -> LoadedInference:
+        sub, m = self._find("inference", ref)
+        if m is None:
+            raise StoreError(f"no complete inference named or id'd {ref!r}")
+        return LoadedInference("inference", m.id, m.name, m, sub, results=dict(m.body["results"]),
+                               samples_path=sub / "samples.pt")
 
 
 def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None, hw=None,

@@ -350,8 +350,9 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
 def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session():
     """⚠ GUARDRAIL 8's GUI half. A non-amortized artifact is loaded through the Posterior tab, which
     opts in (``Accept(truncated=True)``) and installs the LoadedPosterior on the session; Validate
-    reads the region off ``session.posterior.posterior.truncation`` so calibration draws from the
-    truncated prior; an amortized LoadedPosterior clears it."""
+    passes that LoadedPosterior straight through to validate_calibration, which itself reads the
+    region off ``posterior.posterior.truncation`` so calibration draws from the truncated prior; an
+    amortized LoadedPosterior clears it."""
     from core.artifacts import Accept
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
@@ -369,9 +370,9 @@ def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session():
     assert inf.session.posterior.posterior.x_obs_digest == "feedfacefeedface"
 
     captured = {}
-    vp.dispatch = lambda fn, *a, **k: captured.update(kwargs=k)
+    vp.dispatch = lambda fn, *a, **k: captured.update(args=a, kwargs=k)
     vp._validate()
-    assert captured["kwargs"].get("truncation") is region,         "Validate ran on the FULL prior for a truncated posterior"
+    assert captured["args"][1] is inf.session.posterior and captured["args"][1].posterior.truncation is region,         "Validate did not pass the posterior whose region restricts calibration"
 
     load = {}
     pp.dispatch = lambda fn, *a, **k: load.update(args=a, kwargs=k)
