@@ -914,15 +914,11 @@ def test_a_round_records_parent_posterior_and_observation_as_parents(tiny_run):
     # CHECKPOINTED every batch, so this round writes a REAL simulation cache: without it the kind is
     # empty for the whole module and the integrity test at the end of this file has no simulation row
     # to walk (its manifest, its prior parent, its completion).
-    saved = orchestrator.TRAINING_CHECKPOINT_EVERY
-    orchestrator.TRAINING_CHECKPOINT_EVERY = 1
-    try:
-        child = orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2,
-                                             hidden_features=8, num_transforms=1, stop_after_epochs=1,
-                                             truncation=region, observation=obs,
-                                             parent_posterior=r.posterior, name="round1")
-    finally:
-        orchestrator.TRAINING_CHECKPOINT_EVERY = saved
+    child = orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2,
+                                         hidden_features=8, num_transforms=1, stop_after_epochs=1,
+                                         truncation=region, observation=obs,
+                                         parent_posterior=r.posterior, name="round1",
+                                         checkpoint_every=1)
     m = child.manifest
     assert m.body["amortized"] is False and child.posterior.truncation is not None
     assert m.parents["parent_posterior"] == r.posterior.id and m.parents["observation"] == obs.id

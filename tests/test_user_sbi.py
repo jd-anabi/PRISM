@@ -2279,7 +2279,6 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     saved_gen_prior = orchestrator.pipeline.gen_prior
     saved_fisher = orchestrator.decorrelate.build_latent_fisher_rotation
     saved_train_nn = pipeline_mod.train_nn
-    saved_every = orchestrator.TRAINING_CHECKPOINT_EVERY
     try:
         cfg = cli.make_sim_config("NADROWSKI", labels, True,
                                   str(config.BOUNDS_PATH / "nadrowski" / "master.txt"),
@@ -2307,12 +2306,14 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         region = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
                                       probe=probe, x_obs_digest="deadbeefdeadbeef")
 
-        def _round(reg, observation=None):
+        def _round(reg, observation=None, checkpoint_every=None):
             """The TransformedPosterior (not the LoadedPosterior wrapper): every assertion below reads
-            .truncation / .x_obs_digest / .T, which live on it."""
+            .truncation / .x_obs_digest / .T, which live on it. ``checkpoint_every`` is None (off, the
+            session default) except for the (iii) checkpoint leg, which passes 1 explicitly."""
             return orchestrator.build_posterior(cfg, lp, None, True,
                                                 fig_sink=sink, num_runs=2, run_size_cap=8,
-                                                truncation=reg, observation=observation).posterior
+                                                truncation=reg, observation=observation,
+                                                checkpoint_every=checkpoint_every).posterior
 
         # (i) + (ii): the parent's basis is reused, the Fisher stub never fires, the plan's prior is
         # THIS region over a latent rotated by exactly Q, and the posterior carries the region
@@ -2407,7 +2408,6 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         # that IS under this round's identity but stores another rotation is refused, and one that
         # records this region under the region's own V resumes.
         import shutil
-        orchestrator.TRAINING_CHECKPOINT_EVERY = 1
         amortized = orchestrator.training_identity(cfg, inferred_prior, 8, 2)
         own = orchestrator.training_identity(cfg, inferred_prior, 8, 2, truncation=region)
         d_am, d_own = _tc.resolve_dir(amortized), _tc.resolve_dir(own)
@@ -2425,29 +2425,28 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
 
         _write(d_am, amortized, Q)                        # the parent's complete-looking checkpoint
         seen.clear()
-        _round(region)                                    # ...is not resumed: the round routes to its own slot
+        _round(region, checkpoint_every=1)                # ...is not resumed: the round routes to its own slot
         assert seen["prior"].region is region
         assert seen["checkpoint"]["dir"] == d_own and seen["checkpoint"]["dir"] != d_am
         assert seen["checkpoint"]["identity"]["truncation"] == region.identity_fields()
         _write(d_own, own, Q2)                            # this round's slot, another rotation
         try:
-            _round(region)
+            _round(region, checkpoint_every=1)
             raise AssertionError("a checkpoint stored under another rotation was resumed")
         except ValueError as e:
             assert "rotation" in str(e) and "checkpoint" in str(e).lower(), e
         _write(d_own, own, Q)                             # this round's slot, this region's V: ACCEPTED
         seen.clear()                                      # (train_nn is stubbed, so no rows are adopted here;
-        _round(region)                                    #  this leg pins the absence of both refusals)
+        _round(region, checkpoint_every=1)                #  this leg pins the absence of both refusals)
         assert seen["checkpoint"]["dir"] == d_own and _tc.peek(d_own)["batches_done"] == 1
         # and a header under this round's slot that records ANOTHER region is refused on identity
         other = _tr.TruncationRegion([0], [-2.0], [2.0], n_latent=P, V=Q, probe=probe)
         _write(d_own, dict(own, truncation=other.identity_fields()), Q)
         try:
-            _round(region)
+            _round(region, checkpoint_every=1)
             raise AssertionError("a checkpoint recording another region was resumed")
         except ValueError as e:
             assert "a different region" in str(e), e
-        orchestrator.TRAINING_CHECKPOINT_EVERY = 0
 
         # (iv) the config's rotation flag must agree with the region, in both directions
         cfg.reparam_rotate = False
@@ -2497,7 +2496,6 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.decorrelate.build_latent_fisher_rotation = saved_fisher
         pipeline_mod.train_nn = saved_train_nn
-        orchestrator.TRAINING_CHECKPOINT_EVERY = saved_every
 
 
 def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
