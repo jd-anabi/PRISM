@@ -874,11 +874,15 @@ def build_posterior(
         if _st and _st.get("batches_done"):
             ckpt_resumed = training_checkpoint.read_header(ckpt_dir)
         else:
-            # D7, plus the hoisted resume='require'. HERE because it is after the taken-name refusal
-            # (:700) and before the Fisher (:995-997), before any simulation, and before the cache's
-            # own create() (pipeline.py:1414). The truncation-branch refusals (:894-929) come LATER;
-            # they are unreachable with checkpointing off, so nothing depends on their order relative
-            # to this block. The pipeline's copy
+            # D7, plus the hoisted resume='require'. HERE: after the taken-name refusal (:700) and
+            # before the truncation-branch refusals (:898-933) and the Fisher rotation (:999) -- before
+            # any simulation, and before the cache's own create() (pipeline.py:1414), so every refusal
+            # still lands before any spend. One consequence of the order: a caller who consents with
+            # new_run=True can still be refused moments later by an unrelated truncation check (a
+            # region with no observation digest, a rotation mismatch) -- harmless, since nothing has
+            # been simulated yet. That refusal's own pin
+            # (test_a_round_whose_region_names_no_observation_is_refused_before_the_spend) runs with
+            # checkpointing off, so it never reaches this block. The pipeline's copy
             # of the require refusal fires only after a freshly computed rotation, which is the most
             # expensive thing this run does before it simulates; it stays there as a second line.
             near = training_checkpoint.near_miss_siblings(ident, store.kind_dir("simulation"))
