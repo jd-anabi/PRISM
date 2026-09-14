@@ -48,3 +48,18 @@ summary in `docs/STATE.md` item 4.
 | A7 | TSNPE round; load it; refuse another cell | TSNPE tab: the "Observation" picker lists A6's observation; Batches = 2, "Run TSNPE round" (log `[tsnpe] region from observation <id>: …`). Then load the round's posterior from the Posterior tab picker. Then Infer on `master_weak.txt` (or any other cell) with it | a new `posteriors/_unnamed__<id>/` whose manifest reads `"amortized": false`, carries a `"truncation"` block naming the observation digest, and has FOUR parents: prior, simulation, parent_posterior, observation. Loading it needs no dialog (the tab accepts truncated posteriors) and prints "[tsnpe] loaded a NON-AMORTIZED posterior: valid only near the observation with …". Infer on the other cell is refused by a dialog that ends "… or pass Accept(other_observation=True) to run anyway -- the inference will record it." and nothing new appears under `inferences/` | 2026-09-11 | pass (the user's run on the real screen; reported "everything passes") |
 | A8 | Cancel during training | Posterior tab: "+  (from scratch)", Batches = 4 (a NEW digest — the identity includes the batch count), "Train / Load posterior", press "Cancel" while the simulation batches run | the button reads "Cancelling…", the log "Cancelling — will stop at the next checkpoint (up to ~1 min during training).", a clean stop within about a minute, controls unlock, no error dialog; on disk NO new `posteriors/` directory, and the new `simulations/<digest>/manifest.json` reads `"complete": false` with `"batches_done"` below 4; re-pick the prior (the budget lines refresh on a config or prior change): the checkpoint line reads "Resumes an existing checkpoint: <n>/4 batches already done." | 2026-09-11 | pass (the user's run on the real screen; reported "everything passes") |
 | A9 | A torn manifest is not offered | With the app open, open any `manifest.json` under `Artifacts/priors/` or `Artifacts/posteriors/` in an editor, delete its second half, save; press the picker's refresh button (tooltip "Rescan the artifact store") | the artifact disappears from the picker, no crash, no dialog; restore the file (or delete the directory) and refresh again: it is back (or gone). Repeat once on the Posterior tab's picker | 2026-09-11 | pass (the user's run on the real screen; reported "everything passes") |
+
+## Piece-2 GUI checks (one flow underneath; design spec §9.4)
+
+The rows the piece-2 commits create, each added by the commit that creates the behaviour; the user
+runs them once on a real display at the end of the piece, the way the A-rows were run. Two notes on
+what they supersede, because rows A1-A9 are NOT edited:
+
+- **B1 supersedes A7's "Loading it needs no dialog"**: loading a stored non-amortized posterior now
+  asks first. A round's own result still installs with no dialog (B2).
+- **B3 supersedes A7's quoted refusal string**: simulated inference on another observation is now
+  refused UP FRONT, before anything is simulated, with the wording in design §2.3.
+
+| # | surface | do | expect | date | result |
+|---|---|---|---|---|---|
+| B4 | Near-miss dialog (D7) | With checkpointing on, train at Batches 2 to completion. Then train at Batches 3 with the same prior: Cancel, then "Start a new run anyway". Then train at Batches 2. | The "differs only in n_runs" dialog with both values. Cancel dispatches nothing. Confirming trains in a new digest directory. Batches 2: no dialog, and "Resumes a COMPLETE checkpoint". | | |

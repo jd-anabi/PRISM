@@ -366,6 +366,70 @@ def training_identity(cfg: SimConfig, prior, run_size: int, n_runs: int, truncat
     return SimulationIdentity.from_cfg(cfg, prior, run_size, n_runs, truncation=truncation).to_dict()
 
 
+def _training_run_size(cfg: SimConfig, size_cap: int) -> int:
+    """Rows per training batch: the hardware batch, capped. A CEILING, never a replacement.
+
+    THE one resolution, because build_posterior and fresh_run_near_misses must agree to the row: the
+    run size is part of the simulation identity, so a detector that resolved it differently would look
+    in a directory the run never touches. The Posterior tab did exactly that -- `cap or _hw_batch(cfg)`
+    against the stage's `min(hw, cap)` -- and with a cap above the hardware batch it asked about the
+    wrong cache. Pure; the announcements stay in build_posterior.
+    """
+    run_size = cfg.hw.batch_size
+    return min(size_cap, run_size) if size_cap else run_size
+
+
+def fresh_run_near_misses(cfg: SimConfig, prior, *, num_runs=None, run_size_cap=None, truncation=None,
+                          checkpoint_every=None, store=None) -> list:
+    """training_checkpoint.near_miss_siblings for the identity build_posterior WOULD use. [] when
+    checkpointing resolves to off, when the run's own cache already holds batches (a resume), or when
+    no committed sibling is one field away. Pure; fails open for a stub prior (identity.py:30-32).
+
+    ONE DETECTOR, shared by the training stage and the Posterior tab's dialog, so the question the
+    user is asked and the refusal that follows can never disagree about which directory this run will
+    touch. Its answer is advisory for the tab and binding inside the stage.
+    """
+    ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
+    if not ck_every:
+        return []                            # nothing is read or written, so nothing is near
+    store = resolve_store(store)
+    n_runs = TRAINING_NUM_RUNS if num_runs is None else int(num_runs)
+    size_cap = TRAINING_RUN_SIZE if run_size_cap is None else int(run_size_cap)
+    ident = training_identity(cfg, prior, _training_run_size(cfg, size_cap), n_runs,
+                              truncation=truncation)
+    root = store.kind_dir("simulation")
+    if (training_checkpoint.peek(training_checkpoint.resolve_dir(ident, root)) or {}).get("batches_done"):
+        return []                            # this IS a resume; there is nothing to warn about
+    return training_checkpoint.near_miss_siblings(ident, root)
+
+
+def _near_miss_lines(ckpt_dir, near) -> str:
+    """The three richest near misses, one line each: what they hold, and the single field that differs."""
+    out = []
+    for r in near[:3]:
+        st = training_checkpoint.peek(ckpt_dir.parent / r["name"]) or {}
+        out.append(f"  {r['name']}: {r['batches']:,} batches "
+                   f"({'complete' if st.get('complete') else 'partial'}) -- differs only in "
+                   f"{r['field']}: this run {r['mine']!r}, that cache {r['theirs']!r}")
+    return "\n".join(out)
+
+
+def _near_miss_message(ckpt_dir, near) -> str:
+    """D7's refusal. The spend it prevents is days of simulation, so it names the field, BOTH values,
+    and the two ways out -- continue that cache, or say explicitly that this is a new run."""
+    return (f"This run would start a NEW simulation cache at {ckpt_dir} from zero, but a committed "
+            f"cache ONE setting away exists:\n" + _near_miss_lines(ckpt_dir, near) +
+            f"\nIf you meant to continue that cache, set {near[0]['field']} back to "
+            f"{near[0]['theirs']!r}. To start a new cache anyway, pass new_run=True "
+            f"(GUI: \"Start a new run anyway\"; command line: --new-run).")
+
+
+def _no_cache_message(ckpt_dir, near) -> str:
+    msg = f"resume='require' but there is no resumable cache at {ckpt_dir}."
+    if near:
+        msg += "\nA committed cache ONE setting away exists:\n" + _near_miss_lines(ckpt_dir, near)
+    return msg
+
 
 def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
                 *, name: str = "", note: str = "", fig_sink=None, store=None,
@@ -550,7 +614,7 @@ def build_posterior(
     hidden_features: int | None = None, num_transforms: int | None = None,
     learning_rate: float | None = None, stop_after_epochs: int | None = None,
     max_num_epochs: int | None = None, checkpoint_every: int | None = None,
-    resume: str = "auto",
+    resume: str = "auto", new_run: bool = False,
     fisher_m: int | None = None, fisher_dz: float | None = None,
     fisher_points: int | None = None,
 ) -> LoadedPosterior:
@@ -591,6 +655,8 @@ def build_posterior(
     :param resume: "auto" (resume this run's own cache when it holds batches), "require" (refuse if
                      there is none) or "never" (refuse if there is one). Recorded as an OUTCOME in
                      the manifest (``training.resumed_from_batch``), not as a setting.
+    :param new_run: consent (D7). Silences the near-miss refusal below and NOTHING else -- it never
+                     forces a fresh start over a resumable cache of this run's own.
     :param fisher_m: ensemble per latent perturbation for the rotation; None =
                      config.REPARAM_FISHER_M.
     :param fisher_dz: latent central-difference step; None = config.REPARAM_FISHER_DZ.
@@ -769,11 +835,10 @@ def build_posterior(
     # Announced when it binds: a cap that changes the shape of a multi-day run is not allowed to be
     # silent, and the printed row count is also the check that TRAINING_NUM_RUNS was moved to match.
     # Resolved HERE, above the rotation, because the checkpoint's identity includes it.
-    run_size = cfg.hw.batch_size
-    if size_cap and size_cap < run_size:
-        print(f"Training batch capped at {size_cap} (hardware default {run_size}) — "
+    run_size = _training_run_size(cfg, size_cap)
+    if size_cap and size_cap < cfg.hw.batch_size:
+        print(f"Training batch capped at {size_cap} (hardware default {cfg.hw.batch_size}) — "
               f"{n_runs} batches x {size_cap} = {n_runs * size_cap:,} training rows.")
-        run_size = size_cap
     if n_runs != TRAINING_NUM_RUNS:
         # Announced for the same reason the cap is: a batch count that changes the shape (and the
         # (t_scale, T) diversity) of a multi-day run is not allowed to be silent.
@@ -808,6 +873,19 @@ def build_posterior(
         # don't re-simulate for days" path into a hard failure. Any committed batch pins V.
         if _st and _st.get("batches_done"):
             ckpt_resumed = training_checkpoint.read_header(ckpt_dir)
+        else:
+            # D7, plus the hoisted resume='require'. HERE because it is after the taken-name refusal
+            # (:700) and before the Fisher (:995-997), before any simulation, and before the cache's
+            # own create() (pipeline.py:1414). The truncation-branch refusals (:894-929) come LATER;
+            # they are unreachable with checkpointing off, so nothing depends on their order relative
+            # to this block. The pipeline's copy
+            # of the require refusal fires only after a freshly computed rotation, which is the most
+            # expensive thing this run does before it simulates; it stays there as a second line.
+            near = training_checkpoint.near_miss_siblings(ident, store.kind_dir("simulation"))
+            if resume == "require":
+                raise ValueError(_no_cache_message(ckpt_dir, near))
+            if near and not new_run:
+                raise ValueError(_near_miss_message(ckpt_dir, near))
 
     rotate = cfg.reparam_rotate
     # Only the freshly-computed branch below knows the eigenvalues; a resumed checkpoint carries V but

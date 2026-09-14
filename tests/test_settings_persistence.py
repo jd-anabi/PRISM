@@ -594,7 +594,11 @@ def test_a_one_field_near_miss_blocks_a_fresh_run_until_confirmed():
         assert tc.near_miss_siblings(sib, root) == [] or             all(r["name"] != d.name for r in tc.near_miss_siblings(sib, root)),             "a checkpoint must never be a near miss of itself"
 
 def test_the_confirmation_is_reached_and_can_refuse():
-    """The dialog must actually gate the dispatch, and Cancel must mean cancel."""
+    """The dialog must actually gate the dispatch, Cancel must mean cancel, and the answer must travel
+    to the stage as `new_run=` -- a consent the panel kept to itself would be re-refused inside the
+    worker. The panel also no longer computes the identity itself: ONE detector,
+    orchestrator.fresh_run_near_misses, so the dialog and the stage cannot disagree about which
+    directory the run will touch."""
     from core.gui.panels import inference_tabs as it
 
     src = _code_only(it.PosteriorPanel._build_posterior)
@@ -603,9 +607,15 @@ def test_the_confirmation_is_reached_and_can_refuse():
     i_dispatch = src.find("self.dispatch(")
     assert i_confirm < i_dispatch, "the confirmation must gate the dispatch, not follow it"
     assert "return" in src[i_confirm:i_dispatch], "a refusal must return instead of training"
+    assert "new_run=" in src, "the dialog's answer must reach build_posterior as an argument"
 
     # Fails open rather than blocking a run it cannot assess.
     body = _code_only(it.PosteriorPanel._confirm_fresh_run)
-    assert body.count("return True") >= 3, (
+    assert body.count("True, False") >= 3, (
         "the check must fail OPEN -- no prior, an unreadable identity, and no near miss must all "
         "proceed; a warning that can block a run is worse than no warning")
+    assert "fresh_run_near_misses" in body, "the panel must use the stage's own detector"
+    for banned in ("near_miss_siblings", "resolve_dir", "peek"):
+        assert banned not in body, (
+            f"_confirm_fresh_run reimplements '{banned}' -- the GUI's own identity derivation is the "
+            f"defect D7 removed (it resolved run_size as `cap or hw`, not `min(hw, cap)`)")

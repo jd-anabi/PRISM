@@ -40,6 +40,7 @@ from core.gui.widgets.log_pane import LogPane                     # noqa: E402
 from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
 import contextlib                                                  # noqa: E402
+import pytest                                                      # noqa: E402
 
 def _app():
     return QApplication.instance() or QApplication([])
@@ -827,3 +828,62 @@ def test_simulated_inference_runner_emits_the_ground_truth_figure():
         orchestrator.infer_and_visualize = real_iv
 
     assert seen == ["Ground-truth trace"], seen
+
+
+def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
+    """The dialog gates the dispatch and its answer TRAVELS: consent is a keyword on the stage call,
+    not a flag the panel keeps to itself. The stage asks the same question again inside the worker --
+    this is only the early, cheap version of the refusal -- so a dialog that answered "yes" and then
+    dispatched without new_run would be refused seconds later for no reason the user can see.
+
+    And it FAILS OPEN in both the shapes that can happen in the wild: no near miss, and a detector
+    that raises. A warning that can block a run is worse than no warning."""
+    from core import orchestrator
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+
+    _app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub())
+    pp = inf.posterior_panel
+    pp.post_picker.selected = lambda: ("", True)              # "(from scratch)" -> a NEW run
+    pp.num_runs.setText("2")
+    pp.run_size_cap.setText("8")
+    sent = {}
+    pp.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    row = [{"name": "abcdef012345", "batches": 3989, "field": "n_runs", "mine": 2, "theirs": 3}]
+
+    # one near miss, answered yes. monkeypatch, never a bare rebind: an assertion that fails below
+    # would otherwise leave the stub installed on core.orchestrator for the rest of this
+    # single-process gate, silently disabling D7 for every later test in the run.
+    monkeypatch.setattr(orchestrator, "fresh_run_near_misses", lambda *a, **k: list(row))
+    pp._ask_new_run = lambda near, n_runs: True
+    pp._build_posterior()
+    assert sent["fn"] is orchestrator.build_posterior and sent["kwargs"]["new_run"] is True
+    assert sent["kwargs"]["num_runs"] == 2 and sent["kwargs"]["run_size_cap"] == 8
+
+    # answered no: nothing is dispatched at all
+    sent.clear()
+    pp._ask_new_run = lambda near, n_runs: False
+    pp._build_posterior()
+    assert sent == {}, "Cancel must not start the run"
+
+    # no near miss: dispatched without consent, and nothing is asked
+    sent.clear()
+    monkeypatch.setattr(orchestrator, "fresh_run_near_misses", lambda *a, **k: [])
+    pp._ask_new_run = lambda near, n_runs: pytest.fail("a run with no near miss must not be questioned")
+    pp._build_posterior()
+    assert sent["kwargs"]["new_run"] is False
+
+    # a detector that raises: the run proceeds and the log says so
+    sent.clear()
+
+    def _boom(*a, **k):
+        raise RuntimeError("unreadable header")
+
+    monkeypatch.setattr(orchestrator, "fresh_run_near_misses", _boom)
+    lines = []
+    pp.log_pane.append_line = lambda text, kind="": lines.append((kind, text))
+    pp._build_posterior()
+    assert sent["kwargs"]["new_run"] is False
+    assert any(k == "warning" and "unreadable header" in t for k, t in lines), lines

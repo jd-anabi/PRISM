@@ -1104,3 +1104,65 @@ def test_make_sim_config_takes_the_device_as_an_argument():
     assert cfg.hw is hw and cfg.hw.device.type == "cpu"
     default = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"), bounds)
     assert default.hw.device.type == config.detect_device().device.type
+
+
+def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
+    """D7. A run that would start a NEW simulation cache while a committed one sits ONE identity field
+    away is refused BEFORE the Fisher, before any simulation, and before the cache's own create().
+
+    This is the 2026-09-11 GPU incident made loud: run 2 was given NUM_RUNS=2 against run 1's 4, keyed
+    a new directory, recomputed the rotation and re-simulated -- silently, exit 0. The pipeline's own
+    `resume='require'` refusal (pipeline.py:1367-1368) fires only AFTER a freshly computed Fisher,
+    which is the most expensive thing a run does before it simulates, so it is hoisted here and the
+    pipeline keeps its copy as a second line.
+    """
+    from core import orchestrator
+    from core.artifacts.identity import SimulationIdentity
+    from core.SBI import training_checkpoint as tc
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = True
+    cfg.hw.batch_size = 4
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+
+    # A committed sibling that differs in EXACTLY one field: 3 batches where this run asks for 2.
+    sib = SimulationIdentity.from_cfg(cfg, lp, 4, 3).to_dict()
+    d = tc.resolve_dir(sib, store.kind_dir("simulation"))
+    (d / "shards").mkdir(parents=True)
+    torch.save({"format": tc.CHECKPOINT_FORMAT, "identity": sib, "V": None, "probe": None}, d / "header.pt")
+    torch.save({"batches_done": 2, "complete": False, "rng": None}, d / "state.pt")
+
+    def _fisher(*a, **k):
+        raise AssertionError("Fisher reached")
+
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", _fisher)
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: None)
+
+    # (a) refused, naming the field and both values
+    with pytest.raises(ValueError) as e:
+        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4, checkpoint_every=1)
+    msg = str(e.value)
+    assert "n_runs" in msg and "3" in msg and "2" in msg and "new_run" in msg, msg
+    assert d.name in msg, "the refusal must name the cache it would abandon"
+
+    # (b) consent overrides it, and the run proceeds as far as the Fisher
+    with pytest.raises(AssertionError, match="Fisher reached"):
+        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
+                                     checkpoint_every=1, new_run=True)
+
+    # (c) resume='require' refuses before the Fisher too, and says why
+    with pytest.raises(ValueError, match="no resumable cache"):
+        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
+                                     checkpoint_every=1, resume="require")
+
+    # (d) with checkpointing off there is nothing to be near: no read, no write, no question
+    with pytest.raises(AssertionError, match="Fisher reached"):
+        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4, checkpoint_every=0)
+
+    # (e) THE DETECTOR RESOLVES run_size EXACTLY AS THE STAGE DOES: min(hw, cap). The Posterior tab
+    # used `cap or _hw_batch(cfg)`, so with a cap ABOVE the hardware batch it asked about a directory
+    # the run never touches -- two fields would differ and the near miss would vanish.
+    rows = orchestrator.fresh_run_near_misses(cfg, lp, num_runs=2, run_size_cap=4096,
+                                              checkpoint_every=1)
+    assert [r["field"] for r in rows] == ["n_runs"] and rows[0]["batches"] == 2
+    assert orchestrator.fresh_run_near_misses(cfg, lp, num_runs=2, run_size_cap=4,
+                                              checkpoint_every=0) == [], "off means no question"

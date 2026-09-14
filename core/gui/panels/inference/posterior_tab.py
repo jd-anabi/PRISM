@@ -2,14 +2,13 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLineEdit, QMessageBox, Q
 
 from core import config, orchestrator
 from core.artifacts import Accept, default_store
-from core.SBI import training_checkpoint
 
 from ... import icons, settings
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
-from .base import _StagePanel, _TrainingBudgetMixin, _hw_batch
+from .base import _StagePanel, _TrainingBudgetMixin
 from .help_text import HELP
 
 
@@ -116,8 +115,11 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         if cap < 0:
             self.log_pane.append_line("Max rows per batch cannot be negative (0 = auto).", "warning")
             return
-        if is_new and not self._confirm_fresh_run(cfg, cap or _hw_batch(cfg), n_runs):
-            return
+        new_run = False
+        if is_new:
+            go, new_run = self._confirm_fresh_run(cfg, n_runs, cap)
+            if not go:
+                return
         self.session.reset_downstream("posterior")
         self._screen.refresh_gates()
         # Passed, never written to config: orchestrator does `from .config import TRAINING_NUM_RUNS`,
@@ -127,6 +129,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
                       entry, is_new,
                       num_runs=n_runs, run_size_cap=cap, accept=Accept(truncated=True),
+                      new_run=new_run,
                       hidden_features=max(1, self.flow_hidden.value()),
                       num_transforms=max(1, self.flow_transforms.value()),
                       learning_rate=self.flow_lr.value() or config.TRAINING_LEARNING_RATE,
@@ -136,39 +139,43 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
                       fisher_points=max(1, self.fisher_points.value()),
                       provide_fig_sink=True, on_result=self._on_posterior)
 
-    def _confirm_fresh_run(self, cfg, width: int, n_runs: int) -> bool:
-        """Ask before starting from zero when a checkpoint is ONE FIELD away. True = go ahead.
+    def _confirm_fresh_run(self, cfg, n_runs: int, cap: int) -> tuple:
+        """Ask before starting from zero when a committed cache is ONE FIELD away.
+
+        Returns ``(go, new_run)``: whether to dispatch at all, and the consent to hand
+        build_posterior, which refuses the same near miss again inside the worker. The stage is the
+        one that must be sure; this dialog is the early, cheap version of that refusal, and the two
+        share ONE detector so they cannot disagree about which directory the run will touch.
 
         THE STATUS LINE WAS NOT ENOUGH, and this is the evidence. `_budget_checkpoint` already says
         "these settings match no checkpoint, so this starts a NEW run" and names the differing field
         -- but it is a passive label, on a tab the user has usually scrolled past by the time they
         press Train, and it has now failed to prevent three restarts: 884 batches lost outright on
         2026-08-27 (a prior rebuilt rather than loaded, and never saved, so unrecoverable), and a
-        3989-batch checkpoint nearly abandoned twice on 2026-08-28 because a prior was selected in
-        the picker but never loaded. A modal costs one click on the rare occasion it fires.
+        3989-batch checkpoint nearly abandoned twice on 2026-08-28.
 
-        DELIBERATELY NARROW. It asks only when a committed sibling differs in EXACTLY ONE field --
-        the signature of an accident rather than of a different experiment. A genuinely new run,
-        with no near-miss, is never interrupted.
+        DELIBERATELY NARROW. The detector reports only a committed sibling that differs in EXACTLY
+        ONE field -- the signature of an accident rather than of a different experiment.
 
-        FAILS OPEN. A status line must never block a run: if the identity cannot be computed (no
-        prior yet, an unreadable header) this returns True and the run proceeds, exactly as before.
+        FAILS OPEN. No prior, a detector that raises, and no near miss all return ``(True, False)``
+        and the run proceeds, exactly as before.
         """
-        if not config.TRAINING_CHECKPOINT_EVERY or self.session.inf_prior is None:
-            return True
+        if self.session.inf_prior is None:
+            return True, False
         try:
-            ident = orchestrator.training_identity(cfg, self.session.inf_prior, width, n_runs)
-            if (training_checkpoint.peek(training_checkpoint.resolve_dir(ident)) or {}).get("batches_done"):
-                return True                  # this IS a resume; nothing to warn about
-            near = training_checkpoint.near_miss_siblings(ident)
+            near = orchestrator.fresh_run_near_misses(cfg, self.session.inf_prior,
+                                                      num_runs=n_runs, run_size_cap=cap)
         except Exception as e:               # noqa: BLE001 -- never block a run over a warning
             self.log_pane.append_line(
                 f"Could not check for resumable checkpoints ({type(e).__name__}: {e}); "
-                f"continuing.", "warning")
-            return True
+                f"continuing -- the training stage checks again before it simulates.", "warning")
+            return True, False
         if not near:
-            return True
+            return True, False
+        return (True, True) if self._ask_new_run(near, n_runs) else (False, False)
 
+    def _ask_new_run(self, near, n_runs: int) -> bool:
+        """The modal itself, split out so a test can answer it without a click. True = start anyway."""
         lines = [f"  • {r['name']}: {r['batches']:,} batches — differs only in {r['field']}\n"
                  f"      this run: {str(r['mine'])[:60]}\n"
                  f"      that one: {str(r['theirs'])[:60]}" for r in near[:3]]
