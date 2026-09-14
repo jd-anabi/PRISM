@@ -475,9 +475,8 @@ def thin_ticks(fig, max_ticks: int = 3, rotation: int = 30) -> None:
 
 
 def emit_figure(fig_sink, title: str, fig) -> None:
-    """Display a figure: hand it to fig_sink (a GUI canvas) when given, else fall back to the
-    legacy blocking plt.show() (CLI). Keeps orchestrator.run's CLI behaviour unchanged when
-    fig_sink is None."""
+    """Display a figure: hand it to fig_sink (a GUI canvas) when given, else fall back to a blocking
+    plt.show(). Every front end passes a sink; None is the bare-library fallback."""
     if fig_sink is not None:
         fig_sink(title, fig)
     else:

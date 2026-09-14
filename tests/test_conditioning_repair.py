@@ -925,27 +925,37 @@ def test_reparam_is_the_only_reader_of_the_rotation_matrix():
     assert readers == ["core/SBI/reparam.py"], f"parts[0].M is read outside reparam: {readers}"
 
 
-def test_the_cli_run_loads_a_truncated_artifact_and_calibrates_on_its_region():
-    """The CLI half of guardrail 8, pinned at the source: orchestrator.run must opt in to a
-    non-amortized artifact with ``Accept(truncated=True)``. Dropping it would refuse the load
-    entirely (store.load_posterior gates on it), which is loud -- but SILENTLY calibrating a TSNPE
-    posterior on the full prior is not, so this stays pinned at the source rather than left to be
-    caught downstream. The region itself now rides on the LoadedPosterior's ``.posterior.truncation``
-    (interim until Task 9 threads the wrapper all the way through validate_calibration), so this no
-    longer pins the validate_calibration keyword's text.
+def test_the_prompt_cli_is_retired():
+    """D1: nothing under core/ asks a question at a terminal any more.
+
+    A surviving input() is not cosmetic. On a GUI worker thread it blocks forever with no prompt
+    anyone can answer -- which is exactly what run_fdt's two ``None`` defaults meant, and why the
+    FDT panel had to remember to pass explicit booleans. Making them REQUIRED moves that from a
+    convention a caller can forget to a TypeError at the call site. The scan walks core/ because
+    that is where every front end now lives -- the GUI, and from T11 the command-line tool.
     """
     import ast
     import inspect
-    import textwrap
-    from core import orchestrator
+    from pathlib import Path as _P
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(orchestrator.run)))
-    calls = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            calls.setdefault(node.func.id, []).append({kw.arg: ast.unparse(kw.value) for kw in node.keywords})
-    assert any(kw.get("accept") == "Accept(truncated=True)" for kw in calls.get("build_posterior", [])), \
-        "orchestrator.run does not opt in to non-amortized artifacts"
+    repo = _P(__file__).resolve().parents[1]
+    offenders = []
+    for py in sorted((repo / "core").rglob("*.py")):
+        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "input":
+                offenders.append(f"{py.relative_to(repo)}:{node.lineno}")
+    assert not offenders, "input() survives the prompt CLI's retirement:\n" + "\n".join(offenders)
+
+    from core.FDT.fdt_pipeline import run_fdt
+    params = inspect.signature(run_fdt).parameters
+    for name in ("skip_sanity", "confirm_production"):
+        p = params[name]
+        assert p.kind is inspect.Parameter.KEYWORD_ONLY, f"run_fdt's {name} is {p.kind}"
+        assert p.default is inspect.Parameter.empty, f"run_fdt's {name} still defaults to {p.default!r}"
+
+    from core import orchestrator
+    assert not hasattr(orchestrator, "run"), "orchestrator.run is still there"
+    assert not (repo / "core" / "app.py").exists(), "core/app.py is still there"
 
 
 def test_a_resumed_checkpoint_with_another_rotation_is_refused():

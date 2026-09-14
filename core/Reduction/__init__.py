@@ -8,7 +8,7 @@ bifurcation. No simulation, no SBI, no GPU — numpy/scipy on float64/complex128
 Public API:
   - reduce_nwk_to_hopf(...): single-point reduction returning a ReductionRecord
   - sweep_f_max(cfg, grid): vector of analytical predictions over an f_max sweep
-  - run_reduction_map(cfg): CLI entry point (Part A + Part B)
+  - run_reduction_map(cfg): the Reduction panel's entry point, no command-line subcommand (Part A + B)
 """
 from .reduce import reduce_nwk_to_hopf, ReductionRecord, ReductionFailure
 from .sweep import sweep_f_max, run_reduction_map

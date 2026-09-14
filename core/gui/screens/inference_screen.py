@@ -109,7 +109,7 @@ class InferenceScreen(QWidget):
         has_cfg = s.cfg is not None
         # NOT force_prior: build_forcing_prior returns None for any NO-FORCING model (spontaneous /
         # BP / no-forcing user models / a chi-mode config), so requiring it made Validate permanently
-        # unreachable for exactly the models the CLI validates fine. The inferred prior is the one
+        # unreachable for exactly the models validate_calibration handles fine. The inferred prior is the one
         # validate_calibration actually consumes; force_prior is passed through and may legitimately be None.
         can_validate = s.posterior is not None and s.inf_prior is not None
         can_infer = s.posterior is not None                        # infer_and_visualize needs no prior

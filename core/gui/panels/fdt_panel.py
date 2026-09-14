@@ -1,11 +1,11 @@
 """FDT mode: the fluctuation-dissipation-theorem analysis.
 
-Mirrors cli.build_fdt_config (cli.make_fdt_config) with widgets, then runs FDT.fdt_pipeline.run_fdt on a
+Mirrors cli.make_fdt_config with widgets, then runs FDT.fdt_pipeline.run_fdt on a
 worker.
 
-The two checkboxes are load-bearing. run_fdt's `skip_sanity` / `confirm_production` default to None,
-which means "ask via input()" -- that is the CLI path (FDT.fdt_pipeline.run_fdt). A GUI MUST pass
-explicit booleans; leaving them None would block the worker forever on an input() nobody can answer.
+The two checkboxes are load-bearing. run_fdt's `skip_sanity` / `confirm_production` are REQUIRED
+keyword booleans (D1 deleted the prompts they used to fall back to), and these boxes are where a user
+answers them -- a worker thread has no terminal to be asked at.
 """
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPushButton
 
@@ -53,8 +53,8 @@ def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production):
 class FdtPanel(BasePanel):
     """Drives a single-cell FDT analysis (``FDT.fdt_pipeline.run_fdt``).
 
-    Passes explicit booleans for run_fdt's ``skip_sanity``/``confirm_production``: their None default
-    means "ask via input()", which on a worker thread would block forever with no prompt to answer.
+    Passes run_fdt's required ``skip_sanity``/``confirm_production`` booleans from the two checkboxes:
+    the stage no longer prompts, so this panel is the only place those answers come from.
 
     Persists (group "fdt"): model, cell picker, and the campaign knobs. Restore order matters --
     model FIRST, then the pickers, or the model's refresh() wipes the restored picker.

@@ -431,11 +431,12 @@ def test_the_solver_meter_reads_the_step_counter_not_a_rendered_bar():
     prog.end()
 
 def test_the_solver_bar_paints_a_rate_even_when_the_call_is_under_a_second():
-    """The CLI half of the same regression, pinned at the tqdm layer.
+    """The command-line half of the same regression, pinned at the tqdm layer.
 
-    The GUI no longer reads this bar, but `python -m core` has nothing else: with mininterval=1.0 a
-    graphed 100k-step call (~0.7s) rendered its opening "?it/s" frame and never a rate -- measured 123
-    chars of stderr containing none. Drives the REAL settings from sdeint._bar_kwargs, and checks the
+    The GUI no longer reads this bar, but the command-line tool (`python -m core <subcommand>`) has
+    nothing else: with mininterval=1.0 a graphed 100k-step call (~0.7s) rendered its opening "?it/s"
+    frame and never a rate -- measured 123 chars of stderr containing none. Drives the REAL settings
+    from sdeint._bar_kwargs, and checks the
     counterfactual so the test cannot go vacuous if someone puts mininterval back.
     """
     import re

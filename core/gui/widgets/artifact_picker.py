@@ -1,5 +1,6 @@
-"""A combo box populated from ``file_manager.list_dir(base, keep=...)`` -- the GUI equivalent of the
-CLI file pickers (cells, bounds, priors, posteriors). Optionally offers a '(from scratch)' sentinel."""
+"""A combo box populated from ``file_manager.list_dir(base, keep=...)``: the GUI's INPUT-file picker
+(cells, bounds). Optionally offers a '(from scratch)' sentinel. StorePicker below is its
+generated-kind twin, which reads the artifact store instead of a directory."""
 import contextlib
 import io
 from pathlib import Path

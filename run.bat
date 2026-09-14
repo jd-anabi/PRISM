@@ -5,7 +5,7 @@ REM torch+MKL ship two OpenMP runtimes on Windows/conda; without this the first 
 set KMP_DUPLICATE_LIB_OK=TRUE
 
 echo Starting GUI...
-REM Run the desktop GUI (PySide6). Use `python -m core` instead for the interactive CLI.
+REM Run the desktop GUI (PySide6). `python -m core <subcommand>` is the command-line tool.
 python -m core.gui
 
 REM Return to the original directory

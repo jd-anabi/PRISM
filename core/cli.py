@@ -1,8 +1,10 @@
 """
-Interactive CLI prompts for the SBI pipeline.
+Prompt-free configuration builders, shared by PRISM's two front ends.
 
-This is the ONLY module that calls input() / print() for user interaction.
-To build a GUI, replace this module with one that provides the same function signatures.
+The interactive prompts this module was named for went with the prompt CLI (piece 2, D1). What is
+left is pure: cell / bounds / units parsing, the unit conversion factors, and the ``make_*_config``
+builders that the GUI (``core/gui``) and the command-line tool (``core/tool``) each call with values
+they obtained their own way. The module keeps the name ``core.cli``.
 """
 from collections import OrderedDict
 from pathlib import Path
@@ -13,99 +15,21 @@ from core import config          # live-read config.CHI_MODE / CHI_N_FREQS (avoi
 from .config import (
     SimConfig, FDTConfig, detect_device, cpu_device,
     DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S,
-    VALID_MODELS, VALID_LABELS,
-    CELL_PATH, BOUNDS_PATH, UNITS_PATH,
+    BOUNDS_PATH, UNITS_PATH,
 )
-from .Helpers import helpers, file_manager
+from .Helpers import file_manager
 
 
 class UnitParseError(ValueError):
     """Raised when a cell/units file names a unit pint can't resolve.
 
     Previously the parsers printed an error and called exit(), which killed the whole process --
-    fatal for a GUI. They now raise this instead; the CLI boundary (core/__main__) catches it and
-    exits cleanly, while the GUI surfaces it as an error dialog.
+    fatal for a GUI. They now raise this instead; each front end catches it -- the command-line tool
+    turns it into a refusal (exit 1), and the GUI surfaces it as an error dialog.
     """
 
 
-def _prompt_index(n_options: int, prompt: str, *, allow_zero: bool = False):
-    """Prompt for a 1-based menu choice and return the 0-based index, re-asking until it is valid.
-
-    Every list prompt in this module used to be a bare ``int(input(...)) - 1`` straight into a list
-    subscript. Three ways that went wrong, all silent or unhelpful:
-      * ``0``  -> index -1 -> the LAST item, with no error. Several prompts explicitly invite "0",
-        so this was reachable by following the instructions. A fat-fingered digit ran an entire
-        multi-hour pipeline against the wrong cell.
-      * a negative -> counted from the end, same class of silent mis-selection.
-      * out of range -> a bare IndexError, which the callers' ``except ValueError`` did not catch.
-
-    :param allow_zero: when True, ``0`` is a legal answer and returns None (the "from scratch"
-                       option some prompts offer) rather than selecting anything.
-    """
-    lo = 0 if allow_zero else 1
-    while True:
-        raw = input(prompt).strip()
-        try:
-            choice = int(raw)
-        except ValueError:
-            print(f"  '{raw}' is not a number. Enter a number between {lo} and {n_options}.")
-            continue
-        if allow_zero and choice == 0:
-            return None
-        if lo <= choice <= n_options:
-            return choice - 1
-        print(f"  {choice} is out of range. Enter a number between {lo} and {n_options}.")
-
-
-# ── Model & cell file selection ──────────────────────────────────────────────
-def select_model() -> tuple[str, list[str], bool]:
-    """
-    Prompt the user to choose a model.
-
-    :return: (model_name, labels, state_dep_drift)
-    """
-    helpers.clear_screen()
-    print("Available models:")
-    for idx, model in enumerate(VALID_MODELS):
-        print(f"  ({idx + 1}) {model}")
-    idx = _prompt_index(len(VALID_MODELS), "\nWhich model would you like to run? Select a number: ")
-    model = VALID_MODELS[idx]
-    labels = VALID_LABELS[idx]
-    from core import registry
-    if registry.is_user_model(model):
-        raise ValueError(
-            f"'{model}' is a user-defined model. User-defined models are Simulate-only; "
-            "use the GUI's Simulate section.")
-    state_dep_drift = registry.state_dep_drift(model)
-    # (The old `if model not in VALID_MODELS` check here was dead: model was just read OUT of
-    # VALID_MODELS, so it could never fail. Range-checking the INPUT is what was actually needed.)
-    helpers.clear_screen()
-    return model, labels, state_dep_drift
-
-def select_cell_file() -> str:
-    """
-    Prompt the user to choose a cell configuration file.
-
-    :return: Full path to the chosen cell file.
-    """
-    print("Available cell files:")
-    cell_files = file_manager.list_dir(str(CELL_PATH))
-    idx = _prompt_index(len(cell_files), "\nFile number for model parameters: ")
-    helpers.clear_screen()
-    return str(CELL_PATH / cell_files[idx])
-
-def select_bounds_file() -> str:
-    """
-    Prompt the user to choose a parameter-BOUNDS file (the SBI startup input).
-
-    :return: Full path to the chosen bounds file.
-    """
-    print("Available bounds files:")
-    bounds_files = file_manager.list_dir(str(BOUNDS_PATH))
-    idx = _prompt_index(len(bounds_files), "\nFile number for parameter BOUNDS: ")
-    helpers.clear_screen()
-    return str(BOUNDS_PATH / bounds_files[idx])
-
+# ── Per-model input files ────────────────────────────────────────────────────
 def resolve_units_file(model: str) -> str:
     """
     Auto-resolve the per-model units file (no prompt): Resources/Units/<model>/units.txt.
@@ -117,93 +41,8 @@ def resolve_units_file(model: str) -> str:
         raise FileNotFoundError(f"Missing units file for model '{model}': expected {path}")
     return str(path)
 
-# ── Time / segmentation parameters ──────────────────────────────────────────
-def get_time_params() -> float:
-    """
-    Prompt for observation duration.
-
-    :return: T_obs_seconds
-    """
-    T_obs_s = float(input("Observation duration T_obs (seconds): "))
-    helpers.clear_screen()
-    return T_obs_s
-
-# ── Prior / posterior selection ──────────────────────────────────────────────
-def _pick_artifact(kind: str, what: str, prompt: str, allow_new: bool) -> tuple:
-    """Interim until piece 2 retires this CLI: the store's complete artifacts of one kind, numbered;
-    returns (id_or_None, build_new)."""
-    from core.artifacts import default_store
-    rows = [s for s in default_store().list(kind) if s.complete]
-    if not rows and allow_new:
-        helpers.clear_screen()
-        return None, True
-    if allow_new:
-        print(f"  0) build/train a new {what}")
-    for i, s in enumerate(rows, 1):
-        print(f"  {i}) {s.label}   [{s.id}, {s.created}]")
-    if not rows and not allow_new:
-        raise SystemExit(f"No {what} artifacts exist yet.")
-    # allow_zero: '0' is the documented "make from scratch" answer here. _prompt_index returns None
-    # for it and a 0-based index (choice - 1) otherwise -- rows is 0-indexed the same way.
-    idx = _prompt_index(len(rows), prompt, allow_zero=allow_new)
-    return (None, True) if idx is None else (rows[idx].id, False)
-
-
-def select_or_build_prior() -> tuple[str | None, bool]:
-    """
-    Ask the user whether to load an existing prior or build a new one.
-
-    :return: (id_or_None, build_new). If build_new is True, id is None.
-    """
-    print("Available priors: ")
-    id_, build_new = _pick_artifact(
-        "prior", "prior",
-        "\nWhich prior would you like to use? "
-        "Select a file number ('0' if you want to make from scratch): ",
-        allow_new=True)
-    helpers.clear_screen()
-    return id_, build_new
-
-def select_or_train_posterior() -> tuple[str | None, bool]:
-    """
-    Ask the user whether to load an existing posterior or train a new one.
-
-    :return: (id_or_None, train_new). If train_new is True, id is None.
-    """
-    print("Available posteriors: ")
-    id_, train_new = _pick_artifact(
-        "posterior", "posterior",
-        "\nWhich posterior would you like to use? "
-        "Select a file number (or '0' if you would like to make it from scratch): ",
-        allow_new=True)
-    helpers.clear_screen()
-    return id_, train_new
-
-def prompt_save_name(artifact_type: str) -> str:
-    """
-    Ask the user for a filename when saving a prior or posterior.
-
-    :param artifact_type: Human-readable label, e.g. "prior" or "posterior".
-    :return: The name entered by the user (without extension).
-    """
-    return input(f"Enter a name for the {artifact_type} file: ")
-
 
 # ── Post-training inference ─────────────────────────────────────────────────
-def select_inference_mode() -> str:
-    """
-    Ask whether / how to infer after training + calibration.
-
-    :return: "simulated" (a cell-file ground-truth point), "experimental" (real recordings), or "none".
-    """
-    print("\nInfer on a dataset now?")
-    print("  (1) Simulated dataset  (a cell file's ground-truth point)")
-    print("  (2) Experimental data  (real recordings)")
-    print("  (3) Neither            (stop after calibration)")
-    choice = input("\nSelect a number: ").strip()
-    helpers.clear_screen()
-    return {"1": "simulated", "2": "experimental", "3": "none"}.get(choice, "none")
-
 def validate_gt_file(cfg: SimConfig, cell_path: str) -> list:
     """Non-mutating dry run of ``load_and_validate_gt``: the problems that would make it raise.
 
@@ -252,100 +91,6 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
 # Display-only SI unit hints, indexed by forcing param name (CLI prompts + the GUI's drive fields).
 # DERIVED from config.FORCING_SI_UNITS, the authoritative conversion table, so the two cannot drift.
 INFERENCE_PROMPT_UNITS = config.FORCING_DISPLAY_UNITS
-
-def get_inference_inputs(force_param_names: list[str]) -> tuple[str, str, float, dict]:
-    """
-    Prompt for the inputs needed to run inference on real experimental data.
-
-    All inputs are in SI units; conversion to cell file units happens in the
-    caller via SimConfig.get_unit_conversion_factor().
-
-    :param force_param_names: Forcing parameter names from the cell file (e.g.
-                              ["amp", "freq", "phase", "offset"] for Nadrowski/BP, or
-                              ["amp", "amp_y", "freq", "phase", "offset"] for Hopf).
-    :return: (spont_path, forced_path, T_obs_seconds, forcing_params_si). The forcing dict
-             has one entry per name in force_param_names.
-    """
-    spont_path = input("Path to SPONTANEOUS (unforced) recording (.csv or .npy): ").strip()
-    forced_path = input("Path to FORCED (driven) recording (.csv or .npy): ").strip()
-    T_obs_s = float(input("Observation duration T_obs (seconds): "))
-    print("\nForcing parameters (in SI units):")
-    forcing_params_si: dict = {}
-    for name in force_param_names:
-        unit = INFERENCE_PROMPT_UNITS.get(name, "")
-        unit_str = f" ({unit})" if unit else ""
-        forcing_params_si[name] = float(input(f"  {name}{unit_str}: "))
-    helpers.clear_screen()
-    return spont_path, forced_path, T_obs_s, forcing_params_si
-
-
-def get_inference_inputs_chi() -> tuple[str, list[str], float, float]:
-    """Prompt for the chi(omega) experimental inputs: one PASSIVE recording, then K single-tone FORCED
-    recordings (the k-th driven at the k-th relative frequency multiplier of the spontaneous peak
-    Omega_0), the observation duration, and the physical drive amplitude used. K = config.CHI_N_FREQS.
-
-    chi = response/drive is drive-amplitude-independent in the linear regime, so any linear F0 works;
-    it is reported only so the lock-in divides by it (see orchestrator.build_experiment_obs_chi).
-
-    :return: (spont_path, forced_paths (length K), T_obs_seconds, F0_si_newtons).
-    """
-    k = config.CHI_N_FREQS
-    spont_path = input("Path to PASSIVE (unforced) recording (.csv or .npy): ").strip()
-    print(f"\nPaths to the {k} FORCED recordings, in INCREASING drive-frequency order")
-    print("(recording i was driven at multiplier i of the spontaneous peak Omega_0):")
-    forced_paths = [input(f"  forced recording {i + 1}/{k}: ").strip() for i in range(k)]
-    T_obs_s = float(input("\nObservation duration T_obs (seconds): "))
-    F0_si = float(input("Drive amplitude F0 (N, the physical force used for every recording): "))
-    helpers.clear_screen()
-    return spont_path, forced_paths, T_obs_s, F0_si
-
-
-def get_inference_inputs_spontaneous() -> tuple[str, float]:
-    """Prompt for a PASSIVE (no-drive) experimental recording + observation duration. Used by the
-    no-forcing inference path; there is no forced file and no forcing SI params.
-
-    :return: (path, T_obs_seconds).
-    """
-    path = input("Path to PASSIVE (unforced) recording (.csv or .npy): ").strip()
-    T_obs_s = float(input("Observation duration T_obs (seconds): "))
-    helpers.clear_screen()
-    return path, T_obs_s
-
-# ── Mode selection (top-level) ──────────────────────────────────────────────
-def select_mode() -> str:
-    """
-    Top-level prompt: which analysis mode to run.
-
-    :return: "FDT", "SBI", "REDUCTION", or "CROSSVAL".
-    """
-    helpers.clear_screen()
-    print("Available analysis modes:")
-    print("  (1) FDT analysis")
-    print("  (2) SBI parameter fitting")
-    print("  (3) NWK→Hopf reduction map")
-    print("  (4) FDT parameter-sweep study (S and T_a/T)")
-    choice_str = input("\nWhich mode? Select a number: ").strip()
-    helpers.clear_screen()
-    if choice_str == "1":
-        return "FDT"
-    if choice_str == "2":
-        return "SBI"
-    if choice_str == "3":
-        return "REDUCTION"
-    if choice_str == "4":
-        return "CROSSVAL"
-    raise ValueError(f"Invalid mode selection: {choice_str}.")
-
-
-# ── Small input helpers ─────────────────────────────────────────────────────
-def _prompt_int(label: str, default: int) -> int:
-    ans = input(f"{label} [{default}]: ").strip()
-    return int(ans) if ans else default
-
-def _prompt_float(label: str, default: float) -> float:
-    ans = input(f"{label} [{default}]: ").strip()
-    return float(ans) if ans else default
-
 
 # ── Cell-file parsing (shared by FDT/REDUCTION/CROSSVAL modes + the scripts) ─────────────────
 def _merge_vals_bounds(vals: dict, bounds: OrderedDict,
@@ -495,7 +240,7 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
     """
     Build a bounds-only SimConfig (no prompts) from a chosen model + bounds file. Ground-truth values,
     initial conditions, and T_obs are filled later (only for simulated inference). Shared by
-    build_sim_config (CLI) and the GUI's SBI config form.
+    the command-line tool (core/tool) and the GUI's SBI config form.
 
     The chi(omega) knobs are explicit keyword args so a GUI can set them PER CONFIG; each falls back to
     the live ``config.CHI_*`` module value when None (the CLI passes nothing and keeps its behaviour).
@@ -559,25 +304,12 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
     )
 
 
-# ── Top-level config builder (SBI mode) ─────────────────────────────────────
-def build_sim_config() -> SimConfig:
-    """
-    Interactive setup for SBI parameter fitting. Prompts ONLY for a model and a parameter-BOUNDS file;
-    the units file is auto-resolved per model. No cell file and no T_obs at startup — ground-truth
-    values, initial conditions, and T_obs are supplied later, only if the user chooses to infer on a
-    simulated observation (see orchestrator.run + cli.load_and_validate_gt).
-    """
-    model, labels, state_dep_drift = select_model()
-    bounds_file = select_bounds_file()
-    return make_sim_config(model, labels, state_dep_drift, bounds_file)
-
-
 # ── Pure config core (FDT) ───────────────────────────────────────────────────
 def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
                     n_freqs: int = 60, ensemble_M: int = 256, freqs_per_batch: int = 1,
                     F0: float = 0.05) -> FDTConfig:
-    """Build an FDTConfig (no prompts) from a model + cell file + FDT knobs. Shared by build_fdt_config
-    (CLI) and the GUI's FDT form."""
+    """Build an FDTConfig (no prompts) from a model + cell file + FDT knobs. Shared by the command-line
+    tool (core/tool) and the GUI's FDT form."""
     (inits_dict, params_dict, rescale_params, force_params_dict,
      units_dict, _, _) = parse_cell(cell_file, model=model)
     return FDTConfig(
@@ -596,49 +328,10 @@ def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
     )
 
 
-# ── Top-level config builder (FDT mode) ─────────────────────────────────────
-def build_fdt_config() -> FDTConfig:
-    """
-    Interactive setup for FDT analysis. Prompts for model and cell file like the
-    SBI mode, then for FDT-specific knobs (n_freqs, ensemble_M, F0, freqs_per_batch).
-    """
-    model, _labels, state_dep_drift = select_model()
-    cell_file = select_cell_file()
-
-    print("\nFDT knobs (press Enter to accept default):")
-    n_freqs = _prompt_int("  n_freqs", 60)
-    ensemble_M = _prompt_int("  ensemble_M", 256)
-    freqs_per_batch = _prompt_int("  freqs_per_batch (Campaign 2 packing)", 1)
-    F0 = _prompt_float("  F0 (ND forcing amplitude)", 0.05)
-    helpers.clear_screen()
-
-    return make_fdt_config(model, state_dep_drift, cell_file, n_freqs=n_freqs,
-                           ensemble_M=ensemble_M, freqs_per_batch=freqs_per_batch, F0=F0)
-
-
-# ── Top-level config builder (Reduction-map mode) ────────────────────────────
-def build_reduction_config() -> FDTConfig:
-    """
-    Interactive setup for the NWK→Hopf analytical reduction map.
-
-    The reduction map is Nadrowski-specific by construction, so the model is
-    fixed to NADROWSKI. Only the cell file (which carries the ND parameters
-    and dimensional rescaling factors) and an optional forcing amplitude F0
-    need to be supplied — no FDT-specific simulation knobs are relevant here.
-    """
-    print("Reduction map: model fixed to NADROWSKI (NWK→Hopf reduction).")
-    cell_file = select_cell_file()
-
-    print("\nReduction-map knobs (press Enter to accept default):")
-    F0 = _prompt_float("  F0 (NWK forcing amplitude for Phase B1)", 0.05)
-    helpers.clear_screen()
-
-    return make_reduction_config(cell_file, F0=F0)
-
-
 def make_reduction_config(cell_file: str, *, F0: float = 0.05) -> FDTConfig:
     """Build a reduction-map FDTConfig (no prompts) from a cell file. Model is fixed to NADROWSKI
-    (the reduction is Nadrowski-specific). Shared by build_reduction_config (CLI) and the GUI form."""
+    (the reduction is Nadrowski-specific). The GUI's Reduction form is its only caller -- there is no
+    reduction subcommand."""
     (inits_dict, params_dict, rescale_params, force_params_dict,
      units_dict, _, _) = parse_cell(cell_file, model="NADROWSKI")
     return FDTConfig(
@@ -669,73 +362,13 @@ SWEEP_PRESETS = {
                         psd_T_obs_nd=8000.0, ensemble_M=256, points=12),
 }
 
-def _select_sweep_preset() -> dict:
-    """
-    Prompt for the sweep-study resolution preset. Defaults to exploratory.
-
-    :return: the chosen preset's knob dict (a copy of the SWEEP_PRESETS entry).
-    """
-    print("\nSweep preset:")
-    print("  (1) Exploratory — fast/coarse; confirm the restoration trend (~3-4x faster)")
-    print("  (2) Production  — full resolution")
-    choice = input("\nWhich preset? Select a number [1]: ").strip() or "1"
-    name = "production" if choice == "2" else "exploratory"
-    print(f"Using the {name} preset.")
-    return dict(SWEEP_PRESETS[name])
-
-
-# ── Top-level config builder (FDT parameter-sweep study) ─────────────────────
-def build_param_sweep_config() -> tuple["FDTConfig", "np.ndarray", "np.ndarray"]:
-    """
-    Interactive setup for the FDT parameter-sweep study.
-
-    Two sweeps probe FDT restoration on the Nadrowski model:
-      - S sweep  (T_a/T = 1 held): vary S; FDT restored as S -> 0.
-      - T sweep  (S = 0 held):     vary T_a/T; FDT restored as T_a/T -> 1.
-
-    Returns (cfg, s_grid, temp_grid). cfg carries NWK params + FDT knobs.
-    """
-    print("FDT parameter-sweep study: model fixed to NADROWSKI.")
-
-    cell_file = select_cell_file()
-    (_i, params_dict, _r, _f, _u, _si, _s) = parse_cell(cell_file, model="NADROWSKI")
-    cell_s = params_dict["s"][0]
-    cell_temp = params_dict["temp"][0]
-    print(f"\nCell-file values: S = {cell_s:.4f},  T_a/T = {cell_temp:.4f}")
-
-    # Resolution preset (drives the FDT knobs + default grid density for BOTH sweeps).
-    preset = _select_sweep_preset()
-
-    print("\nS sweep grid (T_a/T held at 1; FDT restored as S -> 0):")
-    s_min = _prompt_float("  S_min", 0.0)
-    s_max = _prompt_float("  S_max", cell_s)
-    s_points = _prompt_int("  S n_points", preset["points"])
-
-    print("\nT_a/T sweep grid (S held at 0; FDT restored as T_a/T -> 1):")
-    t_min = _prompt_float("  T_min", 1.0)
-    t_max = _prompt_float("  T_max", cell_temp)
-    t_points = _prompt_int("  T n_points", preset["points"])
-
-    print("\nFDT knobs (press Enter to accept preset default):")
-    n_freqs = _prompt_int("  n_freqs", preset["n_freqs"])
-    ensemble_M = _prompt_int("  ensemble_M", preset["ensemble_M"])
-    freqs_per_batch = _prompt_int("  freqs_per_batch (Campaign 2 packing)", 1)
-    F0 = _prompt_float("  F0 (ND forcing amplitude)", 0.05)
-    print(f"  freq_bounds={preset['freq_bounds']}, T_obs_periods={preset['T_obs_periods']}, "
-          f"psd_T_obs_nd={preset['psd_T_obs_nd']}  (from preset)")
-    helpers.clear_screen()
-
-    return make_param_sweep_config(
-        cell_file, preset=preset, s_spec=(s_min, s_max, s_points), t_spec=(t_min, t_max, t_points),
-        n_freqs=n_freqs, ensemble_M=ensemble_M, freqs_per_batch=freqs_per_batch, F0=F0)
-
 
 def make_param_sweep_config(cell_file: str, *, preset: dict, s_spec: tuple, t_spec: tuple,
                             n_freqs: int, ensemble_M: int, freqs_per_batch: int = 1,
                             F0: float = 0.05) -> tuple["FDTConfig", "np.ndarray", "np.ndarray"]:
     """Build (FDTConfig, s_grid, temp_grid) for the sweep study (no prompts). ``preset`` supplies the
     advanced resolution levers (freq_bounds / T_obs_periods / psd_T_obs_nd); ``s_spec``/``t_spec`` are
-    (min, max, n_points). Model fixed to NADROWSKI. Shared by build_param_sweep_config (CLI) + the GUI."""
+    (min, max, n_points). Model fixed to NADROWSKI. Shared by the command-line tool (core/tool) + the GUI."""
     import numpy as np  # local import — keep top-of-file lean
     (inits_dict, params_dict, rescale_params, force_params_dict,
      units_dict, _, _) = parse_cell(cell_file, model="NADROWSKI")

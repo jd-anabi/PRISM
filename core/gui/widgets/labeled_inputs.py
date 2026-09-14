@@ -1,5 +1,4 @@
-"""Small typed input widgets mirroring the CLI's numeric/path prompts (_prompt_int/_prompt_float and
-the experimental-data file prompts)."""
+"""Small typed input widgets: the numeric fields and file pickers the GUI's forms are built from."""
 from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QPushButton, QWidget
 

@@ -150,7 +150,7 @@ class SimConfig:
         """
         Pre-simulated ND time vector at finest resolution and longest duration.
 
-        Cached: SimConfig is effectively immutable after build_sim_config(), so we
+        Cached: SimConfig is effectively immutable once built, so we
         allocate the 2.4M-point tensor once per config lifetime.
         """
         if self.dt_exp is not None:
@@ -545,7 +545,7 @@ class FDTConfig:
     force_params_dict: OrderedDict    # {name: (val, (lo, hi))}
     units_dict: tuple
 
-    # FDT-specific knobs (sensible defaults; overrideable in build_fdt_config)
+    # FDT-specific knobs (sensible defaults; overrideable in cli.make_fdt_config)
     n_freqs: int = 60
     # Multipliers of omega_0 for the Campaign-2 production grid.
     # Asymmetric in log space by design: below = 1 decade, above = 1.5 decades

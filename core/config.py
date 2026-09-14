@@ -354,8 +354,8 @@ TRAINING_SHOW_SUMMARY = True             # print sbi's train/validation-loss sum
 # === PROGRESS BARS ===
 # The per-time-segment bar (core/Simulator/simulator.py) wraps segs in {1,2,3} -- a three-step bar that
 # tells a user nothing, while nesting a whole extra level under the training-data bar.
-# core.gui.app.build_app() sets this True; the CLI and scripts/ never touch it, so `python -m core`
-# renders exactly the bars it always has.
+# core.gui.app.build_app() sets this True; the command-line tool never touches it and keeps both
+# bars.
 # Read this through the MODULE (`from core import config; config.QUIET_SEGMENT_BAR`) -- a
 # `from core.config import QUIET_SEGMENT_BAR` snapshots the value at import and would freeze it False.
 QUIET_SEGMENT_BAR = False

@@ -4,7 +4,7 @@ Two sweeps probe FDT restoration on the Nadrowski model (see cli.make_param_swee
   * S sweep  (T_a/T held at 1): vary S;      FDT is restored as S -> 0.
   * T sweep  (S held at 0):     vary T_a/T;  FDT is restored as T_a/T -> 1.
 
-Mirrors cli.build_param_sweep_config with widgets, then runs the prompt-free
+Mirrors cli.make_param_sweep_config with widgets, then runs the prompt-free
 FDT.cross_validation.run_param_study_cli on a worker. Model is fixed to NADROWSKI.
 """
 from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
@@ -105,7 +105,7 @@ class CrossValPanel(BasePanel):
 
         self.controls_layout.addWidget(box)
 
-    # ── prefill, exactly as the CLI does (cli.build_param_sweep_config's prefill) ───────────────
+    # ── prefill from the cell file: the values cli.make_param_sweep_config then consumes ─────────
     def _on_cell_changed(self):
         cell = self.cell_picker.selected_path()
         if not cell:
@@ -181,7 +181,7 @@ class CrossValPanel(BasePanel):
         self.preset_combo.setCurrentText(settings.get_str(qs, "preset", self.preset_combo.currentText()))
         self.cell_picker.restore_key(settings.get_str(qs, "cell"))
         # Restore ONLY the freely-set knobs -- and after the cell, so a saved `points` survives. Do NOT
-        # restore the grid lo/hi: those are re-derived from the cell (cli.build_param_sweep_config's prefill), and a saved
+        # restore the grid lo/hi: those are re-derived from the cell (cli.make_param_sweep_config's inputs), and a saved
         # value from a DIFFERENT cell would be a stale, wrong bound.
         settings.restore_field(qs, "f0", self.f0)
         settings.restore_field(qs, "freqs_per_batch", self.freqs_per_batch)

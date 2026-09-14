@@ -1,6 +1,6 @@
 """REDUCTION mode: the NWK -> Hopf reduction map.
 
-Mirrors cli.build_reduction_config (cli.make_reduction_config) but with widgets instead of prompts, then runs
+Mirrors cli.make_reduction_config but with widgets instead of prompts, then runs
 the already prompt-free Reduction.sweep.run_reduction_map on a worker. The model is fixed to NADROWSKI
 -- the reduction is Nadrowski-specific (cli.make_reduction_config).
 

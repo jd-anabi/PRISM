@@ -3,7 +3,7 @@
 The many existing consumers of ``config.VALID_MODELS`` / ``config.VALID_LABELS`` index the two lists
 positionally, so user models are APPENDED IN PLACE to those live lists -- the built-ins keep indices
 0-2 and nothing downstream changes. Loading is an explicit call (``load_user_models()``, from
-core.gui.app.build_app and core.__main__), never an import side effect: the GUI test suite constructs
+core.gui.app.build_app and core.tool.main), never an import side effect: the GUI test suite constructs
 MainWindow directly and must keep seeing pristine registries.
 
 User models are Simulate-only in v1: they carry no Prior/INIT_SHAPES entries and the FDT/Inference

@@ -150,4 +150,4 @@ Use the launchers below (they `cd` to the repository root for you). The working 
 | Windows         | `run.bat`                 |
 | Any OS (direct) | `python -m core.gui`      |
 
-Use `python -m core` instead for the interactive CLI. On macOS/Linux, remember to activate the environment (`conda activate biophys-env`, or the `source .../activate biophys-env` line if you set up Miniforge by full path) before launching.
+`python -m core --help` lists the command-line tool's subcommands. On macOS/Linux, remember to activate the environment (`conda activate biophys-env`, or the `source .../activate biophys-env` line if you set up Miniforge by full path) before launching.

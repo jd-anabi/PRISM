@@ -1,6 +1,3 @@
-import os
-import sys
-
 import numpy as np
 import torch
 
@@ -44,19 +41,4 @@ def concat(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     if x.shape[0] != y.shape[0]:
         raise ValueError('Both arrays must have same number of rows')
     return np.concatenate((x, y), axis=1)
-
-def clear_screen() -> None:
-    """
-    Clears the console screen depending on the operating system.
-
-    This function checks the underlying operating system and executes the appropriate
-    command to clear the terminal screen. It supports both Windows and Unix-based
-    platforms.
-
-    :return: None
-    """
-    if sys.platform == 'win32':
-        _ = os.system('cls')
-    else:
-        _ = os.system('clear')
 

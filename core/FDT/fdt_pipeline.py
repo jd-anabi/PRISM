@@ -55,15 +55,15 @@ def _estimate_omega_0(cfg: FDTConfig) -> tuple[float, str]:
     return 1.0, "1.0 (fallback default)"
 
 
-def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
-            confirm_production: bool | None = None) -> None:
-    """End-to-end FDT analysis. Runs sanity checks first; gates on user
-    confirmation before the production sweep.
+def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> None:
+    """End-to-end FDT analysis. Runs sanity checks first; gates on the caller's answer before the
+    production sweep.
 
-    :param skip_sanity: skip the sanity checks. None (default) => prompt via input() (CLI);
-                        a GUI passes an explicit bool.
-    :param confirm_production: proceed to the production sweep after sanity. None (default) => prompt
-                        via input() (CLI); a GUI passes an explicit bool. Only consulted when sanity runs."""
+    :param skip_sanity: skip the sanity checks. REQUIRED: there is no prompt to fall back to (D1
+                        retired the CLI), and the old None default meant an input() that a GUI worker
+                        thread could never answer.
+    :param confirm_production: proceed to the production sweep after sanity. REQUIRED, for the same
+                        reason; only consulted when the sanity checks run."""
     # 1. Model-specific natural-frequency starting estimate; the production omega_0
     #    is refined from the Campaign 1 PSD peak below.
     cfg.omega_0, omega_0_desc = _estimate_omega_0(cfg)
@@ -72,10 +72,8 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
     # Single plot dir + timestamp for all outputs from this run (incl. sanity plots).
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # 2. Sanity checks (optional skip). skip_sanity/confirm_production default to None => prompt (CLI);
-    #    a GUI supplies explicit booleans so no input() fires.
-    if skip_sanity is None:
-        skip_sanity = input("Skip sanity checks? (y/N): ").strip().lower() in ("y", "yes")
+    # 2. Sanity checks (optional skip). Both booleans are supplied by the caller -- the FDT panel's two
+    #    checkboxes, or the `fdt` subcommand's flags. Nothing here prompts.
     if skip_sanity:
         print("Skipping sanity checks.")
     else:
@@ -83,10 +81,7 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool | None = None,
         results = run_all_sanity(cfg, passive_plot_path=passive_plot_path)
         if not all(passed for passed, _ in results.values()):
             print("WARNING: one or more sanity checks failed (see metrics above).")
-        proceed = confirm_production
-        if proceed is None:
-            proceed = input("Proceed to production sweep? (y/N): ").strip().lower() in ("y", "yes")
-        if not proceed:
+        if not confirm_production:
             print("Aborted by user.")
             return
 

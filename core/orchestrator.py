@@ -1,7 +1,7 @@
 """
 Pipeline orchestration for the SBI pipeline.
 
-No input() calls live here -- all user interaction is delegated to cli.py.
+No input() anywhere; the front ends (core/gui, core/tool) call these stages.
 This module owns the pipeline flow: observe -> prior -> posterior -> validate.
 """
 import importlib
@@ -32,7 +32,7 @@ from .config import (
 )
 from . import cli, config, forcing
 from .Helpers import helpers, visualizers, file_manager, labels
-from .Helpers.visualizers import emit_figure as _emit, thin_ticks as _thin_ticks
+from .Helpers.visualizers import thin_ticks as _thin_ticks
 from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
                         LoadedInference, resolve_store)
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
@@ -100,74 +100,6 @@ def _truth_outside_region(T_train, region, truth) -> list:
     # contains() is False for a non-finite coordinate too, which neither comparison above names
     return bad or [f"direction {d}: truth {float(v)!r} not inside [{float(a):.3g}, {float(b):.3g}]"
                    for d, v, a, b in zip(region.dims, sel, region.lo, region.hi)]
-
-
-# ── Pipeline entry point ────────────────────────────────────────────────────
-def run(cfg: SimConfig):
-    """
-    Execute the SBI pipeline:
-      1. Build or load the prior (ND x rescale x forcing product prior).
-      2. Train or load the posterior (amortized NPE — ground-truth-free).
-      3. Calibration diagnostics (SBC + expected coverage) — no chosen observation needed.
-      4. Optionally infer on a chosen observation: a simulated cell (ground truth), experimental
-         data, or neither. Only this step shows observation-dependent plots (GT trace, corner, PPC,
-         eye test).
-    """
-    # 1. Prior
-    prior_choice, build_new = cli.select_or_build_prior()
-    lp = build_prior(cfg, prior_choice, build_new)
-    inf_prior, force_prior = lp.prior, lp.force_prior
-
-    # 2. Posterior (training is amortized and observation-independent)
-    from .artifacts import Accept
-    pos_choice, train_new = cli.select_or_train_posterior()
-    # accept: a NON-AMORTIZED artifact may be loaded here -- its region then restricts the
-    # calibration prior below, and step 4 warns if the observation is not the one it was drawn around.
-    lp_post = build_posterior(cfg, lp, pos_choice, train_new, accept=Accept(truncated=True))
-    helpers.clear_screen()
-
-    # 3. Calibration (data-free): SBC + expected coverage -- on the posterior's own region, if it has
-    # one (guardrail 8); validate_calibration reads truncation off lp_post.posterior.truncation.
-    validate_calibration(cfg, lp_post, lp)
-
-    # 4. Optional inference on a chosen observation
-    mode = cli.select_inference_mode()
-    if mode == "simulated":
-        cell_file = cli.select_cell_file()
-        ignored = cli.load_and_validate_gt(cfg, cell_file)   # inject GT + inits, validated vs bounds
-        if ignored:
-            print(f"Note: the bounds file does not declare {', '.join(ignored)} — those cell values "
-                  f"were ignored.")
-        for msg in check_observation_in_distribution(cfg, inf_prior, force_prior):
-            warnings.warn(msg, stacklevel=2)
-        T_obs_s = cli.get_time_params()
-        cfg.T_obs = T_obs_s * cfg.get_unit_conversion_factor("s")
-        if T_obs_s < T_MIN_EXP_S:
-            warnings.warn(
-                f"T_obs={T_obs_s:.2f}s is below the training range minimum T_MIN_EXP_S="
-                f"{T_MIN_EXP_S:.2f}s; the posterior may extrapolate poorly.", stacklevel=2)
-        elif T_obs_s > T_MAX_EXP_S:
-            warnings.warn(
-                f"T_obs={T_obs_s:.2f}s exceeds the training range maximum T_MAX_EXP_S="
-                f"{T_MAX_EXP_S:.2f}s; the posterior may extrapolate poorly.", stacklevel=2)
-        obs = generate_observations(cfg)
-        infer_and_visualize(cfg, lp_post, obs)
-    elif mode == "experimental":
-        if cfg.chi_mode:
-            spont_path, forced_paths, T_obs_s, F0_si = cli.get_inference_inputs_chi()
-            rec = RecordingSet(spont=spont_path, forced=tuple((p, None) for p in forced_paths),
-                               T_obs_s=T_obs_s, F0_si=F0_si)
-        elif not cfg.has_forcing:
-            path, T_obs_s = cli.get_inference_inputs_spontaneous()
-            rec = RecordingSet(spont=path, T_obs_s=T_obs_s)
-        else:
-            spont_path, forced_path, T_obs_s, forcing_params_si = cli.get_inference_inputs(
-                list(cfg.force_params_dict.keys()))
-            rec = RecordingSet(spont=spont_path, forced=((forced_path, None),), T_obs_s=T_obs_s,
-                               forcing_params_si=forcing_params_si)
-        obs = build_experiment_observation(cfg, rec)
-        infer_and_visualize(cfg, lp_post, obs)
-    # mode == "none": stop after calibration
 
 
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
@@ -1751,8 +1683,8 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
                      other than its region's; the flag is recorded in the artifact.
     :param n_samples: posterior draws for the corner, the PPC and the summary (1000 = the historical
                      constant).
-    :param fig_sink: Optional (title, fig) -> None display callback (a GUI embeds the figures); when
-                     None each plot falls back to the legacy blocking plt.show() (CLI unchanged).
+    :param fig_sink: Optional (title, fig) -> None display callback (a GUI embeds the figures); every
+                     front end passes one, and None is the bare-library fallback to plt.show().
     """
     from .artifacts import Accept
     store = resolve_store(store)

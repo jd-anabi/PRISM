@@ -36,7 +36,7 @@ def _install_excepthook(parent_getter):
 def build_app(argv=None):
     # Quiet the per-time-segment bar: it wraps segs in {1,2,3} and nests a whole level under the
     # training-data bar for nothing. The solver's per-step bar stays ON -- it feeds the Solver
-    # Performance meter. The GUI is the only caller that flips this; the CLI keeps both bars.
+    # Performance meter. The GUI is the only caller that flips this; the tool keeps both bars.
     config.QUIET_SEGMENT_BAR = True
 
     # Register saved user-defined models BEFORE MainWindow: the model combos read VALID_MODELS at
