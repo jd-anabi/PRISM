@@ -141,3 +141,108 @@ def report(*artifacts) -> None:
     """One line per artifact this run wrote: kind, ``<name>__<id>``, and the path to it."""
     for a in artifacts:
         print(f"[prism] {a.kind} {a.path.name}  {a.path}", flush=True)
+
+
+def add_accept_flags(p, *, other_observation: bool = False) -> None:
+    """D8: the tool REFUSES by default, and these two map 1:1 onto ``artifacts.Accept``. Every flag
+    used is recorded in the artifact it produced (``results.accepted``), so a number produced under one
+    carries that fact with it."""
+    p.add_argument("--accept-truncated", action="store_true",
+                   help="load a NON-AMORTIZED (TSNPE) posterior. It is valid only near the "
+                        "observation its region was drawn around; elsewhere the flow extrapolates.")
+    if other_observation:
+        p.add_argument("--accept-other-observation", action="store_true",
+                       help="run a NON-AMORTIZED posterior on an observation other than its "
+                            "region's. A re-simulated cell draws new noise, so simulated inference "
+                            "needs this for any TSNPE posterior.")
+
+
+def accept_from(args):
+    from core.artifacts import Accept
+    return Accept(truncated=args.accept_truncated,
+                  other_observation=getattr(args, "accept_other_observation", False))
+
+
+def parse_forced(spec: str):
+    """``"rec.npy@12.5"`` -> ``("rec.npy", 12.5)``; a bare path -> ``(path, None)``.
+
+    Split at the LAST ``@`` so a path that contains one still parses. The frequency is the one the
+    bench actually drove at: the lock-in locks in where it is TOLD, and a lock-in at the wrong
+    frequency decays like a sinc rather than failing.
+    """
+    path, sep, freq = str(spec).rpartition("@")
+    if not sep:
+        return str(spec), None
+    try:
+        return path, float(freq)
+    except ValueError:
+        raise UsageError(f"--forced {spec!r}: {freq!r} is not a drive frequency in Hz. Write "
+                         f"PATH@HZ, e.g. recording.npy@12.5.") from None
+
+
+def recording_set(cfg, args):
+    """The ``RecordingSet`` ``infer --spont`` describes, checked against the mode the bounds file
+    declares. A pure function of ``cfg.observation_mode`` and ``cfg.force_params_dict``, so every
+    refusal here costs nothing and names the flag to fix."""
+    from core.SBI.observations import RecordingSet
+    forced = [parse_forced(s) for s in (args.forced or [])]
+
+    if cfg.observation_mode == "chi":
+        if not forced:
+            raise UsageError("chi mode conditions on a passive recording plus at least one "
+                             "single-tone forced one: pass --forced PATH@HZ.")
+        bare = [p for p, f in forced if f is None]
+        if bare:
+            raise UsageError(f"chi mode: every driven recording must state the frequency (Hz) it was "
+                             f"driven at -- write --forced PATH@HZ. Missing for: {bare}. (D9)")
+        if args.f0_si is None:
+            raise UsageError("chi mode needs --f0-si: chi is response/drive, so the lock-in divides "
+                             "by the physical drive amplitude the recordings were made at.")
+        if args.drive:
+            raise UsageError("--drive is a single-drive (forced) setting. chi probes at the "
+                             "frequencies --forced names, so drop it.")
+        return RecordingSet(spont=args.spont, forced=tuple(forced), T_obs_s=args.t_obs_s,
+                            F0_si=args.f0_si)
+
+    if cfg.observation_mode == "spontaneous":
+        if forced or args.drive or args.f0_si is not None:
+            raise UsageError("this bounds file declares no Forcing section, so the observation is a "
+                             "single passive recording: drop --forced, --drive and --f0-si.")
+        return RecordingSet(spont=args.spont, T_obs_s=args.t_obs_s)
+
+    if len(forced) != 1 or forced[0][1] is not None:
+        raise UsageError("forced mode takes exactly one --forced PATH, without @HZ: its drive is the "
+                         "one --drive describes.")
+    if args.f0_si is not None:
+        raise UsageError("--f0-si is a chi setting; in forced mode the amplitude is --drive amp=<N>.")
+    drive = {}
+    for item in (args.drive or []):
+        key, sep, value = str(item).partition("=")
+        if not sep:
+            raise UsageError(f"--drive {item!r}: write NAME=VALUE in SI units, e.g. amp=1e-12.")
+        try:
+            drive[key.strip()] = float(value)
+        except ValueError:
+            raise UsageError(f"--drive {item!r}: {value!r} is not a number.") from None
+    want = set(cfg.force_params_dict)
+    if set(drive) != want:
+        raise UsageError(f"--drive must name exactly the drive this bounds file declares: "
+                         f"{sorted(want)}; got {sorted(drive)}.")
+    return RecordingSet(spont=args.spont, forced=((forced[0][0], None),), T_obs_s=args.t_obs_s,
+                        forcing_params_si=drive)
+
+
+def load_posterior_and_prior(cfg, ref, accept, store):
+    """``(posterior, prior)`` for a subcommand that loads one: THE PRIOR IS ALWAYS THE POSTERIOR'S OWN.
+
+    Never a prior the operator names. build_posterior refuses a prior that is not the one the
+    posterior's manifest records, so an explicit flag could only ever be refused -- and a TSNPE child
+    records its base prior, so this resolves for a round's posterior too.
+    """
+    from core import orchestrator
+    p_ref = store.get("posterior", ref).parents["prior"]
+    print(f"[prism] prior: {p_ref} (the posterior's training prior)", flush=True)
+    prior = orchestrator.build_prior(cfg, p_ref, False, fig_sink=close_sink, store=store)
+    posterior = orchestrator.build_posterior(cfg, prior, ref, False, accept=accept,
+                                             fig_sink=close_sink, store=store)
+    return posterior, prior

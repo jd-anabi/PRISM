@@ -238,3 +238,215 @@ def test_a_taken_name_is_refused_with_exit_1_and_nothing_written(tool_run, capsy
     err = capsys.readouterr().err
     assert "refused: StoreError" in err and "already exists" in err and "raised at" in err
     assert [s.id for s in store.list("prior")] == before
+
+
+def test_parse_forced_and_recording_set_rules():
+    """Section 3.6, as a unit: which recordings each observation mode takes, decided before anything
+    is loaded or spent. The stub configs carry only the two fields the function is allowed to read."""
+    from core.tool.config_args import UsageError, parse_forced, recording_set
+
+    assert parse_forced("rec.npy") == ("rec.npy", None)
+    assert parse_forced("rec.npy@12.5") == ("rec.npy", 12.5)
+    assert parse_forced(r"C:\runs\a@b\rec.npy@40") == (r"C:\runs\a@b\rec.npy", 40.0), "split at the LAST @"
+    with pytest.raises(UsageError, match="PATH@HZ"):
+        parse_forced("rec.npy@fast")
+
+    def _args(**over):
+        d = dict(spont="s.npy", forced=None, drive=None, f0_si=None, t_obs_s=2.0)
+        d.update(over)
+        return SimpleNamespace(**d)
+
+    chi = SimpleNamespace(observation_mode="chi", force_params_dict={"amp": None})
+    with pytest.raises(UsageError, match="at least one"):
+        recording_set(chi, _args(f0_si=1e-12))
+    with pytest.raises(UsageError, match="frequency"):
+        recording_set(chi, _args(forced=["a.npy"], f0_si=1e-12))
+    with pytest.raises(UsageError, match="--f0-si"):
+        recording_set(chi, _args(forced=["a.npy@10"]))
+    rec = recording_set(chi, _args(forced=["a.npy@10", "b.npy@20"], f0_si=1e-12))
+    assert rec.forced == (("a.npy", 10.0), ("b.npy", 20.0))
+    assert rec.F0_si == 1e-12 and rec.T_obs_s == 2.0 and rec.forcing_params_si is None
+
+    spont = SimpleNamespace(observation_mode="spontaneous", force_params_dict={})
+    assert recording_set(spont, _args()).forced == ()
+    with pytest.raises(UsageError, match="no Forcing section"):
+        recording_set(spont, _args(forced=["a.npy"]))
+
+    forced = SimpleNamespace(observation_mode="forced", force_params_dict={"amp": None, "freq": None})
+    with pytest.raises(UsageError, match="exactly one"):
+        recording_set(forced, _args(drive=["amp=1e-12", "freq=30"]))
+    with pytest.raises(UsageError, match="exactly the drive"):
+        recording_set(forced, _args(forced=["a.npy"], drive=["amp=1e-12"]))
+    with pytest.raises(UsageError, match="NAME=VALUE"):
+        recording_set(forced, _args(forced=["a.npy"], drive=["amp"]))
+    rec = recording_set(forced, _args(forced=["a.npy"], drive=["amp=1e-12", "freq=30"]))
+    assert rec.forced == (("a.npy", None),) and rec.forcing_params_si == {"amp": 1e-12, "freq": 30.0}
+
+
+def test_infer_usage_errors_exit_2(tool_run, capsys):
+    bounds, cell, root = tool_run
+    base = ["infer", *_cfg(bounds), "--posterior", "tpost", "--t-obs", "1.0"]
+    assert main([*base, "--cell", cell, "--spont", "x.npy"]) == 2     # mutually exclusive
+    assert main([*base]) == 2                                        # and one of them is required
+    capsys.readouterr()
+    assert main([*base, "--spont", "x.npy", "--forced", "y.npy"]) == 2
+    err = capsys.readouterr().err
+    assert "usage:" in err and "no Forcing section" in err
+
+
+def test_validate_and_simulated_infer(tool_run):
+    """Both load the posterior AND the prior that posterior was trained on -- never a prior the
+    operator names, which build_posterior could only ever refuse."""
+    from core.artifacts import ArtifactStore
+    bounds, cell, root = tool_run
+    store = ArtifactStore(root)
+    assert main(["validate", *_cfg(bounds), "--posterior", "tpost", "--n-cal", "60",
+                 "--name", "tcal"]) == 0
+    assert main(["infer", *_cfg(bounds), "--posterior", "tpost", "--cell", cell,
+                 "--t-obs", "1.0", "--name", "tinf"]) == 0
+    post_id, prior_id = store.get("posterior", "tpost").id, store.get("prior", "tp").id
+    assert store.get("calibration", "tcal").parents == {"posterior": post_id, "prior": prior_id}
+    inf = store.get("inference", "tinf")
+    assert inf.parents["posterior"] == post_id and inf.parents["observation"]
+    assert inf.body["results"]["accepted"] == []
+
+
+def test_near_miss_is_refused_before_simulation(tool_run, capsys):
+    """D7 on the command line: the 2026-09-11 incident, in which run 2 silently started a new cache
+    under an identity one field away from run 1's, is now a refusal with no spend."""
+    from core.artifacts import ArtifactStore
+    bounds, cell, root = tool_run
+    store = ArtifactStore(root)
+    sims = Path(root) / "simulations"
+    sims_before = {p.name for p in sims.iterdir()}
+    posts_before = {s.id for s in store.list("posterior")}
+    capsys.readouterr()
+    assert main(["train", *_cfg(bounds), "--prior", "tp", "--num-runs", "3", "--run-size", "8",
+                 "--hidden-features", "8", "--num-transforms", "1", "--stop-after-epochs", "1",
+                 "--checkpoint-every", "1"]) == 1
+    err = capsys.readouterr().err
+    assert "ONE setting away" in err and "n_runs" in err and "--new-run" in err
+    assert {p.name for p in sims.iterdir()} == sims_before, "a new cache was started anyway"
+    assert {s.id for s in store.list("posterior")} == posts_before
+
+
+@pytest.fixture(scope="module")
+def tool_round(tool_run, _session_default_store):
+    """One real TSNPE round through the tool: the observation it was drawn around, and ``tround``, a
+    NON-AMORTIZED posterior. Shared by the round's own test and by the refusal test below, because a
+    truncated artifact that the store will actually load has to be made by a real round."""
+    from core.artifacts import ArtifactStore, default_store
+    bounds, cell, root = tool_run
+    store = ArtifactStore(root)
+    assert main(["infer", *_cfg(bounds), "--posterior", "tpost", "--cell", cell,
+                 "--t-obs", "1.0", "--name", "tround_inf"]) == 0
+    obs = store.get("inference", "tround_inf").parents["observation"]
+    # --directions 3: SBITEST's latent is 4 wide (2 ND params + 2 rescale), and tsnpe_round's own
+    # default (truncate.DEFAULT_N_DIRECTIONS = 5) refuses on this tiny model ("5 directions requested
+    # but the latent has 4") -- a real orchestrator guardrail, not a tool bug. 3 leaves one flat
+    # direction, as the guardrail intends.
+    assert main(["tsnpe", *_cfg(bounds), "--posterior", "tpost", "--observation", obs,
+                 "--directions", "3", "--num-runs", "1", "--run-size", "8", "--hidden-features", "8",
+                 "--num-transforms", "1", "--stop-after-epochs", "1", "--checkpoint-every", "1",
+                 "--new-run", "--name", "tround"]) == 0
+    assert default_store() is _session_default_store, \
+        "tool_round's own two real `main` calls left the tool's store as the process default"
+    return bounds, cell, root, obs
+
+
+def test_tsnpe_subcommand_runs_a_round(tool_round):
+    from core.artifacts import ArtifactStore
+    bounds, cell, root, obs = tool_round
+    store = ArtifactStore(root)
+    m = store.get("posterior", "tround")
+    assert m.body["amortized"] is False
+    assert m.body["truncation"]["x_obs_digest"] == store.get("observation", obs).body["x_obs_digest"]
+    assert m.parents["observation"] == obs
+    assert m.parents["parent_posterior"] == store.get("posterior", "tpost").id
+    assert m.parents["prior"] == store.get("prior", "tp").id, "a round records its BASE prior"
+
+
+def test_validate_refuses_a_non_amortized_posterior_without_accept_truncated(tool_round, monkeypatch,
+                                                                             capsys):
+    from core import orchestrator
+    bounds, cell, root, obs = tool_round
+    argv = ["validate", *_cfg(bounds), "--posterior", "tround", "--n-cal", "60"]
+    capsys.readouterr()
+    assert main(argv) == 1
+    err = capsys.readouterr().err
+    assert "NOT AMORTIZED" in err and "--accept-truncated" in err and "raised at" in err
+
+    rec = _Rec(_art(root, "calibration"))
+    monkeypatch.setattr(orchestrator, "validate_calibration", rec)
+    assert main([*argv, "--accept-truncated"]) == 0
+    (cfg, posterior, prior), kw = rec.calls[0]
+    assert posterior.posterior.truncation is not None
+    assert posterior.accepted == ["truncated"], "the hatch used is recorded on the wrapper"
+    assert kw["n_cal"] == 60
+
+
+def test_ctrl_c_mid_simulation_keeps_the_committed_batches(tool_run, monkeypatch, capsys):
+    """Ctrl-C is not a refusal and not a bug: the pipeline commits the batches it finished, the
+    writer removes the artifact it had opened, and the next run with --resume require continues."""
+    from core.SBI import pipeline
+    from core.artifacts import ArtifactStore
+    bounds, cell, root = tool_run
+    store = ArtifactStore(root)
+    posts_before = {s.id for s in store.list("posterior")}
+    real, calls = pipeline._rows_with_oom_retry, []
+
+    def _interrupt(fn, lo, hi, **kw):
+        calls.append(1)
+        if len(calls) == 3:
+            raise KeyboardInterrupt
+        return real(fn, lo, hi, **kw)
+
+    monkeypatch.setattr(pipeline, "_rows_with_oom_retry", _interrupt)
+    argv = ["train", *_cfg(bounds), "--prior", "tp", "--num-runs", "4", "--run-size", "8",
+            "--hidden-features", "8", "--num-transforms", "1", "--stop-after-epochs", "1",
+            "--checkpoint-every", "1", "--new-run"]
+    capsys.readouterr()
+    assert main(argv) == 130
+    assert "interrupted" in capsys.readouterr().err
+    assert {s.id for s in store.list("posterior")} == posts_before, "no half-posterior survived"
+    partial = [m for m in (store.get("simulation", s.id) for s in store.list("simulation"))
+               if m.body["complete"] is False]
+    assert len(partial) == 1 and partial[0].body["batches_done"] == 2
+
+    monkeypatch.undo()
+    capsys.readouterr()
+    assert main([*argv, "--resume", "require"]) == 0
+    assert "resuming at batch 2/4" in capsys.readouterr().out
+
+
+def test_every_validate_infer_and_tsnpe_flag_reaches_its_stage_as_a_keyword(tool_round, monkeypatch):
+    """Spec 3.4: a flag's dest IS the stage's keyword name, for the three subcommands T11 did not
+    cover. The real runs above would catch a wrong dest only for the flags they happen to pass -- and
+    they pass none of these, so a rename like --posterior-samples -> num_posterior_samples could drift
+    silently until a TypeError surfaced from **knobs() in front of an operator.
+    """
+    from core import orchestrator
+    bounds, cell, root, obs = tool_round
+    v = _Rec(_art(root, "calibration"))
+    i = _Rec((_art(root, "observation"), _art(root, "inference")))
+    t = _Rec(_art(root, "posterior"))
+    monkeypatch.setattr(orchestrator, "validate_calibration", v)
+    monkeypatch.setattr(orchestrator, "simulated_inference", i)
+    monkeypatch.setattr(orchestrator, "tsnpe_round", t)
+
+    assert main(["validate", *_cfg(bounds), "--posterior", "tpost", "--n-cal", "7",
+                 "--cal-n-scales", "3", "--posterior-samples", "11"]) == 0
+    assert v.calls[0][1]["n_cal"] == 7 and v.calls[0][1]["cal_n_scales"] == 3
+    assert v.calls[0][1]["num_posterior_samples"] == 11
+
+    assert main(["infer", *_cfg(bounds), "--posterior", "tpost", "--cell", cell,
+                 "--t-obs", "2.5", "--n-samples", "13"]) == 0
+    (_c, _p, t_obs), kw = i.calls[0]
+    assert t_obs == 2.5 and kw["n_samples"] == 13
+
+    assert main(["tsnpe", *_cfg(bounds), "--posterior", "tpost", "--observation", obs,
+                 "--directions", "2", "--level", "0.99", "--learning-rate", "0.002",
+                 "--max-epochs", "3"]) == 0
+    kw = t.calls[0][1]
+    assert (kw["n_directions"], kw["level"]) == (2, 0.99)
+    assert (kw["learning_rate"], kw["max_num_epochs"]) == (0.002, 3)
