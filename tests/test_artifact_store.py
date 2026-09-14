@@ -648,8 +648,13 @@ def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store):
     region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
                                        probe=bijection_probe(T, P), x_obs_digest="d" * 16)
     _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
-    with pytest.raises(ValueError, match="NOT AMORTIZED"):
+    with pytest.raises(ValueError, match="NOT AMORTIZED") as excinfo:
         store.load_posterior(cfg, "trunc")
+    # The refusal must name every way out, one per front end -- a message that names only the Python
+    # hatch tells a GUI user and a command-line user nothing they can act on.
+    for needle in ("confirm the load on the Posterior tab", "--accept-truncated",
+                   "Accept(truncated=True)"):
+        assert needle in str(excinfo.value), needle
     lp = store.load_posterior(cfg, "trunc", accept=Accept(truncated=True))
     assert lp.posterior.truncation.dims == [0, 1] and lp.posterior.x_obs_digest == "d" * 16
     assert lp.accepted == ["truncated"] and torch.equal(lp.posterior.truncation.probe, region.probe)
@@ -891,8 +896,11 @@ def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unles
     was = r.cfg.T_obs
     r.cfg.T_obs = was + 7.0
     try:
-        with pytest.raises(ValueError, match="NOT AMORTIZED"):
+        with pytest.raises(ValueError, match="NOT AMORTIZED") as excinfo:
             orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20)
+        for needle in ("Run on a different observation", "--accept-other-observation",
+                       "Accept(other_observation=True)"):
+            assert needle in str(excinfo.value), needle
         assert r.cfg.T_obs == was + 7.0, "a refused inference installed the observation's context anyway"
     finally:
         r.cfg.T_obs = was

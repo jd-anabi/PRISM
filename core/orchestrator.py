@@ -1771,8 +1771,10 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
                 f"valid; anywhere else the flow has never seen a training row and extrapolates confidently rather "
                 f"than returning the prior.")
         if not accept.other_observation:
-            raise ValueError(_msg + " Use the recorded observation, an amortized posterior, or pass "
-                             "Accept(other_observation=True) to run anyway -- the inference will record it.")
+            raise ValueError(_msg + " Use the recorded observation or an amortized posterior. To run anyway, "
+                             "tick 'Run on a different observation' on the Infer tab, pass "
+                             "--accept-other-observation, or pass Accept(other_observation=True); the "
+                             "inference will record it.")
         print(_msg + " Running anyway (accepted).", flush=True)
         warnings.warn(_msg, stacklevel=2)
         accepted = accept.used()

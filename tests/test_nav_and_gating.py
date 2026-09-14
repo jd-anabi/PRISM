@@ -342,6 +342,9 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     inf.session = SbiSession(cfg=cfg, inf_prior=object())
     panel = inf.tsnpe_panel
 
+    import pytest
+    inf.posterior_panel._ask_load_non_amortized = lambda m: pytest.fail(
+        "a round's OWN result must install with no dialog -- it is the posterior the user just made")
     panel._on_round(loaded)
     assert inf.session.posterior is loaded, "the round's LoadedPosterior never reached the session"
     assert inf.session.posterior.manifest.body["amortized"] is False,         "the round's posterior was not installed as NON-AMORTIZED"
@@ -361,39 +364,76 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     assert inf.session.posterior.manifest.body["amortized"] is True
 
 
-def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session():
-    """⚠ GUARDRAIL 8's GUI half. A non-amortized artifact is loaded through the Posterior tab, which
-    opts in (``Accept(truncated=True)``) and installs the LoadedPosterior on the session; Validate
-    passes that LoadedPosterior straight through to validate_calibration, which itself reads the
-    region off ``posterior.posterior.truncation`` so calibration draws from the truncated prior; an
-    amortized LoadedPosterior clears it."""
+def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session(store):
+    """⚠ GUARDRAIL 8's GUI half, plus D8's question. A non-amortized artifact is loaded through the
+    Posterior tab, which now ASKS first and opts in with ``Accept(truncated=True)`` only on a yes; the
+    LoadedPosterior it installs carries the region, Validate passes that wrapper straight through to
+    validate_calibration (which reads the region off ``posterior.posterior.truncation`` so calibration
+    draws from the truncated prior), and an amortized LoadedPosterior clears it -- and is loaded with no
+    question at all."""
+    import pytest
     from core.artifacts import Accept
+    from core.SBI import reparam, truncate
+    from core.SBI.training_checkpoint import bijection_probe
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
+    from tests._fixtures import _nad_cfg, _posterior_artifact
+
+    cfg = _nad_cfg(chi_mode=True)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    T = reparam.build_inferred_bijection(cfg, log_params=[])
+    region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
+                                       probe=bijection_probe(T, P), x_obs_digest="d" * 16)
+    trunc = _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
+    amortized = _posterior_artifact(store, cfg, name="amort")
 
     _app()
     inf = InferenceScreen()
-    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub())
+    inf.session = SbiSession(cfg=cfg, inf_prior=_prior_stub())
     pp, vp = inf.posterior_panel, inf.validate_panel
 
-    region = object()
-    stub = type("Post", (), {"truncation": region, "x_obs_digest": "feedfacefeedface", "latent": object()})()
+    # the session half: a loaded region reaches Validate
+    stub_region = object()
+    stub = type("Post", (), {"truncation": stub_region, "x_obs_digest": "feedfacefeedface",
+                             "latent": object()})()
     loaded = type("LoadedPosterior", (), {"posterior": stub, "name": "", "id": "p1"})()
     pp._on_posterior(loaded)
-    assert inf.session.posterior.posterior.truncation is region
+    assert inf.session.posterior.posterior.truncation is stub_region
     assert inf.session.posterior.posterior.x_obs_digest == "feedfacefeedface"
 
     captured = {}
     vp.dispatch = lambda fn, *a, **k: captured.update(args=a, kwargs=k)
     vp._validate()
-    assert captured["args"][1] is inf.session.posterior and captured["args"][1].posterior.truncation is region,         "Validate did not pass the posterior whose region restricts calibration"
+    assert captured["args"][1] is inf.session.posterior and captured["args"][1].posterior.truncation is stub_region, \
+        "Validate did not pass the posterior whose region restricts calibration"
 
     load = {}
     pp.dispatch = lambda fn, *a, **k: load.update(args=a, kwargs=k)
-    pp.post_picker.selected = lambda: ("posterior_x", False)
+
+    # (a) the ask says yes: the load opts in, and it is a LOAD (build_new False)
+    asked = []
+    pp._ask_load_non_amortized = lambda m: asked.append(m) or True
+    pp.post_picker.selected = lambda: (trunc.id, False)
     pp._build_posterior()
     accept = load["kwargs"].get("accept")
-    assert isinstance(accept, Accept) and accept.truncated is True and load["args"][3] is False,         "the Posterior tab's LOAD does not opt in to non-amortized artifacts"
+    assert isinstance(accept, Accept) and accept.truncated is True and load["args"][3] is False, \
+        "the confirmed LOAD does not opt in to non-amortized artifacts"
+    assert len(asked) == 1 and asked[0].id == trunc.id, "the dialog was not shown the artifact's manifest"
+
+    # (b) the ask says no: nothing is dispatched and the session keeps what it had
+    load.clear()
+    before = inf.session.posterior
+    pp._ask_load_non_amortized = lambda m: False
+    pp._build_posterior()
+    assert load == {}, "Cancel dispatched the load anyway"
+    assert inf.session.posterior is before, "Cancel reset the session"
+
+    # (c) an amortized artifact is loaded with no question at all
+    load.clear()
+    pp._ask_load_non_amortized = lambda m: pytest.fail("an amortized posterior must not raise a dialog")
+    pp.post_picker.selected = lambda: (amortized.id, False)
+    pp._build_posterior()
+    assert load["kwargs"]["accept"].used() == [], load["kwargs"]["accept"]
 
     amortized_stub = type("Post", (), {"truncation": None, "x_obs_digest": None, "latent": object()})()
     amortized_loaded = type("LoadedPosterior", (), {"posterior": amortized_stub, "name": "", "id": "p2"})()
@@ -1033,3 +1073,44 @@ def test_the_tsnpe_new_run_box_is_not_persisted():
     assert "new_run" not in src, "save_settings must not persist the near-miss consent"
     src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(TSNPEPanel.restore_settings))))
     assert "new_run" not in src, "restore_settings must not restore the near-miss consent"
+
+
+def test_the_infer_tab_other_observation_box():
+    """D8 on the Infer tab. The box is the GUI's only way to say "yes, run this TSNPE posterior on a
+    different observation" -- and it must be UNREACHABLE for an amortized posterior, where it would mean
+    nothing, and must never survive a change of posterior or a restart: a stale tick would silence
+    guardrail 2 for a posterior the user never answered the question about."""
+    from core.artifacts import Accept
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+
+    _app()
+    inf = InferenceScreen()
+    inf.install_config(_chi_cfg(k=1))
+    panel = inf.infer_panel
+
+    # (a) amortized: greyed out, and no accept travels
+    inf.session.posterior = _posterior_stub(id_="amort")
+    inf.refresh_gates()
+    assert panel.other_obs.isEnabled() is False
+    assert panel._accept() is None, "an amortized posterior must send no Accept at all"
+
+    # (b) non-amortized and ticked: the consent travels
+    inf.session.posterior = _posterior_stub(id_="trunc", truncation=object(), x_obs_digest="d" * 16)
+    inf.refresh_gates()
+    assert panel.other_obs.isEnabled() is True
+    panel.other_obs.setChecked(True)
+    acc = panel._accept()
+    assert isinstance(acc, Accept) and acc.other_observation is True and acc.truncated is False
+
+    # (c) a DIFFERENT posterior clears it, even another truncated one
+    inf.session.posterior = _posterior_stub(id_="trunc2", truncation=object(), x_obs_digest="e" * 16)
+    inf.refresh_gates()
+    assert panel.other_obs.isChecked() is False, "the tick survived a change of posterior"
+    assert panel._accept() is None
+
+    # (d) not persisted: a restart must not restore consent
+    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(type(panel).save_settings))))
+    assert "other_obs" not in src, "save_settings must not persist the other-observation consent"
+    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(type(panel).restore_settings))))
+    assert "other_obs" not in src, "restore_settings must not restore it"

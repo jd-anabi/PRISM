@@ -610,9 +610,10 @@ class ArtifactStore:
                     f"{trd.get('level', '?')}-HPD region along Fisher direction(s) {trd.get('dims')}, drawn around "
                     f"the observation with digest {trd.get('x_obs_digest')}. It is only valid for observations in "
                     f"that region -- outside it the flow has never seen a training row and will extrapolate "
-                    f"confidently rather than return the prior. Pass Accept(truncated=True) to load it anyway "
-                    f"(the Posterior tab does): its region then restricts calibration, and inference refuses any "
-                    f"other observation unless told to accept it.")
+                    f"confidently rather than return the prior. To load it anyway: confirm the load on the "
+                    f"Posterior tab, pass --accept-truncated on the command line, or pass Accept(truncated=True). "
+                    f"Its region then restricts calibration, and inference refuses any other observation unless "
+                    f"told to accept it.")
             region = truncate.TruncationRegion.from_dict(mf.region_from_json(trd)) if trd else None
             # The digest is refused alongside the basis and for the same class of reason: without a
             # probe the coordinate the box refers to cannot be verified, and without a digest the

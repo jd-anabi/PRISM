@@ -1,6 +1,7 @@
 import math
 
-from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+                               QVBoxLayout, QWidget)
 
 from core import cli, config, forcing, orchestrator
 from core.artifacts import Accept
@@ -37,6 +38,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         self._cell_problems = []             # why the picked cell can't be used (empty = usable)
         self.cell_picker.combo.currentIndexChanged.connect(lambda _i: self._on_cell_changed())
         self._forcing_fields = {}            # name -> FloatField (experimental drive)
+        self._gated_posterior = None         # which posterior the other-observation box was gated on
         box = QGroupBox("Infer")
         v = QVBoxLayout(box)
 
@@ -103,6 +105,12 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         self.chi_form.addRow(self._chi_anchor)
         self.infer_stack.addWidget(chi_w)
         v.addWidget(self.infer_stack)
+
+        # D8: the GUI's only way to run a TSNPE posterior on an observation other than its region's.
+        # Enabled only when the session's posterior IS non-amortized -- on an amortized one it would
+        # mean nothing -- and cleared whenever the posterior changes.
+        self.other_obs = QCheckBox("Run on a different observation")
+        v.addWidget(with_badge(self.other_obs, HELP["infer_other_obs"]))
 
         self.btn_infer = QPushButton("Run inference")
         self.btn_infer.setProperty("accent", True)        # primary CTA (Fluent accent)
@@ -382,9 +390,11 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
     def _accept(self):
         """The Accept this run opts in with, or None for the default (refuse everything).
 
-        A seam, filled in the commit that adds the "Run on a different observation" checkbox: every
-        dispatch site passes it already, so the box becomes one method and no new call sites.
+        Reads the BOX, and only while it is enabled: a tick left behind by a posterior that has since
+        been replaced must never silence guardrail 2 for the new one.
         """
+        if self.other_obs.isEnabled() and self.other_obs.isChecked():
+            return Accept(other_observation=True)
         return None
 
     def _on_observation(self, payload):
@@ -405,6 +415,14 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         self.btn_infer.setEnabled(self.session.posterior is not None and not blocked)
         self.btn_infer.setToolTip(
             "The selected cell does not fit the bounds file used to build the config." if blocked else "")
+        # The other-observation box. getattr all the way down: the gate tests put a bare object() on
+        # session.posterior, and a status gate must never raise into refresh_gates().
+        post = self.session.posterior
+        truncated = getattr(getattr(post, "posterior", None), "truncation", None) is not None
+        if post is not self._gated_posterior or not truncated:
+            self.other_obs.setChecked(False)
+        self._gated_posterior = post
+        self.other_obs.setEnabled(truncated)
 
     def save_settings(self, qs):
         qs.beginGroup("inference_infer")

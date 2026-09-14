@@ -115,21 +115,25 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         if cap < 0:
             self.log_pane.append_line("Max rows per batch cannot be negative (0 = auto).", "warning")
             return
-        new_run = False
+        new_run, accept = False, Accept()
         if is_new:
             go, new_run = self._confirm_fresh_run(cfg, n_runs, cap)
             if not go:
                 return
+        else:
+            accept = self._accept_for_load(entry)
+            if accept is None:                 # the user cancelled the load
+                return
+        # AFTER both questions, never before: Cancel must leave the session exactly as it was, and
+        # reset_downstream drops the posterior the user is still working with. The load branch above
+        # asks through _accept_for_load before loading a non-amortized posterior.
         self.session.reset_downstream("posterior")
         self._screen.refresh_gates()
         # Passed, never written to config: orchestrator does `from .config import TRAINING_NUM_RUNS`,
         # so setting the constant here would be a silent no-op and the run would use the default.
-        # accept=Accept(truncated=True): a NON-AMORTIZED artifact loads here and carries its region
-        # into the session, so Validate restricts its prior to it and Infer warns on another observation.
         self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
                       entry, is_new,
-                      num_runs=n_runs, run_size_cap=cap, accept=Accept(truncated=True),
-                      new_run=new_run,
+                      num_runs=n_runs, run_size_cap=cap, accept=accept, new_run=new_run,
                       hidden_features=max(1, self.flow_hidden.value()),
                       num_transforms=max(1, self.flow_transforms.value()),
                       learning_rate=self.flow_lr.value() or config.TRAINING_LEARNING_RATE,
@@ -194,6 +198,53 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         box.exec()
         return box.clickedButton() is go
 
+    def _accept_for_load(self, entry) -> "Accept | None":
+        """What to load a STORED posterior with: ``Accept()``, ``Accept(truncated=True)``, or None for
+        "the user cancelled".
+
+        The tab used to pass ``Accept(truncated=True)`` unconditionally, which made the store's refusal
+        unreachable from the GUI: a non-amortized artifact -- valid only near ONE observation -- loaded
+        as silently as an amortized one, and the only sign was a log line after the fact. Asking costs a
+        click on the rare occasion a TSNPE posterior is picked, and the question is the only place the
+        three consequences (Validate restricts its prior, Infer refuses another observation, a further
+        round can only be drawn around this posterior's own observation) are stated before the load.
+
+        FAILS OPEN on any error: the load itself then names the problem, which it does far better than a
+        dialog here could.
+        """
+        try:
+            m = default_store().get("posterior", entry)       # the picker's userData is the id
+        except Exception:                                     # noqa: BLE001 -- let the load report it
+            return Accept()
+        if m.body.get("amortized", True):
+            return Accept()
+        return Accept(truncated=True) if self._ask_load_non_amortized(m) else None
+
+    def _ask_load_non_amortized(self, m) -> bool:
+        """The dialog. A method of its own so tests can replace it without a live event loop."""
+        trd = m.body.get("truncation") or {}
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Load a NON-AMORTIZED posterior?")
+        box.setText(f"'{m.name or m.id}' was trained by a TSNPE round.")
+        box.setInformativeText(
+            f"It was trained on a prior truncated to a {trd.get('level', '?')}-HPD region along Fisher "
+            f"direction(s) {trd.get('dims')}, drawn around the observation with digest "
+            f"{trd.get('x_obs_digest')}.\n\n"
+            "It is valid only near that observation; anywhere else the flow has never seen a training "
+            "row and extrapolates confidently rather than returning the prior.\n\n"
+            "If you load it:\n"
+            "  • Validate restricts its prior to that region.\n"
+            "  • Infer refuses any other observation unless \"Run on a different observation\" is "
+            "ticked on the Infer tab.\n"
+            "  • A further TSNPE round can only be drawn around this posterior's own observation — "
+            "there is no override for that one.")
+        load = box.addButton("Load it", QMessageBox.DestructiveRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setDefaultButton(box.buttons()[-1])
+        box.exec()
+        return box.clickedButton() is load
+
     def _on_posterior(self, payload):
         self.session.posterior = payload                 # a LoadedPosterior
         region = payload.posterior.truncation
@@ -201,7 +252,8 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
             self.log_pane.append_line(
                 f"This posterior is NON-AMORTIZED (observation digest {payload.posterior.x_obs_digest}): "
                 f"Validate restricts its prior to the region it was trained on; Infer refuses any other "
-                f"observation unless told to accept it.", "warning")
+                f"observation unless 'Run on a different observation' is ticked on the Infer tab.",
+                "warning")
         self.log_pane.append_line(f"Posterior ready: {payload.name or '(unnamed, id ' + payload.id + ')'}. "
                                   f"Name it below to keep it.")
         self._screen.refresh_gates()
@@ -262,7 +314,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
             except (TypeError, ValueError):
                 getattr(self, name).setText(str(default))
         # Defaults are the config constants, so a fresh install and a wiped QSettings both land on
-        # exactly the CLI's behaviour.
+        # exactly the stage defaults.
         self.num_runs.setText(str(settings.get_int(qs, "num_runs", config.TRAINING_NUM_RUNS)))
         self.run_size_cap.setText(str(settings.get_int(qs, "run_size_cap", config.TRAINING_RUN_SIZE)))
         qs.endGroup()
