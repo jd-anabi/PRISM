@@ -36,10 +36,32 @@ def _art(root, kind):
     return SimpleNamespace(kind=kind, path=Path(root) / f"{kind}s" / "rec__20260101T000000")
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _session_default_store():
+    """The session sandbox object, captured before ANY fixture below can run ``main`` for real.
+
+    pytest instantiates same-scope fixtures with autouse ones first (see "Autouse fixtures are
+    executed first within their scope" in the pytest docs), so this module-scoped autouse fixture is
+    guaranteed to run before ``tool_env``/``tool_run`` -- both module-scoped but only explicitly
+    requested -- regardless of test order or a ``-k`` selection. That matters because ``tool_run``
+    calls the real ``main`` TWICE during its own fixture setup, before any test body -- and therefore
+    before a function-scoped fixture's ``default_store()`` read -- ever runs. Capturing ``before``
+    inside a function-scoped fixture would read the store AFTER those two calls, so a leak baked in
+    during ``tool_run``'s setup would already be sitting in ``before`` and every later comparison
+    would trivially pass (spec Sec. 8.4's gap). Recording it here, ahead of every module fixture, is what
+    keeps ``default_store() is <this>`` a real check of the object the session started with.
+    """
+    from core.artifacts import default_store
+    return default_store()
+
+
 @pytest.fixture(scope="module")
-def tool_env(tmp_path_factory):
+def tool_env(_session_default_store, tmp_path_factory):
     """PRISM_ARTIFACTS at a temp root, the tiny gen_prior stub, and SBITEST installed as real input
-    files -- all restored at module teardown. Yields ``(bounds, cell, root)``."""
+    files -- all restored at module teardown. Yields ``(bounds, cell, root)``.
+
+    Depends on ``_session_default_store`` (even though it does not use the value) so the capture above
+    is guaranteed to happen first even if pytest's scope/autouse ordering were ever in doubt."""
     from core import orchestrator
     from tests._fixtures import _tiny_gen_prior, install_sbitest
     root = tmp_path_factory.mktemp("tool_artifacts")
@@ -54,26 +76,36 @@ def tool_env(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def tool_run(tool_env):
+def tool_run(tool_env, _session_default_store):
     """A real prior (``tp``) and a real posterior (``tpost``) written BY THE TOOL, at tiny size.
-    ``--checkpoint-every 1`` is explicit: the session default is off (tests/conftest.py)."""
+    ``--checkpoint-every 1`` is explicit: the session default is off (tests/conftest.py).
+
+    These are the only in-process calls to the real stages that happen OUTSIDE a test body (during
+    module-fixture setup), so the store-survives check is repeated right here, immediately after them,
+    rather than trusting the later function-scoped fixture alone to catch a leak from this setup."""
+    from core.artifacts import default_store
     bounds, cell, root = tool_env
     assert main(["prior", *_cfg(bounds), "--name", "tp"]) == 0
     assert main(["train", *_cfg(bounds), "--prior", "tp", "--name", "tpost", "--num-runs", "2",
                  "--run-size", "8", "--hidden-features", "8", "--num-transforms", "1",
                  "--stop-after-epochs", "1", "--checkpoint-every", "1"]) == 0
+    assert default_store() is _session_default_store, \
+        "tool_run's own two real `main` calls left the tool's store as the process default"
     return bounds, cell, root
 
 
 @pytest.fixture(autouse=True)
-def _default_store_is_restored():
+def _default_store_is_restored(_session_default_store):
     """``main`` runs its handler under ``use_store`` and must put the process default back. A tool that
     leaked its store would make every later test in the session write into the tool's root, and only a
-    SINGLE-PROCESS gate could ever notice (CLAUDE.md); this makes it a per-test failure instead."""
+    SINGLE-PROCESS gate could ever notice (CLAUDE.md); this makes it a per-test failure instead.
+
+    Compared against ``_session_default_store`` -- captured once, before any module fixture's real
+    ``main`` calls -- rather than a fresh ``default_store()`` read here, so a leak already baked into a
+    per-test ``before`` by ``tool_run``'s fixture setup cannot hide behind it."""
     from core.artifacts import default_store
-    before = default_store()
     yield
-    assert default_store() is before, "the tool left its own store as the process default"
+    assert default_store() is _session_default_store, "the tool left its own store as the process default"
 
 
 def test_the_help_epilog_names_the_core_environment_settings():
