@@ -3731,8 +3731,8 @@ def test_a_failed_snapshot_never_writes_a_stale_restore_point():
 
 
 def test_the_vram_ceiling_env_override_wins_and_tolerates_junk():
-    """A per-run throttle has to be settable without editing a tracked file, so it follows
-    PRISM_CHI_OVERRIDE's shape. A typo in an env var must not end a multi-day run."""
+    """A per-run throttle has to be settable without editing a tracked file, so it is read live from
+    the environment, like PRISM_MEM_LOG_EVERY. A typo in an env var must not end a multi-day run."""
     import os as _os
     saved_env = _os.environ.get(pipeline_mod.VRAM_CEILING_ENV)
     saved_cfg = config.SIM_VRAM_CEILING_GIB

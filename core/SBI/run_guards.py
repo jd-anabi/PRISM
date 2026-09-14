@@ -11,14 +11,11 @@ amortization flag were retired the same way (piece 1, Task 7): store.load_poster
 is their successor.
 """
 import hashlib
-import os
 
 import torch
 
 from core import config, registry
 from core.config import SimConfig
-
-CHI_OVERRIDE_ENV = "PRISM_CHI_OVERRIDE"
 
 
 def _find_nd_gmm(obj, _depth: int = 0):
@@ -130,9 +127,8 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     omits it on purpose), and failing on it would refuse a perfectly good 7-recording experiment. It
     is reported alongside a real mismatch as context, never as the cause.
 
-    :raises ValueError: on a band/drive mismatch, unless ``PRISM_CHI_OVERRIDE=1``. Deliberate band
-        exploration is a real activity -- ``scripts/chi_f0_sweep.py`` exists for it -- so the escape
-        hatch is explicit rather than absent.
+    :raises ValueError: on any band/drive mismatch. There is no override: a non-default band or drive
+        amplitude means editing config.py deliberately (D11).
     """
     if not cfg.chi_mode:
         return
@@ -149,10 +145,6 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         k_note = (f"\n  (FYI, not an error: chi_n_freqs is {cfg.chi_n_freqs} against config's "
                   f"{config.CHI_N_FREQS}. K is per-observation and training draws its own, so it is "
                   f"legitimate -- but if you did not choose it either, it points at the same source.)")
-    if os.environ.get(CHI_OVERRIDE_ENV) == "1":
-        print(f"[chi] {CHI_OVERRIDE_ENV}=1 -- proceeding with a NON-DEFAULT chi configuration:\n"
-              f"{detail}{k_note}", flush=True)
-        return
     raise ValueError(
         f"This chi run's configuration does not match config.py, and the difference decides what the "
         f"network is trained on:\n{detail}{k_note}\n\n"
@@ -162,7 +154,8 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         f"  MOST LIKELY CAUSE: stale persisted GUI settings. The Config tab seeds these from config.py "
         f"and then restores them from QSettings, so a value saved before a config change wins silently."
         f" Check the [inference_config] chi_lo / chi_hi / chi_f0 keys in PRISM.ini.\n"
-        f"  If the difference is DELIBERATE (a band sweep, say), re-run with {CHI_OVERRIDE_ENV}=1.")
+        f"  A non-default band or drive amplitude is not supported: set the Config tab back to "
+        f"config.py's values (or edit config.py itself, deliberately, for every future run).")
 
 
 def _log_params_for(cfg: SimConfig):

@@ -38,7 +38,7 @@ from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedC
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .artifacts.provenance import file_ref as _file_ref
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
-from .SBI.run_guards import (CHI_OVERRIDE_ENV, _find_nd_gmm, _gmm_fingerprint,  # noqa: E402
+from .SBI.run_guards import (_find_nd_gmm, _gmm_fingerprint,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches_region,
                              _assert_chi_config_is_deliberate, _log_params_for)
 from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derived, overlay, ppc,

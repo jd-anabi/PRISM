@@ -36,7 +36,7 @@ import torch
 from core import cli, config, orchestrator, registry
 from core.config import BOUNDS_PATH, CELL_PATH, VALID_LABELS, VALID_MODELS
 from core.Helpers import file_manager
-from core.SBI import reparam
+from core.SBI import reparam, run_guards
 
 from tests._fixtures import _WriteFailed, _failing
 
@@ -234,7 +234,7 @@ def test_atomic_savez_round_trips_and_cannot_be_torn(tmp_path):
 
 
 # ── the chi band/drive preflight (2026-08-19 regression) ─────────────────────────────────────────
-def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend():
+def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(monkeypatch):
     """A ~5-day retrain was spent at the RETIRED band (0.1, 10.0) because QSettings restored a value
     saved before C-5 changed it. ``store.load_posterior`` catches that disagreement only when a
     posterior is LOADED, i.e. after the days are gone.
@@ -247,7 +247,6 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
     OBSERVATION supplies, training draws its own K per batch, and failing on it would refuse a
     perfectly good 7-recording experiment.
     """
-    import os as _os
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
 
     orchestrator._assert_chi_config_is_deliberate(cfg)          # at the defaults: must not raise
@@ -274,15 +273,20 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
     spont.chi_freq_bounds = (0.1, 10.0)
     orchestrator._assert_chi_config_is_deliberate(spont)        # must not raise
 
-    # The escape hatch works, and is explicit -- a band sweep is a real activity.
-    prev = _os.environ.get(orchestrator.CHI_OVERRIDE_ENV)
-    _os.environ[orchestrator.CHI_OVERRIDE_ENV] = "1"
+    # THERE IS NO ESCAPE HATCH ANY MORE (D11). PRISM_CHI_OVERRIDE=1 used to let a deliberate band
+    # sweep through; its one sanctioned caller is archived, every knob now travels as an argument,
+    # and a non-default band means editing config.py deliberately. The refusal must not advertise a
+    # variable that does nothing -- an operator who sets it and sees the run proceed learns the wrong
+    # lesson, and an operator who sets it and sees it ignored deserves to be told why.
+    monkeypatch.setenv("PRISM_CHI_OVERRIDE", "1")
+    override = _cfg(chi_mode=True, chi_n_freqs=4)
+    override.chi_freq_bounds = (0.1, 10.0)
     try:
-        override = _cfg(chi_mode=True, chi_n_freqs=4)
-        override.chi_freq_bounds = (0.1, 10.0)
-        orchestrator._assert_chi_config_is_deliberate(override)  # must not raise
-    finally:
-        if prev is None:
-            _os.environ.pop(orchestrator.CHI_OVERRIDE_ENV, None)
-        else:
-            _os.environ[orchestrator.CHI_OVERRIDE_ENV] = prev
+        orchestrator._assert_chi_config_is_deliberate(override)
+        raise AssertionError("PRISM_CHI_OVERRIDE=1 still let a non-default band through")
+    except ValueError as e:
+        assert "PRISM_CHI_OVERRIDE" not in str(e), \
+            f"the refusal still advertises a hatch that no longer exists: {e}"
+        assert "config.py" in str(e), f"the refusal must say what to do instead, got: {e}"
+    assert not hasattr(run_guards, "CHI_OVERRIDE_ENV"), "run_guards still defines the override name"
+    assert not hasattr(orchestrator, "CHI_OVERRIDE_ENV"), "orchestrator still re-exports the override name"

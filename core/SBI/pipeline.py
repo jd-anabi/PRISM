@@ -510,8 +510,8 @@ def sim_memory_budget_elements(device: torch.device, dtype: torch.dtype) -> int:
     15.92 GiB card). Free the memory first, then set this to about (nvidia-smi free) - 1 GiB.
 
     ``PRISM_VRAM_CEILING_GIB`` overrides the config constant, so a single run can be throttled
-    without editing a tracked file -- the same shape as PRISM_CHI_OVERRIDE. An unparsable value is
-    ignored with a note rather than crashing a multi-day run on a typo.
+    without editing a tracked file -- read live from the environment, like ``PRISM_MEM_LOG_EVERY``.
+    An unparsable value is ignored with a note rather than crashing a multi-day run on a typo.
     """
     budget = min(config.memory_budget_elements(device, dtype, _SIM_MEM_FRACTION), _budget_cap())
     ceiling_gib = vram_ceiling_gib()
