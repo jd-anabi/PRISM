@@ -26,12 +26,13 @@ from . import manifest as mf
 from . import provenance as prov
 
 KIND_DIRS = {"prior": "priors", "simulation": "simulations", "posterior": "posteriors",
-             "observation": "observations", "calibration": "calibrations", "inference": "inferences"}
+             "observation": "observations", "calibration": "calibrations", "inference": "inferences",
+             "diagnostic": "diagnostics"}
 MANIFEST = "manifest.json"
 # Which ``parents`` keys can name an artifact of a given kind.
 _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 "posterior": ("posterior", "parent_posterior"), "observation": ("observation",),
-                "calibration": (), "inference": ()}
+                "calibration": (), "inference": (), "diagnostic": ()}
 
 
 class StoreError(ValueError):
@@ -147,6 +148,14 @@ class LoadedCalibration(Loaded):
 class LoadedInference(Loaded):
     results: dict = field(default_factory=dict)
     samples_path: "Path | None" = None
+
+
+@dataclass
+class LoadedDiagnostic(Loaded):
+    diagnostic: str = ""            # the function that wrote it ("sbc_repeats", "identifiability", ...)
+    variant: "str | None" = None    # its mode where it has more than one ("rotation"/"laplace"/"jacobian")
+    settings: dict = field(default_factory=dict)
+    results: dict = field(default_factory=dict)
 
 
 def slug(title: str) -> str:
@@ -712,6 +721,25 @@ class ArtifactStore:
             raise StoreError(f"no complete inference named or id'd {ref!r}")
         return LoadedInference("inference", m.id, m.name, m, sub, results=dict(m.body["results"]),
                                samples_path=sub / "samples.pt")
+
+    def load_diagnostic(self, ref: str) -> LoadedDiagnostic:
+        """A diagnostic is a MEASUREMENT about other artifacts, so this verifies nothing and refuses
+        nothing (D5): there is no configuration it has to match, and nothing is ever trained from it.
+        The one failure is a ref that names no complete diagnostic.
+
+        From the manifest body, like load_calibration and load_inference: the manifest is the
+        authoritative description of the artifact, and any results file beside it is a
+        human-readable copy. Per-parameter records are LISTS of {"name": ...} entries for the same
+        reason they are there -- to_json_text sorts keys recursively, which would alphabetize a dict
+        keyed by parameter name and silently decouple it from cfg.params_dict's order.
+        """
+        sub, m = self._find("diagnostic", ref)
+        if m is None:
+            raise StoreError(f"no complete diagnostic named or id'd {ref!r}")
+        body = m.body
+        return LoadedDiagnostic("diagnostic", m.id, m.name, m, sub, diagnostic=body["diagnostic"],
+                                variant=body["variant"], settings=dict(body["settings"]),
+                                results=dict(body["results"]))
 
 
 def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None, hw=None,

@@ -71,6 +71,12 @@ def test_manifest_validation_refuses_missing_header_wrong_schema_bad_name_bad_id
     assert mf.validate(_header(id="20260910T120000-2")).id == "20260910T120000-2"
     assert mf.validate(_header(kind="simulation", id="0123456789ab",
                                body={k: None for k in mf.BODY_KEYS["simulation"]})).id == "0123456789ab"
+    ok = _header(kind="diagnostic", body={"diagnostic": "sbc", "variant": "k4", "settings": {"repeats": 2},
+                                          "results": {"n_valid": 8}})
+    assert mf.validate(ok).body["diagnostic"] == "sbc"
+    short = dict(ok["body"]); del short["variant"]
+    with pytest.raises(mf.ManifestError, match="diagnostic body keys"):
+        mf.validate(_header(kind="diagnostic", body=short))
 
 
 def test_provenance_records_git_rev_and_dirty_and_unknown_outside_a_repo():
@@ -145,6 +151,8 @@ def test_create_list_get_round_trip_per_kind(store):
         "observation": {"mode": "chi", "conditioning": {"width": 50}, "x_obs_digest": "0" * 16, "T_obs_cell": 1.0,
                         "n_obs": 10, "forcing_vals": {}, "chi_obs_freqs": None, "source": {"kind": "simulated"}},
         "calibration": _cal_body(), "inference": {"results": {"n_samples": 5}},
+        "diagnostic": {"diagnostic": "sbc", "variant": None, "settings": {"repeats": 2},
+                       "results": {"n_valid": 8}},
     }
     for kind, body in bodies.items():
         w = _make(store, kind, name=f"n_{kind}", body=body)
@@ -155,6 +163,8 @@ def test_create_list_get_round_trip_per_kind(store):
         assert store.path(kind, w.id) == w.dir and m.payloads["results.json"] == prov.sha256_file(w.dir / "results.json")
         assert m.prism["git_rev"] != "" and m.env["python"]
     assert store.list("posterior")[0].width == 50 and store.list("posterior")[0].amortized is True
+    assert store.list("diagnostic")[0].mode is None, \
+        "the diagnostic body key is 'variant', not 'mode': Summary.mode is the OBSERVATION mode"
 
 
 def test_writer_removes_the_directory_on_exception(store):

@@ -14,7 +14,7 @@ import re
 from dataclasses import asdict, dataclass
 
 SCHEMA = 1
-KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference")
+KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 # A UTC second, with -2/-3 on a same-second collision; or the simulation kind's 12-hex identity digest.
 ID_RE = re.compile(r"^(\d{8}T\d{6}(-\d+)?|[0-9a-f]{12})$")
@@ -30,6 +30,15 @@ BODY_KEYS = {
                     "chi_obs_freqs", "source"),
     "calibration": ("results",),
     "inference": ("results",),
+    # A measurement ABOUT other artifacts (SBC repeats, identifiability, channel ablation).
+    # ``diagnostic`` names the function that wrote it, ``variant`` its mode (None when it has only
+    # one), ``settings`` the knobs it ran under and ``results`` a SHORT summary -- the arrays stay in
+    # payloads beside the manifest. There is deliberately NO closed registry of diagnostic names
+    # here: a new diagnostic is a new value, not a schema change.
+    # The mode key is ``variant`` and NOT ``mode`` because ArtifactStore.list fills Summary.mode from
+    # body.get("mode"), where ``mode`` means the OBSERVATION mode -- a listing that showed "laplace"
+    # in that column would be reporting a conditioning geometry that does not exist.
+    "diagnostic": ("diagnostic", "variant", "settings", "results"),
 }
 
 
