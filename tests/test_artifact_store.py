@@ -1218,8 +1218,11 @@ def test_simulated_inference_warns_about_ignored_values_t_obs_and_an_out_of_dist
     assert any("the bounds file does not declare" in m and "f_scale" in m for m in said), said
     assert any("lies outside the training prior" in m for m in said), said
     # the range check is two-sided
-    with pytest.warns(orchestrator.PreflightWarning, match="exceeds the training range maximum"):
+    with pytest.warns(orchestrator.PreflightWarning) as rec2:
         orchestrator.simulated_inference(cfg, _sim_post(), 999.0, cell=cell, store=store)
+    said2 = [str(w.message) for w in rec2]
+    assert any("exceeds the training range maximum" in m for m in said2), said2
+    assert any("the bounds file does not declare" in m and "f_scale" in m for m in said2), said2
 
 
 def test_simulated_inference_refuses_a_non_amortized_posterior_before_it_simulates(store, monkeypatch):
