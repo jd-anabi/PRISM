@@ -551,7 +551,11 @@ def test_delete_refuses_a_prior_a_simulation_was_generated_against_by_fingerprin
 
 def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, monkeypatch):
     """The checkpoint dict build_posterior hands gen_training_data names the LoadedPrior's id, and the
-    identity's prior fingerprint is the wrapper's -- checked at the seam, with train_nn stubbed."""
+    identity's prior fingerprint is the wrapper's -- checked at the seam, with train_nn stubbed.
+
+    The cadence and the epoch cap ride in as ARGUMENTS (piece 2, §2.6): checkpoint_every reaches the
+    plan's checkpoint dict and max_num_epochs reaches train_nn, neither of them through a module
+    constant that orchestrator snapshotted at import."""
     from core import orchestrator
     from core.artifacts.identity import SimulationIdentity
     cfg = _nad_cfg()
@@ -560,17 +564,19 @@ def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, 
     captured = {}
 
     def fake_train_nn(plan, **kw):
-        captured["plan"] = plan
+        captured["plan"], captured["kw"] = plan, kw
         raise RuntimeError("stop before training")
 
     monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
-    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 1)
     with pytest.raises(RuntimeError, match="stop before training"):
-        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4)
+        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
+                                     checkpoint_every=1, max_num_epochs=7)
     ck = captured["plan"].checkpoint
     assert ck["parents"] == {"prior": lp.id} and ck["inputs"]["model"] == "NADROWSKI" and ck["hw"] is cfg.hw
     assert ck["identity"] == SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
     assert ck["identity"]["prior_fingerprint"] == lp.fingerprint and ck["dir"].parent == store.kind_dir("simulation")
+    assert ck["every"] == 1 and ck["resume"] == "auto", "the cadence and the policy must be the arguments"
+    assert captured["kw"]["max_num_epochs"] == 7, "max_num_epochs was accepted and dropped"
 
 
 class _PriorWrap:
@@ -1005,3 +1011,100 @@ def test_every_artifact_the_suite_wrote_is_complete_and_its_parents_resolve(tiny
                 assert s.get(k, pid).id == pid, (kind, row.id, pkind, pid)
             for f, sha in m.payloads.items():
                 assert prov.sha256_file(row.path / f) == sha, (kind, row.id, f)
+
+
+def test_checkpoint_every_and_max_epochs_are_recorded_in_the_manifest(store, monkeypatch):
+    """Both knobs are recorded, so an artifact says what cadence it was written under and what epoch
+    cap it trained to. checkpoint_every=0 is checkpointing OFF: no plan.checkpoint, no simulation
+    parent, and nothing under simulations/ -- which is what the whole suite now runs with."""
+    from core import orchestrator
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = False
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    captured = {}
+
+    def fake_train_nn(plan, **kw):
+        captured["plan"], captured["kw"] = plan, kw
+        dp = _FakeDP()
+        dp.prior = kw["prior"]
+        return dp, {"training_loss": [1.0], "validation_loss": [1.0], "best_validation_loss": 1.0,
+                    "epochs_trained": 1, "stop_after_epochs": 1}
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data",
+                        lambda plan, **kw: (torch.zeros(8, 50), torch.zeros(8, 13)))
+    out = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=lambda t, f: None,
+                                       num_runs=2, run_size_cap=4, checkpoint_every=0,
+                                       max_num_epochs=11, hidden_features=8, num_transforms=1,
+                                       stop_after_epochs=1)
+    m = store.get("posterior", out.id)
+    assert captured["plan"].checkpoint is None, "checkpoint_every=0 must leave the plan uncheckpointed"
+    assert captured["kw"]["max_num_epochs"] == 11
+    assert m.config["checkpoint_every"] == 0 and m.config["max_num_epochs"] == 11
+    assert "simulation" not in m.parents
+    sims = store.kind_dir("simulation")
+    assert not sims.exists() or not list(sims.iterdir()), "checkpointing off still wrote a cache"
+
+
+def test_resume_is_validated_and_refused_before_any_spend(store, monkeypatch):
+    """`resume` is an ARGUMENT with a LITERAL default -- 'auto', 'require' or 'never', refused
+    otherwise -- rather than a None-resolved knob, because there is no config constant behind it.
+
+    And a policy with checkpointing OFF is refused up front: with checkpoint_every=0 no cache is read
+    or written, so the policy has nothing to act on, and a `--resume require` drill would otherwise
+    exit 0 having tested nothing. That is exactly how the 2026-09-11 GPU run 2 passed while resuming
+    nothing at all."""
+    import inspect as _inspect
+    from core import orchestrator
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = False
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    spent = []
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: spent.append("train"))
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("sim"))
+    with pytest.raises(ValueError, match="resume"):
+        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
+                                     checkpoint_every=1, resume="yes please")
+    with pytest.raises(ValueError, match="checkpointing on"):
+        orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
+                                     checkpoint_every=0, resume="require")
+    assert spent == [], "a refused resume policy started the run anyway"
+    assert _inspect.signature(orchestrator.build_posterior).parameters["resume"].default == "auto"
+
+
+def test_the_budget_line_prints_with_default_arguments(store, monkeypatch, capsys):
+    """Guardrail 6 on the command line: what this run will actually simulate, said once, whether or
+    not a cap or a batch count was overridden. The two conditional announcements stay -- with the
+    defaults neither of them fires, which is precisely the run whose size used to be invisible."""
+    from core import orchestrator
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = False
+    cfg.hw.batch_size = 4
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+
+    def stop(*a, **k):
+        raise RuntimeError("stop before training")
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", stop)
+    with pytest.raises(RuntimeError, match="stop before training"):
+        orchestrator.build_posterior(cfg, lp, None, True)
+    out = capsys.readouterr().out
+    n = config.TRAINING_NUM_RUNS
+    assert f"[budget] {n:,} batches x 4 rows = {n * 4:,} training rows" in out
+    assert "capped at" not in out and "COUNT overridden" not in out, (
+        "the default run fires neither conditional announcement -- that is why [budget] is unconditional")
+
+
+def test_make_sim_config_takes_the_device_as_an_argument():
+    """The command-line tool builds `hw` from --device; the GUI passes nothing and keeps
+    detect_device(). A hard-coded detect_device() inside the builder made the CPU unreachable without
+    mutating the config afterwards, and the device is part of the simulation identity."""
+    from core import cli, registry
+    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    bounds = str(BOUNDS_PATH / "nadrowski" / "master.txt")
+    hw = config.cpu_device()
+    cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"), bounds, hw=hw)
+    assert cfg.hw is hw and cfg.hw.device.type == "cpu"
+    default = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"), bounds)
+    assert default.hw.device.type == config.detect_device().device.type

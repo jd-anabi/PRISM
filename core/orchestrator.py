@@ -549,6 +549,8 @@ def build_posterior(
     observation=None, parent_posterior=None, accept=None,
     hidden_features: int | None = None, num_transforms: int | None = None,
     learning_rate: float | None = None, stop_after_epochs: int | None = None,
+    max_num_epochs: int | None = None, checkpoint_every: int | None = None,
+    resume: str = "auto",
     fisher_m: int | None = None, fisher_dz: float | None = None,
     fisher_points: int | None = None,
 ) -> LoadedPosterior:
@@ -581,6 +583,14 @@ def build_posterior(
     :param num_transforms: flow depth; None = config.NSF_NUM_TRANSFORMS.
     :param learning_rate: Adam LR; None = config.TRAINING_LEARNING_RATE.
     :param stop_after_epochs: early-stopping patience; None = config.TRAINING_STOP_AFTER_EPOCHS.
+    :param max_num_epochs: hard epoch cap; None = config.TRAINING_MAX_NUM_EPOCHS.
+    :param checkpoint_every: training batches between checkpoint writes, 0 = checkpointing OFF (no
+                     simulation cache is read or written); None = config.TRAINING_CHECKPOINT_EVERY.
+                     NOT part of the simulation identity -- the checkpoint header stores no cadence
+                     either, so changing it never re-keys a cache.
+    :param resume: "auto" (resume this run's own cache when it holds batches), "require" (refuse if
+                     there is none) or "never" (refuse if there is one). Recorded as an OUTCOME in
+                     the manifest (``training.resumed_from_batch``), not as a setting.
     :param fisher_m: ensemble per latent perturbation for the rotation; None =
                      config.REPARAM_FISHER_M.
     :param fisher_dz: latent central-difference step; None = config.REPARAM_FISHER_DZ.
@@ -653,6 +663,22 @@ def build_posterior(
     if size_cap < 0:
         raise ValueError(
             f"run_size_cap must be >= 0 (0 = follow the hardware default), got {size_cap}")
+    # The cadence and the policy, resolved beside them for the same reason: everything that decides
+    # WHETHER a simulation cache is touched has to be settled before the identity is built.
+    ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
+    max_ep = TRAINING_MAX_NUM_EPOCHS if max_num_epochs is None else int(max_num_epochs)
+    if ck_every < 0:
+        raise ValueError(f"checkpoint_every must be >= 0 (0 = checkpointing off), got {ck_every}")
+    if resume not in ("auto", "require", "never"):
+        raise ValueError(
+            f"resume={resume!r} is not one of 'auto', 'require', 'never'.")
+    if resume != "auto" and not ck_every and train_new:
+        # Without this, a `resume='require'` drill with checkpointing off exits 0 having tested
+        # nothing: there is no cache for the policy to act on, so the policy is silently ignored.
+        raise ValueError(
+            f"resume={resume!r} needs checkpointing on: with checkpoint_every=0 no simulation cache "
+            f"is read or written, so the policy has nothing to act on. Pass checkpoint_every=N "
+            f"(command line: --checkpoint-every N), or leave resume at 'auto'.")
     # Above BOTH branches, and the load branch is the subtle half. store.load_posterior compares the
     # posterior against cfg -- so a STALE cfg loading the posterior trained under that same stale cfg
     # agrees with itself and says nothing, while every inference it serves is at a retired band. This
@@ -754,6 +780,12 @@ def build_posterior(
         print(f"Training batch COUNT overridden: {n_runs} batches (config default "
               f"{TRAINING_NUM_RUNS}) — {n_runs * run_size:,} training rows.")
 
+    # UNCONDITIONAL, unlike the two announcements above, which fire only when a knob was overridden.
+    # This is guardrail 6 ("show the cost") on the command line: the GUI has a budget group, and the
+    # tool has this line. It is the one place a run states what it is about to simulate.
+    print(f"[budget] {n_runs:,} batches x {run_size:,} rows = {n_runs * run_size:,} training rows",
+          flush=True)
+
     # --- training-data checkpoint (C-11): resolved BEFORE the rotation, because a resume REUSES V ---
     # This ordering is the whole reason the resume works with rotation ON, which is how the retrain is
     # specified to run. `build_latent_fisher_rotation` seeds its noise under fork_rng but draws its
@@ -763,7 +795,7 @@ def build_posterior(
     # Reusing the stored V also skips the Fisher entirely on a resume, which is the single largest
     # pre-training cost.
     ckpt_dir = ckpt_resumed = None
-    if TRAINING_CHECKPOINT_EVERY and train_new:
+    if ck_every and train_new:
         # The region is part of the identity (omitted for an amortized run), so a TSNPE round has its
         # OWN directory and can never resume the amortized run's rows, nor the other way round (D3).
         from .artifacts.identity import SimulationIdentity
@@ -979,7 +1011,7 @@ def build_posterior(
             # into a CUDA matmul is a hard RuntimeError inside build_posterior.
             "probe": training_checkpoint.bijection_probe(
                 T_train, len(cfg.params_dict) + len(cfg.rescale_params), device=cfg.hw.device),
-            "V": V, "every": TRAINING_CHECKPOINT_EVERY, "resume": "auto",
+            "V": V, "every": ck_every, "resume": resume,
             "parents": {"prior": prior.id},
             "inputs": _inputs_from_cfg(cfg), "hw": cfg.hw,
         }
@@ -1017,7 +1049,7 @@ def build_posterior(
         theta_transform=T_train,
         hidden_features=hf, num_transforms=nt, num_bins=NSF_NUM_BINS,
         learning_rate=lr, stop_after_epochs=patience,
-        max_num_epochs=TRAINING_MAX_NUM_EPOCHS, show_train_summary=TRAINING_SHOW_SUMMARY,
+        max_num_epochs=max_ep, show_train_summary=TRAINING_SHOW_SUMMARY,
         batch_size=TRAINING_BATCH_SIZE, device=cfg.hw.device,
     )
 
@@ -1077,7 +1109,8 @@ def build_posterior(
         _fp = fisher_points or config.REPARAM_FISHER_POINTS
         w.config.update({"num_runs": n_runs, "run_size": run_size, "hidden_features": hf, "num_transforms": nt,
                          "learning_rate": lr, "stop_after_epochs": patience, "fisher_m": _fm,
-                         "fisher_dz": _fdz, "fisher_points": _fp})
+                         "fisher_dz": _fdz, "fisher_points": _fp,
+                         "checkpoint_every": ck_every, "max_num_epochs": max_ep})
         w.body = {
             "mode": cfg.observation_mode,
             "conditioning": conditioning_block(cfg),

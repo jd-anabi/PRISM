@@ -181,21 +181,23 @@ def build_tiny_run(store, hw=None):
     cfg.hw = hw if hw is not None else config.cpu_device()
     cfg.hw.batch_size = 8
     cfg.T_obs = 1.0
-    saved = (orchestrator.pipeline.gen_prior, orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL,
-             orchestrator.TRAINING_CHECKPOINT_EVERY)
+    saved_gen_prior = orchestrator.pipeline.gen_prior
     orchestrator.pipeline.gen_prior = _tiny_gen_prior
-    orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL, orchestrator.TRAINING_CHECKPOINT_EVERY = 2, 60, 0
     sink = lambda title, fig: None                                   # noqa: E731
     prior = orchestrator.build_prior(cfg, None, True, fig_sink=sink, name="tiny_prior")
+    # EVERY knob is an argument. This fixture used to rebind orchestrator.TRAINING_NUM_RUNS,
+    # SBC_N_CAL and TRAINING_CHECKPOINT_EVERY for its consumers; the cadence is now the session
+    # fixture's job (tests/conftest.py::_checkpointing_off_unless_asked) and the sizes are each
+    # consumer's own (they all pass num_runs=/n_cal= already).
     posterior = orchestrator.build_posterior(cfg, prior, None, True, fig_sink=sink, name="tiny_post",
-                                             hidden_features=8, num_transforms=1, stop_after_epochs=1)
+                                             num_runs=2, hidden_features=8, num_transforms=1,
+                                             stop_after_epochs=1)
 
     def other_prior():
         return orchestrator.build_prior(cfg, None, True, fig_sink=sink)   # another fit, another GMM
 
     def teardown():
-        (orchestrator.pipeline.gen_prior, orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL,
-         orchestrator.TRAINING_CHECKPOINT_EVERY) = saved
+        orchestrator.pipeline.gen_prior = saved_gen_prior
         # + whatever test_no_forcing_user_model_full_sbi_pipeline's finally does to unregister SBITEST
         try:
             model_store.delete_user_model(name)

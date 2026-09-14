@@ -49,3 +49,28 @@ def tiny_run(tmp_path_factory):
             yield run
         finally:
             run.teardown()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _checkpointing_off_unless_asked():
+    """Training-data checkpointing OFF for the whole session. A test that wants a simulation cache
+    passes ``checkpoint_every=`` to build_posterior explicitly.
+
+    A TEST-INTEGRITY guard, not housekeeping. Left on, the full-pipeline tests write real caches keyed
+    on a digest of their config -- and a COMPLETE cache short-circuits generation and returns its
+    stored rows. So the FIRST run would create them and every run afterwards would silently skip
+    gen_training_data entirely while the suite stayed green. Under D7 a stray cache is worse still: a
+    committed sibling one identity field away now REFUSES a later run instead of quietly restarting it,
+    so one test's leftovers would fail another's.
+
+    Rebound on ORCHESTRATOR, not on config: orchestrator does ``from .config import
+    TRAINING_CHECKPOINT_EVERY`` at import and would otherwise keep its snapshot. SESSION-scoped, which
+    is the point of moving it here: it used to be an import-time assignment in
+    tests/test_user_sbi.py, so it applied only when that file was collected and a single-file run
+    behaved differently from the gate.
+    """
+    from core import orchestrator
+    mp = pytest.MonkeyPatch()
+    mp.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 0)
+    yield
+    mp.undo()

@@ -40,17 +40,6 @@ from tests._fixtures import _tiny_gen_prior                      # noqa: E402
 _N_GROUP_G = 11
 _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
 
-# Training-data checkpointing OFF for the whole suite (C-11). Rebound on ORCHESTRATOR, not config,
-# because orchestrator does `from .config import ...` at import and would otherwise keep its snapshot.
-#
-# This is a TEST-INTEGRITY guard, not housekeeping. Left on, the full-pipeline tests write real
-# checkpoints into Resources/Checkpoints/ keyed on a digest of their config -- and a COMPLETE
-# checkpoint short-circuits generation and returns its stored rows. So the FIRST run would create
-# them and every run after that would silently skip gen_training_data entirely, and the suite would
-# stay green while testing nothing. Tests that want checkpointing pass an explicit `checkpoint=` dict
-# with a tmpdir, which is unaffected by this.
-orchestrator.TRAINING_CHECKPOINT_EVERY = 0
-
 
 def test_no_forcing_user_model_full_sbi_pipeline(tmp_path):
     """build_prior -> build_posterior -> generate_observations -> infer -> validate -> passive-infer."""
@@ -3319,6 +3308,7 @@ def test_the_sweep_and_flow_knobs_are_ARGUMENTS_because_the_constants_are_snapsh
           "min_cluster_size", "min_samples")),
         (orchestrator.build_posterior,
          ("hidden_features", "num_transforms", "learning_rate", "stop_after_epochs",
+          "max_num_epochs", "checkpoint_every",
           "fisher_m", "fisher_dz", "fisher_points")),
     ):
         params = _inspect.signature(fn).parameters

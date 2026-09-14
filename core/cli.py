@@ -490,7 +490,8 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
                     chi_mode: bool | None = None, chi_n_freqs: int | None = None,
                     chi_f0: float | None = None, chi_freq_bounds: tuple | None = None,
                     chi_k_pad: int | None = None, chi_max_cycles: float | None = None,
-                    reparam_rotate: bool | None = None) -> SimConfig:
+                    reparam_rotate: bool | None = None,
+                    hw: "DeviceConfig | None" = None) -> SimConfig:
     """
     Build a bounds-only SimConfig (no prompts) from a chosen model + bounds file. Ground-truth values,
     initial conditions, and T_obs are filled later (only for simulated inference). Shared by
@@ -508,6 +509,10 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
     ``(params, rescale, forcing)`` triple in ``parse_bounds_file``'s shape. Exactly one of the two must
     be given. Parameter ORDER within each dict is load-bearing (simulators bind columns positionally),
     so it is preserved verbatim.
+
+    ``hw`` is the DeviceConfig to run on; None detects one. The GUI passes nothing and keeps
+    detect_device(); the command-line tool builds it from --device. It is not a cosmetic setting --
+    the device and dtype are part of the simulation identity (core/artifacts/identity.py:72-73).
     """
     if (bounds_file is None) == (bounds_dicts is None):
         raise ValueError("make_sim_config needs exactly one of bounds_file or bounds_dicts.")
@@ -549,7 +554,7 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
         t_min_exp=T_MIN_EXP_S * s_to_cell,
         t_max_exp=T_MAX_EXP_S * s_to_cell,
         T_obs=None,                             # observation duration is prompted at the inference step
-        hw=detect_device(),
+        hw=detect_device() if hw is None else hw,
         sources={k: str(v) for k, v in (("bounds", bounds_file), ("units", units_path)) if v},
     )
 
