@@ -39,7 +39,7 @@ from ..streams import WorkerCancelled
 def build_stream_config(model: str, cell_path: str):
     """Build a ground-truth ``SimConfig`` from a model + cell pick, forced onto CPU.
 
-    Mirrors the inference simulated path (``inference_tabs._run_simulated_inference``): the bounds file
+    Mirrors the inference simulated path (``orchestrator.simulated_inference``): the bounds file
     is RESOLVED from the cell by ``cli.resolve_bounds_for_cell`` (same-named sibling, else the model's
     shared ``master.txt``), so no separate bounds pick is needed. ``make_sim_config`` defaults ``hw``
     to ``detect_device()`` (CUDA on a capable box); the batch-1 sequential Euler loop is CPU-optimal

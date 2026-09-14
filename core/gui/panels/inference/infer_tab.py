@@ -2,7 +2,8 @@ import math
 
 from PySide6.QtWidgets import (QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget)
 
-from core import cli, config, forcing
+from core import cli, config, forcing, orchestrator
+from core.artifacts import Accept
 from core.Helpers import file_manager, labels
 from core.config import T_MIN_EXP_S
 
@@ -16,7 +17,6 @@ from ...widgets.source_toggle import SourceToggle
 from core.SBI.observations import RecordingSet
 
 from .rows import _ChiProbeRow
-from .runners import (_run_experimental_inference, _run_simulated_inference)
 from .base import _CellPreviewMixin, _StagePanel
 from .help_text import HELP
 
@@ -329,8 +329,12 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                     self.log_pane.append_line(
                         "Fix the cell selection first: " + "; ".join(self._cell_problems), "warning")
                     return
-            self.dispatch(_run_simulated_inference, cfg, post, cell, self.sim_tobs.value(),
-                          gt_dicts=gt_dicts, prior=self.session.inf_prior, provide_fig_sink=True,
+            # ONE flow: the composition in orchestrator carries the ignored-cell note, the T_obs range
+            # check, the out-of-distribution check and the up-front non-amortized refusal that used to
+            # live in three copies (the GUI runner, orchestrator.run and scripts/_common).
+            self.dispatch(orchestrator.simulated_inference, cfg, post, self.sim_tobs.value(),
+                          cell=cell, gt_values=gt_dicts, prior=self.session.inf_prior,
+                          accept=self._accept(), provide_fig_sink=True,
                           on_result=self._on_observation)
         elif cfg.observation_mode == "chi":          # experimental, χ(ω): 1 passive + K forced
             if not self.chi_spont.value():
@@ -356,21 +360,32 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             pairs = [r.pair() for r in self._chi_forced_fields]
             rec = RecordingSet(spont=self.chi_spont.value(), forced=tuple(pairs),
                                T_obs_s=self.chi_tobs.value(), F0_si=self.chi_f0_si.value())
-            self.dispatch(_run_experimental_inference, cfg, post, rec, provide_fig_sink=True,
+            self.dispatch(orchestrator.experimental_inference, cfg, post, rec,
+                          accept=self._accept(), provide_fig_sink=True,
                           on_result=self._on_observation)
         elif not cfg.has_forcing:                    # experimental, passive (no drive)
             if not self.exp_spont.value():
                 self.log_pane.append_line("Select a passive recording first.", "warning")
                 return
             rec = RecordingSet(spont=self.exp_spont.value(), T_obs_s=self.exp_tobs.value())
-            self.dispatch(_run_experimental_inference, cfg, post, rec, provide_fig_sink=True,
+            self.dispatch(orchestrator.experimental_inference, cfg, post, rec,
+                          accept=self._accept(), provide_fig_sink=True,
                           on_result=self._on_observation)
         else:                                        # experimental, driven
             forcing_si = {name: fld.value() for name, fld in self._forcing_fields.items()}
             rec = RecordingSet(spont=self.exp_spont.value(), forced=((self.exp_forced.value(), None),),
                                T_obs_s=self.exp_tobs.value(), forcing_params_si=forcing_si)
-            self.dispatch(_run_experimental_inference, cfg, post, rec, provide_fig_sink=True,
+            self.dispatch(orchestrator.experimental_inference, cfg, post, rec,
+                          accept=self._accept(), provide_fig_sink=True,
                           on_result=self._on_observation)
+
+    def _accept(self):
+        """The Accept this run opts in with, or None for the default (refuse everything).
+
+        A seam, filled in the commit that adds the "Run on a different observation" checkbox: every
+        dispatch site passes it already, so the box becomes one method and no new call sites.
+        """
+        return None
 
     def _on_observation(self, payload):
         obs, inf = payload

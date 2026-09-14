@@ -785,22 +785,25 @@ def test_help_badge_carries_its_text():
     _app()
     assert HelpBadge("what this does").toolTip() == "what this does"
 
-def test_simulated_inference_runner_emits_the_ground_truth_figure():
-    """The simulated-inference runner shows the 'Ground-truth trace' figure before inferring (the old
-    Simulate tab did only the first half; the tab is gone, the figure is not). A real SDE sim is too slow
-    for a unit test, so stub the heavy pieces and assert the fig_sink wiring. The figure now comes from
+def test_simulated_inference_emits_the_ground_truth_figure():
+    """The simulated-inference COMPOSITION shows the 'Ground-truth trace' figure before inferring (the
+    old Simulate tab did only the first half; the tab is gone, the figure is not). A real SDE sim is too
+    slow for a unit test, so stub the heavy pieces and assert the fig_sink wiring. The figure comes from
     the observation stage itself (generate_observations writes the artifact and its trace figure), so
     the stub emits it exactly as the real stage would before handing back a LoadedObservation-shaped
-    stand-in."""
+    stand-in.
+
+    The GUI runner this used to exercise is gone (piece 2, T6): the tab dispatches
+    orchestrator.simulated_inference directly, so the wiring under test is the composition's."""
     import types
     import torch
     from core import cli, orchestrator
-    from core.gui.panels import inference_tabs
 
     _app()
 
     class Cfg:
         length_unit = "nm"                       # trace y-axis unit (round-4 labels)
+        sources = {}
 
         def get_unit_conversion_factor(self, _unit):
             return 1.0
@@ -820,14 +823,67 @@ def test_simulated_inference_runner_emits_the_ground_truth_figure():
     orchestrator.infer_and_visualize = lambda *a, **k: types.SimpleNamespace(
         id="i", name="", results={"ppc": {"coverage_90": 0.9}})
     try:
-        inference_tabs._run_simulated_inference(
-            Cfg(), object(), "cell.txt", 0.1, fig_sink=lambda title, fig: seen.append(title))
+        post = types.SimpleNamespace(posterior=types.SimpleNamespace(x_obs_digest=None, truncation=None))
+        obs, inf = orchestrator.simulated_inference(
+            Cfg(), post, 0.1, cell="cell.txt", fig_sink=lambda title, fig: seen.append(title))
     finally:
         cli.load_and_validate_gt = real_gt
         orchestrator.generate_observations = real_go
         orchestrator.infer_and_visualize = real_iv
 
     assert seen == ["Ground-truth trace"], seen
+    assert (obs.id, inf.id) == ("o", "i"), "the composition must return (observation, inference)"
+
+
+def test_the_infer_tab_dispatches_the_compositions():
+    """The Infer tab's four Run paths must call the COMPOSITIONS, not a GUI-local runner.
+
+    The runner module existed only to be module-level and Qt-free with an injectable fig_sink; the
+    compositions are both, and a wrapper is one more hop where positional order can drift. Each branch
+    is checked for the function it dispatches and for the positional argument that decides the run:
+    the simulated branch's cell (or hand-entered values) and the experimental branch's RecordingSet.
+    """
+    from core import orchestrator
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+
+    _app()
+    inf = InferenceScreen()
+    inf.install_config(_chi_cfg(k=2))
+    inf.session.posterior = _posterior_stub()
+    inf.session.inf_prior = _prior_stub()
+    panel = inf.infer_panel
+
+    cap = {}
+    panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
+
+    # simulated, from a cell FILE
+    panel.infer_mode.setCurrentIndex(0)
+    panel.cell_source.set_direct(False)
+    panel.cell_picker.selected_path = lambda: "/tmp/cell.txt"
+    panel._cell_problems = []
+    panel.sim_tobs.setText("3.5")
+    panel._infer()
+    assert cap["fn"] is orchestrator.simulated_inference, cap["fn"]
+    assert cap["args"][2] == 3.5 and cap["kwargs"]["cell"] == "/tmp/cell.txt"
+    assert cap["kwargs"]["gt_values"] is None and cap["kwargs"]["prior"] is inf.session.inf_prior
+    assert cap["kwargs"]["provide_fig_sink"] is True
+    assert cap["kwargs"]["on_result"] == panel._on_observation
+
+    # experimental, chi: one passive recording + the probe pairs, as a RecordingSet
+    cap.clear()
+    panel.infer_mode.setCurrentIndex(1)
+    panel.chi_spont.edit.setText("/tmp/passive.npy")
+    for i, row in enumerate(panel._chi_forced_fields):
+        row.path.edit.setText(f"/tmp/probe{i}.npy")
+        row.freq.setText(str(10.0 + i))
+    panel.chi_tobs.setText("2.0")
+    panel._infer()
+    assert cap["fn"] is orchestrator.experimental_inference, cap["fn"]
+    rec = cap["args"][2]
+    assert rec.spont == "/tmp/passive.npy" and rec.forced == (("/tmp/probe0.npy", 10.0),
+                                                              ("/tmp/probe1.npy", 11.0))
+    assert rec.T_obs_s == 2.0 and cap["kwargs"]["provide_fig_sink"] is True
 
 
 def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
