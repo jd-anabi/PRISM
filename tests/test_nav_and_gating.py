@@ -824,13 +824,19 @@ def test_simulated_inference_emits_the_ground_truth_figure():
         id="i", name="", results={"ppc": {"coverage_90": 0.9}})
     try:
         post = types.SimpleNamespace(posterior=types.SimpleNamespace(x_obs_digest=None, truncation=None))
-        obs, inf = orchestrator.simulated_inference(
-            Cfg(), post, 0.1, cell="cell.txt", fig_sink=lambda title, fig: seen.append(title))
+        # T_obs=0.1s is below T_MIN_EXP_S on purpose (the spec's test row): record the resulting
+        # PreflightWarning instead of leaking it -- `match=` would re-emit any warning that does not
+        # match, and this call is not asserted to emit exactly one.
+        with pytest.warns(orchestrator.PreflightWarning) as rec:
+            obs, inf = orchestrator.simulated_inference(
+                Cfg(), post, 0.1, cell="cell.txt", fig_sink=lambda title, fig: seen.append(title))
     finally:
         cli.load_and_validate_gt = real_gt
         orchestrator.generate_observations = real_go
         orchestrator.infer_and_visualize = real_iv
 
+    assert any("below the training range minimum" in str(w.message) for w in rec), \
+        [str(w.message) for w in rec]
     assert seen == ["Ground-truth trace"], seen
     assert (obs.id, inf.id) == ("o", "i"), "the composition must return (observation, inference)"
 
