@@ -160,6 +160,39 @@ def _tiny_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_b
                              state_dep_drift=state_dep_drift, log_mask=log_mask)
 
 
+def install_sbitest():
+    """Register the SBITEST user model and emit its Bounds/Cells/Units triple; ``(bounds, cell, teardown)``.
+
+    A one-variable OU process with two ND parameters and no drive -- the smallest thing that can carry
+    a real prior, a real flow and a real observation. ``save_user_model`` writes
+    ``Resources/{Bounds,Cells,Units}/sbitest/`` and ``Resources/Models/SBITEST.json``, so the two paths
+    returned are REAL INPUT FILES: that is what lets the command-line tool be driven with
+    ``--bounds``/``--cell`` exactly as an operator would drive it, instead of against a hand-built
+    config no flag could have produced. ``teardown`` removes exactly what this helper wrote (the
+    SBITEST bounds/cell/units files and the model JSON) and unregisters the model; call it from a
+    ``finally``. ``git status`` after a run is what shows ``Resources/`` clean -- the session conftest
+    only snapshots and asserts ``Artifacts/``.
+    """
+    from core import config, registry
+    from core.Helpers import model_store
+    name = "SBITEST"
+    doc = {"schema_version": 1, "name": name,
+           "variables": [{"name": "x", "drift": "-k*x", "D": "d0", "init": 0.5, "forcing": None}],
+           "params": {"k": 1.0, "d0": 0.05}, "rescale": {"x_scale": 10.0, "t_scale": 0.01}}
+    model_store.save_user_model(doc)
+    registry.load_user_models()
+
+    def teardown():
+        try:
+            model_store.delete_user_model(name)
+        except Exception:                                    # noqa: BLE001 -- best-effort cleanup
+            pass
+        registry.unregister(name)
+
+    return (str(config.BOUNDS_PATH / name.lower() / "default.txt"),
+            str(config.CELL_PATH / name.lower() / "default.txt"), teardown)
+
+
 def build_tiny_run(store, hw=None):
     """A REAL SBITEST prior and posterior at tiny size, inside ``store`` (make it the default first).
     Mirrors test_user_sbi.test_no_forcing_user_model_full_sbi_pipeline's setup -- and its teardown:
@@ -168,16 +201,10 @@ def build_tiny_run(store, hw=None):
     CPU run cannot see."""
     from types import SimpleNamespace
     from core import cli, config, orchestrator, registry
-    from core.Helpers import model_store
     name = "SBITEST"
-    doc = {"schema_version": 1, "name": name,
-           "variables": [{"name": "x", "drift": "-k*x", "D": "d0", "init": 0.5, "forcing": None}],
-           "params": {"k": 1.0, "d0": 0.05}, "rescale": {"x_scale": 10.0, "t_scale": 0.01}}
-    model_store.save_user_model(doc)
-    registry.load_user_models()
-    cfg = cli.make_sim_config(name, registry.get(name).labels, registry.state_dep_drift(name),
-                              str(config.BOUNDS_PATH / name.lower() / "default.txt"))
-    cli.load_and_validate_gt(cfg, str(config.CELL_PATH / name.lower() / "default.txt"))
+    bounds, cell, undo_install = install_sbitest()
+    cfg = cli.make_sim_config(name, registry.get(name).labels, registry.state_dep_drift(name), bounds)
+    cli.load_and_validate_gt(cfg, cell)
     cfg.hw = hw if hw is not None else config.cpu_device()
     cfg.hw.batch_size = 8
     cfg.T_obs = 1.0
@@ -198,11 +225,6 @@ def build_tiny_run(store, hw=None):
 
     def teardown():
         orchestrator.pipeline.gen_prior = saved_gen_prior
-        # + whatever test_no_forcing_user_model_full_sbi_pipeline's finally does to unregister SBITEST
-        try:
-            model_store.delete_user_model(name)
-        except Exception:                                        # noqa: BLE001 -- best-effort cleanup
-            pass
-        registry.unregister(name)
+        undo_install()
     return SimpleNamespace(cfg=cfg, prior=prior, posterior=posterior, store=store, sink=sink,
                            other_prior=other_prior, teardown=teardown)
