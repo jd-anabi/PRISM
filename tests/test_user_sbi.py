@@ -429,7 +429,13 @@ def test_chi_mode_full_sbi_pipeline(tmp_path):
             p = tmp_path / f"chi_forced_{i}.npy"
             np.save(p, x_dim[0].numpy())
             forced_paths.append(p)
-        rec = RecordingSet(spont=str(spont_path), forced=tuple((str(p), None) for p in forced_paths),
+        # D9: every driven chi recording states its drive frequency. generate_observations recorded the
+        # absolute probe frequencies it measured at on cfg.chi_obs_freqs, in CELL units (orchestrator
+        # :303-304); observations.py multiplies by freq_si_to_cell to get from Hz to cell units, so
+        # divide by it here to undo that and recover Hz.
+        rec = RecordingSet(spont=str(spont_path),
+                           forced=tuple((str(p), float(f) / cfg.freq_si_to_cell)
+                                        for p, f in zip(forced_paths, cfg.chi_obs_freqs)),
                            T_obs_s=1.0, F0_si=1.0)
         obs_e = orchestrator.build_experiment_observation(cfg, rec, fig_sink=sink)
         assert obs_e.width == SUMMARY_WIDTH + 1 + K3

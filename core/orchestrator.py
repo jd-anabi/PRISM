@@ -343,13 +343,21 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
     for p, role, f in named:
         if not p or not os.path.isfile(str(p)):
             raise FileNotFoundError(f"the {role} recording was not found: {p!r}")
+        # D9. Role-scoped on purpose: `named`'s FIRST element is the passive recording, whose frequency
+        # is None BY CONSTRUCTION, so an unscoped check would refuse every chi observation. A lock-in
+        # aimed at a guessed mult_k * Omega_0 instead of the drive the bench applied decays like a sinc
+        # -- a fraction of 1/T_obs off destroys the estimate, and nothing says so.
+        if cfg.observation_mode == "chi" and role == "forced" and f is None:
+            raise ValueError(f"chi mode: forced recording {p!r} has no drive frequency; every driven "
+                             f"chi recording must state the frequency (Hz) it was driven at")
         r = _file_ref(p)
         r.update({"role": role, "freq_Hz": None if f is None else float(f)})
         refs.append(r)
     X_spont = file_manager.load_experimental_data(rec.spont, dtype=cfg.hw.dtype)
     if cfg.observation_mode == "chi":
-        loaded = [(file_manager.load_experimental_data(p, dtype=cfg.hw.dtype), f) for p, f in rec.forced]
-        forced = [(x, float(f)) if f is not None else x for x, f in loaded]
+        # Every `f` is a real frequency here: the file-check loop above refused a None one (D9).
+        forced = [(file_manager.load_experimental_data(p, dtype=cfg.hw.dtype), float(f))
+                  for p, f in rec.forced]
         obs_stats, obs_data, t_dim = build_experiment_obs_chi(cfg, X_spont, forced, rec.T_obs_s, rec.F0_si)
     elif cfg.has_forcing:
         if len(rec.forced) != 1:

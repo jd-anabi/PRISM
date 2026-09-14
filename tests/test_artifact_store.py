@@ -838,6 +838,67 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
                               forcing_params_si=si), fig_sink=lambda t, f: None)
 
 
+def test_chi_mode_refuses_a_forced_recording_without_its_drive_frequency(store, tmp_path, monkeypatch):
+    """D9: every driven chi recording states the frequency (Hz) it was driven at.
+
+    The refusal has to be scoped to the FORCED role. The stage's file-check loop is
+    ``[(rec.spont, "spont", None)] + [(p, "forced", f) for p, f in rec.forced]``, so its first element
+    is the passive recording with no frequency BY CONSTRUCTION -- an unscoped check would reject every
+    chi observation. The lock-in is a sinc in the frequency error: a probe aimed at a guessed
+    ``mult_k * Omega_0`` rather than at the drive the bench actually applied decays to noise, silently.
+    Both legs are pinned: the frequency-less set is refused before anything is read or built, and the
+    complete set reaches the chi builder as ``(recording, Hz)`` pairs.
+    """
+    import numpy as np
+    from core import orchestrator
+    from core.Helpers import file_manager
+    from core.SBI.observations import RecordingSet
+
+    cfg = _nad_cfg(chi_mode=True)
+    cfg.T_obs = 200.0                                        # cell units: 200 frames at dt_exp = 1
+    spont = tmp_path / "passive.npy"
+    np.save(spont, np.zeros(200, dtype=np.float32))
+    driven = []
+    for i in range(2):
+        p = tmp_path / f"driven_{i}.npy"
+        np.save(p, np.zeros(200, dtype=np.float32))
+        driven.append(str(p))
+
+    class _Reached(RuntimeError):
+        """Raised by the chi-builder spy: the stage got past every refusal."""
+
+    read, seen = [], []
+
+    def _record_load(path, dtype=None):
+        read.append(str(path))
+        return torch.zeros(200)
+
+    def _spy(cfg_, X_spont, X_forced_list, T_obs_s, F0_si):
+        seen.append(X_forced_list)
+        raise _Reached
+
+    monkeypatch.setattr(file_manager, "load_experimental_data", _record_load)
+    monkeypatch.setattr(orchestrator, "build_experiment_obs_chi", _spy)
+
+    # (a) one driven recording without its frequency: refused, by name, before anything is read
+    gap = RecordingSet(spont=str(spont), forced=((driven[0], 12.5), (driven[1], None)),
+                       T_obs_s=1.0, F0_si=1.0)
+    with pytest.raises(ValueError, match="no drive frequency") as e:
+        orchestrator.build_experiment_observation(cfg, gap, fig_sink=lambda t, f: None)
+    assert "driven_1.npy" in str(e.value), str(e.value)
+    assert read == [], f"a recording was read before the refusal: {read}"
+    assert seen == [], "the frequency-less set reached the chi builder"
+    assert not list(store.kind_dir("observation").glob("*")), "a refused set wrote an observation"
+
+    # (b) every driven recording names its frequency: not refused, and the builder gets (x, Hz) pairs
+    ok = RecordingSet(spont=str(spont), forced=((driven[0], 12.5), (driven[1], 25.0)),
+                      T_obs_s=1.0, F0_si=1.0)
+    with pytest.raises(_Reached):
+        orchestrator.build_experiment_observation(cfg, ok, fig_sink=lambda t, f: None)
+    assert [f for _x, f in seen[0]] == [12.5, 25.0]
+    assert all(torch.is_tensor(x) and isinstance(f, float) for x, f in seen[0]), seen[0]
+
+
 def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(tiny_run):
     import numpy as np
     from core import orchestrator

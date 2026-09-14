@@ -190,9 +190,9 @@ def build_experiment_obs_chi(
     the true physical susceptibility (x_scale/f_scale)*chi_nd, matching training.
 
     :param X_spont: 1D passive recording (N_obs,), sampled at 1/cfg.dt_exp.
-    :param X_forced_list: the forced recordings. Either 1-D tensors -- legacy, assumed driven at
-        ``chi.chi_multipliers_for(cfg)`` -- or ``(recording, drive_frequency_Hz)`` pairs, which is the
-        form to use for real data. Any count from 1 to ``cfg.chi_k_pad``.
+    :param X_forced_list: the forced recordings as ``(recording, drive_frequency_Hz)`` pairs -- every
+        driven recording states the frequency it was actually driven at (D9), and the stage above
+        refuses one that does not. Any count from 1 to ``cfg.chi_k_pad``.
     :param T_obs_s: observation duration (seconds).
     :param F0_si: physical drive amplitude used (SI force, N); converted to cell force units.
     :return: (obs_stats, obs_data=X_spont as (1,N), t_dim in seconds).
@@ -216,20 +216,9 @@ def build_experiment_obs_chi(
         raise ValueError(
             f"chi-mode accepts 1 to {cfg.chi_k_pad} forced recordings (CHI_K_PAD), got {n_probes}.")
 
-    # Legacy positional form: no frequency supplied, so fall back to the nominal grid.
-    paired = bool(X_forced_list) and isinstance(X_forced_list[0], (tuple, list))
-    if not paired:
-        mults = chi.chi_multipliers(dtype=dtype, device=torch.device("cpu"),
-                                    n_freqs=n_probes, bounds=cfg.chi_freq_bounds)
-
     chis, u_list, logcyc_list, valid = [], [], [], []
     for k, item in enumerate(X_forced_list):
-        if paired:
-            Xf, freq_hz = item[0], float(item[1])
-        else:
-            Xf = item
-            # The legacy grid, expressed in Hz so ONE predicate path serves both forms.
-            freq_hz = float(mults[k] * f_peak) / cfg.freq_si_to_cell
+        Xf, freq_hz = item[0], float(item[1])
         Xf_b = Xf.to(dtype=dtype).unsqueeze(0)               # (1, N_k)
         N_k = Xf_b.shape[-1]
 
