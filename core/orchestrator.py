@@ -63,6 +63,45 @@ _product_mod = importlib.import_module("core.SBI.Priors.Product Prior.product_pr
 ProductPrior = _product_mod.ProductPrior
 
 
+class PreflightWarning(UserWarning):
+    """A judgement reported before or instead of refusing: out-of-distribution truth, a truth outside a
+    non-amortized posterior's region, T_obs outside the training range, an HPD tighter than recommended,
+    cell values the bounds ignore."""
+
+
+# The GUI routes warnings.showwarning to the log pane at WARNING severity, while a print lands at info
+# (core/gui/streams.py:244-247), and pytest.warns can assert one. The "always" filter defeats Python's
+# once-per-location registry: without it a second inference in the same session would stay silent about
+# a repeated out-of-distribution truth, which is exactly the case an operator needs told twice.
+warnings.filterwarnings("always", category=PreflightWarning)
+
+
+def _preflight_warn(msg: str) -> None:
+    """The ONE channel a composition reports a judgement through. stacklevel=3 points the warning at the
+    front end that called the composition, not at this helper."""
+    warnings.warn(msg, PreflightWarning, stacklevel=3)
+
+
+def _truth_outside_region(T_train, region, truth) -> list:
+    """Per-direction messages for a truth outside a truncation region; [] when it is inside.
+
+    ONE wording, two callers: build_posterior's guardrail-5 block (which prints and warns in its own
+    words around these) and simulated_inference's region check. The latent inverse is taken under
+    no_grad and compared on the CPU in float64, which is the dtype a region's bounds are stored in.
+    """
+    with torch.no_grad():
+        z = T_train.inv(truth.reshape(1, -1)).detach().cpu().to(torch.float64)
+    if bool(region.contains(z)[0]):
+        return []
+    sel = z[0, region.dims]
+    bad = [f"direction {d}: truth {float(v):+.3g} outside [{float(a):.3g}, {float(b):.3g}]"
+           for d, v, a, b in zip(region.dims, sel, region.lo, region.hi)
+           if v < a or v > b]
+    # contains() is False for a non-finite coordinate too, which neither comparison above names
+    return bad or [f"direction {d}: truth {float(v)!r} not inside [{float(a):.3g}, {float(b):.3g}]"
+                   for d, v, a, b in zip(region.dims, sel, region.lo, region.hi)]
+
+
 # ── Pipeline entry point ────────────────────────────────────────────────────
 def run(cfg: SimConfig):
     """
@@ -1028,16 +1067,10 @@ def build_posterior(
             # GUARDRAIL 5's honest failure rate, per run: does the box even contain the loaded cell's
             # truth? Warn, never refuse -- an experimental observation has no truth, and a simulated
             # one's lying outside is a finding about the parent posterior, not a reason to stop.
-            with torch.no_grad():
-                _z_true = T_train.inv(cfg.ground_truth_tensor.reshape(1, -1)).detach().cpu().to(torch.float64)
-            if not bool(truncation.contains(_z_true)[0]):
-                _sel = _z_true[0, truncation.dims]
-                _bad = [f"direction {d}: truth {float(v):+.3g} outside [{float(a):.3g}, {float(b):.3g}]"
-                        for d, v, a, b in zip(truncation.dims, _sel, truncation.lo, truncation.hi)
-                        if v < a or v > b]
-                # contains() is False for a non-finite coordinate too, which neither comparison names
-                _bad = _bad or [f"direction {d}: truth {float(v)!r} not inside [{float(a):.3g}, {float(b):.3g}]"
-                                for d, v, a, b in zip(truncation.dims, _sel, truncation.lo, truncation.hi)]
+            # The per-direction wording is _truth_outside_region's, shared with simulated_inference:
+            # one sentence for one fact, wherever the operator meets it.
+            _bad = _truth_outside_region(T_train, truncation, cfg.ground_truth_tensor)
+            if _bad:
                 _msg = ("[tsnpe] WARNING: the loaded cell's GROUND TRUTH lies OUTSIDE the truncation "
                         "region -- " + "; ".join(_bad) + ". This round will never see a training row "
                         "near the truth. Continuing, because the truth is a simulated cell's, not the "
@@ -1944,6 +1977,110 @@ def _build_latent_prior_for_validation(cfg, inferred_prior):
         distributions=[latent_nd, latent_rescale],
         dims=[len(cfg.params_dict), len(cfg.rescale_params)],
     )
+
+
+# ── The compositions: ONE flow, two front ends ──────────────────────────────
+# Defined HERE, in the module the stages live in, so that generate_observations, infer_and_visualize
+# and cli.* resolve through the module globals at CALL time -- which is what the suites patch
+# (tests/_fixtures.py, tests/test_nav_and_gating.py, tests/test_user_sbi.py). A re-export from another
+# module would be a second binding and every one of those patches would miss it.
+def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: float, *,
+                        cell=None, gt_values=None, prior: "LoadedPrior | None" = None,
+                        accept=None, n_samples: int | None = None,
+                        name: str = "", note: str = "", fig_sink=None, store=None):
+    """Simulate a ground-truth observation for a cell and infer on it: the whole simulated path.
+
+    Every check that used to live in one front end only lives here now, and every one of them runs
+    BEFORE the simulation -- so a refusal costs nothing and leaves no orphan observation behind.
+
+    :param cell: the cell file to take the truth from. Give EXACTLY one of ``cell`` and ``gt_values``.
+    :param gt_values: hand-entered values in parse_values_file's ``(inits, params, rescale, forcing)``
+                      shape, validated against the bounds exactly as a file's are.
+    :param prior: the LoadedPrior the posterior was trained with. When given, the truth is checked
+                      against the distribution the network actually saw; omitted, the check is skipped
+                      silently (a stand-in prior cannot answer the question).
+    :param accept: an ``artifacts.Accept``. ``other_observation=True`` is REQUIRED for a NON-AMORTIZED
+                      posterior: a cell simulated now draws new noise, so it can never be the
+                      observation that posterior's region was drawn around.
+    :param n_samples: posterior draws; None leaves infer_and_visualize's own default, so that number
+                      stays written down in exactly one place.
+    :return: ``(observation, inference)`` -- the payload shape the Infer tab unpacks.
+    """
+    from .artifacts import Accept
+    store = resolve_store(store)
+    # Before the simulation, not inside infer_and_visualize: that check used to run after the
+    # observation had been simulated AND written, so a taken name cost a simulation and left an
+    # observation artifact nothing would ever name.
+    store.assert_name_free("inference", name)
+    if (cell is None) == (gt_values is None):
+        raise ValueError("simulated_inference takes exactly one of cell= (a cell file) and gt_values= "
+                         "(hand-entered values in parse_values_file's shape).")
+    accept = accept or Accept()
+    # GUARDRAIL 2, hoisted ahead of the spend. x_obs_digest, truncation and amortized=False are written
+    # together by build_posterior and never set independently, so this predicate, the Infer tab's gate
+    # and the store's load refusal all pick out the same posteriors.
+    if posterior.posterior.x_obs_digest is not None and not accept.other_observation:
+        raise ValueError(
+            f"[tsnpe] this posterior is NOT AMORTIZED: it was trained on a prior restricted to a region "
+            f"drawn around the observation with digest {posterior.posterior.x_obs_digest}. A cell "
+            f"simulated now draws NEW noise, so it can never be that observation. Use an amortized "
+            f"posterior, or run anyway by ticking 'Run on a different observation' on the Infer tab, "
+            f"passing --accept-other-observation, or passing Accept(other_observation=True); the "
+            f"inference will record it.")
+    ignored = (cli.load_and_validate_gt(cfg, cell) if cell is not None
+               else cfg.inject_ground_truth(*gt_values))
+    if gt_values is not None:
+        # inject_ground_truth never touches cfg.sources, so without this the provenance of a
+        # hand-entered truth would name -- and content-hash -- whatever cell was loaded before it.
+        cfg.sources.pop("cell", None)
+    if ignored:
+        _preflight_warn(f"the bounds file does not declare {', '.join(ignored)}; those cell values were "
+                        f"ignored (the bounds file defines the inferred set)")
+    cfg.T_obs = T_obs_s * cfg.get_unit_conversion_factor("s")
+    if T_obs_s < T_MIN_EXP_S:
+        _preflight_warn(f"T_obs={T_obs_s:.2f}s is below the training range minimum T_MIN_EXP_S="
+                        f"{T_MIN_EXP_S:.2f}s; the posterior may extrapolate poorly.")
+    elif T_obs_s > T_MAX_EXP_S:
+        _preflight_warn(f"T_obs={T_obs_s:.2f}s exceeds the training range maximum T_MAX_EXP_S="
+                        f"{T_MAX_EXP_S:.2f}s; the posterior may extrapolate poorly.")
+    if prior is not None:
+        # Bounds-checking cannot answer this: the ND prior is a stability-SCREENED GMM, so a value can
+        # sit inside the box and in a corner the training data never visited.
+        for msg in check_observation_in_distribution(cfg, prior.prior, prior.force_prior):
+            _preflight_warn(msg)
+    region = posterior.posterior.truncation
+    if region is not None:
+        # Reachable only past an ACCEPTED refusal above. check_observation_in_distribution samples the
+        # FULL base prior, while a non-amortized flow was trained on that prior restricted to this box:
+        # being in-distribution there says nothing about being inside the region.
+        for msg in _truth_outside_region(posterior.posterior.T, region, cfg.ground_truth_tensor):
+            _preflight_warn("this truth lies outside the region the NON-AMORTIZED posterior was trained "
+                            "on; the flow extrapolates there: " + msg)
+    obs = generate_observations(cfg, fig_sink=fig_sink, store=store)
+    inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
+                              accept=accept,
+                              **({"n_samples": n_samples} if n_samples is not None else {}))
+    return obs, inf
+
+
+def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "RecordingSet", *,
+                           accept=None, n_samples: int | None = None,
+                           name: str = "", note: str = "", fig_sink=None, store=None):
+    """Any bench recording set (passive, driven, chi) -> the observation artifact -> the inference.
+
+    It adds no checks of its own, and that is deliberate. A recording carries no truth, so there is
+    nothing to compare against the training distribution. And rebuilding the same recordings reproduces
+    a region's digest, which is the LEGITIMATE match -- so the non-amortized refusal stays in
+    infer_and_visualize, where it can tell that case apart from a foreign observation. Nothing is lost
+    by waiting: building an experimental observation costs no simulation.
+    """
+    store = resolve_store(store)
+    store.assert_name_free("inference", name)   # with the recordings' own file checks, before any compute
+    obs = build_experiment_observation(cfg, rec, fig_sink=fig_sink, store=store)
+    inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
+                              accept=accept,
+                              **({"n_samples": n_samples} if n_samples is not None else {}))
+    return obs, inf
 
 
 # The experimental observation builders (and RecordingSet) live in SBI/observations.py; re-exported

@@ -277,6 +277,26 @@ class SimConfig:
         self.inits_dict = OrderedDict(inits)
         return ignored
 
+    def clear_ground_truth(self) -> None:
+        """Drop every ground-truth VALUE, the initial conditions and the recorded cell.
+
+        The inverse of inject_ground_truth, for LoadedObservation.install. An EXPERIMENTAL observation
+        has no truth, and until this existed nothing ever cleared one: after a simulated inference the
+        next round read the stale cell as that observation's ("the loaded cell's GROUND TRUTH lies
+        OUTSIDE the truncation region", orchestrator.build_posterior) or was silently satisfied by it,
+        and the experimental PPC started from the stale cell's inits (_observation_inits).
+
+        BOUNDS ARE UNTOUCHED: the config goes back to being the bounds-built one it was before a cell
+        loaded, so has_ground_truth reads False and _observation_inits falls back to the documented
+        experimental inits. Forcing values are left alone too -- install sets them straight afterwards
+        from the observation's own recorded drive (set_observation_context).
+        """
+        for d in (self.params_dict, self.rescale_params):
+            for name, (_value, bounds) in list(d.items()):
+                d[name] = (None, bounds)
+        self.inits_dict = OrderedDict()
+        self.sources.pop("cell", None)
+
     def set_observation_context(self, T_obs: float, forcing_vals: dict | None = None) -> None:
         """
         Set the observation duration (and optionally forcing VALUES) for the experimental-data branch,

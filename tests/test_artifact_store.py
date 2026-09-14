@@ -1166,3 +1166,188 @@ def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
     assert [r["field"] for r in rows] == ["n_runs"] and rows[0]["batches"] == 2
     assert orchestrator.fresh_run_near_misses(cfg, lp, num_runs=2, run_size_cap=4,
                                               checkpoint_every=0) == [], "off means no question"
+
+
+# ── the compositions: one flow under the GUI and the command line (piece 2, §2.3-§2.4) ───────────
+def _sim_post(*, x_obs_digest=None, truncation=None, T=None):
+    """A LoadedPosterior-shaped stand-in. simulated_inference reads only .posterior.x_obs_digest,
+    .posterior.truncation and .posterior.T before it simulates, which is the whole point: every
+    refusal and every judgement happens before the first SDE step."""
+    from types import SimpleNamespace
+    return SimpleNamespace(posterior=SimpleNamespace(x_obs_digest=x_obs_digest, truncation=truncation, T=T),
+                           id="post", name="")
+
+
+def _spont_cfg():
+    """NADROWSKI off master_spont.txt: 12 inferred parameters, no f_scale and no Forcing section, so a
+    forced cell loaded against it has values the bounds deliberately ignore."""
+    from core import cli, config, registry
+    from core.config import BOUNDS_PATH, VALID_LABELS, VALID_MODELS
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                              str(BOUNDS_PATH / "nadrowski" / "master_spont.txt"))
+    cfg.hw = config.cpu_device()
+    return cfg
+
+
+def test_simulated_inference_warns_about_ignored_values_t_obs_and_an_out_of_distribution_truth(store, monkeypatch):
+    """The three judgements the front ends used to make in three different places -- orchestrator.run,
+    the GUI runner and scripts/_common, each with its own wording and two of them as bare prints --
+    now come from ONE channel. That matters twice over: the GUI routes warnings.showwarning to the log
+    pane at WARNING severity while a print lands at info, and the T_obs range check reached the GUI for
+    the first time here."""
+    from core import orchestrator
+    from core.config import CELL_PATH
+    cfg = _spont_cfg()
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")      # a FORCED cell: f_scale + a drive
+    made = []
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: made.append(k) or "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
+    monkeypatch.setattr(orchestrator, "check_observation_in_distribution",
+                        lambda c, p, f, **k: ["Ground-truth parameter 'k' = 1 lies outside the training "
+                                              "prior's 1-99% range"])
+
+    class _P:                                                    # the LoadedPrior shape
+        prior = force_prior = None
+
+    with pytest.warns(orchestrator.PreflightWarning) as rec:
+        got = orchestrator.simulated_inference(cfg, _sim_post(), 0.5, cell=cell, prior=_P(), store=store)
+    said = [str(w.message) for w in rec]
+    assert got == ("OBS", "INF") and made == [{"fig_sink": None, "store": store}]
+    assert any("below the training range minimum" in m for m in said), said
+    assert any("the bounds file does not declare" in m and "f_scale" in m for m in said), said
+    assert any("lies outside the training prior" in m for m in said), said
+    # the range check is two-sided
+    with pytest.warns(orchestrator.PreflightWarning, match="exceeds the training range maximum"):
+        orchestrator.simulated_inference(cfg, _sim_post(), 999.0, cell=cell, store=store)
+
+
+def test_simulated_inference_refuses_a_non_amortized_posterior_before_it_simulates(store, monkeypatch):
+    """The refusal used to fire inside infer_and_visualize, i.e. AFTER generate_observations had
+    simulated and WRITTEN an observation artifact -- one orphan per refusal. And for SIMULATED
+    inference it is unconditional on the digest: a cell simulated now draws new noise, so it can never
+    be the observation a region was drawn around."""
+    from core import orchestrator
+    from core.artifacts import Accept
+    from core.config import CELL_PATH
+    from core.SBI import reparam, truncate
+    cfg = _nad_cfg()
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")
+    made = []
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: made.append(1) or "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
+    with pytest.raises(ValueError, match="NOT AMORTIZED"):
+        orchestrator.simulated_inference(cfg, _sim_post(x_obs_digest="d" * 16), 1.0, cell=cell, store=store)
+    assert made == [], "the refused run simulated anyway"
+    assert not cfg.has_ground_truth, "a refused run injected the cell's truth into the session's cfg"
+    assert store.list("observation") == [], "a refused run left an orphan observation behind"
+
+    # accepted: the run proceeds, and the REGION check (new; reachable only past this refusal) reports
+    # a truth outside the box the non-amortized flow was trained on
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    T = reparam.build_inferred_bijection(cfg, log_params=[])
+    far = truncate.TruncationRegion([0], [9.0], [10.0], level=0.999, n_latent=P)
+    with pytest.warns(orchestrator.PreflightWarning, match="NON-AMORTIZED posterior was trained on"):
+        orchestrator.simulated_inference(cfg, _sim_post(x_obs_digest="d" * 16, truncation=far, T=T), 1.0,
+                                         cell=cell, store=store, accept=Accept(other_observation=True))
+    assert made == [1], "the region check is a judgement, not a refusal: the run must still happen"
+
+
+def test_hand_entered_values_replace_the_recorded_cell(store, monkeypatch):
+    """inject_ground_truth never touches cfg.sources, so before this the provenance of a hand-entered
+    inference named -- and content-hashed -- whichever cell file the session had loaded earlier."""
+    from core import cli, orchestrator
+    from core.config import CELL_PATH
+    cfg = _nad_cfg()
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")
+    cli.load_and_validate_gt(cfg, cell)                          # the session's earlier inference
+    assert cfg.sources["cell"].endswith("master_weak.txt")
+    gt = (dict(cfg.inits_dict),
+          {k: v for k, (v, _) in cfg.params_dict.items()},
+          {k: v for k, (v, _) in cfg.rescale_params.items()},
+          {k: v for k, (v, _) in cfg.force_params_dict.items()})
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
+    orchestrator.simulated_inference(cfg, _sim_post(), 1.0, gt_values=gt, store=store)
+    assert "cell" not in cfg.sources and cfg.has_ground_truth
+    for kw in (dict(cell=cell, gt_values=gt), {}):
+        with pytest.raises(ValueError, match="exactly one of"):
+            orchestrator.simulated_inference(cfg, _sim_post(), 1.0, store=store, **kw)
+
+
+def test_a_taken_inference_name_is_refused_before_the_observation_is_simulated(store, monkeypatch):
+    """assert_name_free used to run inside infer_and_visualize, which is after generate_observations
+    has simulated and written an observation nothing will ever name."""
+    from core import orchestrator
+    from core.config import CELL_PATH
+    cfg = _forced_cfg()
+    with store.create("inference", cfg, name="taken") as w:
+        w.body = {"results": {}}
+    made = []
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: made.append(1) or "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
+    with pytest.raises(st.StoreError, match="already exists"):
+        orchestrator.simulated_inference(cfg, _sim_post(), 1.0, name="taken", store=store,
+                                         cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"))
+    assert made == [] and store.list("observation") == []
+
+
+def test_installing_an_experimental_observation_clears_a_stale_truth(store, tmp_path):
+    """install means "put back THIS observation's context", and a bench recording has no truth.
+    Nothing ever cleared one, so after a simulated inference the next round read the stale cell as this
+    observation's -- "the loaded cell's GROUND TRUTH lies OUTSIDE the truncation region" -- or was
+    silently satisfied by it, and the experimental PPC started from the stale cell's inits."""
+    import numpy as np
+    from core import orchestrator
+    from core.SBI.observations import RecordingSet
+    cfg = _forced_cfg()
+    sim = orchestrator.generate_observations(cfg, fig_sink=lambda t, f: None)
+    trace = sim.obs_data[0].numpy()
+    spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
+    np.save(spont, trace)
+    np.save(forced, trace)
+    T_obs_s = cfg.T_obs / cfg.get_unit_conversion_factor("s")
+    si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in cfg.force_params_dict}
+    rec = RecordingSet(spont=str(spont), forced=((str(forced), None),), T_obs_s=T_obs_s,
+                       forcing_params_si=si)
+    exp = orchestrator.build_experiment_observation(cfg, rec, fig_sink=lambda t, f: None)
+    assert cfg.has_ground_truth and "cell" in cfg.sources          # the stale truth, still there
+    exp.install(cfg)
+    assert not cfg.has_ground_truth, "an experimental observation installed a truth that is not its own"
+    assert "cell" not in cfg.sources and not cfg.inits_dict
+    assert cfg.T_obs == float(exp.manifest.body["T_obs_cell"])
+    sim.install(cfg)                                               # a simulated one puts its truth back
+    assert cfg.has_ground_truth
+
+
+def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
+    """The SECOND hop is where a composition silently drops a caller's choice. accept, the store, the
+    figure sink, the name and the note all have to arrive at the stage that WRITES the artifact -- and
+    n_samples must be ABSENT when the caller did not set it, so the stage's own literal default stays
+    the single place that number is written down."""
+    from core import orchestrator
+    from core.artifacts import Accept
+    from core.config import CELL_PATH
+    from core.SBI.observations import RecordingSet
+    seen = {}
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: seen.update(gen=k) or "OBS")
+    monkeypatch.setattr(orchestrator, "build_experiment_observation",
+                        lambda c, r, **k: seen.update(exp=k, rec=r) or "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize",
+                        lambda *a, **k: seen.update(inf=k, args=a) or "INF")
+    cfg = _nad_cfg()
+    acc = Accept(other_observation=True)
+    sink = lambda title, fig: None                                 # noqa: E731
+    orchestrator.simulated_inference(cfg, _sim_post(), 1.0, accept=acc, n_samples=7, name="n1",
+                                     note="t1", fig_sink=sink, store=store,
+                                     cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"))
+    assert seen["gen"] == {"fig_sink": sink, "store": store}
+    assert seen["args"][0] is cfg and seen["args"][2] == "OBS"
+    assert seen["inf"] == {"name": "n1", "note": "t1", "fig_sink": sink, "store": store,
+                           "accept": acc, "n_samples": 7}
+    rec = RecordingSet(spont="x.npy", T_obs_s=1.0)
+    orchestrator.experimental_inference(cfg, _sim_post(), rec, accept=acc, name="n2", note="t2",
+                                        fig_sink=sink, store=store)
+    assert seen["rec"] is rec and seen["exp"] == {"fig_sink": sink, "store": store}
+    assert seen["inf"] == {"name": "n2", "note": "t2", "fig_sink": sink, "store": store, "accept": acc}, \
+        "n_samples must be ABSENT when the caller did not set it"

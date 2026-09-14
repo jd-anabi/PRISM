@@ -127,6 +127,11 @@ class LoadedObservation(Loaded):
         if src["kind"] == "simulated":
             cfg.inject_ground_truth(dict(src["inits"]), dict(src["params"]), dict(src["rescale"]),
                                     dict(src["forcing"]))
+        else:
+            # "put back THIS observation's context" cuts both ways: a bench recording has no truth, and
+            # one left over from an earlier simulated inference would be read as this observation's by
+            # the round's ground-truth check and by the PPC's initial conditions.
+            cfg.clear_ground_truth()
         cfg.set_observation_context(cfg.T_obs, dict(body["forcing_vals"] or {}))
 
 
