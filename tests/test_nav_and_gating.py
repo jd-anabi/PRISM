@@ -342,7 +342,6 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     inf.session = SbiSession(cfg=cfg, inf_prior=object())
     panel = inf.tsnpe_panel
 
-    import pytest
     inf.posterior_panel._ask_load_non_amortized = lambda m: pytest.fail(
         "a round's OWN result must install with no dialog -- it is the posterior the user just made")
     panel._on_round(loaded)
@@ -371,7 +370,6 @@ def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session(st
     validate_calibration (which reads the region off ``posterior.posterior.truncation`` so calibration
     draws from the truncated prior), and an amortized LoadedPosterior clears it -- and is loaded with no
     question at all."""
-    import pytest
     from core.artifacts import Accept
     from core.SBI import reparam, truncate
     from core.SBI.training_checkpoint import bijection_probe
@@ -420,8 +418,11 @@ def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session(st
         "the confirmed LOAD does not opt in to non-amortized artifacts"
     assert len(asked) == 1 and asked[0].id == trunc.id, "the dialog was not shown the artifact's manifest"
 
-    # (b) the ask says no: nothing is dispatched and the session keeps what it had
+    # (b) the ask says no: nothing is dispatched and the session keeps what it had. Reinstall a
+    # posterior first -- step (a)'s LOAD already reset the session's to None via reset_downstream, so
+    # "is before" would hold trivially (None is None) even if Cancel reset it too.
     load.clear()
+    pp._on_posterior(loaded)
     before = inf.session.posterior
     pp._ask_load_non_amortized = lambda m: False
     pp._build_posterior()
