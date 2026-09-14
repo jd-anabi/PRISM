@@ -1019,3 +1019,224 @@ def test_the_local_sweep_is_no_longer_a_staticmethod_pinned_to_the_cpu():
         # and the accept loop must not sync per row -- that would hand back most of the device move
         assert "for i in range(batch_size)" not in code, \
             f"{cls}._local_map still walks rows one at a time (a device-to-host sync per row)"
+
+
+# ── tsnpe_round: the one round path (piece 2, §2.5) ──────────────────────────────────────────────
+class _RoundStore:
+    """The store shape tsnpe_round uses: it asks whether the posterior name is free, then hands itself
+    to build_posterior. Passing one proves the round never reaches for the process default -- which is
+    what the GUI runner did, and is the carried item "thread the store into the TSNPE runner"."""
+
+    def __init__(self):
+        self.asked = []
+
+    def assert_name_free(self, kind, name):
+        self.asked.append((kind, name))
+
+
+def _round_cfg():
+    """The cfg shape tsnpe_round reads before it hands off: 8 ND + 5 rescale = a 13-dimensional latent,
+    with t_scale second in the rescale block (so its latent index is 8 + 1 = 9)."""
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        params_dict={f"p{i}": (None, (0.0, 1.0)) for i in range(8)},
+        rescale_params={n: (None, (0.0, 1.0)) for n in ("x_scale", "t_scale", "f_scale", "a", "b")},
+        rescale_idx={"x_scale": 0, "t_scale": 1, "f_scale": 2, "a": 3, "b": 4})
+
+
+def _round_obs(digest="a" * 16, events=None):
+    """A LoadedObservation-shaped stand-in whose install() records that it ran, and when."""
+    from types import SimpleNamespace
+    ev = [] if events is None else events
+    o = SimpleNamespace(digest=digest, id="obs", name="", events=ev)
+    o.install = lambda cfg: ev.append(("install", cfg))
+    return o
+
+
+def _parent(digest=None):
+    """The parent LoadedPosterior shape tsnpe_round reads: only .posterior.x_obs_digest."""
+    from types import SimpleNamespace
+    return SimpleNamespace(posterior=SimpleNamespace(x_obs_digest=digest), id="parent", name="")
+
+
+def test_tsnpe_round_refuses_bad_direction_counts_and_hpd_levels_before_any_spend():
+    """These three checks lived on the TSNPE tab, where neither the command line nor a test could reach
+    them -- and truncate.region_from_posterior silently CLAMPED the direction count at both ends: a 0
+    became 1, and a count above the latent size truncated every direction including the flat ones
+    guardrail 3 exists to leave at full width."""
+    from core import orchestrator
+    drawn, store, cfg, obs = [], _RoundStore(), _round_cfg(), _round_obs()
+    saved = orchestrator.build_truncation_region
+    orchestrator.build_truncation_region = lambda *a, **k: drawn.append(1)
+    try:
+        for bad, why in ((dict(n_directions=0), "At least one direction must be truncated"),
+                         (dict(n_directions=14), "the latent has 13"),
+                         (dict(level=0.0), "strictly between 0 and 1"),
+                         (dict(level=1.0), "strictly between 0 and 1")):
+            try:
+                orchestrator.tsnpe_round(cfg, _parent(), object(), obs, store=store, **bad)
+                raise AssertionError(f"tsnpe_round accepted {bad}")
+            except ValueError as e:
+                assert why in str(e), f"{bad}: {e}"
+    finally:
+        orchestrator.build_truncation_region = saved
+    assert drawn == [], "a refused round drew a region"
+    assert obs.events == [], "a refused round installed the observation's context on the session cfg"
+    assert store.asked == [("posterior", "")] * 4, "the name check must run first, on every path"
+
+
+def test_a_tight_hpd_warns_through_the_preflight_channel_and_still_runs():
+    """A judgement, not a refusal -- but it has to REACH somebody: the GUI routes warnings to the log
+    pane at warning severity while a print lands at info. Deleted support is a one-way ratchet, and a
+    region that is too TIGHT is the expensive mistake, not the cheap one."""
+    from core import orchestrator
+    cfg, obs, store = _round_cfg(), _round_obs(), _RoundStore()
+    saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
+    orchestrator.build_truncation_region = lambda *a, **k: "REGION"
+    orchestrator.build_posterior = lambda *a, **k: "CHILD"
+    try:
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            out = orchestrator.tsnpe_round(cfg, _parent(), object(), obs, level=0.95, store=store)
+    finally:
+        orchestrator.build_truncation_region, orchestrator.build_posterior = saved
+    said = [str(w.message) for w in rec if issubclass(w.category, orchestrator.PreflightWarning)]
+    assert out == "CHILD", "a tight HPD must warn, not refuse"
+    assert any("tighter than the recommended 0.999" in m for m in said), said
+
+
+def test_a_non_amortized_parent_is_refused_on_another_observation():
+    """D12, and there is no escape hatch. A non-amortized parent is valid only near its own
+    observation, so a region drawn from it around another one is drawn where the flow extrapolates
+    rather than where it was trained. Reachable today by loading a round's posterior on the Posterior
+    tab and then picking a different observation on the TSNPE tab; build_truncation_region does not
+    check it."""
+    from core import orchestrator
+    cfg, store = _round_cfg(), _RoundStore()
+    drawn = []
+    saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
+    orchestrator.build_truncation_region = lambda *a, **k: drawn.append(1) or "REGION"
+    orchestrator.build_posterior = lambda *a, **k: "CHILD"
+    try:
+        other = _round_obs(digest="a" * 16)
+        try:
+            orchestrator.tsnpe_round(cfg, _parent(digest="b" * 16), object(), other, store=store)
+            raise AssertionError("a round was drawn from a non-amortized parent around another observation")
+        except ValueError as e:
+            assert "b" * 16 in str(e) and "a" * 16 in str(e), f"the refusal must name both digests: {e}"
+            assert "no override" in str(e), f"the refusal must say there is no way past it: {e}"
+        assert drawn == [] and other.events == []
+        # the parent's OWN observation is the legitimate case, and an amortized parent takes any
+        assert orchestrator.tsnpe_round(cfg, _parent(digest="a" * 16), object(), _round_obs(),
+                                        store=store) == "CHILD"
+        assert orchestrator.tsnpe_round(cfg, _parent(), object(), _round_obs(digest="c" * 16),
+                                        store=store) == "CHILD"
+        assert drawn == [1, 1]
+    finally:
+        orchestrator.build_truncation_region, orchestrator.build_posterior = saved
+
+
+def test_tsnpe_round_installs_the_observation_then_forwards_every_knob_to_build_posterior():
+    """The SECOND hop. The store the caller names is the one every stage gets; the observation's context
+    is installed BEFORE the region is drawn, so the round's ground-truth check reads THIS observation's
+    truth or none; t_scale's latent index travels, because a direction that loads on it must not be
+    truncated (D4); and no Fisher keyword is accepted at all, because a truncated round reuses the
+    region's own V and never runs the Fisher (guardrail 7)."""
+    from core import orchestrator
+    events, seen, store, cfg = [], {}, _RoundStore(), _round_cfg()
+    obs = _round_obs(events=events)
+    sink = lambda title, fig: None                                   # noqa: E731
+    prior = object()
+    parent = _parent()
+    saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
+    orchestrator.build_truncation_region = (
+        lambda post, ob, **k: (events.append(("region",)), seen.update(region_kw=k, region_args=(post, ob)),
+                               "REGION")[-1])
+    orchestrator.build_posterior = lambda *a, **k: (seen.update(args=a, kw=k), "CHILD")[-1]
+    try:
+        out = orchestrator.tsnpe_round(cfg, parent, prior, obs, n_directions=3, level=0.999, num_runs=7,
+                                       run_size_cap=8, hidden_features=16, num_transforms=2,
+                                       learning_rate=1e-3, stop_after_epochs=4, max_num_epochs=5,
+                                       checkpoint_every=2, resume="require", new_run=True,
+                                       name="r1", note="n1", fig_sink=sink, store=store)
+        assert out == "CHILD" and store.asked == [("posterior", "r1")]
+        assert events == [("install", cfg), ("region",)], \
+            "the observation's context must be installed BEFORE the region is drawn"
+        assert seen["region_args"] == (parent, obs)
+        assert seen["region_kw"] == {"n_directions": 3, "level": 0.999, "t_scale_idx": 9}
+        assert seen["args"] == (cfg, prior, None, True)
+        assert seen["kw"] == {"truncation": "REGION", "observation": obs, "parent_posterior": parent,
+                              "resume": "require", "new_run": True, "name": "r1", "note": "n1",
+                              "fig_sink": sink, "store": store, "num_runs": 7, "run_size_cap": 8,
+                              "hidden_features": 16, "num_transforms": 2, "learning_rate": 1e-3,
+                              "stop_after_epochs": 4, "max_num_epochs": 5, "checkpoint_every": 2}
+        assert not {"fisher_m", "fisher_dz", "fisher_points"} & set(seen["kw"]), \
+            "a truncated round must accept no Fisher knob: it never runs the Fisher"
+        # an unset knob is NOT forwarded, so the stage's own default stays the one place it lives
+        seen.clear()
+        orchestrator.tsnpe_round(cfg, parent, prior, _round_obs(), store=store)
+        assert set(seen["kw"]) == {"truncation", "observation", "parent_posterior", "resume", "new_run",
+                                   "name", "note", "fig_sink", "store"}, seen["kw"]
+        assert seen["kw"]["resume"] == "auto" and seen["kw"]["new_run"] is False
+        assert seen["region_kw"]["n_directions"] == truncate.DEFAULT_N_DIRECTIONS
+        assert seen["region_kw"]["level"] == truncate.DEFAULT_HPD
+    finally:
+        orchestrator.build_truncation_region, orchestrator.build_posterior = saved
+
+
+def test_the_round_reads_this_observations_truth_and_no_other():
+    """An experimental recording has no truth, and nothing ever cleared one: a round on a bench
+    recording, run after a simulated inference in the same session, reported the STALE cell as "the
+    loaded cell's GROUND TRUTH lies OUTSIDE the truncation region" -- or was silently satisfied by it.
+    install now clears it, so build_posterior's guardrail-5 block has nothing to fire on."""
+    from types import SimpleNamespace
+    from core import cli, orchestrator
+    from core.artifacts import LoadedObservation
+    from core.config import CELL_PATH
+    from tests._fixtures import _nad_cfg
+    cfg = _nad_cfg()
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")
+    cli.load_and_validate_gt(cfg, cell)                      # the session's earlier simulated inference
+    cfg.T_obs = 200.0
+    assert cfg.has_ground_truth
+    body = {"T_obs_cell": 200.0, "n_obs": 200, "chi_obs_freqs": None, "forcing_vals": {},
+            "source": {"kind": "experimental"}}
+    exp = LoadedObservation(kind="observation", id="e", name="", path=None,
+                            manifest=SimpleNamespace(body=body), digest="a" * 16)
+    saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
+    orchestrator.build_truncation_region = lambda *a, **k: "REGION"
+    orchestrator.build_posterior = lambda *a, **k: "CHILD"
+    try:
+        orchestrator.tsnpe_round(cfg, _parent(), object(), exp, store=_RoundStore())
+    finally:
+        orchestrator.build_truncation_region, orchestrator.build_posterior = saved
+    assert not cfg.has_ground_truth, "the round kept a truth that belongs to another observation"
+    assert "cell" not in cfg.sources and not cfg.inits_dict
+
+    # ... and a SIMULATED observation's truth outside the box is still reported, in the one wording
+    cli.load_and_validate_gt(cfg, cell)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    T = reparam.build_inferred_bijection(cfg, log_params=[])
+    wide = truncate.TruncationRegion([0], [-1e6], [1e6], level=0.999, n_latent=P)
+    far = truncate.TruncationRegion([0], [9.0], [10.0], level=0.999, n_latent=P)
+    assert orchestrator._truth_outside_region(T, wide, cfg.ground_truth_tensor) == []
+    said = orchestrator._truth_outside_region(T, far, cfg.ground_truth_tensor)
+    assert said and said[0].startswith("direction 0:") and "outside [9" in said[0], said
+
+
+def test_the_round_announces_the_region_it_drew():
+    """Walkthrough row A7 quotes this line, and it is the operator's only view of which observation a
+    multi-day round was drawn around."""
+    import contextlib
+    from core import orchestrator
+    cfg, store = _round_cfg(), _RoundStore()
+    saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
+    orchestrator.build_truncation_region = lambda *a, **k: "REGION-REPR"
+    orchestrator.build_posterior = lambda *a, **k: "CHILD"
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            orchestrator.tsnpe_round(cfg, _parent(), object(), _round_obs(), store=store)
+    finally:
+        orchestrator.build_truncation_region, orchestrator.build_posterior = saved
+    assert "[tsnpe] region from observation obs: 'REGION-REPR'" in buf.getvalue(), buf.getvalue()

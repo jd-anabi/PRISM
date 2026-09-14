@@ -2083,6 +2083,95 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
     return obs, inf
 
 
+def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
+                observation: LoadedObservation, *,
+                n_directions: int | None = None, level: float | None = None,
+                num_runs: int | None = None, run_size_cap: int | None = None,
+                hidden_features: int | None = None, num_transforms: int | None = None,
+                learning_rate: float | None = None, stop_after_epochs: int | None = None,
+                max_num_epochs: int | None = None, checkpoint_every: int | None = None,
+                resume: str = "auto", new_run: bool = False,
+                name: str = "", note: str = "", fig_sink=None, store=None) -> LoadedPosterior:
+    """One TSNPE round: the region drawn from ``posterior`` around ``observation``, then the PRIOR
+    RESTRICTED to it, simulated and retrained.
+
+    ⚠ THE PROPOSAL IS THE TRUNCATED PRIOR, NEVER THE POSTERIOR. Nothing here reimplements that rule:
+    the region travels as ``truncation=``, and build_posterior is what wraps the latent prior in a
+    TruncatedLatentPrior. This function only carries a front end's choices into the stages, and refuses
+    before any of them is spent.
+
+    ⚠ NO FISHER KNOBS, BY DESIGN. With a region, build_posterior reuses the region's own V and never
+    reaches the Fisher at all: the box is measured in the parent's basis and is meaningless in any
+    other (guardrail 7).
+
+    :param posterior: the parent LoadedPosterior the region is drawn from.
+    :param prior: the parent's own base prior. The region records that prior's GMM fingerprint and
+                      build_posterior refuses any other -- a box measured on one prior selects a slab
+                      of another that nobody measured.
+    :param observation: the LoadedObservation the region is drawn around. Its context is installed on
+                      ``cfg`` before training, so the round's ground-truth check reads THIS
+                      observation's truth, or none for a bench recording.
+    :param n_directions / level: how many of the best-constrained directions to truncate, and the
+                      per-direction interval; None = ``truncate.DEFAULT_N_DIRECTIONS`` / ``DEFAULT_HPD``.
+    :param resume / new_run: the cache policy and the D7 consent, forwarded to build_posterior always.
+    :return: the LoadedPosterior build_posterior wrote and read back. It carries its own region and
+                      observation digest, so nothing here has to return them separately.
+    """
+    store = resolve_store(store)
+    store.assert_name_free("posterior", name)      # before the region draw and before days of training
+    n = truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions)
+    q = truncate.DEFAULT_HPD if level is None else float(level)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    # region_from_posterior CLAMPS both ends silently (max(1, min(n, p))). Clamping a 0 up to 1 hides a
+    # miskeyed setting; clamping down to P truncates EVERY direction, including the flat ones guardrail
+    # 3 exists to leave at full width. Both are refusals here instead.
+    if n < 1:
+        raise ValueError("At least one direction must be truncated")
+    if n > P:
+        raise ValueError(f"{n} directions requested but the latent has {P}; truncating every direction "
+                         f"deletes support along the flat ones too")
+    if not 0.0 < q < 1.0:
+        raise ValueError("HPD level must be strictly between 0 and 1")
+    if q < truncate.DEFAULT_HPD - 0.009:           # i.e. below 0.99
+        # A judgement, so it warns rather than refuses -- but deleted support is a ONE-WAY ratchet, and
+        # a region that is too TIGHT is the expensive mistake, not the cheap one.
+        _preflight_warn(f"HPD {q:g} is tighter than the recommended {truncate.DEFAULT_HPD:g}. Truncation "
+                        f"permanently deletes prior support; no later round can recover it.")
+    # D12, WITH NO ESCAPE HATCH. A non-amortized parent is valid only near its own observation, so a
+    # region drawn from it around another one is drawn where the flow extrapolates rather than where it
+    # was trained. Reachable today by loading a round's posterior and then picking another observation;
+    # build_truncation_region checks the observation's digest against itself, not against the parent.
+    parent_digest = posterior.posterior.x_obs_digest
+    if parent_digest is not None and parent_digest != observation.digest:
+        raise ValueError(
+            f"[tsnpe] the parent posterior is itself NON-AMORTIZED: it is valid only near the "
+            f"observation with digest {parent_digest}, and the observation supplied "
+            f"('{observation.name or observation.id}') has digest {observation.digest}. A region drawn "
+            f"from it around another observation would be drawn where the flow extrapolates. There is "
+            f"no override: draw the round around the parent's own observation, or start from an "
+            f"amortized posterior.")
+    # THIS observation's context, and only this one's: a simulated observation puts back its own truth,
+    # an experimental one clears whatever an earlier inference left behind. Training reads nothing
+    # install sets -- the simulation identity holds no T_obs, n_obs or chi_n_freqs.
+    observation.install(cfg)
+    # t_scale_idx: a direction that loads on t_scale is not truncated -- the per-batch t_scale override
+    # would turn its box into a reweighting (D4) -- and the region records which ones were skipped.
+    t_scale_idx = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
+    region = build_truncation_region(posterior, observation, n_directions=n, level=q,
+                                     t_scale_idx=t_scale_idx)
+    print(f"[tsnpe] region from observation {observation.name or observation.id}: {region!r}", flush=True)
+    # Forwarded only when set, so every stage default stays written down in exactly one place; resume
+    # and new_run always travel, because their defaults are this function's own.
+    knobs = {k: v for k, v in (("num_runs", num_runs), ("run_size_cap", run_size_cap),
+                               ("hidden_features", hidden_features), ("num_transforms", num_transforms),
+                               ("learning_rate", learning_rate), ("stop_after_epochs", stop_after_epochs),
+                               ("max_num_epochs", max_num_epochs), ("checkpoint_every", checkpoint_every))
+             if v is not None}
+    return build_posterior(cfg, prior, None, True, truncation=region, observation=observation,
+                           parent_posterior=posterior, resume=resume, new_run=new_run,
+                           name=name, note=note, fig_sink=fig_sink, store=store, **knobs)
+
+
 # The experimental observation builders (and RecordingSet) live in SBI/observations.py; re-exported
 # here because the GUI runners and the diagnostic scripts call them as orchestrator.build_experiment_obs*
 # / orchestrator.RecordingSet.

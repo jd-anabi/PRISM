@@ -63,3 +63,4 @@ what they supersede, because rows A1-A9 are NOT edited:
 | # | surface | do | expect | date | result |
 |---|---|---|---|---|---|
 | B4 | Near-miss dialog (D7) | With checkpointing on, train at Batches 2 to completion. Then train at Batches 3 with the same prior: Cancel, then "Start a new run anyway". Then train at Batches 2. | The "differs only in n_runs" dialog with both values. Cancel dispatches nothing. Confirming trains in a new digest directory. Batches 2: no dialog, and "Resumes a COMPLETE checkpoint". | | |
+| B7 | A TSNPE round on a non-amortized parent (D12) | Load a round's posterior (accept the B1 dialog), pick a DIFFERENT observation on the TSNPE tab, Run. | An error dialog within seconds naming the parent's own observation digest; nothing written under `posteriors/` or `simulations/`; no `[tsnpe] region…` line. There is no checkbox for this. | | |
