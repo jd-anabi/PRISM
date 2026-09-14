@@ -30,6 +30,11 @@ HELP = {
     "tsnpe_dirs": "How many of the best-constrained Fisher directions to truncate; the rest keep "
                   "full prior width. Truncating every axis would cut the FLAT directions (k, "
                   "delta_E, temp sit at or near prior) on noise rather than on information.",
+    "tsnpe_new_run": "Tick this only after a round has been REFUSED for starting a new simulation "
+                     "cache while a committed one sits exactly one setting away. The refusal names the "
+                     "setting and both values: if you meant to continue that cache, change the setting "
+                     "back instead. Ticking it starts a new cache from zero and the box clears itself "
+                     "afterwards, so the next round is protected again.",
     "sweep_iters": "GLOBAL sweep rounds. Total candidates screened for stability = rounds x "
                    "candidates-per-round, so this is the coverage of the broad Sobol census that "
                    "SEEDS the local flood-fill. The sweep is ITERATION-bounded, which is why the "

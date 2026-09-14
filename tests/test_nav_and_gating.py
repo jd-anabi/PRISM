@@ -259,7 +259,6 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     """
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
-    from core.gui.panels import inference_tabs
 
     _app()
     inf = InferenceScreen()
@@ -283,21 +282,35 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     panel.refresh_local_gates()
     assert panel.btn_round.isEnabled(), "with a posterior, its prior and an observation, a round is allowed"
 
-    # The runner's contract: it hands build_posterior a truncation region and nothing else refits.
-    # Checked against the CODE, with the docstring stripped -- that docstring necessarily contains the
-    # word "proposal" while explaining what must not happen, and a naive text search on the whole
-    # source flags the very comment that documents the rule.
-    tree = ast.parse(textwrap.dedent(inspect.getsource(inference_tabs._run_tsnpe_round)))
-    fn = tree.body[0]
-    if (fn.body and isinstance(fn.body[0], ast.Expr)
-            and isinstance(fn.body[0].value, ast.Constant) and isinstance(fn.body[0].value.value, str)):
-        fn.body = fn.body[1:]
-    code = ast.unparse(tree)
-    assert "build_truncation_region" in code and "truncation=region" in code,         "the TSNPE runner does not build a truncation region and pass it to build_posterior"
+    # The contract, checked against the CODE with docstrings stripped -- those docstrings necessarily
+    # contain the word "proposal" while explaining what must not happen, and a naive text search on the
+    # whole source flags the very comment that documents the rule. Two halves now: the STAGE builds the
+    # region and hands it to build_posterior as a truncation, and the TAB does nothing but dispatch it.
+    from core import orchestrator
+    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+
+    def _stripped(obj):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(obj)))
+        fn = tree.body[0]
+        if (fn.body and isinstance(fn.body[0], ast.Expr)
+                and isinstance(fn.body[0].value, ast.Constant) and isinstance(fn.body[0].value.value, str)):
+            fn.body = fn.body[1:]
+        return ast.unparse(tree)
+
+    code = _stripped(orchestrator.tsnpe_round)
+    assert "build_truncation_region" in code and "truncation=region" in code, \
+        "tsnpe_round does not build a truncation region and pass it to build_posterior"
     for banned in ("set_default_x", "proposal"):
         assert banned not in code, (
-            f"the TSNPE runner's CODE references '{banned}' -- it must sample the truncated PRIOR, "
-            f"never the posterior; that is tempering, and SBC cannot detect it")
+            f"tsnpe_round's CODE references '{banned}' -- it must sample the truncated PRIOR, never the "
+            f"posterior; that is tempering, and SBC cannot detect it")
+
+    tab = _stripped(TSNPEPanel._round)
+    assert "orchestrator.tsnpe_round" in tab, "the tab must dispatch the stage, not reimplement a round"
+    for banned in ("build_posterior", "build_truncation_region", "set_default_x", "proposal"):
+        assert banned not in tab, (
+            f"TSNPEPanel._round's CODE references '{banned}' -- the round's science lives in "
+            f"orchestrator.tsnpe_round, and a second copy in the GUI is how the two drift apart")
 
 def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     """⚠ SECTION 11.6 GUARDRAIL 2, at the seam where it is easiest to lose.
@@ -949,3 +962,74 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     pp._build_posterior()
     assert sent["kwargs"]["new_run"] is False
     assert any(k == "warning" and "unreadable header" in t for k, t in lines), lines
+
+
+def test_the_tsnpe_tab_dispatches_a_loaded_observation():
+    """The tab loads the observation ITSELF, on the GUI thread, and hands the wrapper to the stage.
+
+    Loading is what re-hashes the file and checks its mode and conditioning width against the session's
+    config, so a mismatch is a dialog within milliseconds instead of an exception hours into a round.
+    No stage loads by reference any more, and no GUI dispatch names a store (build_app installs the
+    default once).
+    """
+    import types
+    from core import orchestrator
+    from core.gui.panels.inference import tsnpe_tab as tt
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+
+    _app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    panel = inf.tsnpe_panel
+    panel.obs_picker.key = lambda: "20260910T120000"
+
+    sentinel = types.SimpleNamespace(id="20260910T120000", name="obs")
+    real_default_store = tt.default_store
+    cap = {}
+    panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
+    errors = []
+    panel._on_error = lambda message, tb: errors.append(message)
+    try:
+        tt.default_store = lambda: types.SimpleNamespace(load_observation=lambda cfg, ref: sentinel)
+        panel.n_dirs.setText("2")
+        panel.hpd.setText("0.999")
+        panel.num_runs.setText("3")
+        panel.run_size_cap.setText("8")
+        panel._round()
+        assert cap["fn"] is orchestrator.tsnpe_round, cap["fn"]
+        assert cap["args"][3] is sentinel, "the tab must pass the LOADED observation, not its key"
+        assert cap["kwargs"]["n_directions"] == 2 and cap["kwargs"]["level"] == 0.999
+        assert cap["kwargs"]["num_runs"] == 3 and cap["kwargs"]["run_size_cap"] == 8
+        assert cap["kwargs"]["new_run"] is False and cap["kwargs"]["provide_fig_sink"] is True
+        assert "store" not in cap["kwargs"], "the GUI names no store; build_app installs the default"
+
+        # ticked: the consent travels, and the box clears itself so it cannot silently persist
+        cap.clear()
+        panel.new_run.setChecked(True)
+        panel._round()
+        assert cap["kwargs"]["new_run"] is True
+        assert panel.new_run.isChecked() is False, "the box must clear after each dispatch"
+
+        # a load failure dispatches NOTHING and reports through _on_error (not _config_error, whose
+        # text begins "The configuration could not be built")
+        cap.clear()
+        def _boom(cfg, ref):
+            raise ValueError("width 61 is not this config's 50")
+        tt.default_store = lambda: types.SimpleNamespace(load_observation=_boom)
+        panel._round()
+        assert cap == {}, "a round was dispatched with an observation that would not load"
+        assert errors and "20260910T120000" in errors[-1] and "width 61" in errors[-1], errors
+    finally:
+        tt.default_store = real_default_store
+
+
+def test_the_tsnpe_new_run_box_is_not_persisted():
+    """D7's consent is per-run. Persisting it would silence the near-miss refusal for every future
+    round in every future session -- exactly the accident the refusal exists to catch."""
+    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+
+    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(TSNPEPanel.save_settings))))
+    assert "new_run" not in src, "save_settings must not persist the near-miss consent"
+    src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(TSNPEPanel.restore_settings))))
+    assert "new_run" not in src, "restore_settings must not restore the near-miss consent"

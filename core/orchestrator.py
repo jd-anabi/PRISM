@@ -460,7 +460,8 @@ def _near_miss_message(ckpt_dir, near) -> str:
             f"cache ONE setting away exists:\n" + _near_miss_lines(ckpt_dir, near) +
             f"\nIf you meant to continue that cache, set {near[0]['field']} back to "
             f"{near[0]['theirs']!r}. To start a new cache anyway, pass new_run=True "
-            f"(GUI: \"Start a new run anyway\"; command line: --new-run).")
+            f"(GUI: \"Start a new run anyway\" on the Posterior tab, or tick \"Start a new simulation "
+            f"even if a cache one setting away exists\" on the TSNPE tab; command line: --new-run).")
 
 
 def _no_cache_message(ckpt_dir, near) -> str:

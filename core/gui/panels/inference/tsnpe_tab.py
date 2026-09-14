@@ -1,14 +1,14 @@
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (QGroupBox, QLabel, QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (QCheckBox, QGroupBox, QLabel, QPushButton, QVBoxLayout)
 
-from core import config
+from core import config, orchestrator
+from core.artifacts import default_store
 
 from ... import icons, settings
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
 from ...widgets.labeled_inputs import FloatField, IntField, PathField
-from .runners import (_run_tsnpe_round)
 from .base import _StagePanel, _TrainingBudgetMixin
 from .help_text import HELP
 
@@ -80,6 +80,13 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
             bv.addWidget(lab)
         for fld in (self.num_runs, self.run_size_cap):
             fld.textChanged.connect(lambda _t: self._sync_budget())
+        # D7's consent, per run and never persisted. It is needed on THIS tab because a near miss fires
+        # for rounds too -- a 2-batch test round and a 5000-batch round on the same parent differ only in
+        # the batch count -- and the region is drawn inside the worker, so an up-front dialog like the
+        # Posterior tab's is impossible: the refusal arrives from the stage, seconds in, and this is how
+        # the user answers it.
+        self.new_run = QCheckBox("Start a new simulation even if a cache one setting away exists")
+        bv.addWidget(with_badge(self.new_run, HELP["tsnpe_new_run"]))
         self.controls_layout.addWidget(budget)
         self._sync_budget()
 
@@ -87,24 +94,23 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         s = self.session
         if s.posterior is None or s.inf_prior is None or not self.obs_picker.key():
             return
-        level, n_dirs = self.hpd.value(), self.n_dirs.value()
-        if not (0.0 < level < 1.0):
-            self.log_pane.append_line("HPD level must be strictly between 0 and 1.", "warning")
+        # Loaded HERE, on the GUI thread: the load re-hashes the file and checks its mode and
+        # conditioning width against this config, so a mismatch is a dialog now rather than an
+        # exception hours into the round. The stage takes the wrapper; nothing loads by reference.
+        try:
+            obs = default_store().load_observation(s.cfg, self.obs_picker.key())
+        except Exception as e:                                  # noqa: BLE001 -- a picked file is user input
+            self._on_error(f"Could not load observation '{self.obs_picker.key()}': {e}", "")
             return
-        if n_dirs < 1:
-            self.log_pane.append_line("At least one direction must be truncated.", "warning")
-            return
-        if level < 0.99:
-            # A judgement, so it warns rather than refuses -- but deleted support is a ONE-WAY
-            # ratchet, and a region that is too TIGHT is the expensive mistake, not the cheap one.
-            self.log_pane.append_line(
-                f"HPD {level:g} is tighter than the recommended {0.999:g}. Truncation permanently "
-                f"deletes prior support; no later round can recover it.", "warning")
+        # The HPD / direction-count checks are the STAGE's now (one copy, shared with the command-line
+        # tool), and it refuses before it simulates -- so the error dialog still arrives within seconds.
         n_runs, cap = self._budget_values()
-        self.dispatch(_run_tsnpe_round, s.cfg, s.posterior, s.inf_prior,
-                      self.obs_picker.key(), n_dirs, level,
-                      max(1, n_runs), max(0, cap), provide_fig_sink=True,
-                      on_result=self._on_round)
+        self.dispatch(orchestrator.tsnpe_round, s.cfg, s.posterior, s.inf_prior, obs,
+                      n_directions=self.n_dirs.value(), level=self.hpd.value(),
+                      num_runs=max(1, n_runs), run_size_cap=max(0, cap),
+                      new_run=self.new_run.isChecked(),
+                      provide_fig_sink=True, on_result=self._on_round)
+        self.new_run.setChecked(False)
 
     def _on_round(self, payload):
         """Install the round's LoadedPosterior -- it carries its own region and observation digest
