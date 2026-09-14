@@ -4,8 +4,8 @@ A handler resolves nothing of its own. Every value flag defaults to None and is 
 was given, so the stage's own default -- read from config.py, in one place -- is the default. The heavy
 imports live inside the handlers, so building the parser costs no torch.
 """
-from .config_args import (accept_from, add_accept_flags, add_config_flags, add_name_flags, build_cfg,
-                          close_sink, knobs, load_posterior_and_prior, recording_set, report)
+from .config_args import (UsageError, accept_from, add_accept_flags, add_config_flags, add_name_flags,
+                          build_cfg, close_sink, knobs, load_posterior_and_prior, recording_set, report)
 
 PRIOR_KNOBS = ("num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units",
                "min_cluster_size", "min_samples")
@@ -138,8 +138,11 @@ def register(subparsers) -> dict:
     p.add_argument("--learning-rate", type=float, default=None, metavar="X")
     p.add_argument("--stop-after-epochs", type=int, default=None, metavar="N")
     p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=None, metavar="N")
-    p.add_argument("--checkpoint-every", type=int, default=None, metavar="N")
-    p.add_argument("--resume", choices=("auto", "require", "never"), default=None)
+    p.add_argument("--checkpoint-every", type=int, default=None, metavar="N",
+                   help="batches between checkpoint commits (0 = no cache, nothing resumable)")
+    p.add_argument("--resume", choices=("auto", "require", "never"), default=None,
+                   help="auto resumes this run's own cache; require refuses when there is none; "
+                        "never refuses to resume one (default: auto)")
     p.add_argument("--new-run", action="store_true",
                    help="start a new simulation cache even though a committed one ONE setting away "
                         "exists (a test round and a real one differ only in --num-runs)")
@@ -186,8 +189,15 @@ def _infer(args, store) -> int:
     # is printed once, by the composition, rather than here and there.
     cfg, _ = build_cfg(args)
     accept = accept_from(args)
-    # R-L: computed BEFORE load_posterior_and_prior, so a usage error (a bad --forced/--drive/--f0-si
-    # combination) costs no load -- refuse before the spend.
+    if args.cell and (args.forced or args.drive or args.f0_si is not None):
+        # Spec 3.5: --forced/--drive/--f0-si describe a MEASURED recording. --cell re-simulates the
+        # cell's own drive, so on that branch they name nothing the command reads -- exactly the
+        # silently-ignored flag D6 forbids.
+        raise UsageError("--forced, --drive and --f0-si describe measured recordings; --cell "
+                         "re-simulates the cell's own drive, so drop them.")
+    # A usage error costs no posterior load: recording_set is checked here, before
+    # load_posterior_and_prior, so a bad --forced/--drive/--f0-si combination is refused before the
+    # load is spent.
     rec = recording_set(cfg, args) if args.spont else None
     posterior, prior = load_posterior_and_prior(cfg, args.posterior, accept, store)
     if args.cell:

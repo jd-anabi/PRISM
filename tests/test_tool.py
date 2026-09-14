@@ -223,6 +223,7 @@ def test_usage_errors_exit_2(tool_env, capsys):
     assert main([]) == 2
     assert main(["prior", "--device", "cpu"]) == 2          # --bounds is required everywhere
     assert main(["train", *_cfg(bounds)]) == 2              # --prior is required
+    assert main(["validate", "--posterior", "x"]) == 2      # --bounds is required for validate too
     capsys.readouterr()
     assert main(["--help"]) == 0
     assert "PRISM_ARTIFACTS" in capsys.readouterr().out
@@ -259,8 +260,9 @@ def test_parse_forced_and_recording_set_rules():
     chi = SimpleNamespace(observation_mode="chi", force_params_dict={"amp": None})
     with pytest.raises(UsageError, match="at least one"):
         recording_set(chi, _args(f0_si=1e-12))
-    with pytest.raises(UsageError, match="frequency"):
+    with pytest.raises(UsageError, match="frequency") as exc:
         recording_set(chi, _args(forced=["a.npy"], f0_si=1e-12))
+    assert "(D9)" in str(exc.value), "spec 3.6 requires the guardrail id in the message"
     with pytest.raises(UsageError, match="--f0-si"):
         recording_set(chi, _args(forced=["a.npy@10"]))
     rec = recording_set(chi, _args(forced=["a.npy@10", "b.npy@20"], f0_si=1e-12))
@@ -288,10 +290,22 @@ def test_infer_usage_errors_exit_2(tool_run, capsys):
     base = ["infer", *_cfg(bounds), "--posterior", "tpost", "--t-obs", "1.0"]
     assert main([*base, "--cell", cell, "--spont", "x.npy"]) == 2     # mutually exclusive
     assert main([*base]) == 2                                        # and one of them is required
+
+    # R-L's ordering, PROVED rather than assumed: --posterior names a ref that does not exist, so the
+    # only way this can return 2 (recording_set's UsageError) rather than 1
+    # (load_posterior_and_prior's StoreError) is if the recording rules are checked BEFORE the load.
+    # Moving recording_set after the load would silently turn this into a 1.
+    bad_ref = ["infer", *_cfg(bounds), "--posterior", "nosuch", "--t-obs", "1.0"]
     capsys.readouterr()
-    assert main([*base, "--spont", "x.npy", "--forced", "y.npy"]) == 2
+    assert main([*bad_ref, "--spont", "x.npy", "--forced", "y.npy"]) == 2
     err = capsys.readouterr().err
     assert "usage:" in err and "no Forcing section" in err
+
+    # --cell with any of the experimental-only recording flags: I3, refused before the load too.
+    capsys.readouterr()
+    assert main([*bad_ref, "--cell", cell, "--forced", "y.npy@10", "--f0-si", "1e-12"]) == 2
+    err = capsys.readouterr().err
+    assert "usage:" in err and "--forced" in err and "--f0-si" in err
 
 
 def test_validate_and_simulated_infer(tool_run):
@@ -326,6 +340,8 @@ def test_near_miss_is_refused_before_simulation(tool_run, capsys):
                  "--checkpoint-every", "1"]) == 1
     err = capsys.readouterr().err
     assert "ONE setting away" in err and "n_runs" in err and "--new-run" in err
+    assert "this run 3" in err and "that cache 2" in err, \
+        "the refusal must name BOTH values, not just the field -- read literally off the message"
     assert {p.name for p in sims.iterdir()} == sims_before, "a new cache was started anyway"
     assert {s.id for s in store.list("posterior")} == posts_before
 
@@ -386,8 +402,10 @@ def test_validate_refuses_a_non_amortized_posterior_without_accept_truncated(too
 
 
 def test_ctrl_c_mid_simulation_keeps_the_committed_batches(tool_run, monkeypatch, capsys):
-    """Ctrl-C is not a refusal and not a bug: the pipeline commits the batches it finished, the
-    writer removes the artifact it had opened, and the next run with --resume require continues."""
+    """Ctrl-C is not a refusal and not a bug: what this test actually proves is that the batches the
+    pipeline already committed survive the interrupt, that no half-trained posterior is ever written
+    (posts_before is unchanged after the 130), and that the same command with --resume require
+    continues training from batch 2 rather than restarting."""
     from core.SBI import pipeline
     from core.artifacts import ArtifactStore
     bounds, cell, root = tool_run
@@ -421,32 +439,101 @@ def test_ctrl_c_mid_simulation_keeps_the_committed_batches(tool_run, monkeypatch
 
 def test_every_validate_infer_and_tsnpe_flag_reaches_its_stage_as_a_keyword(tool_round, monkeypatch):
     """Spec 3.4: a flag's dest IS the stage's keyword name, for the three subcommands T11 did not
-    cover. The real runs above would catch a wrong dest only for the flags they happen to pass -- and
-    they pass none of these, so a rename like --posterior-samples -> num_posterior_samples could drift
-    silently until a TypeError surfaced from **knobs() in front of an operator.
+    cover. Pins the WHOLE keyword mapping each call produces -- ``set(kw) ==`` the exact set, as T11's
+    own ``test_every_train_flag_reaches_build_posterior_as_a_keyword`` does -- not a sample of it:
+    ``knobs()`` silently DROPS a dest that no longer matches a flag (a rename like ``--run-size``
+    losing ``dest="run_size_cap"``, or a typo in ``getattr(args, "accept_other_observation", False)``),
+    so checking only a few keys would stay green through that drift; only the exact set catches it.
+
+    Also covers the two recording paths (``--cell`` and ``--spont``) and the accept hatches: what a
+    composition (``simulated_inference``/``experimental_inference``) receives as ``accept=``, and --
+    separately -- what ``load_posterior_and_prior`` itself receives for ``validate``/``tsnpe``, which
+    reach it as the ONLY place they use ``accept`` (their own compositions take no ``accept=`` of their
+    own).
     """
+    from core.artifacts import Accept
+    from core.SBI.observations import RecordingSet
     from core import orchestrator
+    from core.tool import stages
     bounds, cell, root, obs = tool_round
     v = _Rec(_art(root, "calibration"))
     i = _Rec((_art(root, "observation"), _art(root, "inference")))
+    e = _Rec((_art(root, "observation"), _art(root, "inference")))
     t = _Rec(_art(root, "posterior"))
     monkeypatch.setattr(orchestrator, "validate_calibration", v)
     monkeypatch.setattr(orchestrator, "simulated_inference", i)
+    monkeypatch.setattr(orchestrator, "experimental_inference", e)
     monkeypatch.setattr(orchestrator, "tsnpe_round", t)
 
+    # validate: every VALIDATE_KNOBS flag, a distinct value each.
     assert main(["validate", *_cfg(bounds), "--posterior", "tpost", "--n-cal", "7",
                  "--cal-n-scales", "3", "--posterior-samples", "11"]) == 0
-    assert v.calls[0][1]["n_cal"] == 7 and v.calls[0][1]["cal_n_scales"] == 3
-    assert v.calls[0][1]["num_posterior_samples"] == 11
+    (_cfg1, _post1, _prior1), kw = v.calls[0]
+    assert set(kw) == {"name", "note", "fig_sink", "store", "n_cal", "cal_n_scales",
+                       "num_posterior_samples"}
+    assert (kw["n_cal"], kw["cal_n_scales"], kw["num_posterior_samples"]) == (7, 3, 11)
 
+    # infer --cell: the simulated composition's full keyword set.
     assert main(["infer", *_cfg(bounds), "--posterior", "tpost", "--cell", cell,
                  "--t-obs", "2.5", "--n-samples", "13"]) == 0
     (_c, _p, t_obs), kw = i.calls[0]
-    assert t_obs == 2.5 and kw["n_samples"] == 13
+    assert t_obs == 2.5
+    assert set(kw) == {"cell", "prior", "accept", "name", "note", "fig_sink", "store", "n_samples"}
+    assert kw["n_samples"] == 13 and kw["cell"] == cell and kw["accept"] == Accept()
+
+    # infer --spont: the experimental composition's full keyword set, and the RecordingSet SBITEST's
+    # spontaneous mode (no Forcing section, per install_sbitest) actually accepts -- --spont alone, no
+    # --forced/--drive/--f0-si. The path need not exist: nothing before the stub reads it.
+    assert main(["infer", *_cfg(bounds), "--posterior", "tpost", "--spont", "s.npy",
+                 "--t-obs", "3.0", "--n-samples", "17"]) == 0
+    (_c2, _p2, rec), kw = e.calls[0]
+    assert isinstance(rec, RecordingSet) and rec.spont == "s.npy" and rec.T_obs_s == 3.0
+    assert set(kw) == {"accept", "name", "note", "fig_sink", "store", "n_samples"}
+    assert kw["n_samples"] == 17 and kw["accept"] == Accept()
+
+    # infer --cell with both accept flags: the composition sees the Accept they build.
+    i.calls.clear()
+    assert main(["infer", *_cfg(bounds), "--posterior", "tpost", "--cell", cell, "--t-obs", "2.5",
+                 "--accept-truncated", "--accept-other-observation"]) == 0
+    assert i.calls[0][1]["accept"] == Accept(truncated=True, other_observation=True)
+
+    # tsnpe: every TSNPE_KNOBS flag, a distinct value each, plus --new-run.
+    assert main(["tsnpe", *_cfg(bounds), "--posterior", "tpost", "--observation", obs,
+                 "--directions", "2", "--level", "0.99", "--num-runs", "6", "--run-size", "9",
+                 "--hidden-features", "10", "--num-transforms", "3", "--learning-rate", "0.002",
+                 "--stop-after-epochs", "5", "--max-epochs", "3", "--checkpoint-every", "2",
+                 "--resume", "require", "--new-run"]) == 0
+    (_c3, _p3, _pr3, _obs3), kw = t.calls[0]
+    assert set(kw) == {"name", "note", "fig_sink", "store", "new_run", "n_directions", "level",
+                       "num_runs", "run_size_cap", "hidden_features", "num_transforms",
+                       "learning_rate", "stop_after_epochs", "max_num_epochs", "checkpoint_every",
+                       "resume"}
+    assert (kw["n_directions"], kw["level"]) == (2, 0.99)
+    assert (kw["num_runs"], kw["run_size_cap"]) == (6, 9)
+    assert (kw["hidden_features"], kw["num_transforms"]) == (10, 3)
+    assert (kw["learning_rate"], kw["stop_after_epochs"], kw["max_num_epochs"]) == (0.002, 5, 3)
+    assert kw["checkpoint_every"] == 2 and kw["resume"] == "require" and kw["new_run"] is True
+
+    # The accept hatch on validate/tsnpe reaches only load_posterior_and_prior (their own
+    # compositions take no accept= of their own) -- so record what THAT receives, delegating to the
+    # real implementation so the load still succeeds. It is imported into core.tool.stages'
+    # namespace under its own name, so that is what a rename-proof monkeypatch targets.
+    real_load = stages.load_posterior_and_prior
+    load_calls = []
+
+    def _record_load(cfg, ref, accept, store):
+        load_calls.append(accept)
+        return real_load(cfg, ref, accept, store)
+
+    monkeypatch.setattr(stages, "load_posterior_and_prior", _record_load)
+
+    assert main(["validate", *_cfg(bounds), "--posterior", "tpost", "--n-cal", "5",
+                 "--accept-truncated"]) == 0
+    assert load_calls[-1] == Accept(truncated=True)
+
+    assert main(["validate", *_cfg(bounds), "--posterior", "tpost", "--n-cal", "5"]) == 0
+    assert load_calls[-1] == Accept(), "Accept() arrives when the flag is not given"
 
     assert main(["tsnpe", *_cfg(bounds), "--posterior", "tpost", "--observation", obs,
-                 "--directions", "2", "--level", "0.99", "--learning-rate", "0.002",
-                 "--max-epochs", "3"]) == 0
-    kw = t.calls[0][1]
-    assert (kw["n_directions"], kw["level"]) == (2, 0.99)
-    assert (kw["learning_rate"], kw["max_num_epochs"]) == (0.002, 3)
+                 "--directions", "2", "--accept-truncated"]) == 0
+    assert load_calls[-1] == Accept(truncated=True)

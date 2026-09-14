@@ -40,8 +40,11 @@ class StoreError(ValueError):
 
 @dataclass(frozen=True)
 class Accept:
-    """The ONLY escape hatches on the load path. Every flag used is written into the downstream
-    manifest's ``results.accepted``, so a number produced under one is marked."""
+    """The ONLY escape hatches on the load path. An INFERENCE writes the flags used into its own
+    manifest's ``results.accepted``, so a number produced under one is marked; a calibration or a
+    TSNPE round built with one does not carry that mark itself -- there, the flag only ever unlocks
+    the load, and what is on record is the non-amortized posterior's own manifest, which already says
+    ``amortized: false``."""
     truncated: bool = False            # load a NON-AMORTIZED (TSNPE) posterior
     other_observation: bool = False    # infer with it on an observation other than its region's
 
