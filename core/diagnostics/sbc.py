@@ -38,6 +38,14 @@ def _col(values) -> tuple:
     return float(np.median(col)), float(col.min()), float((col < 0.05).mean())
 
 
+def _cell(v, spec: str) -> str:
+    """One KS-table cell: the NUMBER formatted, or "-" (a column with no finite entry) right-justified
+    to the same width. Formatting the number and not str(v) matters: a string cut to 8 characters
+    prints 3.212345646893978e-20 as 3.212345, on exactly the rows the table sorts to the top."""
+    width = int(spec.split(".")[0])
+    return f"{'-':>{width}s}" if v is None else f"{v:{spec}}"
+
+
 def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
                 num_posterior_samples: int = 1000, cal_n_scales: int | None = None,
                 chi_k_fixed: int | None = None, seed: int = 0,
@@ -139,14 +147,19 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
                               "frac_ks_below_05": orch._num(frac),
                               "c2st_ranks_median": orch._num(_col(c2st_ranks[:, j])[0])})
         for rec in sorted(per_param, key=lambda p: (p["ks_p_median"] is None, p["ks_p_median"])):
-            print(f"{rec['name']:16s} {rec['ks_p_median']!s:>8.8s} {rec['ks_p_min']!s:>8.8s} "
-                  f"{rec['frac_ks_below_05']!s:>9.9s}")
+            print(f"{rec['name']:16s} {_cell(rec['ks_p_median'], '8.2e')} {_cell(rec['ks_p_min'], '8.2e')} "
+                  f"{_cell(rec['frac_ks_below_05'], '9.3f')}")
 
         # sbc_rank_plot's own default num_bins is num_sbc_runs // 20, which is 0 for a small pooled set
-        # and matplotlib then refuses outright -- floored here exactly as validate_calibration floors it.
+        # (matplotlib then refuses outright), hence the floor of 1. And it is capped so every bin spans
+        # at least ~10 of the nps + 1 integer ranks: the POOLED N is repeats x n_cal, so N // 20 alone
+        # gives ~950 bins over 1001 ranks at the defaults -- some bins hold two ranks and spike above
+        # the band on a calibrated posterior, and past N = 20 (nps + 1) every other bin is empty. At the
+        # defaults the cap gives 100 bins, each 10 ranks wide, the figure validate_calibration draws.
         n_rows = int(np.ceil(len(labels) / 4))
+        num_bins = max(1, min(pooled.shape[0] // 20, (nps + 1) // 10))
         fig, _ = orch.sbc_rank_plot(ranks=torch.as_tensor(pooled), num_posterior_samples=nps,
-                                    plot_type="hist", num_bins=max(1, pooled.shape[0] // 20),
+                                    plot_type="hist", num_bins=num_bins,
                                     parameter_labels=labels, figsize=(16, 3.4 * n_rows))
         fig.subplots_adjust(hspace=0.75, wspace=0.3)
         w.fig_sink(fig_sink)("SBC ranks pooled over repeats (histogram)", fig)

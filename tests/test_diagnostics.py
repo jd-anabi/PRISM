@@ -385,6 +385,46 @@ def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
         "a refused sbc_repeats call wrote a diagnostic of its own (only the name taken above should exist)"
 
 
+def test_sbc_prints_small_p_values_as_numbers_and_bins_ranks_at_least_ten_wide(tiny_run, monkeypatch,
+                                                                             capsys):
+    """Two display defects on the rows that matter most.
+
+    The KS table formatted str(float) truncated to 8 characters, so 3.212345646893978e-20 printed as
+    3.212345 -- a p-value between 1 and 10 on exactly the miscalibrated rows the table sorts to the top.
+
+    The pooled histogram took one bin per 20 pooled rows. Pooled N is repeats x n_cal, so at the defaults
+    that is 950 bins over 1001 integer ranks: some bins hold two ranks and spike above the band on a
+    well-calibrated posterior. Each bin must span at least ~10 integer ranks."""
+    import numpy as np
+    from matplotlib import pyplot as plt
+    from core import orchestrator as orch
+    from core.diagnostics import sbc_repeats
+    r = tiny_run
+    P = len(r.cfg.params_dict) + len(r.cfg.rescale_params)
+    N, nps = 2000, 1000
+    tiny_p = 3.212345646893978e-20
+    assert len(str(tiny_p)) > 8
+    seen = {}
+
+    def _plot(**k):
+        seen.update(k)
+        return plt.figure(), None
+
+    monkeypatch.setattr(orch, "_draw_calibration_set",
+                        lambda *a, **k: (torch.zeros(N, 3), torch.zeros(N, P)))
+    monkeypatch.setattr(orch, "run_sbc", lambda **k: (
+        (torch.arange(N * P).reshape(N, P) % (nps + 1)), torch.zeros(N, P)))
+    monkeypatch.setattr(orch, "_sbc_reference_sample", lambda *a, **k: torch.zeros(N, P))
+    monkeypatch.setattr(orch, "check_sbc", lambda **k: {"ks_pvals": [tiny_p] * P,
+                                                        "c2st_ranks": [0.5] * P, "c2st_dap": [0.5] * P})
+    monkeypatch.setattr(orch, "sbc_rank_plot", _plot)
+    sbc_repeats(r.cfg, r.posterior, r.prior, repeats=10, n_cal=N, num_posterior_samples=nps,
+                fig_sink=lambda title, fig: plt.close(fig))
+    out = capsys.readouterr().out
+    assert seen["num_bins"] <= (nps + 1) // 10, seen["num_bins"]
+    assert "3.21e-20" in out and "3.212345" not in out, out
+
+
 def _rotation_posterior(store, cfg, *, V, evals):
     """A posterior artifact whose transform block records V (columns) and its eigenvalues."""
     over = {("transform", "fisher_eigenvalues"): None if evals is None else [float(v) for v in evals]}
