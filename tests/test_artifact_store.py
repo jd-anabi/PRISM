@@ -1556,9 +1556,12 @@ def test_an_experimental_observation_records_its_own_length_and_drive_frequencie
     si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in cfg.force_params_dict}
     rec = RecordingSet(spont=str(spont), forced=((str(forced), None),), T_obs_s=T_obs_s,
                        forcing_params_si=si)
+    # a stale probe set on the session's cfg (say, from a chi session's install): a forced recording
+    # has no probes, so the manifest must record None, not these
+    cfg.chi_obs_freqs = torch.tensor([0.1, 0.2])
     exp = orchestrator.build_experiment_observation(cfg, rec, fig_sink=closing)
     assert exp.manifest.body["n_obs"] == 150, exp.manifest.body["n_obs"]
-    assert exp.manifest.body["chi_obs_freqs"] is None
+    assert exp.manifest.body["chi_obs_freqs"] is None, exp.manifest.body["chi_obs_freqs"]
 
     # M2: a chi recording set records its drive frequencies in cell units, in the recordings' order
     chi_cfg = _nad_cfg(chi_mode=True)

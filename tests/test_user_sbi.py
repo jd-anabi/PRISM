@@ -430,7 +430,8 @@ def test_chi_mode_full_sbi_pipeline(tmp_path):
     saved_gen_prior = orchestrator.pipeline.gen_prior
     saved_runs, saved_ncal = orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL
     saved_mode, saved_k = config.CHI_MODE, config.CHI_N_FREQS
-    sink = lambda title, fig: None                                # noqa: E731
+    import matplotlib.pyplot as plt
+    sink = lambda title, fig: plt.close(fig)                      # noqa: E731 -- closing: no leaked figures
     try:
         config.CHI_MODE, config.CHI_N_FREQS = True, 3
         cfg = cli.make_sim_config("NADROWSKI", labels, True,

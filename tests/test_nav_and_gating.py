@@ -1056,16 +1056,35 @@ def test_the_d7_and_d8_dialogs_default_to_cancel(monkeypatch):
     seen = []
     monkeypatch.setattr(QMessageBox, "exec", lambda self: seen.append(self) or 0)
 
-    started = pp._ask_new_run([{"name": "a", "batches": 3, "field": "n_runs", "mine": 2, "theirs": 3}], 2)
-    assert seen and seen[-1].defaultButton() is not None
-    assert seen[-1].defaultButton().text() == "Cancel", seen[-1].defaultButton().text()
-    assert started is False
+    def ask_new_run():
+        return pp._ask_new_run([{"name": "a", "batches": 3, "field": "n_runs", "mine": 2, "theirs": 3}], 2)
 
-    loaded = pp._ask_load_non_amortized(SimpleNamespace(
-        body={"truncation": {"level": 0.99, "dims": [0], "x_obs_digest": "d" * 16}}, name="r", id="x"))
-    assert len(seen) == 2 and seen[-1].defaultButton() is not None
-    assert seen[-1].defaultButton().text() == "Cancel", seen[-1].defaultButton().text()
-    assert loaded is False
+    def ask_load():
+        return pp._ask_load_non_amortized(SimpleNamespace(
+            body={"truncation": {"level": 0.99, "dims": [0], "x_obs_digest": "d" * 16}}, name="r", id="x"))
+
+    def _click(text):
+        return next(b for b in seen[-1].buttons() if b.text() == text)
+
+    for ask, destructive in ((ask_new_run, "Start a new run anyway"), (ask_load, "Load it")):
+        # nothing clicked: the default is Cancel
+        seen.clear()
+        monkeypatch.setattr(QMessageBox, "exec", lambda self: seen.append(self) or 0)
+        assert ask() is False
+        assert seen and seen[-1].defaultButton() is not None
+        assert seen[-1].defaultButton().text() == "Cancel", seen[-1].defaultButton().text()
+
+        # Enter: the default button is clicked, and the answer is NO
+        seen.clear()
+        monkeypatch.setattr(QMessageBox, "exec",
+                            lambda self: seen.append(self) or self.defaultButton().click() or 0)
+        assert ask() is False, f"clicking the default button on the '{destructive}' dialog answered yes"
+
+        # the destructive button clicked: the answer is YES
+        seen.clear()
+        monkeypatch.setattr(QMessageBox, "exec",
+                            lambda self: seen.append(self) or _click(destructive).click() or 0)
+        assert ask() is True, f"clicking '{destructive}' did not answer yes"
 
 
 def test_the_tsnpe_tab_dispatches_a_loaded_observation():
