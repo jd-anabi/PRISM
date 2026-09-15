@@ -1201,6 +1201,20 @@ def test_resume_is_validated_and_refused_before_any_spend(store, monkeypatch):
                                      checkpoint_every=0, resume="require")
     assert spent == [], "a refused resume policy started the run anyway"
     assert _inspect.signature(orchestrator.build_posterior).parameters["resume"].default == "auto"
+    # The flow and training knobs are refused with the cadence, not after every simulation: a
+    # --max-epochs -1 used to simulate the whole budget and then die inside sbi, and a zero patience or
+    # learning rate silently wrote an untrained posterior.
+    bad = [("max_num_epochs", {"max_num_epochs": 0}), ("max_num_epochs", {"max_num_epochs": -1}),
+           ("hidden_features", {"hidden_features": 0}), ("num_transforms", {"num_transforms": 0}),
+           ("stop_after_epochs", {"stop_after_epochs": 0}),
+           ("learning_rate", {"learning_rate": 0}), ("learning_rate", {"learning_rate": float("nan")}),
+           ("checkpoint_every", {"checkpoint_every": -1})]
+    for knob, kw in bad:
+        kw = {"checkpoint_every": 1, **kw}
+        with pytest.raises(ValueError) as e:
+            orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4, **kw)
+        assert knob in str(e.value), (kw, str(e.value))
+        assert spent == [], f"{kw} was refused only after the spend: {spent}"
 
 
 def test_the_budget_line_prints_with_default_arguments(store, monkeypatch, capsys):
@@ -1519,6 +1533,43 @@ def test_an_experimental_observation_records_its_own_length_and_drive_frequencie
     assert stale.manifest.body["chi_obs_freqs"] == want, stale.manifest.body["chi_obs_freqs"]
     assert stale.manifest.body["n_obs"] == 50
     assert stale.manifest.body["conditioning"]["chi_n_freqs"] == 2
+
+
+def test_zero_posterior_samples_or_calibration_points_are_refused_before_any_spend(store, monkeypatch):
+    """A zero sample count used to be refused by whatever broke first: `validate --posterior-samples 0`
+    simulated the whole calibration set and then failed in run_sbc, and `infer --n-samples 0` simulated
+    and WROTE an observation nothing would name, then failed at samples.median."""
+    from types import SimpleNamespace
+    from core import orchestrator
+    from core.config import CELL_PATH
+    from core.SBI.observations import RecordingSet
+    made = []
+    monkeypatch.setattr(orchestrator, "_calibration_prior", lambda c, p, q: (None, None, None))
+    monkeypatch.setattr(orchestrator, "_draw_calibration_set",
+                        lambda *a, **k: made.append("cal") or (torch.zeros(4, 3), torch.zeros(4, 2)))
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: made.append("sim") or "OBS")
+    monkeypatch.setattr(orchestrator, "build_experiment_observation",
+                        lambda c, r, **k: made.append("exp") or "OBS")
+    prior = SimpleNamespace(prior=None, force_prior=None, id="prior", fingerprint=None)
+    cfg = _forced_cfg()
+    legs = [
+        ("num_posterior_samples", lambda: orchestrator.validate_calibration(
+            cfg, _sim_post(), prior, store=store, num_posterior_samples=0)),
+        ("n_cal", lambda: orchestrator.validate_calibration(cfg, _sim_post(), prior, store=store, n_cal=0)),
+        ("n_samples", lambda: orchestrator.simulated_inference(
+            cfg, _sim_post(), 1.0, store=store, n_samples=0,
+            cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"))),
+        ("n_samples", lambda: orchestrator.experimental_inference(
+            cfg, _sim_post(), RecordingSet(spont="passive.npy"), store=store, n_samples=0)),
+        ("n_samples", lambda: orchestrator.infer_and_visualize(cfg, _sim_post(), None, store=store,
+                                                               n_samples=0)),
+    ]
+    for knob, call in legs:
+        with pytest.raises(ValueError) as e:
+            call()
+        assert knob in str(e.value) and "at least 1" in str(e.value), str(e.value)
+        assert made == [], f"the {knob}=0 refusal came after the spend: {made}"
+    assert store.list("calibration") == [] and store.list("observation") == []
 
 
 def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):

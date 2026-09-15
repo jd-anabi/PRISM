@@ -725,9 +725,23 @@ def build_posterior(
     # The cadence and the policy, resolved beside them for the same reason: everything that decides
     # WHETHER a simulation cache is touched has to be settled before the identity is built.
     ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
-    max_ep = TRAINING_MAX_NUM_EPOCHS if max_num_epochs is None else int(max_num_epochs)
     if ck_every < 0:
         raise ValueError(f"checkpoint_every must be >= 0 (0 = checkpointing off), got {ck_every}")
+    # The flow and training knobs, resolved and range-checked here too, before the Fisher and every
+    # simulation: sbi only objects to a bad one after the whole budget is spent, and a zero patience or
+    # learning rate does not object at all -- it writes an untrained posterior. The manifest records
+    # these same names.
+    max_ep = TRAINING_MAX_NUM_EPOCHS if max_num_epochs is None else int(max_num_epochs)
+    hf = NSF_HIDDEN_FEATURES if hidden_features is None else int(hidden_features)
+    nt = NSF_NUM_TRANSFORMS if num_transforms is None else int(num_transforms)
+    lr = TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate)
+    patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else int(stop_after_epochs)
+    for _knob, _v in (("max_num_epochs", max_ep), ("hidden_features", hf), ("num_transforms", nt),
+                      ("stop_after_epochs", patience)):
+        if _v < 1:
+            raise ValueError(f"{_knob} must be at least 1, got {_v}")
+    if not (math.isfinite(lr) and lr > 0):
+        raise ValueError(f"learning_rate must be a finite positive number, got {lr}")
     if resume not in ("auto", "require", "never"):
         raise ValueError(
             f"resume={resume!r} is not one of 'auto', 'require', 'never'.")
@@ -1102,13 +1116,8 @@ def build_posterior(
     # feed training-time diagnostics, so we pass None — no ground-truth observation needed to train.
     theta_obs_latent = None
 
-    # Resolved BEFORE train_nn -- not inlined into its call -- so the manifest can record what was
-    # actually used rather than re-deriving the same None-fallback logic a second time.
-    hf = NSF_HIDDEN_FEATURES if hidden_features is None else int(hidden_features)
-    nt = NSF_NUM_TRANSFORMS if num_transforms is None else int(num_transforms)
-    lr = TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate)
-    patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else int(stop_after_epochs)
-
+    # hf, nt, lr, patience and max_ep were resolved (and range-checked) above, before any spend -- not
+    # inlined into this call -- so the manifest records what was actually used.
     posterior_latent, pos_diagnostics = pipeline.train_nn(
         training_params, model=DENSITY_ESTIMATOR, prior=sbi_prior,
         embedding_net=embedded_net, forcing_prior=force_prior,
@@ -1573,6 +1582,12 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     store.assert_name_free("calibration", name)   # before the calibration set is simulated
     post, inferred_prior, force_prior = posterior.posterior, prior.prior, prior.force_prior
     nps = int(num_posterior_samples)
+    n_cal_used = SBC_N_CAL if n_cal is None else int(n_cal)
+    # Before the calibration set is simulated: run_sbc only objects to zero draws after all of it.
+    if n_cal_used < 1:
+        raise ValueError(f"n_cal must be at least 1, got {n_cal_used}")
+    if nps < 1:
+        raise ValueError(f"num_posterior_samples must be at least 1, got {nps}")
     _assert_prior_used_matches_posterior(post, inferred_prior, "SBC/TARP calibration")
     with store.create("calibration", cfg, name=name, note=note) as w:
         device = cfg.hw.device
@@ -1581,7 +1596,6 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
         # the rotation wrap, the basis check, the truncation wrap and the reference sample's t_scale
         # mirror are guardrail 8, and a second copy of them is how a repeat-SBC run silently inverts it.
         val_latent_prior, T, truncation = _calibration_prior(cfg, posterior, prior)
-        n_cal_used = SBC_N_CAL if n_cal is None else int(n_cal)
         # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
         # mixture of probe counts training saw. Stratifying by count is `python -m core sbc`'s
         # --chi-k-fixed (core.diagnostics.sbc_repeats), run per stratum -- a pooled SBC over a mixture
@@ -1743,6 +1757,7 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
     from .artifacts import Accept
     store = resolve_store(store)
     store.assert_name_free("inference", name)     # before the PPC's simulations
+    _refuse_no_samples(n_samples)
     accept = accept or Accept()
     post = posterior.posterior
     # NOT installed yet: both refusals below come first. show_truth reads the MANIFEST, so it does not
@@ -1981,6 +1996,13 @@ def _build_latent_prior_for_validation(cfg, inferred_prior):
 # and cli.* resolve through the module globals at CALL time -- which is what the suites patch
 # (tests/_fixtures.py, tests/test_nav_and_gating.py, tests/test_user_sbi.py). A re-export from another
 # module would be a second binding and every one of those patches would miss it.
+def _refuse_no_samples(n_samples) -> None:
+    """Zero posterior draws, refused before the observation is simulated or written: otherwise the
+    inference fails at samples.median after the spend, leaving an observation nothing names."""
+    if n_samples is not None and int(n_samples) < 1:
+        raise ValueError(f"n_samples must be at least 1, got {int(n_samples)}")
+
+
 def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: float, *,
                         cell=None, gt_values=None, prior: "LoadedPrior | None" = None,
                         accept=None, n_samples: int | None = None,
@@ -2009,6 +2031,7 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     # observation had been simulated AND written, so a taken name cost a simulation and left an
     # observation artifact nothing would ever name.
     store.assert_name_free("inference", name)
+    _refuse_no_samples(n_samples)
     if (cell is None) == (gt_values is None):
         raise ValueError("simulated_inference takes exactly one of cell= (a cell file) and gt_values= "
                          "(hand-entered values in parse_values_file's shape).")
@@ -2073,6 +2096,7 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
     """
     store = resolve_store(store)
     store.assert_name_free("inference", name)   # with the recordings' own file checks, before any compute
+    _refuse_no_samples(n_samples)
     obs = build_experiment_observation(cfg, rec, fig_sink=fig_sink, store=store)
     inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
                               accept=accept,
