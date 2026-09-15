@@ -616,9 +616,10 @@ def test_the_laplace_guards_refuse_before_anything_is_created(store, monkeypatch
 
 
 def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(store, monkeypatch):
-    """M9: a non-positive t_obs_s divides down to n_obs<=0 (a zero-or-negative-length recording), and
-    an m_noise below 10 cannot estimate a feature-noise floor at all -- both refusals fire before
-    store.create, for both simulating diagnostics."""
+    """M9/R3: a t_obs_s that computes a non-positive OR sub-one n_obs (zero, negative, or a tiny
+    positive value that still floors to 0 samples), or a non-finite t_obs_s (NaN would otherwise
+    crash at int(nan) rather than refuse), and an m_noise below 10 (which cannot estimate a
+    feature-noise floor at all) -- all fire before store.create, for both simulating diagnostics."""
     import pytest
     import torch
     from core.diagnostics import identifiability, identifiability_jacobian, identifiability_laplace
@@ -634,13 +635,19 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
 
     with pytest.raises(ValueError, match="t_obs_s"):
         identifiability_laplace(cfg, lp, t_obs_s=0.0, name="lap_bad_t")
+    with pytest.raises(ValueError, match="t_obs_s"):
+        # R3: a TINY positive value must also refuse -- n_obs floors to 0 samples, not a valid
+        # recording, and the old `t_obs_s <= 0` guard let it straight through.
+        identifiability_laplace(cfg, lp, t_obs_s=1e-12, name="lap_tiny_t")
     with pytest.raises(ValueError, match="m_noise"):
         identifiability_laplace(cfg, lp, m_noise=4, name="lap_bad_m")
     with pytest.raises(ValueError, match="t_obs_s"):
         identifiability_jacobian(cfg, t_obs_s=-1.0, name="jac_bad_t")
+    with pytest.raises(ValueError, match="t_obs_s"):
+        identifiability_jacobian(cfg, t_obs_s=1e-12, name="jac_tiny_t")
     with pytest.raises(ValueError, match="m_noise"):
         identifiability_jacobian(cfg, m_noise=4, name="jac_bad_m")
-    for nm in ("lap_bad_t", "lap_bad_m", "jac_bad_t", "jac_bad_m"):
+    for nm in ("lap_bad_t", "lap_tiny_t", "lap_bad_m", "jac_bad_t", "jac_tiny_t", "jac_bad_m"):
         assert [s for s in store.list("diagnostic") if s.name == nm] == []
 
 
@@ -668,11 +675,60 @@ def test_laplace_raw_does_not_leak_its_crn_seed(monkeypatch):
     nd = cfg.params_tensor[0].clone()
     res = torch.tensor([v for v, _ in cfg.rescale_params.values()], dtype=cfg.hw.dtype)
     force = torch.tensor([v for v, _ in cfg.force_params_dict.values()], dtype=cfg.hw.dtype)
-    torch.manual_seed(123)
-    before = torch.get_rng_state()
-    identifiability._laplace_raw(cfg, nd, res, force, 4, True, 20)
-    after = torch.get_rng_state()
+    # R4: torch.manual_seed is process-global and NEVER restores on its own -- fork_rng here is not
+    # the thing under test (that is _laplace_raw's OWN fork_rng), it is this TEST keeping its own
+    # seeding from leaking into whichever test runs next.
+    with torch.random.fork_rng():
+        torch.manual_seed(123)
+        before = torch.get_rng_state()
+        identifiability._laplace_raw(cfg, nd, res, force, 4, True, 20)
+        after = torch.get_rng_state()
     assert torch.equal(before, after), "the CRN reseed leaked into the caller's RNG stream"
+
+
+def test_laplace_points_draw_independent_noise_but_the_whole_run_reproduces(monkeypatch):
+    """R1 (a regression introduced by the M5 fix above): fork_rng must wrap ONLY the CRN-seeded
+    (``crn=True``) arms, not the ``crn=False`` noise-floor ensemble too. An earlier version wrapped
+    the whole function unconditionally, so fork_rng ALSO captured-and-discarded whatever the
+    crn=False branch drew -- every Laplace POINT's m_noise ensemble then replayed the exact same
+    frozen incoming state, and "independent" noise floors across the ground truth and the prior
+    draws were not independent at all: the ORIGINAL SCRIPT's points each drew fresh noise.
+
+    Verified directly and cheaply (CPU, no real simulation, same stub as the leak test above): two
+    crn=False calls made back-to-back inside one seeded(...) run must draw DIFFERENT noise (the
+    stream genuinely advances between them), while replaying the same two-call sequence from the
+    same seed reproduces both calls bit-for-bit -- the whole measurement stays reproducible even
+    though each point's own draw is not a repeat of the last.
+    """
+    import numpy as np
+    import torch
+    from core.diagnostics import identifiability
+    from core.diagnostics.rng import seeded
+    from core.SBI import pipeline
+
+    def _stub_gen_obs(*, model, params, t, inits, force, n_segs, steady_idx, state_dep_drift,
+                      batch_size, dtype, device, **_kw):
+        return (torch.randn(batch_size, t.shape[0], dtype=dtype, device=device),)
+
+    monkeypatch.setattr(pipeline, "gen_obs", _stub_gen_obs)
+    cfg = _forced_nad_cfg()
+    nd = cfg.params_tensor[0].clone()
+    res = torch.tensor([v for v, _ in cfg.rescale_params.values()], dtype=cfg.hw.dtype)
+    force = torch.tensor([v for v, _ in cfg.force_params_dict.values()], dtype=cfg.hw.dtype)
+
+    def _two_points():
+        with seeded(7, cfg.hw.device):
+            feats1, _, _ = identifiability._laplace_raw(cfg, nd, res, force, 4, False, 20)
+            feats2, _, _ = identifiability._laplace_raw(cfg, nd, res, force, 4, False, 20)
+        return feats1, feats2
+
+    f1a, f2a = _two_points()
+    assert not np.allclose(f1a, f2a), \
+        "two crn=False calls in the same run must draw DIFFERENT noise -- fork_rng is discarding " \
+        "the stream's progression between them, exactly the R1 regression"
+    f1b, f2b = _two_points()
+    assert np.allclose(f1a, f1b) and np.allclose(f2a, f2b), \
+        "the same seed must reproduce BOTH points' noise exactly"
 
 
 def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(store, monkeypatch):

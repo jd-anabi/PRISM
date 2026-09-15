@@ -220,17 +220,25 @@ def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
                                 state_dep_drift=cfg.state_dep_drift, batch_size=m, dtype=dtype,
                                 device=device)[0][:, ::subs][:, :n_obs]
 
-    # fork_rng so the fixed CRN seeds do not leak out and pin the caller's global RNG -- the same
-    # M5 defect once present in _jacobian_features (see the fork_rng note there): without it, every
-    # call here that runs with crn=True (every perturbation arm) leaves the global stream at a
-    # constant, seed-independent state, so the NEXT point's own noise-floor measurement (crn=False,
-    # no reseed of its own) silently stops depending on ``--seed`` at all.
-    with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
-        if crn:
+    if crn:
+        # fork_rng CONFINED to the CRN-seeded arms only (R1). manual_seed(_SF)/(_SS) exist so the
+        # +-d perturbation arms of ONE point's finite difference see the SAME simulated noise -- the
+        # whole point of common random numbers -- and fork_rng keeps those fixed seeds from leaking
+        # into the caller's stream once this call returns (the M5 defect this mirrors from
+        # _jacobian_features). The crn=False noise-floor ensemble below must NOT be wrapped here: an
+        # earlier version wrapped the whole function unconditionally, so fork_rng ALSO captured and
+        # discarded the crn=False draw -- every Laplace POINT's m_noise ensemble then replayed the
+        # same frozen state, and "independent" noise floors across GT/prior points were not
+        # independent at all. The crn=False branch instead draws from the RUNNING seeded(...) stream,
+        # so different points get different noise while the whole measurement stays reproducible
+        # under --seed.
+        with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
             torch.manual_seed(_SF)
-        xf = sim(forcef)
-        if crn:
+            xf = sim(forcef)
             torch.manual_seed(_SS)
+            xs = sim(torch.zeros_like(forcef))
+    else:
+        xf = sim(forcef)
         xs = sim(torch.zeros_like(forcef))
     xsc = res[cfg.rescale_idx["x_scale"]].double()
     xof = res[cfg.rescale_idx["x_offset"]].double() if "x_offset" in cfg.rescale_idx else 0.0
@@ -346,10 +354,17 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
 
     dtype, device = cfg.hw.dtype, cfg.hw.device
     t_obs_s = float(config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
-    if t_obs_s <= 0:
-        raise ValueError(f"t_obs_s must be positive (it sizes n_obs, the recording length in "
-                         f"samples), got {t_obs_s}")
-    n_obs = int(t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp)
+    n_obs_f = t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp
+    if not math.isfinite(n_obs_f) or n_obs_f < 1:
+        # R3: a bare `t_obs_s <= 0` check lets through a tiny positive value that still floors to
+        # n_obs == 0 (a zero-length recording, not a refusal) and lets a NaN through to crash later
+        # at int(nan). Guard on the computed n_obs instead -- and on non-finite t_obs_s directly,
+        # since NaN * anything is NaN and n_obs_f < 1 alone would not catch +inf.
+        raise ValueError(
+            f"--t-obs must be a positive, finite recording length long enough for at least one "
+            f"sample (n_obs = t_obs_s * unit_conversion_factor / dt_exp); t_obs_s={t_obs_s!r} gives "
+            f"n_obs={n_obs_f!r}.")
+    n_obs = int(n_obs_f)
     nd_dim = len(cfg.params_dict)
     res_names = list(cfg.rescale_params)
     names = list(cfg.params_dict) + res_names
@@ -377,11 +392,10 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
             gt_force = torch.tensor([v for v, _ in cfg.force_params_dict.values()], dtype=dtype, device=device)
             points = [("GT", gt_nd, gt_res, gt_force)]
             if n_points > 1:
-                from core import orchestrator
                 T = posterior.posterior.T
                 z = latent_prior.sample((n_points - 1,))
                 theta = T(z.to(device))
-                force_s = orchestrator.build_forcing_prior(cfg).sample((n_points - 1,)).to(device)
+                force_s = orch.build_forcing_prior(cfg).sample((n_points - 1,)).to(device)
                 for k in range(n_points - 1):
                     points.append((f"prior{k + 1}", theta[k, :nd_dim].clone(),
                                    theta[k, nd_dim:].clone(), force_s[k].clone()))
@@ -626,7 +640,7 @@ def _jacobian(ctx, gt_nd, gt_rescale, fnoise, cap, m, rel, min_valid):
     return np.stack(cols, axis=1), names, kinds, vfr
 
 
-def _summaries(ctx, J, fnoise, dead, names, kinds, zero_tol, sink):
+def _summaries(ctx, J, fnoise, dead, names, kinds, vfr, zero_tol, sink):
     """The tables, the two figures, and the extra arrays the caller folds into the npz payload.
 
     Returns a TUPLE, not "the results block" -- ``identifiability_jacobian``'s own ``results`` stays
@@ -654,9 +668,9 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, zero_tol, sink):
     norms_raw = np.array([np.linalg.norm(J[:, p] * fnoise) if np.isfinite(J[:, p]).all() else np.nan
                           for p in range(P)])
     print("\n=== per-param gradient ===")
-    print(f"{'param':11s} {'kind':9s} {'||g||_std':>10s} {'||g||_raw':>10s}")
+    print(f"{'param':11s} {'kind':9s} {'||g||_std':>10s} {'||g||_raw':>10s} {'valid':>6s}")
     for p in range(P):
-        print(f"{names[p]:11s} {kinds[p]:9s} {norms_std[p]:10.3f} {norms_raw[p]:10.4g}")
+        print(f"{names[p]:11s} {kinds[p]:9s} {norms_std[p]:10.3f} {norms_raw[p]:10.4g} {vfr[p]:6.2f}")
 
     # ---- which rows are driving J ---- advisory, no threshold: a row leading this table on a std
     # 1000x under the median is quantization (the probe budget above says which probe), not signal.
@@ -721,6 +735,10 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, zero_tol, sink):
     im = ax.imshow(C, vmin=0, vmax=1, cmap="magma")
     ax.set_xticks(range(len(ns))); ax.set_xticklabels(ns, rotation=45, ha="right")
     ax.set_yticks(range(len(ns))); ax.set_yticklabels(ns)
+    for i in range(len(ns)):
+        for j in range(len(ns)):
+            ax.text(j, i, f"{C[i, j]:.2f}", ha="center", va="center",
+                    color="white" if C[i, j] < 0.6 else "black", fontsize=6)
     ax.set_title(f"|cos| between standardized feature-gradients ({len(ctx.feat_labels)} features)")
     fig.colorbar(im, ax=ax, fraction=0.046); fig.tight_layout()
     sink("Jacobian cosine matrix", fig)
@@ -793,10 +811,16 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
 
     dtype, device = cfg.hw.dtype, cfg.hw.device
     t_obs_s = float(config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
-    if t_obs_s <= 0:
-        raise ValueError(f"t_obs_s must be positive (it sizes n_obs, the recording length in "
-                         f"samples), got {t_obs_s}")
-    n_obs = int(t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp)
+    n_obs_f = t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp
+    if not math.isfinite(n_obs_f) or n_obs_f < 1:
+        # R3: see the identical guard in identifiability_laplace -- a bare t_obs_s <= 0 check lets a
+        # tiny positive value through to a zero-length recording (n_obs == 0) and lets NaN through to
+        # crash at int(nan) instead of refusing here, before any simulation.
+        raise ValueError(
+            f"--t-obs must be a positive, finite recording length long enough for at least one "
+            f"sample (n_obs = t_obs_s * unit_conversion_factor / dt_exp); t_obs_s={t_obs_s!r} gives "
+            f"n_obs={n_obs_f!r}.")
+    n_obs = int(n_obs_f)
     gt_nd = cfg.params_tensor[0].clone()
     gt_rescale = torch.tensor([v for v, _ in cfg.rescale_params.values()], dtype=dtype, device=device)
     ctx = _JacCtx(cfg=cfg, n_obs=n_obs,
@@ -840,7 +864,7 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
                                              float(rel), float(min_valid))
         sink = w.fig_sink(fig_sink)
         norms_std, norms_raw, unmeasurable, pairs, cond, extra = _summaries(
-            ctx, J, fnoise, dead, names, kinds, float(zero_tol), sink)
+            ctx, J, fnoise, dead, names, kinds, vfr, float(zero_tol), sink)
         file_manager.atomic_savez(w.payload("degeneracy_map.npz"), {
             "J": J, "fnoise": fnoise, "dead": dead, "norms_std": norms_std, "norms_raw": norms_raw,
             "feat_labels": np.array([str(s) for s in ctx.feat_labels]),
