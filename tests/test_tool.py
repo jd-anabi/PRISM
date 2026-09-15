@@ -957,3 +957,136 @@ def test_smoke_ctrl_c_prints_store_specific_resume_advice(tool_env, tmp_path, mo
     assert main(["smoke", *_cfg(bounds), "--cell", cell]) == 130
     err = capsys.readouterr().err
     assert "a run without --store-root cannot be resumed." in err
+
+
+def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, capsys):
+    """Every fdt/crossval flag arrives at the builder it belongs to, and nothing simulates.
+
+    The recorders stand in for the four callees; each handler imports them at CALL time, so the
+    module attribute is what runs. This is the fast-gate coverage for the pair -- the real tiny-size
+    run below may be slow-marked. ``tool_env`` is taken for its PRISM_ARTIFACTS redirect: ``main``
+    mkdirs its store root before any handler runs, and the session teardown asserts the real
+    ``Artifacts/`` gained nothing.
+
+    Every ``kw`` a recorder receives is pinned by an exact-set (or exact-dict) comparison, never a
+    sample of its keys: ``knobs()`` silently drops a dest that no longer matches a flag, so checking
+    only a few keys would stay green through a knob quietly no longer reaching its builder.
+    """
+    from core import cli, config
+    from core.FDT import cross_validation, fdt_pipeline
+    from core.tool import main
+
+    seen = {}
+
+    def _fdt_cfg(model, state_dep_drift, cell_file, **kw):
+        seen["make_fdt_config"] = (model, state_dep_drift, cell_file, kw)
+        return "CFG"
+
+    def _run_fdt(cfg, *, skip_sanity, confirm_production):
+        seen["run_fdt"] = (cfg, skip_sanity, confirm_production)
+
+    def _sweep_cfg(cell_file, **kw):
+        seen["make_param_sweep_config"] = (cell_file, kw)
+        return "CFG", "S", "T"
+
+    def _study(cfg, s_grid, temp_grid):
+        seen["run_param_study_cli"] = (cfg, s_grid, temp_grid)
+        return Path("s.h5"), Path("t.h5")
+
+    monkeypatch.setattr(cli, "make_fdt_config", _fdt_cfg)
+    monkeypatch.setattr(fdt_pipeline, "run_fdt", _run_fdt)
+    monkeypatch.setattr(cli, "make_param_sweep_config", _sweep_cfg)
+    monkeypatch.setattr(cross_validation, "run_param_study_cli", _study)
+
+    # Inputs resolve through config, never through the process working directory.
+    cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    assert main(["fdt", "--cell", cell, "--n-freqs", "3", "--ensemble-m", "7",
+                 "--freqs-per-batch", "2", "--f0", "0.11", "--skip-sanity"]) == 0
+    model, sdd, cell_file, kw = seen["make_fdt_config"]
+    assert model == "HOPF" and sdd is False and cell_file == cell     # the model is the cell's folder
+    assert kw == {"n_freqs": 3, "ensemble_M": 7, "freqs_per_batch": 2, "F0": 0.11}
+    assert seen["run_fdt"] == ("CFG", True, True)                     # --no-production absent
+
+    seen.clear()
+    assert main(["fdt", "--cell", cell, "--model", "hopf", "--no-production"]) == 0
+    assert seen["make_fdt_config"][3] == {}, "an unset knob must not be passed: the default is in cli"
+    assert seen["run_fdt"] == ("CFG", False, False)
+
+    seen.clear()
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                 "--t-grid", "1", "1.1", "3", "--n-freqs", "2", "--ensemble-m", "8",
+                 "--freqs-per-batch", "4", "--f0", "0.2"]) == 0
+    cell_file, kw = seen["make_param_sweep_config"]
+    assert cell_file == nad
+    assert set(kw) == {"preset", "s_spec", "t_spec", "n_freqs", "ensemble_M", "freqs_per_batch", "F0"}
+    assert kw["s_spec"] == (0.0, 0.1, 2) and kw["t_spec"] == (1.0, 1.1, 3)
+    assert isinstance(kw["s_spec"][2], int), "np.linspace refuses a float num"
+    assert kw["n_freqs"] == 2 and kw["ensemble_M"] == 8
+    assert kw["freqs_per_batch"] == 4 and kw["F0"] == 0.2
+    assert kw["preset"] == dict(cli.SWEEP_PRESETS["exploratory"])
+    assert seen["run_param_study_cli"] == ("CFG", "S", "T")
+    assert "s.h5" in capsys.readouterr().out
+
+    seen.clear()
+    assert main(["crossval", "--cell", nad, "--preset", "production",
+                 "--s-grid", "0", "0.1", "2", "--t-grid", "1", "1.1", "2"]) == 0
+    cell_file, kw = seen["make_param_sweep_config"]
+    assert set(kw) == {"preset", "s_spec", "t_spec", "n_freqs", "ensemble_M"}, \
+        "freqs_per_batch and F0 were left unset -- they must not be forwarded"
+    assert kw["preset"] == dict(cli.SWEEP_PRESETS["production"])
+    assert kw["n_freqs"] == cli.SWEEP_PRESETS["production"]["n_freqs"]
+    assert kw["ensemble_M"] == cli.SWEEP_PRESETS["production"]["ensemble_M"]
+
+
+def test_fdt_and_crossval_usage_errors(tool_env, capsys):
+    """A model FDT cannot run is a refusal (1); a malformed grid or a missing cell is usage (2).
+
+    ``tool_env`` for the PRISM_ARTIFACTS redirect: even a refusal builds the store root first.
+    """
+    from core import config
+    from core.tool import main
+
+    cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    assert main(["fdt", "--cell", cell, "--model", "NOPE"]) == 1
+    assert "Unknown model" in capsys.readouterr().err
+
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2.5",
+                 "--t-grid", "1", "1.1", "2"]) == 2
+    assert "--s-grid" in capsys.readouterr().err
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "1",
+                 "--t-grid", "1", "1.1", "2"]) == 2
+    assert main(["fdt"]) == 2                       # --cell is required
+    assert main(["crossval", "--cell", nad]) == 2   # both grids are required
+
+
+@pytest.mark.slow
+def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
+    """The real pipelines, at the smallest sizes the flags allow, into the temp artifacts root.
+
+    No new science: this asks only whether the two subcommands drive the campaigns end to end and
+    put their outputs where the GUI panels put theirs. ``tool_env`` is what makes "the temp artifacts
+    root" true: it sets PRISM_ARTIFACTS, and `config.artifacts_root()` -- which is what FDT and the
+    sweep study write under -- reads that variable at every call. Without it the four PNGs and the
+    two .h5 files land in the real ``Artifacts/`` and the session teardown fails.
+
+    Measured 2026-09-15: 598.55 s on the CPU (Campaign 1 is 810k Euler steps; psd_T_obs_nd is not a
+    flag), so it is slow-marked; the recorder test above keeps the fast-gate coverage.
+    """
+    from core import config
+    from core.tool import main
+
+    cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    assert main(["fdt", "--cell", cell, "--n-freqs", "2", "--ensemble-m", "8",
+                 "--skip-sanity"]) == 0
+    out = config.artifacts_root() / "fdt"
+    for tag in ("fdt_ratio_", "chi_components_", "psd_", "spontaneous_trajectory_"):
+        assert list(out.glob(f"{tag}*.png")), tag
+
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                 "--t-grid", "1", "1.1", "2", "--n-freqs", "2", "--ensemble-m", "8"]) == 0
+    cv = config.artifacts_root() / "crossval"
+    assert list(cv.glob("sweep_s_*.h5")) and list(cv.glob("sweep_temp_*.h5"))
+    assert "[prism crossval] S sweep:" in capsys.readouterr().out

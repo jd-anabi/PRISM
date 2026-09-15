@@ -13,7 +13,7 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from . import config_args, diagnostics, smoke, stages
+from . import config_args, diagnostics, fdt, smoke, stages
 from .config_args import UsageError  # noqa: F401 -- part of this package's public surface
 
 EPILOG = """\
@@ -35,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="The PRISM command-line tool. The GUI is `python -m core.gui`.")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="<subcommand>")
     p.subcommands = {}
-    for module in (stages, diagnostics, smoke):
+    for module in (stages, diagnostics, smoke, fdt):
         p.subcommands.update(module.register(sub))
     return p
 

@@ -54,7 +54,8 @@ class FdtPanel(BasePanel):
     """Drives a single-cell FDT analysis (``FDT.fdt_pipeline.run_fdt``).
 
     Passes run_fdt's required ``skip_sanity``/``confirm_production`` booleans from the two checkboxes:
-    the stage no longer prompts, so this panel is the only place those answers come from.
+    the stage no longer prompts, so a front end -- this panel, or ``python -m core fdt`` -- must
+    supply both.
 
     Persists (group "fdt"): model, cell picker, and the campaign knobs. Restore order matters --
     model FIRST, then the pickers, or the model's refresh() wipes the restored picker.
