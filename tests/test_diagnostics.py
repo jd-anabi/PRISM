@@ -6,6 +6,7 @@ a measurement ABOUT a trained posterior, so the thing worth pinning is what it r
 and what it writes -- not the numbers a real training run would give it.
 """
 import pytest
+import torch
 from sbi.inference import DirectPosterior
 
 from core.artifacts import LoadedDiagnostic
@@ -462,6 +463,53 @@ def test_identifiability_rotation_refuses_n_worst_over_p(store):
     with pytest.raises(ValueError, match=f"n_worst \\({P + 1}\\) cannot exceed"):
         identifiability_rotation(cfg, store.load_posterior(cfg, w.id), n_worst=P + 1, name="rot_nw")
     assert [s.name for s in store.list("diagnostic") if s.name == "rot_nw"] == []
+
+
+def test_identifiability_rotation_writes_a_non_finite_eigenvalue_as_none(store):
+    """N1b / S1 (spec 4.1): a non-finite eigenvalue reaching identifiability_rotation's results must
+    become None, not raise at the manifest write (allow_nan=False) -- or worse, silently succeed with
+    a NaN embedded in a JSON field no downstream reader expects.
+
+    A REAL posterior artifact cannot carry a NaN eigenvalue in the first place: store.create's own
+    manifest validator refuses it outright, well before identifiability_rotation ever runs -- proven
+    directly below. So this uses the rotation tests' own synthetic-manifest pattern
+    (_rotation_posterior/_posterior_artifact), but skips the real store WRITE for the input posterior:
+    identifiability_rotation reads only posterior.manifest.body/.config/.name/.id/.accepted, never the
+    pickled payload, so a plain in-memory stand-in is enough -- exactly as cheap as a real one, and the
+    only way to get a non-finite value in front of this function at all.
+    """
+    import math
+    from types import SimpleNamespace
+
+    import pytest
+    import torch
+    from core.artifacts import manifest as mf
+    from core.diagnostics import identifiability_rotation
+    cfg = _nad_cfg()
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+
+    # Proof a REAL artifact refuses this outright -- the reason a synthetic stand-in is needed at all.
+    with pytest.raises(Exception, match="non-finite"):
+        _posterior_artifact(store, cfg, name="nan_real", V=torch.eye(P, dtype=torch.float64),
+                            over={("transform", "fisher_eigenvalues"): [float("nan")] * P})
+
+    keys = list(cfg.params_dict) + list(cfg.rescale_params)
+    evals = [float("nan")] + [10.0 ** (1 - k) for k in range(1, P)]
+    body = {"mode": cfg.observation_mode, "conditioning": mf.conditioning_block(cfg),
+            "transform": {"param_keys": keys, "V": torch.eye(P, dtype=torch.float64).tolist(),
+                          "fisher_eigenvalues": evals}}
+    posterior = SimpleNamespace(manifest=SimpleNamespace(body=body, config={"model": cfg.model}),
+                                name="synthetic_rot", id="synthrotid", accepted=[])
+    d = identifiability_rotation(cfg, posterior, n_worst=1, top_n=2, name="rot_nan")
+    res = d.results
+    assert res["eigenvalues"][0] is None
+    assert all(v is None or math.isfinite(v) for v in res["eigenvalues"])
+    assert res["directions"][0]["eigenvalue"] is None
+    assert all(dr["eigenvalue"] is None or math.isfinite(dr["eigenvalue"]) for dr in res["directions"])
+    # the manifest was actually written and loads back clean -- proof no NaN literal reached
+    # json.dumps(allow_nan=False).
+    reloaded = store.load_diagnostic(d.id)
+    assert reloaded.results == res
 
 
 def _forced_nad_cfg():
@@ -1023,14 +1071,18 @@ def test_ablation_sweeps_the_summary_columns_through_the_whole_conditioning_path
 
     zeroing = torch.nn.Sequential(_Zero(), net)
     rows0 = ablation._sweep_channels(zeroing, data, n_sum, 5, labels)[1:]
-    # R-K(3) as given (== 0.0 -> <= 1e-6) still under-tolerates: the net's own weight init is NOT
-    # seeded here (only the data draw is), so the float32 kernel choice on the zeroed leg lands
-    # anywhere from ~9e-7 to ~1.4e-6 across a run of five unseeded inits measured while writing this
-    # test -- a few ulps of FLOAT32_EPS (1.19e-7) either way, comfortably distinct from a HEALTHY
-    # channel's response (2-4 here) by 6+ orders of magnitude. The bound is therefore relative to this
-    # very call's own healthy max, not a hardcoded absolute: the intent -- a zeroing standardizer makes
-    # the sweep read as float noise, not as a real signal -- survives whatever scale a given net's
-    # random init happens to produce.
+    # N3: R-K(3) as given (== 0.0 -> <= 1e-6) still under-tolerates. Since I2 the net's init is SEEDED
+    # (built inside the same fork_rng as the data draw above), so this is not init noise: _Zero maps
+    # every input to the identical zero tensor, but _sweep_channels calls emb() once on a 1-ROW batch
+    # (e0 = emb(base)) and once on a 5-ROW batch (emb(v), n_sweep=5) -- the same logical computation,
+    # batched differently. A LayerNorm/matmul kernel is not guaranteed bit-identical across batch
+    # shapes (a different vectorization or summation order for 1 row vs 5 rows), so the "zeroed" leg
+    # still lands a few ulps of FLOAT32_EPS (1.19e-7) above exactly 0.0 -- ~9e-7 to ~1.4e-6, measured
+    # across five runs while writing this test -- comfortably distinct from a HEALTHY channel's
+    # response (2-4 here) by 6+ orders of magnitude. The bound is therefore relative to this very
+    # call's own healthy max, not a hardcoded absolute: the intent -- a zeroing standardizer makes the
+    # sweep read as machine noise, not as a real signal -- survives whatever scale a given net's
+    # (now seeded, reproducible) init happens to produce.
     assert max(r[0] for r in rows0) <= healthy_max * 1e-4, \
         "the standardizer was not in the path: the sweep bypassed it and reached the bare net"
 
@@ -1075,8 +1127,11 @@ def test_ablation_reads_the_cache_its_posterior_names(tiny_run, monkeypatch):
     assert len(res["channels"]) == SUMMARY_WIDTH + 1
     assert set(res["channels"][0]) == {"label", "max_disp", "rel_median", "p1", "p99", "verdict"}
     assert res["counts"]["total"] == SUMMARY_WIDTH + 1
+    # N2: the invariant must cover ALL FOUR counted categories, "nonfinite" (S1) included -- a real
+    # SBITEST net never diverges here, so this stays a no-op today (nonfinite == 0), but the sum would
+    # silently undercount total the day it legitimately is not.
     assert (res["counts"]["constant"] + res["counts"]["invisible"] + res["counts"]["usable"]
-            == res["counts"]["total"])
+            + res["counts"]["nonfinite"] == res["counts"]["total"])
     assert res["accepted"] == [] and d.manifest.payloads == {} and d.manifest.figures == []
     assert d.manifest.config["rows"] == 12 and d.manifest.config["n_sweep"] == 5
     # M4: matched on the DIAGNOSTIC's own name/id, not merely the generic "name it as a parent" text --
@@ -1162,8 +1217,18 @@ class _FakeDPWithEst(DirectPosterior):
         self.posterior_estimator = net
 
 
+class _EstWithEmbedding(torch.nn.Module):
+    """``posterior_estimator`` with its net BEHIND a real ``.embedding_net`` attribute -- module-level
+    so it pickles (a local class inside a function is not picklable at all: ``torch.save`` fails with
+    ``Can't get local object``). N1a: this is what lets ``channel_ablation``'s own
+    ``emb = est.embedding_net`` resolve when the caller goes on to monkeypatch ``_sweep_channels``."""
+    def __init__(self, inner):
+        super().__init__()
+        self.embedding_net = inner
+
+
 def _ablation_posterior_with_cache(store, cfg, *, name, net_input_dim, sim_cols,
-                                   batches_done=1, run_size=3):
+                                   batches_done=1, run_size=3, wrap_embedding=False):
     """A posterior naming a real (tiny) simulation cache on disk, without a real training run (M7).
     ``net_input_dim`` controls the trained net's OWN ``input_dim`` (independent of the cache); ``sim_cols``
     controls the cache's OWN row width (independent of the net) -- so the two guards in
@@ -1171,6 +1236,12 @@ def _ablation_posterior_with_cache(store, cfg, *, name, net_input_dim, sim_cols,
     width against the posterior's ``conditioning.width``) can each be pinned in isolation. Both guards
     fire before ``est.embedding_net`` (the whole conditioning path) is ever touched, so a bare,
     forcing_dim=0 EmbeddedNet is enough -- the sweep path itself is never exercised by this stub.
+
+    ``wrap_embedding=True`` (N1a) instead puts the net BEHIND a ``.embedding_net`` attribute, so
+    ``channel_ablation``'s own ``emb = est.embedding_net`` resolves and the sweep call is actually
+    reached -- needed only when the caller goes on to monkeypatch ``_sweep_channels`` itself, since a
+    real forcing_dim=0 net makes ``reparam.posterior_mode``'s tier-2 detection read "spontaneous",
+    which only agrees with the manifest for a genuinely SPONTANEOUS ``cfg`` (forcing_dim=0 there too).
     """
     import torch
     from core.artifacts import manifest as mf
@@ -1178,12 +1249,13 @@ def _ablation_posterior_with_cache(store, cfg, *, name, net_input_dim, sim_cols,
     from core.SBI import embedded_network
     from core.SBI.training_checkpoint import identity_digest
     net = embedded_network.EmbeddedNet(net_input_dim, 3, (4, 4), forcing_dim=0)
+    est = _EstWithEmbedding(net) if wrap_embedding else net
     keys = list(cfg.params_dict) + list(cfg.rescale_params)
     ident = {"format": "training-rows/2", "prior_fingerprint": None, "n_runs": 1,
              "run_size": int(run_size), "truncation": None}
     digest = identity_digest(ident)
     with store.create("posterior", cfg, name=name) as w:
-        torch.save(_FakeDPWithEst(net), str(w.payload("posterior.pt")))
+        torch.save(_FakeDPWithEst(est), str(w.payload("posterior.pt")))
         w.parents = {"prior": "20260910T100000", "simulation": digest}
         w.body = {
             "mode": cfg.observation_mode, "conditioning": mf.conditioning_block(cfg),
@@ -1243,3 +1315,57 @@ def test_channel_ablation_refuses_a_cache_whose_width_disagrees_with_the_posteri
     with pytest.raises(ValueError, match="do not describe the same measurement"):
         channel_ablation(cfg, post, rows=50, n_sweep=5, name="abl_bad_cache")
     assert len(store.list("diagnostic")) == before
+
+
+def test_channel_ablation_writes_a_non_finite_displacement_as_an_explicit_verdict(store, monkeypatch):
+    """N1a / S1 (spec 4.1): a channel whose sweep drove the network to NaN/Inf gets its OWN verdict --
+    every numeric comparison against NaN is False, so before the fix it fell all the way through to
+    "healthy" instead -- and the float fields that DERIVE from that NaN must be None in the manifest,
+    because the writer refuses a non-finite float outright (``allow_nan=False``) and would otherwise
+    fail well after the whole sweep had already run.
+
+    ``_sweep_channels`` is monkeypatched WHOLESALE to a fixed record list (one channel poisoned to NaN,
+    the rest finite fillers): the point is not to reproduce a real divergence, but to drive the REAL,
+    unmonkeypatched code that runs AFTER it returns -- the verdict loop, the counts, the results dict
+    and the manifest write -- with the least scaffolding. That still needs ``est.embedding_net`` to
+    resolve (``channel_ablation`` builds it before calling ``_sweep_channels``), so this reuses M7's
+    stub-posterior helper with ``wrap_embedding=True`` rather than a real training run.
+    """
+    import math
+    from core import cli, config, registry
+    from core.config import VALID_LABELS, VALID_MODELS
+    from core.diagnostics import ablation, channel_ablation
+    from core.SBI.statistics import SUMMARY_WIDTH
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    # SPONTANEOUS, not the module's usual forced master.txt: wrap_embedding's real (forcing_dim=0) net
+    # is tier-2 mode-detected as "spontaneous" by reparam.posterior_mode, which store.load_posterior
+    # then checks against the manifest's own mode -- only a genuinely spontaneous cfg agrees.
+    spont = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                                str(config.BOUNDS_PATH / "nadrowski" / "master_spont.txt"))
+    spont.hw = config.cpu_device()
+    width = SUMMARY_WIDTH + 1
+    post = _ablation_posterior_with_cache(store, spont, name="abl_nan_post", net_input_dim=width,
+                                          sim_cols=width, wrap_embedding=True)
+    poisoned = {}
+
+    def _fake_sweep(emb, data, n_sum_, n_sweep_, sweep_labels):
+        poisoned["label"] = sweep_labels[0]
+        out = [(0, "__base__", 0.0, 0.0, "__base__"), (float("nan"), sweep_labels[0], -1.0, 1.0, "")]
+        out += [(1.0 + 0.01 * j, sweep_labels[j], -1.0, 1.0, "") for j in range(1, n_sum_)]
+        return out
+
+    monkeypatch.setattr(ablation, "_sweep_channels", _fake_sweep)
+    d = channel_ablation(spont, post, rows=5, n_sweep=5, name="abl_nan")
+    res = d.results
+    poisoned_rec = next(c for c in res["channels"] if c["label"] == poisoned["label"])
+    assert "NON-FINITE" in poisoned_rec["verdict"]
+    assert "healthy" not in poisoned_rec["verdict"].lower()
+    # the fields that DERIVE from the NaN displacement (d itself, and d/med) must be None; p1/p99 are
+    # independent quantile bounds computed before the sweep and stay finite.
+    assert poisoned_rec["max_disp"] is None and poisoned_rec["rel_median"] is None
+    assert math.isfinite(poisoned_rec["p1"]) and math.isfinite(poisoned_rec["p99"])
+    assert res["counts"]["nonfinite"] == 1
+    # the manifest was actually written and loads back clean -- proof no NaN literal reached
+    # json.dumps(allow_nan=False), which would have raised mid-write rather than merely mislabelling.
+    reloaded = store.load_diagnostic(d.id)
+    assert reloaded.results == res
