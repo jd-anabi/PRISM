@@ -169,9 +169,11 @@ def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(stor
     runs one probe-count stratum at a time -- is a keyword on the middle one. validate_calibration
     itself always passes None: its SBC is the POOLED one, over the same mixture of counts training saw.
     """
+    import ast
     import contextlib
     import inspect
     import io
+    import textwrap
     from types import SimpleNamespace
 
     import torch
@@ -201,14 +203,37 @@ def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(stor
     trunc_post = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T, truncation=region))
     plain_post = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T))
 
+    # (a) check_basis must actually run for a truncated draw -- nothing else in this test would
+    # notice if _calibration_prior silently dropped the call.
+    basis_calls = []
+    real_check_basis = region.check_basis
+
+    def _recording_check_basis(*a, **k):
+        basis_calls.append((a, k))
+        return real_check_basis(*a, **k)
+
+    monkeypatch.setattr(region, "check_basis", _recording_check_basis)
+
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         vlp, T_out, truncation = orch._calibration_prior(cfg, trunc_post, lp)
     assert truncation is region and T_out is trunc_post.posterior.T
     assert isinstance(vlp, _tr.TruncatedLatentPrior) and vlp.region is region
     assert "PRIOR RESTRICTED" in buf.getvalue(), buf.getvalue()
+    assert len(basis_calls) == 1 and basis_calls[0][0][0] is T_out, \
+        "_calibration_prior must call check_basis exactly once, with the posterior's own T"
+
     vlp_plain, _, trunc_plain = orch._calibration_prior(cfg, plain_post, lp)
     assert trunc_plain is None and not isinstance(vlp_plain, _tr.TruncatedLatentPrior)
+
+    # (b) the rotation wrap: with a stub V, the returned prior must come back wrapped in
+    # RotatedLatentPrior. Plain posterior, so check_basis (and its call count above) is untouched.
+    stub_V = torch.eye(P)
+    monkeypatch.setattr(orch, "rotation_of", lambda _T: stub_V)
+    vlp_rot, _, trunc_rot = orch._calibration_prior(cfg, plain_post, lp)
+    assert trunc_rot is None
+    assert isinstance(vlp_rot, _rp.RotatedLatentPrior) and vlp_rot.V is stub_V, \
+        "_calibration_prior must wrap the calibration prior in RotatedLatentPrior when rotation_of(T) is not None"
 
     seen = {}
 
@@ -223,7 +248,21 @@ def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(stor
     assert seen["cal_n_scales"] == 1 and seen["chi_k_fixed"] == 4
     assert x_cal.shape == (6, 3) and theta_star.shape == (6, P)
     assert inspect.signature(orch._draw_calibration_set).parameters["chi_k_fixed"].default is None
-    assert "chi_k_fixed=None" in inspect.getsource(orch.validate_calibration), \
+
+    # (c) validate_calibration must actually CALL the three helpers, not merely mention their names
+    # in a comment -- an AST check over calls, not a text search over the source.
+    tree = ast.parse(textwrap.dedent(inspect.getsource(orch.validate_calibration)))
+    calls_by_name = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            calls_by_name.setdefault(node.func.id, []).append(node)
+    for name in ("_calibration_prior", "_draw_calibration_set", "_sbc_reference_sample"):
+        assert name in calls_by_name and len(calls_by_name[name]) == 1, \
+            f"validate_calibration must call {name} exactly once"
+    draw_call = calls_by_name["_draw_calibration_set"][0]
+    chi_kw = {kw.arg: kw.value for kw in draw_call.keywords}
+    assert "chi_k_fixed" in chi_kw and isinstance(chi_kw["chi_k_fixed"], ast.Constant) \
+        and chi_kw["chi_k_fixed"].value is None, \
         "validate_calibration's SBC is the pooled one and must pass chi_k_fixed=None explicitly"
 
     ref = orch._sbc_reference_sample(cfg, vlp, T, region, lp.prior, theta_star)
@@ -232,3 +271,7 @@ def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(stor
         "the reference sample must mirror the per-batch t_scale override"
     plain_ref = orch._sbc_reference_sample(cfg, vlp_plain, T, None, lp.prior, theta_star)
     assert plain_ref.shape[0] == theta_star.shape[0]
+    # (d) the plain branch draws straight from the prior; without a region there is no override
+    # to mirror, so its t_scale column must NOT be a permutation of theta*'s.
+    assert not torch.equal(plain_ref[:, i_t].sort().values, theta_star[:, i_t].sort().values), \
+        "the plain branch must not mirror theta*'s t_scale column -- there is no region to mirror it against"

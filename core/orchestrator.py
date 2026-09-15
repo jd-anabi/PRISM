@@ -1450,8 +1450,10 @@ def _calibration_prior(cfg: SimConfig, posterior: LoadedPosterior, prior: Loaded
 
 def _draw_calibration_set(cfg: SimConfig, val_latent_prior, T, force_prior, *, n_cal: int,
                           cal_n_scales: "int | None", chi_k_fixed: "int | None" = None):
-    """Simulate the calibration set: ``(x_cal, theta_star)``, theta* LATENT (gen_cal_data returns the
-    latent z whenever a theta_transform is given).
+    """Simulate the calibration set: ``(x_cal, theta_star)``, theta* PHYSICAL. ``T`` is always given
+    here, and ``gen_cal_data`` applies it to the latent draw before returning --
+    ``theta_transform(theta_star_latent)`` (core/SBI/analysis.py:197-202) -- so the caller must NOT
+    push theta* through ``T`` again; a caller that trusted "latent" here would transform it twice.
 
     ``n_cal`` is already RESOLVED -- validate_calibration applies its SBC_N_CAL default before calling,
     and sbc_repeats has a default of its own -- so this helper never reads a module constant.
@@ -1568,9 +1570,9 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
         val_latent_prior, T, truncation = _calibration_prior(cfg, posterior, prior)
         n_cal_used = SBC_N_CAL if n_cal is None else int(n_cal)
         # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
-        # mixture of probe counts training saw. Stratifying by count is scripts/sbc_characterize.py's
-        # CHI_K_FIXED, run per stratum (a pooled SBC over a mixture of counts can be flat while
-        # each count is miscalibrated in compensating directions).
+        # mixture of probe counts training saw. Stratifying by count is `python -m core sbc`'s
+        # --chi-k-fixed (core.diagnostics.sbc_repeats), run per stratum -- a pooled SBC over a mixture
+        # of counts can be flat while each count is miscalibrated in compensating directions.
         x_cal, theta_star = _draw_calibration_set(cfg, val_latent_prior, T, force_prior,
                                                   n_cal=n_cal_used, cal_n_scales=cal_n_scales,
                                                   chi_k_fixed=None)
