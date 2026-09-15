@@ -706,3 +706,67 @@ def test_the_ablation_subcommand_forwards_its_knobs(tmp_path, monkeypatch):
     assert tool.main(["ablation", "--bounds", bounds, "--device", "cpu", "--posterior", "p"]) == 0
     assert "rows" not in seen["kw"] and "n_sweep" not in seen["kw"]
     assert set(seen["kw"]) == {"name", "note", "fig_sink", "store"}
+
+
+def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_path, capsys):
+    """The four stages end to end at tiny size, then the drill the GPU gate of record runs (§3.8).
+
+    Leg (b) is the resume: the SAME --num-runs against the SAME store, with the prior LOADED by name
+    so prior_fingerprint is pinned. Leg (c) is the 2026-09-11 incident -- one field apart (n_runs) --
+    which used to start a new cache and exit 0, and is now a refusal before the Fisher. Leg (d) is the
+    stage banner: a stage that raises names itself before the traceback.
+    """
+    from core import orchestrator
+    from core.artifacts import ArtifactStore, default_store
+    from core.tool import main
+
+    # tool_env is what installs SBITEST as real input files and points PRISM_ARTIFACTS at a temp
+    # root; --store-root then puts this run's own store beside it.
+    bounds, cell, _env_root = tool_env
+    sandbox = default_store()
+    root = tmp_path / "smoke"
+    SCFG = [*_cfg(bounds), "--cell", cell]
+    common = ["smoke", *SCFG, "--store-root", str(root), "--run-size", "8", "--t-obs", "1.0",
+              "--checkpoint"]
+
+    # (a) the full run: four stages, six artifacts.
+    assert main([*common, "--num-runs", "2", "--n-cal", "60", "--max-epochs", "2", "--save"]) == 0
+    out = capsys.readouterr().out
+    for line in ("=== prior ===", "=== posterior ===", "=== validate ===", "=== infer ===",
+                 "[smoke] ALL STAGES COMPLETED"):
+        assert line in out, line
+    s = ArtifactStore(root)
+    assert [r.name for r in s.list("prior")] == ["smoke_prior"]
+    assert [r.name for r in s.list("posterior")] == ["smoke_posterior"]
+    for kind in ("simulation", "observation", "calibration", "inference"):
+        assert len(s.list(kind)) == 1, kind
+
+    # (b) the drill: same store, same budget, the prior loaded by name -> a resume, in seconds.
+    drill = [*common, "--num-runs", "2", "--prior", "smoke_prior", "--stages", "prior,posterior"]
+    assert main([*drill, "--resume", "require"]) == 0
+    out = capsys.readouterr().out
+    assert "resuming at batch 2/2" in out, out[-2000:]
+    assert len(ArtifactStore(root).list("simulation")) == 1, "a resume must not key a new cache"
+
+    # (c) one field away: refused before any simulation, naming the field and both values.
+    assert main([*common, "--num-runs", "3", "--prior", "smoke_prior",
+                 "--stages", "prior,posterior"]) == 1
+    cap = capsys.readouterr()
+    assert "n_runs" in cap.err and "new_run" in cap.err, cap.err
+    assert len(ArtifactStore(root).list("simulation")) == 1, "nothing may be written by a refusal"
+
+    # (d) a stage that raises names itself.
+    def _boom(*a, **k):
+        raise RuntimeError("calibration exploded")
+
+    real = orchestrator.validate_calibration
+    orchestrator.validate_calibration = _boom
+    try:
+        code = main([*drill, "--stages", "prior,posterior,validate", "--resume", "require"])
+    finally:
+        orchestrator.validate_calibration = real
+    cap = capsys.readouterr()
+    assert code == 1
+    assert "*** FAILED in stage validate ***" in cap.out + cap.err
+
+    assert default_store() is sandbox, "main must leave the session's default store installed"

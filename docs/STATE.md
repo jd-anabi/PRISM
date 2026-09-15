@@ -64,9 +64,12 @@ that commit and re-checked; `Artifacts/` exists now with the walkthrough's artif
    **Recipe correction:** run 2 must use the SAME `NUM_RUNS` as run 1 — the simulation identity
    includes `n_runs`, so `NUM_RUNS=2` after a `NUM_RUNS=4` run 1 keys a NEW cache directory,
    rebuilds the Fisher rotation and never resumes (it did exactly that here, silently, exit 0).
-   The drill that certifies the resume is run 1 `CHI=1 TOBS_S=4.5 BOUNDS=…/master.txt
-   CELL=…/master_spont.txt CHECKPOINT=1 SAVE=1 CKPT_DIR=<scratch>/smoke`, then run 2 with
-   `PRIOR=smoke_prior STAGES=prior,posterior`, the same `NUM_RUNS`, `SAVE` unset.
+   The recipe is four command lines since T19 (`CLAUDE.md`, spec §3.8): `python -m core smoke --chi
+   --t-obs 4.5 --bounds …/master.txt --cell …/master_spont.txt --checkpoint --save --store-root
+   <scratch>/smoke`, then the same line with `--prior smoke_prior --stages prior,posterior --resume
+   require` (must resume), then the same again with `--num-runs 2` (must EXIT 1 naming `n_runs` —
+   the incident, now loud), then the forced-mode run against its own store. The environment-variable
+   recipe is gone with `scripts/smoke_train.py`.
 4. ~~Manual GUI check on a display~~ — done 2026-09-11 by the user on the real screen: rows A1–A9
    of `docs/checklists/display-walkthrough.md` all pass (reported "everything passes"). The one
    failure was the walkthrough's row 1, the APP ICON: the window's title bar showed the mark, the

@@ -9,10 +9,11 @@ to catch a handler that swaps the process default store and never puts it back.
 """
 import argparse
 import sys
+import tempfile
 import traceback
 from pathlib import Path
 
-from . import config_args, diagnostics, stages
+from . import config_args, diagnostics, smoke, stages
 from .config_args import UsageError  # noqa: F401 -- part of this package's public surface
 
 EPILOG = """\
@@ -34,7 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="The PRISM command-line tool. The GUI is `python -m core.gui`.")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="<subcommand>")
     p.subcommands = {}
-    for module in (stages, diagnostics):
+    for module in (stages, diagnostics, smoke):
         p.subcommands.update(module.register(sub))
     return p
 
@@ -52,9 +53,13 @@ def main(argv=None) -> int:
     from core.artifacts import ArtifactStore, use_store
     registry.load_user_models()                # idempotent; AFTER parsing, so --help stays torch-free
     try:
-        # smoke names its own root; everything else follows PRISM_ARTIFACTS, read here at call time.
-        # Created up front so an unusable root fails in the first second, not on day three.
-        root = Path(getattr(args, "store_root", None) or config.artifacts_root())
+        # smoke is the one subcommand with its own root: a fresh store per run unless one is named, so
+        # two runs never share a cache by accident and a named one can be resumed. Keyed on the FLAG
+        # (only smoke defines --store-root), never on the subcommand name.
+        if hasattr(args, "store_root"):
+            root = Path(args.store_root or tempfile.mkdtemp(prefix="prism_smoke_"))
+        else:
+            root = config.artifacts_root()
         root.mkdir(parents=True, exist_ok=True)
         # use_store AND store= at every call: the context makes the default right for anything that
         # reaches for it, the keyword makes each stage independent of the default. set_default_store
