@@ -275,3 +275,70 @@ def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(stor
     # to mirror, so its t_scale column must NOT be a permutation of theta*'s.
     assert not torch.equal(plain_ref[:, i_t].sort().values, theta_star[:, i_t].sort().values), \
         "the plain branch must not mirror theta*'s t_scale column -- there is no region to mirror it against"
+
+
+def test_sbc_writes_one_diagnostic_naming_its_posterior_and_prior(tiny_run):
+    """The repeat study is one artifact: K x n_cal calibration sets, the per-repeat KS/C2ST tables in a
+    payload, one pooled figure, and a manifest naming the posterior and the prior it was trained from.
+    Seeded per repeat (seed + r) under core.diagnostics.rng.seeded, so a second run at the same seed
+    reproduces the table exactly -- which is the whole point of a repeat study: the spread across
+    repeats is the measurement, and it is worthless if the spread is partly the caller's RNG state."""
+    import numpy as np
+    from core.diagnostics import sbc_repeats
+    r = tiny_run
+    d = sbc_repeats(r.cfg, r.posterior, r.prior, repeats=2, n_cal=8, num_posterior_samples=40,
+                    cal_n_scales=1, seed=0, fig_sink=r.sink, name="sbc_two")
+    keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
+    m = d.manifest
+    assert d.diagnostic == "sbc" and d.variant == "pooled"
+    assert m.parents == {"posterior": r.posterior.id, "prior": r.prior.id}
+    assert m.fingerprints["gmm"] == r.prior.fingerprint
+    assert m.config["repeats"] == 2 and m.config["n_cal"] == 8 and m.config["seed"] == 0
+    assert [p["name"] for p in d.results["per_param"]] == keys
+    assert set(d.results["per_param"][0]) == {"name", "ks_p_median", "ks_p_min", "frac_ks_below_05",
+                                              "c2st_ranks_median"}
+    # n_cal is an UPPER bound: gen_cal_data drops rows whose simulation was invalid, which is why the
+    # diagnostic records n_valid at all. Assert the invariant, not the count.
+    assert len(d.results["n_valid"]) == 2 and all(0 < n <= 8 for n in d.results["n_valid"])
+    assert d.results["kept_fraction"] is None
+    assert d.results["accepted"] == []
+    assert set(m.payloads) == {"sbc_repeats.npz"}
+    assert m.figures == ["figures/sbc_ranks_pooled_over_repeats_histogram.png"]
+    z = np.load(d.path / "sbc_repeats.npz")
+    assert z["ks"].shape == (2, len(keys)) and z["c2st_ranks"].shape == (2, len(keys))
+    assert z["c2st_dap"].shape == (2, len(keys))
+    assert z["ranks"].shape == (sum(d.results["n_valid"]), len(keys))
+    assert z["repeat"].tolist() == ([0] * d.results["n_valid"][0] + [1] * d.results["n_valid"][1])
+    assert int(z["nps"]) == 40
+    assert [str(s) for s in z["labels"]] == keys
+    assert r.store.load_diagnostic(d.id).results == d.results
+    again = sbc_repeats(r.cfg, r.posterior, r.prior, repeats=2, n_cal=8, num_posterior_samples=40,
+                        cal_n_scales=1, seed=0, fig_sink=r.sink)
+    assert np.allclose(np.load(again.path / "sbc_repeats.npz")["ks"], z["ks"], equal_nan=True), \
+        "the same seed must reproduce the KS table; the repeat spread is the measurement"
+
+
+def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
+    """Every refusal fires before a single calibration set is simulated -- n_cal x repeats simulations
+    is the spend this diagnostic exists to characterise, and learning that the name is taken (or that
+    CHI_K_FIXED means nothing outside chi mode) afterwards throws all of it away."""
+    import pytest
+    from core import orchestrator
+    from core.artifacts import StoreError
+    from core.diagnostics import sbc_repeats
+    r = tiny_run
+    drawn = []
+    monkeypatch.setattr(orchestrator.analysis, "gen_cal_data", lambda **k: drawn.append(1))
+    with pytest.raises(ValueError, match="repeats must be at least 1"):
+        sbc_repeats(r.cfg, r.posterior, r.prior, repeats=0, n_cal=8, fig_sink=r.sink)
+    with pytest.raises(ValueError, match="n_cal must be at least 1"):
+        sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=0, fig_sink=r.sink)
+    with pytest.raises(ValueError, match="chi_k_fixed"):
+        sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, chi_k_fixed=2, fig_sink=r.sink)
+    with pytest.raises(StoreError, match="already exists"):
+        sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, fig_sink=r.sink, name="sbc_two")
+    with pytest.raises(ValueError, match="not the one this posterior was trained with"):
+        sbc_repeats(r.cfg, r.posterior, r.other_prior(), repeats=1, n_cal=8, fig_sink=r.sink)
+    assert drawn == [], "a calibration set was simulated before the refusals"
+    assert not [s for s in r.store.list("diagnostic") if not s.complete], \
+        "a refused run left a half-written diagnostic directory"

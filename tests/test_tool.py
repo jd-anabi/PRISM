@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from core import config
 from core.tool import build_parser, main
 
 
@@ -537,3 +538,47 @@ def test_every_validate_infer_and_tsnpe_flag_reaches_its_stage_as_a_keyword(tool
     assert main(["tsnpe", *_cfg(bounds), "--posterior", "tpost", "--observation", obs,
                  "--directions", "2", "--accept-truncated"]) == 0
     assert load_calls[-1] == Accept(truncated=True)
+
+
+def test_the_sbc_subcommand_forwards_every_knob_as_a_keyword(tmp_path, monkeypatch, capsys):
+    """Each flag reaches sbc_repeats under the stage's own keyword name, and a flag left off is NOT
+    passed -- so the default lives in one place (the function signature) instead of being restated by
+    the tool. The posterior load is replaced: what is under test is the wiring, not the store."""
+    from core import tool
+    from core.artifacts import Accept
+    from core.tool import diagnostics as tool_diag
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    seen = {}
+
+    def _fake_pair(cfg, ref, accept, store):
+        seen["ref"], seen["accept"] = ref, accept
+        return "POST", "PRIOR"
+
+    def _fake_sbc(cfg, posterior, prior, **kw):
+        seen["args"] = (posterior, prior)
+        seen["kw"] = kw
+        # The shape `config_args.report` actually reads: `.kind` and `.path`, and it prints
+        # `a.path.name`, so the directory name has to BE the last path segment.
+        return SimpleNamespace(kind="diagnostic", path=tmp_path / "diagnostics" / "d__1")
+
+    monkeypatch.setattr(tool_diag, "load_posterior_and_prior", _fake_pair)
+    monkeypatch.setattr("core.diagnostics.sbc_repeats", _fake_sbc)
+    bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")
+    rc = tool.main(["sbc", "--bounds", bounds, "--device", "cpu", "--posterior", "tpost",
+                    "--repeats", "3", "--n-cal", "40", "--posterior-samples", "70",
+                    "--cal-n-scales", "2", "--seed", "5", "--accept-truncated",
+                    "--name", "sbc1", "--note", "hello"])
+    assert rc == 0
+    assert seen["ref"] == "tpost" and seen["accept"] == Accept(truncated=True)
+    assert seen["args"] == ("POST", "PRIOR")
+    assert seen["kw"]["repeats"] == 3 and seen["kw"]["n_cal"] == 40
+    assert seen["kw"]["num_posterior_samples"] == 70 and seen["kw"]["cal_n_scales"] == 2
+    assert seen["kw"]["seed"] == 5 and seen["kw"]["name"] == "sbc1" and seen["kw"]["note"] == "hello"
+    assert "chi_k_fixed" not in seen["kw"], "a flag left off must not be passed at all"
+    assert "diagnostic d__1" in capsys.readouterr().out
+
+    seen.clear()
+    assert tool.main(["sbc", "--bounds", bounds, "--device", "cpu", "--posterior", "p",
+                      "--chi", "--chi-k-fixed", "6"]) == 0
+    assert seen["kw"]["chi_k_fixed"] == 6 and seen["accept"] == Accept()
+    assert "repeats" not in seen["kw"] and "seed" not in seen["kw"]

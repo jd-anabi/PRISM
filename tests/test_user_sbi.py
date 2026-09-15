@@ -2504,7 +2504,7 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         pipeline_mod.train_nn = saved_train_nn
 
 
-def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
+def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_path):
     """⚠ GUARDRAIL 8, end to end through validate_calibration with the real gen_cal_data (10 rows).
 
     For a TSNPE posterior the calibration prior must be the prior RESTRICTED to its region -- drawn
@@ -2518,6 +2518,10 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
     the reference sample mirrors the override (its t_scale column is a permutation of theta*'s) while
     the t_scale-free direction stays restricted for both. The sbi diagnostics and the plots are
     stubbed; the simulation is real.
+
+    The same guarantee is then re-checked through core.diagnostics.sbc_repeats, which draws through
+    these very helpers: a diagnostic that reported extrapolation as miscalibration would be worse
+    than no diagnostic, because its numbers look exactly like a real result.
     """
     import contextlib
     import matplotlib.pyplot as plt
@@ -2633,6 +2637,27 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given():
         assert bool(((w_ref[:, 1] >= lo1) & (w_ref[:, 1] <= hi1)).all())
         assert torch.equal(cap["prior_samples"][:, i_t].sort().values, cap["thetas"].cpu()[:, i_t].sort().values), \
             "the reference sample did not mirror the t_scale override"
+
+        # ── the SAME guarantee through sbc_repeats (piece 2 §4.4) ────────────────────────────────
+        from core.artifacts import ArtifactStore, use_store
+        from core.diagnostics import sbc_repeats
+        cap.clear()
+        buf = io.StringIO()
+        with use_store(ArtifactStore(tmp_path / "sbc_diag")), contextlib.redirect_stdout(buf):
+            diag = sbc_repeats(cfg, lp_post, lp, repeats=1, n_cal=10, num_posterior_samples=40,
+                               cal_n_scales=1, seed=0, fig_sink=sink)
+        assert isinstance(cap["prior"], _tr.TruncatedLatentPrior) and cap["prior"].region is region
+        assert bool(region.contains(T.inv(cap["thetas"].cpu()).double()).all()), \
+            "an sbc_repeats theta* lies outside the region the posterior was trained on"
+        assert bool(region.contains(T.inv(cap["prior_samples"].cpu()).double()).all()), \
+            "sbc_repeats' reference sample was drawn from the FULL prior"
+        assert torch.equal(cap["prior_samples"][:, i_t].sort().values,
+                           cap["thetas"].cpu()[:, i_t].sort().values), \
+            "sbc_repeats' reference sample did not mirror the t_scale override"
+        assert "PRIOR RESTRICTED" in buf.getvalue(), buf.getvalue()[-800:]
+        assert diag.results["stratum"] == "pooled"
+        assert diag.results["kept_fraction"]["acceptance"] > 0.0
+        assert diag.manifest.parents["posterior"] == "stub_post"
 
         cap.clear()
         lp_post_plain = SimpleNamespace(posterior=post, id="stub_post_plain")
