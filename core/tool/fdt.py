@@ -101,7 +101,7 @@ def register(subparsers):
     fdt.add_argument("--skip-sanity", dest="skip_sanity", action="store_true",
                      help="skip the sanity checks and go straight to the production sweep")
     fdt.add_argument("--no-production", dest="no_production", action="store_true",
-                     help="stop after the sanity checks (ignored with --skip-sanity)")
+                     help="stop after the sanity checks")
     fdt.set_defaults(handler=run_fdt_cmd, interrupt_note=FDT_INTERRUPT_NOTE)
 
     cv = subparsers.add_parser(
@@ -123,6 +123,12 @@ def run_fdt_cmd(args, store):
     """``store`` is unused: FDT writes plots, not artifacts (piece 5 wraps it)."""
     from core import cli, config, registry
     from core.FDT import fdt_pipeline
+    if args.skip_sanity and args.no_production:
+        # run_fdt reads confirm_production only on the sanity branch, so this pair used to run the
+        # full production sweep without a word.
+        raise UsageError("--skip-sanity and --no-production together run nothing: --skip-sanity goes "
+                         "straight to the production sweep, and --no-production stops after the "
+                         "sanity checks. Drop one of them.")
     model = model_for_cell(args)
     ok, reason = registry.fdt_support(model)
     if not ok:

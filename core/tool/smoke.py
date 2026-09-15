@@ -47,9 +47,10 @@ STAGES = ("prior", "posterior", "validate", "infer")
 EPILOG = """\
 Writes to --store-root, or a fresh temp directory when it is not given -- NEVER to PRISM_ARTIFACTS,
 which every OTHER subcommand follows but smoke does not. Reads PRISM_RESOURCES (the inputs root)
-like every subcommand, and two core-level settings read live by core/SBI/pipeline.py, never by this
-tool: PRISM_VRAM_CEILING_GIB (GiB one simulation batch may plan to occupy, 0 = auto) and
-PRISM_MEM_LOG_EVERY (batches between memory log lines).
+like every subcommand, and two core-level settings read by core/SBI/pipeline.py, never by this
+tool: PRISM_VRAM_CEILING_GIB (GiB one simulation batch may plan to occupy, 0 = auto; read live, on
+every batch plan) and PRISM_MEM_LOG_EVERY (batches between memory log lines; read once, when
+core.SBI.pipeline is imported).
 
 What to watch: the masked-probe count (~37 % of TRAINING probes, and a single run within +/-12 pp
 is uninformative -- the effective sample size is the BATCH count, not the probe count); the mode
@@ -123,20 +124,35 @@ def register(subparsers):
 def run_smoke(args, store):
     """The stage sequence. A composition of its own, not a chain of ``main`` calls: one process, one
     store, one cfg -- run 2 loads its prior into that cfg and --stages can stop early."""
-    from core import config, orchestrator
+    from core import cli, config, orchestrator
     from core.diagnostics.rng import seeded
     from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH, VALID_FLAG_LABELS
     from core.tool import UsageError
-    from core.tool.config_args import build_cfg, close_sink, knobs
+    from core.tool.config_args import build_cfg, close_sink, knobs, make_cfg
 
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
     unknown = [s for s in stages if s not in STAGES]
     if unknown:
         raise UsageError(f"--stages: unknown stage(s) {unknown}; choose from {list(STAGES)}")
+    if "posterior" in stages:
+        # Two --resume settings that can never work, refused before the prior build -- not after it,
+        # by the stage's refusal, which names train's --checkpoint-every rather than smoke's flag.
+        if args.resume in ("require", "never") and not args.checkpoint:
+            raise UsageError(f"--resume {args.resume} needs --checkpoint: without it no simulation "
+                             f"cache is read or written, so the policy has nothing to act on.")
+        if args.resume == "require" and args.prior is None:
+            raise UsageError("--resume require needs --prior <the prior run 1 built>: without it this "
+                             "run fits a new prior, whose fingerprint is part of the cache identity, "
+                             "so no cache can match.")
 
     # load_gt=False: the truth is injected by simulated_inference, so the note about ignored cell
     # values prints once, at the stage that uses them.
     cfg, _ignored = build_cfg(args, load_gt=False)
+    if "infer" in stages:
+        # The cell is first read by the infer stage, after the prior, the training and the calibration.
+        # Checked here against a THROWAWAY config, so a mistyped --cell (or one outside --bounds) costs
+        # nothing, while the training cfg stays truth-free.
+        cli.load_and_validate_gt(make_cfg(args), args.cell)
     t_obs_s = config.T_MIN_EXP_S if args.t_obs_s is None else float(args.t_obs_s)
     fdim = orchestrator.expected_forcing_dim(cfg)
     want = SUMMARY_WIDTH + 1 + fdim

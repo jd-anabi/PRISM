@@ -23,8 +23,9 @@ environment -- the only variables PRISM reads, and none of them is a substitute 
                           writes here, and `smoke` takes --store-root instead
   PRISM_VRAM_CEILING_GIB  core-level: GiB one simulation batch may plan to occupy (0 = auto)
   PRISM_MEM_LOG_EVERY     core-level: batches between memory log lines
-The last two are read live by core/SBI/pipeline.py, never by this tool. They are deliberately not
-flags: they change the memory PLAN for a batch, not the rows it produces.
+The last two are read by core/SBI/pipeline.py, never by this tool: PRISM_VRAM_CEILING_GIB live, on
+every batch plan; PRISM_MEM_LOG_EVERY once, when core.SBI.pipeline is imported. They are
+deliberately not flags: they change the memory PLAN for a batch, not the rows it produces.
 """
 
 
@@ -40,16 +41,23 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _smoke_interrupt_advice(args) -> str:
+def _smoke_interrupt_advice(args, root) -> str:
     """K5, fix round 1: the Ctrl-C hint for a resumable cache. Every OTHER subcommand's own command
     line, re-issued with --resume require, IS the resumable one -- that is what the generic message
     says. smoke keys its store on --store-root rather than on PRISM_ARTIFACTS, so re-issuing run 1's
     OWN command line instead re-BUILDS the prior (refused by name under --save, or a fresh, different
-    fit otherwise); the resumable form names --prior and --stages explicitly, as the drill does."""
-    if not args.store_root:
-        return "a run without --store-root cannot be resumed."
-    return (f"re-run with --store-root {args.store_root} --prior smoke_prior "
-            f"--stages prior,posterior --resume require to continue them.")
+    fit otherwise); the resumable form names --prior and --stages explicitly, as the drill does.
+
+    The prior to name is the one this run used: the one it loaded (--prior), else smoke_prior when
+    --save named what it built, else the unnamed one it built, whose id only its directory carries.
+    The store is --store-root, else the temp ``root`` main created -- main keeps that root whenever it
+    holds anything, committed batches included, and the [smoke] banner printed its path."""
+    prior = args.prior or ("smoke_prior" if args.save else
+                           "<the id of the prior this run built: its directory is "
+                           "priors/_unnamed__<id> under the store root>")
+    return (f"re-run with --store-root {args.store_root or root} --prior {prior} --checkpoint "
+            f"--stages prior,posterior --resume require, and the same --num-runs and --run-size, "
+            f"to continue them.")
 
 
 def _remove_if_still_empty(root: Path) -> None:
@@ -103,7 +111,7 @@ def main(argv=None) -> int:
         if note is not None:
             print(f"prism {args.cmd}: interrupted: {note}", file=sys.stderr)
         else:
-            advice = _smoke_interrupt_advice(args) if has_store_root else \
+            advice = _smoke_interrupt_advice(args, root) if has_store_root else \
                 "the same command with --resume require continues them."
             print(f"prism {args.cmd}: interrupted: the artifact being written was removed. If a "
                   f"[checkpoint] line above says batches were saved, {advice}", file=sys.stderr)

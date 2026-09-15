@@ -918,14 +918,28 @@ def test_smoke_ctrl_c_advice_depends_on_store_root():
     """
     from core.tool import _smoke_interrupt_advice
 
-    named = SimpleNamespace(store_root=r"C:\scratch\smoke")
-    advice = _smoke_interrupt_advice(named)
+    auto = Path(r"C:\Temp\prism_smoke_abc")
+    named = SimpleNamespace(store_root=r"C:\scratch\smoke", prior=None, save=True)
+    advice = _smoke_interrupt_advice(named, Path(named.store_root))
     assert r"--store-root C:\scratch\smoke" in advice
     assert "--prior smoke_prior" in advice and "--stages prior,posterior" in advice
-    assert "--resume require" in advice
+    assert "--resume require" in advice and "--checkpoint" in advice
+    assert "--num-runs" in advice and "--run-size" in advice
 
-    unnamed = SimpleNamespace(store_root=None)
-    assert _smoke_interrupt_advice(unnamed) == "a run without --store-root cannot be resumed."
+    # without --save the prior this run built is unnamed: the advice must not name smoke_prior
+    unsaved = SimpleNamespace(store_root=r"C:\scratch\smoke", prior=None, save=False)
+    advice = _smoke_interrupt_advice(unsaved, Path(unsaved.store_root))
+    assert "smoke_prior" not in advice and "cannot be resumed" not in advice, advice
+    assert "_unnamed__" in advice and "--resume require" in advice
+
+    # a loaded prior is the one to name, whether or not --save was given
+    loaded = SimpleNamespace(store_root=r"C:\scratch\smoke", prior="P", save=True)
+    assert "--prior P " in _smoke_interrupt_advice(loaded, Path(loaded.store_root))
+
+    # the temp root is kept when it holds committed batches, and its path is the one to name
+    unnamed = SimpleNamespace(store_root=None, prior=None, save=True)
+    advice = _smoke_interrupt_advice(unnamed, auto)
+    assert f"--store-root {auto}" in advice and "cannot be resumed" not in advice, advice
 
 
 def test_smoke_ctrl_c_prints_store_specific_resume_advice(tool_env, tmp_path, monkeypatch, capsys):
@@ -948,15 +962,54 @@ def test_smoke_ctrl_c_prints_store_specific_resume_advice(tool_env, tmp_path, mo
 
     store = tmp_path / "named_store"
     capsys.readouterr()
-    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--store-root", str(store)]) == 130
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--store-root", str(store), "--save"]) == 130
     err = capsys.readouterr().err
     assert f"--store-root {store}" in err and "--prior smoke_prior" in err
     assert "--stages prior,posterior" in err and "--resume require" in err
 
+    # no --store-root: the temp root's own path is named (it is kept when it holds batches). The
+    # root is empty here, so main removes it after printing -- nothing is left in %TEMP%.
     capsys.readouterr()
     assert main(["smoke", *_cfg(bounds), "--cell", cell]) == 130
     err = capsys.readouterr().err
-    assert "a run without --store-root cannot be resumed." in err
+    assert "cannot be resumed" not in err and "prism_smoke_" in err, err
+    assert "smoke_prior" not in err, "a run without --save built an unnamed prior"
+
+
+def test_smoke_refuses_a_bad_cell_and_an_impossible_resume_before_the_prior(tool_env, tmp_path,
+                                                                            monkeypatch, capsys):
+    """F5/F6: smoke checks what it can from its flags before the prior build.
+
+    The cell used to be parsed first inside the infer stage, after the prior (~100 s), the training
+    and the calibration; a mistyped one then exited 1 and left orphans. And a --resume that can never
+    work (no --checkpoint, or require without --prior, whose fresh fit has a new prior_fingerprint)
+    was refused only after the prior, by an orchestrator message naming a flag smoke does not have."""
+    from core import orchestrator
+    from core.tool import main
+
+    bounds, cell, _root = tool_env
+    rec = _Rec(None)
+    monkeypatch.setattr(orchestrator, "build_prior", rec)
+    missing = tmp_path / "missing.txt"
+
+    capsys.readouterr()
+    assert main(["smoke", *_cfg(bounds), "--cell", str(missing), "--store-root", str(tmp_path / "s")]) == 1
+    err = capsys.readouterr().err
+    assert "missing.txt" in err, err
+    assert rec.calls == [], "the prior was built before the cell was checked"
+
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--store-root", str(tmp_path / "s"),
+                 "--resume", "require", "--prior", "p"]) == 2
+    err = capsys.readouterr().err
+    assert "--checkpoint" in err, err
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--store-root", str(tmp_path / "s"),
+                 "--resume", "never"]) == 2
+    assert "--checkpoint" in capsys.readouterr().err
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--store-root", str(tmp_path / "s"),
+                 "--resume", "require", "--checkpoint"]) == 2
+    err = capsys.readouterr().err
+    assert "--prior" in err, err
+    assert rec.calls == [], "an impossible --resume was refused only after the prior"
 
 
 def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, capsys):
@@ -1053,7 +1106,7 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     assert kw["ensemble_M"] == cli.SWEEP_PRESETS["production"]["ensemble_M"]
 
 
-def test_fdt_and_crossval_usage_errors(tool_env, capsys):
+def test_fdt_and_crossval_usage_errors(tool_env, capsys, monkeypatch):
     """A model FDT cannot run is a refusal (1); a malformed grid or a missing cell is usage (2).
 
     ``tool_env`` for the PRISM_ARTIFACTS redirect: even a refusal builds the store root first.
@@ -1096,6 +1149,17 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys):
 
     assert main(["fdt"]) == 2                       # --cell is required
     assert main(["crossval", "--cell", nad]) == 2   # both grids are required
+
+    # F8: --skip-sanity with --no-production runs nothing, and used to run the full production sweep
+    # silently. A usage error, before any config is built (a recorder stands in for the builder).
+    from core import cli
+    built = []
+    monkeypatch.setattr(cli, "make_fdt_config", lambda *a, **k: built.append(1))
+    capsys.readouterr()
+    assert main(["fdt", "--cell", cell, "--skip-sanity", "--no-production"]) == 2
+    err = capsys.readouterr().err
+    assert "--skip-sanity" in err and "--no-production" in err, err
+    assert built == [], "the refused pair built a config"
 
 
 def test_crossval_preset_choices_match_sweep_presets():

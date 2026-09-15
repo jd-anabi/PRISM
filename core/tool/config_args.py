@@ -94,6 +94,18 @@ def build_cfg(args, *, load_gt: bool = False):
     the truth before the stage runs ask for it. ``infer`` and ``smoke`` leave it to
     ``simulated_inference``, so the note about ignored cell values prints exactly once.
     """
+    from core import cli
+    cfg = make_cfg(args)
+    cell = getattr(args, "cell", None)
+    ignored = cli.load_and_validate_gt(cfg, cell) if load_gt else []
+    describe(cfg, cell=cell, bounds=args.bounds, ignored=ignored)
+    return cfg, ignored
+
+
+def make_cfg(args):
+    """The SimConfig the shared flags describe, and nothing else: no truth loaded, nothing printed.
+    ``build_cfg`` is this plus the cell and the banner; ``smoke`` also calls it alone, for a throwaway
+    config to check --cell against before the prior build."""
     from core import cli, config, registry
     from core.config import VALID_LABELS, VALID_MODELS
     model = model_for(args)
@@ -107,12 +119,8 @@ def build_cfg(args, *, load_gt: bool = False):
     labels = (VALID_LABELS[VALID_MODELS.index(model)] if model in VALID_MODELS
               else registry.get(model).labels)
     hw = config.cpu_device() if args.device == "cpu" else None
-    cfg = cli.make_sim_config(model, labels, registry.state_dep_drift(model), args.bounds,
-                              chi_mode=args.chi_mode, chi_n_freqs=args.chi_n_freqs, hw=hw)
-    cell = getattr(args, "cell", None)
-    ignored = cli.load_and_validate_gt(cfg, cell) if load_gt else []
-    describe(cfg, cell=cell, bounds=args.bounds, ignored=ignored)
-    return cfg, ignored
+    return cli.make_sim_config(model, labels, registry.state_dep_drift(model), args.bounds,
+                               chi_mode=args.chi_mode, chi_n_freqs=args.chi_n_freqs, hw=hw)
 
 
 def describe(cfg, *, cell=None, bounds=None, ignored=()) -> None:
