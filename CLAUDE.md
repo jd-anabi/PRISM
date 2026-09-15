@@ -23,8 +23,10 @@ what is on disk, the last gate). Update it at the end of every session.
 
 ## Tests
 
-- pytest. Fast gate: `pytest -m "not slow"` (minutes). Full: `pytest` (about an hour; the chi
-  full-pipeline test in `tests/test_user_sbi.py`). Count: `pytest --collect-only -q`.
+- pytest. Fast gate: `pytest -m "not slow"` (minutes). Full: `pytest` (about an hour; the slow set
+  is the chi full-pipeline test in `tests/test_user_sbi.py` and the FDT/crossval tiny-size run in
+  `tests/test_tool.py`, ~10 min; the slow set alone is `pytest -m slow`). Count:
+  `pytest --collect-only -q`.
 - Markers: `slow`; `gpu` (skipped when CUDA is absent); `display` (skipped offscreen). The
   display-marked tests run on the real screen with `QT_QPA_PLATFORM=windows pytest -m display`
   (the root conftest only DEFAULTS the variable); they create hidden native windows, nothing shows.
