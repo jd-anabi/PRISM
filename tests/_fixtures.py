@@ -13,6 +13,15 @@ import torch
 
 from core.artifacts import manifest as mf
 
+# The top-level repository directories that hold PRODUCT code, and therefore the only ones the source
+# scans walk: the literal-path scan (tests/test_artifact_store.py), and the rotation-reader and
+# input() scans (both tests/test_conditioning_repair.py). It was ("core", "scripts") until piece 2
+# folded the scripts into `python -m core <subcommand>` and removed scripts/ -- the tool's own code lives under core/tool,
+# so one root covers both front ends. tests/ and the gitignored archive/ are deliberately absent: they
+# are not shipped code. test_the_source_scans_cover_every_code_directory keeps this set closed, so a
+# new top-level package cannot appear and be scanned by nothing.
+CODE_ROOTS: tuple[str, ...] = ("core",)
+
 
 def _nad_cfg(**over):
     """A real NADROWSKI SimConfig off the master bounds file, CPU device."""

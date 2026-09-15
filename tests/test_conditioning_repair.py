@@ -903,11 +903,14 @@ def test_a_t_scale_loaded_direction_is_excluded_from_the_region():
 
 def test_reparam_is_the_only_reader_of_the_rotation_matrix():
     """The transpose convention (parts[0].M == Vᵀ) is decoded in exactly one place, reparam.rotation_of.
-    A second reader is how the GUI came to write every sidecar transposed (D6); a source scan keeps
-    the count at one. The forbidden spelling is assembled so this file does not match itself."""
+    A second reader is how the GUI came to write every sidecar transposed (D6); a source scan over
+    CODE_ROOTS -- every top-level directory that holds code, which since piece 2 is core/ alone --
+    keeps the count at one. The forbidden spelling is assembled so this file does not match itself."""
     import io as _io
     import tokenize
     from pathlib import Path as _P
+
+    from tests._fixtures import CODE_ROOTS
     needle = "parts[0]" + ".M"
     skip = {tokenize.COMMENT, tokenize.STRING, tokenize.NL, tokenize.NEWLINE, tokenize.INDENT,
             tokenize.DEDENT, tokenize.ENCODING}
@@ -920,7 +923,7 @@ def test_reparam_is_the_only_reader_of_the_rotation_matrix():
 
     repo = _P(__file__).resolve().parents[1]
     readers = sorted(str(p.relative_to(repo)).replace("\\", "/")
-                     for sub in ("core", "scripts") for p in (repo / sub).rglob("*.py")
+                     for sub in CODE_ROOTS for p in (repo / sub).rglob("*.py")
                      if needle in _code_only(p))
     assert readers == ["core/SBI/reparam.py"], f"parts[0].M is read outside reparam: {readers}"
 
@@ -931,19 +934,23 @@ def test_the_prompt_cli_is_retired():
     A surviving input() is not cosmetic. On a GUI worker thread it blocks forever with no prompt
     anyone can answer -- which is exactly what run_fdt's two ``None`` defaults meant, and why the
     FDT panel had to remember to pass explicit booleans. Making them REQUIRED moves that from a
-    convention a caller can forget to a TypeError at the call site. The scan walks core/ because
-    that is where every front end now lives -- the GUI, and from T11 the command-line tool.
+    convention a caller can forget to a TypeError at the call site. The scan walks CODE_ROOTS, the
+    same set the other two source scans walk -- which since piece 2 is core/ alone, where every
+    front end now lives (the GUI, and the command-line tool under core/tool).
     """
     import ast
     import inspect
     from pathlib import Path as _P
 
+    from tests._fixtures import CODE_ROOTS
+
     repo = _P(__file__).resolve().parents[1]
     offenders = []
-    for py in sorted((repo / "core").rglob("*.py")):
-        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "input":
-                offenders.append(f"{py.relative_to(repo)}:{node.lineno}")
+    for sub in CODE_ROOTS:
+        for py in sorted((repo / sub).rglob("*.py")):
+            for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "input":
+                    offenders.append(f"{py.relative_to(repo)}:{node.lineno}")
     assert not offenders, "input() survives the prompt CLI's retirement:\n" + "\n".join(offenders)
 
     from core.FDT.fdt_pipeline import run_fdt
