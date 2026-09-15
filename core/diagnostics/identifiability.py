@@ -58,7 +58,12 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
             f"Posterior '{label}' records no Fisher rotation (V is None: the rotation was off for this "
             f"run), so there is no eigenbasis to decompose. Train with cfg.reparam_rotate on -- note "
             f"that a model without forcing disables it -- or point this at a posterior that has one.")
-    n_worst, top_n = max(1, int(n_worst)), max(1, int(top_n))
+    # Refused, not clamped: a clamp turned --n-worst 0 into 1 without a word (the D6 trap).
+    n_worst, top_n = int(n_worst), int(top_n)
+    if n_worst < 1:
+        raise ValueError(f"n_worst must be at least 1, got {n_worst}")
+    if top_n < 1:
+        raise ValueError(f"top_n must be at least 1, got {top_n}")
     V = np.asarray(tr["V"], dtype=float)
     P = V.shape[0]
     if n_worst > P:
@@ -204,6 +209,19 @@ def _training_latent_prior(latent):
         "this posterior carries no latent training prior (nothing with a `gen_dist` under its "
         "`.prior`), so the off-ground-truth points cannot be drawn from the distribution the flow "
         "was trained on.")
+
+
+def _refuse_bad_arm_settings(m, rel, min_valid) -> None:
+    """The finite-difference arms' own knobs, refused before the noise ensemble runs (laplace and
+    jacobian share them): ``m`` rows per arm, the relative step ``rel`` and the validity floor
+    ``min_valid``. Unchecked, ``m=0`` ran the whole noise ensemble and then every arm at batch 0, and
+    ``rel=0`` on a zero-valued truth divided by zero on its way to lstsq, after the spend."""
+    if int(m) < 1:
+        raise ValueError(f"m must be at least 1 (rows per finite-difference arm), got {int(m)}")
+    if not (math.isfinite(float(rel)) and float(rel) > 0):
+        raise ValueError(f"rel must be a finite positive relative step, got {rel}")
+    if not (0 < float(min_valid) <= 1):
+        raise ValueError(f"min_valid must be a fraction in (0, 1], got {min_valid}")
 
 
 def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
@@ -359,6 +377,7 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
         # _analyze_point rather than a refusal that names the knob to raise.
         raise ValueError(f"m_noise must be at least 10 (the feature-noise floor needs an ensemble), "
                          f"got {int(m_noise)}")
+    _refuse_bad_arm_settings(m, rel, min_valid)
     _ = cfg.ground_truth                      # refuses a cell-free config, before anything is spent
     feature_sets.describe_features(cfg)
 
@@ -816,6 +835,7 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
     if int(m_noise) < 10:
         raise ValueError(f"m_noise must be at least 10 (the feature-noise floor needs an ensemble), "
                          f"got {int(m_noise)}")
+    _refuse_bad_arm_settings(m, rel, min_valid)
     _ = cfg.ground_truth
     feature_sets.describe_features(cfg)
 

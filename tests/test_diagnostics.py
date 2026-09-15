@@ -129,6 +129,9 @@ def test_the_diagnostic_guards_refuse_with_value_errors():
     with pytest.raises(ValueError, match="no amp/freq/phase to read") as e:
         fs.assert_forced(spont, "identifiability jacobian")
     assert "master_weak.txt" in str(e.value) and "--cell" in str(e.value)
+    # the refusal depends on --bounds, which the tool never resolves from the cell: name a bounds file
+    # with a Forcing section
+    assert "--bounds" in str(e.value) and "master.txt" in str(e.value), str(e.value)
     fs.assert_forced(_nad_cfg(), "identifiability jacobian")            # master.txt declares Forcing
 
     for guard in (fs.assert_not_chi, fs.assert_nadrowski, fs.assert_forced):
@@ -627,6 +630,10 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
     # exactly 2.0, so the old check would not have noticed that write happening at all.
     assert cfg.T_obs == t_obs_before, "the diagnostic must never write cfg.T_obs"
     assert {m for m, _, _ in calls} == {4, 16} and {n for _, _, n in calls} == {int(2.0 * cfg.get_unit_conversion_factor("s") / cfg.dt_exp)}
+    # F15: the noise-floor ensemble draws INDEPENDENT noise (crn False); the +-d arms share common
+    # random numbers (crn True), or the finite difference is noise over 2d
+    assert {c for mm, c, _ in calls if mm == 16} == {False}, calls
+    assert {c for mm, c, _ in calls if mm == 4} == {True}, calls
 
     # M12: this fake makes the numbers a closed form, derived here and pinned so a units/arithmetic
     # slip in _analyze_point's covariance inversion fails LOUDLY rather than merely changing a number.
@@ -739,6 +746,29 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
     for nm in ("lap_bad_t", "lap_tiny_t", "lap_bad_m", "jac_bad_t", "jac_tiny_t", "jac_bad_m"):
         assert [s for s in store.list("diagnostic") if s.name == nm] == []
 
+    # F10: the arm ensemble, the relative step and the validity floor. --m 0 used to run the whole
+    # noise ensemble and then every arm at batch 0; --rel 0 on a zero-valued truth divided by zero and
+    # reached lstsq after the spend; --min-valid outside (0, 1] silently accepted or refused every arm.
+    bad = [("m", {"m": 0}), ("rel", {"rel": 0.0}), ("rel", {"rel": float("nan")}),
+           ("rel", {"rel": -0.02}), ("min_valid", {"min_valid": 0.0}), ("min_valid", {"min_valid": 1.5})]
+    for knob, kw in bad:
+        with pytest.raises(ValueError, match=knob):
+            identifiability_laplace(cfg, lp, name=f"lap_bad_{knob}", **kw)
+        with pytest.raises(ValueError, match=knob):
+            identifiability_jacobian(cfg, name=f"jac_bad_{knob}", **kw)
+        for nm in (f"lap_bad_{knob}", f"jac_bad_{knob}"):
+            assert [s for s in store.list("diagnostic") if s.name == nm] == []
+
+    # rotation used to CLAMP n_worst / top_n to 1: a --n-worst 0 quietly became 1 (the D6 trap)
+    from core.diagnostics import identifiability_rotation
+    rot = store.load_posterior(cfg, _rotation_posterior(store, cfg, V=torch.eye(P, dtype=torch.float64),
+                                                        evals=None).id)
+    with pytest.raises(ValueError, match="n_worst"):
+        identifiability_rotation(cfg, rot, n_worst=0, name="rot_nw0")
+    with pytest.raises(ValueError, match="top_n"):
+        identifiability_rotation(cfg, rot, top_n=0, name="rot_top0")
+    assert [s for s in store.list("diagnostic") if s.name in ("rot_nw0", "rot_top0")] == []
+
 
 def test_laplace_raw_does_not_leak_its_crn_seed(monkeypatch):
     """M5: ``_laplace_raw``'s CRN reseeds (``_SF``/``_SS``) must not escape the call, exactly as
@@ -840,9 +870,11 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     # "degenerate" (|cos|==1) by construction: a rank-1 Jacobian the assertions below could not tell
     # apart from a real, non-degenerate one.
     W = ((np.arange(n_feat)[:, None] * 7 + np.arange(n_theta)[None, :] * 3) % 5 + 1).astype(float)
+    crns = []
 
     def _fake_feats(ctx, pvec, rescale_vec, m, crn):
         import torch
+        crns.append((int(m), bool(crn)))
         theta = np.concatenate([pvec.detach().cpu().numpy(), rescale_vec.detach().cpu().numpy()])
         idx = np.arange(n_feat)
         base = (idx + 1).astype(float)
@@ -866,6 +898,9 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     monkeypatch.setattr(identifiability, "_jacobian_features", _fake_feats)
     d = identifiability_jacobian(cfg, m=4, m_noise=16, t_obs_s=2.0, seed=1, name="jac1")
     res = d.results
+    # F15: the m_noise ensemble without common random numbers, every +-d arm with them
+    assert {c for mm, c in crns if mm == 16} == {False}, crns
+    assert {c for mm, c in crns if mm == 4} == {True}, crns
     assert d.variant == "jacobian" and d.manifest.parents == {}
     assert res["observation_mode"] == "forced" and res["T_obs_s"] == 2.0
     assert res["n_features"] == n_feat

@@ -111,6 +111,7 @@ def assert_forced(cfg: SimConfig, what: str) -> None:
             f"{what} measures the response to the cell's OWN drive, but this config is "
             f"{cfg.observation_mode.upper()}: its bounds file declares no Forcing section, so there "
             f"is no amp/freq/phase to read.\n"
-            f"  -> point it at a forced cell, e.g. "
-            f"--cell {config.CELL_PATH / 'nadrowski' / 'master_weak.txt'} , whose sibling bounds file "
-            f"is the forced box --bounds then resolves to.")
+            f"  -> pass a bounds file with a Forcing section, e.g. "
+            f"--bounds {config.BOUNDS_PATH / 'nadrowski' / 'master.txt'} , together with a forced "
+            f"cell such as --cell {config.CELL_PATH / 'nadrowski' / 'master_weak.txt'} . The refusal "
+            f"depends on --bounds: the tool never resolves the box from the cell.")
