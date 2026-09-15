@@ -922,3 +922,148 @@ def test_the_probe_budget_accepts_a_correctly_wired_pair():
     keep0 = np.ones(4, dtype=bool)
     xs0 = torch.randn(4, 256, dtype=cfg.hw.dtype)
     identifiability._probe_budget(ctx, feats, keep0, xs0, 1.0)          # must not raise
+
+
+def test_load_rows_x_only_stops_at_max_rows(tmp_path):
+    """The conditioning-channel diagnostics read x and never the targets, and they want a sample, not
+    the cache: at the production shape the th_ shards are half the bytes on disk and the whole cache
+    is tens of GiB. x_only must not open a th_ shard at all -- pinned by deleting them -- and max_rows
+    must stop at the shard that reaches the count rather than walking to the end."""
+    import pytest
+    import torch
+    from core.SBI import training_checkpoint as tc
+    d = tmp_path / "cache"
+    (d / "shards").mkdir(parents=True)
+    for a, b in ((0, 2), (2, 4), (4, 6)):
+        torch.save(torch.full((2 * 5, 3), float(a)), d / "shards" / f"x_{a:06d}_{b:06d}.pt")
+        torch.save(torch.full((2 * 5, 2), float(a)), d / "shards" / f"th_{a:06d}_{b:06d}.pt")
+    x, th = tc.load_rows(d, 6, 5)
+    assert tuple(x.shape) == (30, 3) and tuple(th.shape) == (30, 2)
+    for f in (d / "shards").glob("th_*.pt"):
+        f.unlink()
+    x, th = tc.load_rows(d, 6, 5, x_only=True)
+    assert tuple(x.shape) == (30, 3) and th is None
+    x, th = tc.load_rows(d, 6, 5, x_only=True, max_rows=12)
+    assert tuple(x.shape) == (12, 3) and th is None
+    assert x[:10].eq(0.0).all() and x[10:].eq(2.0).all(), "max_rows must keep batch order"
+    # The completeness check is SKIPPED under max_rows -- a partial read is the point -- but still
+    # fires without it, because a cache that commits 6 batches and holds 2 is corrupt.
+    assert tuple(tc.load_rows(d, 99, 5, x_only=True, max_rows=4)[0].shape) == (4, 3)
+    with pytest.raises(ValueError, match="commits 99 batches but only 6"):
+        tc.load_rows(d, 99, 5, x_only=True)
+
+
+def test_ablation_sweeps_the_summary_columns_through_the_whole_conditioning_path():
+    """Two things at once, because they are one defect.
+
+    (a) The sweep runs over the SUMMARY columns only: the forcing / chi block stays at the base row's
+    values, so a forced or chi posterior -- whose width includes that block -- is measured at a real
+    observation rather than at a row no recording can produce.
+
+    (b) It runs through the whole conditioning path, standardizer included. For spontaneous and forced
+    posteriors sbi puts a per-column affine ahead of the net (z_score_x="independent"), so a bare-net
+    sweep fed raw values to a net trained on z-scores. A standardizer that zeroes its input must make
+    every channel read as doing nothing -- which can only happen if it is actually in the path.
+    """
+    import torch
+    from core import orchestrator
+    from core.diagnostics import ablation
+    from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH, VALID_FLAG_LABELS
+
+    class _Zero(torch.nn.Module):
+        """A stand-in standardizer that maps everything to zero -- if it is in the path, nothing moves."""
+        def forward(self, x):
+            return torch.zeros_like(x)
+
+    cfg = _forced_nad_cfg()
+    n_sum = SUMMARY_WIDTH + 1
+    fdim = orchestrator.expected_forcing_dim(cfg)
+    labels = FEATURE_LABELS + VALID_FLAG_LABELS + ["logT"]
+    net = orchestrator.build_embedding_net(cfg).eval()
+    seen = []
+
+    class _Record(torch.nn.Module):
+        def __init__(self, inner):
+            super().__init__()
+            self.inner = inner
+
+        def forward(self, x):
+            seen.append(x.detach().clone())
+            return self.inner(x)
+
+    torch.manual_seed(0)
+    data = torch.randn(64, n_sum + fdim)
+    # Element 0 of the return is the base-row marker (its r[0] is the row INDEX, not a displacement),
+    # so every assertion below reads the summary records only.
+    rows = ablation._sweep_channels(_Record(net), data, n_sum, 5, labels)[1:]
+    assert len(rows) == n_sum and [r[1] for r in rows] == labels
+    base = seen[0]
+    assert base.shape == (1, n_sum + fdim)
+    for call in seen[1:]:
+        assert torch.equal(call[:, n_sum:], base[:, n_sum:].expand(call.shape[0], -1)), \
+            "the forcing block moved during a summary sweep"
+        varying = [j for j in range(n_sum) if call[:, j].min() != call[:, j].max()]
+        assert len(varying) <= 1, "more than one summary column moved in one sweep"
+    assert max(r[0] for r in rows) > 0.0, "an unstandardized sweep must move the embedding"
+
+    zeroing = torch.nn.Sequential(_Zero(), net)
+    rows0 = ablation._sweep_channels(zeroing, data, n_sum, 5, labels)[1:]
+    # R-K(3) as given (== 0.0 -> <= 1e-6) still under-tolerates: the net's own weight init is NOT
+    # seeded here (only the data draw is), so the float32 kernel choice on the zeroed leg lands
+    # anywhere from ~9e-7 to ~1.4e-6 across a run of five unseeded inits measured while writing this
+    # test -- a few ulps of FLOAT32_EPS (1.19e-7) either way, comfortably distinct from a HEALTHY
+    # channel's response (2-4 here) by 6+ orders of magnitude. The bound is therefore relative to this
+    # very call's own healthy max, not a hardcoded absolute: the intent -- a zeroing standardizer makes
+    # the sweep read as float noise, not as a real signal -- survives whatever scale a given net's
+    # random init happens to produce.
+    healthy_max = max(r[0] for r in rows)
+    assert max(r[0] for r in rows0) <= healthy_max * 1e-4, \
+        "the standardizer was not in the path: the sweep bypassed it and reached the bare net"
+
+
+def test_ablation_reads_the_cache_its_posterior_names(tiny_run, monkeypatch):
+    """The rows come from the simulation cache the POSTERIOR names, not from whatever checkpoint is
+    newest: the ranges a channel is swept over are the ranges that network was trained on, and any
+    other cache's quantiles describe a different experiment. A posterior trained with checkpointing
+    off has no rows left at all, and that is a refusal rather than a silent substitution."""
+    import pytest
+    import torch
+    from matplotlib import pyplot as plt
+    from core import orchestrator
+    from core.diagnostics import ablation, channel_ablation
+    r = tiny_run
+    close = lambda title, fig: plt.close(fig)                       # noqa: E731
+    with pytest.raises(ValueError, match="checkpointing was off"):
+        channel_ablation(r.cfg, r.posterior, rows=8, n_sweep=3, name="abl_nocache")
+    post = orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=close, num_runs=2,
+                                        run_size_cap=8, hidden_features=8, num_transforms=1,
+                                        stop_after_epochs=1, checkpoint_every=1, new_run=True,
+                                        name="abl_post")
+    used = {}
+    real = ablation._sweep_channels
+
+    def _recording_sweep(emb, *a, **k):
+        # R-K(2): a NAMED function, not a lambda short-circuiting on `used.setdefault(...) or real(...)`
+        # -- setdefault returns the stored value, and `emb` (an nn.Module) is truthy, so `or` would
+        # never call `real` at all.
+        used["emb"] = emb
+        return real(emb, *a, **k)
+
+    monkeypatch.setattr(ablation, "_sweep_channels", _recording_sweep)
+    d = channel_ablation(r.cfg, post, rows=12, n_sweep=5, name="abl1")
+    res = d.results
+    assert d.diagnostic == "ablation" and d.variant is None
+    assert d.manifest.parents == {"posterior": post.id,
+                                  "simulation": post.manifest.parents["simulation"]}
+    assert used["emb"] is post.latent.posterior_estimator.embedding_net
+    assert res["n_rows"] == 12 and 0 <= res["base_row"] < 12 and res["live_probes"] is None
+    from core.SBI.statistics import SUMMARY_WIDTH
+    assert len(res["channels"]) == SUMMARY_WIDTH + 1
+    assert set(res["channels"][0]) == {"label", "max_disp", "rel_median", "p1", "p99", "verdict"}
+    assert res["counts"]["total"] == SUMMARY_WIDTH + 1
+    assert (res["counts"]["constant"] + res["counts"]["invisible"] + res["counts"]["usable"]
+            == res["counts"]["total"])
+    assert res["accepted"] == [] and d.manifest.payloads == {} and d.manifest.figures == []
+    assert d.manifest.config["rows"] == 12 and d.manifest.config["n_sweep"] == 5
+    with pytest.raises(Exception, match="name it as a parent"):
+        r.store.delete("simulation", post.manifest.parents["simulation"])

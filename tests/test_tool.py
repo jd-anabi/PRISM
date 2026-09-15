@@ -675,3 +675,34 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
     assert tool.main(["identifiability", "rotation", "--bounds", bounds, "--device", "cpu",
                       "--posterior", "p", "--cell", cell]) == 2
     assert tool.main(["identifiability", "--bounds", bounds]) == 2
+
+
+def test_the_ablation_subcommand_forwards_its_knobs(tmp_path, monkeypatch):
+    from core import tool
+    from core.artifacts import Accept
+    from core.tool import diagnostics as tool_diag
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    seen = {}
+
+    def _pair(cfg, ref, accept, store):
+        seen["accept"] = accept
+        return "POST", "PRIOR"
+
+    def _rec(cfg, posterior, **kw):
+        # Named, not `seen.setdefault("kw", kw) or SimpleNamespace(...)`: kw is never empty, so the
+        # `or` would return the dict and `report` would fail on `dict.kind`.
+        seen["kw"] = kw
+        return SimpleNamespace(kind="diagnostic", path=tmp_path / "diagnostics" / "d__1")
+
+    monkeypatch.setattr(tool_diag, "load_posterior_and_prior", _pair)
+    monkeypatch.setattr("core.diagnostics.channel_ablation", _rec)
+    bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")
+    assert tool.main(["ablation", "--bounds", bounds, "--device", "cpu", "--posterior", "p",
+                      "--rows", "500", "--n-sweep", "9", "--accept-truncated", "--name", "a1"]) == 0
+    assert set(seen["kw"]) == {"name", "note", "fig_sink", "store", "rows", "n_sweep"}
+    assert seen["kw"]["rows"] == 500 and seen["kw"]["n_sweep"] == 9 and seen["kw"]["name"] == "a1"
+    assert seen["accept"] == Accept(truncated=True)
+    seen.clear()
+    assert tool.main(["ablation", "--bounds", bounds, "--device", "cpu", "--posterior", "p"]) == 0
+    assert "rows" not in seen["kw"] and "n_sweep" not in seen["kw"]
+    assert set(seen["kw"]) == {"name", "note", "fig_sink", "store"}

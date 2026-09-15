@@ -362,37 +362,57 @@ def _refresh_manifest(path: Path, *, batches_done: int, complete: bool = False, 
         pass
 
 
-def load_rows(path, batches_done: int, run_size: int):
+def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
+              max_rows: int | None = None):
     """Every committed row, in batch order, as ``(x, thetas)``. Orphan shards past ``batches_done``
     (a crash between the shard write and the state commit) are ignored by construction: this walks
-    the recorded ranges, not the directory."""
+    the recorded ranges, not the directory.
+
+    :param x_only: skip the ``th_`` shards entirely and return ``(x, None)``. The conditioning-channel
+                   diagnostics read only x, and the targets are half the bytes on disk.
+    :param max_rows: stop after the shard that reaches this many rows and truncate to it. The
+                   ``got != batches_done`` completeness check is SKIPPED, because a partial read is
+                   the whole point -- the caller asked for a sample, not the cache.
+    """
     path = Path(path)
     xs, ths = [], []
-    got = 0
+    got = rows = 0
     for f in sorted((path / _SHARDS).glob("x_*.pt")):
         a, b = (int(p) for p in f.stem.split("_")[1:3])
         if b > batches_done:
             continue
-        th = _shard(path, "th", a, b)
-        if not th.exists():
-            raise ValueError(f"Training checkpoint at {path} is missing {th.name}, the targets for "
-                             f"batches [{a}, {b}). Delete the directory to start fresh.")
+        th_part = None
+        if not x_only:
+            th = _shard(path, "th", a, b)
+            if not th.exists():
+                raise ValueError(f"Training checkpoint at {path} is missing {th.name}, the targets for "
+                                 f"batches [{a}, {b}). Delete the directory to start fresh.")
+            th_part = torch.load(str(th), map_location="cpu", weights_only=False)
         x_part = torch.load(str(f), map_location="cpu", weights_only=False)
-        th_part = torch.load(str(th), map_location="cpu", weights_only=False)
         want = (b - a) * run_size
-        if x_part.shape[0] != want or th_part.shape[0] != want:
+        if x_part.shape[0] != want or (th_part is not None and th_part.shape[0] != want):
             raise ValueError(
                 f"Training checkpoint shard {f.name} holds {x_part.shape[0]} rows, not the "
                 f"{want} its name claims. Delete the directory to start fresh.")
         xs.append(x_part)
-        ths.append(th_part)
+        if th_part is not None:
+            ths.append(th_part)
         got += b - a
-    if got != batches_done:
+        rows += x_part.shape[0]
+        if max_rows is not None and rows >= max_rows:
+            break
+    if max_rows is None and got != batches_done:
         raise ValueError(f"Training checkpoint at {path} commits {batches_done} batches but only "
                          f"{got} are present on disk. Delete the directory to start fresh.")
     if not xs:
         return None, None
-    return torch.cat(xs, dim=0), torch.cat(ths, dim=0)
+    x = torch.cat(xs, dim=0)
+    if max_rows is not None:
+        x = x[:max_rows]
+    if x_only:
+        return x, None
+    th = torch.cat(ths, dim=0)
+    return x, (th[:max_rows] if max_rows is not None else th)
 
 
 # ── RNG ──────────────────────────────────────────────────────────────────────────────────────────

@@ -16,3 +16,4 @@ The function names differ from the module names on purpose, so no function shado
 from .identifiability import (identifiability_jacobian, identifiability_laplace,  # noqa: F401
                               identifiability_rotation)
 from .sbc import sbc_repeats  # noqa: F401
+from .ablation import channel_ablation  # noqa: F401

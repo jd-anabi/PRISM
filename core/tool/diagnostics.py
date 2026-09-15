@@ -105,6 +105,32 @@ def _register_identifiability(sub) -> dict:
     return {"identifiability": p}
 
 
+def _ablation(args, store) -> None:
+    import core.diagnostics as diag
+    from core.artifacts import Accept
+    cfg, _ = config_args.build_cfg(args, load_gt=False)
+    posterior, _prior = load_posterior_and_prior(cfg, args.posterior,
+                                             accept_from(args), store)
+    return report(diag.channel_ablation(
+        cfg, posterior, name=args.name, note=args.note, fig_sink=config_args.close_sink,
+        store=store, **knobs(args, "rows", "n_sweep")))
+
+
+def _register_ablation(sub) -> dict:
+    p = sub.add_parser("ablation", help="which conditioning channels the trained flow can SEE "
+                                        "(reads the artifacts; simulates nothing)")
+    config_args.add_config_flags(p)
+    p.add_argument("--posterior", required=True, metavar="REF")
+    p.add_argument("--rows", type=int,
+                   help="rows read from the posterior's own simulation cache (stage default 200000)")
+    p.add_argument("--n-sweep", type=int, dest="n_sweep",
+                   help="points per channel sweep (stage default 33)")
+    add_accept_flags(p)
+    add_name_flags(p)
+    p.set_defaults(handler=_ablation)
+    return {"ablation": p}
+
+
 def register(sub) -> dict:
     """``{name: subparser}`` -- the contract ``build_parser``'s ``p.subcommands.update(...)`` loop
     needs. T17 and T18 append their entries to the dict this returns."""
@@ -125,4 +151,4 @@ def register(sub) -> dict:
     add_accept_flags(p)
     add_name_flags(p)
     p.set_defaults(handler=_sbc)
-    return {"sbc": p, **_register_identifiability(sub)}
+    return {"sbc": p, **_register_identifiability(sub), **_register_ablation(sub)}
