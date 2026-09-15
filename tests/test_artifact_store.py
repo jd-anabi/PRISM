@@ -1048,6 +1048,10 @@ def test_no_literal_resource_paths_outside_config():
                 hits.append(node.lineno)
         return hits
 
+    missing = [name for name in CODE_FILES if not (root / name).is_file()]
+    assert not missing, (
+        f"CODE_FILES names a file that no longer exists: {missing}. Update tests/_fixtures.CODE_FILES.")
+
     offenders, scanned = [], 0
     for sub in CODE_ROOTS:
         for py in sorted((root / sub).rglob("*.py")):
@@ -1074,15 +1078,15 @@ def test_the_source_scans_cover_every_code_directory():
     fails here.
 
     Directories excluded by name, each for its own reason: tests/ (the suites themselves, not
-    shipped code); the gitignored archive/ (not shipped code); the gitignored .claude/ (holds *.py
-    only via three nested git worktrees under .claude/worktrees/ -- jolly-jang, trusting-einstein,
-    upbeat-rhodes-c8d30f -- each a checkout of this repo, not code that lives in .claude on
-    purpose); the gitignored sbi-logs/ (a log directory; holds no *.py, listed for the same reason
-    as the rest below); and .git/, .pytest_cache/, __pycache__/, Artifacts/, Resources/ (data,
-    caches, VCS or tool state, not product code). .idea/, .superpowers/ and docs/ hold no *.py
-    today so they need no explicit exclusion; they fall out of `with_py` on their own, and would
-    have to be added here (or to CODE_ROOTS) the day one of them gained a Python file. Loose
-    top-level files need no exclusion set: every *.py at the repo root must be in CODE_FILES."""
+    shipped code); the gitignored archive/ (not shipped code); the gitignored .claude/ (Claude
+    Code's local state, which can hold other checkouts -- machine-local, not code that lives in
+    .claude on purpose); the gitignored sbi-logs/ (a log directory; holds no *.py, listed for the
+    same reason as the rest below); and .git/, .pytest_cache/, __pycache__/, Artifacts/,
+    Resources/ (data, caches, VCS or tool state, not product code). .idea/, .superpowers/ and
+    docs/ hold no *.py today so they need no explicit exclusion; they fall out of `with_py` on
+    their own, and would have to be added here (or to CODE_ROOTS) the day one of them gained a
+    Python file. Loose top-level files need no exclusion set: every *.py at the repo root must be
+    in CODE_FILES."""
     root = Path(__file__).resolve().parents[1]
     skip = {"tests", "archive", ".claude", ".git", ".pytest_cache", "sbi-logs", "Artifacts",
             "Resources", "__pycache__"}
