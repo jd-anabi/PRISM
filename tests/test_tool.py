@@ -1169,3 +1169,30 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     for tag in ("fdt3d_vs_S_", "fdt3d_vs_T_"):
         assert list(cv.glob(f"{tag}*.png")), tag
     assert "[prism crossval] S sweep:" in capsys.readouterr().out
+
+
+def test_fdt_plot_functions_close_a_saved_figure_instead_of_show(tmp_path):
+    """Commit B, fix round 1: every real caller (fdt_pipeline.py, sanity.py) always passes
+    ``save_path``, so the old unconditional ``plt.show()`` was pure cost under the tool's Agg
+    backend -- it does nothing there except print "FigureCanvasAgg is non-interactive, and thus
+    cannot be shown" (four times per real ``fdt`` run, once per plot function) and it never closed
+    the figure it drew, leaking one live figure per call for the life of the process. Close-when-
+    saved is the right default; ``plt.show()`` survives for the no-``save_path`` case no current
+    caller uses.
+    """
+    import warnings
+
+    import numpy as np
+    from matplotlib import pyplot as plt
+
+    from core.FDT.plots import plot_psd
+
+    before = len(plt.get_fignums())
+    out = tmp_path / "psd.png"
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        plot_psd(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 1.5]), save_path=out)
+    assert out.exists()
+    assert not any("non-interactive" in str(w.message) for w in rec), \
+        [str(w.message) for w in rec]
+    assert len(plt.get_fignums()) == before

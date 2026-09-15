@@ -81,7 +81,9 @@ def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
 
     if save_path is not None:
         plt.savefig(save_path, dpi=150)
-    plt.show()
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def plot_spontaneous_trajectory(t: np.ndarray, x_mean: np.ndarray,
@@ -121,7 +123,9 @@ def plot_spontaneous_trajectory(t: np.ndarray, x_mean: np.ndarray,
 
     if save_path is not None:
         plt.savefig(save_path, dpi=150)
-    plt.show()
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def plot_psd(omegas: np.ndarray, G: np.ndarray,
@@ -179,7 +183,9 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
 
     if save_path is not None:
         plt.savefig(save_path, dpi=150)
-    plt.show()
+        plt.close(fig)
+    else:
+        plt.show()
 
 
 def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
@@ -233,4 +239,6 @@ def plot_chi_components(omegas: np.ndarray, chis: np.ndarray,
     plt.tight_layout()
     if save_path is not None:
         plt.savefig(save_path, dpi=150)
-    plt.show()
+        plt.close(fig)
+    else:
+        plt.show()
