@@ -43,8 +43,8 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         v = QVBoxLayout(box)
         warn = QLabel("Restricts the PRIOR to the posterior's credible region and retrains there. It "
                       "never proposes from the posterior itself. The result is NON-AMORTIZED and is "
-                      "marked as such in its manifest, so the load path will refuse it for general "
-                      "inference.")
+                      "marked as such in its manifest: loading it later asks first, and Infer refuses "
+                      "any other observation unless 'Run on a different observation' is ticked.")
         warn.setWordWrap(True)
         warn.setTextFormat(Qt.PlainText)
         v.addWidget(warn)
@@ -139,7 +139,9 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
                 "of it and is drawn when the round starts, so it never resumes the amortized checkpoint "
                 "at these settings. Re-running with the SAME posterior, observation, HPD level, "
                 "direction count and budget redraws the same region and resumes that round's own "
-                "checkpoint; anything else simulates the full budget from zero.")
+                "checkpoint; a run exactly one setting away from a committed cache is refused unless "
+                "'Start a new simulation even if a cache one setting away exists' is ticked; anything "
+                "else simulates the full budget from zero.")
 
     def refresh_local_gates(self):
         s = self.session

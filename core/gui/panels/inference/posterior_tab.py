@@ -193,8 +193,10 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
             "— for a prior, remember that choosing it in the picker does nothing until you press "
             "\"Build / Load prior\".")
         go = box.addButton("Start a new run anyway", QMessageBox.DestructiveRole)
-        box.addButton("Cancel", QMessageBox.RejectRole)
-        box.setDefaultButton(box.buttons()[-1])
+        # Cancel is the default BY NAME: buttons() orders by role (Reject before Destructive), so
+        # buttons()[-1] was the destructive one, and Enter started the run this dialog exists to stop.
+        cancel = box.addButton("Cancel", QMessageBox.RejectRole)
+        box.setDefaultButton(cancel)
         box.exec()
         return box.clickedButton() is go
 
@@ -240,8 +242,8 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
             "  • A further TSNPE round can only be drawn around this posterior's own observation — "
             "there is no override for that one.")
         load = box.addButton("Load it", QMessageBox.DestructiveRole)
-        box.addButton("Cancel", QMessageBox.RejectRole)
-        box.setDefaultButton(box.buttons()[-1])
+        cancel = box.addButton("Cancel", QMessageBox.RejectRole)      # the default by name (spec §5.3)
+        box.setDefaultButton(cancel)
         box.exec()
         return box.clickedButton() is load
 

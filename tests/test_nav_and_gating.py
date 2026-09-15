@@ -1005,6 +1005,33 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     assert any(k == "warning" and "unreadable header" in t for k, t in lines), lines
 
 
+def test_the_d7_and_d8_dialogs_default_to_cancel(monkeypatch):
+    """Enter on either dialog must do the SAFE thing. Spec §5.3 makes Cancel the default: on D8 the
+    other button loads a NON-AMORTIZED posterior with Accept(truncated=True), and on D7 it starts a
+    fresh cache one setting away from a committed one, the accident D7 exists to stop. Every other test
+    replaces the _ask_* methods, so only this one sees the dialogs themselves."""
+    from types import SimpleNamespace
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui.screens.inference_screen import InferenceScreen
+
+    _app()
+    inf = InferenceScreen()
+    pp = inf.posterior_panel
+    seen = []
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: seen.append(self) or 0)
+
+    started = pp._ask_new_run([{"name": "a", "batches": 3, "field": "n_runs", "mine": 2, "theirs": 3}], 2)
+    assert seen and seen[-1].defaultButton() is not None
+    assert seen[-1].defaultButton().text() == "Cancel", seen[-1].defaultButton().text()
+    assert started is False
+
+    loaded = pp._ask_load_non_amortized(SimpleNamespace(
+        body={"truncation": {"level": 0.99, "dims": [0], "x_obs_digest": "d" * 16}}, name="r", id="x"))
+    assert len(seen) == 2 and seen[-1].defaultButton() is not None
+    assert seen[-1].defaultButton().text() == "Cancel", seen[-1].defaultButton().text()
+    assert loaded is False
+
+
 def test_the_tsnpe_tab_dispatches_a_loaded_observation():
     """The tab loads the observation ITSELF, on the GUI thread, and hands the wrapper to the stage.
 
