@@ -590,3 +590,78 @@ def test_the_sbc_subcommand_forwards_every_knob_as_a_keyword(tmp_path, monkeypat
     assert set(seen["kw"]) == {"name", "note", "fig_sink", "store", "chi_k_fixed"}
     assert seen["kw"]["chi_k_fixed"] == 6 and seen["accept"] == Accept()
     assert "repeats" not in seen["kw"] and "seed" not in seen["kw"]
+
+
+def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(tmp_path, monkeypatch):
+    """The mode is a positional subparser, so a flag that means nothing to a mode is an argparse
+    error (exit 2) rather than a silently ignored setting -- `rotation --cell x` is the case that
+    matters, because rotation simulates nothing and a cell would never be read.
+
+    R-T/flags-to-keywords: rotation and laplace declare the accept flag with `add_accept_flags` and
+    build their Accept with `accept_from`, the single D8 definition (Tasks 12/16) -- so this also
+    pins the FULL `set(kw)` each mode's handler forwards, one distinct value per knob, the way T12
+    and T16's own tool tests pin VALIDATE_KNOBS/TSNPE_KNOBS/sbc's set: `knobs()` silently drops a
+    dest that no longer matches a flag, so checking only a few keys would stay green through that."""
+    from core import tool
+    from core.tool import diagnostics as tool_diag
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    seen = {}
+    monkeypatch.setattr(tool_diag, "load_posterior_and_prior", lambda cfg, ref, accept, store: ("P", "Q"))
+
+    def _recorder(_n):
+        # A NAMED function, not `seen.setdefault(_n, kw) or SimpleNamespace(...)`: setdefault returns
+        # the stored value, and kw is never empty (every handler passes name, note, fig_sink and
+        # store), so the `or` would short-circuit and hand `report` a dict, which has no `.kind`.
+        def _rec(*a, **kw):
+            seen[_n] = kw
+            return SimpleNamespace(kind="diagnostic", path=tmp_path / "diagnostics" / "d__1")
+
+        return _rec
+
+    for fn in ("identifiability_rotation", "identifiability_laplace", "identifiability_jacobian"):
+        monkeypatch.setattr(f"core.diagnostics.{fn}", _recorder(fn))
+    # master.txt: there is no Bounds/nadrowski/master_weak.txt (master_weak is a cell).
+    bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")
+    cell = str(config.CELL_PATH / "nadrowski" / "master_weak.txt")
+
+    assert tool.main(["identifiability", "rotation", "--bounds", bounds, "--device", "cpu",
+                      "--posterior", "p", "--n-worst", "2", "--top-n", "5"]) == 0
+    assert set(seen["identifiability_rotation"]) == {"name", "note", "fig_sink", "store",
+                                                      "n_worst", "top_n"}
+    assert seen["identifiability_rotation"]["n_worst"] == 2
+    assert seen["identifiability_rotation"]["top_n"] == 5
+
+    assert tool.main(["identifiability", "laplace", "--bounds", bounds, "--device", "cpu",
+                      "--posterior", "p", "--cell", cell, "--t-obs", "2.5",
+                      "--n-points", "3", "--m", "5", "--m-noise", "17", "--rel", "0.03",
+                      "--min-valid", "0.6", "--sd-identified", "0.4", "--seed", "9"]) == 0
+    assert set(seen["identifiability_laplace"]) == {"name", "note", "fig_sink", "store", "n_points",
+                                                     "m", "m_noise", "rel", "min_valid",
+                                                     "sd_identified", "t_obs_s", "seed"}
+    assert seen["identifiability_laplace"]["n_points"] == 3
+    assert seen["identifiability_laplace"]["sd_identified"] == 0.4
+    assert seen["identifiability_laplace"]["t_obs_s"] == 2.5
+    assert seen["identifiability_laplace"]["m"] == 5
+    assert seen["identifiability_laplace"]["m_noise"] == 17
+    assert seen["identifiability_laplace"]["rel"] == 0.03
+    assert seen["identifiability_laplace"]["min_valid"] == 0.6
+    assert seen["identifiability_laplace"]["seed"] == 9
+
+    assert tool.main(["identifiability", "jacobian", "--bounds", bounds, "--device", "cpu",
+                      "--cell", cell, "--t-obs", "3.0", "--m", "6", "--m-noise", "19",
+                      "--rel", "0.04", "--min-valid", "0.7", "--zero-tol", "0.1",
+                      "--noise-eps", "1e-5", "--seed", "11"]) == 0
+    assert set(seen["identifiability_jacobian"]) == {"name", "note", "fig_sink", "store", "m",
+                                                      "m_noise", "rel", "min_valid", "zero_tol",
+                                                      "noise_eps", "t_obs_s", "seed"}
+    assert seen["identifiability_jacobian"]["zero_tol"] == 0.1
+    assert seen["identifiability_jacobian"]["noise_eps"] == 1e-5
+    assert seen["identifiability_jacobian"]["m"] == 6 and seen["identifiability_jacobian"]["m_noise"] == 19
+    assert seen["identifiability_jacobian"]["rel"] == 0.04
+    assert seen["identifiability_jacobian"]["min_valid"] == 0.7
+    assert seen["identifiability_jacobian"]["seed"] == 11
+    assert "n_points" not in seen["identifiability_jacobian"]
+
+    assert tool.main(["identifiability", "rotation", "--bounds", bounds, "--device", "cpu",
+                      "--posterior", "p", "--cell", cell]) == 2
+    assert tool.main(["identifiability", "--bounds", bounds]) == 2

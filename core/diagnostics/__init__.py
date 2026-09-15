@@ -13,4 +13,6 @@ seeds once, lets the stream run on, and hands the caller's RNG back.
 
 The function names differ from the module names on purpose, so no function shadows its submodule.
 """
+from .identifiability import (identifiability_jacobian, identifiability_laplace,  # noqa: F401
+                              identifiability_rotation)
 from .sbc import sbc_repeats  # noqa: F401
