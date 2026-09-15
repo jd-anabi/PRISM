@@ -131,6 +131,16 @@ class LoadedObservation(Loaded):
         if src["kind"] == "simulated":
             cfg.inject_ground_truth(dict(src["inits"]), dict(src["params"]), dict(src["rescale"]),
                                     dict(src["forcing"]))
+            # The cell is part of the context: a round drawn around this observation must not record
+            # the cell a later inference loaded. Restored only when the file still hashes to the
+            # record -- build_posterior hashes sources after the Fisher, so an unchecked path that has
+            # moved or changed would turn into a refusal after the spend.
+            ref = src.get("cell")
+            p = config.RESOURCES_ROOT / ref["path"] if ref else None
+            if p is not None and p.is_file() and prov.sha256_file(p) == ref.get("sha256"):
+                cfg.sources["cell"] = str(p)
+            else:
+                cfg.sources.pop("cell", None)
         else:
             # "put back THIS observation's context" cuts both ways: a bench recording has no truth, and
             # one left over from an earlier simulated inference would be read as this observation's by

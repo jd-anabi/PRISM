@@ -1472,6 +1472,26 @@ def test_installing_an_experimental_observation_clears_a_stale_truth(store, tmp_
     assert cfg.has_ground_truth
 
 
+def test_installing_a_simulated_observation_puts_back_its_own_verified_cell(store):
+    """install puts back THIS observation's context, and the cell it was simulated from is part of it.
+    Leaving cfg.sources["cell"] alone meant a TSNPE round around observation A, run after an inference
+    on cell B, recorded cell B (and B's hash) as its input while naming A as its parent. A recorded cell
+    that no longer hashes to its record is dropped rather than restored, because build_posterior hashes
+    sources after the Fisher and a moved cell would become a refusal after the spend."""
+    from matplotlib import pyplot as plt
+    from core import orchestrator
+    from core.config import CELL_PATH
+    cfg = _forced_cfg()
+    obs = orchestrator.generate_observations(cfg, fig_sink=lambda title, fig: plt.close(fig))
+    cfg.sources["cell"] = str(CELL_PATH / "nadrowski" / "master_spont.txt")   # a later inference's cell
+    obs.install(cfg)
+    assert cfg.sources["cell"].endswith("master_weak.txt"), cfg.sources["cell"]
+    obs.manifest.body["source"]["cell"]["sha256"] = "0" * 64                 # the file no longer matches
+    cfg.sources["cell"] = str(CELL_PATH / "nadrowski" / "master_spont.txt")
+    obs.install(cfg)
+    assert "cell" not in cfg.sources, cfg.sources
+
+
 def test_an_experimental_observation_records_its_own_length_and_drive_frequencies(store, tmp_path,
                                                                                  monkeypatch):
     """The observation records the context of THE RECORDING, not whatever the session's cfg last held.
