@@ -155,3 +155,80 @@ def test_seeded_restores_the_callers_rng():
         assert torch.equal(torch.randn(3), onward_t), "the same seed must replay the same stream"
     assert torch.equal(a_t, b_t) and np.array_equal(a_n, b_n)
     assert not torch.equal(a_t, before_t), "the seed inside the block must actually take effect"
+
+
+def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(store, monkeypatch):
+    """T16's sbc_repeats draws its per-repeat calibration set through EXACTLY the code
+    validate_calibration draws its own through. That is what gives the repeat-SBC run the four things
+    scripts/sbc_characterize.py never had: check_basis, the t_scale-override mirror in the reference
+    sample, the kept-fraction line and the LoadedPrior path. A second copy of the wrap is precisely how
+    a repeat-SBC run comes to draw theta* from the FULL prior while the flow was trained on the region
+    -- guardrail 8, silently inverted.
+
+    So the draw is three named helpers, and the one thing sbc_repeats varies -- chi_k_fixed, which
+    runs one probe-count stratum at a time -- is a keyword on the middle one. validate_calibration
+    itself always passes None: its SBC is the POOLED one, over the same mixture of counts training saw.
+    """
+    import contextlib
+    import inspect
+    import io
+    from types import SimpleNamespace
+
+    import torch
+    from core import orchestrator as orch
+    from core.SBI import reparam as _rp, training_checkpoint as _tc, truncate as _tr
+    from tests._fixtures import _prior_artifact
+
+    cfg = _nad_cfg(reparam_rotate=False)
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
+    T = orch.build_inferred_bijection(cfg, log_params=orch._log_params_for(cfg))
+    with torch.no_grad():
+        z = orch._build_latent_prior_for_validation(cfg, lp.prior).sample((512,)).double()
+    region = _tr.TruncationRegion([0, 1], [float(z[:, 0].quantile(0.25)), float(z[:, 1].quantile(0.25))],
+                                  [float(z[:, 0].quantile(0.75)), float(z[:, 1].quantile(0.75))],
+                                  n_latent=P, V=None, probe=_tc.bijection_probe(T, P))
+
+    class _Lat:
+        prior = None
+
+        def sample(self, shape, x=None, **k):
+            return torch.randn(int(torch.Size(shape).numel()), P)
+
+        sample_batched = sample
+
+    trunc_post = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T, truncation=region))
+    plain_post = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T))
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        vlp, T_out, truncation = orch._calibration_prior(cfg, trunc_post, lp)
+    assert truncation is region and T_out is trunc_post.posterior.T
+    assert isinstance(vlp, _tr.TruncatedLatentPrior) and vlp.region is region
+    assert "PRIOR RESTRICTED" in buf.getvalue(), buf.getvalue()
+    vlp_plain, _, trunc_plain = orch._calibration_prior(cfg, plain_post, lp)
+    assert trunc_plain is None and not isinstance(vlp_plain, _tr.TruncatedLatentPrior)
+
+    seen = {}
+
+    def _gen_cal(**kw):
+        seen.update(kw)
+        return torch.zeros(6, 3), torch.randn(6, P)
+
+    monkeypatch.setattr(orch.analysis, "gen_cal_data", _gen_cal)
+    x_cal, theta_star = orch._draw_calibration_set(cfg, vlp, T, lp.force_prior, n_cal=6,
+                                                   cal_n_scales=1, chi_k_fixed=4)
+    assert seen["prior"] is vlp and seen["theta_transform"] is T and seen["n_cal"] == 6
+    assert seen["cal_n_scales"] == 1 and seen["chi_k_fixed"] == 4
+    assert x_cal.shape == (6, 3) and theta_star.shape == (6, P)
+    assert inspect.signature(orch._draw_calibration_set).parameters["chi_k_fixed"].default is None
+    assert "chi_k_fixed=None" in inspect.getsource(orch.validate_calibration), \
+        "validate_calibration's SBC is the pooled one and must pass chi_k_fixed=None explicitly"
+
+    ref = orch._sbc_reference_sample(cfg, vlp, T, region, lp.prior, theta_star)
+    assert ref.shape == theta_star.shape
+    assert torch.equal(ref[:, i_t].sort().values, theta_star[:, i_t].sort().values), \
+        "the reference sample must mirror the per-batch t_scale override"
+    plain_ref = orch._sbc_reference_sample(cfg, vlp_plain, T, None, lp.prior, theta_star)
+    assert plain_ref.shape[0] == theta_star.shape[0]

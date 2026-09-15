@@ -1415,6 +1415,97 @@ def _observation_inits(cfg: SimConfig) -> torch.Tensor:
     return torch.tensor(arr, dtype=cfg.hw.dtype, device=cfg.hw.device)
 
 
+def _calibration_prior(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior):
+    """The proposal a calibration set must be drawn from, and the bijection it is drawn through:
+    ``(val_latent_prior, T, truncation)``.
+
+    Factored out so ``core.diagnostics.sbc_repeats`` draws through THE SAME code. The rotation wrap,
+    the basis check and the truncation wrap ARE guardrail 8, and a second copy of them is how a
+    repeat-SBC run comes to draw theta* from the full prior while the flow was trained on the region.
+    """
+    post, inferred_prior = posterior.posterior, prior.prior
+    truncation = post.truncation
+    # Posterior's actual transform (rotated if REPARAM_ROTATE) so the cal prior + theta_transform match.
+    T = (post.T if isinstance(post, TransformedPosterior)
+         else build_inferred_bijection(cfg, log_params=_log_params_for(cfg)))
+
+    # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
+    val_latent_prior = _build_latent_prior_for_validation(cfg, inferred_prior)
+    # If the posterior uses a decorrelating rotation, rotate the calibration prior to match it.
+    # rotation_of is the ONE decoder of parts[0].M == V^T; reading the attribute here directly is
+    # how the GUI's deferred save came to write V transposed (defect D6).
+    _V_post = rotation_of(T)
+    if _V_post is not None:
+        val_latent_prior = RotatedLatentPrior(val_latent_prior, _V_post)
+    if truncation is not None:
+        # AFTER the rotation wrap: the region's dims index the rotated latent w = z @ V, and its basis
+        # must be the one this posterior evaluates in -- the same check a training round makes.
+        truncation.check_basis(T, dim=len(cfg.params_dict) + len(cfg.rescale_params), device=cfg.hw.device)
+        val_latent_prior = truncate.TruncatedLatentPrior(val_latent_prior, truncation)
+        print(f"[tsnpe] calibration draws theta* from the PRIOR RESTRICTED to {truncation!r}: SBC and "
+              f"TARP certify calibration ON THE REGION -- they cannot tell whether the region cut real "
+              f"mass at x_obs.", flush=True)
+    return val_latent_prior, T, truncation
+
+
+def _draw_calibration_set(cfg: SimConfig, val_latent_prior, T, force_prior, *, n_cal: int,
+                          cal_n_scales: "int | None", chi_k_fixed: "int | None" = None):
+    """Simulate the calibration set: ``(x_cal, theta_star)``, theta* LATENT (gen_cal_data returns the
+    latent z whenever a theta_transform is given).
+
+    ``n_cal`` is already RESOLVED -- validate_calibration applies its SBC_N_CAL default before calling,
+    and sbc_repeats has a default of its own -- so this helper never reads a module constant.
+
+    ``chi_k_fixed`` stratifies the draw by probe count. None is the POOLED draw, over the same mixture
+    of counts training saw, and is what validate_calibration always passes; ``core.diagnostics.sbc_repeats``
+    passes a count to run one stratum at a time, because a pooled SBC over a mixture of counts can be
+    flat while each count is miscalibrated in compensating directions.
+    """
+    return analysis.gen_cal_data(
+        model=cfg.model, prior=val_latent_prior,
+        forcing_prior=force_prior,
+        t=cfg.t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min,
+        n_cal=n_cal,
+        cal_n_scales=cal_n_scales,
+        nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+        dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+        t_scale_bounds=cfg.t_scale_bounds,
+        theta_transform=T,
+        state_dep_drift=cfg.state_dep_drift,
+        # _observation_inits: SBC/TARP draw theta from the PRIOR and need no ground truth, so this must
+        # work on a cell-free config (cfg.inits_tensor would raise). See build_posterior.
+        spontaneous_only=not cfg.has_forcing, chi_mode=cfg.chi_mode,
+        chi_f0=cfg.chi_f0, chi_freq_bounds=cfg.chi_freq_bounds,
+        chi_k_pad=cfg.chi_k_pad, chi_max_cycles=cfg.chi_max_cycles,
+        chi_k_fixed=chi_k_fixed,
+        n_vars=_observation_inits(cfg).shape[-1],
+        nd_idx=cfg.tier1_args[0], k_b_cell=cfg.tier1_args[1],
+        dtype=cfg.hw.dtype, device=cfg.hw.device,
+    )
+
+
+def _sbc_reference_sample(cfg: SimConfig, val_latent_prior, T, truncation, inferred_prior, theta_star):
+    """check_sbc's reference sample: the draw its data-averaged-posterior test compares ranks against.
+
+    It must come from the SAME proposal theta* did -- the data-averaged posterior converges to that
+    proposal, and against the full prior c2st_dap reports a miscalibration that is not one. That
+    proposal is the restricted prior mapped through the posterior's own bijection AND THEN the
+    per-batch t_scale override theta* went through in gen_training_data: without mirroring it, a
+    region that constrains a t_scale-loaded direction pins the reference's t_scale while theta*'s
+    spans the whole schedule, and c2st_dap[t_scale] reads ~1 by construction. A permutation of
+    theta*'s own t_scale column IS the schedule's marginal, drawn independently of the other
+    coordinates -- exactly the override's effect.
+    """
+    if truncation is None:
+        return inferred_prior.sample((theta_star.shape[0],)).cpu()
+    with torch.no_grad():
+        _z_ref = val_latent_prior.sample((theta_star.shape[0],)).to(device=cfg.hw.device, dtype=cfg.hw.dtype)
+        _ref = T(_z_ref).detach().cpu()
+    _i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
+    _ref[:, _i_t] = theta_star[torch.randperm(theta_star.shape[0]), _i_t].to(_ref)
+    return _ref
+
+
 # ── Step 4a: Calibration diagnostics (data-free — no chosen observation) ─────
 def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                          *, name: str = "", note: str = "", fig_sink=None, store=None,
@@ -1466,59 +1557,23 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     store = resolve_store(store)
     store.assert_name_free("calibration", name)   # before the calibration set is simulated
     post, inferred_prior, force_prior = posterior.posterior, prior.prior, prior.force_prior
-    truncation = post.truncation
     nps = int(num_posterior_samples)
     _assert_prior_used_matches_posterior(post, inferred_prior, "SBC/TARP calibration")
     with store.create("calibration", cfg, name=name, note=note) as w:
-        t = cfg.t
         device = cfg.hw.device
         dtype = cfg.hw.dtype
-        # Posterior's actual transform (rotated if REPARAM_ROTATE) so the cal prior + theta_transform match.
-        T = (post.T if isinstance(post, TransformedPosterior)
-             else build_inferred_bijection(cfg, log_params=_log_params_for(cfg)))
-
-        # Critical: draw theta_star from the PRIOR (not the posterior) for valid SBC.
-        val_latent_prior = _build_latent_prior_for_validation(cfg, inferred_prior)
-        # If the posterior uses a decorrelating rotation, rotate the calibration prior to match it.
-        # rotation_of is the ONE decoder of parts[0].M == V^T; reading the attribute here directly is
-        # how the GUI's deferred save came to write V transposed (defect D6).
-        _V_post = rotation_of(T)
-        if _V_post is not None:
-            val_latent_prior = RotatedLatentPrior(val_latent_prior, _V_post)
-        if truncation is not None:
-            # AFTER the rotation wrap: the region's dims index the rotated latent w = z @ V, and its basis
-            # must be the one this posterior evaluates in -- the same check a training round makes.
-            truncation.check_basis(T, dim=len(cfg.params_dict) + len(cfg.rescale_params), device=device)
-            val_latent_prior = truncate.TruncatedLatentPrior(val_latent_prior, truncation)
-            print(f"[tsnpe] calibration draws theta* from the PRIOR RESTRICTED to {truncation!r}: SBC and "
-                  f"TARP certify calibration ON THE REGION -- they cannot tell whether the region cut real "
-                  f"mass at x_obs.", flush=True)
+        # The draw is three helpers so that core.diagnostics.sbc_repeats runs through the same code --
+        # the rotation wrap, the basis check, the truncation wrap and the reference sample's t_scale
+        # mirror are guardrail 8, and a second copy of them is how a repeat-SBC run silently inverts it.
+        val_latent_prior, T, truncation = _calibration_prior(cfg, posterior, prior)
         n_cal_used = SBC_N_CAL if n_cal is None else int(n_cal)
-        x_cal, theta_star = analysis.gen_cal_data(
-            model=cfg.model, prior=val_latent_prior,
-            forcing_prior=force_prior,
-            t=t, steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min,
-            n_cal=n_cal_used,
-            cal_n_scales=cal_n_scales,
-            nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
-            dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
-            t_scale_bounds=cfg.t_scale_bounds,
-            theta_transform=T,
-            state_dep_drift=cfg.state_dep_drift,
-            # _observation_inits: SBC/TARP draw theta from the PRIOR and need no ground truth, so this must
-            # work on a cell-free config (cfg.inits_tensor would raise). See build_posterior.
-            spontaneous_only=not cfg.has_forcing, chi_mode=cfg.chi_mode,
-            chi_f0=cfg.chi_f0, chi_freq_bounds=cfg.chi_freq_bounds,
-            chi_k_pad=cfg.chi_k_pad, chi_max_cycles=cfg.chi_max_cycles,
-            # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
-            # mixture of probe counts training saw. Stratifying by count is scripts/sbc_characterize.py's
-            # CHI_K_FIXED, run per stratum (a pooled SBC over a mixture of counts can be flat while
-            # each count is miscalibrated in compensating directions).
-            chi_k_fixed=None,
-            n_vars=_observation_inits(cfg).shape[-1],
-            nd_idx=cfg.tier1_args[0], k_b_cell=cfg.tier1_args[1],
-            dtype=dtype, device=device,
-        )
+        # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
+        # mixture of probe counts training saw. Stratifying by count is scripts/sbc_characterize.py's
+        # CHI_K_FIXED, run per stratum (a pooled SBC over a mixture of counts can be flat while
+        # each count is miscalibrated in compensating directions).
+        x_cal, theta_star = _draw_calibration_set(cfg, val_latent_prior, T, force_prior,
+                                                  n_cal=n_cal_used, cal_n_scales=cal_n_scales,
+                                                  chi_k_fixed=None)
         x_cal_dev = x_cal.to(device)
         theta_star_dev = theta_star.to(device)
 
@@ -1528,24 +1583,8 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             num_posterior_samples=nps, reduce_fns="marginals",
             use_batched_sampling=True, show_progress_bar=True,
         )
-        if truncation is not None:
-            # check_sbc's reference sample must come from the SAME proposal theta* did -- the data-averaged
-            # posterior converges to that proposal, and against the full prior c2st_dap reports a
-            # miscalibration that is not one. That proposal is the restricted prior mapped through the
-            # posterior's own bijection AND THEN the per-batch t_scale override theta* went through in
-            # gen_training_data: without mirroring it, a region that constrains a t_scale-loaded
-            # direction pins the reference's t_scale while theta*'s spans the whole schedule, and
-            # c2st_dap[t_scale] reads ~1 by construction. A permutation of theta*'s own t_scale column IS
-            # the schedule's marginal, drawn independently of the other coordinates -- exactly the
-            # override's effect.
-            with torch.no_grad():
-                _z_ref = val_latent_prior.sample((theta_star.shape[0],)).to(device=device, dtype=dtype)
-                _ref = T(_z_ref).detach().cpu()
-            _i_t = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
-            _ref[:, _i_t] = theta_star[torch.randperm(theta_star.shape[0]), _i_t].to(_ref)
-            prior_samples = _ref
-        else:
-            prior_samples = inferred_prior.sample((theta_star.shape[0],)).cpu()
+        prior_samples = _sbc_reference_sample(cfg, val_latent_prior, T, truncation, inferred_prior,
+                                              theta_star)
         sbc_stats = check_sbc(
             ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
             num_posterior_samples=nps,
