@@ -3,7 +3,7 @@
 The three builders mirror generate_observations' branches for data that was measured rather than
 simulated: forced (passive + one driven recording), spontaneous (one passive recording), and chi
 (passive + any number of single-tone recordings at the frequencies they were actually driven at).
-Re-exported by orchestrator under the same names for the GUI runners and the scripts.
+Re-exported by orchestrator under the same names for the GUI and the command-line tool.
 """
 import math
 import warnings

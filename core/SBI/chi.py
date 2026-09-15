@@ -38,8 +38,8 @@ _PEAK_FREQ_BATCH = 256
 # silent, so they are named once here and every consumer asks for one by name.
 #
 #   CONDITIONING  6 channels x K_PAD slots  -> the network, expected_forcing_dim, the sidecar
-#   FISHER        3 channels x K probes     -> decorrelate.feats, scripts/degeneracy_map
-#   (the diagnostic labels in scripts/_common are the FISHER set minus the 11 Group-G columns)
+#   FISHER        3 channels x K probes     -> decorrelate.feats, `identifiability jacobian`
+#   (the labels in core/diagnostics/feature_sets.py are the FISHER set minus the 11 Group-G columns)
 #
 # `u`, `mask` and `logcyc` are deliberately ABSENT from the Fisher set. The reason is one property with
 # three faces: a standardized Jacobian DIVIDES by an ensemble std (`fnoise = max(std, 1e-9)`), so a
@@ -63,8 +63,8 @@ _PEAK_FREQ_BATCH = 256
 #   K probes contribute K exact duplicates that weight that one direction K-fold in J^T J. Measured on
 #   a real rotation: four of six rows agreed to 6 significant figures. With the ceiling BINDING,
 #   freq*T_row -> CHI_MAX_CYCLES and all that remains is the sawtooth of floor(), std ~1e-4 -- the
-#   amplifier case, measured at max|J| = 2.0e4 against 289 for the largest real feature in
-#   scripts/degeneracy_map, and at a harmless 6.0 in a rotation whose +-dz arms happened not to
+#   amplifier case, measured at max|J| = 2.0e4 against 289 for the largest real feature in the
+#   jacobian diagnostic, and at a harmless 6.0 in a rotation whose +-dz arms happened not to
 #   straddle a quantization step. Intermittent, not benign: a rotation averages 8 operating points over
 #   a ~4-decade Omega_0 prior. Duplicate or quantization, never independent -- so it leaves.
 #
@@ -496,7 +496,7 @@ def fisher_features(chi_stack: torch.Tensor) -> torch.Tensor:
     CHI_FISHER_CHANNELS for why each of those is an AMPLIFIER rather than a quiet row once the
     Jacobian divides by an ensemble std.
 
-    TAKES ONE ARGUMENT ON PURPOSE. It used to take `logcyc` too, and `scripts/degeneracy_map` passed
+    TAKES ONE ARGUMENT ON PURPOSE. It used to take `logcyc` too, and the jacobian diagnostic passed
     it `gen_chi_raw(...)[:2]` -- i.e. `u`, the one channel this docstring warned about -- for three
     commits, silently, because a 4-tuple sliced to 2 still unpacks into 2 names. A one-argument
     signature makes that entire class of mistake a TypeError. Do not add a second parameter back

@@ -160,9 +160,9 @@ def create(path, identity: dict, *, schedule_t_scales, schedule_Ts, inits, V, pr
            run_size: int, n_runs: int, parents=None, inputs=None, hw=None) -> None:
     """Write the write-once header and a zeroed state. Called BEFORE the first simulation.
 
-    Doing this up front is the cheapest insurance in the feature: a read-only Resources/, a
-    permissions problem or a disk with no room surfaces in the first seconds rather than on day three
-    when the first cadence write is attempted.
+    Doing this up front is the cheapest insurance in the feature: a read-only artifact root
+    (``Artifacts/``, or ``PRISM_ARTIFACTS``), a permissions problem or a disk with no room surfaces
+    in the first seconds rather than on day three when the first cadence write is attempted.
     """
     path = Path(path)
     (path / _SHARDS).mkdir(parents=True, exist_ok=True)

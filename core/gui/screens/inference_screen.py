@@ -118,10 +118,11 @@ class InferenceScreen(QWidget):
         self.tabs.setTabEnabled(2, has_cfg)          # Posterior
         self.tabs.setTabEnabled(3, can_validate)     # Validate
         self.tabs.setTabEnabled(4, can_infer)        # Infer
-        # TSNPE needs what Validate needs, PLUS an observation on disk -- and the observation gate
-        # is the panel's own (refresh_local_gates), because it depends on Resources/Observations
-        # rather than on the session. Enabling the TAB on the session alone keeps the tooltip
-        # useful: "no observation yet" is a different message from "no posterior yet".
+        # TSNPE needs what Validate needs, PLUS a recorded observation -- and the observation gate
+        # is the panel's own (refresh_local_gates), because it depends on what the artifact store
+        # holds (the observation picker lists `observations/`), not on the session. Enabling the TAB
+        # on the session alone keeps the tooltip useful: "no observation yet" is a different message
+        # from "no posterior yet".
         self.tabs.setTabEnabled(5, can_validate)     # TSNPE
 
         self.tabs.setTabToolTip(1, "" if has_draft else "Apply a model in Config first.")

@@ -1335,9 +1335,9 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                     f"stratum cannot ask for more probes than the network has slots, and 0 probes is "
                     f"an all-masked observation the experimental path refuses outright.")
         # A DEDICATED generator for the probe draw. Never the global RNG: common-random-number
-        # schemes (the Fisher, degeneracy_map) surround the chi block with deliberate manual_seed()
-        # calls, and a placement drawn from the global stream would be re-randomised -- or worse,
-        # frozen -- by them.
+        # schemes (the Fisher, the jacobian diagnostic) surround the chi block with deliberate
+        # manual_seed() calls, and a placement drawn from the global stream would be re-randomised
+        # -- or worse, frozen -- by them.
         chi_gen = torch.Generator(device="cpu")
         chi_gen.manual_seed(20260805)
 
@@ -1408,9 +1408,10 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             n_runs, t, t_scale_bounds, t_min_exp, t_max_exp, dt_exp, dt_nd_min, steady_idx)
 
         if _ck_dir is not None:
-            # The PREFLIGHT write, before the first simulation. A read-only Resources/, a permissions
-            # problem or a full disk then surfaces in the first seconds instead of at the first
-            # cadence write, twenty minutes in -- and this is also where the schedule becomes durable.
+            # The PREFLIGHT write, before the first simulation. A read-only artifact root
+            # (`Artifacts/`, or `PRISM_ARTIFACTS`), a permissions problem or a full disk then surfaces
+            # in the first seconds instead of at the first cadence write, twenty minutes in -- and
+            # this is also where the schedule becomes durable.
             _tc.create(_ck_dir, checkpoint["identity"],
                        schedule_t_scales=batch_t_scales, schedule_Ts=batch_Ts, inits=inits,
                        V=checkpoint.get("V"), probe=checkpoint.get("probe"),

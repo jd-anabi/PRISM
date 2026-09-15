@@ -269,11 +269,11 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     inf.session.inf_prior = object(); inf.refresh_gates()
     assert inf.tabs.isTabEnabled(5), "TSNPE opens once a posterior and its prior exist"
 
-    # The observation gate, driven through the picker's own accessor rather than through the real
-    # Resources/Observations directory. Clearing the combo does NOT work: refresh_local_gates calls
-    # obs_picker.refresh(), which repopulates it from disk -- so the assertion passed only while that
-    # directory happened to be empty, and any suite run that had exercised infer_and_visualize left a
-    # record behind and flipped it. A gate test must not depend on what an earlier test wrote.
+    # The observation gate, driven through the picker's own accessor rather than through the store's
+    # `observations/` listing. Clearing the combo does NOT work: refresh_local_gates calls
+    # obs_picker.refresh(), which repopulates it from the store -- so the assertion passed only while
+    # no observation had been recorded, and any suite run that had exercised infer_and_visualize left
+    # one behind and flipped it. A gate test must not depend on what an earlier test wrote.
     panel = inf.tsnpe_panel
     panel.obs_picker.key = lambda: ""                    # nothing recorded yet
     panel.refresh_local_gates()

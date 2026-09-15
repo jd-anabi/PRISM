@@ -21,7 +21,7 @@ different experiment than the one being run, so V would decorrelate the wrong th
 No trained posterior is needed -- F comes from the simulator alone, so this generalizes to any
 model. V = I (REPARAM_ROTATE=False) recovers the plain pipeline exactly. Orthogonality, the
 bijection round-trip and the rotation reuse are pinned by tests/test_user_sbi.py's Fisher tests,
-and scripts/smoke_train.py exercises the rotation end to end on the card.
+and `python -m core smoke` exercises the rotation end to end on the card.
 """
 import math
 
@@ -109,8 +109,9 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
     # than refuse.
     #
     # chi mode used to be excluded upstream in build_posterior, on the stated grounds that "chi(omega)
-    # already attacks the degeneracy the rotation targets". MEASURED FALSE (scripts/degeneracy_map.py,
-    # master cell, 2026-08-05): k~x_scale is 0.98 in forced mode and 0.95 in chi mode -- essentially
+    # already attacks the degeneracy the rotation targets". MEASURED FALSE (`python -m core
+    # identifiability jacobian`, master cell, 2026-08-05): k~x_scale is 0.98 in forced mode and 0.95
+    # in chi mode -- essentially
     # untouched -- and k / x_scale still hold the two worst unique handles (0.102 / 0.147) under chi.
     # The rotation exists for exactly that alias, so chi mode now gets one too, built over the chi
     # feature set. chi IGNORES the cell's own drive, so it is checked BEFORE has_drive below.
@@ -221,7 +222,7 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
                 # SEED AGAIN, right here. gen_chi_raw runs K MORE simulations that are otherwise
                 # completely unseeded, so the zp/zm arms of the central difference would see different
                 # chi noise and the derivative would be swamped -- a plausible-looking, meaningless V.
-                # scripts/degeneracy_map.py carries the same seed-before-the-chi-block rule.
+                # The jacobian diagnostic carries the same seed-before-the-chi-block rule.
                 torch.manual_seed(3)
                 # resolution_filter=False is MANDATORY here. The filter depends on f_peak, which
                 # depends on theta, so a probe can CROSS the threshold between the +dz and -dz arms --
@@ -326,8 +327,9 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
     if n_used == 0:
         raise RuntimeError(
             "Fisher rotation: every operating point failed (non-finite features or device errors).")
+    _anchor = "GT" if cfg.has_ground_truth else "prior median"
     print(f"[fisher] averaged simulation Fisher over {n_used}/{len(points)} operating points "
-          f"(GT + {n_used - 1} prior draw(s))", flush=True)
+          f"({_anchor} + {n_used - 1} prior draw(s))", flush=True)
     F = torch.tensor(F_accum / n_used, dtype=torch.float64, device=device)
     if with_values:
         V, evals = fisher_eigenbasis(F, with_values=True)

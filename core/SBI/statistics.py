@@ -502,8 +502,9 @@ FEATURE_SET_VERSION = 1
 # WHY. Several of these features are undefined for a large minority of the prior, and the substituted
 # value is not a small number -- it is log(1e-12) = -27.63, five decades below anything real. Without
 # a flag the flow cannot tell "the peak has no measurable width" from "the peak is extremely sharp",
-# and the sentinel mass drags the channel's scale with it. Measured over the 10.24M rows of
-# Resources/Checkpoints/train_98aebd93ed17:
+# and the sentinel mass drags the channel's scale with it. Measured over the 10.24M rows of training
+# checkpoint train_98aebd93ed17 (pre-piece-1 layout, deleted by the 2026-09-11 clean break; the
+# figures stand as history):
 #
 #     V_B1_Q            30.3% substituted     V_E1_tau_slow      8.0%
 #     V_C7_slowenv      30.0%                 V_E1_tau_fast      7.5%

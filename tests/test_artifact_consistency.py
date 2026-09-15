@@ -203,7 +203,7 @@ def test_a_torn_prior_write_leaves_the_previous_prior_intact(tmp_path):
 
 def test_atomic_savez_round_trips_and_cannot_be_torn(tmp_path):
     """The .loss.npz is a zip, so a truncated one raises BadZipFile rather than reading short -- and it
-    is the file scripts/retrain_convergence.py reads back for its convergence verdict.
+    is the file scripts/retrain_convergence.py at 7433ced^ read back for its convergence verdict.
 
     The round-trip half is load-bearing on its own: np.savez appends '.npz' when handed a NAME but not
     when handed a HANDLE, which is the difference between landing on <name>.loss.npz and on

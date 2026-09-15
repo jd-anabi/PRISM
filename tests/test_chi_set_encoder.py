@@ -431,7 +431,7 @@ def test_fisher_features_takes_one_argument_and_its_channels_are_what_they_claim
 
     Both halves are regressions, not hypotheticals (trap CHI10):
 
-    * `fisher_features` used to take `(chi_stack, logcyc)`, and scripts/degeneracy_map passed it
+    * `fisher_features` used to take `(chi_stack, logcyc)`, and the jacobian diagnostic passed it
       `gen_chi_raw(...)[:2]` -- so `u` arrived wearing `logcyc`'s name and nothing complained,
       because a 4-tuple sliced to 2 unpacks into 2 names perfectly happily. A one-argument signature
       makes that a TypeError. Pin the arity so it cannot quietly grow a second parameter back.
@@ -464,7 +464,7 @@ def test_fisher_features_takes_one_argument_and_its_channels_are_what_they_claim
                           torch.ones(B, K), atol=1e-5), "cos^2 + sin^2 != 1"
 
     # The labels must describe the block they are printed beside, or a diagnostic table lies about
-    # which feature carries which parameter -- which is exactly the payload of scripts/degeneracy_map.
+    # which feature carries which parameter -- the payload of `python -m core identifiability jacobian`.
     labels = chi_mod.chi_labels(K, chi_mod.CHI_FISHER_CHANNELS)
     assert len(labels) == 3 * K
     assert labels[:3] == ["chi0_logmag", "chi0_cos", "chi0_sin"], labels[:3]

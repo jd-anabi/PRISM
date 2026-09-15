@@ -1,9 +1,10 @@
 """
-Part B sweep + top-level CLI entry point for the reduction map.
+Part B sweep + the Reduction panel's entry point for the reduction map.
 
 `sweep_f_max` produces a DataFrame of analytical Hopf predictions as `f_max`
-varies; `run_reduction_map` is the interactive entry point that does Part A
-(report at cell-file params) then Part B (sweep + save + plot).
+varies; `run_reduction_map` is the Reduction panel's entry point (no
+command-line subcommand) that does Part A (report at cell-file params) then
+Part B (sweep + save + plot).
 """
 from __future__ import annotations
 from datetime import datetime
@@ -160,9 +161,10 @@ def _print_part_a_report(rec: ReductionRecord) -> None:
 
 def run_reduction_map(cfg: FDTConfig) -> ReductionRecord:
     """
-    CLI entry point. Runs Part A (cell-file report) then Part B (f_max sweep),
-    saves the sweep table to <artifacts root>/reduction/, and returns the Part A
-    record so callers can chain further work.
+    The Reduction panel's entry point (no command-line subcommand). Runs Part A
+    (cell-file report) then Part B (f_max sweep), saves the sweep table to
+    <artifacts root>/reduction/, and returns the Part A record so callers can
+    chain further work.
     """
     nwk_params = _nwk_params_from_cfg(cfg)
     t_scale_nwk, x_scale_nwk = _t_x_scale(cfg)

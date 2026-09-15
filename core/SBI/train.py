@@ -1,6 +1,6 @@
 """The sbi training call, split out of pipeline.py (which stays the public facade).
 
-Every consumer -- orchestrator.build_posterior, scripts/retrain_convergence.py, the test suites --
+Every consumer -- orchestrator.build_posterior, the test suites --
 reaches these as ``pipeline.train_nn`` / ``pipeline._capped_zscore_check``: pipeline.py re-imports
 them at its bottom, which also keeps monkeypatching ``pipeline.<name>`` effective. Calls back into
 the generation machinery go through the pipeline MODULE OBJECT at call time (``_pipeline.``), never

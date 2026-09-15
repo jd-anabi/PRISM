@@ -608,11 +608,11 @@ def build_posterior(
                      completion -- the Save button is a rename -- so a multi-day run can no longer be
                      lost to a forgotten click, and every posterior has an id its children can name.
     :param fig_sink: Optional (title, fig) -> None display callback for the training-loss curve
-                     (a GUI embeds it); None keeps the CLI behavior (loss saved to PNG, not shown).
+                     (a GUI embeds it); None saves the loss curve to PNG instead of showing it.
     :param store: the ArtifactStore the simulation cache and the region-fingerprint lookup read/write
                      under; None = the process default.
-    :param num_runs: Training BATCHES to simulate; None (the default) = config.TRAINING_NUM_RUNS,
-                     which is the CLI's behaviour and what every script and test gets.
+    :param num_runs: Training BATCHES to simulate; None (the default) = config.TRAINING_NUM_RUNS;
+                     every caller passes it as an argument (the GUI, `python -m core train/smoke`).
     :param run_size_cap: CEILING on simulations per batch, 0 = follow the hardware default; None =
                      config.TRAINING_RUN_SIZE.
     :param truncation: a ``SBI.truncate.TruncationRegion`` to restrict the PRIOR to (TSNPE round 2+).
@@ -662,9 +662,9 @@ def build_posterior(
     ⚠ WHY THESE ARE PARAMETERS AND NOT "JUST SET THE CONFIG CONSTANT". This module does
     `from .config import TRAINING_NUM_RUNS, TRAINING_RUN_SIZE`, which SNAPSHOTS both at import -- so a
     caller writing `config.TRAINING_NUM_RUNS = 2000` is a silent no-op and the run uses 5000 anyway,
-    with nothing to say otherwise. (`scripts/smoke_train.py` gets this right by assigning to
-    `orchestrator.TRAINING_NUM_RUNS`; a GUI mutating a module global per run would also leak across
-    runs.) Passing them keeps the CLI byte-identical and makes the override explicit and testable.
+    with nothing to say otherwise. (`python -m core train` and `smoke` pass them as arguments, which
+    is why the tool rebinds no module global; a GUI mutating one per run would leak across runs.)
+    Passing them keeps every front end byte-identical and makes the override explicit and testable.
 
     ⚠ AND THEY ARE NOT INTERCHANGEABLE BUDGET KNOBS. Each batch shares ONE Sobol (t_scale_k, T_k)
     pair, overridden for every row in it -- so `num_runs` is the (t_scale, T) DIVERSITY count and the
@@ -804,14 +804,14 @@ def build_posterior(
     #
     # chi mode used to be excluded here, because "chi(omega) already attacks the degeneracy the
     # rotation targets". That was never measured, and it is false: on the master cell k~x_scale is
-    # 0.98 forced vs 0.95 chi (scripts/degeneracy_map.py, 2026-08-05), i.e. chi leaves the dominant
+    # 0.98 forced vs 0.95 chi (`python -m core identifiability jacobian`, 2026-08-05), i.e. chi leaves the dominant
     # alias essentially intact while improving nearly everything else. The rotation exists for that
     # alias, so chi gets one too. Cost note: the Fisher pays (1 + K) simulations per evaluation in chi
     # mode instead of 2, so a rotation costs ~(K+1)/2 x what it does in forced mode -- REPARAM_FISHER_M
     # and REPARAM_FISHER_POINTS are the knobs if that is too slow.
     # The training batch's OWN ceiling -- not hw.batch_size, and deliberately not PRIOR_SWEEP_BATCH's
-    # twin. A CEILING rather than a replacement, because smoke_train.py and three pipeline tests shrink
-    # runs by writing cfg.hw.batch_size directly and a replacing knob would silently override them.
+    # twin. A CEILING rather than a replacement, because three pipeline tests shrink runs by writing
+    # cfg.hw.batch_size directly and a replacing knob would silently override them.
     # Announced when it binds: a cap that changes the shape of a multi-day run is not allowed to be
     # silent, and the printed row count is also the check that TRAINING_NUM_RUNS was moved to match.
     # Resolved HERE, above the rotation, because the checkpoint's identity includes it.
@@ -981,7 +981,7 @@ def build_posterior(
             m=fisher_m, dz=fisher_dz, n_points=fisher_points)
         # The eigenvalues ride into the sidecar with V. Without them the saved rotation only says
         # WHICH direction is least constrained, never BY HOW MUCH -- and recovering them afterwards
-        # costs a full Fisher re-run. See scripts/identifiability.py.
+        # costs a full Fisher re-run. See `python -m core identifiability rotation`.
         _spread = float(fisher_evals[0] / fisher_evals[-1]) if float(fisher_evals[-1]) > 0 else float("inf")
         print(f"[fisher] eigenvalue spread (best/worst direction): {_spread:.3g}", flush=True)
         T_train = build_rotated_bijection(T, V)

@@ -2010,8 +2010,8 @@ def test_a_complete_checkpoint_short_circuits_generation_entirely():
 
 def test_checkpointing_off_writes_nothing_and_changes_nothing(store):
     """checkpoint=None is the whole backward-compatibility story: analysis.gen_cal_data,
-    scripts/chi_mask_audit and every pre-C-11 call site pass nothing and must be untouched -- same
-    bytes out, and no disk written."""
+    scripts/chi_mask_audit.py at 7433ced^ and every pre-C-11 call site pass nothing and must be
+    untouched -- same bytes out, and no disk written."""
     a_x, a_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
     b_x, b_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
     assert torch.equal(a_x, b_x) and torch.equal(a_th, b_th)
@@ -2120,7 +2120,7 @@ def test_fisher_eigenbasis_can_return_the_eigenvalues_its_columns_are_sorted_by(
     measures everything tolerably (spread ~3x) and with one that measures four things and returns the
     prior for the rest (spread 1e6). They used to be computed here and thrown away, and recovering
     them afterwards costs a full Fisher re-run -- so the 2026-08-25 posterior can be decomposed only
-    up to an ordering. See scripts/posterior_identifiability.py.
+    up to an ordering. See `python -m core identifiability rotation`.
     """
     from core.SBI.reparam import fisher_eigenbasis
 
@@ -2202,8 +2202,8 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
     # THE GOLDEN DIGEST. Computed once from this cfg/prior pair at the commit that added the region
     # to the identity; if it moves, every complete checkpoint on disk is orphaned. Update it only
     # deliberately, with a migration for the checkpoints on disk (scripts/migrate_checkpoint_flags.py
-    # is the precedent). Belongs to training-rows/2 -- the training-rows/1 digest this superseded was
-    # "463e81d156cd".
+    # at e37df41^ is the precedent). Belongs to training-rows/2 -- the training-rows/1 digest this
+    # superseded was "463e81d156cd".
     assert tc.identity_digest(ia) == "1912d2139359", \
         f"the amortized identity moved to {tc.identity_digest(ia)} -- every checkpoint on disk is orphaned"
     assert set(ia) == {

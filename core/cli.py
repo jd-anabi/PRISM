@@ -88,7 +88,7 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
     return cfg.inject_ground_truth(inits, param_vals, rescale_vals, forcing_vals)
 
 
-# Display-only SI unit hints, indexed by forcing param name (CLI prompts + the GUI's drive fields).
+# Display-only SI unit hints, indexed by forcing param name (the GUI's drive fields).
 # DERIVED from config.FORCING_SI_UNITS, the authoritative conversion table, so the two cannot drift.
 INFERENCE_PROMPT_UNITS = config.FORCING_DISPLAY_UNITS
 
@@ -229,7 +229,7 @@ def units_to_factors(units: tuple) -> tuple[list[float], float]:
     return si_factors, ureg.Quantity(1, "s").to(time_unit).magnitude
 
 
-# ── Pure config cores (no prompts) — shared by the CLI builders below and the GUI ────────────
+# ── Pure config cores (no prompts) — shared by `python -m core` and the GUI ────────────
 def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds_file: str = None, *,
                     bounds_dicts=None, units_override=None,
                     chi_mode: bool | None = None, chi_n_freqs: int | None = None,
@@ -243,7 +243,8 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
     the command-line tool (core/tool) and the GUI's SBI config form.
 
     The chi(omega) knobs are explicit keyword args so a GUI can set them PER CONFIG; each falls back to
-    the live ``config.CHI_*`` module value when None (the CLI passes nothing and keeps its behaviour).
+    the live ``config.CHI_*`` module value when None (the command-line tool passes only chi_mode and
+    chi_n_freqs, and keeps this behaviour for the rest).
     They are stored ON the config, so a posterior trained from it is self-describing.
 
     ``units_override`` DECLARES what the numbers in the bounds/cell files mean; it never converts them.
@@ -298,7 +299,8 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
         dt_exp=DT_EXP_S * s_to_cell,
         t_min_exp=T_MIN_EXP_S * s_to_cell,
         t_max_exp=T_MAX_EXP_S * s_to_cell,
-        T_obs=None,                             # observation duration is prompted at the inference step
+        T_obs=None,                             # observation duration is supplied later, at the
+                                                 # inference step (the GUI's field, or --t-obs)
         hw=detect_device() if hw is None else hw,
         sources={k: str(v) for k, v in (("bounds", bounds_file), ("units", units_path)) if v},
     )

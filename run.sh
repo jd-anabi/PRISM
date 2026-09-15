@@ -1,9 +1,8 @@
 #!/bin/bash
 # Launch the PRISM desktop GUI (PySide6) on macOS / Linux. Windows users: run.bat.
 #
-# Must be launched such that the working directory is the repo root -- core/config.py builds all
-# Resources/ paths from the current working directory. The cd below guarantees that regardless of where
-# this script is invoked from.
+# The working directory does not matter to the code (core/config.py resolves both roots from its own
+# location); the cd below only keeps typed paths relative to the repo.
 
 # The directory this script lives in = the project root.
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)

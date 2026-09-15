@@ -34,7 +34,8 @@ def save_figure(fig: "plt.Figure", target, **kwargs) -> None:
 def plot(x: np.ndarray, y: np.ndarray, scatter: bool = False, title: str = None, labels: tuple = None, lims: list = None, hlines: tuple = None, tight: bool = True, sink=None) -> "plt.Figure":
     """Line/scatter plot. Builds an explicit Figure and returns it. ``sink``, if given, is a callable
     ``(title, fig) -> None`` that handles display (e.g. a GUI canvas); when None, falls back to the
-    legacy blocking ``plt.show()`` so the CLI is unchanged."""
+    legacy blocking ``plt.show()`` -- unchanged for a caller (GUI or ``python -m core``) that passes
+    no sink."""
     fig, ax = plt.subplots()
     if scatter:
         ax.scatter(x, y)
@@ -68,7 +69,8 @@ def plot(x: np.ndarray, y: np.ndarray, scatter: bool = False, title: str = None,
 # === DISTRIBUTION VISUALIZERS ===
 def visualize_dist(dist: torch.distributions.Distribution, labels: list, n_samples: int = 10000, save_path: str | PathLike[str] = None, title: str = "Distribution", sink=None) -> "plt.Figure":
     """Corner plot of a distribution. Returns the Figure. ``sink`` (title, fig)->None handles display
-    for a GUI; when None, falls back to blocking ``plt.show()`` (CLI-unchanged)."""
+    for a GUI; when None, falls back to blocking ``plt.show()`` (unchanged for a caller that passes
+    no sink)."""
     # sample from distribution
     samples = dist.sample((n_samples,)).cpu().numpy()
 

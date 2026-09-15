@@ -97,7 +97,7 @@ class TruncationRegion:
 
     Latent, not physical, and that is load-bearing -- see the module docstring. ``dims`` are indices
     into the latent vector; under REPARAM_ROTATE, dim j is column j of the Fisher rotation V, so it
-    is the same "direction j" that scripts/posterior_identifiability.py reports.
+    is the same "direction j" that ``python -m core identifiability rotation`` reports.
 
     ``V`` and ``probe`` are the basis those indices refer to: the parent posterior's rotation
     (eigenvectors in COLUMNS, ``w = z @ V``; None for an unrotated run) and

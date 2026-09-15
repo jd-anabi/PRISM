@@ -267,7 +267,7 @@ CAL_N_SCALES = 200     # (t_scale, T) pairs per calibration set == number of bat
 CAL_RUN_SIZE = 10      # FLOOR on samples per pair (the historical fixed value)
 CAL_RUN_SIZE_MAX = 256 # ceiling on samples per pair; the solver is flat in batch size up to ~2048
 SBC_N_CAL = 2000       # calibration datasets for SBC in validate(). n_cal=1000 was under-powered:
-                       # the K=10 repeat study (scripts/sbc_characterize.py) showed mild marginal
+                       # the K=10 repeat study (`python -m core sbc --repeats 10`) showed mild marginal
                        # miscalibration only surfaces reliably at n_cal>=2000 (KS power grows with n_cal).
 TRAINING_NUM_RUNS = 5000  # number of (t_scale_k, T_k) batches per training round (data budget)
 
@@ -329,7 +329,7 @@ TRAINING_RUN_SIZE = 0   # CEILING on simulations per training batch; 0 = follow 
                         # absorb.
                         #
                         # A CEILING, NOT A REPLACEMENT (unlike PRIOR_SWEEP_BATCH, which replaces).
-                        # scripts/smoke_train.py and three pipeline tests shrink a run by writing
+                        # Three pipeline tests shrink a run by writing
                         # cfg.hw.batch_size directly; a replacing knob would override them and quietly
                         # drive the CPU test suite at this width -- landing as "the tests got slow", not
                         # as an error. The asymmetry is principled: the prior sweep is iteration-bounded,
@@ -443,7 +443,8 @@ CHI_FREQ_BOUNDS = (0.03, 0.3)  # log-spaced multipliers of the measured spontane
                                # by the K-frequency grid (mirrors FDTConfig.freq_bounds).
                                #
                                # SUB-RESONANCE ONLY, and that is a MEASUREMENT, not a preference.
-                               # scripts/chi_f0_sweep.py on the master cell (M=24 seeds), sweeping drive
+                               # scripts/chi_f0_sweep.py at 7433ced^ (archived) on the master cell (M=24
+                               # seeds), sweeping drive
                                # amplitude against probe frequency, found |chi| reproducible ONLY below
                                # ~0.25x Omega_0:
                                #     0.05x  CV 0.026     0.1x  CV 0.029     0.2x  CV 0.055   (usable)
@@ -465,7 +466,7 @@ CHI_FREQ_BOUNDS = (0.03, 0.3)  # log-spaced multipliers of the measured spontane
                                # carry chi's MAGNITUDE (x_scale/f_scale, already well identified) without the
                                # SHAPE that was supposed to separate kappa/lambda -- the shape lives near and
                                # above resonance, which is exactly the unusable region. Check with
-                               # scripts/degeneracy_map.py before spending another training run.
+                               # `python -m core identifiability jacobian` before spending another run.
 CHI_K_MAX = 24         # upper bound on CHI_K_PAD accepted by the GUI -- a CAPACITY knob. It used to
                        # bound K itself; under the set layout K is a property of an OBSERVATION and is
                        # bounded by the pad, not by this.
@@ -510,7 +511,7 @@ CHI_MAX_CYCLES = 20.0  # CEILING on the drive cycles a probe is locked in over. 
                        # PPC and the experimental path -- goes through it. Applying it in one caller
                        # would make the network condition on a different observable than it was
                        # trained on, which is silent.
-                       # WHY 20. scripts/chi_f0_sweep.py brackets the wall by re-locking the same
+                       # WHY 20. scripts/chi_f0_sweep.py at 7433ced^ brackets the wall by re-locking the same
                        # traces over every prefix length (M=48, in-band probes only so frequency
                        # effects cannot confound it). Worst |chi| CV by cap:
                        #   8 -> 0.042   12 -> 0.039   16 -> 0.047   20 -> 0.062
@@ -558,7 +559,8 @@ CHI_F0 = 0.15                  # ND drive amplitude for every chi probe. Driving
                                #     ND >=0.5 -> even steadier, but entrainment saturates |chi| (9.2 -> 1.4
                                #                at Omega_0 from 0.05 -> 1.0), compressing its theta-dependence
                                #
-                               # RE-MEASURED 2026-08-05 on the master cell (scripts/chi_f0_sweep.py), over
+                               # RE-MEASURED 2026-08-05 on the master cell (scripts/chi_f0_sweep.py at
+                               # 7433ced^), over
                                # the SUB-RESONANCE band this grid now spans. Two bounds, not one:
                                #   too small -> CV rises (0.05x: CV 0.090 at F0=0.05 vs 0.026 at F0=0.15)
                                #   too large -> the drive ENTRAINS the bundle, which abandons its own rhythm

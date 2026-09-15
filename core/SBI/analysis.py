@@ -243,7 +243,7 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
 # quote it as a KL, and note it can go negative for a marginal the flow widened.
 # The per-direction figures are computed in the flow's own LATENT coordinate, which under
 # REPARAM_ROTATE *is* the Fisher eigenbasis -- so direction j here is column j of the V that
-# scripts/posterior_identifiability.py decomposes, and the two tables line up row for row.
+# `python -m core identifiability rotation` decomposes, and the two tables line up row for row.
 
 
 def _entropy_1d(x: torch.Tensor, m: int = None) -> torch.Tensor:

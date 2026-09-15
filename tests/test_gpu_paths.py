@@ -1,7 +1,7 @@
 """GPU-only paths of the stage contract (piece 1): what the CPU suites cannot see.
 
 Every other suite runs on the CPU, where ``.to(device)`` is a no-op and a tensor on the wrong device
-is invisible. The 2026-09-11 GPU gate (``scripts/smoke_train.py``) failed in the infer stage with a
+is invisible. The 2026-09-11 GPU gate (``python -m core smoke``) failed in the infer stage with a
 CUDA observation row meeting CPU simulated statistics inside the posterior predictive check -- after
 prior, posterior and validate had passed. This module is the regression test for that class: the
 tiny SBITEST run of ``tests/_fixtures.build_tiny_run`` on ``config.detect_device()``.
