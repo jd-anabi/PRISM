@@ -55,6 +55,16 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     :param seed: base seed. Repeat r runs inside ``seeded(seed + r, cfg.hw.device)``, which restores
                      the caller's RNG afterwards.
     :param fig_sink: (title, fig) -> None; the writer's sink saves the PNG and forwards to this one.
+
+    ⚠ FOR A TSNPE POSTERIOR, reproducibility is WHOLE-RUN, not per-repeat. ``val_latent_prior`` (the
+    region-restricted proposal built once below, before the loop) is ONE ``TruncatedLatentPrior``
+    shared by every repeat, and its rejection sampler sizes each draw's over-draw from the acceptance
+    rate ACCUMULATED over every repeat run on it so far (core/SBI/truncate.py:434-436), not from that
+    repeat alone. A full run at one seed reproduces bit-for-bit -- each repeat still reseeds at
+    ``seed + r`` -- but repeat r's own draw is sized differently when it is the FIRST repeat of a
+    fresh run (``--repeats 1 --seed r``) than when it is repeat r of a longer ``--seed 0`` run: the
+    earlier repeats there have already fed the shared prior's running acceptance estimate. So
+    ``--repeats 1 --seed r`` does NOT reproduce repeat r pulled out of a ``--repeats K --seed 0`` run.
     """
     store = resolve_store(store)
     store.assert_name_free("diagnostic", name)            # before K x n_cal simulations
@@ -64,6 +74,8 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
         raise ValueError(f"repeats must be at least 1, got {repeats}")
     if n_cal < 1:
         raise ValueError(f"n_cal must be at least 1, got {n_cal}")
+    if nps < 1:
+        raise ValueError(f"num_posterior_samples must be at least 1, got {nps}")
     if chi_k_fixed is not None and not cfg.chi_mode:
         raise ValueError(
             f"chi_k_fixed only means something in chi(omega) mode; this config is "
@@ -110,8 +122,12 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
             ranks_all.append(rk_np)
             repeat_col.append(np.full(rk_np.shape[0], r, dtype=np.int64))
             n_valid.append(int(theta_star.shape[0]))
+            # Guarded exactly as _col guards its own nanmedian/min: an all-NaN row (a repeat whose
+            # calibration set came back empty) must print "nan", not warn "All-NaN slice" from a bare
+            # np.nanmin.
+            worst = _col(ks[r])[1]
             print(f"[sbc] repeat {r + 1}/{repeats}: n_valid={n_valid[-1]}  "
-                  f"worst KS p={np.nanmin(ks[r]):.4f}", flush=True)
+                  f"worst KS p={worst:.4f}", flush=True)
 
         pooled = np.concatenate(ranks_all, axis=0)
         print("\n=== KS p-value distribution over repeats (sorted by median; low = miscalibrated) ===")
@@ -137,9 +153,9 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
 
         kept = None
         if truncation is not None:
-            # The SHAPE validate_calibration already records on a calibration artifact
-            # (orchestrator.py:1545): both numbers under the one key, so `kept_fraction` does not mean
-            # two different things depending on which artifact kind you read it from.
+            # The SHAPE matches the results["kept_fraction"] key validate_calibration already writes
+            # on a calibration artifact: both numbers under the one key, so `kept_fraction` does not
+            # mean two different things depending on which artifact kind you read it from.
             kept = {"acceptance": orch._num(val_latent_prior.acceptance_rate),
                     "containment": orch._num(val_latent_prior.recorded_containment)}
             print(f"[tsnpe] kept fraction: the region accepted {val_latent_prior.acceptance_rate:.3%} of "

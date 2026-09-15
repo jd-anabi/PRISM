@@ -152,7 +152,7 @@ class LoadedInference(Loaded):
 
 @dataclass
 class LoadedDiagnostic(Loaded):
-    diagnostic: str = ""            # the function that wrote it ("sbc_repeats", "identifiability", ...)
+    diagnostic: str = ""            # the diagnostic that wrote it ("sbc", "identifiability", ...)
     variant: "str | None" = None    # its mode where it has more than one ("rotation"/"laplace"/"jacobian")
     settings: dict = field(default_factory=dict)
     results: dict = field(default_factory=dict)

@@ -284,10 +284,15 @@ def test_sbc_writes_one_diagnostic_naming_its_posterior_and_prior(tiny_run):
     reproduces the table exactly -- which is the whole point of a repeat study: the spread across
     repeats is the measurement, and it is worthless if the spread is partly the caller's RNG state."""
     import numpy as np
+    from matplotlib import pyplot as plt
     from core.diagnostics import sbc_repeats
     r = tiny_run
+    # tiny_run.sink is a no-op (it does not close figures); the writer's own fig_sink saves the PNG
+    # and then forwards to whichever sink was given, so a no-op sink here would leak one matplotlib
+    # figure per call -- two, across this test's two calls.
+    close = lambda title, fig: plt.close(fig)                       # noqa: E731
     d = sbc_repeats(r.cfg, r.posterior, r.prior, repeats=2, n_cal=8, num_posterior_samples=40,
-                    cal_n_scales=1, seed=0, fig_sink=r.sink, name="sbc_two")
+                    cal_n_scales=1, seed=0, fig_sink=close, name="sbc_two")
     keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
     m = d.manifest
     assert d.diagnostic == "sbc" and d.variant == "pooled"
@@ -312,8 +317,20 @@ def test_sbc_writes_one_diagnostic_naming_its_posterior_and_prior(tiny_run):
     assert int(z["nps"]) == 40
     assert [str(s) for s in z["labels"]] == keys
     assert r.store.load_diagnostic(d.id).results == d.results
+    # The spread across repeats IS the measurement: a loop that reused seeded(seed) for every repeat
+    # (zero spread) or that restored the RNG but never reseeded it would still pass every assertion
+    # above -- shapes, counts and keys are all identical either way. Only comparing the repeats'
+    # actual rank rows catches it. n_valid can differ between repeats (gen_cal_data drops invalid
+    # rows independently each time), so the comparison is truncated to the shorter of the two rather
+    # than assuming equal lengths.
+    n0, n1 = d.results["n_valid"]
+    ranks0, ranks1 = z["ranks"][:n0], z["ranks"][n0:n0 + n1]
+    n_common = min(ranks0.shape[0], ranks1.shape[0])
+    assert not np.array_equal(ranks0[:n_common], ranks1[:n_common]), \
+        "the two repeats produced identical rank rows -- seeded() must reseed EACH repeat at " \
+        "seed + r, not reuse one seed, or the repeat spread this diagnostic exists to measure is gone"
     again = sbc_repeats(r.cfg, r.posterior, r.prior, repeats=2, n_cal=8, num_posterior_samples=40,
-                        cal_n_scales=1, seed=0, fig_sink=r.sink)
+                        cal_n_scales=1, seed=0, fig_sink=close)
     assert np.allclose(np.load(again.path / "sbc_repeats.npz")["ks"], z["ks"], equal_nan=True), \
         "the same seed must reproduce the KS table; the repeat spread is the measurement"
 
@@ -321,24 +338,37 @@ def test_sbc_writes_one_diagnostic_naming_its_posterior_and_prior(tiny_run):
 def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
     """Every refusal fires before a single calibration set is simulated -- n_cal x repeats simulations
     is the spend this diagnostic exists to characterise, and learning that the name is taken (or that
-    CHI_K_FIXED means nothing outside chi mode) afterwards throws all of it away."""
+    CHI_K_FIXED means nothing outside chi mode) afterwards throws all of it away.
+
+    Independent of test order (its own taken name, not the previous test's ``sbc_two``), and proves
+    the refusals fire before ``_calibration_prior`` -- not merely before the simulation ``gen_cal_data``
+    would run -- which is what actually distinguishes ``sbc_repeats``' own early ``assert_name_free``
+    from the refusal ``store.create`` would raise much later, after the whole calibration set."""
     import pytest
     from core import orchestrator
     from core.artifacts import StoreError
     from core.diagnostics import sbc_repeats
     r = tiny_run
-    drawn = []
+    before = len(r.store.list("diagnostic"))
+    _diagnostic(r.store, r.cfg, name="sbc_taken")          # our own taken name, not the prior test's
+    drawn, calibrated = [], []
     monkeypatch.setattr(orchestrator.analysis, "gen_cal_data", lambda **k: drawn.append(1))
+    monkeypatch.setattr(orchestrator, "_calibration_prior", lambda *a, **k: calibrated.append(1))
     with pytest.raises(ValueError, match="repeats must be at least 1"):
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=0, n_cal=8, fig_sink=r.sink)
     with pytest.raises(ValueError, match="n_cal must be at least 1"):
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=0, fig_sink=r.sink)
+    with pytest.raises(ValueError, match="num_posterior_samples must be at least 1"):
+        sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, num_posterior_samples=0,
+                    fig_sink=r.sink)
     with pytest.raises(ValueError, match="chi_k_fixed"):
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, chi_k_fixed=2, fig_sink=r.sink)
     with pytest.raises(StoreError, match="already exists"):
-        sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, fig_sink=r.sink, name="sbc_two")
+        sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, fig_sink=r.sink, name="sbc_taken")
     with pytest.raises(ValueError, match="not the one this posterior was trained with"):
         sbc_repeats(r.cfg, r.posterior, r.other_prior(), repeats=1, n_cal=8, fig_sink=r.sink)
     assert drawn == [], "a calibration set was simulated before the refusals"
-    assert not [s for s in r.store.list("diagnostic") if not s.complete], \
-        "a refused run left a half-written diagnostic directory"
+    assert calibrated == [], \
+        "_calibration_prior ran before a refusal fired -- every guard above must precede it"
+    assert len(r.store.list("diagnostic")) == before + 1, \
+        "a refused sbc_repeats call wrote a diagnostic of its own (only the name taken above should exist)"

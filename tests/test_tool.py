@@ -571,6 +571,13 @@ def test_the_sbc_subcommand_forwards_every_knob_as_a_keyword(tmp_path, monkeypat
     assert rc == 0
     assert seen["ref"] == "tpost" and seen["accept"] == Accept(truncated=True)
     assert seen["args"] == ("POST", "PRIOR")
+    # The FULL set, not a sample of it (as T12's own tool tests pin VALIDATE_KNOBS/TSNPE_KNOBS,
+    # tests/test_tool.py ~473-508): knobs() silently DROPS a dest that no longer matches a flag, so
+    # checking only a few keys would stay green through a knob quietly no longer reaching sbc_repeats,
+    # or through one being forwarded unconditionally (e.g. n_cal=args.n_cal beside **knobs(...)),
+    # which would crash a real run on int(None) the moment the flag was left off.
+    assert set(seen["kw"]) == {"name", "note", "fig_sink", "store", "repeats", "n_cal",
+                               "num_posterior_samples", "cal_n_scales", "seed"}
     assert seen["kw"]["repeats"] == 3 and seen["kw"]["n_cal"] == 40
     assert seen["kw"]["num_posterior_samples"] == 70 and seen["kw"]["cal_n_scales"] == 2
     assert seen["kw"]["seed"] == 5 and seen["kw"]["name"] == "sbc1" and seen["kw"]["note"] == "hello"
@@ -580,5 +587,6 @@ def test_the_sbc_subcommand_forwards_every_knob_as_a_keyword(tmp_path, monkeypat
     seen.clear()
     assert tool.main(["sbc", "--bounds", bounds, "--device", "cpu", "--posterior", "p",
                       "--chi", "--chi-k-fixed", "6"]) == 0
+    assert set(seen["kw"]) == {"name", "note", "fig_sink", "store", "chi_k_fixed"}
     assert seen["kw"]["chi_k_fixed"] == 6 and seen["accept"] == Accept()
     assert "repeats" not in seen["kw"] and "seed" not in seen["kw"]
