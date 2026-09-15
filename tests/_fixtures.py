@@ -214,25 +214,36 @@ def build_tiny_run(store, hw=None):
     on (default the CPU); tests/test_gpu_paths.py passes config.detect_device() to reach the paths a
     CPU run cannot see."""
     from types import SimpleNamespace
+    from matplotlib import pyplot as plt
     from core import cli, config, orchestrator, registry
     name = "SBITEST"
     bounds, cell, undo_install = install_sbitest()
-    cfg = cli.make_sim_config(name, registry.get(name).labels, registry.state_dep_drift(name), bounds)
-    cli.load_and_validate_gt(cfg, cell)
-    cfg.hw = hw if hw is not None else config.cpu_device()
-    cfg.hw.batch_size = 8
-    cfg.T_obs = 1.0
     saved_gen_prior = orchestrator.pipeline.gen_prior
-    orchestrator.pipeline.gen_prior = _tiny_gen_prior
-    sink = lambda title, fig: None                                   # noqa: E731
-    prior = orchestrator.build_prior(cfg, None, True, fig_sink=sink, name="tiny_prior")
-    # EVERY knob is an argument. This fixture used to rebind orchestrator.TRAINING_NUM_RUNS,
-    # SBC_N_CAL and TRAINING_CHECKPOINT_EVERY for its consumers; the cadence is now the session
-    # fixture's job (tests/conftest.py::_checkpointing_off_unless_asked) and the sizes are each
-    # consumer's own (they all pass num_runs=/n_cal= already).
-    posterior = orchestrator.build_posterior(cfg, prior, None, True, fig_sink=sink, name="tiny_post",
-                                             num_runs=2, hidden_features=8, num_transforms=1,
-                                             stop_after_epochs=1)
+    # A setup that fails must undo what it did: the conftest fixture reaches its own teardown only
+    # after this returns, so without the except a failed build left the gen_prior stub installed on
+    # core.orchestrator and SBITEST's files in the real Resources/ for the rest of the process.
+    try:
+        cfg = cli.make_sim_config(name, registry.get(name).labels, registry.state_dep_drift(name), bounds)
+        cli.load_and_validate_gt(cfg, cell)
+        cfg.hw = hw if hw is not None else config.cpu_device()
+        cfg.hw.batch_size = 8
+        cfg.T_obs = 1.0
+        orchestrator.pipeline.gen_prior = _tiny_gen_prior
+        # CLOSING: the writer's sink saves the PNG and forwards here, and only closes the figure itself
+        # when nothing is forwarded -- a no-op sink leaked every figure every consumer drew.
+        sink = lambda title, fig: plt.close(fig)                         # noqa: E731
+        prior = orchestrator.build_prior(cfg, None, True, fig_sink=sink, name="tiny_prior")
+        # EVERY knob is an argument. This fixture used to rebind orchestrator.TRAINING_NUM_RUNS,
+        # SBC_N_CAL and TRAINING_CHECKPOINT_EVERY for its consumers; the cadence is now the session
+        # fixture's job (tests/conftest.py::_checkpointing_off_unless_asked) and the sizes are each
+        # consumer's own (they all pass num_runs=/n_cal= already).
+        posterior = orchestrator.build_posterior(cfg, prior, None, True, fig_sink=sink, name="tiny_post",
+                                                 num_runs=2, hidden_features=8, num_transforms=1,
+                                                 stop_after_epochs=1)
+    except BaseException:
+        orchestrator.pipeline.gen_prior = saved_gen_prior
+        undo_install()
+        raise
 
     def other_prior():
         return orchestrator.build_prior(cfg, None, True, fig_sink=sink)   # another fit, another GMM

@@ -66,14 +66,27 @@ def tool_env(_session_default_store, tmp_path_factory):
     from core import orchestrator
     from tests._fixtures import _tiny_gen_prior, install_sbitest
     root = tmp_path_factory.mktemp("tool_artifacts")
-    bounds, cell, teardown = install_sbitest()
+    teardown = None
     with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("PRISM_ARTIFACTS", str(root))
-        mp.setattr(orchestrator.pipeline, "gen_prior", _tiny_gen_prior)
         try:
+            # INSIDE the try: an install that fails halfway (the model JSON written, a folder not) must
+            # still be undone, and so must the monkeypatches -- the context manager restores those.
+            bounds, cell, teardown = install_sbitest()
+            mp.setenv("PRISM_ARTIFACTS", str(root))
+            mp.setattr(orchestrator.pipeline, "gen_prior", _tiny_gen_prior)
             yield str(bounds), str(cell), root
         finally:
-            teardown()
+            if teardown is not None:
+                teardown()
+            else:
+                # install_sbitest raised before handing back its teardown: remove whatever it wrote
+                from core import registry
+                from core.Helpers import model_store
+                try:
+                    model_store.delete_user_model("SBITEST")
+                except Exception:                                # noqa: BLE001 -- best-effort cleanup
+                    pass
+                registry.unregister("SBITEST")
 
 
 @pytest.fixture(scope="module")
@@ -117,7 +130,51 @@ def test_the_help_epilog_names_the_core_environment_settings():
         assert name in epilog, name
 
 
-def test_the_tool_reads_no_environment_and_writes_no_knob():
+def _env_reads_and_knob_writes(tree) -> list:
+    """``[(lineno, what)]`` for every environment read and every knob write in a parsed module.
+
+    A knob is an attribute that is upper-case (a module constant) or ``batch_size``. The forms: a plain,
+    augmented or annotated assignment, a tuple or list target (walked recursively), and
+    ``setattr(x, "<knob>", v)`` with a string constant. An environment read is ``os.environ`` /
+    ``os.getenv`` as attributes, or the bare names in a module that did ``from os import ...``."""
+    def _knob(attr):
+        return attr.isupper() or attr == "batch_size"
+
+    def _targets(t):
+        if isinstance(t, (ast.Tuple, ast.List)):
+            for elt in t.elts:
+                yield from _targets(elt)
+        elif isinstance(t, ast.Starred):
+            yield from _targets(t.value)
+        else:
+            yield t
+
+    from_os = {a.asname or a.name for node in ast.walk(tree)
+               if isinstance(node, ast.ImportFrom) and node.module == "os"
+               for a in node.names if a.name in ("environ", "getenv")}
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in ("environ", "getenv"):
+            found.append((node.lineno, "reads the environment"))
+        if isinstance(node, ast.Name) and node.id in from_os:
+            found.append((node.lineno, f"reads the environment ({node.id})"))
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        else:
+            targets = []
+        for target in (t for tt in targets for t in _targets(tt)):
+            if isinstance(target, ast.Attribute) and _knob(target.attr):
+                found.append((node.lineno, f"assigns {target.attr}"))
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr"
+                and len(node.args) >= 2 and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str) and _knob(node.args[1].value)):
+            found.append((node.lineno, f"assigns {node.args[1].value} via setattr"))
+    return found
+
+
+def test_the_tool_reads_no_environment_and_writes_no_knob(tmp_path):
     """D6: every setting is a flag that travels to its stage as a keyword.
 
     An ``os.environ`` read inside the tool would be a knob no flag names, and an assignment to a
@@ -129,15 +186,24 @@ def test_the_tool_reads_no_environment_and_writes_no_knob():
     modules = sorted((root / "core" / "tool").rglob("*.py"))
     assert modules, "core/tool/ holds no modules"
     for py in modules:
-        tree = ast.parse(py.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr in ("environ", "getenv"):
-                pytest.fail(f"{py.relative_to(root)}:{node.lineno} reads the environment")
-            if isinstance(node, ast.Assign):
-                for target in node.targets:
-                    if isinstance(target, ast.Attribute) and (target.attr.isupper()
-                                                              or target.attr == "batch_size"):
-                        pytest.fail(f"{py.relative_to(root)}:{node.lineno} assigns {target.attr}")
+        for lineno, what in _env_reads_and_knob_writes(ast.parse(py.read_text(encoding="utf-8"))):
+            pytest.fail(f"{py.relative_to(root)}:{lineno} {what}")
+
+    # The checker's teeth: every write and read form it claims to catch, in a module of its own.
+    forms = tmp_path / "forms.py"
+    forms.write_text(
+        "from os import getenv as ge, environ\n"
+        "a, (config.TRAINING_NUM_RUNS, b) = 1, (2, 3)\n"
+        "[cfg.hw.batch_size] = [4]\n"
+        "config.SBC_N_CAL += 1\n"
+        "config.CHI_MODE: bool = True\n"
+        "setattr(config, 'TRAINING_RUN_SIZE', 8)\n"
+        "x = ge('PRISM_X')\n"
+        "y = environ['PRISM_Y']\n", encoding="utf-8")
+    got = {ln for ln, _ in _env_reads_and_knob_writes(ast.parse(forms.read_text(encoding="utf-8")))}
+    assert got >= {2, 3, 4, 5, 6, 7, 8}, sorted(got)
+    assert not _env_reads_and_knob_writes(ast.parse("cfg.name = 'x'\nsetattr(cfg, 'name', 1)\n")), \
+        "a lower-case attribute is not a knob"
 
     entry = ast.parse((root / "core" / "__main__.py").read_text(encoding="utf-8"))
     setdefaults, agg, core_imports = [], [], []
@@ -677,6 +743,35 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
     assert tool.main(["identifiability", "--bounds", bounds]) == 2
 
 
+def test_identifiability_rotation_refuses_a_posterior_without_a_rotation(tool_run, capsys):
+    """Spec §8.4, through the REAL posterior load: no stub stands between the tool and the store.
+
+    tool_run's tpost carries a rotation (the tool has no flag that turns it off), so the posterior
+    under test is trained here, through the real build_posterior at tiny size with reparam_rotate off,
+    into the tool's own store. It records no V, so there is no basis to decompose: a refusal (exit 1)
+    naming the reason and where it was raised, and no diagnostic written."""
+    from matplotlib import pyplot as plt
+    from core import cli, config as _config, orchestrator, registry
+    from core.artifacts import ArtifactStore
+    bounds, _cell, root = tool_run
+    store = ArtifactStore(root)
+    cfg = cli.make_sim_config("SBITEST", registry.get("SBITEST").labels, registry.state_dep_drift("SBITEST"),
+                              bounds, hw=_config.cpu_device(), reparam_rotate=False)
+    prior = orchestrator.build_prior(cfg, "tp", False, fig_sink=lambda title, fig: plt.close(fig),
+                                     store=store)
+    orchestrator.build_posterior(cfg, prior, None, True, name="tpost_norot", store=store,
+                                 fig_sink=lambda title, fig: plt.close(fig), num_runs=2,
+                                 run_size_cap=8, hidden_features=8, num_transforms=1,
+                                 stop_after_epochs=1, checkpoint_every=0)
+    assert store.get("posterior", "tpost_norot").body["transform"]["V"] is None
+    before = [r.id for r in store.list("diagnostic")]
+    capsys.readouterr()
+    assert main(["identifiability", "rotation", *_cfg(bounds), "--posterior", "tpost_norot"]) == 1
+    err = capsys.readouterr().err
+    assert "no Fisher rotation" in err and "raised at" in err, err
+    assert [r.id for r in ArtifactStore(root).list("diagnostic")] == before
+
+
 def test_the_ablation_subcommand_forwards_its_knobs(tmp_path, monkeypatch):
     from core import tool
     from core.artifacts import Accept
@@ -779,7 +874,7 @@ def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_p
     assert default_store() is sandbox, "main must leave the session's default store installed"
 
 
-def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, monkeypatch):
+def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, tmp_path, monkeypatch):
     """K1, fix round 1 (review finding, spec Sec. 8.4): no test pinned smoke's own knob forwarding.
     Deleting ``run_size_cap=args.run_size_cap`` from smoke.py kept the four-stage test (and leg (b)
     of its drill) green, because both legs of THAT test fall back to the same hardware batch -- the
@@ -815,16 +910,24 @@ def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, monkeypatch):
     monkeypatch.setattr(orchestrator, "build_posterior", post_rec)
     monkeypatch.setattr(orchestrator, "validate_calibration", val_rec)
     monkeypatch.setattr(orchestrator, "simulated_inference", _infer_rec)
+    # --seed reaches the one seeded() context the whole stage sequence runs in
+    import contextlib
+    import core.diagnostics.rng
+    seeds = []
+    monkeypatch.setattr(core.diagnostics.rng, "seeded",
+                        lambda seed, device: seeds.append((seed, device)) or contextlib.nullcontext())
 
     # --prior AND --save together: build_prior LOADS (ref given, build_new False) and is named ""
     # (a loaded prior is never renamed); build_posterior still gets "smoke_posterior" -- --save names
-    # whatever THIS run builds, independent of whether the prior was loaded.
+    # whatever THIS run builds, independent of whether the prior was loaded. --store-root keeps the
+    # run out of %TEMP%: a successful run never removes the root main created for it.
     assert main(["smoke", *_cfg(bounds), "--cell", cell, "--num-runs", "3", "--run-size", "9",
                  "--n-cal", "17", "--max-epochs", "6", "--checkpoint", "--new-run",
                  "--resume", "require", "--t-obs", "2.5", "--seed", "5", "--prior", "smoke_prior",
-                 "--save"]) == 0
+                 "--save", "--store-root", str(tmp_path / "smoke")]) == 0
 
     (cfg1, ref1, build_new1), kw1 = prior_rec.calls[0]
+    assert seeds == [(5, cfg1.hw.device)], seeds
     assert ref1 == "smoke_prior" and build_new1 is False
     assert kw1["name"] == ""
     assert set(kw1) == {"fig_sink", "store", "name"}

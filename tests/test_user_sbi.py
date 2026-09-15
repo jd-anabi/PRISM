@@ -49,7 +49,8 @@ def test_no_forcing_user_model_full_sbi_pipeline(tmp_path):
            "params": {"k": 1.0, "d0": 0.05}, "rescale": {"x_scale": 10.0, "t_scale": 0.01}}
     saved_gen_prior = orchestrator.pipeline.gen_prior
     saved_runs, saved_ncal = orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL
-    sink = lambda title, fig: None                                # noqa: E731
+    import matplotlib.pyplot as plt
+    sink = lambda title, fig: plt.close(fig)                      # noqa: E731 -- closing: no leaked figures
     try:
         model_store.save_user_model(doc)
         registry.load_user_models()
@@ -99,6 +100,43 @@ def test_no_forcing_user_model_full_sbi_pipeline(tmp_path):
         registry.unregister(name)
 
 
+def test_a_failing_tiny_run_build_undoes_its_install(tmp_path, monkeypatch):
+    """tests/_fixtures.build_tiny_run installs SBITEST's input files into the real Resources/ and swaps
+    the gen_prior stub onto core.orchestrator BEFORE it builds, and the conftest fixture reaches its
+    teardown only after the build returns. So a build that raised used to leave both behind for the rest
+    of the single-process gate. Lives in this module because no module-scoped SBITEST install (tiny_run,
+    tool_env) is active here to be removed by the undo under test."""
+    from core import config as _config
+    from core.artifacts import ArtifactStore, use_store
+    from tests._fixtures import build_tiny_run
+    bounds_dir = _config.BOUNDS_PATH / "sbitest"
+    assert not bounds_dir.exists(), "SBITEST is already installed: the undo below would remove it"
+    original = orchestrator.pipeline.gen_prior
+
+    class _Boom(RuntimeError):
+        """The injected prior-build failure."""
+
+    def _raise(*a, **k):
+        raise _Boom("the prior build failed")
+
+    monkeypatch.setattr(orchestrator, "build_prior", _raise)
+    try:
+        with use_store(ArtifactStore(tmp_path / "Artifacts")) as s:
+            with pytest.raises(_Boom):
+                build_tiny_run(s)
+        stub_left = orchestrator.pipeline.gen_prior is not original
+        files_left = bounds_dir.exists()
+        model_left = registry.get("SBITEST") is not None
+    finally:
+        # never leave either behind, even when the fixture under test does
+        orchestrator.pipeline.gen_prior = original
+        if (_config.MODELS_PATH / "SBITEST.json").exists() or bounds_dir.exists():
+            model_store.delete_user_model("SBITEST")
+        registry.unregister("SBITEST")
+    assert not stub_left, "the gen_prior stub stayed installed on core.orchestrator"
+    assert not files_left and not model_left, "SBITEST stayed installed in the real Resources/"
+
+
 def test_builtin_forcing_path_unperturbed():
     """The spontaneous-only branching must leave the Nadrowski forcing path byte-compatible: a full-width
     conditioning vector [S(41) | log(T) | forcing] with Group G populated by the drive response."""
@@ -135,7 +173,8 @@ def test_train_and_validate_without_a_loaded_cell():
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
     saved_gen_prior = orchestrator.pipeline.gen_prior
     saved_runs, saved_ncal = orchestrator.TRAINING_NUM_RUNS, orchestrator.SBC_N_CAL
-    sink = lambda title, fig: None                                # noqa: E731
+    import matplotlib.pyplot as plt
+    sink = lambda title, fig: plt.close(fig)                      # noqa: E731 -- closing: no leaked figures
     try:
         cfg = cli.make_sim_config("NADROWSKI", labels, True,
                                   str(config.BOUNDS_PATH / "nadrowski" / "master.txt"),
@@ -2281,7 +2320,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         return _FakeDP(), {"loss": []}
 
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
-    sink = lambda title, fig: None                                # noqa: E731
+    import matplotlib.pyplot as plt
+    sink = lambda title, fig: plt.close(fig)                      # noqa: E731 -- closing: no leaked figures
     saved_gen_prior = orchestrator.pipeline.gen_prior
     saved_fisher = orchestrator.decorrelate.build_latent_fisher_rotation
     saved_train_nn = pipeline_mod.train_nn
@@ -2529,7 +2569,7 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
 
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
-    sink = lambda title, fig: None                                # noqa: E731
+    sink = lambda title, fig: plt.close(fig)                      # noqa: E731 -- closing: no leaked figures
     saved_gen_prior = orchestrator.pipeline.gen_prior
     real_gen_cal = orchestrator.analysis.gen_cal_data
     saved_info = orchestrator.analysis.informativeness

@@ -301,9 +301,8 @@ def test_sbc_writes_one_diagnostic_naming_its_posterior_and_prior(tiny_run):
     from matplotlib import pyplot as plt
     from core.diagnostics import sbc_repeats
     r = tiny_run
-    # tiny_run.sink is a no-op (it does not close figures); the writer's own fig_sink saves the PNG
-    # and then forwards to whichever sink was given, so a no-op sink here would leak one matplotlib
-    # figure per call -- two, across this test's two calls.
+    # The writer's own fig_sink saves the PNG and then forwards to whichever sink was given, so a no-op
+    # sink here would leak one matplotlib figure per call -- two, across this test's two calls.
     close = lambda title, fig: plt.close(fig)                       # noqa: E731
     d = sbc_repeats(r.cfg, r.posterior, r.prior, repeats=2, n_cal=8, num_posterior_samples=40,
                     cal_n_scales=1, seed=0, fig_sink=close, name="sbc_two")

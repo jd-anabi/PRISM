@@ -305,12 +305,17 @@ def test_simconfig_units_and_inferred_labels_are_latex():
 def test_plot_posterior_vs_truth_default_labels_have_units():
     import numpy as np
     from core.Helpers import visualizers
+    from matplotlib import pyplot as plt
     fig = visualizers.plot_posterior_vs_truth(np.arange(5) * 1.0, np.zeros(5))
     ax = fig.axes[0]
-    assert ax.get_xlabel() == "$t$ (s)" and ax.get_ylabel() == "$x$ (nm)"
+    labels_ = (ax.get_xlabel(), ax.get_ylabel())
+    plt.close(fig)                                   # the gate's pyplot is shared: close what is drawn
+    assert labels_ == ("$t$ (s)", "$x$ (nm)")
     fig2 = visualizers.plot_posterior_vs_truth(np.arange(5) * 1.0, np.zeros(5),
                                                xlabel="$t$ (ms)", ylabel="$x$ (µm)")
-    assert fig2.axes[0].get_xlabel() == "$t$ (ms)"
+    xlabel2 = fig2.axes[0].get_xlabel()
+    plt.close(fig2)
+    assert xlabel2 == "$t$ (ms)"
 
 def test_gui_form_labels_are_prettified():
     from PySide6.QtWidgets import QLabel

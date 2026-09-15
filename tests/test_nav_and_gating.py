@@ -797,15 +797,19 @@ def test_an_empty_predictive_band_is_annotated_on_the_psd_figure():
     _app()
     freqs = np.linspace(0.1, 100, 64)
     nan = np.full(64, np.nan)
+    from matplotlib import pyplot as plt
     fig = visualizers.plot_psd_overlay(freqs, np.ones(64), nan, nan, nan, n_dropped=7)
     texts = [t.get_text() for t in fig.axes[0].texts]
+    plt.close(fig)                                   # the gate's pyplot is shared: close what is drawn
     assert any("no finite" in t for t in texts), f"no explanation drawn: {texts}"
     assert any("7" in t for t in texts), f"the dropped count is not on the figure: {texts}"
 
     # and with a healthy band there must be no such annotation
     ok = visualizers.plot_psd_overlay(freqs, np.ones(64), np.ones(64) * .5, np.ones(64),
                                       np.ones(64) * 2)
-    assert not [t.get_text() for t in ok.axes[0].texts], "annotated a perfectly good band"
+    ok_texts = [t.get_text() for t in ok.axes[0].texts]
+    plt.close(ok)
+    assert not ok_texts, "annotated a perfectly good band"
 
 def test_overlay_figures_render_and_are_picklable():
     """Each new Infer-tab figure must build and survive pickling (the 'Pop out' path unpickles it)."""
@@ -828,11 +832,17 @@ def test_overlay_figures_render_and_are_picklable():
         visualizers.plot_cycle_average(np.linspace(0, 2 * np.pi, 48), np.zeros(48), np.zeros(48),
                                        -np.ones(48), np.ones(48)),
     ]
-    for fig in figs:
-        assert fig.axes, "figure has no axes"
-        pickle.loads(pickle.dumps(fig))                  # must not raise
-    # the 13-row parameter table gets its own axes, never the title
-    assert len(figs[0].axes) == 2
+    from matplotlib import pyplot as plt
+    try:
+        for fig in figs:
+            assert fig.axes, "figure has no axes"
+            # must not raise; the copy registers with pyplot too, so it is closed like the original
+            plt.close(pickle.loads(pickle.dumps(fig)))
+        # the 13-row parameter table gets its own axes, never the title
+        assert len(figs[0].axes) == 2
+    finally:
+        for fig in figs:
+            plt.close(fig)
 
 def test_help_badge_carries_its_text():
     from core.gui.widgets.help_badge import HelpBadge
@@ -929,21 +939,39 @@ def test_the_infer_tab_dispatches_the_compositions():
     assert cap["kwargs"]["gt_values"] is None and cap["kwargs"]["prior"] is inf.session.inf_prior
     assert cap["kwargs"]["provide_fig_sink"] is True
     assert cap["kwargs"]["on_result"] == panel._on_observation
+    assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
 
     # experimental, chi: one passive recording + the probe pairs, as a RecordingSet
-    cap.clear()
-    panel.infer_mode.setCurrentIndex(1)
-    panel.chi_spont.edit.setText("/tmp/passive.npy")
-    for i, row in enumerate(panel._chi_forced_fields):
-        row.path.edit.setText(f"/tmp/probe{i}.npy")
-        row.freq.setText(str(10.0 + i))
-    panel.chi_tobs.setText("2.0")
-    panel._infer()
+    def _chi_run():
+        cap.clear()
+        panel.infer_mode.setCurrentIndex(1)
+        panel.chi_spont.edit.setText("/tmp/passive.npy")
+        for i, row in enumerate(panel._chi_forced_fields):
+            row.path.edit.setText(f"/tmp/probe{i}.npy")
+            row.freq.setText(str(10.0 + i))
+        panel.chi_tobs.setText("2.0")
+        panel._infer()
+
+    _chi_run()
     assert cap["fn"] is orchestrator.experimental_inference, cap["fn"]
     rec = cap["args"][2]
     assert rec.spont == "/tmp/passive.npy" and rec.forced == (("/tmp/probe0.npy", 10.0),
                                                               ("/tmp/probe1.npy", 11.0))
     assert rec.T_obs_s == 2.0 and cap["kwargs"]["provide_fig_sink"] is True
+    assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
+
+    # F16: a NON-AMORTIZED posterior with the box ticked -- the consent travels on both branches
+    inf.session.posterior = _posterior_stub(truncation=object(), x_obs_digest="d" * 16)
+    inf.refresh_gates()
+    panel.other_obs.setChecked(True)
+    cap.clear()
+    panel.infer_mode.setCurrentIndex(0)
+    panel._infer()
+    assert cap["fn"] is orchestrator.simulated_inference, cap["fn"]
+    assert cap["kwargs"]["accept"].other_observation is True, cap["kwargs"]["accept"]
+    _chi_run()
+    assert cap["fn"] is orchestrator.experimental_inference, cap["fn"]
+    assert cap["kwargs"]["accept"].other_observation is True, cap["kwargs"]["accept"]
 
 
 def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
@@ -972,9 +1000,17 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     # one near miss, answered yes. monkeypatch, never a bare rebind: an assertion that fails below
     # would otherwise leave the stub installed on core.orchestrator for the rest of this
     # single-process gate, silently disabling D7 for every later test in the run.
-    monkeypatch.setattr(orchestrator, "fresh_run_near_misses", lambda *a, **k: list(row))
+    # The detector must be asked about THIS run's identity: a stub that ignored its arguments stayed
+    # green through a regression that dropped run_size_cap, where the real detector looks at another
+    # identity, the dialog never shows, and the stage then refuses with advice to press a button that
+    # cannot appear.
+    seen = {}
+    monkeypatch.setattr(orchestrator, "fresh_run_near_misses",
+                        lambda cfg, prior, **k: seen.update(k, prior=prior) or list(row))
     pp._ask_new_run = lambda near, n_runs: True
     pp._build_posterior()
+    assert seen["num_runs"] == 2 and seen["run_size_cap"] == 8, seen
+    assert seen["prior"] is inf.session.inf_prior, seen
     assert sent["fn"] is orchestrator.build_posterior and sent["kwargs"]["new_run"] is True
     assert sent["kwargs"]["num_runs"] == 2 and sent["kwargs"]["run_size_cap"] == 8
 

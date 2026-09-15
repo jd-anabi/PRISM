@@ -17,6 +17,18 @@ from tests._fixtures import (CODE_FILES, CODE_ROOTS, _FakeDP, _gmm_in_box, _nad_
                              _posterior_artifact, _prior_artifact, _set_path)
 
 
+def _close(title, fig):
+    """A closing figure sink. The writer's own sink saves the PNG and forwards here, and closes the
+    figure itself only when nothing is forwarded, so a no-op sink leaks every figure it is handed."""
+    from matplotlib import pyplot as plt
+    plt.close(fig)
+
+
+def _recording(seen):
+    """A closing sink that also records each title."""
+    return lambda title, fig: (seen.append(title), _close(title, fig))
+
+
 def test_manifest_json_round_trips_tensors_exactly():
     V = torch.linalg.qr(torch.randn(13, 13, dtype=torch.float64))[0]
     as_list = mf.tensor_to_json(V)
@@ -426,17 +438,17 @@ def test_build_prior_auto_persists_and_loads_back(store, monkeypatch):
 
     monkeypatch.setattr(orchestrator.pipeline, "gen_prior", stub_gen_prior)
     seen = []
-    lp = orchestrator.build_prior(cfg, None, True, fig_sink=lambda title, fig: seen.append(title), num_iterations=1)
+    lp = orchestrator.build_prior(cfg, None, True, fig_sink=_recording(seen), num_iterations=1)
     assert lp.name == "" and [r.id for r in store.list("prior")] == [lp.id]
     assert (lp.path / "figures" / "prior.png").stat().st_size > 0 and seen == ["Prior"]
     m = lp.manifest
     assert m.body["gmm"]["param_keys"] == list(cfg.params_dict) and m.config["num_iterations"] == 1
     assert m.body["gmm"]["box"]["log_mask"] == nd_log_mask(cfg, log_params=_log_params_for(cfg)).tolist()
     assert m.inputs["bounds"]["path"] == "Bounds/nadrowski/master.txt" and m.fingerprints["gmm"] == lp.fingerprint
-    again = orchestrator.build_prior(cfg, lp.id, False, fig_sink=lambda title, fig: None)
+    again = orchestrator.build_prior(cfg, lp.id, False, fig_sink=_close)
     assert again.id == lp.id and again.fingerprint == lp.fingerprint
     store.rename("prior", lp.id, "master_prior")
-    assert orchestrator.build_prior(cfg, "master_prior", False, fig_sink=lambda title, fig: None).name == "master_prior"
+    assert orchestrator.build_prior(cfg, "master_prior", False, fig_sink=_close).name == "master_prior"
 
 
 def _weights_that_renormalise_inexactly(n=64):
@@ -495,7 +507,7 @@ def test_build_prior_reloads_a_gmm_whose_weights_do_not_renormalise_exactly(stor
 
     monkeypatch.setattr(orchestrator.pipeline, "gen_prior", stub_gen_prior)
     cfg = _nad_cfg()
-    lp = orchestrator.build_prior(cfg, None, True, fig_sink=lambda title, fig: None, num_iterations=1)
+    lp = orchestrator.build_prior(cfg, None, True, fig_sink=_close, num_iterations=1)
     assert lp.fingerprint == lp.manifest.fingerprints["gmm"]
     assert store.load_prior(cfg, lp.id).fingerprint == lp.fingerprint
 
@@ -717,7 +729,7 @@ def test_build_posterior_auto_persists_and_returns_the_loaded_wrapper(store, mon
                         lambda plan, **kw: (torch.zeros(8, 50), torch.zeros(8, 13)))
     monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 0)
     seen = []
-    out = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=lambda t, f: seen.append(t),
+    out = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=_recording(seen),
                                        num_runs=2, run_size_cap=4, hidden_features=8, num_transforms=1,
                                        stop_after_epochs=1, note="tiny")
     assert isinstance(out, st.LoadedPosterior) and out.name == "" and out.diagnostics["epochs_trained"] == 2
@@ -768,7 +780,7 @@ def test_a_torn_posterior_write_at_the_stage_leaves_no_half_artifact(store, monk
     real_save = torch.save
     monkeypatch.setattr(torch, "save", _failing(real_save))
     with pytest.raises(_WriteFailed):
-        orchestrator.build_posterior(cfg, lp, None, True, fig_sink=lambda t, f: None, num_runs=2, run_size_cap=4,
+        orchestrator.build_posterior(cfg, lp, None, True, fig_sink=_close, num_runs=2, run_size_cap=4,
                                      hidden_features=8, num_transforms=1, stop_after_epochs=1)
     monkeypatch.setattr(torch, "save", real_save)
     assert [r.id for r in store.list("posterior")] == before, "a torn write left a posterior directory behind"
@@ -807,7 +819,7 @@ def test_generate_observations_writes_an_artifact_that_reinstalls_its_context(st
     from core import orchestrator
     cfg = _forced_cfg()
     seen = []
-    obs = orchestrator.generate_observations(cfg, fig_sink=lambda t, f: seen.append(t), name="cell")
+    obs = orchestrator.generate_observations(cfg, fig_sink=_recording(seen), name="cell")
     assert obs.name == "cell" and obs.mode == "forced" and obs.width == obs.x_obs.shape[-1]
     assert seen == ["Ground-truth trace"] and obs.manifest.figures == ["figures/ground_truth_trace.png"]
     src = obs.manifest.body["source"]
@@ -830,7 +842,7 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
     from core import orchestrator
     from core.SBI.observations import RecordingSet
     cfg = _forced_cfg()
-    sim = orchestrator.generate_observations(cfg, fig_sink=lambda t, f: None)
+    sim = orchestrator.generate_observations(cfg, fig_sink=_close)
     trace = sim.obs_data[0].numpy()
     spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
     np.save(spont, trace)
@@ -838,7 +850,7 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
     T_obs_s = cfg.T_obs / cfg.get_unit_conversion_factor("s")
     si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in cfg.force_params_dict}
     rec = RecordingSet(spont=str(spont), forced=((str(forced), None),), T_obs_s=T_obs_s, forcing_params_si=si)
-    obs = orchestrator.build_experiment_observation(cfg, rec, fig_sink=lambda t, f: None)
+    obs = orchestrator.build_experiment_observation(cfg, rec, fig_sink=_close)
     recs = obs.manifest.body["source"]["recordings"]
     assert [r["role"] for r in recs] == ["spont", "forced"] and all(len(r["sha256"]) == 64 for r in recs)
     assert obs.width == sim.width and obs.manifest.body["source"]["kind"] == "experimental"
@@ -846,7 +858,7 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
     with pytest.raises(FileNotFoundError):
         orchestrator.build_experiment_observation(
             cfg, RecordingSet(spont=str(tmp_path / "nope.npy"), forced=((str(forced), None),), T_obs_s=T_obs_s,
-                              forcing_params_si=si), fig_sink=lambda t, f: None)
+                              forcing_params_si=si), fig_sink=_close)
 
 
 def test_chi_mode_refuses_a_forced_recording_without_its_drive_frequency(store, tmp_path, monkeypatch):
@@ -895,7 +907,7 @@ def test_chi_mode_refuses_a_forced_recording_without_its_drive_frequency(store, 
     gap = RecordingSet(spont=str(spont), forced=((driven[0], 12.5), (driven[1], None)),
                        T_obs_s=1.0, F0_si=1.0)
     with pytest.raises(ValueError, match="no drive frequency") as e:
-        orchestrator.build_experiment_observation(cfg, gap, fig_sink=lambda t, f: None)
+        orchestrator.build_experiment_observation(cfg, gap, fig_sink=_close)
     assert "driven_1.npy" in str(e.value), str(e.value)
     assert read == [], f"a recording was read before the refusal: {read}"
     assert seen == [], "the frequency-less set reached the chi builder"
@@ -905,7 +917,7 @@ def test_chi_mode_refuses_a_forced_recording_without_its_drive_frequency(store, 
     ok = RecordingSet(spont=str(spont), forced=((driven[0], 12.5), (driven[1], 25.0)),
                       T_obs_s=1.0, F0_si=1.0)
     with pytest.raises(_Reached):
-        orchestrator.build_experiment_observation(cfg, ok, fig_sink=lambda t, f: None)
+        orchestrator.build_experiment_observation(cfg, ok, fig_sink=_close)
     assert [f for _x, f in seen[0]] == [12.5, 25.0]
     assert all(torch.is_tensor(x) and isinstance(f, float) for x, f in seen[0]), seen[0]
 
@@ -1164,7 +1176,7 @@ def test_checkpoint_every_and_max_epochs_are_recorded_in_the_manifest(store, mon
     monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
     monkeypatch.setattr(orchestrator.pipeline, "gen_training_data",
                         lambda plan, **kw: (torch.zeros(8, 50), torch.zeros(8, 13)))
-    out = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=lambda t, f: None,
+    out = orchestrator.build_posterior(cfg, lp, None, True, fig_sink=_close,
                                        num_runs=2, run_size_cap=4, checkpoint_every=0,
                                        max_num_epochs=11, hidden_features=8, num_transforms=1,
                                        stop_after_epochs=1)
@@ -1450,10 +1462,11 @@ def test_installing_an_experimental_observation_clears_a_stale_truth(store, tmp_
     observation's -- "the loaded cell's GROUND TRUTH lies OUTSIDE the truncation region" -- or was
     silently satisfied by it, and the experimental PPC started from the stale cell's inits."""
     import numpy as np
+    from matplotlib import pyplot as plt
     from core import orchestrator
     from core.SBI.observations import RecordingSet
     cfg = _forced_cfg()
-    sim = orchestrator.generate_observations(cfg, fig_sink=lambda t, f: None)
+    sim = orchestrator.generate_observations(cfg, fig_sink=lambda t, f: plt.close(f))
     trace = sim.obs_data[0].numpy()
     spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
     np.save(spont, trace)
@@ -1462,7 +1475,7 @@ def test_installing_an_experimental_observation_clears_a_stale_truth(store, tmp_
     si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in cfg.force_params_dict}
     rec = RecordingSet(spont=str(spont), forced=((str(forced), None),), T_obs_s=T_obs_s,
                        forcing_params_si=si)
-    exp = orchestrator.build_experiment_observation(cfg, rec, fig_sink=lambda t, f: None)
+    exp = orchestrator.build_experiment_observation(cfg, rec, fig_sink=lambda t, f: plt.close(f))
     assert cfg.has_ground_truth and "cell" in cfg.sources          # the stale truth, still there
     exp.install(cfg)
     assert not cfg.has_ground_truth, "an experimental observation installed a truth that is not its own"
