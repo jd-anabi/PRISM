@@ -6,6 +6,7 @@ a measurement ABOUT a trained posterior, so the thing worth pinning is what it r
 and what it writes -- not the numbers a real training run would give it.
 """
 import pytest
+from sbi.inference import DirectPosterior
 
 from core.artifacts import LoadedDiagnostic
 from core.artifacts import store as st
@@ -979,7 +980,6 @@ def test_ablation_sweeps_the_summary_columns_through_the_whole_conditioning_path
     n_sum = SUMMARY_WIDTH + 1
     fdim = orchestrator.expected_forcing_dim(cfg)
     labels = FEATURE_LABELS + VALID_FLAG_LABELS + ["logT"]
-    net = orchestrator.build_embedding_net(cfg).eval()
     seen = []
 
     class _Record(torch.nn.Module):
@@ -991,20 +991,35 @@ def test_ablation_sweeps_the_summary_columns_through_the_whole_conditioning_path
             seen.append(x.detach().clone())
             return self.inner(x)
 
-    torch.manual_seed(0)
-    data = torch.randn(64, n_sum + fdim)
+    # I2: the net's own weight init AND the data draw are BOTH seeded inside one fork_rng, so
+    # healthy_max no longer depends on what ran before this test in the same process -- fork_rng
+    # restores the caller's RNG on the way out, exactly as core.diagnostics.rng.seeded does.
+    with torch.random.fork_rng():
+        torch.manual_seed(0)
+        net = orchestrator.build_embedding_net(cfg).eval()
+        data = torch.randn(64, n_sum + fdim)
     # Element 0 of the return is the base-row marker (its r[0] is the row INDEX, not a displacement),
     # so every assertion below reads the summary records only.
     rows = ablation._sweep_channels(_Record(net), data, n_sum, 5, labels)[1:]
     assert len(rows) == n_sum and [r[1] for r in rows] == labels
     base = seen[0]
     assert base.shape == (1, n_sum + fdim)
-    for call in seen[1:]:
+    # M5: the base point must be a REAL row of data (the docstring's whole point), not a column-wise
+    # median vector -- which, for i.i.d. Gaussian data, essentially never matches any actual row.
+    assert any(torch.equal(base[0], data[i]) for i in range(data.shape[0])), \
+        "the base point must be a real row of data, not a synthesized median vector"
+    for j, call in enumerate(seen[1:]):
         assert torch.equal(call[:, n_sum:], base[:, n_sum:].expand(call.shape[0], -1)), \
             "the forcing block moved during a summary sweep"
-        varying = [j for j in range(n_sum) if call[:, j].min() != call[:, j].max()]
-        assert len(varying) <= 1, "more than one summary column moved in one sweep"
-    assert max(r[0] for r in rows) > 0.0, "an unstandardized sweep must move the embedding"
+        # M5: EXACTLY the j-th column, not merely "at most one" -- the data is random normal, so a
+        # column/label mix-up (sweeping column k while labelling and counting it as column j) would
+        # still pass a "<= 1" check but fails this one.
+        varying = [k for k in range(n_sum) if call[:, k].min() != call[:, k].max()]
+        assert varying == [j], "the swept column did not match the sweep's own column index"
+    healthy_max = max(r[0] for r in rows)
+    # I2: guards against a near-dead random init shrinking the bound (below) into the noise floor --
+    # a healthy sweep on an untrained net is still order 1 here, not order 1e-6.
+    assert healthy_max > 1e-2, "an unstandardized sweep must move the embedding by more than noise"
 
     zeroing = torch.nn.Sequential(_Zero(), net)
     rows0 = ablation._sweep_channels(zeroing, data, n_sum, 5, labels)[1:]
@@ -1016,7 +1031,6 @@ def test_ablation_sweeps_the_summary_columns_through_the_whole_conditioning_path
     # very call's own healthy max, not a hardcoded absolute: the intent -- a zeroing standardizer makes
     # the sweep read as float noise, not as a real signal -- survives whatever scale a given net's
     # random init happens to produce.
-    healthy_max = max(r[0] for r in rows)
     assert max(r[0] for r in rows0) <= healthy_max * 1e-4, \
         "the standardizer was not in the path: the sweep bypassed it and reached the bare net"
 
@@ -1065,5 +1079,167 @@ def test_ablation_reads_the_cache_its_posterior_names(tiny_run, monkeypatch):
             == res["counts"]["total"])
     assert res["accepted"] == [] and d.manifest.payloads == {} and d.manifest.figures == []
     assert d.manifest.config["rows"] == 12 and d.manifest.config["n_sweep"] == 5
-    with pytest.raises(Exception, match="name it as a parent"):
+    # M4: matched on the DIAGNOSTIC's own name/id, not merely the generic "name it as a parent" text --
+    # post itself also names the simulation cache as a parent, so a generic match would pass even if
+    # the diagnostic's OWN parent link were silently dropped. dependents() lists each blocker as
+    # "{kind} {name or '(unnamed)'} [{id}]" (store.py); re.escape because the id may contain regex
+    # metacharacters and the brackets are literal here, not a character class.
+    import re
+    with pytest.raises(Exception, match=re.escape(f"diagnostic {d.name} [{d.id}]")):
         r.store.delete("simulation", post.manifest.parents["simulation"])
+
+
+def test_channel_ablation_refuses_bad_rows_and_n_sweep_before_the_row_read(store):
+    """I1: --rows < 1 and --n-sweep < 2 are refused before ANYTHING about the posterior or its cache
+    is even touched. Before this guard, a negative --rows silently sliced ``x[:-5]``, --n-sweep 1 wrote
+    a table measured at p1 only (no range at all), and 0 for either crashed deep inside
+    ``training_checkpoint.load_rows``/``store.create`` well after the read. ``object()`` stands in for
+    the posterior: if either guard did not fire FIRST, this would blow up on ``posterior.name`` with an
+    AttributeError, not the ValueError under test -- so the test is self-checking on ordering too."""
+    import pytest
+    from core.diagnostics import channel_ablation
+    cfg = _nad_cfg()
+    before = len(store.list("diagnostic"))
+    for bad_rows in (-5, 0):
+        with pytest.raises(ValueError, match="--rows"):
+            channel_ablation(cfg, object(), rows=bad_rows, n_sweep=5, name=f"bad_rows_{bad_rows}")
+    for bad_sweep in (0, 1):
+        with pytest.raises(ValueError, match="--n-sweep"):
+            channel_ablation(cfg, object(), rows=10, n_sweep=bad_sweep, name=f"bad_sweep_{bad_sweep}")
+    assert len(store.list("diagnostic")) == before, "a refused call must write no diagnostic directory"
+
+
+def test_load_rows_max_rows_still_checks_completeness_if_the_cap_is_never_reached(tmp_path):
+    """M3: max_rows only waives the batches_done completeness check when the CAP actually stopped the
+    walk early -- a partial read is the point THEN. If the cache holds fewer committed batches than
+    batches_done claims, asking for far more rows than the (incomplete) cache actually holds must still
+    refuse: the cap can never fire, so silently returning whatever partial data exists on disk would
+    hide the very corruption the completeness check exists to catch."""
+    import pytest
+    import torch
+    from core.SBI import training_checkpoint as tc
+    d = tmp_path / "cache"
+    (d / "shards").mkdir(parents=True)
+    # Only batches [0, 2) are committed on disk, but the caller claims 6 are done -- and max_rows asks
+    # for far more rows than this (incomplete) cache holds, so the cap is never reached.
+    torch.save(torch.full((2 * 5, 3), 0.0), d / "shards" / "x_000000_000002.pt")
+    with pytest.raises(ValueError, match="commits 6 batches but only 2"):
+        tc.load_rows(d, 6, 5, x_only=True, max_rows=1000)
+
+
+def test_load_rows_max_rows_stops_before_a_later_corrupt_shard(tmp_path):
+    """M6: the cap stops the walk AT the shard that reaches the count -- a corrupted LATER shard must
+    never even be opened. Also covers x_only=False together with max_rows, which no earlier test did."""
+    import pytest
+    import torch
+    from core.SBI import training_checkpoint as tc
+    d = tmp_path / "cache"
+    (d / "shards").mkdir(parents=True)
+    for a, b in ((0, 2), (2, 4)):
+        torch.save(torch.full((2 * 5, 3), float(a)), d / "shards" / f"x_{a:06d}_{b:06d}.pt")
+        torch.save(torch.full((2 * 5, 2), float(a)), d / "shards" / f"th_{a:06d}_{b:06d}.pt")
+    # A corrupted/truncated LATER shard: its name claims 2 batches (10 rows) but it holds only 1.
+    torch.save(torch.full((1, 3), 99.0), d / "shards" / "x_000004_000006.pt")
+    torch.save(torch.full((1, 2), 99.0), d / "shards" / "th_000004_000006.pt")
+    # max_rows satisfied by the first two shards alone (20 rows): the walk must stop there and never
+    # touch the corrupt third shard.
+    x, th = tc.load_rows(d, 6, 5, x_only=True, max_rows=15)
+    assert tuple(x.shape) == (15, 3) and th is None
+    # x_only=False + max_rows together must also stop before the corrupt shard.
+    x, th = tc.load_rows(d, 6, 5, max_rows=15)
+    assert tuple(x.shape) == (15, 3) and tuple(th.shape) == (15, 2)
+    # Without max_rows the walk DOES reach the corrupt shard, and its row-count mismatch is caught.
+    with pytest.raises(ValueError, match=r"holds 1 rows, not the 10"):
+        tc.load_rows(d, 6, 5, x_only=True)
+
+
+class _FakeDPWithEst(DirectPosterior):
+    """A DirectPosterior by type only (the loader's isinstance check accepts it), carrying a tiny REAL
+    ``EmbeddedNet`` as its ``posterior_estimator`` so ``ablation._find_net`` has something to find --
+    module-level so it pickles. M7: this is what makes the two width refusals cheap to pin without a
+    real training run."""
+    def __init__(self, net):
+        self.posterior_estimator = net
+
+
+def _ablation_posterior_with_cache(store, cfg, *, name, net_input_dim, sim_cols,
+                                   batches_done=1, run_size=3):
+    """A posterior naming a real (tiny) simulation cache on disk, without a real training run (M7).
+    ``net_input_dim`` controls the trained net's OWN ``input_dim`` (independent of the cache); ``sim_cols``
+    controls the cache's OWN row width (independent of the net) -- so the two guards in
+    ``channel_ablation`` (the net's summary width against ``SUMMARY_WIDTH + 1``, and the cache's row
+    width against the posterior's ``conditioning.width``) can each be pinned in isolation. Both guards
+    fire before ``est.embedding_net`` (the whole conditioning path) is ever touched, so a bare,
+    forcing_dim=0 EmbeddedNet is enough -- the sweep path itself is never exercised by this stub.
+    """
+    import torch
+    from core.artifacts import manifest as mf
+    from core.artifacts import store as artifact_store
+    from core.SBI import embedded_network
+    from core.SBI.training_checkpoint import identity_digest
+    net = embedded_network.EmbeddedNet(net_input_dim, 3, (4, 4), forcing_dim=0)
+    keys = list(cfg.params_dict) + list(cfg.rescale_params)
+    ident = {"format": "training-rows/2", "prior_fingerprint": None, "n_runs": 1,
+             "run_size": int(run_size), "truncation": None}
+    digest = identity_digest(ident)
+    with store.create("posterior", cfg, name=name) as w:
+        torch.save(_FakeDPWithEst(net), str(w.payload("posterior.pt")))
+        w.parents = {"prior": "20260910T100000", "simulation": digest}
+        w.body = {
+            "mode": cfg.observation_mode, "conditioning": mf.conditioning_block(cfg),
+            "transform": {"param_keys": keys, "log_params": [],
+                          "nd_lows": [float(b[0]) for _, b in cfg.params_dict.values()],
+                          "nd_highs": [float(b[1]) for _, b in cfg.params_dict.values()],
+                          "rescale_lows": [float(b[0]) for _, b in cfg.rescale_params.values()],
+                          "rescale_highs": [float(b[1]) for _, b in cfg.rescale_params.values()],
+                          "V": None, "V_orientation": "columns",
+                          "fisher_eigenvalues": None, "V_digest": mf.tensor_digest(None)},
+            "amortized": True, "truncation": None, "training": {}}
+    sim_dir = store.kind_dir("simulation") / f"fake_{digest}"
+    artifact_store.write_simulation_manifest(sim_dir, ident, batches_done=batches_done, complete=False)
+    (sim_dir / "shards").mkdir(parents=True, exist_ok=True)
+    torch.save(torch.zeros(batches_done * run_size, sim_cols),
+              sim_dir / "shards" / f"x_{0:06d}_{batches_done:06d}.pt")
+    return store.load_posterior(cfg, w.id)
+
+
+def test_channel_ablation_refuses_a_mismatched_summary_width(store):
+    """M7: pins the guard at ablation.py's ``n_sum != SUMMARY_WIDTH + 1`` -- a stub posterior/cache
+    pair, no real training run, since the guard fires before the sweep path is ever built."""
+    import pytest
+    from core.diagnostics import channel_ablation
+    from core.SBI.statistics import SUMMARY_WIDTH
+    cfg = _nad_cfg()
+    post = _ablation_posterior_with_cache(store, cfg, name="bad_width_net",
+                                          net_input_dim=SUMMARY_WIDTH, sim_cols=10)
+    before = len(store.list("diagnostic"))
+    with pytest.raises(ValueError, match="wide summary block"):
+        channel_ablation(cfg, post, rows=50, n_sweep=5, name="abl_bad_net")
+    assert len(store.list("diagnostic")) == before
+
+
+def test_channel_ablation_refuses_a_cache_whose_width_disagrees_with_the_posterior(store):
+    """M7: pins the OTHER width guard -- the cache's own row width against
+    ``posterior.manifest.body['conditioning']['width']`` -- again via a stub, no training run.
+
+    The chi branch (``blk[:, -1]``, not ``blk[:, 0]``) is NOT pinned here: reaching it needs a full,
+    successful sweep (``est.embedding_net`` actually built and called), which needs a REAL,
+    internally-consistent chi net -- one whose ``chi_layout``/``chi_k_pad`` agree with the manifest,
+    or ``store.load_posterior``'s own tier-2 mode detection (``reparam.posterior_mode``) raises a
+    StoreError before ``channel_ablation`` is ever reached. Building that (a correctly-shaped chi
+    ``EmbeddedNet`` wrapped so ``.embedding_net`` resolves, PLUS fabricated probe rows in the real chi
+    column layout) is materially more scaffolding than the two width guards, which fail before any of
+    it is touched -- so per M7's own escape clause, this is skipped rather than forced.
+    """
+    import pytest
+    from core import orchestrator
+    from core.diagnostics import channel_ablation
+    from core.SBI.statistics import SUMMARY_WIDTH
+    cfg = _nad_cfg()
+    width = SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg)
+    post = _ablation_posterior_with_cache(store, cfg, name="bad_width_cache",
+                                          net_input_dim=SUMMARY_WIDTH + 1, sim_cols=width - 1)
+    before = len(store.list("diagnostic"))
+    with pytest.raises(ValueError, match="do not describe the same measurement"):
+        channel_ablation(cfg, post, rows=50, n_sweep=5, name="abl_bad_cache")
+    assert len(store.list("diagnostic")) == before

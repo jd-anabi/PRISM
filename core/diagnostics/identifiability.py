@@ -151,9 +151,19 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
               "rather than flat")
 
     settings = {"n_worst": n_worst, "top_n": top_n}
-    results = {"P": P, "orthogonality": orth,
-               "eigenvalues": None if ev_a is None else [float(v) for v in ev_a],
-               "directions": directions, "per_param": per_param, "flat_axes": flat_axes,
+    # S1 (spec 4.1): every float reaching the manifest goes through orch._num here, in one place, so a
+    # non-finite value becomes None instead of reaching the writer (which refuses NaN/inf outright).
+    # The compute/print/sort logic above is untouched -- it keeps reading the RAW (unconverted) floats.
+    num_directions = [{**d, "eigenvalue": orch._num(d["eigenvalue"]),
+                       "loadings": [{**ld, "loading": orch._num(ld["loading"])} for ld in d["loadings"]]}
+                      for d in directions]
+    num_per_param = [{**p, "bottom_share": orch._num(p["bottom_share"]),
+                      "top4_share": orch._num(p["top4_share"])} for p in per_param]
+    num_flat_axes = [{**a, "share": orch._num(a["share"]), "loading": orch._num(a["loading"])}
+                     for a in flat_axes]
+    results = {"P": P, "orthogonality": orch._num(orth),
+               "eigenvalues": None if ev_a is None else [orch._num(v) for v in ev_a],
+               "directions": num_directions, "per_param": num_per_param, "flat_axes": num_flat_axes,
                "accepted": list(getattr(posterior, "accepted", []))}
     with store.create("diagnostic", cfg, name=name, note=note) as w:
         w.parents = {"posterior": posterior.id}

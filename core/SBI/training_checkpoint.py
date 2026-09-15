@@ -371,12 +371,16 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
     :param x_only: skip the ``th_`` shards entirely and return ``(x, None)``. The conditioning-channel
                    diagnostics read only x, and the targets are half the bytes on disk.
     :param max_rows: stop after the shard that reaches this many rows and truncate to it. The
-                   ``got != batches_done`` completeness check is SKIPPED, because a partial read is
-                   the whole point -- the caller asked for a sample, not the cache.
+                   ``got != batches_done`` completeness check is SKIPPED ONLY when the cap actually
+                   stopped the walk early (a partial read is the whole point then) -- not merely
+                   because ``max_rows`` was passed. If the cache runs out of shards before reaching
+                   the cap, that is still corruption (it commits ``batches_done`` batches but holds
+                   fewer), and the check still fires.
     """
     path = Path(path)
     xs, ths = [], []
     got = rows = 0
+    capped = False
     for f in sorted((path / _SHARDS).glob("x_*.pt")):
         a, b = (int(p) for p in f.stem.split("_")[1:3])
         if b > batches_done:
@@ -400,8 +404,9 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
         got += b - a
         rows += x_part.shape[0]
         if max_rows is not None and rows >= max_rows:
+            capped = True
             break
-    if max_rows is None and got != batches_done:
+    if not capped and got != batches_done:
         raise ValueError(f"Training checkpoint at {path} commits {batches_done} batches but only "
                          f"{got} are present on disk. Delete the directory to start fresh.")
     if not xs:

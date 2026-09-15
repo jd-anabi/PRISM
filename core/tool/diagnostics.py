@@ -107,10 +107,8 @@ def _register_identifiability(sub) -> dict:
 
 def _ablation(args, store) -> None:
     import core.diagnostics as diag
-    from core.artifacts import Accept
     cfg, _ = config_args.build_cfg(args, load_gt=False)
-    posterior, _prior = load_posterior_and_prior(cfg, args.posterior,
-                                             accept_from(args), store)
+    posterior, _prior = load_posterior_and_prior(cfg, args.posterior, accept_from(args), store)
     return report(diag.channel_ablation(
         cfg, posterior, name=args.name, note=args.note, fig_sink=config_args.close_sink,
         store=store, **knobs(args, "rows", "n_sweep")))

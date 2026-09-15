@@ -15,8 +15,11 @@ noise, identical because neither channel moves the output at all.
 """
 from __future__ import annotations
 
+import math
+
 import torch
 
+from core import orchestrator as orch
 from core.artifacts import resolve_store
 
 FLOAT32_EPS = 1.1920929e-07
@@ -75,13 +78,22 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
                      name: str = "", note: str = "", fig_sink=None, store=None):
     """Sweep each summary channel across its own p1-p99 range and record the embedding displacement.
 
-    :param rows: rows sampled from the posterior's OWN simulation cache for the quantiles.
+    :param rows: the LEADING rows, in batch order, read from the posterior's own simulation cache for
+                     the quantiles -- not a random sample of it (``training_checkpoint.load_rows``
+                     walks the recorded shard ranges in order and stops at the first one that reaches
+                     this count).
     :param n_sweep: points per channel sweep. The sweep is deterministic and takes no seed.
     """
     from core.SBI import training_checkpoint
     from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH, VALID_FLAG_LABELS
     store = resolve_store(store)
     store.assert_name_free("diagnostic", name)
+    if int(rows) < 1:
+        raise ValueError(f"--rows must be at least 1, got {int(rows)}.")
+    if int(n_sweep) < 2:
+        raise ValueError(
+            f"--n-sweep must be at least 2 -- a sweep with fewer points cannot describe a range, only "
+            f"the channel's p1 value -- got {int(n_sweep)}.")
     label = posterior.name or posterior.id
     digest = posterior.manifest.parents.get("simulation")
     if digest is None:
@@ -133,17 +145,29 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
               + ("" if live_probes is None
                  else f", {live_probes} live probe(s) of {int(cond['chi_k_pad'])} slots"))
 
-        live = [d for d, _, _, _, n in swept if n != "CONSTANT"]
+        # NaN/Inf is excluded from the median baseline too: one channel whose sweep drove the network
+        # to a non-finite output must not corrupt the scale every OTHER channel's verdict is judged
+        # against.
+        live = [d for d, _, _, _, n in swept if n != "CONSTANT" and math.isfinite(d)]
         med = float(torch.tensor(live).median()) if live else 0.0
         print(f"\n=== max ||delta embedding|| over each channel's real p1-p99 range ===")
         print(f"median over non-constant channels: {med:.4g};  float32 eps = {FLOAT32_EPS:.3g}\n")
         print(f"{'channel':<24} {'max|d emb|':>12} {'vs median':>10}   {'p1':>12} {'p99':>12}  verdict")
         print("-" * 92)
-        channels, n_const, n_invis = [], 0, 0
+        channels, n_const, n_invis, n_nonfinite = [], 0, 0, 0
         for d, lab, lo, hi, tag in sorted(swept):
             if tag == "CONSTANT":
                 verdict = "constant in training (structurally dead)"
                 n_const += 1
+            elif not math.isfinite(d):
+                # A NaN/Inf displacement compares False against every numeric test below (< and >
+                # with NaN are always False), so it used to fall all the way through to "healthy" --
+                # the opposite of what happened: the perturbation broke the network numerically, it did
+                # not confirm the channel is fine. §4.1 also refuses to write a non-finite float into a
+                # manifest (allow_nan=False), so this verdict has to exist before results is built,
+                # not merely be caught there.
+                verdict = "NON-FINITE -- this perturbation drove the network to a NaN/Inf output"
+                n_nonfinite += 1
             elif d < FLOAT32_EPS or (med and d < med * 1e-4):
                 # Either test alone under-reports. The absolute one misses a channel whose whole range
                 # moves the embedding a millionth as far as a typical channel's but still clears an
@@ -157,17 +181,20 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
             else:
                 verdict = "healthy"
             rel = (d / med) if med else None
-            channels.append({"label": lab, "max_disp": float(d), "rel_median": rel,
-                             "p1": float(lo), "p99": float(hi), "verdict": verdict})
+            # S1 (spec 4.1): every float here goes through orch._num, so a non-finite value becomes
+            # None instead of reaching the manifest writer (which refuses NaN/inf outright, after the
+            # whole sweep has already run).
+            channels.append({"label": lab, "max_disp": orch._num(d), "rel_median": orch._num(rel),
+                             "p1": orch._num(lo), "p99": orch._num(hi), "verdict": verdict})
             print(f"{lab:<24} {d:12.4g} {(f'{rel:.3g}x' if rel is not None else '-'):>10}   "
                   f"{lo:12.4g} {hi:12.4g}  {verdict}")
-        counts = {"constant": n_const, "invisible": n_invis,
-                  "usable": n_sum - n_const - n_invis, "total": n_sum}
-        print(f"\n{n_const} structurally dead, {n_invis} numerically invisible, "
-              f"{counts['usable']} usable of {n_sum} summary channels")
+        counts = {"constant": n_const, "invisible": n_invis, "nonfinite": n_nonfinite,
+                  "usable": n_sum - n_const - n_invis - n_nonfinite, "total": n_sum}
+        print(f"\n{n_const} structurally dead, {n_invis} numerically invisible, {n_nonfinite} "
+              f"non-finite, {counts['usable']} usable of {n_sum} summary channels")
 
         results = {"n_rows": int(data.shape[0]), "base_row": base_row, "live_probes": live_probes,
-                   "median_disp": med, "channels": channels, "counts": counts,
+                   "median_disp": orch._num(med), "channels": channels, "counts": counts,
                    "accepted": list(getattr(posterior, "accepted", []))}
         w.parents = {"posterior": posterior.id, "simulation": digest}
         w.config.update(settings)
