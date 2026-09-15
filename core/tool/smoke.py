@@ -45,8 +45,11 @@ import time
 STAGES = ("prior", "posterior", "validate", "infer")
 
 EPILOG = """\
-Reads the store root from --store-root (a fresh temp directory otherwise) and nothing from the
-environment except the two roots PRISM_RESOURCES / PRISM_ARTIFACTS.
+Writes to --store-root, or a fresh temp directory when it is not given -- NEVER to PRISM_ARTIFACTS,
+which every OTHER subcommand follows but smoke does not. Reads PRISM_RESOURCES (the inputs root)
+like every subcommand, and two core-level settings read live by core/SBI/pipeline.py, never by this
+tool: PRISM_VRAM_CEILING_GIB (GiB one simulation batch may plan to occupy, 0 = auto) and
+PRISM_MEM_LOG_EVERY (batches between memory log lines).
 
 What to watch: the masked-probe count (~37 % of TRAINING probes, and a single run within +/-12 pp
 is uninformative -- the effective sample size is the BATCH count, not the probe count); the mode
@@ -60,10 +63,24 @@ A seeded run is not bitwise-reproducible on CUDA or across devices.
 """
 
 
+def _stages_type(value: str) -> str:
+    """argparse ``type=`` for ``--stages``: validated at PARSE TIME (fix round 1, K2), so an unknown
+    stage is an argparse error before ``main`` ever resolves a store root or creates a temp
+    directory -- and before ``registry.load_user_models()``, so it costs no torch import either.
+    Returns the original string unchanged; ``run_smoke`` still does its own split (kept as a second,
+    defensive check for any caller that reaches it without going through argparse)."""
+    stages = [s.strip() for s in value.split(",") if s.strip()]
+    unknown = [s for s in stages if s not in STAGES]
+    if unknown:
+        raise argparse.ArgumentTypeError(
+            f"--stages: unknown stage(s) {unknown}; choose from {list(STAGES)}")
+    return value
+
+
 def register(subparsers):
     """The ``smoke`` subcommand. Its defaults are the drill's sizes, and they are the ONE place in
     the tool that restates a literal (every other subcommand leaves defaults to its stage)."""
-    from core.tool.config_args import add_config_flags
+    from core.tool.config_args import add_config_flags, add_resume_flags
     p = subparsers.add_parser(
         "smoke", help="every stage end to end at tiny sizes (the GPU gate)",
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -73,7 +90,7 @@ def register(subparsers):
     p.add_argument("--t-obs", dest="t_obs_s", type=float, default=None,
                    help="observation duration in seconds (default: config.T_MIN_EXP_S)")
     p.add_argument("--seed", type=int, default=0, help="RNG seed for the whole run (default 0)")
-    p.add_argument("--stages", default=",".join(STAGES),
+    p.add_argument("--stages", default=",".join(STAGES), type=_stages_type,
                    help=f"comma list, a subset of {','.join(STAGES)} (default: all four)")
     p.add_argument("--num-runs", dest="num_runs", type=int, default=4,
                    help="training batches (default 4)")
@@ -98,10 +115,7 @@ def register(subparsers):
                    help="a prior artifact (name or id) in --store-root to LOAD instead of building. "
                         "Required for a resume: the cache identity includes prior_fingerprint, and "
                         "two fits of one box differ")
-    p.add_argument("--resume", choices=("auto", "require", "never"), default=None,
-                   help="resume policy for the training cache (stage default: auto)")
-    p.add_argument("--new-run", dest="new_run", action="store_true",
-                   help="start a new cache even though a committed one is a single setting away")
+    add_resume_flags(p)
     p.set_defaults(handler=run_smoke)
     return {"smoke": p}
 
@@ -113,7 +127,7 @@ def run_smoke(args, store):
     from core.diagnostics.rng import seeded
     from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH, VALID_FLAG_LABELS
     from core.tool import UsageError
-    from core.tool.config_args import build_cfg, close_sink
+    from core.tool.config_args import build_cfg, close_sink, knobs
 
     stages = [s.strip() for s in args.stages.split(",") if s.strip()]
     unknown = [s for s in stages if s not in STAGES]
@@ -143,7 +157,6 @@ def run_smoke(args, store):
           f"({cfg.hw.batch_size}).", flush=True)
 
     ck_every = max(1, args.num_runs // 2) if args.checkpoint else 0
-    resume_kw = {} if args.resume is None else {"resume": args.resume}
     t0, done = time.time(), {}
 
     def _stage(name, fn):
@@ -176,7 +189,7 @@ def run_smoke(args, store):
             name="smoke_posterior" if args.save else "",
             num_runs=args.num_runs, run_size_cap=args.run_size_cap,
             max_num_epochs=args.max_num_epochs, checkpoint_every=ck_every,
-            new_run=args.new_run, **resume_kw))
+            new_run=args.new_run, **knobs(args, "resume")))
         if post is None:
             print("\n[smoke] prior only; stopping before training.")
             return 0

@@ -66,10 +66,13 @@ that commit and re-checked; `Artifacts/` exists now with the walkthrough's artif
    rebuilds the Fisher rotation and never resumes (it did exactly that here, silently, exit 0).
    The recipe is four command lines since T19 (`CLAUDE.md`, spec §3.8): `python -m core smoke --chi
    --t-obs 4.5 --bounds …/master.txt --cell …/master_spont.txt --checkpoint --save --store-root
-   <scratch>/smoke`, then the same line with `--prior smoke_prior --stages prior,posterior --resume
-   require` (must resume), then the same again with `--num-runs 2` (must EXIT 1 naming `n_runs` —
-   the incident, now loud), then the forced-mode run against its own store. The environment-variable
-   recipe is gone with `scripts/smoke_train.py`.
+   <scratch>/smoke` (run 1); run 2 is that line WITHOUT `--save`, with `--prior smoke_prior --stages
+   prior,posterior --resume require` added (must resume); run 2b is run 2's line WITHOUT `--resume
+   require`, with `--num-runs 2` added instead (must EXIT 1 naming `n_runs` — the incident, now
+   loud); then the forced-mode run against its own store. Read literally, keeping `--save` on run 2
+   would refuse on the taken name `smoke_posterior` instead of resuming — fixed in the fix-round-1
+   pass over this recipe (K4), kept in sync with `CLAUDE.md`. The environment-variable recipe is
+   gone with `scripts/smoke_train.py`.
 4. ~~Manual GUI check on a display~~ — done 2026-09-11 by the user on the real screen: rows A1–A9
    of `docs/checklists/display-walkthrough.md` all pass (reported "everything passes"). The one
    failure was the walkthrough's row 1, the APP ICON: the window's title bar showed the mark, the

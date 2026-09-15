@@ -51,6 +51,25 @@ def add_name_flags(p) -> None:
                    help="free text recorded in the artifact's manifest")
 
 
+def add_resume_flags(p) -> None:
+    """``--resume`` and ``--new-run``, D7's consent pair (spec Sec. 2.7), shared verbatim by every
+    subcommand that trains a cache: ``train``, ``tsnpe`` and ``smoke`` (fix round 1, K9). Before this
+    the three defined the same two flags three times, with three slightly different help strings.
+
+    ``--checkpoint-every`` is deliberately NOT here even though ``train`` and ``tsnpe`` share it
+    identically: ``smoke`` has no flag of that shape at all -- its own ``--checkpoint`` is a bool
+    (on/off; the cadence is computed from ``--num-runs``), not the batches-between-commits int
+    ``train``/``tsnpe`` take. Bundling it would restate one subcommand's knob as another's.
+    """
+    p.add_argument("--resume", choices=("auto", "require", "never"), default=None,
+                   help="resume policy for the training cache: auto resumes this run's own cache; "
+                        "require refuses when there is none; never refuses to resume one "
+                        "(default: auto)")
+    p.add_argument("--new-run", action="store_true",
+                   help="start a new simulation cache even though a committed one ONE setting away "
+                        "exists; it silences that near-miss refusal and nothing else")
+
+
 def model_for(args) -> str:
     """``--model``, else the ``--bounds`` parent folder upper-cased (the ``Bounds/<model>/`` layout --
     the same rule cells resolve by, so a command never has to hard-code a model name)."""

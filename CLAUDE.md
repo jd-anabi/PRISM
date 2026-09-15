@@ -39,26 +39,38 @@ what is on disk, the last gate). Update it at the end of every session.
   A tool call cannot hold a run longer than ten minutes: start long runs in the background,
   logging to a file, and touch no source until they exit.
 - A green suite does not certify the GPU path (every suite runs on the CPU). After touching code
-  that moves tensors, run the smoke gate on the card — four command lines, from the repo root:
+  that moves tensors, run the smoke gate on the card — four command lines, from the repo root —
+  and check `$LASTEXITCODE` after each one:
 
   ```powershell
   $py = "C:\Users\J\anaconda3\envs\biophys-env\python.exe"
   $B  = "--bounds","Resources/Bounds/nadrowski/master.txt"
   $C  = "--cell","Resources/Cells/nadrowski/master_spont.txt"
+  $S  = "<scratch>"
   # run 1: chi; builds and names smoke_prior/smoke_posterior; writes the simulation cache
-  & $py -m core smoke --chi --t-obs 4.5 @B @C --checkpoint --save --store-root <scratch>/smoke
+  & $py -m core smoke --chi --t-obs 4.5 @B @C --checkpoint --save --store-root "$S/smoke"
   # run 2: same store, same --num-runs; must resume
-  & $py -m core smoke --chi --t-obs 4.5 @B @C --checkpoint --store-root <scratch>/smoke --prior smoke_prior --stages prior,posterior --resume require
+  & $py -m core smoke --chi --t-obs 4.5 @B @C --checkpoint --store-root "$S/smoke" --prior smoke_prior --stages prior,posterior --resume require
   # run 2b: one setting away; must exit 1 naming n_runs
-  & $py -m core smoke --chi --t-obs 4.5 @B @C --checkpoint --store-root <scratch>/smoke --prior smoke_prior --stages prior,posterior --num-runs 2
+  & $py -m core smoke --chi --t-obs 4.5 @B @C --checkpoint --store-root "$S/smoke" --prior smoke_prior --stages prior,posterior --num-runs 2
   # run 3: forced mode, its own store
-  & $py -m core smoke --no-chi --t-obs 4.5 @B --cell Resources/Cells/nadrowski/master_weak.txt --checkpoint --save --store-root <scratch>/smoke_chi0
+  & $py -m core smoke --no-chi --t-obs 4.5 @B --cell Resources/Cells/nadrowski/master_weak.txt --checkpoint --save --store-root "$S/smoke_chi0"
   ```
 
-  Run 2 must resume (`Reusing the Fisher rotation…`, `[checkpoint] resuming at batch 4/4`); run 2b
-  is the same identity one field away and must EXIT 1 naming `n_runs`. `--bounds` is required: the
-  same-named sibling rule would otherwise resolve the 12-dim spontaneous box. Delete `<scratch>`
-  afterwards; the last result is in `docs/STATE.md`.
+  Pass criteria, read off `$LASTEXITCODE` and the printed lines after each command:
+  - run 1 and run 3: `$LASTEXITCODE` 0, no OOM lines, stage timings near the last recorded gate in
+    `docs/STATE.md`, masked-probe counts within ±12 pp of 37 %;
+  - run 2: prints `Reusing the Fisher rotation stored with the training checkpoint` and
+    `[checkpoint] resuming at batch 4/4`, `$LASTEXITCODE` 0;
+  - run 2b: `$LASTEXITCODE` 1, the refusal names `n_runs`, no `[fisher]` line, no new directory
+    under `$S/smoke/simulations/`.
+
+  `--bounds` is required: the same-named sibling rule would otherwise resolve the 12-dim
+  spontaneous box. After a change under `core/diagnostics` that moves tensors, also run the
+  diagnostic card (`sbc`, `identifiability jacobian`, `ablation` against `$S/smoke` with
+  `$env:PRISM_ARTIFACTS` set; `identifiability laplace` against `$S/smoke_chi0`), as recorded in
+  `docs/STATE.md`'s piece-2 GPU gate row. Delete `$S` afterwards; the last result is in
+  `docs/STATE.md`.
 - A foreground `python` check that imports torch and touches the prior or checkpoint machinery
   can hang the tool call for good. Write such checks to a script and run them with a timeout.
 - Do not pipe large Python or Markdown through a bash heredoc (`cat <<EOF`); it dies on

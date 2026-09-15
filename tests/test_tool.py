@@ -749,11 +749,18 @@ def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_p
     assert len(ArtifactStore(root).list("simulation")) == 1, "a resume must not key a new cache"
 
     # (c) one field away: refused before any simulation, naming the field and both values.
+    posts_before = len(ArtifactStore(root).list("posterior"))
     assert main([*common, "--num-runs", "3", "--prior", "smoke_prior",
                  "--stages", "prior,posterior"]) == 1
     cap = capsys.readouterr()
     assert "n_runs" in cap.err and "new_run" in cap.err, cap.err
+    # K8, fix round 1: the comment always said "both values" -- pin them, read literally off the
+    # message's own format (orchestrator._near_miss_lines: "this run <mine>, that cache <theirs>").
+    # This run asked for --num-runs 3; leg (a) committed the cache at --num-runs 2.
+    assert "this run 3" in cap.err and "that cache 2" in cap.err, cap.err
     assert len(ArtifactStore(root).list("simulation")) == 1, "nothing may be written by a refusal"
+    assert len(ArtifactStore(root).list("posterior")) == posts_before, \
+        "nothing may be written by a refusal"
 
     # (d) a stage that raises names itself.
     def _boom(*a, **k):
@@ -770,3 +777,183 @@ def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_p
     assert "*** FAILED in stage validate ***" in cap.out + cap.err
 
     assert default_store() is sandbox, "main must leave the session's default store installed"
+
+
+def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, monkeypatch):
+    """K1, fix round 1 (review finding, spec Sec. 8.4): no test pinned smoke's own knob forwarding.
+    Deleting ``run_size_cap=args.run_size_cap`` from smoke.py kept the four-stage test (and leg (b)
+    of its drill) green, because both legs of THAT test fall back to the same hardware batch -- the
+    GPU gate would then silently train at the card's batch and key a different simulation identity.
+    This pins the exact ``set(kw)`` each of the four stage calls receives, one distinct non-default
+    value per flag, the way T11/T16's own knob tests pin TRAIN_KNOBS/TSNPE_KNOBS/sbc's set.
+
+    All four orchestrator calls smoke.py makes (build_prior, build_posterior, validate_calibration,
+    simulated_inference) CAN be stubbed with recorders without re-implementing smoke -- none of
+    smoke's own control flow (stage skipping, the width/finite checks, the banner) depends on a real
+    return value beyond the shapes built here.
+    """
+    import torch
+    from core import orchestrator
+    from core.SBI.statistics import SUMMARY_WIDTH
+    from core.tool import main
+
+    bounds, cell, root = tool_env
+    loaded_prior = _art(root, "prior")
+    loaded_post = _art(root, "posterior")
+    prior_rec = _Rec(loaded_prior)
+    post_rec = _Rec(loaded_post)
+    val_rec = _Rec(_art(root, "calibration"))
+    infer_calls = []
+
+    def _infer_rec(cfg, posterior, t_obs_s, **kw):
+        infer_calls.append(((cfg, posterior, t_obs_s), kw))
+        want = SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(cfg)
+        obs = SimpleNamespace(width=want, x_obs=torch.zeros(1))
+        return obs, _art(root, "inference")
+
+    monkeypatch.setattr(orchestrator, "build_prior", prior_rec)
+    monkeypatch.setattr(orchestrator, "build_posterior", post_rec)
+    monkeypatch.setattr(orchestrator, "validate_calibration", val_rec)
+    monkeypatch.setattr(orchestrator, "simulated_inference", _infer_rec)
+
+    # --prior AND --save together: build_prior LOADS (ref given, build_new False) and is named ""
+    # (a loaded prior is never renamed); build_posterior still gets "smoke_posterior" -- --save names
+    # whatever THIS run builds, independent of whether the prior was loaded.
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--num-runs", "3", "--run-size", "9",
+                 "--n-cal", "17", "--max-epochs", "6", "--checkpoint", "--new-run",
+                 "--resume", "require", "--t-obs", "2.5", "--seed", "5", "--prior", "smoke_prior",
+                 "--save"]) == 0
+
+    (cfg1, ref1, build_new1), kw1 = prior_rec.calls[0]
+    assert ref1 == "smoke_prior" and build_new1 is False
+    assert kw1["name"] == ""
+    assert set(kw1) == {"fig_sink", "store", "name"}
+
+    (cfg2, prior2, ref2, train_new2), kw2 = post_rec.calls[0]
+    assert prior2 is loaded_prior and ref2 is None and train_new2 is True
+    assert kw2["name"] == "smoke_posterior"
+    assert set(kw2) == {"fig_sink", "store", "name", "num_runs", "run_size_cap", "max_num_epochs",
+                        "checkpoint_every", "new_run", "resume"}
+    assert kw2["num_runs"] == 3
+    assert kw2["run_size_cap"] == 9
+    assert kw2["max_num_epochs"] == 6
+    assert kw2["checkpoint_every"] == 1, "ck_every = max(1, num_runs // 2) = max(1, 3 // 2)"
+    assert kw2["new_run"] is True
+    assert kw2["resume"] == "require"
+
+    (cfg3, post3, prior3), kw3 = val_rec.calls[0]
+    assert post3 is loaded_post and prior3 is loaded_prior
+    assert set(kw3) == {"fig_sink", "store", "n_cal"}
+    assert kw3["n_cal"] == 17
+
+    (cfg4, post4, t_obs4), kw4 = infer_calls[0]
+    assert post4 is loaded_post and t_obs4 == 2.5
+    assert set(kw4) == {"cell", "prior", "fig_sink", "store"}
+    assert kw4["cell"] == cell and kw4["prior"] is loaded_prior
+
+
+def test_smoke_rejects_an_unknown_stage_at_parse_time(tool_env, monkeypatch, capsys):
+    """K2, fix round 1: an unknown --stages entry is now an argparse type= error, so it is refused
+    DURING PARSING -- before main ever calls tempfile.mkdtemp or registry.load_user_models(). Pinned
+    by call counts on both, not by a directory listing or the exit code alone: the OLD runtime-only
+    check (still present in run_smoke as a second, defensive line -- see its own docstring) already
+    returned exit 2 for this exact input, AND K3's own leaked-root cleanup would already remove the
+    resulting empty prism_smoke_* directory after that runtime refusal -- so neither the exit code
+    nor a clean tempdir listing can tell "refused before a root was resolved" apart from "refused
+    after one was created and then cleaned up". Only the call counts can.
+    """
+    import tempfile
+    from core import registry
+    from core.tool import main
+
+    bounds, cell, root = tool_env
+    mkdtemp_calls = []
+    real_mkdtemp = tempfile.mkdtemp
+    monkeypatch.setattr(
+        tempfile, "mkdtemp",
+        lambda *a, **k: (mkdtemp_calls.append(1), real_mkdtemp(*a, **k))[1])
+    load_calls = []
+    monkeypatch.setattr(registry, "load_user_models", lambda: load_calls.append(1))
+
+    capsys.readouterr()
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--stages", "prior,bogus"]) == 2
+    err = capsys.readouterr().err
+    assert "bogus" in err and "--stages" in err
+    assert mkdtemp_calls == [], "a parse-time refusal must never call tempfile.mkdtemp"
+    assert load_calls == [], "a parse-time refusal must never reach registry.load_user_models"
+
+
+def test_smoke_leaves_no_leaked_temp_root_on_a_bad_bounds_file(tool_env, tmp_path, monkeypatch,
+                                                                capsys):
+    """K3, fix round 1: mkdtemp runs before build_cfg, so a bad --bounds used to leave an empty
+    %TEMP%\\prism_smoke_* behind forever, its path never printed anywhere an operator would look.
+    main() now removes an auto-created root when the handler fails AND the root is still empty; a
+    non-empty root (Step 7's real one-stage check, or any run that got as far as writing anything)
+    or a user-named --store-root is never touched -- pinned by the main four-stage smoke test's own
+    --store-root runs, which still leave their directories on disk.
+
+    tempfile.tempdir is monkeypatched to tmp_path (rather than reading %TEMP% itself) so this test
+    counts in isolation from whatever else the real temp directory holds.
+    """
+    import tempfile
+    from core.tool import main
+
+    bounds, cell, root = tool_env
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    before = set(tmp_path.iterdir())
+    bad_bounds = str(Path(bounds).parent / "does_not_exist.txt")
+    capsys.readouterr()
+    assert main(["smoke", "--bounds", bad_bounds, "--device", "cpu", "--cell", cell]) == 1
+    after = set(tmp_path.iterdir())
+    assert after == before, "a bad --bounds must not leave an empty prism_smoke_* directory behind"
+
+
+def test_smoke_ctrl_c_advice_depends_on_store_root():
+    """K5, fix round 1: smoke keys its store on --store-root, not PRISM_ARTIFACTS, so the generic
+    "the same command with --resume require continues them" advice is wrong for it -- re-issuing run
+    1's own command line just re-BUILDS the prior. Unit-tested directly against the extracted helper
+    (rather than only by driving a real KeyboardInterrupt through a real smoke run, as the existing
+    Ctrl-C test does for train against a prior/posterior already on disk) because smoke's own
+    prior/posterior build is the expensive real chain this subcommand exists to exercise.
+    """
+    from core.tool import _smoke_interrupt_advice
+
+    named = SimpleNamespace(store_root=r"C:\scratch\smoke")
+    advice = _smoke_interrupt_advice(named)
+    assert r"--store-root C:\scratch\smoke" in advice
+    assert "--prior smoke_prior" in advice and "--stages prior,posterior" in advice
+    assert "--resume require" in advice
+
+    unnamed = SimpleNamespace(store_root=None)
+    assert _smoke_interrupt_advice(unnamed) == "a run without --store-root cannot be resumed."
+
+
+def test_smoke_ctrl_c_prints_store_specific_resume_advice(tool_env, tmp_path, monkeypatch, capsys):
+    """K5 end to end: main()'s KeyboardInterrupt handler must pick the smoke-specific advice for
+    smoke -- keyed on the --store-root FLAG (hasattr), not the subcommand name -- and must leave
+    every other subcommand's generic advice untouched (test_ctrl_c_mid_simulation_keeps_the_committed_
+    batches still asserts only "interrupted" is in stderr for train). Raising KeyboardInterrupt
+    straight out of build_prior, rather than driving a real interrupt through a real simulation mid-
+    flight, proves main() picked the right branch at no simulation cost.
+    """
+    from core import orchestrator
+    from core.tool import main
+
+    bounds, cell, _root = tool_env
+
+    def _boom(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(orchestrator, "build_prior", _boom)
+
+    store = tmp_path / "named_store"
+    capsys.readouterr()
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--store-root", str(store)]) == 130
+    err = capsys.readouterr().err
+    assert f"--store-root {store}" in err and "--prior smoke_prior" in err
+    assert "--stages prior,posterior" in err and "--resume require" in err
+
+    capsys.readouterr()
+    assert main(["smoke", *_cfg(bounds), "--cell", cell]) == 130
+    err = capsys.readouterr().err
+    assert "a run without --store-root cannot be resumed." in err

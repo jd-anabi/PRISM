@@ -5,7 +5,8 @@ was given, so the stage's own default -- read from config.py, in one place -- is
 imports live inside the handlers, so building the parser costs no torch.
 """
 from .config_args import (UsageError, accept_from, add_accept_flags, add_config_flags, add_name_flags,
-                          build_cfg, close_sink, knobs, load_posterior_and_prior, recording_set, report)
+                          add_resume_flags, build_cfg, close_sink, knobs, load_posterior_and_prior,
+                          recording_set, report)
 
 PRIOR_KNOBS = ("num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units",
                "min_cluster_size", "min_samples")
@@ -69,12 +70,7 @@ def register(subparsers) -> dict:
                    help="operating points the Fisher is averaged over")
     p.add_argument("--checkpoint-every", type=int, default=None, metavar="N",
                    help="batches between checkpoint commits (0 = no cache, nothing resumable)")
-    p.add_argument("--resume", choices=("auto", "require", "never"), default=None,
-                   help="auto resumes this run's own cache; require refuses when there is none; "
-                        "never refuses to resume one (default: auto)")
-    p.add_argument("--new-run", action="store_true",
-                   help="start a new simulation cache even though a committed one ONE setting away "
-                        "exists; it silences that refusal and nothing else")
+    add_resume_flags(p)
     p.set_defaults(handler=_train)
     out["train"] = p
 
@@ -140,12 +136,7 @@ def register(subparsers) -> dict:
     p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=None, metavar="N")
     p.add_argument("--checkpoint-every", type=int, default=None, metavar="N",
                    help="batches between checkpoint commits (0 = no cache, nothing resumable)")
-    p.add_argument("--resume", choices=("auto", "require", "never"), default=None,
-                   help="auto resumes this run's own cache; require refuses when there is none; "
-                        "never refuses to resume one (default: auto)")
-    p.add_argument("--new-run", action="store_true",
-                   help="start a new simulation cache even though a committed one ONE setting away "
-                        "exists (a test round and a real one differ only in --num-runs)")
+    add_resume_flags(p)
     add_accept_flags(p)
     p.set_defaults(handler=_tsnpe)
     out["tsnpe"] = p
