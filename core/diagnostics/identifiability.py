@@ -26,6 +26,7 @@ from dataclasses import dataclass
 import numpy as np
 import torch
 
+from core import orchestrator as orch
 from core.artifacts import resolve_store
 from core.Helpers import file_manager
 
@@ -33,12 +34,6 @@ from . import feature_sets
 from .rng import seeded
 
 _SF, _SS, _SC = 1, 2, 3          # CRN seeds: forced / spontaneous / chi block
-
-
-def _finite(x):
-    """A finite float, or None -- a manifest refuses NaN and a destabilised point legitimately makes one."""
-    v = float(x)
-    return v if math.isfinite(v) else None
 
 
 def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4,
@@ -66,6 +61,10 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
     n_worst, top_n = max(1, int(n_worst)), max(1, int(top_n))
     V = np.asarray(tr["V"], dtype=float)
     P = V.shape[0]
+    if n_worst > P:
+        # M8: W[i, P-n_worst:] with P-n_worst < 0 is a NEGATIVE slice -- Python reads it "from the
+        # end", so bottom_share silently sums fewer than n_worst directions rather than crashing.
+        raise ValueError(f"n_worst ({n_worst}) cannot exceed the number of directions P={P}.")
     names = list(tr["param_keys"])
     if len(names) != P:
         names = [f"p{i}" for i in range(P)]
@@ -221,12 +220,18 @@ def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
                                 state_dep_drift=cfg.state_dep_drift, batch_size=m, dtype=dtype,
                                 device=device)[0][:, ::subs][:, :n_obs]
 
-    if crn:
-        torch.manual_seed(_SF)
-    xf = sim(forcef)
-    if crn:
-        torch.manual_seed(_SS)
-    xs = sim(torch.zeros_like(forcef))
+    # fork_rng so the fixed CRN seeds do not leak out and pin the caller's global RNG -- the same
+    # M5 defect once present in _jacobian_features (see the fork_rng note there): without it, every
+    # call here that runs with crn=True (every perturbation arm) leaves the global stream at a
+    # constant, seed-independent state, so the NEXT point's own noise-floor measurement (crn=False,
+    # no reseed of its own) silently stops depending on ``--seed`` at all.
+    with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
+        if crn:
+            torch.manual_seed(_SF)
+        xf = sim(forcef)
+        if crn:
+            torch.manual_seed(_SS)
+        xs = sim(torch.zeros_like(forcef))
     xsc = res[cfg.rescale_idx["x_scale"]].double()
     xof = res[cfg.rescale_idx["x_offset"]].double() if "x_offset" in cfg.rescale_idx else 0.0
     xf_d, xs_d = xsc * xf.double() + xof, xsc * xs.double() + xof
@@ -330,11 +335,20 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
     n_points = int(n_points)
     if n_points < 1:
         raise ValueError(f"n_points must be at least 1 (the ground truth is point 1), got {n_points}")
+    if int(m_noise) < 10:
+        # Below this the noise-floor ensemble is too small to estimate a per-feature std at all; left
+        # unguarded it produces "Mean of empty slice" / zero-division RuntimeWarnings deep inside
+        # _analyze_point rather than a refusal that names the knob to raise.
+        raise ValueError(f"m_noise must be at least 10 (the feature-noise floor needs an ensemble), "
+                         f"got {int(m_noise)}")
     _ = cfg.ground_truth                      # refuses a cell-free config, before anything is spent
     feature_sets.describe_features(cfg)
 
     dtype, device = cfg.hw.dtype, cfg.hw.device
     t_obs_s = float(config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
+    if t_obs_s <= 0:
+        raise ValueError(f"t_obs_s must be positive (it sizes n_obs, the recording length in "
+                         f"samples), got {t_obs_s}")
     n_obs = int(t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp)
     nd_dim = len(cfg.params_dict)
     res_names = list(cfg.rescale_params)
@@ -352,6 +366,9 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
                 "min_valid": float(min_valid), "sd_identified": float(sd_identified),
                 "t_obs_s": t_obs_s, "seed": int(seed),
                 "log_range_params": [n for n, lg in zip(names, is_log) if lg]}
+    # M6: hoisted above store.create -- this can refuse (no `gen_dist` under the posterior's
+    # `.latent.prior`), and a refusal must not leave a half-written diagnostic directory behind.
+    latent_prior = _training_latent_prior(posterior.latent) if n_points > 1 else None
 
     with store.create("diagnostic", cfg, name=name, note=note) as w:
         with seeded(int(seed), device):
@@ -361,7 +378,6 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
             points = [("GT", gt_nd, gt_res, gt_force)]
             if n_points > 1:
                 from core import orchestrator
-                latent_prior = _training_latent_prior(posterior.latent)
                 T = posterior.posterior.T
                 z = latent_prior.sample((n_points - 1,))
                 theta = T(z.to(device))
@@ -387,8 +403,8 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
             med = float(np.median(fin)) if fin.size else float("nan")
             frac = float((fin < sd_identified).mean()) if fin.size else float("nan")
             per_param.append({"name": names[p], "unit": "log-range" if is_log[p] else "range",
-                              "sd": [_finite(v) for v in row], "median_sd": _finite(med),
-                              "frac_identified": _finite(frac)})
+                              "sd": [orch._num(v) for v in row], "median_sd": orch._num(med),
+                              "frac_identified": orch._num(frac)})
             print(f"{names[p]:9s} "
                   + " ".join(f"{v:7.3f}" if np.isfinite(v) else f"{'nan':>7s}" for v in row)
                   + f" {med:8.3f} {frac:8.2f}")
@@ -513,7 +529,8 @@ def _probe_budget(ctx, feats0, keep0, xs0, t_obs_s) -> None:
     t_full = ctx.n_obs * cfg.dt_exp
     n_sp, n_ch = len(ctx.keep_idx), len(chi_mod.CHI_FISHER_CHANNELS)
     print(f"\n=== probe budget: T_obs={t_obs_cell:g} cell-time = {t_obs_s:g} s, "
-          f"Omega_0={f0_gt * hz:.4g} Hz (ensemble median) ===")
+          f"Omega_0={f0_gt * hz:.4g} Hz (ensemble median; p5..p95 "
+          f"{np.percentile(f_pk, 5) * hz:.3g}..{np.percentile(f_pk, 95) * hz:.3g}) ===")
     print(f"  {'xOmega_0':>9} {'f (Hz)':>9} {'cycles':>8} {'floor':>7} {'ceiling':>8} "
           f"{'mean log|chi|':>14} {'cos^2+sin^2':>12}")
     bad = 0
@@ -532,6 +549,13 @@ def _probe_budget(ctx, feats0, keep0, xs0, t_obs_s) -> None:
             f"chi: {bad} probe(s) violate cos^2 + sin^2 == 1, so channels 1 and 2 of the Fisher block "
             f"are not the cosine and sine of one phase. Check what is being passed to "
             f"chi.fisher_features and the gen_chi_raw unpack (trap CHI10).")
+    lo_b, hi_b = cfg.chi_freq_bounds
+    print(f"  low edge {lo_b:g}x clears {CHI_MIN_CYCLES:g} cycles at T_obs >= "
+          f"{CHI_MIN_CYCLES / (lo_b * f0_gt) / hz:.3g} s; high edge {hi_b:g}x stays under the "
+          f"{cfg.chi_max_cycles:g}-cycle ceiling below T_obs = "
+          f"{cfg.chi_max_cycles / (hi_b * f0_gt) / hz:.3g} s.")
+    print(f"  adapt_placement (OFF here, see the gen_chi_raw call) would be a NO-OP iff the first of "
+          f"those two numbers is <= this T_obs of {t_obs_s:g} s.", flush=True)
 
 
 def _dead_channels(ctx, feats0, keep0, fnoise, noise_eps):
@@ -602,9 +626,28 @@ def _jacobian(ctx, gt_nd, gt_rescale, fnoise, cap, m, rel, min_valid):
     return np.stack(cols, axis=1), names, kinds, vfr
 
 
-def _summaries(ctx, J, fnoise, names, kinds, zero_tol, sink):
-    """The tables, the two figures and the results block. Pure over ``J``."""
+def _summaries(ctx, J, fnoise, dead, names, kinds, zero_tol, sink):
+    """The tables, the two figures, and the extra arrays the caller folds into the npz payload.
+
+    Returns a TUPLE, not "the results block" -- ``identifiability_jacobian``'s own ``results`` stays
+    limited to spec Sec 4.5's keys, and everything restored here (the unique-handle fractions, the
+    sloppiest direction, the top features, the rows dominating J) goes to the screen and to the npz's
+    ``extra`` dict, the last element of the tuple, not into ``results``.
+
+    ``dead`` is owned HERE (not by the caller) because the "zeroed N dead rows" amplification line
+    needs J's PRE-zeroing values to report what was lost, and zeroing has to happen before every
+    downstream statistic (norms, cosines, SVD) so none of them sees a channel that isn't really there.
+    """
     from matplotlib import pyplot as plt
+    if dead.any():
+        # The amplification is printed because it is the EVIDENCE that the guard did something: a
+        # dead row whose largest entry rivals the largest live one is a row that would have led the
+        # payload table. ZEROED, not deleted, so every row index still matches feat_labels.
+        fin = np.isfinite(J)
+        print(f"[noise] zeroed {int(dead.sum())} dead rows of J; their largest standardized entry was "
+              f"{np.abs(J[dead][fin[dead]]).max(initial=0.0):.3g}, against "
+              f"{np.abs(J[~dead][fin[~dead]]).max(initial=0.0):.3g} over the live rows.", flush=True)
+        J[dead, :] = 0.0
     P = J.shape[1]
     norms_std = np.array([np.linalg.norm(J[:, p]) if np.isfinite(J[:, p]).all() else np.nan
                           for p in range(P)])
@@ -614,12 +657,26 @@ def _summaries(ctx, J, fnoise, names, kinds, zero_tol, sink):
     print(f"{'param':11s} {'kind':9s} {'||g||_std':>10s} {'||g||_raw':>10s}")
     for p in range(P):
         print(f"{names[p]:11s} {kinds[p]:9s} {norms_std[p]:10.3f} {norms_raw[p]:10.4g}")
+
+    # ---- which rows are driving J ---- advisory, no threshold: a row leading this table on a std
+    # 1000x under the median is quantization (the probe budget above says which probe), not signal.
+    abs_j = np.abs(np.nan_to_num(J, nan=0.0))
+    rowmax, fmed = abs_j.max(1), float(np.median(fnoise))
+    print(f"\n=== feature rows dominating J (median fnoise {fmed:.3g}; check it before believing one) ===")
+    print(f"  {'row':18s} {'fnoise':>10s} {'/median':>9s} {'max|J|':>9s}  at param")
+    row_top = np.argsort(-rowmax)[:8]
+    for i in row_top:
+        print(f"  {ctx.feat_labels[i]:18s} {fnoise[i]:10.3g} {fnoise[i] / max(fmed, 1e-30):9.3g} "
+              f"{rowmax[i]:9.3g}  {names[int(np.argmax(abs_j[i]))]}")
+
     measurable = np.array([kinds[p] != "UNMEAS" for p in range(P)])
     stiff = measurable & (np.nan_to_num(norms_std) > zero_tol)
     mi = [p for p in range(P) if measurable[p]]
     si = [p for p in range(P) if stiff[p]]
     unmeasurable = [names[p] for p in range(P) if not measurable[p]]
+    no_local_info = [names[p] for p in range(P) if measurable[p] and not stiff[p]]
     print(f"\nunmeasurable (both sides destabilize): {unmeasurable or 'none'}")
+    print(f"no local info (||g||_std<{zero_tol}): {no_local_info or 'none'}")
 
     ns = [names[p] for p in mi]
     Jm = J[:, mi]
@@ -635,12 +692,30 @@ def _summaries(ctx, J, fnoise, names, kinds, zero_tol, sink):
           + (", ".join(f"{p['a']}~{p['b']} ({p['cos']:.2f})" for p in pairs) or "none"))
 
     Js = J[:, si]
-    S = np.linalg.svd(Js, full_matrices=False)[1] if Js.size else np.zeros(0)
+    if Js.size:
+        _u, S, Vt = np.linalg.svd(Js, full_matrices=False)
+    else:
+        S, Vt = np.zeros(0), np.zeros((0, 0))
+    nss = [names[p] for p in si]
     cond = float(S[0] / max(S[-1], 1e-12)) if S.size else float("nan")
-    print(f"\n=== SVD over stiff columns {[names[p] for p in si]} ===")
+    print(f"\n=== SVD over stiff columns {nss} ===")
     for k in range(S.size):
         print(f"  sigma[{k}] = {S[k]:9.3f}  (norm {S[k] / S[0]:.4f})")
     print(f"  condition number = {cond:.1f}")
+    print("\n=== sloppiest stiff direction (smallest singular value) loadings ===")
+    sloppiest = Vt[-1] if Vt.shape[0] else np.zeros(0)
+    for j in np.argsort(-np.abs(sloppiest)):
+        print(f"  {nss[j]:11s} {sloppiest[j]:+.3f}")
+
+    # ---- unique-handle over measurable columns: ||g_p projected off span(others)|| / ||g_p|| ----
+    print("\n=== unique-handle ||g_p _|_ span(others)|| / ||g_p|| (low = degenerate) ===")
+    unique_frac = np.zeros(len(mi))
+    for p in range(len(mi)):
+        others = np.delete(Jm, p, axis=1)
+        coef, *_ = np.linalg.lstsq(others, Jm[:, p], rcond=None)
+        unique_frac[p] = np.linalg.norm(Jm[:, p] - others @ coef) / max(np.linalg.norm(Jm[:, p]), 1e-12)
+    for p in sorted(range(len(mi)), key=lambda q: unique_frac[q]):
+        print(f"  {ns[p]:11s} unique={unique_frac[p]:.3f}   ||g||_std={np.linalg.norm(Jm[:, p]):.3f}")
 
     fig, ax = plt.subplots(figsize=(8.5, 7.5))
     im = ax.imshow(C, vmin=0, vmax=1, cmap="magma")
@@ -656,7 +731,34 @@ def _summaries(ctx, J, fnoise, names, kinds, zero_tol, sink):
     ax2.set_title("Jacobian singular spectrum over stiff cols (small = sloppy)")
     fig2.tight_layout()
     sink("Jacobian singular spectrum", fig2)
-    return norms_std, norms_raw, unmeasurable, pairs, cond
+
+    # ---- top features per parameter -- the script calls this "the scientific payload": not merely
+    # whether an alias weakened, but WHICH features drove it.
+    print("\n=== top features per parameter ===")
+    top_k = min(5, J.shape[0])
+    top_feat_idx = np.full((P, top_k), -1, dtype=int)
+    top_feat_val = np.full((P, top_k), np.nan)
+    for p in range(P):
+        col = J[:, p]
+        if not np.isfinite(col).all():
+            print(f"  {names[p]:11s} (unmeasurable)")
+            continue
+        top = np.argsort(-np.abs(col))[:top_k]
+        top_feat_idx[p, :len(top)] = top
+        top_feat_val[p, :len(top)] = col[top]
+        print(f"  {names[p]:11s} " + ", ".join(f"{ctx.feat_labels[i]}={col[i]:+.2f}" for i in top))
+
+    extra = {
+        "measurable_mask": measurable, "stiff_mask": stiff,
+        "C": C, "S": S, "sloppiest_loadings": sloppiest, "unique_frac": unique_frac,
+        "pair_a": np.array([p["a"] for p in pairs], dtype=str),
+        "pair_b": np.array([p["b"] for p in pairs], dtype=str),
+        "pair_cos": np.array([p["cos"] for p in pairs], dtype=float),
+        "top_feat_idx": top_feat_idx, "top_feat_val": top_feat_val,
+        "row_dominant_idx": row_top.astype(int), "row_dominant_fnoise": fnoise[row_top],
+        "row_dominant_ratio": fnoise[row_top] / max(fmed, 1e-30), "row_dominant_maxJ": rowmax[row_top],
+    }
+    return norms_std, norms_raw, unmeasurable, pairs, cond, extra
 
 
 def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float = 0.02,
@@ -683,11 +785,17 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
     if not cfg.chi_mode:
         # chi probes at its own frequencies and ignores the cell's drive, so only this branch needs one.
         feature_sets.assert_forced(cfg, "identifiability jacobian in forced mode")
+    if int(m_noise) < 10:
+        raise ValueError(f"m_noise must be at least 10 (the feature-noise floor needs an ensemble), "
+                         f"got {int(m_noise)}")
     _ = cfg.ground_truth
     feature_sets.describe_features(cfg)
 
     dtype, device = cfg.hw.dtype, cfg.hw.device
     t_obs_s = float(config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
+    if t_obs_s <= 0:
+        raise ValueError(f"t_obs_s must be positive (it sizes n_obs, the recording length in "
+                         f"samples), got {t_obs_s}")
     n_obs = int(t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp)
     gt_nd = cfg.params_tensor[0].clone()
     gt_rescale = torch.tensor([v for v, _ in cfg.rescale_params.values()], dtype=dtype, device=device)
@@ -710,6 +818,16 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
         with seeded(int(seed), device):
             feats0, xf0, xs0 = _jacobian_features(ctx, gt_nd, gt_rescale, int(m_noise), False)
             fin0 = (torch.isfinite(xf0).all(1) & torch.isfinite(xs0).all(1)).cpu().numpy()
+            if fin0.sum() < 10:
+                # M7: mirrors _analyze_point's own guard (laplace). Below this the noise floor is not
+                # estimable at all -- unguarded, np.median(amax0[fin0]) on an empty selection warns
+                # "Mean of empty slice", the derived CAP is NaN, keep0 ends up all-False, and
+                # feats0[keep0].std(0) then warns "Degrees of freedom <= 0" on a zero-size reduction.
+                raise ValueError(
+                    f"identifiability jacobian: only {int(fin0.sum())} of {fin0.size} baseline "
+                    f"trajectories at the ground truth were finite, so no feature-noise floor could "
+                    f"be measured. The simulation is destabilizing at this T_obs/ground truth; check "
+                    f"the cell and --t-obs.")
             amax0 = torch.maximum(xf0.abs().amax(1), xs0.abs().amax(1)).cpu().numpy()
             cap = 100.0 * float(np.median(amax0[fin0]))
             keep0 = fin0 & (amax0 < cap)
@@ -720,21 +838,18 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
             dead = _dead_channels(ctx, feats0, keep0, fnoise, float(noise_eps))
             J, names, kinds, vfr = _jacobian(ctx, gt_nd, gt_rescale, fnoise, cap, int(m),
                                              float(rel), float(min_valid))
-        if dead.any():
-            # ZEROED, not deleted, so every row index still matches feat_labels: a zero row contributes
-            # nothing to a norm, a cosine, a singular value or an argsort.
-            J[dead, :] = 0.0
         sink = w.fig_sink(fig_sink)
-        norms_std, norms_raw, unmeasurable, pairs, cond = _summaries(
-            ctx, J, fnoise, names, kinds, float(zero_tol), sink)
+        norms_std, norms_raw, unmeasurable, pairs, cond, extra = _summaries(
+            ctx, J, fnoise, dead, names, kinds, float(zero_tol), sink)
         file_manager.atomic_savez(w.payload("degeneracy_map.npz"), {
             "J": J, "fnoise": fnoise, "dead": dead, "norms_std": norms_std, "norms_raw": norms_raw,
             "feat_labels": np.array([str(s) for s in ctx.feat_labels]),
             "param_names": np.array([str(s) for s in names]),
             "kinds": np.array(kinds), "valid_frac": np.asarray(vfr, dtype=float),
-            "mults": (ctx.mults.cpu().numpy() if cfg.chi_mode else np.zeros(0))})
+            "mults": (ctx.mults.cpu().numpy() if cfg.chi_mode else np.zeros(0)),
+            **extra})
         results = {"observation_mode": cfg.observation_mode, "T_obs_s": t_obs_s,
-                   "n_features": len(ctx.feat_labels), "condition_number": _finite(cond),
+                   "n_features": len(ctx.feat_labels), "condition_number": orch._num(cond),
                    "unmeasurable": unmeasurable, "degenerate_pairs": pairs,
                    "dead_channels": [ctx.feat_labels[i] for i in np.flatnonzero(dead)]}
         w.parents = {}

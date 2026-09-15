@@ -385,8 +385,6 @@ def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
 
 def _rotation_posterior(store, cfg, *, V, evals):
     """A posterior artifact whose transform block records V (columns) and its eigenvalues."""
-    from core.artifacts import manifest as mf
-    from tests._fixtures import _posterior_artifact
     over = {("transform", "fisher_eigenvalues"): None if evals is None else [float(v) for v in evals]}
     return _posterior_artifact(store, cfg, name="rot", V=V, over=over)
 
@@ -395,16 +393,18 @@ def test_identifiability_rotation_decomposes_a_stored_basis(store):
     """What did this artifact MEASURE? The Fisher eigenbasis is on disk already, so the answer costs
     no simulation: which directions carry the information, what each is made of, and which parameters
     are their OWN near-null direction (flat, not aliased -- no reparameterisation reaches those)."""
-    import math
     import torch
     from core.diagnostics import identifiability_rotation
-    from tests._fixtures import _nad_cfg
     cfg = _nad_cfg()
     P = len(cfg.params_dict) + len(cfg.rescale_params)
     names = list(cfg.params_dict) + list(cfg.rescale_params)
     # A permutation basis: direction j is exactly parameter order[j], so every share is 0 or 1 and the
     # arithmetic below is checkable by hand. order[-1] is the WORST direction and its parameter is flat.
-    order = list(range(P))
+    # I1: a CYCLIC SHIFT, not the identity -- V(order=range(P)) is the identity matrix, which is
+    # SYMMETRIC, so reading it transposed (the D6 defect: rows instead of columns) is indistinguishable
+    # from reading it correctly and every assertion below would still pass. A cyclic shift of P>2
+    # elements is not an involution, so its permutation matrix is genuinely non-symmetric.
+    order = [(i + 1) % P for i in range(P)]
     V = torch.zeros(P, P, dtype=torch.float64)
     for j, i in enumerate(order):
         V[i, j] = 1.0
@@ -435,7 +435,6 @@ def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_abse
     import pytest
     import torch
     from core.diagnostics import identifiability_rotation
-    from tests._fixtures import _nad_cfg
     cfg = _nad_cfg()
     P = len(cfg.params_dict) + len(cfg.rescale_params)
     w = _rotation_posterior(store, cfg, V=torch.eye(P, dtype=torch.float64), evals=None)
@@ -443,11 +442,25 @@ def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_abse
     assert d.results["eigenvalues"] is None and len(d.results["directions"]) == P
     assert d.results["directions"][0]["eigenvalue"] is None
     assert "NOT STORED" in capsys.readouterr().out
-    from tests._fixtures import _posterior_artifact
     flat = _posterior_artifact(store, cfg, name="norot", V=None)
     with pytest.raises(ValueError, match="records no Fisher rotation"):
         identifiability_rotation(cfg, store.load_posterior(cfg, flat.id), name="rot_none")
     assert [s.name for s in store.list("diagnostic") if s.name == "rot_none"] == []
+
+
+def test_identifiability_rotation_refuses_n_worst_over_p(store):
+    """M8: ``W[i, P-n_worst:]`` is a NEGATIVE slice once ``n_worst > P`` -- Python reads it from the
+    end instead of raising, so ``bottom_share`` would silently sum fewer than n_worst directions.
+    Refused before store.create, so no directory is written."""
+    import pytest
+    import torch
+    from core.diagnostics import identifiability_rotation
+    cfg = _nad_cfg()
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    w = _rotation_posterior(store, cfg, V=torch.eye(P, dtype=torch.float64), evals=None)
+    with pytest.raises(ValueError, match=f"n_worst \\({P + 1}\\) cannot exceed"):
+        identifiability_rotation(cfg, store.load_posterior(cfg, w.id), n_worst=P + 1, name="rot_nw")
+    assert [s.name for s in store.list("diagnostic") if s.name == "rot_nw"] == []
 
 
 def _forced_nad_cfg():
@@ -476,7 +489,6 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
     import numpy as np
     import torch
     from core.diagnostics import identifiability, identifiability_laplace
-    from tests._fixtures import _posterior_artifact
     cfg = _forced_nad_cfg()
     P = len(cfg.params_dict) + len(cfg.rescale_params)
     V = torch.eye(P, dtype=torch.float64)
@@ -489,10 +501,24 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
         calls.append((int(m), bool(crn), int(n_obs)))
         n_feat = identifiability.feature_sets.n_features(cfg_)
         g = torch.zeros(int(m), 8, dtype=torch.float64)
-        feats = np.tile(np.arange(n_feat, dtype=float) + float(nd.sum()), (int(m), 1))
+        row = np.arange(n_feat, dtype=float) + float(nd.sum())
+        # M12: an alternating +-0.01 "wobble" over the ensemble AXIS (same for every feature column),
+        # not the exactly-constant-row fake this replaces. An EXACTLY constant ensemble makes fnoise
+        # clamp to the 1e-9 floor, which -- after dividing a raw gradient of ~1 by it -- puts every ND
+        # column of J at ~1e9-1e12 in magnitude; J^T@J then lands at ~1e21-1e24, where adding
+        # `np.eye(P)` is a complete float64 NO-OP (bit-lost), turning a well-posed ridge inversion into
+        # a numerically singular one -- the covariance diagonal comes back as SIGN-NOISE near zero,
+        # not the true (well-conditioned, closed-form) answer. `m` and `m_noise` are both EVEN here
+        # (4, 16), so `sum((-1)**i for i in range(m)) == 0` EXACTLY (IEEE754 negation is exact, and
+        # summing exact +/-0.01 pairs cancels to exactly 0.0) -- the ensemble MEAN, which is all
+        # measure() ever reads, is therefore untouched, while the ensemble STD (fnoise) becomes a
+        # clean, well-scaled 0.01 instead of the pathological 1e-9 floor.
+        wobble = 0.01 * ((-1.0) ** np.arange(int(m)))[:, None]
+        feats = np.tile(row, (int(m), 1)) + wobble
         return feats, g + 1.0, g + 1.0
 
     monkeypatch.setattr(identifiability, "_laplace_raw", _fake_raw)
+    t_obs_before = cfg.T_obs                          # I3: captured BEFORE the call, not guessed after
     d = identifiability_laplace(cfg, lp, n_points=2, m=4, m_noise=16, t_obs_s=2.0, seed=3,
                                 name="lap1")
     res = d.results
@@ -507,18 +533,57 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
     assert set(d.manifest.payloads) == {"laplace_sd.npz"}
     z = np.load(d.path / "laplace_sd.npz")
     assert z["SD"].shape == (2, len(names)) and z["points"].shape[0] == 2
-    assert cfg.T_obs is None or cfg.T_obs != 2.0, "the diagnostic must never write cfg.T_obs"
+    # I3: EQUALS its pre-call value, not merely "not 2.0" -- 2.0 is SECONDS while the script's own
+    # (never-ported) write was `cfg.T_obs = t_obs_s * hz` in CELL units, which is essentially never
+    # exactly 2.0, so the old check would not have noticed that write happening at all.
+    assert cfg.T_obs == t_obs_before, "the diagnostic must never write cfg.T_obs"
     assert {m for m, _, _ in calls} == {4, 16} and {n for _, _, n in calls} == {int(2.0 * cfg.get_unit_conversion_factor("s") / cfg.dt_exp)}
+
+    # M12: this fake makes the numbers a closed form, derived here and pinned so a units/arithmetic
+    # slip in _analyze_point's covariance inversion fails LOUDLY rather than merely changing a number.
+    # The fake's feats depend on nd.sum() (`arange(n_feat) + nd.sum() + wobble`), never on res/force:
+    #  - perturbing a RESCALE parameter leaves the fake's MEAN output totally unchanged (the wobble is
+    #    independent of nd/res/force) -> raw gradient EXACTLY 0; fnoise is the wobble's own std, 0.01,
+    #    uniformly over every feature -> 0/0.01 stays exactly 0. J's rescale COLUMNS are therefore
+    #    all-zero, so J^T@J is BLOCK-DIAGONAL with a plain identity rescale block, and I^-1 = I: every
+    #    rescale SD is EXACTLY 1.0 at every point, never < sd_identified (0.3) -> frac_identified==0.0.
+    #  - perturbing ND param p changes nd.sum() by +-d, so fp-fm = 2d for EVERY feature row (the
+    #    arange offset and the wobble both cancel identically) -> raw gradient is the CONSTANT vector
+    #    1.0 (=2d/2d), scaled by fac=(hi-lo) (is_log is False for every ND index) and 1/fnoise=100.
+    #    So each ND column of J is the constant vector w_p=100*(hi_p-lo_p) at every row; J^T@J's nd-nd
+    #    block is then EXACTLY n_feat * outer(w, w), rank 1, and cov = (n_feat*outer(w,w) + I)^-1 --
+    #    computed here EXACTLY as the code computes it (no asymptotic approximation: at this w-scale
+    #    the "+1" stays representable, unlike the 1e9-scale fake this replaces, where it silently
+    #    vanished into float64 rounding and turned a well-posed ridge into a numerically singular one).
+    #    Both points give the SAME value (the additive nd.sum() shift cancels in every finite
+    #    difference), so median_sd equals this closed form and measurable == P at every point.
+    n_nd = len(cfg.params_dict)
+    n_feat = identifiability.feature_sets.n_features(cfg)
+    nd_w = np.array([hi - lo for _, (_v, (lo, hi)) in cfg.params_dict.items()])
+    w_full = np.zeros(len(names))
+    w_full[:n_nd] = nd_w / 0.01                        # fac / fnoise, fnoise == 0.01 by construction
+    cov = np.linalg.inv(n_feat * np.outer(w_full, w_full) + np.eye(len(names)))
+    expected_sd = np.sqrt(np.clip(np.diag(cov), 0, None))
+    assert np.allclose(z["SD"][:, n_nd:], 1.0, atol=1e-8), "every rescale SD must be exactly 1.0"
+    assert np.allclose(z["SD"], expected_sd[None, :], atol=1e-3), \
+        "the SDs must match the closed form derived from the fake's linear response"
+    nd_records, rescale_records = res["per_param"][:n_nd], res["per_param"][n_nd:]
+    assert all(r["frac_identified"] == 0.0 for r in rescale_records)
+    assert [r["median_sd"] for r in nd_records] == pytest.approx(list(expected_sd[:n_nd]), abs=1e-3)
+    assert all(pt["measurable"] == len(names) for pt in res["points"])
 
 
 def test_the_laplace_guards_refuse_before_anything_is_created(store, monkeypatch):
     """A chi posterior conditions on a different feature set entirely, so the single-frequency
-    41-feature arithmetic would produce a confident, meaningless 'identified / not identified'. Both
-    guards fire before store.create, so no directory is written."""
+    41-feature arithmetic would produce a confident, meaningless 'identified / not identified'.
+    M11: THREE guards fire before store.create, so no directory is written -- chi (a chi posterior
+    conditions on a different feature set), forced (a spontaneous cell has no drive to read), and
+    n_points (there must be at least the ground truth)."""
     import pytest
     import torch
+    from core import cli, config, registry
+    from core.config import VALID_LABELS, VALID_MODELS
     from core.diagnostics import identifiability, identifiability_laplace
-    from tests._fixtures import _nad_cfg, _posterior_artifact
     chi_cfg = _nad_cfg(chi_mode=True)
     P = len(chi_cfg.params_dict) + len(chi_cfg.rescale_params)
     w = _posterior_artifact(store, chi_cfg, name="chi_post", V=torch.eye(P, dtype=torch.float64),
@@ -529,30 +594,127 @@ def test_the_laplace_guards_refuse_before_anything_is_created(store, monkeypatch
         identifiability_laplace(chi_cfg, store.load_posterior(chi_cfg, w.id), name="lap_chi")
     assert [s for s in store.list("diagnostic") if s.name == "lap_chi"] == []
 
+    spont = cli.make_sim_config("NADROWSKI", VALID_LABELS[VALID_MODELS.index("NADROWSKI")],
+                                registry.state_dep_drift("NADROWSKI"),
+                                str(config.BOUNDS_PATH / "nadrowski" / "master_spont.txt"))
+    spont.hw = config.cpu_device()
+    Ps = len(spont.params_dict) + len(spont.rescale_params)
+    ws = _posterior_artifact(store, spont, name="spont_post", V=torch.eye(Ps, dtype=torch.float64),
+                             prior=_LatentPriorStub(Ps))
+    with pytest.raises(ValueError, match="no amp/freq/phase to read"):
+        identifiability_laplace(spont, store.load_posterior(spont, ws.id), name="lap_spont")
+    assert [s for s in store.list("diagnostic") if s.name == "lap_spont"] == []
+
+    forced_cfg = _forced_nad_cfg()
+    Pf = len(forced_cfg.params_dict) + len(forced_cfg.rescale_params)
+    wf = _posterior_artifact(store, forced_cfg, name="npts_post", V=torch.eye(Pf, dtype=torch.float64),
+                             prior=_LatentPriorStub(Pf))
+    with pytest.raises(ValueError, match="n_points must be at least 1"):
+        identifiability_laplace(forced_cfg, store.load_posterior(forced_cfg, wf.id), n_points=0,
+                                name="lap_npts")
+    assert [s for s in store.list("diagnostic") if s.name == "lap_npts"] == []
+
+
+def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(store, monkeypatch):
+    """M9: a non-positive t_obs_s divides down to n_obs<=0 (a zero-or-negative-length recording), and
+    an m_noise below 10 cannot estimate a feature-noise floor at all -- both refusals fire before
+    store.create, for both simulating diagnostics."""
+    import pytest
+    import torch
+    from core.diagnostics import identifiability, identifiability_jacobian, identifiability_laplace
+    cfg = _forced_nad_cfg()
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+    w = _posterior_artifact(store, cfg, name="pb_post", V=torch.eye(P, dtype=torch.float64),
+                            prior=_LatentPriorStub(P))
+    lp = store.load_posterior(cfg, w.id)
+    monkeypatch.setattr(identifiability, "_laplace_raw",
+                        lambda *a, **k: pytest.fail("simulated before the guard"))
+    monkeypatch.setattr(identifiability, "_jacobian_features",
+                        lambda *a, **k: pytest.fail("simulated before the guard"))
+
+    with pytest.raises(ValueError, match="t_obs_s"):
+        identifiability_laplace(cfg, lp, t_obs_s=0.0, name="lap_bad_t")
+    with pytest.raises(ValueError, match="m_noise"):
+        identifiability_laplace(cfg, lp, m_noise=4, name="lap_bad_m")
+    with pytest.raises(ValueError, match="t_obs_s"):
+        identifiability_jacobian(cfg, t_obs_s=-1.0, name="jac_bad_t")
+    with pytest.raises(ValueError, match="m_noise"):
+        identifiability_jacobian(cfg, m_noise=4, name="jac_bad_m")
+    for nm in ("lap_bad_t", "lap_bad_m", "jac_bad_t", "jac_bad_m"):
+        assert [s for s in store.list("diagnostic") if s.name == nm] == []
+
+
+def test_laplace_raw_does_not_leak_its_crn_seed(monkeypatch):
+    """M5: ``_laplace_raw``'s CRN reseeds (``_SF``/``_SS``) must not escape the call, exactly as
+    ``_jacobian_features`` already guards with ``fork_rng`` -- otherwise every subsequent measurement
+    (including the noise floor at points 2..K, which is NOT itself reseeded) is pinned downstream of
+    the CRN constants and silently stops depending on ``--seed`` at all.
+
+    Verified directly and cheaply (CPU, no real simulation): the global torch stream must be
+    bit-identical before and after a crn=True call. torch.manual_seed alone leaks its effect out;
+    only fork_rng restores the incoming state. pipeline.gen_obs is stubbed to something that still
+    consumes the RNG (so a leak has something to leak), replacing the real (expensive) simulator.
+    """
+    import torch
+    from core.diagnostics import identifiability
+    from core.SBI import pipeline
+
+    def _stub_gen_obs(*, model, params, t, inits, force, n_segs, steady_idx, state_dep_drift,
+                      batch_size, dtype, device, **_kw):
+        return (torch.randn(batch_size, t.shape[0], dtype=dtype, device=device),)
+
+    monkeypatch.setattr(pipeline, "gen_obs", _stub_gen_obs)
+    cfg = _forced_nad_cfg()
+    nd = cfg.params_tensor[0].clone()
+    res = torch.tensor([v for v, _ in cfg.rescale_params.values()], dtype=cfg.hw.dtype)
+    force = torch.tensor([v for v, _ in cfg.force_params_dict.values()], dtype=cfg.hw.dtype)
+    torch.manual_seed(123)
+    before = torch.get_rng_state()
+    identifiability._laplace_raw(cfg, nd, res, force, 4, True, 20)
+    after = torch.get_rng_state()
+    assert torch.equal(before, after), "the CRN reseed leaked into the caller's RNG stream"
+
 
 def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(store, monkeypatch):
     """The map must be built from the features the posterior CONDITIONS on. Under chi, Group G's 11
     columns are zeroed and 3K chi columns take their place; a map that kept Group G and omitted chi
     would be literally independent of the chi toggle -- it would report kappa~x_scale as strong as
     ever and falsely refute the hypothesis chi mode exists to test."""
+    import math
+
     import numpy as np
     from core.diagnostics import identifiability, identifiability_jacobian
     cfg = _forced_nad_cfg()
     names = list(cfg.params_dict) + list(cfg.rescale_params)
     n_feat = identifiability.feature_sets.n_features(cfg)
+    n_theta = len(names)
     rng = np.random.default_rng(0)
+    # I2: a per-(feature, parameter) weight matrix, deterministic and with NO shared structure across
+    # parameters -- unlike the R-J fake this replaces, whose response depended ONLY on theta.sum(),
+    # making every raw gradient the SAME constant vector (=2d/2d) for EVERY parameter and every pair
+    # "degenerate" (|cos|==1) by construction: a rank-1 Jacobian the assertions below could not tell
+    # apart from a real, non-degenerate one.
+    W = ((np.arange(n_feat)[:, None] * 7 + np.arange(n_theta)[None, :] * 3) % 5 + 1).astype(float)
 
     def _fake_feats(ctx, pvec, rescale_vec, m, crn):
         import torch
-        # A smooth, invertible response plus tiny noise: every parameter measurable, no dead channels.
-        # R-J: the noise is PROPORTIONAL TO EACH CHANNEL'S OWN SCALE (relative noise), not a fixed
-        # absolute magnitude -- an absolute 1e-3 against a scale that grows with the feature index
-        # (`base = arange(1, n_feat+1) * (1+theta.sum())`) falls below `noise_eps * fscale` for the
-        # later, larger-scale channels and flags them dead BY CONSTRUCTION, which is not what this
-        # fake is for (it exists to prove the "no dead channels" premise on a well-behaved response).
         theta = np.concatenate([pvec.detach().cpu().numpy(), rescale_vec.detach().cpu().numpy()])
-        base = np.arange(1, n_feat + 1, dtype=float) * (1.0 + theta.sum())
-        feats = base[None, :] * (1.0 + rng.normal(0.0, 1e-3, size=(int(m), n_feat)))
+        idx = np.arange(n_feat)
+        base = (idx + 1).astype(float)
+        # R-J: relative noise (proportional to each channel's own scale), not a fixed absolute
+        # magnitude -- see the module's own comment on the same choice in _dead_channels' docstring.
+        lean = 0.001 * (W @ theta)
+        response = base * (1.0 + lean)
+        feats = response[None, :] * (1.0 + rng.normal(0.0, 1e-3, size=(int(m), n_feat)))
+        # I2: ONE genuinely dead channel -- ~5.0 plus INDEPENDENT (theta-blind) noise 5 orders of
+        # magnitude quieter than its own scale, well under noise_eps*fscale. Its noise is NOT exactly
+        # zero (unlike simply hardcoding a constant): a literal constant would already give an
+        # all-zero raw gradient on its own (0 divided by anything is 0), so deleting the dead-channel
+        # zeroing step downstream would change NOTHING observable. This tiny independent noise instead
+        # leaks a small but genuinely NONZERO difference into the +-d central-difference arms, which
+        # divided by an even smaller fnoise is an AMPLIFIER (see _dead_channels): with the zeroing
+        # applied the row is exactly 0; without it, it is a spurious, non-negligible row of J.
+        feats[:, -1] = 5.0 + rng.normal(0.0, 1e-7, size=int(m))
         good = torch.ones(int(m), 4, dtype=torch.float64)
         return feats, good, good
 
@@ -561,18 +723,101 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     res = d.results
     assert d.variant == "jacobian" and d.manifest.parents == {}
     assert res["observation_mode"] == "forced" and res["T_obs_s"] == 2.0
-    assert res["n_features"] == n_feat and res["dead_channels"] == []
+    assert res["n_features"] == n_feat
+    dead_label = identifiability.feature_sets.feature_labels(cfg)[-1]
+    assert res["dead_channels"] == [dead_label]
     assert res["unmeasurable"] == [] and res["condition_number"] > 0
     assert all(a in names and b in names for a, b, _ in
                [(p["a"], p["b"], p["cos"]) for p in res["degenerate_pairs"]])
+    # I2: a rank-1 J (the old fake) makes EVERY pair degenerate -- this full-rank response must not.
+    assert 0 <= len(res["degenerate_pairs"]) < math.comb(n_theta, 2)
     assert set(d.manifest.payloads) == {"degeneracy_map.npz"}
     assert sorted(d.manifest.figures) == ["figures/jacobian_cosine_matrix.png",
                                           "figures/jacobian_singular_spectrum.png"]
     z = np.load(d.path / "degeneracy_map.npz")
     assert z["J"].shape == (n_feat, len(names))
     assert [str(s) for s in z["param_names"]] == names
+    assert np.all(z["J"][-1, :] == 0.0), "the dead row must be ZEROED, not merely coincidentally 0"
     assert d.manifest.inputs["cell"]["path"].endswith("master_weak.txt")
     assert d.manifest.inputs["bounds"]["sha256"]
+
+    # S1: the restored npz arrays -- shapes only (the numbers are the fake's, not a fixed science
+    # result): S/C describe the SVD/cosine structure over the measurable and stiff subsets, the pairs
+    # are parallel arrays (no pickle needed to load them), and the top-features table is (P, k).
+    n_meas = int(z["measurable_mask"].sum())
+    n_stiff = int(z["stiff_mask"].sum())
+    assert z["measurable_mask"].shape == (n_theta,) and z["stiff_mask"].shape == (n_theta,)
+    assert z["C"].shape == (n_meas, n_meas) and z["S"].shape == (n_stiff,)
+    assert z["sloppiest_loadings"].shape == (n_stiff,) and z["unique_frac"].shape == (n_meas,)
+    n_pairs = len(res["degenerate_pairs"])
+    assert z["pair_a"].shape == z["pair_b"].shape == z["pair_cos"].shape == (n_pairs,)
+    top_k = min(5, n_feat)
+    assert z["top_feat_idx"].shape == z["top_feat_val"].shape == (n_theta, top_k)
+    assert z["row_dominant_idx"].shape == z["row_dominant_fnoise"].shape == (min(8, n_feat),)
+
+
+def test_identifiability_jacobian_is_chi_aware(store, monkeypatch):
+    """I2: the map's row count and payload must track the MODE's own feature set -- 30 spontaneous +
+    3K chi under chi, not the 41-feature forced set -- so hard-coding the forced width anywhere in
+    this path would be caught here."""
+    import numpy as np
+    from core import cli, config, registry
+    from core.config import VALID_LABELS, VALID_MODELS
+    from core.diagnostics import identifiability, identifiability_jacobian
+    labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
+    cell = str(config.CELL_PATH / "nadrowski" / "master_weak.txt")
+    # I2: the smallest HONEST setup -- chi mode ignores the cell's own drive entirely (assert_forced
+    # is skipped for chi in identifiability_jacobian), but cfg.ground_truth still needs a loaded cell
+    # for the pre-spend refusal to pass, so this reuses the SAME forced cell/bounds pairing every
+    # other test here uses rather than inventing a new bounds/cell file just for this one assertion.
+    chi_cfg = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                                  str(config.BOUNDS_PATH / "nadrowski" / "master.txt"), chi_mode=True)
+    chi_cfg.hw = config.cpu_device()
+    cli.load_and_validate_gt(chi_cfg, cell)
+    names = list(chi_cfg.params_dict) + list(chi_cfg.rescale_params)
+    n_feat = identifiability.feature_sets.n_features(chi_cfg)
+    n_sp = len(identifiability.feature_sets.summary_keep_idx())
+    rng = np.random.default_rng(0)
+
+    def _fake_feats(ctx, pvec, rescale_vec, m, crn):
+        import torch
+        theta = np.concatenate([pvec.detach().cpu().numpy(), rescale_vec.detach().cpu().numpy()])
+        base = (np.arange(n_feat, dtype=float) + 1.0) * (1.0 + 0.001 * theta.sum())
+        feats = base[None, :] * (1.0 + rng.normal(0.0, 1e-3, size=(int(m), n_feat)))
+        for j in range(len(ctx.mults)):                # a genuine cos/sin pair per probe, unit norm
+            feats[:, n_sp + 3 * j + 1] = 0.6
+            feats[:, n_sp + 3 * j + 2] = 0.8
+        good = torch.ones(int(m), 4, dtype=torch.float64)
+        return feats, good, good
+
+    monkeypatch.setattr(identifiability, "_jacobian_features", _fake_feats)
+    d = identifiability_jacobian(chi_cfg, m=4, m_noise=16, t_obs_s=2.0, seed=1, name="jacchi")
+    assert d.results["observation_mode"] == "chi"
+    assert d.results["n_features"] == n_feat == identifiability.feature_sets.n_features(chi_cfg)
+    z = np.load(d.path / "degeneracy_map.npz")
+    assert z["J"].shape == (n_feat, len(names))
+
+
+def test_identifiability_jacobian_refuses_wrong_model_or_spontaneous_cfg(store):
+    """assert_nadrowski and assert_forced both fire before store.create -- both guards run before
+    cfg.ground_truth is even touched, so neither needs a loaded cell to demonstrate the refusal."""
+    import pytest
+    from core import cli, config, registry
+    from core.config import VALID_LABELS, VALID_MODELS
+    from core.diagnostics import identifiability_jacobian
+    other = _nad_cfg()
+    other.model = "HOPF"
+    with pytest.raises(ValueError, match="Nadrowski-specific"):
+        identifiability_jacobian(other, t_obs_s=2.0, name="jac_wrongmodel")
+    assert [s for s in store.list("diagnostic") if s.name == "jac_wrongmodel"] == []
+
+    spont = cli.make_sim_config("NADROWSKI", VALID_LABELS[VALID_MODELS.index("NADROWSKI")],
+                                registry.state_dep_drift("NADROWSKI"),
+                                str(config.BOUNDS_PATH / "nadrowski" / "master_spont.txt"))
+    spont.hw = config.cpu_device()
+    with pytest.raises(ValueError, match="no amp/freq/phase to read"):
+        identifiability_jacobian(spont, t_obs_s=2.0, name="jac_spont")
+    assert [s for s in store.list("diagnostic") if s.name == "jac_spont"] == []
 
 
 def test_the_probe_budget_refuses_a_miswired_cos_sin_pair():
@@ -584,7 +829,6 @@ def test_the_probe_budget_refuses_a_miswired_cos_sin_pair():
     import pytest
     import torch
     from core.diagnostics import identifiability
-    from tests._fixtures import _nad_cfg
     cfg = _nad_cfg(chi_mode=True)
     keep = identifiability.feature_sets.summary_keep_idx()
     labels = identifiability.feature_sets.feature_labels(cfg)
@@ -599,3 +843,26 @@ def test_the_probe_budget_refuses_a_miswired_cos_sin_pair():
     xs0 = torch.randn(4, 256, dtype=cfg.hw.dtype)
     with pytest.raises(ValueError, match=r"cos\^2 \+ sin\^2"):
         identifiability._probe_budget(ctx, feats, keep0, xs0, 1.0)
+
+
+def test_the_probe_budget_accepts_a_correctly_wired_pair():
+    """M10: the miswired test above sets every other slot to ZERO, so a channel-OFFSET regression
+    (reading cos/sin from the wrong pair of columns) could still coincidentally break cos^2+sin^2==1
+    and pass for the wrong reason. A genuinely correct (0.6, 0.8) pair (0.36+0.64==1) must NOT raise,
+    which a wrong-offset read (landing on a zeroed slot) generally would."""
+    import numpy as np
+    import torch
+    from core.diagnostics import identifiability
+    cfg = _nad_cfg(chi_mode=True)
+    keep = identifiability.feature_sets.summary_keep_idx()
+    labels = identifiability.feature_sets.feature_labels(cfg)
+    ctx = identifiability._JacCtx(cfg=cfg, n_obs=100, mults=torch.tensor([0.1, 0.2]),
+                                  forcing_gt=None, keep_idx=keep, feat_labels=labels, n_force_ch=1)
+    n_sp = len(keep)
+    feats = np.zeros((4, len(labels)))
+    for j in range(2):
+        feats[:, n_sp + 3 * j + 1] = 0.6          # cos
+        feats[:, n_sp + 3 * j + 2] = 0.8          # sin: 0.36+0.64 == 1, genuinely valid
+    keep0 = np.ones(4, dtype=bool)
+    xs0 = torch.randn(4, 256, dtype=cfg.hw.dtype)
+    identifiability._probe_budget(ctx, feats, keep0, xs0, 1.0)          # must not raise

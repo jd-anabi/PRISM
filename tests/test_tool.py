@@ -602,10 +602,11 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
     pins the FULL `set(kw)` each mode's handler forwards, one distinct value per knob, the way T12
     and T16's own tool tests pin VALIDATE_KNOBS/TSNPE_KNOBS/sbc's set: `knobs()` silently drops a
     dest that no longer matches a flag, so checking only a few keys would stay green through that."""
+    import pytest
     from core import tool
     from core.tool import diagnostics as tool_diag
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
-    seen = {}
+    seen, seen_args = {}, {}
     monkeypatch.setattr(tool_diag, "load_posterior_and_prior", lambda cfg, ref, accept, store: ("P", "Q"))
 
     def _recorder(_n):
@@ -614,6 +615,7 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
         # store), so the `or` would short-circuit and hand `report` a dict, which has no `.kind`.
         def _rec(*a, **kw):
             seen[_n] = kw
+            seen_args[_n] = a               # M13: the POSITIONAL cfg -- was previously ignored
             return SimpleNamespace(kind="diagnostic", path=tmp_path / "diagnostics" / "d__1")
 
         return _rec
@@ -630,6 +632,10 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
                                                       "n_worst", "top_n"}
     assert seen["identifiability_rotation"]["n_worst"] == 2
     assert seen["identifiability_rotation"]["top_n"] == 5
+    # M13: rotation's cfg must NOT carry a loaded ground truth (build_cfg's needs_gt=False for it) --
+    # a bounds-only cfg's ground_truth raises, exactly like a config nobody ever pointed at a cell.
+    with pytest.raises(ValueError):
+        _ = seen_args["identifiability_rotation"][0].ground_truth
 
     assert tool.main(["identifiability", "laplace", "--bounds", bounds, "--device", "cpu",
                       "--posterior", "p", "--cell", cell, "--t-obs", "2.5",
@@ -646,6 +652,8 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
     assert seen["identifiability_laplace"]["rel"] == 0.03
     assert seen["identifiability_laplace"]["min_valid"] == 0.6
     assert seen["identifiability_laplace"]["seed"] == 9
+    # M13: laplace's cfg DOES need a loaded ground truth (build_cfg's needs_gt=True for it).
+    assert seen_args["identifiability_laplace"][0].ground_truth is not None
 
     assert tool.main(["identifiability", "jacobian", "--bounds", bounds, "--device", "cpu",
                       "--cell", cell, "--t-obs", "3.0", "--m", "6", "--m-noise", "19",
@@ -661,6 +669,8 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
     assert seen["identifiability_jacobian"]["min_valid"] == 0.7
     assert seen["identifiability_jacobian"]["seed"] == 11
     assert "n_points" not in seen["identifiability_jacobian"]
+    # M13: jacobian's cfg likewise needs a loaded ground truth (build_cfg's needs_gt=True for it too).
+    assert seen_args["identifiability_jacobian"][0].ground_truth is not None
 
     assert tool.main(["identifiability", "rotation", "--bounds", bounds, "--device", "cpu",
                       "--posterior", "p", "--cell", cell]) == 2
