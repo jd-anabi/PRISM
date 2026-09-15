@@ -1,15 +1,15 @@
 # PRISM — state
 
 **Last updated:** 2026-09-15. **Piece 2, "one flow underneath", is DONE**: commits
-`0016dae`..`d34997c` (55) on the local `main` branch, not pushed; the USER pushes them. The prompt
+`0016dae`..`d34997c` (55) on the local `main` branch, pushed by the user on 2026-09-15. The prompt
 CLI is retired. The GUI and the new `python -m core <subcommand>` tool are two front ends over the
 same orchestrator stages and three compositions. Six scripts became four subcommands (`smoke` and
 three diagnostics, the diagnostics writing a new `diagnostic` store kind), six were archived, and
 `scripts/` is gone. A whole-branch review and its fixes closed the piece. The GPU gate of record ran
 at `0d96d2f`; the final one-process fast gate (457 passed at `d34997c`) and the slow set are in the
-table below. **Next:** first the user runs rows B1–B8 of `docs/checklists/display-walkthrough.md`
-on the real screen; the result goes into that file's last two columns and is summarised here. Then
-**piece 3** (validation and misuse-proofing, logging with severity, copy-on-run session config),
+table below, and the user ran rows B1–B8 of `docs/checklists/display-walkthrough.md` on the real
+screen on 2026-09-15: all eight pass. **Next: piece 3**
+(validation and misuse-proofing, logging with severity, copy-on-run session config),
 brainstormed → spec → plan → implemented directly on the local `main` branch; its carried items are
 in "Owed" item 7.
 
@@ -40,7 +40,7 @@ in "Owed" item 7.
   hatches; the simulation identity is `training-rows/2`; pickers list the store; scripts are
   re-pointed (nine marked broken until piece 2). Defects 3–4 of the decomposition are fixed
   (the forced-recording path runs); defect 1 disappeared with `load_prior`; defect 2 is piece 3's.
-- **Piece 2 is DONE** (2026-09-15, commits `0016dae`..`d34997c`, on the local `main` branch). It
+- **Piece 2 is DONE** (2026-09-15, commits `0016dae`..`d34997c`, on the local `main` branch, pushed 2026-09-15). It
   follows the design `docs/superpowers/specs/2026-09-11-one-flow-design.md` (§1.1 holds decisions
   D1–D13; §11 lists the 58 deviations ruled during execution) and the 25 tasks of
   `docs/superpowers/plans/2026-09-12-one-flow.md`. Each task had a review and fix loop and a
@@ -104,8 +104,8 @@ in "Owed" item 7.
    and then by the user on the next launch (row 1 PASS). **The user also ran rows 2–20 of the
    piece-4 walkthrough table the same day: all pass** — piece 4's display walkthrough is therefore
    already done once, on the code as of `df7491e`; piece 4 re-checks only what it changes.
-5. ~~**Piece 2**~~ — DONE 2026-09-15, commits `0016dae`..`d34997c`, on the local `main` branch
-   (the user pushes). Every item piece 1 carried into it is closed: ~~extend the source scan to
+5. ~~**Piece 2**~~ — DONE 2026-09-15, commits `0016dae`..`d34997c`, on the local `main` branch, pushed
+   2026-09-15. Every item piece 1 carried into it is closed: ~~extend the source scan to
    `scripts/`~~ (`scripts/` is gone; the scans walk `CODE_ROOTS` plus `CODE_FILES` in
    `tests/_fixtures.py`, and `test_the_source_scans_cover_every_code_directory` keeps the set
    closed — T21, T22 and the final review); ~~retire `_common.require_mode` and the unconditional
@@ -116,10 +116,9 @@ in "Owed" item 7.
    the resume drill loud~~ (a cache one setting away is refused before the Fisher step and before
    any simulation, with `--resume require` and `--new-run`; GPU run 2b exited 1 naming `n_runs` —
    T2, T19).
-6. **The display walkthrough's piece-2 rows B1–B8** (`docs/checklists/display-walkthrough.md`),
-   owed by the USER on the real screen before piece 3 starts. Record the date and result in that
-   file's last two columns, then summarise it in the gate table below. B8 re-checks the FDT panel's
-   full run, because `bb22ac4` changed the plots it draws.
+6. ~~**The display walkthrough's piece-2 rows B1–B8**~~ — done 2026-09-15 by the USER on the real
+   screen: **all eight pass**, recorded in that file's last two columns and in the gate table below.
+   B8 re-checked the FDT panel's full run, because `bb22ac4` changed the plots it draws.
 7. **Pieces 3 → (4 ∥ 5) → 6**, each brainstormed → spec → plan → implementation. Carried into them
    from piece 2 (design spec §1.3, the final review's "left open" list, and the ledger):
    - **Piece 3.**
@@ -242,7 +241,7 @@ in "Owed" item 7.
 | `pytest --collect-only -q` after piece 2 | 2026-09-15 at `d34997c`: **460** collected (the fast gate's 457 passed and 1 skipped, plus the 2 slow tests; Reduction's 5 are collected with them). That is 99 more than the 361 at `df7491e`, where spec §8.5 had budgeted about 42 ± 8 added (spec §11 row 58). Two new suites, `tests/test_tool.py` (the tool, in-process through `main(argv)`) and `tests/test_diagnostics.py`; `tests/test_*.py` holds sixteen suites |
 | **final fast gate, piece 2**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-15 at `d34997c`, after the whole-branch review's fixes: **457 passed, 1 skipped** (the display-marked class-icon test, offscreen), 2 deselected (the two slow tests), 174 warnings, **13 min 38 s** (inside spec §8.5's 14-minute target), exit 0. No "More than 20 figures" line. The real `Artifacts/` gained nothing, and `Resources/Models` held only `SHM.json` and `SHM2.json` afterwards. The gpu-marked `tests/test_gpu_paths.py` ran on the RTX 5070 Ti inside it. Slowest test: `test_user_sbi.py::test_train_and_validate_without_a_loaded_cell`, 180 s. Per-suite durations were not measured, so §8.5's ~90 s targets for `test_tool.py` and `test_diagnostics.py` are unchecked. Every task had its own one-process gate; those results are in the execution ledger (spec §11 row 42) |
 | slow set, `pytest -m slow -q --durations=5` (piece 2) | 2026-09-15 at `d34997c`: **2 passed**, 458 deselected, 96 warnings, **30 min 53 s**, exit 0. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1606 s (26 min 46 s); `test_tool.py::test_fdt_and_crossval_run_at_tiny_size` 243 s. No "More than 20 figures" line (the slow chi test's sink now closes its figures). The warnings are the known library classes (sklearn KMeans, sbi's SBC-count and `__array__` warnings, nflows `triangular_solve`, the reparam batch cap) plus the expected chi probe-masking notices; `Resources/` was left clean. The set is the chi full-pipeline test in `tests/test_user_sbi.py` (it now passes the drive frequencies it simulated as `(path, Hz)` pairs, D9) and the FDT/crossval tiny-size run in `tests/test_tool.py`. The chi test feeds back exactly the frequencies it simulated, so it cannot tell a stale recorded frequency from a correct one; `tests/test_artifact_store.py::test_an_experimental_observation_records_its_own_length_and_drive_frequencies` pins that |
-| display walkthrough, piece-2 rows B1–B8 (`docs/checklists/display-walkthrough.md`) | **owed**: the user runs rows B1–B8 once on the real screen, records the date and result in that file's last two columns, and the result is summarised here. B8 (the FDT panel's full run) was added in `d6b1f03` because `bb22ac4` changed the plots it draws. Rows 1–20 and A1–A9 stand from 2026-09-11 |
+| display walkthrough, piece-2 rows B1–B8 (`docs/checklists/display-walkthrough.md`) | 2026-09-15, the user on the real screen, piece 2 as pushed: **rows B1–B8 all pass** — the D8 load dialog and its Cancel, the round's own install with no dialog, the other-observation box, the D7 near-miss dialog, the TSNPE stage checks (0 directions, HPD 0.95, the near-miss refusal after reloading the amortized parent), the short-T_obs warning, the D12 refusal, and the FDT panel's full run after `bb22ac4` (B8, added in `d6b1f03`). Rows 1–20 and A1–A9 stand from 2026-09-11 |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the two copies identical. Run it from the repository root, with `$S` set to
