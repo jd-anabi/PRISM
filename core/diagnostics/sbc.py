@@ -38,6 +38,34 @@ def _col(values) -> tuple:
     return float(np.median(col)), float(col.min()), float((col < 0.05).mean())
 
 
+def _rank_hist_bins(n_pooled: int, nps: int) -> int:
+    """The bin count for the pooled rank histogram over ``n_pooled`` ranks in 0..nps.
+
+    ``cap = max(1, min(n_pooled // 20, (nps + 1) // 10))``. sbc_rank_plot's own default is
+    num_sbc_runs // 20, which is 0 for a small pooled set (matplotlib then refuses outright), hence the
+    floor of 1. The second term keeps every bin at least ~10 of the nps + 1 integer ranks wide: the
+    POOLED N is repeats x n_cal, so N // 20 alone gives ~950 bins over 1001 ranks at the defaults, some
+    bins hold two ranks and spike above the band on a calibrated posterior, and past N = 20 (nps + 1)
+    every other bin is empty.
+
+    The count is then the LARGEST DIVISOR d of nps + 1 with ``cap // 2 <= d <= cap`` when one exists,
+    and ``cap`` itself otherwise. sbi draws the panel with ``plt.hist(ranks, bins=<int>)``, whose edges
+    are linspace(min, max, bins + 1) with the last bin closed, so over ranks 0..nps every bin holds the
+    same number of integer ranks only when the count divides nps + 1. At the defaults the cap alone is
+    100 bins, edges on multiples of 10, and a closed last bin [990, 1000] holding 11 ranks against 10
+    elsewhere -- a spike above the band in ~14 % of panels on a calibrated posterior; 91 bins hold 11
+    ranks each. Only divisors down to cap // 2 are taken: a pure largest-divisor rule collapses to 1 bin
+    when nps + 1 is prime (nps = 40, 100) and to 3 bins at nps = 500, which is no histogram at all.
+    Without such a divisor the cap stands, and the one last bin is up to one rank wider than the rest.
+    The equal count also assumes a panel's ranks reach both 0 and nps, which a pooled calibrated set
+    does with near certainty; a panel that misses an end is miscalibrated enough to show it regardless.
+    """
+    span = int(nps) + 1
+    cap = max(1, min(int(n_pooled) // 20, span // 10))
+    divisors = [d for d in range(max(1, cap // 2), cap + 1) if span % d == 0]
+    return max(divisors) if divisors else cap
+
+
 def _cell(v, spec: str) -> str:
     """One KS-table cell: the NUMBER formatted, or "-" (a column with no finite entry) right-justified
     to the same width. Formatting the number and not str(v) matters: a string cut to 8 characters
@@ -150,22 +178,8 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
             print(f"{rec['name']:16s} {_cell(rec['ks_p_median'], '8.2e')} {_cell(rec['ks_p_min'], '8.2e')} "
                   f"{_cell(rec['frac_ks_below_05'], '9.3f')}")
 
-        # sbc_rank_plot's own default num_bins is num_sbc_runs // 20, which is 0 for a small pooled set
-        # (matplotlib then refuses outright), hence the floor of 1. It is capped so every bin spans at
-        # least ~10 of the nps + 1 integer ranks: the POOLED N is repeats x n_cal, so N // 20 alone gives
-        # ~950 bins over 1001 ranks at the defaults -- some bins hold two ranks and spike above the band
-        # on a calibrated posterior, and past N = 20 (nps + 1) every other bin is empty.
-        # And the count is the LARGEST DIVISOR of nps + 1 under that cap. sbi draws the panel with
-        # plt.hist(ranks, bins=<int>), whose edges are linspace(min, max, bins + 1) with the last bin
-        # closed; over ranks 0..nps every bin then holds the same number of integer ranks only when the
-        # count divides nps + 1. At the defaults the cap alone gave 100 bins, edges on multiples of 10,
-        # and a closed last bin [990, 1000] holding 11 ranks against 10 elsewhere -- a spike above the
-        # band in ~14 % of panels on a calibrated posterior. 91 bins hold 11 ranks each. The equal
-        # count assumes a panel's ranks reach both 0 and nps, which a pooled calibrated set does with
-        # near certainty; a panel that misses an end is miscalibrated enough to show it regardless.
         n_rows = int(np.ceil(len(labels) / 4))
-        cap = max(1, min(pooled.shape[0] // 20, (nps + 1) // 10))
-        num_bins = max(d for d in range(1, cap + 1) if (nps + 1) % d == 0)
+        num_bins = _rank_hist_bins(pooled.shape[0], nps)
         fig, _ = orch.sbc_rank_plot(ranks=torch.as_tensor(pooled), num_posterior_samples=nps,
                                     plot_type="hist", num_bins=num_bins,
                                     parameter_labels=labels, figsize=(16, 3.4 * n_rows))

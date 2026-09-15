@@ -387,6 +387,35 @@ def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
         "a refused sbc_repeats call wrote a diagnostic of its own (only the name taken above should exist)"
 
 
+@pytest.mark.parametrize("n_pooled, nps, want", [
+    (20000, 1000, 91),    # cap 100; 91 divides 1001, every bin holds 11 ranks
+    (20000, 500, None),   # cap 50; 501 = 3 x 167 has no divisor in [25, 50]: the cap, never 3
+    (20000, 40, 4),       # 41 is prime: the cap (4), never 1
+    (20000, 100, 10),     # 101 is prime: the cap (10), never 1
+    (200, 1000, 7),       # N // 20 = 10 binds; 7 divides 1001 and lies in [5, 10]
+    (100, 1000, 5),       # N // 20 = 5 binds; no divisor of 1001 in [2, 5]: the cap
+    (10, 1000, 1),        # N // 20 = 0: the floor of 1
+])
+def test_the_sbc_rank_histogram_bin_count_stays_near_its_cap(n_pooled, nps, want):
+    """The pooled histogram's bin count: the largest divisor of nps + 1 in [cap // 2, cap], so every bin
+    holds the same number of integer ranks, and otherwise the cap itself. A pure largest-divisor rule
+    collapsed to 1 bin when nps + 1 is prime and to 3 bins at nps = 500 -- a useless rank histogram."""
+    import numpy as np
+    from core.diagnostics.sbc import _rank_hist_bins
+    cap = max(1, min(n_pooled // 20, (nps + 1) // 10))
+    got = _rank_hist_bins(n_pooled, nps)
+    assert max(1, cap // 2) <= got <= cap, (got, cap)
+    if want is not None:
+        assert got == want, (got, want)
+    divisors_in_range = [d for d in range(max(1, cap // 2), cap + 1) if (nps + 1) % d == 0]
+    if divisors_in_range:
+        assert got == max(divisors_in_range)
+        per_bin, _ = np.histogram(np.arange(nps + 1), bins=got)
+        assert len(set(per_bin.tolist())) == 1, per_bin
+    else:
+        assert got == cap
+
+
 def test_sbc_prints_small_p_values_as_numbers_and_bins_ranks_at_least_ten_wide(tiny_run, monkeypatch,
                                                                              capsys):
     """Two display defects on the rows that matter most.
