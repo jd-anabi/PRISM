@@ -1000,6 +1000,7 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
 
     # Inputs resolve through config, never through the process working directory.
     cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
     assert main(["fdt", "--cell", cell, "--n-freqs", "3", "--ensemble-m", "7",
                  "--freqs-per-batch", "2", "--f0", "0.11", "--skip-sanity"]) == 0
     model, sdd, cell_file, kw = seen["make_fdt_config"]
@@ -1007,13 +1008,26 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     assert kw == {"n_freqs": 3, "ensemble_M": 7, "freqs_per_batch": 2, "F0": 0.11}
     assert seen["run_fdt"] == ("CFG", True, True)                     # --no-production absent
 
+    # M4, fix round 1: NADROWSKI's state-dependent (multiplicative) drift, next to HOPF's False above.
+    seen.clear()
+    assert main(["fdt", "--cell", nad]) == 0
+    assert seen["make_fdt_config"][1] is True, "NADROWSKI has state-dependent drift"
+
     seen.clear()
     assert main(["fdt", "--cell", cell, "--model", "hopf", "--no-production"]) == 0
     assert seen["make_fdt_config"][3] == {}, "an unset knob must not be passed: the default is in cli"
     assert seen["run_fdt"] == ("CFG", False, False)
 
+    # I1, fix round 1: NEITHER flag. The two cases above alone cannot catch confirm_production
+    # cross-wired to skip_sanity: (skip_sanity=True, no_production=False) and (skip_sanity=False,
+    # no_production=True) both coincidentally survive that bug (True/True and False/False again).
+    # Only the both-False combination tells them apart -- it must come out (False, True).
     seen.clear()
-    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    assert main(["fdt", "--cell", cell]) == 0
+    assert seen["run_fdt"] == ("CFG", False, True), \
+        "neither flag: sanity runs, then production proceeds by default"
+
+    seen.clear()
     assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
                  "--t-grid", "1", "1.1", "3", "--n-freqs", "2", "--ensemble-m", "8",
                  "--freqs-per-batch", "4", "--f0", "0.2"]) == 0
@@ -1049,7 +1063,9 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys):
 
     cell = str(config.CELL_PATH / "hopf" / "cell.txt")
     assert main(["fdt", "--cell", cell, "--model", "NOPE"]) == 1
-    assert "Unknown model" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "Unknown model" in err
+    assert "pass a different --model" in err, "M1: the refusal says where the name came from"
 
     nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
     assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2.5",
@@ -1057,8 +1073,65 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys):
     assert "--s-grid" in capsys.readouterr().err
     assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "1",
                  "--t-grid", "1", "1.1", "2"]) == 2
+
+    # M3, fix round 1: a bad --t-grid (valid --s-grid alongside it) must name --t-grid, not --s-grid.
+    capsys.readouterr()
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                 "--t-grid", "1", "1.1", "1"]) == 2
+    assert "--t-grid" in capsys.readouterr().err
+
+    # M2, fix round 1: inf/nan point counts used to raise OverflowError/ValueError past main's usage-
+    # error net (a traceback, "*** FAILED ***", exit 1) instead of naming the flag at exit 2.
+    capsys.readouterr()
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "inf",
+                 "--t-grid", "1", "1.1", "2"]) == 2
+    err = capsys.readouterr().err
+    assert "--s-grid" in err and "finite" in err
+
+    capsys.readouterr()
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "nan",
+                 "--t-grid", "1", "1.1", "2"]) == 2
+    err = capsys.readouterr().err
+    assert "--s-grid" in err and "finite" in err
+
     assert main(["fdt"]) == 2                       # --cell is required
     assert main(["crossval", "--cell", nad]) == 2   # both grids are required
+
+
+def test_crossval_preset_choices_match_sweep_presets():
+    """M5, fix round 1: ``--preset``'s hard-coded choices stay hard-coded -- importing ``core.cli``
+    while building the parser would cost a torch import on plain ``--help`` -- so this pins the two
+    lists in sync instead of trusting them to agree by eye."""
+    from core import cli
+    from core.tool import build_parser
+
+    action = next(a for a in build_parser().subcommands["crossval"]._actions if a.dest == "preset")
+    assert tuple(action.choices) == tuple(cli.SWEEP_PRESETS)
+
+
+def test_fdt_ctrl_c_gets_its_own_interrupt_note(tool_env, monkeypatch, capsys):
+    """I2, fix round 1: fdt/crossval keep no cache and take no --resume, so main's generic advice
+    ("if a [checkpoint] line above says batches were saved, ... --resume require") is simply wrong
+    for them -- there is no cache to resume. The partial plots already on disk are the whole
+    recovery story; re-running starts over. Every OTHER subcommand's Ctrl-C message is untouched
+    (test_smoke_ctrl_c_prints_store_specific_resume_advice and
+    test_ctrl_c_mid_simulation_keeps_the_committed_batches still pin the generic wording)."""
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+    from core.tool import main
+
+    def _boom(cfg, *, skip_sanity, confirm_production):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "make_fdt_config", lambda *a, **k: "CFG")
+    monkeypatch.setattr(fdt_pipeline, "run_fdt", _boom)
+    cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    capsys.readouterr()
+    assert main(["fdt", "--cell", cell]) == 130
+    err = capsys.readouterr().err
+    assert "interrupted" in err
+    assert "<artifacts root>/fdt" in err and "stay on disk" in err and "from scratch" in err
+    assert "--resume" not in err
 
 
 @pytest.mark.slow
@@ -1071,8 +1144,12 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     sweep study write under -- reads that variable at every call. Without it the four PNGs and the
     two .h5 files land in the real ``Artifacts/`` and the session teardown fails.
 
-    Measured 2026-09-15: 598.55 s on the CPU (Campaign 1 is 810k Euler steps; psd_T_obs_nd is not a
-    flag), so it is slow-marked; the recorder test above keeps the fast-gate coverage.
+    Measured 2026-09-15: 598.55 s on the CPU. fdt's own Campaign 1 (810k Euler steps) is one term,
+    but crossval's four operating points (2 S-sweep + 2 T-sweep, ~410k steps each under the
+    exploratory preset) are likely the bigger share of the total -- neither psd_T_obs_nd nor the
+    sweep step count is a flag -- so it is slow-marked; the recorder test above keeps the fast-gate
+    coverage. (Fix round 1, M7: corrected from "Campaign 1 alone", which undercounted crossval's
+    share; not re-measured, since the PNG assertions added below are cheap globs.)
     """
     from core import config
     from core.tool import main
@@ -1089,4 +1166,6 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
                  "--t-grid", "1", "1.1", "2", "--n-freqs", "2", "--ensemble-m", "8"]) == 0
     cv = config.artifacts_root() / "crossval"
     assert list(cv.glob("sweep_s_*.h5")) and list(cv.glob("sweep_temp_*.h5"))
+    for tag in ("fdt3d_vs_S_", "fdt3d_vs_T_"):
+        assert list(cv.glob(f"{tag}*.png")), tag
     assert "[prism crossval] S sweep:" in capsys.readouterr().out

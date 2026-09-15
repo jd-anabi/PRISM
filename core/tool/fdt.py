@@ -12,9 +12,9 @@ file and no observation mode. There is no ``--device`` either -- both config bui
 where the sequential SDE loop at M ~ 256 is about 3.4x faster than on the card.
 """
 import argparse
-from pathlib import Path
+import math
 
-from .config_args import knobs
+from .config_args import UsageError, knobs, model_from_path
 
 FDT_EPILOG = """\
 The model comes from the cell's parent folder (Resources/Cells/<model>/), or from --model. A model
@@ -37,19 +37,41 @@ psd_T_obs_nd) and supplies the defaults for --n-freqs and --ensemble-m. One HDF5
 so a long run gives you half its answer early.
 """
 
+# I2, fix round 1: fdt/crossval keep no cache and take no --resume (piece 5 wraps their outputs in
+# the store; until then there is nothing to resume), so main's generic Ctrl-C advice -- "if a
+# [checkpoint] line above says batches were saved, ... --resume require" -- is simply wrong for
+# them. Each note names its own output folder and says plainly that the only recovery is what is
+# already on disk, and that re-running starts over.
+FDT_INTERRUPT_NOTE = (
+    "the plots already written under <artifacts root>/fdt stay on disk and can be inspected; fdt "
+    "keeps no cache, so re-running the same command starts the analysis from scratch.")
+CROSSVAL_INTERRUPT_NOTE = (
+    "the outputs already written under <artifacts root>/crossval -- any sweep that finished its "
+    "own .h5 and plot -- stay on disk and can be inspected; crossval keeps no cache, so re-running "
+    "the same command starts the study from scratch.")
+
 
 def model_for_cell(args) -> str:
     """``--model``, else the cell's parent folder upper-cased (the ``Cells/<model>/`` layout). The
-    SBI subcommands take the model from the BOUNDS folder; these two have no bounds file."""
-    return str(args.model or Path(args.cell).parent.name).upper()
+    SBI subcommands take the model from the BOUNDS folder; these two have no bounds file. A thin
+    wrapper over ``config_args.model_from_path`` -- kept as its own function because the interface
+    and the test suite name it ``fdt.model_for_cell``."""
+    return model_from_path(args.model, args.cell)
 
 
 def _grid(flag: str, triple) -> tuple:
-    """``MIN MAX N`` -> ``(float, float, int)`` for ``np.linspace``, which refuses a float ``num``."""
-    from core.tool import UsageError
+    """``MIN MAX N`` -> ``(float, float, int)`` for ``np.linspace``, which refuses a float ``num``.
+
+    ``N`` must be a FINITE whole number, checked BEFORE any ``int(n)``: ``int(float("inf"))`` raises
+    ``OverflowError`` and ``int(float("nan"))`` raises ``ValueError``, neither caught by ``main``'s
+    ``(ValueError, FileNotFoundError)`` usage-error net for an ``OverflowError``, and even the
+    ``ValueError`` from ``nan`` would print as a bug's traceback rather than naming ``--s-grid``/
+    ``--t-grid``. A malformed grid is a usage error (exit 2) regardless of which of the three ways
+    it is malformed.
+    """
     lo, hi, n = triple
-    if float(n) != int(n):
-        raise UsageError(f"{flag}: the point count must be a whole number, got {n!r}")
+    if not math.isfinite(n) or not float(n).is_integer():
+        raise UsageError(f"{flag}: the point count must be a finite whole number, got {n!r}")
     if int(n) < 2:
         raise UsageError(f"{flag}: a sweep needs at least 2 points, got {int(n)}")
     return float(lo), float(hi), int(n)
@@ -80,7 +102,7 @@ def register(subparsers):
                      help="skip the sanity checks and go straight to the production sweep")
     fdt.add_argument("--no-production", dest="no_production", action="store_true",
                      help="stop after the sanity checks (ignored with --skip-sanity)")
-    fdt.set_defaults(handler=run_fdt_cmd)
+    fdt.set_defaults(handler=run_fdt_cmd, interrupt_note=FDT_INTERRUPT_NOTE)
 
     cv = subparsers.add_parser(
         "crossval", help="the FDT parameter-sweep study (S and T_a/T), NADROWSKI only",
@@ -93,7 +115,7 @@ def register(subparsers):
     cv.add_argument("--t-grid", dest="t_grid", nargs=3, type=float, required=True,
                     metavar=("MIN", "MAX", "N"), help="the T_a/T sweep grid")
     _add_fdt_knobs(cv)
-    cv.set_defaults(handler=run_crossval)
+    cv.set_defaults(handler=run_crossval, interrupt_note=CROSSVAL_INTERRUPT_NOTE)
     return {"fdt": fdt, "crossval": cv}
 
 
@@ -104,7 +126,11 @@ def run_fdt_cmd(args, store):
     model = model_for_cell(args)
     ok, reason = registry.fdt_support(model)
     if not ok:
-        raise ValueError(reason)
+        # M1, fix round 1: say where the model name came from and how to change it, matching
+        # config_args.build_cfg's own "Pass --model, or point --bounds at Bounds/<model>/." tail.
+        hint = ("pass a different --model" if args.model else
+                "the cell's parent folder set the model name; pass --model to override it")
+        raise ValueError(f"{reason} ({hint}.)")
     cfg = cli.make_fdt_config(model, registry.state_dep_drift(model), args.cell,
                               **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0"))
     fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,

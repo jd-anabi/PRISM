@@ -95,10 +95,18 @@ def main(argv=None) -> int:
         with use_store(ArtifactStore(root)) as store:
             rc = int(args.handler(args, store) or 0)
     except KeyboardInterrupt:
-        advice = _smoke_interrupt_advice(args) if has_store_root else \
-            "the same command with --resume require continues them."
-        print(f"prism {args.cmd}: interrupted: the artifact being written was removed. If a "
-              f"[checkpoint] line above says batches were saved, {advice}", file=sys.stderr)
+        # I2, fix round 1: fdt/crossval set their own `interrupt_note` (core/tool/fdt.py) through
+        # set_defaults -- they keep no cache and take no --resume, so the generic advice below
+        # (written for a checkpointed training cache) would be flatly wrong for them. Every other
+        # subcommand leaves interrupt_note unset, so getattr's default keeps their message as is.
+        note = getattr(args, "interrupt_note", None)
+        if note is not None:
+            print(f"prism {args.cmd}: interrupted: {note}", file=sys.stderr)
+        else:
+            advice = _smoke_interrupt_advice(args) if has_store_root else \
+                "the same command with --resume require continues them."
+            print(f"prism {args.cmd}: interrupted: the artifact being written was removed. If a "
+                  f"[checkpoint] line above says batches were saved, {advice}", file=sys.stderr)
         rc = 130
     except UsageError as e:
         print(f"prism {args.cmd}: usage: {e}", file=sys.stderr)

@@ -70,12 +70,18 @@ def add_resume_flags(p) -> None:
                         "exists; it silences that near-miss refusal and nothing else")
 
 
+def model_from_path(model, path) -> str:
+    """``model``, else ``path``'s parent folder upper-cased (the ``<kind>/<model>/`` layout every
+    input folder shares -- ``Bounds/<model>/``, ``Cells/<model>/``). The one rule both ``model_for``
+    (over ``--bounds``) and ``core.tool.fdt.model_for_cell`` (over ``--cell``) apply to their own
+    path flag, written once so the two do not restate it."""
+    return str(model or Path(path).parent.name).upper()
+
+
 def model_for(args) -> str:
     """``--model``, else the ``--bounds`` parent folder upper-cased (the ``Bounds/<model>/`` layout --
     the same rule cells resolve by, so a command never has to hard-code a model name)."""
-    if args.model:
-        return str(args.model).upper()
-    return Path(args.bounds).parent.name.upper()
+    return model_from_path(args.model, args.bounds)
 
 
 def build_cfg(args, *, load_gt: bool = False):
