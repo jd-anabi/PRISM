@@ -1458,6 +1458,69 @@ def test_installing_an_experimental_observation_clears_a_stale_truth(store, tmp_
     assert cfg.has_ground_truth
 
 
+def test_an_experimental_observation_records_its_own_length_and_drive_frequencies(store, tmp_path,
+                                                                                 monkeypatch):
+    """The observation records the context of THE RECORDING, not whatever the session's cfg last held.
+    n_obs was written from cfg whenever an earlier simulated observation had set it, so a shorter bench
+    recording recorded the old length and every PPC on it failed at the band plot. A chi recording set
+    never wrote the frequencies it was driven at, so the manifest recorded None (the PPC then re-derived
+    probes per sample: a different experiment) or the previous cell's frequencies."""
+    import numpy as np
+    from matplotlib import pyplot as plt
+    from core import orchestrator
+    from core.SBI.observations import RecordingSet
+    from core.SBI.statistics import SUMMARY_WIDTH
+    closing = lambda title, fig: plt.close(fig)                   # noqa: E731
+
+    # M1: a real forced build on a recording SHORTER than the simulated observation before it
+    cfg = _forced_cfg()
+    sim = orchestrator.generate_observations(cfg, fig_sink=closing)
+    assert cfg.n_obs == 200
+    trace = sim.obs_data[0].numpy()[:150]
+    spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
+    np.save(spont, trace)
+    np.save(forced, trace)
+    T_obs_s = 150 * cfg.dt_exp / cfg.get_unit_conversion_factor("s")
+    si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in cfg.force_params_dict}
+    rec = RecordingSet(spont=str(spont), forced=((str(forced), None),), T_obs_s=T_obs_s,
+                       forcing_params_si=si)
+    exp = orchestrator.build_experiment_observation(cfg, rec, fig_sink=closing)
+    assert exp.manifest.body["n_obs"] == 150, exp.manifest.body["n_obs"]
+    assert exp.manifest.body["chi_obs_freqs"] is None
+
+    # M2: a chi recording set records its drive frequencies in cell units, in the recordings' order
+    chi_cfg = _nad_cfg(chi_mode=True)
+    width = SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(chi_cfg)
+
+    def _builder(cfg_, X_spont, X_forced_list, T_obs_s_, F0_si):
+        # what the real builder does to cfg, and nothing else: no lock-in runs
+        cfg_.set_observation_context(T_obs_s_ * cfg_.get_unit_conversion_factor("s"), {})
+        return (torch.zeros(1, width, dtype=torch.float64), torch.zeros(1, 50, dtype=cfg_.hw.dtype),
+                torch.zeros(1, 50, dtype=cfg_.hw.dtype))
+
+    monkeypatch.setattr(orchestrator, "build_experiment_obs_chi", _builder)
+    passive = tmp_path / "passive.npy"
+    np.save(passive, np.zeros(50, dtype=np.float32))
+    driven = []
+    for i in range(2):
+        p = tmp_path / f"driven_{i}.npy"
+        np.save(p, np.zeros(50, dtype=np.float32))
+        driven.append(str(p))
+    chi_rec = RecordingSet(spont=str(passive), forced=((driven[0], 5.0), (driven[1], 9.0)),
+                           T_obs_s=1.0, F0_si=1.0)
+    want = pytest.approx([5.0 * chi_cfg.freq_si_to_cell, 9.0 * chi_cfg.freq_si_to_cell])
+    fresh = orchestrator.build_experiment_observation(chi_cfg, chi_rec, fig_sink=closing)       # (a)
+    assert fresh.manifest.body["chi_obs_freqs"] == want, fresh.manifest.body["chi_obs_freqs"]
+    assert fresh.manifest.body["n_obs"] == 50
+    assert fresh.manifest.body["conditioning"]["chi_n_freqs"] == 2
+    chi_cfg.chi_obs_freqs = torch.tensor([0.1, 0.2, 0.3])          # (b) a stale simulated context
+    chi_cfg.n_obs = 7
+    stale = orchestrator.build_experiment_observation(chi_cfg, chi_rec, fig_sink=closing)
+    assert stale.manifest.body["chi_obs_freqs"] == want, stale.manifest.body["chi_obs_freqs"]
+    assert stale.manifest.body["n_obs"] == 50
+    assert stale.manifest.body["conditioning"]["chi_n_freqs"] == 2
+
+
 def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
     """The SECOND hop is where a composition silently drops a caller's choice. accept, the store, the
     figure sink, the name and the note all have to arrive at the stage that WRITES the artifact -- and

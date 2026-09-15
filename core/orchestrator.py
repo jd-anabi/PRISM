@@ -299,6 +299,19 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
                                                           rec.forcing_params_si or {})
     else:
         obs_stats, obs_data, t_dim = build_experiment_obs_spontaneous(cfg, X_spont, rec.T_obs_s)
+    # The context _write_observation records is THIS recording's, not what the session's cfg last held:
+    # the length of the trace that is plotted and eye-tested (the passive trace for spontaneous and chi,
+    # the forced one for forced), which a simulated observation before it would otherwise have left.
+    cfg.n_obs = int(obs_data.shape[-1])
+    if cfg.observation_mode == "chi":
+        # The frequencies the bench drove at, in CELL units and in rec.forced order: the units
+        # generate_observations records and the lock-in above used. Without them the PPC falls back to
+        # re-deriving mult_k * f_peak per posterior sample, which simulates a different experiment.
+        cfg.chi_obs_freqs = torch.tensor([float(f) * cfg.freq_si_to_cell for _, f in rec.forced],
+                                         dtype=cfg.hw.dtype, device=cfg.hw.device)
+        cfg.chi_n_freqs = len(rec.forced)
+    else:
+        cfg.chi_obs_freqs = None
     forcing_vals = ({k: float(v) for k, (v, _) in cfg.force_params_dict.items()}
                     if (cfg.has_forcing and not cfg.chi_mode) else {})
     source = {"kind": "experimental", "recordings": refs, "T_obs_s": float(rec.T_obs_s),
