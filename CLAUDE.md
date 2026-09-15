@@ -15,11 +15,19 @@ what is on disk, the last gate). Update it at the end of every session.
 - CUDA is available (RTX 5070 Ti, 16 GB shared with the desktop). Read free VRAM with
   `nvidia-smi --query-gpu=memory.used --format=csv`, never `torch.cuda.mem_get_info()` (it
   overstates free memory by the desktop's share).
-- Launch the GUI with `run.bat` (or `python -m core.gui`). Paths do not depend on the working
-  directory: `core/config.py` resolves `RESOURCES_ROOT` (inputs; `PRISM_RESOURCES` overrides) and
+- Launch the GUI with `run.bat` (or `python -m core.gui`). The command-line tool is `python -m core
+  <subcommand>` (`core/tool/`; `--help` lists them): its entry sets `KMP_DUPLICATE_LIB_OK` and the
+  Agg backend itself, before any torch or core import, so it needs no environment set up around it.
+  Every tool flag maps 1:1 onto a stage keyword argument; the tool reads no environment but the two
+  roots and rebinds no module constant. Paths do not depend on the working directory:
+  `core/config.py` resolves `RESOURCES_ROOT` (inputs; `PRISM_RESOURCES` overrides) and
   `artifacts_root()` (generated artifacts; `PRISM_ARTIFACTS` overrides) from its own location.
   Point `PRISM_ARTIFACTS` at a scratch directory, or use `core.artifacts.use_store`, to keep a
   check away from the real `Artifacts/`.
+- Two core-level environment settings stay environment settings, deliberately (piece 2's D13), and
+  are named in the tool's `--help` epilog: `PRISM_VRAM_CEILING_GIB` is read live on each batch plan;
+  `PRISM_MEM_LOG_EVERY` is read ONCE, when `core.SBI.pipeline` is imported, so setting it inside a
+  running GUI changes nothing.
 
 ## Tests
 
@@ -40,6 +48,9 @@ what is on disk, the last gate). Update it at the end of every session.
   several processes hides that, so the recorded gate is one `pytest -m "not slow"` invocation.
   A tool call cannot hold a run longer than ten minutes: start long runs in the background,
   logging to a file, and touch no source until they exit.
+- `tests/conftest.py` turns training checkpointing OFF for the session
+  (`_checkpointing_off_unless_asked`); it is the only session-wide knob default the suites
+  install, and a test that wants a simulation cache passes `checkpoint_every` explicitly.
 - A green suite does not certify the GPU path (every suite runs on the CPU). After touching code
   that moves tensors, run the smoke gate on the card — four command lines, from the repo root —
   and check `$LASTEXITCODE` after each one:
@@ -102,13 +113,21 @@ what is on disk, the last gate). Update it at the end of every session.
   amended, ending with the Co-Authored-By line the harness provides. Commit messages are SHORT:
   a one-line subject, a brief body only when the subject cannot carry the why. The user pushes
   and handles every other remote operation.
+- Archiving a file means MOVING it on disk into the gitignored `archive/` and then `git rm
+  --cached` — never `git mv`, which would re-create a tracked-but-ignored file. A script that was
+  folded into a subcommand is `git rm`'d instead: git history is its archive.
 
 ## Where things are
 
 - `docs/STATE.md` — the moving state. Read first, update last.
 - `docs/superpowers/specs/` — approved designs. `docs/superpowers/plans/` — implementation plans.
 - `docs/checklists/display-walkthrough.md` — GUI features never exercised on a real screen.
-- `tests/` — the thirteen suites (`test_artifact_store.py` is the store's; `_fixtures.py` holds the
-  shared stand-ins and the tiny real prior+posterior); `core/Reduction/tests/` — the reduction
-  map's (out of scope).
-- `scripts/` — diagnostics configured by environment variables (each file's docstring lists them).
+- `tests/` — the sixteen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
+  command-line tool's, `test_diagnostics.py` the five diagnostics'; `_fixtures.py` holds the shared
+  stand-ins, the tiny real prior+posterior, and `CODE_ROOTS` plus `CODE_FILES`, the directories and
+  top-level files the source scans walk); `core/Reduction/tests/` — the reduction map's (out of
+  scope).
+- `core/tool/` — the command-line tool: `python -m core --help` lists every subcommand (the stages
+  `prior train tsnpe validate infer`, the diagnostics `sbc identifiability ablation`, plus `smoke`,
+  `fdt` and `crossval`). `scripts/` is gone: six of its scripts became `smoke` and the diagnostics
+  (git history keeps them), and six more joined the gitignored `archive/scripts/`.
