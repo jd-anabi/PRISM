@@ -22,6 +22,10 @@ from core.artifacts import manifest as mf
 # new top-level package cannot appear and be scanned by nothing.
 CODE_ROOTS: tuple[str, ...] = ("core",)
 
+# The top-level repository files (outside any CODE_ROOTS directory) that hold product code, so the
+# literal-path scan walks these too, and the same guard test keeps this set closed as well.
+CODE_FILES: tuple[str, ...] = ("conftest.py",)
+
 
 def _nad_cfg(**over):
     """A real NADROWSKI SimConfig off the master bounds file, CPU device."""

@@ -13,8 +13,8 @@ from core import config
 from core.artifacts import manifest as mf
 from core.artifacts import provenance as prov
 
-from tests._fixtures import (CODE_ROOTS, _FakeDP, _gmm_in_box, _nad_cfg, _posterior_artifact,
-                             _prior_artifact, _set_path)
+from tests._fixtures import (CODE_FILES, CODE_ROOTS, _FakeDP, _gmm_in_box, _nad_cfg,
+                             _posterior_artifact, _prior_artifact, _set_path)
 
 
 def test_manifest_json_round_trips_tensors_exactly():
@@ -1023,8 +1023,10 @@ def test_no_literal_resource_paths_outside_config():
 
     It walks CODE_ROOTS rather than a hard-coded "core", so the command-line tool (core/tool/) is
     covered for free and any future top-level package is covered the moment
-    test_the_source_scans_cover_every_code_directory forces it into CODE_ROOTS. The matcher itself is
-    unchanged."""
+    test_the_source_scans_cover_every_code_directory forces it into CODE_ROOTS. It also walks
+    CODE_FILES, the loose top-level *.py files (conftest.py today) that live outside every
+    CODE_ROOTS directory and so would otherwise escape both this scan and that guard. The matcher
+    itself is unchanged."""
     import ast
     root = Path(__file__).resolve().parents[1]
     roots = ("Resources/", "Resources\\", "Artifacts/", "Artifacts\\", "Resources", "Artifacts")
@@ -1032,22 +1034,31 @@ def test_no_literal_resource_paths_outside_config():
     def _lit(node):
         return isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.startswith(roots)
 
+    def _offenses(py):
+        hits = []
+        for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
+            hit = False
+            if isinstance(node, ast.Call):
+                fn = node.func
+                fname = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+                hit = fname in ("Path", "join") and node.args and _lit(node.args[0])
+            elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                hit = _lit(node.left) or _lit(node.right)
+            if hit:
+                hits.append(node.lineno)
+        return hits
+
     offenders, scanned = [], 0
     for sub in CODE_ROOTS:
         for py in sorted((root / sub).rglob("*.py")):
             if py == root / "core" / "config.py":
                 continue
             scanned += 1
-            for node in ast.walk(ast.parse(py.read_text(encoding="utf-8"))):
-                hit = False
-                if isinstance(node, ast.Call):
-                    fn = node.func
-                    fname = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
-                    hit = fname in ("Path", "join") and node.args and _lit(node.args[0])
-                elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
-                    hit = _lit(node.left) or _lit(node.right)
-                if hit:
-                    offenders.append(f"{py.relative_to(root)}:{node.lineno}")
+            offenders += [f"{py.relative_to(root)}:{ln}" for ln in _offenses(py)]
+    for name in CODE_FILES:
+        py = root / name
+        scanned += 1
+        offenders += [f"{py.relative_to(root)}:{ln}" for ln in _offenses(py)]
     assert scanned >= 20, f"the scan walked only {scanned} files -- CODE_ROOTS is {CODE_ROOTS}"
     assert not offenders, "literal store paths outside config.py:\n" + "\n".join(offenders)
     for name in ("PRIOR_PATH", "POSTERIOR_PATH", "PLOT_PATH", "CHECKPOINT_PATH", "OBSERVATION_PATH"):
@@ -1055,18 +1066,23 @@ def test_no_literal_resource_paths_outside_config():
 
 
 def test_the_source_scans_cover_every_code_directory():
-    """CODE_ROOTS is what the two source scans walk, so a top-level package missing from it is scanned
-    by nothing. That is not hypothetical: scripts/ carried thirteen files past the literal-path scan
-    from piece 1 until piece 2 dissolved it, and the tool could just as easily have been written as a
-    top-level package of its own. The guard is the closure: any new directory holding Python either
-    joins CODE_ROOTS or fails here.
+    """CODE_ROOTS and CODE_FILES are what the two source scans walk, so a top-level package or loose
+    *.py file missing from one of them is scanned by nothing. That is not hypothetical: scripts/
+    carried thirteen files past the literal-path scan from piece 1 until piece 2 dissolved it, and
+    the tool could just as easily have been written as a top-level package of its own. The guard is
+    the closure: any new directory or file holding Python either joins CODE_ROOTS/CODE_FILES or
+    fails here.
 
-    Excluded by name: the suites themselves (tests/), the gitignored archive/, .claude/ and sbi-logs/
-    (the last carries a nested git worktree with its own copies of core/'s *.py files), and the
-    directories that hold data, caches, VCS or tool state rather than product code (.git/,
-    .pytest_cache/, __pycache__/, Artifacts/, Resources/). .idea/, .superpowers/ and docs/ hold no
-    *.py today so they need no explicit exclusion; they fall out of `with_py` on their own, and would
-    have to be added here (or to CODE_ROOTS) the day one of them gained a Python file."""
+    Directories excluded by name, each for its own reason: tests/ (the suites themselves, not
+    shipped code); the gitignored archive/ (not shipped code); the gitignored .claude/ (holds *.py
+    only via three nested git worktrees under .claude/worktrees/ -- jolly-jang, trusting-einstein,
+    upbeat-rhodes-c8d30f -- each a checkout of this repo, not code that lives in .claude on
+    purpose); the gitignored sbi-logs/ (a log directory; holds no *.py, listed for the same reason
+    as the rest below); and .git/, .pytest_cache/, __pycache__/, Artifacts/, Resources/ (data,
+    caches, VCS or tool state, not product code). .idea/, .superpowers/ and docs/ hold no *.py
+    today so they need no explicit exclusion; they fall out of `with_py` on their own, and would
+    have to be added here (or to CODE_ROOTS) the day one of them gained a Python file. Loose
+    top-level files need no exclusion set: every *.py at the repo root must be in CODE_FILES."""
     root = Path(__file__).resolve().parents[1]
     skip = {"tests", "archive", ".claude", ".git", ".pytest_cache", "sbi-logs", "Artifacts",
             "Resources", "__pycache__"}
@@ -1075,6 +1091,10 @@ def test_the_source_scans_cover_every_code_directory():
     assert with_py == set(CODE_ROOTS), (
         f"top-level directories holding Python: {sorted(with_py)}; CODE_ROOTS: {sorted(CODE_ROOTS)}. "
         f"Add the directory to tests/_fixtures.CODE_ROOTS, or exclude it here if it is not product code.")
+    with_py_files = {f.name for f in root.iterdir() if f.is_file() and f.suffix == ".py"}
+    assert with_py_files == set(CODE_FILES), (
+        f"top-level Python files: {sorted(with_py_files)}; CODE_FILES: {sorted(CODE_FILES)}. "
+        f"Add the file to tests/_fixtures.CODE_FILES, or exclude it here if it is not product code.")
 
 
 def test_a_round_whose_region_names_no_observation_is_refused_before_the_spend(tiny_run):
