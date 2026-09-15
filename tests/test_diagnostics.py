@@ -424,6 +424,12 @@ def test_sbc_prints_small_p_values_as_numbers_and_bins_ranks_at_least_ten_wide(t
                 fig_sink=lambda title, fig: plt.close(fig))
     out = capsys.readouterr().out
     assert seen["num_bins"] <= (nps + 1) // 10, seen["num_bins"]
+    # sbi draws plt.hist(ranks, bins=<int>): edges linspace(min, max, bins + 1) with the last bin
+    # closed, so over ranks 0..nps each bin holds the same number of integer ranks only when the bin
+    # count divides nps + 1. At 100 bins the closed last bin holds 11 ranks against 10 elsewhere.
+    assert (nps + 1) % seen["num_bins"] == 0, seen["num_bins"]
+    per_bin, _ = np.histogram(np.arange(nps + 1), bins=seen["num_bins"])
+    assert len(set(per_bin.tolist())) == 1, per_bin
     assert "3.21e-20" in out and "3.212345" not in out, out
 
 

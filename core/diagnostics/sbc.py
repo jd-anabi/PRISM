@@ -151,13 +151,21 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
                   f"{_cell(rec['frac_ks_below_05'], '9.3f')}")
 
         # sbc_rank_plot's own default num_bins is num_sbc_runs // 20, which is 0 for a small pooled set
-        # (matplotlib then refuses outright), hence the floor of 1. And it is capped so every bin spans
-        # at least ~10 of the nps + 1 integer ranks: the POOLED N is repeats x n_cal, so N // 20 alone
-        # gives ~950 bins over 1001 ranks at the defaults -- some bins hold two ranks and spike above
-        # the band on a calibrated posterior, and past N = 20 (nps + 1) every other bin is empty. At the
-        # defaults the cap gives 100 bins, each 10 ranks wide, the figure validate_calibration draws.
+        # (matplotlib then refuses outright), hence the floor of 1. It is capped so every bin spans at
+        # least ~10 of the nps + 1 integer ranks: the POOLED N is repeats x n_cal, so N // 20 alone gives
+        # ~950 bins over 1001 ranks at the defaults -- some bins hold two ranks and spike above the band
+        # on a calibrated posterior, and past N = 20 (nps + 1) every other bin is empty.
+        # And the count is the LARGEST DIVISOR of nps + 1 under that cap. sbi draws the panel with
+        # plt.hist(ranks, bins=<int>), whose edges are linspace(min, max, bins + 1) with the last bin
+        # closed; over ranks 0..nps every bin then holds the same number of integer ranks only when the
+        # count divides nps + 1. At the defaults the cap alone gave 100 bins, edges on multiples of 10,
+        # and a closed last bin [990, 1000] holding 11 ranks against 10 elsewhere -- a spike above the
+        # band in ~14 % of panels on a calibrated posterior. 91 bins hold 11 ranks each. The equal
+        # count assumes a panel's ranks reach both 0 and nps, which a pooled calibrated set does with
+        # near certainty; a panel that misses an end is miscalibrated enough to show it regardless.
         n_rows = int(np.ceil(len(labels) / 4))
-        num_bins = max(1, min(pooled.shape[0] // 20, (nps + 1) // 10))
+        cap = max(1, min(pooled.shape[0] // 20, (nps + 1) // 10))
+        num_bins = max(d for d in range(1, cap + 1) if (nps + 1) % d == 0)
         fig, _ = orch.sbc_rank_plot(ranks=torch.as_tensor(pooled), num_posterior_samples=nps,
                                     plot_type="hist", num_bins=num_bins,
                                     parameter_labels=labels, figsize=(16, 3.4 * n_rows))

@@ -730,18 +730,22 @@ def build_posterior(
     # The flow and training knobs, resolved and range-checked here too, before the Fisher and every
     # simulation: sbi only objects to a bad one after the whole budget is spent, and a zero patience or
     # learning rate does not object at all -- it writes an untrained posterior. The manifest records
-    # these same names.
+    # these same names. Checked only on a call that TRAINS (the branch below loads exactly when
+    # `not train_new and ref is not None`, decided from the arguments alone): a load never reads them,
+    # and the Posterior tab sends its flow fields on a load too.
+    trains = train_new or ref is None
     max_ep = TRAINING_MAX_NUM_EPOCHS if max_num_epochs is None else int(max_num_epochs)
     hf = NSF_HIDDEN_FEATURES if hidden_features is None else int(hidden_features)
     nt = NSF_NUM_TRANSFORMS if num_transforms is None else int(num_transforms)
     lr = TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate)
     patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else int(stop_after_epochs)
-    for _knob, _v in (("max_num_epochs", max_ep), ("hidden_features", hf), ("num_transforms", nt),
-                      ("stop_after_epochs", patience)):
-        if _v < 1:
-            raise ValueError(f"{_knob} must be at least 1, got {_v}")
-    if not (math.isfinite(lr) and lr > 0):
-        raise ValueError(f"learning_rate must be a finite positive number, got {lr}")
+    if trains:
+        for _knob, _v in (("max_num_epochs", max_ep), ("hidden_features", hf), ("num_transforms", nt),
+                          ("stop_after_epochs", patience)):
+            if _v < 1:
+                raise ValueError(f"{_knob} must be at least 1, got {_v}")
+        if not (math.isfinite(lr) and lr > 0):
+            raise ValueError(f"learning_rate must be a finite positive number, got {lr}")
     if resume not in ("auto", "require", "never"):
         raise ValueError(
             f"resume={resume!r} is not one of 'auto', 'require', 'never'.")

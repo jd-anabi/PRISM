@@ -1229,6 +1229,31 @@ def test_resume_is_validated_and_refused_before_any_spend(store, monkeypatch):
         assert spent == [], f"{kw} was refused only after the spend: {spent}"
 
 
+def test_flow_knobs_are_range_checked_only_when_the_call_trains(store, monkeypatch):
+    """A LOAD never uses the flow knobs, so it must not be refused over them. The Posterior tab sends one
+    build_posterior call for train and load alike, and its learning-rate field accepts a negative value:
+    loading an existing posterior with -0.001 in that field was refused. The same values on a call that
+    TRAINS are still refused before any spend (the train side is test_resume_is_validated_...)."""
+    from core import orchestrator
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = False
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    post = _posterior_artifact(store, cfg, name="stored")
+    spent = []
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: spent.append("train"))
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("sim"))
+    bad = {"learning_rate": -0.001, "max_num_epochs": 0, "hidden_features": 0, "num_transforms": 0,
+           "stop_after_epochs": 0}
+    loaded = orchestrator.build_posterior(cfg, lp, post.id, False, **bad)
+    assert loaded.id == post.id and spent == []
+    for knob, value in bad.items():
+        with pytest.raises(ValueError) as e:
+            orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
+                                         checkpoint_every=1, **{knob: value})
+        assert knob in str(e.value), str(e.value)
+    assert spent == []
+
+
 def test_the_budget_line_prints_with_default_arguments(store, monkeypatch, capsys):
     """Guardrail 6 on the command line: what this run will actually simulate, said once, whether or
     not a cap or a batch count was overridden. The two conditional announcements stay -- with the
