@@ -13,8 +13,11 @@ import tempfile
 import traceback
 from pathlib import Path
 
+from core.refusals import Refusal
+
 from . import config_args, diagnostics, fdt, smoke, stages
 from .config_args import UsageError  # noqa: F401 -- part of this package's public surface
+from .fields import fix_sentence
 
 EPILOG = """\
 environment -- the only variables PRISM reads, and none of them is a substitute for a flag:
@@ -117,12 +120,24 @@ def main(argv=None) -> int:
                   f"[checkpoint] line above says batches were saved, {advice}", file=sys.stderr)
         rc = 130
     except UsageError as e:
+        # A Refusal too since piece 3, caught FIRST so a bad flag combination keeps exit 2.
         print(f"prism {args.cmd}: usage: {e}", file=sys.stderr)
         rc = 2
+    except Refusal as e:
+        # V3: one operator line -- the message, then the flag that answers its field, from
+        # core/tool/fields.py. fix_sentence owns the parentheses and is empty for field=None or a
+        # key with no flag, so the line then ends at the message. No class name and no
+        # [raised at ...]: those were hedges for a bug disguised as a ValueError, which a dedicated
+        # class no longer needs.
+        fix = fix_sentence(e.field)
+        sfx = (" " + fix) if fix else ""
+        print(f"prism {args.cmd}: refused: {e.message}{sfx}", file=sys.stderr)
+        rc = 1
     except (ValueError, FileNotFoundError) as e:
-        # Every stage refusal, StoreError, cli.UnitParseError and FDTModelError land here. No
-        # traceback -- the message is written for an operator -- but the innermost frame is named, so
-        # a genuine bug that happens to raise ValueError still says where it came from.
+        # An UNCONVERTED refusal -- a bare ValueError from a site piece 3 has not reached yet -- or a
+        # missing file. No traceback -- the message is written for an operator -- but the class and
+        # the innermost frame are named, so a genuine bug that happens to raise ValueError still says
+        # where it came from.
         tb = e.__traceback__
         while tb is not None and tb.tb_next is not None:
             tb = tb.tb_next

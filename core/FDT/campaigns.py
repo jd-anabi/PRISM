@@ -9,6 +9,7 @@ import torch
 from tqdm import tqdm
 
 from core.config import FDTConfig
+from core.refusals import Refusal
 from core.Simulator.nadrowski_simulator import NadrowskiSimulator
 from core.Simulator.hopf_simulator import HopfSimulator
 from core.Simulator.bp_simulator import BPSimulator
@@ -23,7 +24,7 @@ VALID_SIMS = {
 }
 
 
-class FDTModelError(ValueError):
+class FDTModelError(Refusal):
     """A model/cell cannot run the FDT pipeline (missing FDT parameter, multiplicative or zero
     observable noise, or an unregistered model). Carries a user-facing message the GUI shows plainly."""
 

@@ -24,8 +24,10 @@ import torch
 from sympy.core.function import AppliedUndef
 from sympy.parsing.sympy_parser import parse_expr
 
+from core.refusals import Refusal
 
-class ModelParseError(ValueError):
+
+class ModelParseError(Refusal):
     """Raised when a user-typed model definition cannot be parsed/compiled. Message is user-facing."""
 
 

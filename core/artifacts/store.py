@@ -21,6 +21,7 @@ from pathlib import Path
 
 from core import config
 from core.Helpers import file_manager
+from core.refusals import Refusal
 
 from . import manifest as mf
 from . import provenance as prov
@@ -35,7 +36,7 @@ _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 "calibration": (), "inference": (), "diagnostic": ()}
 
 
-class StoreError(ValueError):
+class StoreError(Refusal):
     """The store refused: a missing, incomplete, duplicate or depended-upon artifact."""
 
 
@@ -381,20 +382,24 @@ class ArtifactStore:
         An empty name is always free -- unnamed is the default, and a kind may hold any number of
         unnamed artifacts. ``allow`` is the id already entitled to the name (``rename``'s own
         artifact), which is not a collision with itself.
+
+        Every refusal here carries ``field="name"`` (piece 3, V3): the message names no box and no
+        flag; each front end's table maps the key to its own control.
         """
         if not name:
             return
         if not mf.NAME_RE.match(name):
-            raise StoreError(f"bad artifact name {name!r}: letters, digits, _ . - and at most 64 characters")
+            raise StoreError(f"bad artifact name {name!r}: letters, digits, _ . - and at most 64 characters",
+                             field="name")
         if mf.ID_RE.match(name):
             # get()/path()/_find resolve a ref as an id OR a name, and the id is tried first: a name
             # shaped like an id would shadow the artifact whose id it is, which could then never be
             # addressed at all.
             raise StoreError(f"bad artifact name {name!r}: it is shaped like an artifact id, which would "
-                             f"shadow the artifact whose id it is in get() and path()")
+                             f"shadow the artifact whose id it is in get() and path()", field="name")
         other = self._find(kind, name)[1]
         if other is not None and (allow is None or other.id != allow):
-            raise StoreError(f"a {kind} named {name!r} already exists; rename or delete it first")
+            raise StoreError(f"a {kind} named {name!r} already exists; rename or delete it first", field="name")
 
     def create(self, kind: str, cfg=None, *, name: str = "", note: str = "") -> ArtifactWriter:
         if kind == "simulation":
@@ -404,7 +409,8 @@ class ArtifactStore:
 
     def rename(self, kind: str, ref: str, new_name: str) -> mf.Manifest:
         if not new_name:
-            raise StoreError(f"bad artifact name {new_name!r}: letters, digits, _ . - and at most 64 characters")
+            raise StoreError(f"bad artifact name {new_name!r}: letters, digits, _ . - and at most 64 characters",
+                             field="name")
         sub, m = self._find(kind, ref)
         if m is None:
             raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}")
@@ -511,12 +517,12 @@ class ArtifactStore:
         gmm = m.body["gmm"]
 
         def _bad(what, got, want):
-            raise ValueError(
+            raise Refusal(
                 f"Prior '{label}' does not match this configuration: {what} differs.\n"
                 f"  prior:  {got}\n  config: {want}\n"
                 f"A prior's GMM is fit in its own box coordinate, so loading it here would train the "
                 f"flow against a different distribution than the one the samples came from. Build a new "
-                f"prior for this bounds file, or pick the prior that belongs to it.")
+                f"prior for this bounds file, or pick the prior that belongs to it.", field="prior")
 
         if m.config.get("model") != cfg.model:
             _bad("the model", m.config.get("model"), cfg.model)
@@ -568,7 +574,7 @@ class ArtifactStore:
         body, cond, tr = m.body, m.body["conditioning"], m.body["transform"]
 
         def _bad(msg):
-            raise ValueError(f"Posterior '{label}' {msg}")
+            raise Refusal(f"Posterior '{label}' {msg}", field="posterior")
 
         if m.config.get("model") != cfg.model:
             _bad(f"was trained for model {m.config.get('model')}, but this config is for {cfg.model}.")
@@ -627,15 +633,18 @@ class ArtifactStore:
         if not body["amortized"]:
             trd = body["truncation"] or {}
             if not accept.truncated:
-                raise ValueError(
+                # V3: neutral. Accept(truncated=True) is the core API's own name and stays; the dialog
+                # and the flag that answer this live in the front-end tables under
+                # field="accept_truncated", so a renamed control cannot go stale here.
+                raise StoreError(
                     f"Posterior '{label}' is NOT AMORTIZED: it was trained by TSNPE on a prior truncated to a "
                     f"{trd.get('level', '?')}-HPD region along Fisher direction(s) {trd.get('dims')}, drawn around "
                     f"the observation with digest {trd.get('x_obs_digest')}. It is only valid for observations in "
                     f"that region -- outside it the flow has never seen a training row and will extrapolate "
-                    f"confidently rather than return the prior. To load it anyway: confirm the load on the "
-                    f"Posterior tab, pass --accept-truncated on the command line, or pass Accept(truncated=True). "
-                    f"Its region then restricts calibration, and inference refuses any other observation unless "
-                    f"told to accept it.")
+                    f"confidently rather than return the prior. To load it anyway, pass Accept(truncated=True); "
+                    f"the front ends offer their own consent. Its region then restricts calibration, and "
+                    f"inference refuses any other observation unless told to accept it.",
+                    field="accept_truncated")
             region = truncate.TruncationRegion.from_dict(mf.region_from_json(trd)) if trd else None
             # The digest is refused alongside the basis and for the same class of reason: without a
             # probe the coordinate the box refers to cannot be verified, and without a digest the
@@ -680,22 +689,25 @@ class ArtifactStore:
         label = m.name or m.id
         body, cond = m.body, m.body["conditioning"]
         want_keys = list(cfg.params_dict) + list(cfg.rescale_params)
+
+        def _bad(msg):
+            raise Refusal(f"Observation '{label}' {msg}", field="observation")
+
         if m.config.get("model") != cfg.model:
-            raise ValueError(f"Observation '{label}' was recorded for model {m.config.get('model')}, not {cfg.model}.")
+            _bad(f"was recorded for model {m.config.get('model')}, not {cfg.model}.")
         if list(m.config.get("param_keys") or []) != want_keys:
-            raise ValueError(f"Observation '{label}' was recorded over parameters {m.config.get('param_keys')}, "
-                             f"not this config's {want_keys}.")
+            _bad(f"was recorded over parameters {m.config.get('param_keys')}, not this config's {want_keys}.")
         if body["mode"] != cfg.observation_mode:
-            raise ValueError(f"Observation '{label}' is a {str(body['mode']).upper()}-mode observation, but this "
-                             f"config is {cfg.observation_mode.upper()} mode.")
+            _bad(f"is a {str(body['mode']).upper()}-mode observation, but this config is "
+                 f"{cfg.observation_mode.upper()} mode.")
         want_dim = int(expected_forcing_dim(cfg))
         if int(cond["forcing_dim"]) != want_dim or int(cond["width"]) != SUMMARY_WIDTH + 1 + want_dim:
-            raise ValueError(f"Observation '{label}' is {cond['width']} wide (block {cond['forcing_dim']}); this "
-                             f"config conditions on {SUMMARY_WIDTH + 1 + want_dim} (block {want_dim}).")
+            _bad(f"is {cond['width']} wide (block {cond['forcing_dim']}); this config conditions on "
+                 f"{SUMMARY_WIDTH + 1 + want_dim} (block {want_dim}).")
         if body["mode"] == "chi" and (cond["chi_layout"] != _config.CHI_LAYOUT
                                       or int(cond["chi_k_pad"]) != int(cfg.chi_k_pad)):
-            raise ValueError(f"Observation '{label}' was packed under chi layout {cond['chi_layout']} with "
-                             f"{cond['chi_k_pad']} slots; this config is layout {_config.CHI_LAYOUT} / {cfg.chi_k_pad}.")
+            _bad(f"was packed under chi layout {cond['chi_layout']} with {cond['chi_k_pad']} slots; this "
+                 f"config is layout {_config.CHI_LAYOUT} / {cfg.chi_k_pad}.")
         payload = torch.load(str(sub / "observation.pt"), map_location="cpu", weights_only=False)
         x_obs = payload["x_obs"]
         if mf.tensor_digest(x_obs) != body["x_obs_digest"]:

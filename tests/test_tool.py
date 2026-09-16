@@ -304,7 +304,14 @@ def test_a_taken_name_is_refused_with_exit_1_and_nothing_written(tool_run, capsy
     capsys.readouterr()
     assert main(["prior", *_cfg(bounds), "--name", "tp"]) == 1
     err = capsys.readouterr().err
-    assert "refused: StoreError" in err and "already exists" in err and "raised at" in err
+    # V3 on the tool: ONE line, the message and the flag that answers it. No class name and no
+    # [raised at ...] -- those were hedges for a bug disguised as a ValueError, which a dedicated
+    # Refusal class no longer needs. fix_sentence owns the parentheses, so "((" would mean the
+    # message carried its own copy of the flag.
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism prior: refused:")]
+    assert len(lines) == 1, err
+    assert "already exists" in lines[0] and lines[0].endswith("(--name)"), lines[0]
+    assert "((" not in lines[0] and "raised at" not in lines[0] and "StoreError" not in lines[0], lines[0]
     assert [s.id for s in store.list("prior")] == before
 
 
@@ -457,7 +464,12 @@ def test_validate_refuses_a_non_amortized_posterior_without_accept_truncated(too
     capsys.readouterr()
     assert main(argv) == 1
     err = capsys.readouterr().err
-    assert "NOT AMORTIZED" in err and "--accept-truncated" in err and "raised at" in err
+    # The flag comes from core/tool/fields.py's FLAG table, appended by main's ladder -- the store's
+    # message itself no longer names it (test_artifact_store.py pins that it names no control).
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism validate: refused:")]
+    assert len(lines) == 1, err
+    assert "NOT AMORTIZED" in lines[0] and lines[0].endswith("(--accept-truncated)"), lines[0]
+    assert "raised at" not in lines[0] and "Posterior tab" not in lines[0], lines[0]
 
     rec = _Rec(_art(root, "calibration"))
     monkeypatch.setattr(orchestrator, "validate_calibration", rec)
@@ -1363,3 +1375,78 @@ def test_fdt_plot_functions_close_a_saved_figure_instead_of_show(tmp_path):
     assert not any("non-interactive" in str(w.message) for w in rec), \
         [str(w.message) for w in rec]
     assert len(plt.get_fignums()) == before
+
+
+def test_the_tool_prints_a_refusal_with_its_flag_and_a_bug_with_a_traceback(tool_env, monkeypatch, capsys):
+    """Spec section 1.2, "V3 and the tool's ladder": four rungs, told apart by TYPE.
+
+    A Refusal is one operator line -- ``prism <cmd>: refused: <message> <fix>`` -- with the flag from
+    core/tool/fields.py in parentheses when its field has one, and NOTHING after the message when
+    the field is None or has no flag (fix_sentence owns the parentheses, so a bare message never
+    ends in "()"). No class name, no [raised at ...]. A bare ValueError from a site piece 3 has not
+    converted keeps today's hedged shape, class and location included, so an unconverted refusal
+    still reads as a refusal. Anything else is a bug and prints the whole traceback. UsageError is
+    now a Refusal too and MUST stay exit 2 with its own prefix: it is caught one rung earlier.
+
+    The stage is stubbed to raise, so the ladder is exercised on the real path from main through
+    the handler and build_cfg, not on a synthetic try/except."""
+    from core import orchestrator
+    from core.refusals import Refusal
+    from core.tool.config_args import UsageError
+    bounds, cell, root = tool_env
+    argv = ["prior", *_cfg(bounds)]
+
+    def _raising(exc):
+        def _stage(*a, **k):
+            raise exc
+        return _stage
+
+    def _prism_lines():
+        err = capsys.readouterr().err
+        return err, [ln for ln in err.splitlines() if ln.startswith("prism prior: ")]
+
+    # (a) a field with a flag: the message, one space, the flag in parentheses, and nothing else
+    monkeypatch.setattr(orchestrator, "build_prior",
+                        _raising(Refusal("The observation length, in seconds, is blank.", field="t_obs")))
+    capsys.readouterr()
+    assert main(argv) == 1
+    err, lines = _prism_lines()
+    assert lines == ["prism prior: refused: The observation length, in seconds, is blank. (--t-obs)"], err
+    assert "Traceback" not in err and "raised at" not in err and "Refusal" not in err, err
+
+    # (b) field=None: the line ends at the message -- no parentheses at all
+    monkeypatch.setattr(orchestrator, "build_prior", _raising(Refusal("Nothing to resume.")))
+    assert main(argv) == 1
+    err, lines = _prism_lines()
+    assert lines == ["prism prior: refused: Nothing to resume."], err
+    assert "(" not in lines[0] and ")" not in lines[0]
+
+    # (c) a registered field with no flag (the chi band is fixed by measurement, D11): same as (b)
+    monkeypatch.setattr(orchestrator, "build_prior", _raising(Refusal(
+        "The chi frequency band (fixed by measurement) is not the one this posterior was trained under.",
+        field="chi_freq_bounds")))
+    assert main(argv) == 1
+    err, lines = _prism_lines()
+    assert lines == ["prism prior: refused: The chi frequency band (fixed by measurement) is not the one "
+                     "this posterior was trained under."], err
+
+    # (d) an unconverted ValueError keeps today's hedged shape: class name and innermost frame
+    monkeypatch.setattr(orchestrator, "build_prior", _raising(ValueError("old style")))
+    assert main(argv) == 1
+    err, lines = _prism_lines()
+    assert len(lines) == 1 and lines[0].startswith("prism prior: refused: ValueError: old style [raised at "), err
+    assert lines[0].endswith("]") and "test_tool.py:" in lines[0] and "Traceback" not in err, err
+
+    # (e) a bug: the traceback, then the FAILED line; never the word "refused"
+    monkeypatch.setattr(orchestrator, "build_prior", _raising(RuntimeError("boom")))
+    assert main(argv) == 1
+    err, lines = _prism_lines()
+    assert lines == ["prism prior: *** FAILED ***"], err
+    assert "Traceback (most recent call last)" in err and "RuntimeError: boom" in err, err
+    assert "refused" not in err, err
+
+    # (f) UsageError is a Refusal and still exits 2 with the usage prefix: caught one rung earlier
+    monkeypatch.setattr(orchestrator, "build_prior", _raising(UsageError("--x needs --y")))
+    assert main(argv) == 2
+    err, lines = _prism_lines()
+    assert lines == ["prism prior: usage: --x needs --y"], err

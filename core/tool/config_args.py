@@ -10,14 +10,17 @@ orchestrator binds config constants at import (CLAUDE.md).
 NOTHING IN THIS PACKAGE READS THE ENVIRONMENT (tests/test_tool.py pins it). The two roots and the two
 core-level settings PRISM does read are named in the --help epilog.
 
-Every ``core`` import is inside a function: the parser is built before ``registry.load_user_models``
-runs, and ``--help`` must not cost a torch import.
+Every ``core`` import that costs torch is inside a function: the parser is built before
+``registry.load_user_models`` runs, and ``--help`` must not cost a torch import. ``core.refusals`` is
+torch-free and is the one top-level exception, for ``UsageError``'s base.
 """
 import argparse
 from pathlib import Path
 
+from core.refusals import Refusal
 
-class UsageError(ValueError):
+
+class UsageError(Refusal):
     """A bad flag COMBINATION -- one argparse cannot express because it depends on the built config
     (which recordings a mode takes, which drive keys exist). Raised after parsing; exit code 2."""
 

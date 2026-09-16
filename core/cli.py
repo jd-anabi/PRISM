@@ -18,9 +18,10 @@ from .config import (
     BOUNDS_PATH, UNITS_PATH,
 )
 from .Helpers import file_manager
+from .refusals import Refusal
 
 
-class UnitParseError(ValueError):
+class UnitParseError(Refusal):
     """Raised when a cell/units file names a unit pint can't resolve.
 
     Previously the parsers printed an error and called exit(), which killed the whole process --

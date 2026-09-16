@@ -13,6 +13,8 @@ import math
 import re
 from dataclasses import asdict, dataclass
 
+from core.refusals import Refusal
+
 SCHEMA = 1
 KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -42,7 +44,7 @@ BODY_KEYS = {
 }
 
 
-class ManifestError(ValueError):
+class ManifestError(Refusal):
     """A manifest that does not describe a current PRISM artifact."""
 
 

@@ -667,6 +667,7 @@ def test_manifest_V_must_equal_the_rotation_in_the_pickled_prior(store):
 
 def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store):
     from core.artifacts import Accept
+    from core.refusals import Refusal
     from core.SBI import reparam, truncate
     from core.SBI.training_checkpoint import bijection_probe
     cfg = _nad_cfg(chi_mode=True)
@@ -675,13 +676,15 @@ def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store):
     region = truncate.TruncationRegion([0, 1], [-1.0, -1.0], [1.0, 1.0], n_latent=P, V=None,
                                        probe=bijection_probe(T, P), x_obs_digest="d" * 16)
     _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
-    with pytest.raises(ValueError, match="NOT AMORTIZED") as excinfo:
+    with pytest.raises(Refusal, match="NOT AMORTIZED") as excinfo:
         store.load_posterior(cfg, "trunc")
-    # The refusal must name every way out, one per front end -- a message that names only the Python
-    # hatch tells a GUI user and a command-line user nothing they can act on.
-    for needle in ("confirm the load on the Posterior tab", "--accept-truncated",
-                   "Accept(truncated=True)"):
-        assert needle in str(excinfo.value), needle
+    # V3: the message is NEUTRAL. It names the Python hatch -- the core API's own name -- and no
+    # control a front end owns; the FIELD is what each front end maps to its dialog or its flag
+    # (core/gui/fields.py, core/tool/fields.py), so a renamed button can never go stale here.
+    assert excinfo.value.field == "accept_truncated"
+    assert "Accept(truncated=True)" in str(excinfo.value)
+    for banned in ("Posterior tab", "--accept-truncated", "command line"):
+        assert banned not in str(excinfo.value), banned
     lp = store.load_posterior(cfg, "trunc", accept=Accept(truncated=True))
     assert lp.posterior.truncation.dims == [0, 1] and lp.posterior.x_obs_digest == "d" * 16
     assert lp.accepted == ["truncated"] and torch.equal(lp.posterior.truncation.probe, region.probe)
@@ -2184,3 +2187,62 @@ def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, mon
         with pytest.raises(_Injected):
             call()
     assert_cfg_unchanged(watched, snap)
+
+
+def test_a_bad_or_taken_name_is_refused_with_the_name_field(store):
+    """Spec section 3.6: ``assert_name_free`` raises ``Refusal(field="name")`` -- still a StoreError,
+    so every ``except StoreError`` in the tree holds, but now carrying the key both front ends map
+    to their own control: the Save box (core/gui/fields.py) and --name (core/tool/fields.py). The
+    message itself names NO control; the tables do, so a renamed box cannot go stale here.
+    ``rename`` shares the rule, so its two refusals carry the same field.
+    """
+    from core.artifacts import store as st
+    from core.refusals import Refusal
+    cfg = _nad_cfg()
+    _prior_artifact(store, cfg, name="taken")
+    for bad, why in (("taken", "already exists"), ("no spaces", "bad artifact name"),
+                     ("20260910T120000", "shaped like an artifact id")):
+        with pytest.raises(st.StoreError, match=why) as e:
+            store.assert_name_free("prior", bad)
+        assert isinstance(e.value, Refusal) and e.value.field == "name", (bad, e.value.field)
+        for control in ("Save box", "--name", "GUI", "command line"):
+            assert control not in str(e.value), (bad, control)
+    with pytest.raises(st.StoreError, match="already exists") as e:
+        store.create("prior", cfg, name="taken")
+    assert e.value.field == "name", "create checks the same rule and must carry the same field"
+    other = _prior_artifact(store, cfg, name="other")
+    for bad in ("taken", ""):
+        with pytest.raises(st.StoreError) as e:
+            store.rename("prior", other.id, bad)
+        assert e.value.field == "name", (bad, e.value.field)
+    assert store.assert_name_free("prior", "") is None, "unnamed is always free"
+
+
+def test_the_loaders_mismatch_refusals_name_their_artifact_field(store):
+    """Spec section 3.3: "the store's load mismatches ... become Refusals with a field key where one
+    control answers them". A prior, posterior or observation that does not belong to this
+    configuration is answered by picking another one, so the refusal names that picker --
+    ``prior``, ``posterior``, ``observation`` -- and the front-end tables render the sentence. The
+    messages are unchanged (the mismatch-class tests above pin their words); only the type and the
+    key are new. The observation is hand-written: its mode check fires before the payload is read,
+    so no simulation is needed to provoke it, and it is written in one mode and loaded in the other
+    exactly as test_generate_observations_writes_an_artifact_that_reinstalls_its_context does.
+    """
+    from core.refusals import Refusal
+    cfg = _nad_cfg(chi_mode=True)
+    _prior_artifact(store, cfg, name="hopf_prior", model="HOPF")
+    with pytest.raises(Refusal, match="the model") as e:
+        store.load_prior(cfg, "hopf_prior")
+    assert e.value.field == "prior"
+    _posterior_artifact(store, cfg, name="hopf_post", over={("config", "model"): "HOPF"})
+    with pytest.raises(Refusal, match="trained for model") as e:
+        store.load_posterior(cfg, "hopf_post")
+    assert e.value.field == "posterior"
+    plain = _nad_cfg()                                       # master.txt declares a drive -> forced mode
+    with store.create("observation", plain, name="forced_obs") as w:
+        w.body = {"mode": plain.observation_mode, "conditioning": mf.conditioning_block(plain),
+                  "x_obs_digest": "d" * 16, "T_obs_cell": 1.0, "n_obs": 1, "forcing_vals": {},
+                  "chi_obs_freqs": None, "source": {"kind": "simulated"}}
+    with pytest.raises(Refusal, match="mode") as e:
+        store.load_observation(cfg, "forced_obs")
+    assert e.value.field == "observation"

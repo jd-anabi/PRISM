@@ -692,3 +692,31 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
                 unregistered.append(f"{py.relative_to(root)}:{ln}: {key!r}")
     assert not unregistered, ("refusal keys used under core/ but absent from core.refusals.FIELDS:\n"
                               + "\n".join(unregistered))
+
+
+def test_every_domain_error_is_a_refusal_and_carries_a_field():
+    """Spec section 3.6, first bullet. The six errors the tree already raises for "something asked for
+    that the program will not do" -- a bad or taken name, a stale manifest, a unit pint cannot
+    resolve, a cell FDT cannot run, a model definition that does not parse, a flag combination
+    argparse cannot express -- become Refusals, so ONE ladder on the tool and ONE routing in the
+    window tell a refusal from a bug by TYPE instead of guessing from ValueError. Each keeps its
+    class (every ``except StoreError`` in the tree still holds) and its docstring, and each takes
+    ``field=`` through Refusal.__init__, so a raise site can name the control that answers it.
+
+    The imports are inside the test: this module is torch-free by contract, and core.artifacts
+    imports core.config, which imports torch."""
+    from core.refusals import Refusal
+    from core.artifacts.manifest import ManifestError
+    from core.artifacts.store import StoreError
+    from core.cli import UnitParseError
+    from core.FDT.campaigns import FDTModelError
+    from core.Models.user_model import ModelParseError
+    from core.tool.config_args import UsageError
+
+    for cls in (StoreError, ManifestError, UnitParseError, FDTModelError, ModelParseError, UsageError):
+        assert issubclass(cls, Refusal) and issubclass(cls, ValueError), cls.__name__
+        e = cls("why", field="name")
+        assert isinstance(e, Refusal) and str(e) == "why" and e.message == "why", cls.__name__
+        assert e.field == "name", cls.__name__
+        assert cls("why").field is None, f"{cls.__name__}: field must default to None"
+        assert cls.__doc__ and cls.__doc__.strip(), f"{cls.__name__} lost its docstring"
