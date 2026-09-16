@@ -225,7 +225,7 @@ def build_experiment_obs_chi(
     if not (1 <= n_probes <= cfg.chi_k_pad):
         raise Refusal(
             f"chi-mode accepts 1 to {cfg.chi_k_pad} forced recordings (CHI_K_PAD), got {n_probes}.",
-            field="chi_n_freqs")
+            field="recording_probe")
 
     chis, u_list, logcyc_list, valid = [], [], [], []
     for k, item in enumerate(X_forced_list):

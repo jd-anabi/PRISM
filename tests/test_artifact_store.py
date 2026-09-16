@@ -2284,4 +2284,4 @@ def test_the_experimental_builders_refuse_as_refusals_before_any_lock_in():
     chi_cfg = _nad_cfg(chi_mode=True)
     with pytest.raises(Refusal, match="forced recordings") as e:
         obsm.build_experiment_obs_chi(chi_cfg, torch.randn(512), [], 512 * cfg.dt_exp / s_to_cell, 1e-12)
-    assert e.value.field == "chi_n_freqs"
+    assert e.value.field == "recording_probe"
