@@ -1,6 +1,6 @@
 # PRISM — state
 
-**Last updated:** 2026-09-15. **Piece 2, "one flow underneath", is DONE**: commits
+**Last updated:** 2026-09-16. **Piece 2, "one flow underneath", is DONE**: commits
 `0016dae`..`d34997c` (55) on the local `main` branch, pushed by the user on 2026-09-15. The prompt
 CLI is retired. The GUI and the new `python -m core <subcommand>` tool are two front ends over the
 same orchestrator stages and three compositions. Six scripts became four subcommands (`smoke` and
@@ -8,10 +8,11 @@ three diagnostics, the diagnostics writing a new `diagnostic` store kind), six w
 `scripts/` is gone. A whole-branch review and its fixes closed the piece. The GPU gate of record ran
 at `0d96d2f`; the final one-process fast gate (457 passed at `d34997c`) and the slow set are in the
 table below, and the user ran rows B1–B8 of `docs/checklists/display-walkthrough.md` on the real
-screen on 2026-09-15: all eight pass. **Next: piece 3**
-(validation and misuse-proofing, logging with severity, copy-on-run session config),
-brainstormed → spec → plan → implemented directly on the local `main` branch; its carried items are
-in "Owed" item 7.
+screen on 2026-09-15: all eight pass. **Piece 3** (validation and misuse-proofing, logging with
+severity, the private copy of the session config) is brainstormed, specified and planned: the design
+`docs/superpowers/specs/2026-09-15-validation-and-logging-design.md` (approved; `ca583f8`, decisions
+V1–V9) and the 24-task plan `docs/superpowers/plans/2026-09-16-validation-and-logging.md` (`a8bcec2`).
+**Next: execute the plan** task by task on the local `main` branch; no task has started.
 
 ## Where things stand
 
@@ -121,7 +122,10 @@ in "Owed" item 7.
    B8 re-checked the FDT panel's full run, because `bb22ac4` changed the plots it draws.
 7. **Pieces 3 → (4 ∥ 5) → 6**, each brainstormed → spec → plan → implementation. Carried into them
    from piece 2 (design spec §1.3, the final review's "left open" list, and the ledger):
-   - **Piece 3.**
+   - **Piece 3.** Spec `ca583f8` and plan `a8bcec2` cover every bullet below (spec §1.3 lists what it
+     leaves to pieces 4 and 5). Execution has not started. The plan's drafting was not independently
+     verified task by task (the verifier run was cut off by a usage limit); its cross-task names were
+     checked by hand, so each task's own review at execution is the first check of its quoted code.
      - Copy-on-run session config: a refused stage must leave nothing on the session. It also
        covers an amortized training in a session whose config carries a ground truth, which then
        anchors the Fisher step on that truth. And it covers a GUI session in which an experimental
