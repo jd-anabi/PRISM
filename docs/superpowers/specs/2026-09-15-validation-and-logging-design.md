@@ -715,8 +715,12 @@ teardown that `<repo>/sbi-logs` does not exist, beside `_sandbox_default_store`.
 
 ## 11. Deviations made during execution (piece 3)
 
-Every ruling made during execution that departs from this spec, with the task that made it. Filled
-during execution; empty at approval.
+Every ruling that departs from this spec, with the task that made it. Rows whose task reads "plan (Tn)"
+were ruled while the implementation plan was written (`docs/superpowers/plans/2026-09-16-validation-and-logging.md`)
+and are carried out by that task; every other row is appended by the task that made the ruling, in its
+own commit, numbered one past the last row.
 
 | # | task | deviation from this spec | why |
 |---|---|---|---|
+| 1 | plan (T4) | §3.2's `(tab, label)` entry names one tab. `num_runs` and `run_size_cap` name two, `(("Posterior", "TSNPE"), label)`, and their fix sentence reads "Set it in the '<label>' box on the Posterior or TSNPE tab." | Both tabs show the budget boxes. Naming one tab would send a user refused on the TSNPE tab to the Posterior tab. |
+| 2 | plan (T6) | §3.6 says `validate_gt_file`'s strings come from the same rules as the cell refusal. In this piece they stay two wordings: T6 makes `load_and_validate_gt`'s refusal a `Refusal(field="cell")` and leaves the dry run's problem strings as they are. | Sharing them needs one message builder that the pick-time cell check and the secondary panels' cell pickers both consume; piece 5 adopts the rules for those pickers and owns it. |
