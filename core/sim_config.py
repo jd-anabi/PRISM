@@ -6,6 +6,7 @@ Every module-level constant is read as ``config.NAME`` -- a LIVE read, never a f
 snapshot -- so the chi default factories keep their read-at-construction semantics and a per-run
 assignment to ``core.config`` is still honoured here.
 """
+import copy
 import os
 import math
 import warnings
@@ -19,6 +20,11 @@ from core import config
 from core.config import DeviceConfig, detect_device
 
 
+# The cached_property names on SimConfig -- what copy_for_run pops off its shallow copy BEFORE the
+# deep copy, so the 2.4M-point grid and the pint registry are never duplicated. Closed by test:
+# test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs asserts this names EVERY
+# cached_property on the class, so a new one cannot be added and silently deep-copied on every entry.
+_CACHED = ("t", "_ureg", "length_unit", "time_unit", "force_unit", "freq_unit")
 
 
 # === SIMULATION CONFIG DATACLASS ===
@@ -527,6 +533,26 @@ class SimConfig:
     def freq_unit(self) -> "str | None":
         """Cell frequency unit token (e.g. "Hz"); None for BP."""
         return self._resolve_unit("Hz")
+
+    def copy_for_run(self) -> "SimConfig":
+        """A deep copy for one run: what `core.runs.public_entry` hands every public stage,
+        composition and diagnostic in place of the caller's config (V1 of piece 3).
+
+        The cached properties (_CACHED) are dropped off a SHALLOW copy before the deep copy, so the
+        2.4M-point grid and the pint registry are never duplicated -- 19 ms and a transient 9.6 MB
+        when they are, under 0.1 ms when they are not -- and the copy recomputes them lazily on the
+        thread that uses it. `_ureg` recomputes to the same process-wide registry
+        (config.unit_registry is lru_cached), so quantities from the copy and the caller still
+        combine. The caller's own caches stay where they were. Everything a stage writes on --
+        T_obs, n_obs, the four OrderedDicts through inject_ground_truth / clear_ground_truth /
+        set_observation_context, sources, chi_obs_freqs -- is an independent equal object on the
+        copy, so a refused, failed or cancelled run leaves the caller's config exactly as built.
+        A CUDA tensor deep-copies onto its device.
+        """
+        c = copy.copy(self)
+        for key in _CACHED:
+            c.__dict__.pop(key, None)
+        return copy.deepcopy(c)
 
 
 # === FDT CONFIG DATACLASS ===

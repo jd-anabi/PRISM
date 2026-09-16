@@ -1664,3 +1664,67 @@ def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
     assert seen["rec"] is rec and seen["exp"] == {"fig_sink": sink, "store": store}
     assert seen["inf"] == {"name": "n2", "note": "t2", "fig_sink": sink, "store": store, "accept": acc}, \
         "n_samples must be ABSENT when the caller did not set it"
+
+
+def test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs():
+    """V1 (spec §2.1). copy_for_run is what every public entry point does to the config it is
+    handed, so it has to be cheap enough to do on every call -- and a plain deepcopy is not: with
+    the 2.4M-point grid and the pint registry cached on the object it costs 19 ms and a transient
+    9.6 MB, and it duplicates a registry whose quantities the original's cannot be combined with.
+    So the cached properties are POPPED off a shallow copy before the deep copy, and the copy
+    recomputes them lazily on the thread that uses it; `_ureg` recomputes to the same process-wide
+    instance. Everything a stage may write on -- the four OrderedDicts, hw, sources, labels, the
+    chi_obs_freqs tensor -- is an independent equal object on the copy, and the caller's caches
+    stay where they were.
+
+    Best of five for the timing, so a busy core cannot fail it; the budget is sixty times the
+    measured cost, and a deep-copied grid overshoots it two hundredfold.
+
+    The closure pin comes first: _CACHED must name EVERY cached_property on SimConfig, so a new
+    one cannot be added and silently deep-copied on every entry."""
+    import time
+    from collections import OrderedDict
+    from functools import cached_property
+
+    from core import sim_config
+    from core.config import SimConfig
+
+    cached = {n for n, v in vars(SimConfig).items() if isinstance(v, cached_property)}
+    assert set(sim_config._CACHED) == cached, f"_CACHED {sim_config._CACHED} vs the class's {cached}"
+
+    cfg = _nad_cfg()
+    cfg.T_obs = 1.0
+    _ = cfg.t, cfg.length_unit, cfg.time_unit               # materialise the grid and the registry
+    cfg.chi_obs_freqs = torch.tensor([1.0, 2.0, 3.0])
+    assert all(k in cfg.__dict__ for k in ("t", "_ureg", "length_unit", "time_unit"))
+
+    times = []
+    for _ in range(5):
+        t0 = time.perf_counter()
+        c = cfg.copy_for_run()
+        times.append(time.perf_counter() - t0)
+    assert min(times) < 0.005, f"copy_for_run took {min(times) * 1e3:.2f} ms: the caches were deep-copied"
+
+    assert isinstance(c, SimConfig) and c is not cfg
+    assert not any(k in c.__dict__ for k in sim_config._CACHED), "the copy starts with no caches"
+    assert all(k in cfg.__dict__ for k in ("t", "_ureg", "length_unit", "time_unit")), \
+        "the caller keeps its caches: only the shallow copy was stripped"
+    for name in ("inits_dict", "params_dict", "rescale_params", "force_params_dict"):
+        a, b = getattr(cfg, name), getattr(c, name)
+        assert isinstance(b, OrderedDict) and a == b and a is not b, name
+    assert c.hw == cfg.hw and c.hw is not cfg.hw
+    assert c.sources == cfg.sources and c.sources is not cfg.sources
+    assert c.labels == cfg.labels and c.labels is not cfg.labels
+    assert torch.equal(c.chi_obs_freqs, cfg.chi_obs_freqs) and c.chi_obs_freqs is not cfg.chi_obs_freqs
+    assert c.T_obs == 1.0 and c.units_dict == cfg.units_dict and c.chi_mode == cfg.chi_mode
+    assert torch.equal(c.t, cfg.t), "the grid recomputes equal on the copy"
+    assert c._ureg is cfg._ureg, "the registry recomputes to the process-wide instance"
+    assert c.length_unit == cfg.length_unit == "nm"
+
+    # a write on the copy -- what a stage does -- never reaches the caller
+    first = next(iter(c.params_dict))
+    c.T_obs = 2.0
+    c.sources["cell"] = "somewhere"
+    c.params_dict[first] = (1.0, c.params_dict[first][1])
+    assert cfg.T_obs == 1.0 and "cell" not in cfg.sources
+    assert cfg.params_dict[first][0] is None and not cfg.has_ground_truth

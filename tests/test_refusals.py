@@ -382,3 +382,184 @@ def test_every_registry_default_is_the_trees_own_default():
     looked_at = set(owned_by_config) | set(owned_by_a_signature) | {"device"}
     rest = {k: f.default for k, f in FIELDS.items() if k not in looked_at}
     assert rest == {k: ("none: it must be given" if k == "t_obs" else None) for k in rest}, rest
+
+
+def test_core_runs_imports_without_torch():
+    """core/runs.py is imported by every public entry point and by BOTH front ends, and the tool's
+    entry sets KMP_DUPLICATE_LIB_OK and the Agg backend BEFORE any torch import (CLAUDE.md). So the
+    module must cost the standard library only -- which is also what lets public_entry duck-type
+    the config instead of isinstance-checking SimConfig. core/__init__.py is empty, so a fresh
+    interpreter tells the truth about what `import core.runs` pulls in."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    proc = subprocess.run(
+        [sys.executable, "-c",
+         "import sys, core.runs; assert 'torch' not in sys.modules, 'core.runs imports torch'"],
+        cwd=str(repo), capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_the_core_logger_is_at_info_by_import():
+    """V4 (spec §1.2, "V4 and the logger level"). Python's root logger sits at WARNING, so a `core`
+    logger left at NOTSET inherits it and drops every information record before any handler sees
+    it: the window's pane and the artifact's log.txt would carry warnings only, while
+    `caplog.set_level` in a suite hid the loss. core/runs.py sets the level ONCE at import; the
+    window's handler and the tool's `main` install and remove handlers and never touch it. Task 16
+    extends this pin across `main` and a stream redirect."""
+    import logging
+
+    from core import runs
+
+    assert runs.LOGGER is logging.getLogger("core")
+    assert runs.LOGGER.level == logging.INFO
+    assert logging.getLogger("core.orchestrator").getEffectiveLevel() == logging.INFO, \
+        "a child inherits INFO: every module's `logging.getLogger(__name__)` is covered"
+    assert runs.LOGGER.propagate is True, "caplog reads the records off the root logger"
+    assert not any(isinstance(h, runs._RunLogHandler) for h in runs.LOGGER.handlers), \
+        "no buffer is attached outside a run"
+
+
+def test_capture_run_pushes_one_buffer_for_nested_calls():
+    """V4 (spec §4.4). A composition writes two artifacts: the observation's log.txt holds the
+    records up to its commit, the inference's holds the WHOLE composition's. So the public stages a
+    composition calls must join the composition's buffer, not open their own: capture_run pushes
+    only when nothing is active on this thread, and a nested exit pops nothing. The buffer is
+    popped on EVERY outer exit, an exception's included, so a refused or crashed run leaves no
+    handler on the logger and no tee on warnings.showwarning."""
+    import logging
+    import re
+    import warnings
+
+    import pytest
+
+    from core import runs
+
+    child = logging.getLogger("core.some_stage")
+    assert runs.current_run_log() is None
+    with runs.capture_run() as outer:
+        assert runs.current_run_log() is outer
+        child.info("outer says hello")
+        with runs.capture_run() as inner:
+            assert inner is outer, "a nested public entry joins the active buffer"
+            child.warning("inner warns")
+            child.debug("never recorded")             # below INFO: dropped at the logger
+        assert runs.current_run_log() is outer, "the inner exit pops nothing"
+        child.error("outer fails")
+    assert runs.current_run_log() is None
+    stamp = r"\d{2}:\d{2}:\d{2}"
+    assert [re.sub(stamp, "T", ln) for ln in outer.lines] == [
+        "T info outer says hello", "T warning inner warns", "T error outer fails"]
+    assert outer.text() == "\n".join(outer.lines) + "\n"
+    assert runs.RunLog().text() == "", "an empty buffer renders as an empty file"
+
+    # popped on the way out of an exception, with the handler and the warnings hook gone
+    prev_hook = warnings.showwarning
+    with pytest.raises(RuntimeError, match="mid-run"):
+        with runs.capture_run():
+            assert warnings.showwarning is not prev_hook, "the tee is installed while active"
+            raise RuntimeError("mid-run")
+    assert runs.current_run_log() is None
+    assert warnings.showwarning is prev_hook
+    assert not any(isinstance(h, runs._RunLogHandler) for h in runs.LOGGER.handlers)
+
+
+def test_the_run_buffer_tees_python_warnings_and_calls_the_previous_hook():
+    """V4 (spec §1.2, "V4 and Python warnings"). The judgement channel -- PreflightWarning -- is
+    what a reviewer wants in an artifact's log.txt, so the buffer tees warnings.showwarning while
+    it is active. It TEES: the hook that was there before (the window's pane hook under a run,
+    pytest's recorder under pytest.warns, Python's stderr printer otherwise) is still called with
+    the same six arguments, and is restored on detach, so the tee nests cleanly inside either.
+    The PreflightWarning import is local: the module under test stays torch-free, and the test
+    process already holds core.orchestrator through the session fixtures."""
+    import re
+    import warnings
+
+    import pytest
+
+    from core import runs
+    from core.orchestrator import PreflightWarning
+
+    seen = []
+    with warnings.catch_warnings():                   # restores showwarning and the filters on exit
+        warnings.simplefilter("always")
+        warnings.showwarning = lambda *a, **k: seen.append(a)
+        mine = warnings.showwarning
+        with runs.capture_run() as log:
+            warnings.warn("T_obs is outside the training range", PreflightWarning)
+        assert warnings.showwarning is mine, "detach restores the hook it found"
+    assert len(seen) == 1 and str(seen[0][0]) == "T_obs is outside the training range" \
+        and seen[0][1] is PreflightWarning, "the previous hook still receives the warning"
+    assert re.fullmatch(r"\d{2}:\d{2}:\d{2} warning PreflightWarning: T_obs is outside the training range",
+                        log.lines[0]), log.lines
+
+    # under pytest.warns the previous hook is pytest's recorder, and it still records
+    with pytest.warns(PreflightWarning, match="training range"):
+        with runs.capture_run() as log2:
+            warnings.warn("T_obs is outside the training range", PreflightWarning)
+    assert len(log2.lines) == 1 and "PreflightWarning" in log2.lines[0]
+
+
+def test_the_public_entry_decorator_passes_a_sentinel_through():
+    """V1 (spec §2.2, §2.4). The decorator replaces the config argument -- the first positional, or
+    the `cfg` keyword -- with its copy_for_run() and runs the call inside capture_run(). It is
+    duck-typed, so core/runs.py never imports torch, and a stub or an object() sentinel (the gate
+    tests put one on session.cfg) passes through untouched. functools.wraps keeps the name, the
+    docstring, the signature and the source, which the AST pins on the stages read."""
+    import inspect
+    import logging
+
+    import pytest
+
+    from core import runs
+
+    class _Duck:
+        """A config stand-in whose copy_for_run returns a NEW object that remembers its origin."""
+        def __init__(self, origin=None):
+            self.origin = origin
+
+        def copy_for_run(self):
+            return _Duck(origin=self)
+
+    seen = {}
+
+    @runs.public_entry
+    def stage(cfg, prior, *, num_runs=None, boom=False):
+        """the stage's own doc"""
+        seen["cfg"], seen["log"] = cfg, runs.current_run_log()
+        if boom:
+            raise RuntimeError("inside the stage")
+        return cfg
+
+    d = _Duck()
+    out = stage(d, "prior", num_runs=3)
+    assert out is not d and out.origin is d, "the stage received a copy of the caller's config"
+    assert isinstance(seen["log"], runs.RunLog), "the call ran inside a run buffer"
+    assert runs.current_run_log() is None, "and the buffer was popped on return"
+
+    out = stage(cfg=d, prior="prior")
+    assert out is not d and out.origin is d, "the keyword form is copied too"
+
+    s = object()
+    assert stage(s, "prior") is s, "a sentinel with no copy_for_run passes through untouched"
+    assert stage(prior="prior", cfg=s) is s
+
+    with pytest.raises(RuntimeError, match="inside the stage"):
+        stage(d, "prior", boom=True)
+    assert runs.current_run_log() is None, "popped on an exception too"
+
+    assert stage.__wrapped__.__name__ == "stage" and stage.__doc__ == "the stage's own doc"
+    assert list(inspect.signature(stage).parameters) == ["cfg", "prior", "num_runs", "boom"]
+    assert inspect.getsource(stage).lstrip().startswith("@runs.public_entry"), \
+        "getsource follows __wrapped__ and returns the decorated original"
+
+    # inside an outer capture -- a composition's -- the stage's records land in the OUTER buffer
+    with runs.capture_run() as outer:
+        @runs.public_entry
+        def logging_stage(cfg):
+            logging.getLogger("core.logging_stage").info("stage record")
+
+        logging_stage(_Duck())
+    assert any(ln.endswith("info stage record") for ln in outer.lines), outer.lines

@@ -638,12 +638,17 @@ PRIOR_CLUSTER_MIN_SAMPLES = 10
 
 @lru_cache(maxsize=1)
 def unit_registry():
-    """The process-wide pint UnitRegistry.
+    """The process-wide pint UnitRegistry: ONE instance per process, held by the lru_cache.
 
     Constructing one parses pint's full unit-definition file (~100-300 ms). Every config builder and
-    every diagnostic script parses units at least once per cell, and cli.parse_cell /
-    cli.units_to_factors used to mint a fresh registry on each call. Quantities from different
-    registries cannot be combined, so a single shared instance is also the safer arrangement.
+    every diagnostic parses units at least once per cell, and cli.parse_cell / cli.units_to_factors
+    used to mint a fresh registry on each call. Quantities from different registries cannot be
+    combined, so a single shared instance is also the safer arrangement.
+
+    SimConfig._ureg caches this same instance per config. A deep copy does not know that: it would
+    duplicate the registry (measured: 19 ms and a transient 9.6 MB per copy), which is why
+    SimConfig.copy_for_run pops `_ureg` off its shallow copy before deep-copying and lets the copy
+    recompute it -- to this instance.
     """
     import pint
     return pint.UnitRegistry()
