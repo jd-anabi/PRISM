@@ -43,6 +43,7 @@ import math
 import torch
 
 from core.SBI import reparam as _reparam, training_checkpoint as _tc
+from core.refusals import Refusal
 
 
 def t_scale_loading_max(n_latent: int) -> float:
@@ -171,15 +172,18 @@ class TruncationRegion:
         kind of "almost the same basis" that would put the box's dims on other directions with no
         numeric warning. The PROBE is then compared too, because the box can change with V held fixed
         (bounds, a log-box setting), and the probe is what catches that.
+
+        Every mismatch is a Refusal with no field: the fix is the parent's config or a rebuilt region,
+        which no single control names.
         """
         if self.probe is None or self.probe.numel() == 0:
-            raise ValueError(
+            raise Refusal(
                 "This TruncationRegion carries no bijection probe (built by hand, or from a sidecar "
                 "written before the basis travelled with the region), so the coordinate its box refers "
                 "to cannot be verified. Rebuild it with orchestrator.build_truncation_region.")
         V_train = _reparam.rotation_of(T_train)
         if (V_train is None) != (self.V is None):
-            raise ValueError(
+            raise Refusal(
                 f"The truncation region was measured {'WITH' if self.V is not None else 'WITHOUT'} a "
                 f"Fisher rotation, but the training bijection has "
                 f"{'none' if V_train is None else 'one'}. Its box indexes the parent posterior's "
@@ -190,7 +194,7 @@ class TruncationRegion:
             b = self.V.to(torch.float64)
             if a.shape != b.shape or not torch.allclose(a, b, rtol=0, atol=atol):
                 diff = float((a - b).abs().max()) if a.shape == b.shape else float("inf")
-                raise ValueError(
+                raise Refusal(
                     f"The training bijection rotates by a DIFFERENT V than the one the truncation region "
                     f"was measured in (max|diff| = {diff:.3g}). The box's dims index the PARENT "
                     f"posterior's Fisher directions; along any other rotation the same numbers select "
@@ -199,10 +203,10 @@ class TruncationRegion:
                     f"never recompute the Fisher.")
         got = _tc.bijection_probe(T_train, dim, device=device)
         if got.shape != self.probe.shape:
-            raise ValueError(f"The training bijection's probe is {tuple(got.shape)} but the region's is "
-                             f"{tuple(self.probe.shape)}: a different parameter count or grid.")
+            raise Refusal(f"The training bijection's probe is {tuple(got.shape)} but the region's is "
+                          f"{tuple(self.probe.shape)}: a different parameter count or grid.")
         if not torch.allclose(got, self.probe, rtol=atol, atol=atol):
-            raise ValueError(
+            raise Refusal(
                 f"The training bijection differs from the one the truncation region was measured in "
                 f"(probe max|diff| = {float((got - self.probe).abs().max()):.3g}) although the rotation "
                 f"matches: either the BOX changed -- bounds, or a log-box setting -- since the parent "

@@ -27,6 +27,7 @@ import torch
 from core import config
 from core.SBI import derived, pipeline, reparam, statistics, training_checkpoint, truncate
 from core.SBI.embedded_network import EmbeddedNet, _probit
+from core.refusals import Refusal
 
 _SENT = float(torch.log(torch.tensor(1e-12, dtype=torch.float32)))
 
@@ -575,20 +576,21 @@ def test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one():
         try:
             region.check_basis(reparam.build_rotated_bijection(box, V2), dim=P)
             raise AssertionError(f"{tag} was accepted as the region's basis")
-        except ValueError as e:
+        except Refusal as e:
             assert "DIFFERENT V" in str(e), f"{tag}: {e}"
+            assert e.field is None, e.field
     # the same V over a different box: the rotation matches, the probe does not
     other_box, _ = _rotated_box(Q, width=20.0)
     try:
         region.check_basis(reparam.build_rotated_bijection(other_box, Q), dim=P)
         raise AssertionError("a changed box under the same rotation was accepted")
-    except ValueError as e:
+    except Refusal as e:
         assert "BOX" in str(e)
     # an unrotated bijection against a rotated region, and the mirror image
     try:
         region.check_basis(box, dim=P)
         raise AssertionError("an unrotated bijection was accepted for a rotated region")
-    except ValueError as e:
+    except Refusal as e:
         assert "measured WITH a Fisher rotation, but the training bijection has none" in str(e), e
     plain = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=None,
                                       probe=training_checkpoint.bijection_probe(box, P))
@@ -596,15 +598,15 @@ def test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one():
     try:
         plain.check_basis(T_train, dim=P)
         raise AssertionError("a rotated bijection was accepted for an unrotated region")
-    except ValueError as e:
+    except Refusal as e:
         assert "measured WITHOUT a Fisher rotation, but the training bijection has one" in str(e), e
     # a probe-less region
     bare = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q)
     try:
         bare.check_basis(T_train, dim=P)
         raise AssertionError("a region without a probe was accepted")
-    except ValueError as e:
-        assert "probe" in str(e)
+    except Refusal as e:
+        assert "probe" in str(e) and e.field is None
 
 
 def _lp(post, latent=None, fingerprint=None, id_="p"):
@@ -654,8 +656,8 @@ def test_build_truncation_region_records_the_parents_basis():
     try:
         orchestrator.build_truncation_region(_lp(post), _lo(x, digest="0" * 16))
         raise AssertionError("a region was drawn around an observation that does not hash to its own digest")
-    except ValueError:
-        pass
+    except Refusal as e:
+        assert e.field == "observation", e.field
     try:
         orchestrator.build_truncation_region(_lp(post), _lo(x, keys=None))
         raise AssertionError("a region was built without knowing where t_scale is")
@@ -772,8 +774,9 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
     try:
         run_guards._assert_prior_matches_region(region, gmm_b, "A truncated round")
         raise AssertionError("a round on a prior other than the region's parent's was accepted")
-    except ValueError as e:
+    except Refusal as e:
         assert fp_a in str(e) and fp_b in str(e) and "parent" in str(e).lower(), e
+        assert e.field == "prior", e.field
     run_guards._assert_prior_matches_region(region, gmm_a, "A truncated round")
     run_guards._assert_prior_matches_region(region, reparam.RotatedLatentPrior(gmm_a, Q), "A truncated round")
     run_guards._assert_prior_matches_region(region, object(), "A truncated round")     # no GMM to compare
@@ -1145,9 +1148,10 @@ def test_a_non_amortized_parent_is_refused_on_another_observation():
         try:
             orchestrator.tsnpe_round(cfg, _parent(digest="b" * 16), object(), other, store=store)
             raise AssertionError("a round was drawn from a non-amortized parent around another observation")
-        except ValueError as e:
+        except Refusal as e:
             assert "b" * 16 in str(e) and "a" * 16 in str(e), f"the refusal must name both digests: {e}"
             assert "no override" in str(e), f"the refusal must say there is no way past it: {e}"
+            assert e.field is None, "D12 has no hatch and no single control; the yellow box names none"
         assert drawn == [] and other.events == []
         # the parent's OWN observation is the legitimate case, and an amortized parent takes any
         assert orchestrator.tsnpe_round(cfg, _parent(digest="a" * 16), object(), _round_obs(),

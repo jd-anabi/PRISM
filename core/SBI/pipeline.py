@@ -17,6 +17,7 @@ from core import forcing as _forcing
 from core.Helpers import helpers
 from core import config
 from core.config import CHUNK_LEN, N_ND_MAX
+from core.refusals import Refusal
 from core.Simulator import bp_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics, chi, derived
 
@@ -1361,12 +1362,13 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
         _state = _tc.peek(_ck_dir)
         _have = bool(_state and _state.get("batches_done"))
         if _ck_mode == "never" and _have:
-            raise ValueError(
+            raise Refusal(
                 f"A training checkpoint with {_state['batches_done']} completed batches already "
                 f"exists at {_ck_dir} and resume='never' would overwrite it. Resume instead, or "
-                f"delete that directory deliberately.")
+                f"delete that directory deliberately.", field="resume")
         if _ck_mode == "require" and not _have:
-            raise ValueError(f"resume='require' but there is no resumable checkpoint at {_ck_dir}.")
+            raise Refusal(f"resume='require' but there is no resumable checkpoint at {_ck_dir}.",
+                          field="resume")
         if _have and _ck_mode != "never":
             _ck_resumed = _tc.verify(_ck_dir, checkpoint["identity"], checkpoint.get("probe"))
             _start_k = int(_state["batches_done"])

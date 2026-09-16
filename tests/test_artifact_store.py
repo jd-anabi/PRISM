@@ -12,6 +12,7 @@ import torch
 from core import config
 from core.artifacts import manifest as mf
 from core.artifacts import provenance as prov
+from core.refusals import Refusal
 
 from tests._fixtures import (CODE_FILES, CODE_ROOTS, _FakeDP, _gmm_in_box, _nad_cfg,
                              _posterior_artifact, _prior_artifact, _set_path, assert_cfg_unchanged,
@@ -990,11 +991,14 @@ def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unles
     was = r.cfg.T_obs
     r.cfg.T_obs = was + 7.0
     try:
-        with pytest.raises(ValueError, match="NOT AMORTIZED") as excinfo:
+        with pytest.raises(Refusal, match="NOT AMORTIZED") as excinfo:
             orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20)
-        for needle in ("Run on a different observation", "--accept-other-observation",
-                       "Accept(other_observation=True)"):
-            assert needle in str(excinfo.value), needle
+        # V3: the message names the Python hatch only; each front end appends its own control from its
+        # table (core/gui/fields.py, core/tool/fields.py), keyed by the field.
+        assert excinfo.value.field == "accept_other_observation"
+        assert "Accept(other_observation=True)" in str(excinfo.value)
+        for banned in ("Run on a different observation", "Infer tab", "--accept-other-observation"):
+            assert banned not in str(excinfo.value), banned
         assert r.cfg.T_obs == was + 7.0, "a refused inference installed the observation's context anyway"
     finally:
         r.cfg.T_obs = was
@@ -1218,9 +1222,10 @@ def test_resume_is_validated_and_refused_before_any_spend(store, monkeypatch):
     with pytest.raises(ValueError, match="resume"):
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
                                      checkpoint_every=1, resume="yes please")
-    with pytest.raises(ValueError, match="checkpointing on"):
+    with pytest.raises(Refusal, match="checkpointing on") as e:
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
                                      checkpoint_every=0, resume="require")
+    assert e.value.field is None and "--checkpoint-every" not in str(e.value), str(e.value)
     assert spent == [], "a refused resume policy started the run anyway"
     assert _inspect.signature(orchestrator.build_posterior).parameters["resume"].default == "auto"
     # The flow and training knobs are refused with the cadence, not after every simulation: a
@@ -1334,11 +1339,15 @@ def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
     monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: None)
 
     # (a) refused, naming the field and both values
-    with pytest.raises(ValueError) as e:
+    with pytest.raises(Refusal) as e:
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4, checkpoint_every=1)
     msg = str(e.value)
     assert "n_runs" in msg and "3" in msg and "2" in msg and "new_run" in msg, msg
     assert d.name in msg, "the refusal must name the cache it would abandon"
+    # `new_run` stays: it is the keyword. The button and the flag come from the front-end tables.
+    assert e.value.field == "new_run"
+    for banned in ("Posterior tab", "TSNPE tab", "--new-run"):
+        assert banned not in msg, banned
 
     # (b) consent overrides it, and the run proceeds as far as the Fisher
     with pytest.raises(AssertionError, match="Fisher reached"):
@@ -1346,9 +1355,10 @@ def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
                                      checkpoint_every=1, new_run=True)
 
     # (c) resume='require' refuses before the Fisher too, and says why
-    with pytest.raises(ValueError, match="no resumable cache"):
+    with pytest.raises(Refusal, match="no resumable cache") as e:
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
                                      checkpoint_every=1, resume="require")
+    assert e.value.field is None, "two controls answer a require with no cache; no single field"
 
     # (d) with checkpointing off there is nothing to be near: no read, no write, no question
     with pytest.raises(AssertionError, match="Fisher reached"):
@@ -1435,8 +1445,12 @@ def test_simulated_inference_refuses_a_non_amortized_posterior_before_it_simulat
     made = []
     monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: made.append(1) or "OBS")
     monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
-    with pytest.raises(ValueError, match="NOT AMORTIZED"):
+    with pytest.raises(Refusal, match="NOT AMORTIZED") as excinfo:
         orchestrator.simulated_inference(cfg, _sim_post(x_obs_digest="d" * 16), 1.0, cell=cell, store=store)
+    assert excinfo.value.field == "accept_other_observation"
+    assert "Accept(other_observation=True)" in str(excinfo.value)
+    for banned in ("Run on a different observation", "Infer tab", "--accept-other-observation"):
+        assert banned not in str(excinfo.value), banned
     assert made == [], "the refused run simulated anyway"
     assert not cfg.has_ground_truth, "a refused run injected the cell's truth into the session's cfg"
     assert store.list("observation") == [], "a refused run left an orphan observation behind"
@@ -1478,8 +1492,9 @@ def test_hand_entered_values_replace_the_recorded_cell(store, monkeypatch):
     assert cfg.sources["cell"].endswith("master_weak.txt"), \
         "the composition dropped the cell from the CALLER's config instead of its own copy"
     for kw in (dict(cell=cell, gt_values=gt), {}):
-        with pytest.raises(ValueError, match="exactly one of"):
+        with pytest.raises(Refusal, match="exactly one of") as e:
             orchestrator.simulated_inference(cfg, _sim_post(), 1.0, store=store, **kw)
+        assert e.value.field is None
 
 
 def test_a_taken_inference_name_is_refused_before_the_observation_is_simulated(store, monkeypatch):
@@ -2246,3 +2261,27 @@ def test_the_loaders_mismatch_refusals_name_their_artifact_field(store):
     with pytest.raises(Refusal, match="mode") as e:
         store.load_observation(cfg, "forced_obs")
     assert e.value.field == "observation"
+
+
+def test_the_experimental_builders_refuse_as_refusals_before_any_lock_in():
+    """The builders' own refusals (spec §3.6): a Refusal each, with the key of the one control that
+    answers it -- the drive box for a drive value that was not given (a KeyError until now, which the
+    tool printed as a crash with a traceback), the probe count for a chi set outside 1..chi_k_pad --
+    and None for a length mismatch, which no single control fixes. All three fire before any lock-in
+    or summary statistic is computed, on tensors a few samples long."""
+    from core.SBI import observations as obsm
+    cfg = _nad_cfg()                                             # master.txt: a drive of amp/freq/phase
+    s_to_cell = cfg.get_unit_conversion_factor("s")
+    T_obs_s = 8 * cfg.dt_exp / s_to_cell                         # exactly 8 frames: no length warning
+    si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in cfg.force_params_dict}
+    with pytest.raises(Refusal, match="same length") as e:
+        obsm.build_experiment_obs(cfg, torch.zeros(8), torch.zeros(9), T_obs_s, si)
+    assert e.value.field is None
+    with pytest.raises(Refusal, match="'freq'") as e:
+        obsm.build_experiment_obs(cfg, torch.zeros(8), torch.zeros(8), T_obs_s,
+                                  {k: v for k, v in si.items() if k != "freq"})
+    assert e.value.field == "drive_frequency"
+    chi_cfg = _nad_cfg(chi_mode=True)
+    with pytest.raises(Refusal, match="forced recordings") as e:
+        obsm.build_experiment_obs_chi(chi_cfg, torch.randn(512), [], 512 * cfg.dt_exp / s_to_cell, 1e-12)
+    assert e.value.field == "chi_n_freqs"

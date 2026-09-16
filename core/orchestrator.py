@@ -31,6 +31,7 @@ from .config import (
     EYE_TEST_CYCLES,
 )
 from . import cli, config, forcing
+from .refusals import Refusal
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import thin_ticks as _thin_ticks
 from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
@@ -283,8 +284,9 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
         # aimed at a guessed mult_k * Omega_0 instead of the drive the bench applied decays like a sinc
         # -- a fraction of 1/T_obs off destroys the estimate, and nothing says so.
         if cfg.observation_mode == "chi" and role == "forced" and f is None:
-            raise ValueError(f"chi mode: forced recording {p!r} has no drive frequency; every driven "
-                             f"chi recording must state the frequency (Hz) it was driven at")
+            raise Refusal(f"chi mode: forced recording {p!r} has no drive frequency; every driven "
+                          f"chi recording must state the frequency (Hz) it was driven at",
+                          field="recording_probe")
         r = _file_ref(p)
         r.update({"role": role, "freq_Hz": None if f is None else float(f)})
         refs.append(r)
@@ -296,7 +298,8 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
         obs_stats, obs_data, t_dim = build_experiment_obs_chi(cfg, X_spont, forced, rec.T_obs_s, rec.F0_si)
     elif cfg.has_forcing:
         if len(rec.forced) != 1:
-            raise ValueError(f"forced mode takes exactly one forced recording, got {len(rec.forced)}")
+            raise Refusal(f"forced mode takes exactly one forced recording, got {len(rec.forced)}",
+                          field="recording_forced")
         X_forced = file_manager.load_experimental_data(rec.forced[0][0], dtype=cfg.hw.dtype)
         obs_stats, obs_data, t_dim = build_experiment_obs(cfg, X_spont, X_forced, rec.T_obs_s,
                                                           rec.forcing_params_si or {})
@@ -410,14 +413,14 @@ def _near_miss_lines(ckpt_dir, near) -> str:
 
 
 def _near_miss_message(ckpt_dir, near) -> str:
-    """D7's refusal. The spend it prevents is days of simulation, so it names the field, BOTH values,
-    and the two ways out -- continue that cache, or say explicitly that this is a new run."""
+    """D7's refusal text. The spend it prevents is days of simulation, so it names the field, BOTH
+    values, and the two ways out -- continue that cache, or say explicitly that this is a new run.
+    Only the keyword is named: the button and the flag come from the front-end tables
+    (core/gui/fields.py, core/tool/fields.py), keyed by the Refusal's field."""
     return (f"This run would start a NEW simulation cache at {ckpt_dir} from zero, but a committed "
             f"cache ONE setting away exists:\n" + _near_miss_lines(ckpt_dir, near) +
             f"\nIf you meant to continue that cache, set {near[0]['field']} back to "
-            f"{near[0]['theirs']!r}. To start a new cache anyway, pass new_run=True "
-            f"(GUI: \"Start a new run anyway\" on the Posterior tab, or tick \"Start a new simulation "
-            f"even if a cache one setting away exists\" on the TSNPE tab; command line: --new-run).")
+            f"{near[0]['theirs']!r}. To start a new cache anyway, pass new_run=True.")
 
 
 def _no_cache_message(ckpt_dir, near) -> str:
@@ -492,7 +495,8 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
         expected = list(spec.compiled.param_names)
         actual = list(cfg.params_dict.keys())
         if actual != expected:
-            raise ValueError(
+            # field=None: the fix is a re-save in the model builder, which no inference control names.
+            raise Refusal(
                 f"Model '{cfg.model}' is out of sync with its bounds file: definition uses {expected}, "
                 f"bounds file lists {actual}. Re-save the model from the Settings model builder.")
 
@@ -757,10 +761,11 @@ def build_posterior(
     if resume != "auto" and not ck_every and train_new:
         # Without this, a `resume='require'` drill with checkpointing off exits 0 having tested
         # nothing: there is no cache for the policy to act on, so the policy is silently ignored.
-        raise ValueError(
+        # field=None: two controls answer it (the cadence and the policy), so no front end appends one.
+        raise Refusal(
             f"resume={resume!r} needs checkpointing on: with checkpoint_every=0 no simulation cache "
-            f"is read or written, so the policy has nothing to act on. Pass checkpoint_every=N "
-            f"(command line: --checkpoint-every N), or leave resume at 'auto'.")
+            f"is read or written, so the policy has nothing to act on. Pass checkpoint_every=N, or "
+            f"leave resume at 'auto'.")
     # Above BOTH branches, and the load branch is the subtle half. store.load_posterior compares the
     # posterior against cfg -- so a STALE cfg loading the posterior trained under that same stale cfg
     # agrees with itself and says nothing, while every inference it serves is at a retired band. This
@@ -773,7 +778,7 @@ def build_posterior(
 
     if not train_new and ref is not None:
         if truncation is not None:
-            raise ValueError(
+            raise Refusal(
                 "build_posterior(truncation=...) restricts the prior for a NEW training run; a loaded "
                 "posterior already carries whatever region it was trained under. Load it without a "
                 "region, or train a new round from it.")
@@ -794,10 +799,10 @@ def build_posterior(
     # Extract latent ND (the MixtureSameFamily inside the TransformedDistribution):
     nd_prior_physical      = inferred.distributions[0]   # TransformedDistribution(latent_gmm, T_nd)
     if not isinstance(nd_prior_physical, torch.distributions.TransformedDistribution):
-        raise ValueError(
+        raise Refusal(
             "Loaded ND prior is not a TransformedDistribution — it was saved with the pre-reparameterization "
-            "pipeline. Regenerate the prior with the current `gen_prior` before training a new posterior."
-        )
+            "pipeline. Regenerate the prior with the current `gen_prior` before training a new posterior.",
+            field="prior")
     rescale_prior_physical = inferred.distributions[1]   # MultipleIndependent
     latent_nd = nd_prior_physical.base_dist              # the raw latent MixtureSameFamily
 
@@ -813,11 +818,12 @@ def build_posterior(
         if not torch.equal(_nd_box.log_mask, _want):
             _src = ("this user model's per-parameter box settings"
                     if _log_params_for(cfg) is not None else "config.REPARAM_LOG_PARAMS")
-            raise ValueError(
+            raise Refusal(
                 f"Loaded ND prior's log-box mask does not match {_src} "
                 f"(prior log dims={_nd_box.log_mask.tolist()}, config wants={_want.tolist()}). "
                 "The latent GMM was fit in a different coordinate — REBUILD the ND prior "
-                "(construct a new prior) before training a new posterior."
+                "(construct a new prior) before training a new posterior.",
+                field="prior"
             )
 
     # Pushforward the physical rescale prior through T_rescale.inv (Issue 2a).
@@ -903,9 +909,9 @@ def build_posterior(
             # expensive thing this run does before it simulates; it stays there as a second line.
             near = training_checkpoint.near_miss_siblings(ident, store.kind_dir("simulation"))
             if resume == "require":
-                raise ValueError(_no_cache_message(ckpt_dir, near))
+                raise Refusal(_no_cache_message(ckpt_dir, near))
             if near and not new_run:
-                raise ValueError(_near_miss_message(ckpt_dir, near))
+                raise Refusal(_near_miss_message(ckpt_dir, near), field="new_run")
 
     rotate = cfg.reparam_rotate
     # Only the freshly-computed branch below knows the eigenvalues; a resumed checkpoint carries V but
@@ -921,7 +927,7 @@ def build_posterior(
         # other, and refuses a config whose rotation flag disagrees with the region -- a rotated
         # box has no meaning in an unrotated latent and vice versa.
         if bool(rotate) != (truncation.V is not None):
-            raise ValueError(
+            raise Refusal(
                 f"cfg.reparam_rotate is {bool(rotate)} but the truncation region was measured "
                 f"{'WITH' if truncation.V is not None else 'WITHOUT'} a Fisher rotation. A truncated "
                 f"round trains in the parent posterior's basis: load the config the parent was trained "
@@ -932,7 +938,7 @@ def build_posterior(
         # is filled in rather than recorded as "valid near observation None".
         if truncation.x_obs_digest is not None:
             if x_obs_digest is not None and x_obs_digest != truncation.x_obs_digest:
-                raise ValueError(
+                raise Refusal(
                     f"x_obs_digest={x_obs_digest!r} does not match the observation the truncation "
                     f"region was drawn around ({truncation.x_obs_digest}); a non-amortized artifact "
                     f"must name the observation its region came from.")
@@ -942,7 +948,7 @@ def build_posterior(
         # otherwise train and simulate the whole round only to have store.load_posterior refuse the
         # finished artifact at read-back, because guardrail 2 could never fire for it.
         if x_obs_digest is None:
-            raise ValueError(
+            raise Refusal(
                 "A non-amortized round's region must name the observation it was drawn around "
                 "(x_obs_digest is None): guardrail 2 could never fire for the posterior it would "
                 "produce, and the store would refuse to load it after the whole spend. Build the "
@@ -957,8 +963,8 @@ def build_posterior(
             _assert_prior_matches_region(truncation, inferred, "A truncated round")
         except ValueError as _e:
             _hit = store.find_prior_by_fingerprint(_want)
-            raise ValueError(f"{_e} The region's fingerprint is that of prior '{_hit.label}' [{_hit.id}]."
-                             if _hit else str(_e)) from None
+            raise Refusal(f"{_e} The region's fingerprint is that of prior '{_hit.label}' [{_hit.id}]."
+                          if _hit else str(_e), field="prior") from None
         if _want is not None and _gmm_fingerprint(inferred) is not None:
             print(f"[tsnpe] prior: the parent's training prior ({_want}), "
                   f"verified against the loaded one.", flush=True)
@@ -976,7 +982,7 @@ def build_posterior(
             _where = f"The training checkpoint at {ckpt_dir} ({_st['batches_done']} batches)"
             _stored_region = (ckpt_resumed.get("identity") or {}).get("truncation")
             if _stored_region != truncation.identity_fields():
-                raise ValueError(
+                raise Refusal(
                     f"{_where} was not generated under this truncation region -- its identity records "
                     f"{'no region at all (an amortized run)' if _stored_region is None else 'a different region'}"
                     f". Resuming would train a 'truncated' round on rows drawn from another proposal "
@@ -1263,14 +1269,15 @@ def build_truncation_region(posterior, observation, *,
     """
     x_obs = observation.x_obs
     if observation_digest(x_obs) != observation.digest:
-        raise ValueError(
+        raise Refusal(
             f"Observation '{observation.name or observation.id}' does not hash to its own digest; "
             f"a region drawn from it would delete prior support on the strength of data nobody "
-            f"recorded -- and truncation is one-way, so a later round cannot undo it.")
+            f"recorded -- and truncation is one-way, so a later round cannot undo it.",
+            field="observation")
     if t_scale_idx is None:
         keys = list(observation.manifest.config.get("param_keys") or [])
         if "t_scale" not in keys:
-            raise ValueError(
+            raise Refusal(
                 "build_truncation_region needs t_scale's latent index (t_scale_idx=len(cfg.params_dict) "
                 "+ cfg.rescale_idx['t_scale']) -- a direction that loads on t_scale must not be "
                 "truncated (D4) -- and "
@@ -1282,10 +1289,11 @@ def build_truncation_region(posterior, observation, *,
     # this the box's "direction j" is a number with no coordinate attached (defect D1).
     T_parent = getattr(posterior.posterior, "T", None)
     if T_parent is None:
-        raise ValueError(
+        raise Refusal(
             "build_truncation_region needs the parent's TransformedPosterior: its .T is the only "
             "carrier of the latent basis the region is measured in. A bare DirectPosterior cannot say "
-            "which coordinate its samples are in, so a region drawn from it cannot be applied safely.")
+            "which coordinate its samples are in, so a region drawn from it cannot be applied safely.",
+            field="posterior")
     V = rotation_of(T_parent)
     latent = posterior.latent
     # Belt and braces against D6: the parent's transform must rotate by the rotation its own network
@@ -1296,18 +1304,18 @@ def build_truncation_region(posterior, observation, *,
     if _V_net is not None and (
             V is None or V.shape != _V_net.shape or not torch.allclose(
                 V.detach().cpu().to(torch.float64), _V_net.detach().cpu().to(torch.float64), atol=1e-6)):
-        raise ValueError(
+        raise Refusal(
             f"The parent posterior's transform "
             f"{'has no rotation' if V is None else 'does not rotate by the rotation'} "
             f"{'although' if V is None else 'that'} its network was trained under (the one inside its "
             f"training prior{'' if V is None else f', {tuple(_V_net.shape)} against {tuple(V.shape)}'}) "
             f"-- a transposed, rotation-less or foreign sidecar (D6). Reload the posterior through "
             f"build_posterior: it reconciles a transposed or missing sidecar rotation against the prior, "
-            f"and refuses one that is neither.")
+            f"and refuses one that is neither.", field="posterior")
     _box = next((p for p in T_parent.parts if isinstance(p, UnitToBoxTransform)), None)
     if _box is None:
-        raise ValueError("The parent posterior's transform has no parameter box; the region's probe "
-                         "cannot be sized from it.")
+        raise Refusal("The parent posterior's transform has no parameter box; the region's probe "
+                      "cannot be sized from it.")
     probe = training_checkpoint.bijection_probe(T_parent, int(_box.lows.numel()),
                                                 device=transform_device(T_parent))
     # The base prior the box restricts, by fingerprint; None when the parent carries no GMM (a
@@ -1319,12 +1327,12 @@ def build_truncation_region(posterior, observation, *,
     _walked_fp = _gmm_fingerprint(getattr(latent, "prior", None))
     _claimed_fp = posterior.fingerprint
     if _claimed_fp is not None and _walked_fp is not None and _claimed_fp != _walked_fp:
-        raise ValueError(
+        raise Refusal(
             f"the parent wrapper claims training prior {_claimed_fp} but pickles {_walked_fp}: reload "
             f"the parent through the store (ArtifactStore.load_posterior, i.e. build_posterior's load "
             f"branch), which computes the fingerprint by this same walk. A wrapper whose fingerprint "
             f"disagrees with the prior it pickles is not a current PRISM artifact, and the region would "
-            f"record the wrong base prior for the next round to be checked against.")
+            f"record the wrong base prior for the next round to be checked against.", field="posterior")
     return truncate.region_from_posterior(
         latent, x_obs.to(transform_device(T_parent)),
         n_directions=truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions),
@@ -1777,10 +1785,11 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
     show_truth = observation.manifest.body["source"]["kind"] == "simulated"
     p_body = posterior.manifest.body
     if observation.mode != p_body["mode"] or observation.width != int(p_body["conditioning"]["width"]):
-        raise ValueError(
+        raise Refusal(
             f"Observation '{observation.name or observation.id}' is {observation.mode} / {observation.width} wide, "
             f"but posterior '{posterior.name or posterior.id}' conditions on {p_body['mode']} / "
-            f"{p_body['conditioning']['width']}. They do not describe the same measurement.")
+            f"{p_body['conditioning']['width']}. They do not describe the same measurement.",
+            field="observation")
     # GUARDRAIL 2 at the one place every inference passes through -- a REFUSAL now, not a warning:
     # outside its region a truncated flow extrapolates confidently. Accept(other_observation=True)
     # is the recorded exception (a simulated cell re-drawn with new noise is the legitimate case).
@@ -1792,10 +1801,9 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
                 f"valid; anywhere else the flow has never seen a training row and extrapolates confidently rather "
                 f"than returning the prior.")
         if not accept.other_observation:
-            raise ValueError(_msg + " Use the recorded observation or an amortized posterior. To run anyway, "
-                             "tick 'Run on a different observation' on the Infer tab, pass "
-                             "--accept-other-observation, or pass Accept(other_observation=True); the "
-                             "inference will record it.")
+            raise Refusal(_msg + " Use the recorded observation or an amortized posterior. To run anyway, "
+                          "pass Accept(other_observation=True); the inference will record it.",
+                          field="accept_other_observation")
         print(_msg + " Running anyway (accepted).", flush=True)
         warnings.warn(_msg, stacklevel=2)
         accepted = accept.used()
@@ -1990,10 +1998,10 @@ def _build_latent_prior_for_validation(cfg, inferred_prior):
     """Mirror of the latent-prior construction in build_posterior, for gen_cal_data in validate."""
     nd_prior_physical = inferred_prior.distributions[0]
     if not isinstance(nd_prior_physical, torch.distributions.TransformedDistribution):
-        raise ValueError(
+        raise Refusal(
             "Loaded ND prior is not a TransformedDistribution — it was saved with the pre-reparameterization "
-            "pipeline. Regenerate the prior with the current `gen_prior` before running validate."
-        )
+            "pipeline. Regenerate the prior with the current `gen_prior` before running validate.",
+            field="prior")
     latent_nd = nd_prior_physical.base_dist
     T_rescale = build_rescale_bijection(cfg)
     latent_rescale = torch.distributions.TransformedDistribution(inferred_prior.distributions[1], T_rescale.inv)
@@ -2046,20 +2054,19 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     store.assert_name_free("inference", name)
     _refuse_no_samples(n_samples)
     if (cell is None) == (gt_values is None):
-        raise ValueError("simulated_inference takes exactly one of cell= (a cell file) and gt_values= "
-                         "(hand-entered values in parse_values_file's shape).")
+        raise Refusal("simulated_inference takes exactly one of cell= (a cell file) and gt_values= "
+                      "(hand-entered values in parse_values_file's shape).")
     accept = accept or Accept()
     # GUARDRAIL 2, hoisted ahead of the spend. x_obs_digest, truncation and amortized=False are written
     # together by build_posterior and never set independently, so this predicate, the Infer tab's gate
     # and the store's load refusal all pick out the same posteriors.
     if posterior.posterior.x_obs_digest is not None and not accept.other_observation:
-        raise ValueError(
+        raise Refusal(
             f"[tsnpe] this posterior is NOT AMORTIZED: it was trained on a prior restricted to a region "
             f"drawn around the observation with digest {posterior.posterior.x_obs_digest}. A cell "
             f"simulated now draws NEW noise, so it can never be that observation. Use an amortized "
-            f"posterior, or run anyway by ticking 'Run on a different observation' on the Infer tab, "
-            f"passing --accept-other-observation, or passing Accept(other_observation=True); the "
-            f"inference will record it.")
+            f"posterior. To run anyway, pass Accept(other_observation=True); the inference will "
+            f"record it.", field="accept_other_observation")
     ignored = (cli.load_and_validate_gt(cfg, cell) if cell is not None
                else cfg.inject_ground_truth(*gt_values))
     if gt_values is not None:
@@ -2179,7 +2186,7 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
     # build_truncation_region checks the observation's digest against itself, not against the parent.
     parent_digest = posterior.posterior.x_obs_digest
     if parent_digest is not None and parent_digest != observation.digest:
-        raise ValueError(
+        raise Refusal(
             f"[tsnpe] the parent posterior is itself NON-AMORTIZED: it is valid only near the "
             f"observation with digest {parent_digest}, and the observation supplied "
             f"('{observation.name or observation.id}') has digest {observation.digest}. A region drawn "

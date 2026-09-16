@@ -18,6 +18,7 @@ import torch
 
 from core import config
 from core.config import DeviceConfig, detect_device
+from core.refusals import Refusal
 
 
 # The cached_property names on SimConfig -- what copy_for_run pops off its shallow copy BEFORE the
@@ -113,24 +114,25 @@ class SimConfig:
         if not self.chi_mode:
             return
         if not (2 <= int(self.chi_k_pad) <= config.CHI_K_MAX):
-            raise ValueError(
+            raise Refusal(
                 f"chi_k_pad={self.chi_k_pad} is out of range: it must be at least 2 and at most "
                 f"CHI_K_MAX={config.CHI_K_MAX}. It is the network's probe-slot capacity and is frozen into "
-                f"every posterior trained with it.")
+                f"every posterior trained with it.", field="chi_k_pad")
         if not (1 <= int(self.chi_n_freqs) <= int(self.chi_k_pad)):
-            raise ValueError(
+            raise Refusal(
                 f"chi_n_freqs={self.chi_n_freqs} probes cannot be packed into chi_k_pad="
                 f"{self.chi_k_pad} slots. Lower the probe count, or raise the pad (which invalidates "
-                f"posteriors trained at the current pad).")
+                f"posteriors trained at the current pad).", field="chi_n_freqs")
         # The floor masks a probe; the ceiling shortens it. If they cross, the ceiling truncates
         # every probe to under the floor and the packer masks the entire set -- an all-masked
         # observation, which the experimental path refuses outright. That would surface as "every
         # probe was masked" with nothing pointing at the two constants that closed on each other.
         if not (float(self.chi_max_cycles) > config.CHI_MIN_CYCLES):
-            raise ValueError(
+            raise Refusal(
                 f"chi_max_cycles={self.chi_max_cycles} does not clear CHI_MIN_CYCLES={config.CHI_MIN_CYCLES}. "
                 f"The ceiling truncates a probe's lock-in and the floor masks it below that many "
-                f"cycles, so a ceiling at or under the floor masks every probe in every observation.")
+                f"cycles, so a ceiling at or under the floor masks every probe in every observation.",
+                field="chi_max_cycles")
 
     # --- Derived properties ---
     @property
@@ -244,14 +246,14 @@ class SimConfig:
         """
         missing = sorted(set(cfg_dict) - set(cell_vals))
         if missing:
-            raise ValueError(
-                f"Cell file is missing {label} required by the bounds file: {missing}."
-            )
+            raise Refusal(
+                f"Cell file is missing {label} required by the bounds file: {missing}.", field="cell")
         if check_bounds:
             oob = [f"{n}={cell_vals[n]} not in ({lo}, {hi})"
                    for n, (_, (lo, hi)) in cfg_dict.items() if not (lo <= cell_vals[n] <= hi)]
             if oob:
-                raise ValueError(f"Cell file {label} outside the bounds file's bounds: " + "; ".join(oob))
+                raise Refusal(f"Cell file {label} outside the bounds file's bounds: " + "; ".join(oob),
+                              field="cell")
         for n in cfg_dict:
             cfg_dict[n] = (cell_vals[n], cfg_dict[n][1])
         return sorted(set(cell_vals) - set(cfg_dict))
@@ -262,8 +264,8 @@ class SimConfig:
         Fill ground-truth VALUES + initial conditions from a cell file into a bounds-built config.
 
         SAFEGUARD: every ND and rescale (inferred) parameter the BOUNDS file declares must be present in
-        the cell and lie within its bounds — else a clear ValueError listing the offenders. Forcing is the
-        known DRIVE (conditioning, not an inferred param): it must be present, but its range is not
+        the cell and lie within its bounds — else a clear Refusal (field "cell") listing the offenders.
+        Forcing is the known DRIVE (conditioning, not an inferred param): it must be present, but its range is not
         enforced (a spontaneous cell legitimately uses amp=0/freq=0 outside the drive prior's range).
 
         Values the cell carries that the bounds file does NOT declare are IGNORED and returned, so the

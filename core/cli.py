@@ -35,11 +35,11 @@ def resolve_units_file(model: str) -> str:
     """
     Auto-resolve the per-model units file (no prompt): Resources/Units/<model>/units.txt.
 
-    :raises FileNotFoundError: if the units file for this model is missing.
+    :raises Refusal: (field "units") if the units file for this model is missing.
     """
     path = UNITS_PATH / model.lower() / "units.txt"
     if not path.exists():
-        raise FileNotFoundError(f"Missing units file for model '{model}': expected {path}")
+        raise Refusal(f"Missing units file for model '{model}': expected {path}", field="units")
     return str(path)
 
 
@@ -107,9 +107,9 @@ def _merge_vals_bounds(vals: dict, bounds: OrderedDict,
     """
     missing = [name for name in bounds if name not in vals]
     if missing:
-        raise ValueError(
-            f"Cell file '{cell_file}' is missing value(s) for {label} required by the bounds file: {missing}."
-        )
+        raise Refusal(
+            f"Cell file '{cell_file}' is missing value(s) for {label} required by the bounds file: {missing}.",
+            field="cell")
     merged = OrderedDict()
     for name, (_, bnds) in bounds.items():
         merged[name] = (vals[name], bnds)
@@ -189,7 +189,7 @@ def parse_cell(cell_file: str, model: str | None = None):
     try:
         si_factors = [ureg(unit).to_base_units().magnitude for unit in units_dict]
     except pint.UndefinedUnitError as e:
-        raise UnitParseError(f"{e}. Unrecognized unit in cell file '{cell_file}'.")
+        raise UnitParseError(f"{e}. Unrecognized unit in cell file '{cell_file}'.", field="cell")
 
     time_unit = None
     for unit_str in units_dict:
@@ -200,7 +200,8 @@ def parse_cell(cell_file: str, model: str | None = None):
         except pint.UndefinedUnitError:
             continue
     if time_unit is None:
-        raise ValueError("Could not detect time unit from cell file. Ensure t_scale has a time unit.")
+        raise Refusal("Could not detect time unit from cell file. Ensure t_scale has a time unit.",
+                      field="cell")
 
     s_to_cell = ureg.Quantity(1, "s").to(time_unit).magnitude
     return inits_dict, params_dict, rescale_params, force_params_dict, units_dict, si_factors, s_to_cell
@@ -216,7 +217,7 @@ def units_to_factors(units: tuple) -> tuple[list[float], float]:
     try:
         si_factors = [ureg(unit).to_base_units().magnitude for unit in units]
     except pint.UndefinedUnitError as e:
-        raise UnitParseError(f"{e}. Unrecognized unit in the units file.")
+        raise UnitParseError(f"{e}. Unrecognized unit in the units file.", field="units")
     time_unit = None
     for unit_str in units:
         try:
@@ -226,7 +227,8 @@ def units_to_factors(units: tuple) -> tuple[list[float], float]:
         except pint.UndefinedUnitError:
             continue
     if time_unit is None:
-        raise ValueError("Could not detect a time unit from the units file. Include a time unit (e.g. ms).")
+        raise Refusal("Could not detect a time unit from the units file. Include a time unit (e.g. ms).",
+                      field="units")
     return si_factors, ureg.Quantity(1, "s").to(time_unit).magnitude
 
 
@@ -262,7 +264,7 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
     the device and dtype are part of the simulation identity (core/artifacts/identity.py:72-73).
     """
     if (bounds_file is None) == (bounds_dicts is None):
-        raise ValueError("make_sim_config needs exactly one of bounds_file or bounds_dicts.")
+        raise Refusal("make_sim_config needs exactly one of bounds_file or bounds_dicts.")
     if bounds_dicts is not None:
         params_dict, rescale_params, force_params_dict = (OrderedDict(d) for d in bounds_dicts)
     else:

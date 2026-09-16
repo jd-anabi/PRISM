@@ -14,6 +14,7 @@ import torch
 from core import config
 from core.config import SimConfig
 from core.SBI import chi, pipeline, statistics
+from core.refusals import Refusal
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,11 @@ class RecordingSet:
     T_obs_s: float = 0.0
     forcing_params_si: "dict | None" = None   # forced mode: {"amp", "freq", "phase", ...} in SI
     F0_si: "float | None" = None              # chi mode: physical drive amplitude (N)
+
+
+# The drive value that was not given -> the field the front ends map to the drive box for it. The
+# three names are the ones config.FORCING_SI_UNITS converts; any other name has no control behind it.
+_DRIVE_FIELD = {"amp": "drive_amplitude", "freq": "drive_frequency", "phase": "drive_phase"}
 
 
 # ── Step 5: Inference on real experimental data ────────────────────────────
@@ -62,7 +68,7 @@ def build_experiment_obs(
     # Consistency check: X_obs must be sampled at 1/dt_exp with duration T_obs.
     expected_N = int(T_obs / cfg.dt_exp)
     if X_obs_spont.shape[-1] != X_obs_forced.shape[-1]:
-        raise ValueError(
+        raise Refusal(
             f"Spontaneous and forced recordings must be the same length "
             f"({X_obs_spont.shape[-1]} vs {X_obs_forced.shape[-1]})."
         )
@@ -97,9 +103,13 @@ def build_experiment_obs(
     forcing_t = torch.empty((1, len(cfg.force_params_dict)), dtype=dtype)
     for name in cfg.force_params_dict.keys():
         if name not in forcing_params_si:
-            raise KeyError(f"forcing_params_si missing required key '{name}' "
-                           f"(cell file expects: {list(cfg.force_params_dict.keys())})")
+            # A refusal, not a KeyError: the tool printed this one as a crash with a traceback.
+            raise Refusal(f"forcing_params_si missing required key '{name}' "
+                          f"(cell file expects: {list(cfg.force_params_dict.keys())})",
+                          field=_DRIVE_FIELD.get(name))
         if name not in _FORCING_SI_UNITS:
+            # Stays a ValueError: a forcing name absent from config.FORCING_SI_UNITS is a table to
+            # extend, not an input to correct.
             raise ValueError(f"Unknown forcing parameter '{name}'. Known: {list(_FORCING_SI_UNITS)}. "
                              f"Add an entry to _FORCING_SI_UNITS in build_experiment_obs.")
         si_unit = _FORCING_SI_UNITS[name]
@@ -213,8 +223,9 @@ def build_experiment_obs_chi(
     f_peak = chi.peak_freq(X_spont_b, cfg.dt_exp)             # (1,) Omega_0/2pi (cell freq units)
     n_probes = len(X_forced_list)
     if not (1 <= n_probes <= cfg.chi_k_pad):
-        raise ValueError(
-            f"chi-mode accepts 1 to {cfg.chi_k_pad} forced recordings (CHI_K_PAD), got {n_probes}.")
+        raise Refusal(
+            f"chi-mode accepts 1 to {cfg.chi_k_pad} forced recordings (CHI_K_PAD), got {n_probes}.",
+            field="chi_n_freqs")
 
     chis, u_list, logcyc_list, valid = [], [], [], []
     for k, item in enumerate(X_forced_list):
@@ -229,7 +240,7 @@ def build_experiment_obs_chi(
         # dying on it, so the shared function returns a verdict and the runtime decides it is fatal.
         v = chi.probe_verdict(cfg, float(f_peak), freq_hz, N_k)
         if v.action == "refuse":
-            raise ValueError(f"chi probe {k}: {v.reason}.")
+            raise Refusal(f"chi probe {k}: {v.reason}.", field="recording_probe")
         if v.action == "truncate":
             # TRUNCATE rather than mask -- the recording is fine, only its tail is unusable, and the
             # leading prefix is exactly what training measured. Warned, not silent: the user recorded
@@ -262,7 +273,7 @@ def build_experiment_obs_chi(
         # but then the posterior is conditioned on the passive trace alone -- so this would silently
         # answer a spontaneous question with a chi posterior. The user supplied recordings expecting
         # them to be used; say that none were.
-        raise ValueError(
+        raise Refusal(
             f"chi: none of the {n_probes} supplied recordings produced a usable probe (all were "
             f"below the {config.CHI_MIN_CYCLES:g}-cycle floor or had a non-finite lock-in). The "
             f"conditioning would carry no susceptibility information at all.")

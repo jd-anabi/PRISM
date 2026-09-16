@@ -414,6 +414,7 @@ def test_near_miss_is_refused_before_simulation(tool_run, capsys):
                  "--checkpoint-every", "1"]) == 1
     err = capsys.readouterr().err
     assert "ONE setting away" in err and "n_runs" in err and "--new-run" in err
+    assert "raised at" not in err, err          # a Refusal: the ladder prints no location for it
     assert "this run 3" in err and "that cache 2" in err, \
         "the refusal must name BOTH values, not just the field -- read literally off the message"
     assert {p.name for p in sims.iterdir()} == sims_before, "a new cache was started anyway"
@@ -861,6 +862,9 @@ def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_p
                  "--stages", "prior,posterior"]) == 1
     cap = capsys.readouterr()
     assert "n_runs" in cap.err and "new_run" in cap.err, cap.err
+    # The flag comes from core/tool/fields.py's table, appended by the ladder; the message itself
+    # names only the keyword, and a Refusal prints with no class name and no [raised at ...].
+    assert "--new-run" in cap.err and "raised at" not in cap.err, cap.err
     # K8, fix round 1: the comment always said "both values" -- pin them, read literally off the
     # message's own format (orchestrator._near_miss_lines: "this run <mine>, that cache <theirs>").
     # This run asked for --num-runs 3; leg (a) committed the cache at --num-runs 2.

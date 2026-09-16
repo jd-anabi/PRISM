@@ -16,6 +16,7 @@ import torch
 
 from core import config, registry
 from core.config import SimConfig
+from core.refusals import Refusal
 
 
 def _find_nd_gmm(obj, _depth: int = 0):
@@ -75,10 +76,11 @@ def _assert_prior_used_matches_posterior(posterior, inferred_prior, what: str) -
     supplied = _gmm_fingerprint(inferred_prior)
     if trained is None or supplied is None or trained == supplied:
         return
-    raise ValueError(
+    raise Refusal(
         f"{what}: the prior supplied is not the one this posterior was trained with "
         f"(prior {supplied} vs posterior's {trained}). Load the prior that belongs to this "
-        f"posterior -- results computed against a different prior describe neither.")
+        f"posterior -- results computed against a different prior describe neither.",
+        field="prior")
 
 
 def _assert_prior_matches_region(region, inferred_prior, what: str) -> None:
@@ -98,11 +100,12 @@ def _assert_prior_matches_region(region, inferred_prior, what: str) -> None:
     supplied = _gmm_fingerprint(inferred_prior)
     if want is None or supplied is None or want == supplied:
         return
-    raise ValueError(
+    raise Refusal(
         f"{what}: the prior supplied is not the one the truncation region's parent posterior was "
         f"trained with (prior {supplied} vs the region's {want}). A truncated round restricts the "
         f"PARENT's prior; on another base prior the box selects a slab of a distribution nobody "
-        f"measured. Load the prior that belongs to the parent posterior.")
+        f"measured. Load the prior that belongs to the parent posterior.",
+        field="prior")
 
 
 def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
@@ -127,8 +130,10 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     omits it on purpose), and failing on it would refuse a perfectly good 7-recording experiment. It
     is reported alongside a real mismatch as context, never as the cause.
 
-    :raises ValueError: on any band/drive mismatch. There is no override: a non-default band or drive
-        amplitude means editing config.py deliberately (D11).
+    :raises Refusal: (field None) on any band/drive mismatch. There is no override: a non-default band
+        or drive amplitude means editing config.py deliberately (D11). The QSettings history above is
+        history: after V5 (piece 3) the window shows config.py's band and drive read-only and neither
+        writes nor reads their keys, so the message no longer sends anyone to PRISM.ini.
     """
     if not cfg.chi_mode:
         return
@@ -145,17 +150,14 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         k_note = (f"\n  (FYI, not an error: chi_n_freqs is {cfg.chi_n_freqs} against config's "
                   f"{config.CHI_N_FREQS}. K is per-observation and training draws its own, so it is "
                   f"legitimate -- but if you did not choose it either, it points at the same source.)")
-    raise ValueError(
+    raise Refusal(
         f"This chi run's configuration does not match config.py, and the difference decides what the "
         f"network is trained on:\n{detail}{k_note}\n\n"
         f"  The band and drive amplitude fix the encoder's frequency normalization and are baked into "
         f"its weights, so a run at the wrong values cannot be reinterpreted afterwards -- it has to be "
         f"redone. This has cost a ~5-day run once already (Appendix A, 2026-08-19).\n"
-        f"  MOST LIKELY CAUSE: stale persisted GUI settings. The Config tab seeds these from config.py "
-        f"and then restores them from QSettings, so a value saved before a config change wins silently."
-        f" Check the [inference_config] chi_lo / chi_hi / chi_f0 keys in PRISM.ini.\n"
-        f"  A non-default band or drive amplitude is not supported: set the Config tab back to "
-        f"config.py's values (or edit config.py itself, deliberately, for every future run).")
+        f"  A non-default band or drive amplitude is not supported: edit config.py itself, deliberately, "
+        f"for every future run.")
 
 
 def _log_params_for(cfg: SimConfig):

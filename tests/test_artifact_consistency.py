@@ -32,11 +32,13 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
+import pytest
 
 from core import cli, config, orchestrator, registry
 from core.config import BOUNDS_PATH, CELL_PATH, VALID_LABELS, VALID_MODELS
 from core.Helpers import file_manager
 from core.SBI import reparam, run_guards
+from core.refusals import Refusal
 
 from tests._fixtures import _WriteFailed, _failing
 
@@ -166,8 +168,8 @@ def test_a_prior_the_posterior_was_not_trained_with_is_refused():
     try:
         orchestrator._assert_prior_used_matches_posterior(post, _Product([phys2]), "t")
         raise AssertionError("a foreign prior was accepted")
-    except ValueError:
-        pass
+    except Refusal as e:
+        assert e.field == "prior", e.field
     # unverifiable on either side => silence, not a false alarm (legacy artifacts land here)
     orchestrator._assert_prior_used_matches_posterior(_Post(None), _Product([phys1]), "t")
 
@@ -257,10 +259,15 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
         try:
             orchestrator._assert_chi_config_is_deliberate(stale)
             raise AssertionError(f"a chi run with a non-default {field} was accepted")
-        except ValueError as e:
+        except Refusal as e:
             assert field in str(e), f"the message must name {field}, got: {e}"
-            assert "PRISM.ini" in str(e) or "QSettings" in str(e), \
-                "the message must point at the persisted-settings cause, which is what bit"
+            assert e.field is None, "two knobs and a science file; no single control answers it"
+            # After V5 no front end can produce the mismatch: the Config tab shows config.py's band
+            # and drive read-only, and the keys are neither written nor read. Sending an operator to
+            # PRISM.ini or the Config tab would send them to a cause that no longer exists.
+            for banned in ("PRISM.ini", "QSettings", "Config tab"):
+                assert banned not in str(e), f"the refusal still points at '{banned}': {e}"
+            assert "config.py" in str(e), f"the refusal must say what to do instead, got: {e}"
 
     # K alone is legitimate -- one posterior serves any probe count (build_posterior omits it from
     # training_params on purpose). Refusing it would break the K-agnosticism the set encoder buys.
@@ -290,3 +297,33 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
         assert "config.py" in str(e), f"the refusal must say what to do instead, got: {e}"
     assert not hasattr(run_guards, "CHI_OVERRIDE_ENV"), "run_guards still defines the override name"
     assert not hasattr(orchestrator, "CHI_OVERRIDE_ENV"), "orchestrator still re-exports the override name"
+
+
+def test_config_build_refusals_name_their_field():
+    """V3 at the config build, the first thing every subcommand and the Prior tab do. Each refusal a
+    bad input can provoke there is a Refusal carrying the key of the ONE control that answers it --
+    the chi knob, the cell, the units -- or None for the exactly-one-of check, which is a caller's
+    mistake with no control behind it. The texts are unchanged (the pins on them elsewhere hold);
+    what changes is the class and the key, so T10's worker can route each to the yellow box and the
+    tool can append the flag from its own table instead of the message naming one."""
+    import dataclasses
+    cfg = _cfg(chi_mode=True, chi_n_freqs=4)
+    for kw, key in ((dict(chi_k_pad=1), "chi_k_pad"),
+                    (dict(chi_n_freqs=cfg.chi_k_pad + 1), "chi_n_freqs"),
+                    (dict(chi_max_cycles=config.CHI_MIN_CYCLES), "chi_max_cycles")):
+        with pytest.raises(Refusal) as e:
+            dataclasses.replace(cfg, **kw)                       # re-runs __post_init__
+        assert e.value.field == key, (kw, str(e.value))
+    # the cell's CONTENT: a bounds-built config handed a cell with nothing in it
+    with pytest.raises(Refusal, match="missing") as e:
+        _cfg().inject_ground_truth({}, {}, {}, {})
+    assert e.value.field == "cell"
+    with pytest.raises(Refusal, match="exactly one of") as e:
+        cli.make_sim_config("NADROWSKI", _LABELS, registry.state_dep_drift("NADROWSKI"))
+    assert e.value.field is None
+    with pytest.raises(Refusal, match="time unit") as e:
+        cli.units_to_factors(("nm", "pN"))                       # no time unit among them
+    assert e.value.field == "units"
+    with pytest.raises(Refusal, match="units file") as e:
+        cli.resolve_units_file("no_such_model_for_this_test")
+    assert e.value.field == "units"

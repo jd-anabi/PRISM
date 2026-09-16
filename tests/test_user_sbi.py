@@ -35,6 +35,7 @@ from core.SBI import chi as chi_mod, pipeline as pipeline_mod    # noqa: E402
 from core.Solvers import sdeint as _sdeint_mod              # noqa: E402
 from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH    # noqa: E402
 from core.config import VALID_MODELS, VALID_LABELS               # noqa: E402
+from core.refusals import Refusal                                # noqa: E402
 from tests._fixtures import _tiny_gen_prior                      # noqa: E402
 
 _N_GROUP_G = 11
@@ -2003,8 +2004,8 @@ def test_resume_modes_never_and_require_refuse_the_wrong_situation():
     tmp = Path(tempfile.mkdtemp())
     try:
         _gen_td("chi", seed=3, n_runs=2, run_size=4, checkpoint=_ck(tmp / "none", resume="require"))
-    except ValueError as e:
-        assert "no resumable checkpoint" in str(e), e
+    except Refusal as e:
+        assert "no resumable checkpoint" in str(e) and e.field == "resume", e
     else:
         raise AssertionError("resume='require' accepted a missing checkpoint")
 
@@ -2016,8 +2017,8 @@ def test_resume_modes_never_and_require_refuse_the_wrong_situation():
                 checkpoint=_ck(tmp / "live", identity={"model": "NADROWSKI", "run_size": 4,
                                                        "n_runs": 2, "mode": "chi"},
                                every=1, resume="never"))
-    except ValueError as e:
-        assert "already exists" in str(e), e
+    except Refusal as e:
+        assert "already exists" in str(e) and e.field == "resume", e
     else:
         raise AssertionError("resume='never' silently overwrote a completed checkpoint")
 
