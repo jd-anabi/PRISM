@@ -1197,3 +1197,102 @@ def test_the_infer_tab_other_observation_box():
     assert "other_obs" not in src, "save_settings must not persist the other-observation consent"
     src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(type(panel).restore_settings))))
     assert "other_obs" not in src, "restore_settings must not restore it"
+
+
+def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
+    """V3's window half. A Refusal names its field by a key and never a box, tab, button or flag;
+    the yellow "Check your inputs" box gets its "how to fix here" line from ONE table, and the
+    inference tabs build their static rows from the same table's labels (label(key)), so a control
+    is named in one place and a renamed one cannot leave a stale sentence behind.
+
+    (a) the table knows every registry key and no other -- an unmapped key would show a refusal
+        with no way out, and an entry nobody raises is a sentence that can go stale unseen;
+    (b) every tuple names a tab as InferenceScreen TITLES it (read off the built screen, not a
+        copy of the tuple), a non-empty label, and renders the box sentence; a sentence entry is
+        returned verbatim and has no label; a None entry says nothing and has no label; and none
+        of the three ever raises from fix_sentence, which runs while a refusal is being shown;
+    (c) the sentences the walkthrough rows C2 and C3 read, and the consents, verbatim -- each
+        quotes the control's own text (posterior_tab.py:195, tsnpe_tab.py:88, infer_tab.py:112);
+    (d) the keys with no window control are exactly the six the window never exposes plus the
+        eleven tool-only diagnostics knobs, so a tool-only key renders no window sentence;
+    (e) the three drive labels are built exactly as the Infer tab builds its rows
+        (_rebuild_forcing_fields: labels.gui_forcing_label with config.FORCING_DISPLAY_UNITS, which
+        cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built Infer tab (Task 15)
+        can find them.
+    """
+    from core import config
+    import core.gui.fields as gui_fields
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.Helpers import labels
+    from core.refusals import FIELDS
+
+    # (a) the same key set, in both directions
+    assert set(gui_fields.CONTROL) == set(FIELDS), (
+        f"only in CONTROL: {sorted(set(gui_fields.CONTROL) - set(FIELDS))}; "
+        f"only in FIELDS: {sorted(set(FIELDS) - set(gui_fields.CONTROL))}")
+
+    # (b) the three shapes, against the screen's own tab titles
+    _app()
+    screen = InferenceScreen()
+    tabs = [screen.tabs.tabText(i) for i in range(screen.tabs.count())]
+    assert tabs == ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]
+    for key, entry in gui_fields.CONTROL.items():
+        if isinstance(entry, tuple):
+            tab, text = entry
+            names = tab if isinstance(tab, tuple) else (tab,)
+            assert names and all(t in tabs for t in names), f"{key}: {tab!r} is not a tab title"
+            assert isinstance(text, str) and text, f"{key}: empty label"
+            assert gui_fields.label(key) == text
+            assert gui_fields.fix_sentence(key) == \
+                f"Set it in the '{text}' box on the {' or '.join(names)} tab."
+        elif isinstance(entry, str):
+            assert entry.endswith("."), f"{key}: a fix sentence ends with a period: {entry!r}"
+            assert gui_fields.fix_sentence(key) == entry
+            with pytest.raises(KeyError):
+                gui_fields.label(key)
+        else:
+            assert entry is None, f"{key}: {entry!r} is none of the three shapes"
+            assert gui_fields.fix_sentence(key) == ""
+            with pytest.raises(KeyError):
+                gui_fields.label(key)
+    assert gui_fields.fix_sentence(None) == ""
+    assert gui_fields.fix_sentence("no_such_key") == ""
+    with pytest.raises(KeyError):
+        gui_fields.label("no_such_key")
+
+    # (c) verbatim: the walkthrough sentences and the consents
+    assert gui_fields.fix_sentence("t_obs") == "Set it in the 'T_obs (s)' box on the Infer tab."
+    assert gui_fields.fix_sentence("n_directions") == \
+        "Set it in the 'Directions truncated' box on the TSNPE tab."
+    assert gui_fields.fix_sentence("accept_other_observation") == \
+        "Tick 'Run on a different observation' on the Infer tab."
+    assert gui_fields.fix_sentence("new_run") == (
+        "Answer 'Start a new run anyway' in the dialog on the Posterior tab, or tick 'Start a new "
+        "simulation even if a cache one setting away exists' on the TSNPE tab.")
+    assert gui_fields.fix_sentence("accept_truncated") == "Confirm the load in the dialog on the Posterior tab."
+    assert gui_fields.fix_sentence("recording_spont") == (
+        "Select the passive recording on the Infer tab (the 'Spontaneous' box on the driven page, "
+        "the 'Passive' box on the χ page).")
+    assert gui_fields.fix_sentence("recording_probe") == \
+        "Pick the probe's recording in the χ probe table on the Infer tab."
+    assert gui_fields.fix_sentence("name") == "Choose another name in the Save box."
+    assert (gui_fields.fix_sentence("chi_f0") == gui_fields.fix_sentence("chi_freq_bounds")
+            == "Fixed by measurement: change it in config.py, deliberately.")
+    # the budget boxes sit on two tabs, and a refusal raised on either must name the one the user is on
+    assert gui_fields.CONTROL["num_runs"] == (("Posterior", "TSNPE"), "Batches")
+    assert gui_fields.fix_sentence("run_size_cap") == \
+        "Set it in the 'Max rows per batch (0 = auto)' box on the Posterior or TSNPE tab."
+
+    # (d) no window control: the six the window never exposes, and the tool-only set
+    assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
+        "checkpoint_every", "resume", "device", "n_samples", "num_posterior_samples", "max_num_epochs",
+        "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
+        "n_sweep", "chi_k_fixed"}
+
+    # (e) the drive labels, as the Infer tab builds them
+    for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):
+        assert gui_fields.CONTROL[key] == (
+            "Infer", labels.gui_forcing_label(name, config.FORCING_DISPLAY_UNITS[name])), key
+    assert gui_fields.label("drive_amplitude") == "A (N)"
+    assert gui_fields.label("drive_frequency") == "f (Hz)"
+    assert gui_fields.label("drive_phase") == "φ (rad)"

@@ -563,3 +563,132 @@ def test_the_public_entry_decorator_passes_a_sentinel_through():
 
         logging_stage(_Duck())
     assert any(ln.endswith("info stage record") for ln in outer.lines), outer.lines
+
+
+# ── The tool's table, and the closure of the registry over the tree (piece 3, Task 4) ────────────
+# The rule functions take the key POSITIONALLY (require_positive("t_obs", v)); a refusal raised directly
+# carries it as field="…". Both shapes are scanned. `describe` is in the list although
+# core/tool/config_args.py has a describe(cfg, ...) of its own: that one's first argument is a config,
+# never a string literal, so a name match cannot mistake it for the registry's describe(key).
+_RULE_CALLS = ("describe", "refuse", "require_given", "require_finite", "require_positive",
+               "require_at_least", "require_between", "require_choice", "require_file")
+
+
+def _field_key_literals(tree) -> list:
+    """Every string literal used as a refusal field key in a parsed module: the ``field="…"`` keyword
+    of ANY call, and the first positional argument of a call to one of ``_RULE_CALLS`` (by the
+    callee's bare name, whether ``require_file(...)`` or ``refusals.require_file(...)``).
+    ``(lineno, key)`` pairs. A ``field=None`` or a key passed as a variable is not a literal and is
+    not returned."""
+    import ast
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for kw in node.keywords:
+            if kw.arg == "field" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+                out.append((node.lineno, kw.value.value))
+        fn = node.func
+        name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
+        if (name in _RULE_CALLS and node.args and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            out.append((node.lineno, node.args[0].value))
+    return out
+
+
+def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered():
+    """V3's tool half, and the closure of the registry. A Refusal names its field by a key and says
+    nothing about flags; the tool turns the key into a flag with ONE table, so:
+
+    (a) the table knows every registry key and no other -- a key that reached the ladder unmapped
+        would print a refusal with no way out named, and an entry for a key nobody raises is a flag
+        that can go stale unseen;
+    (b) every flag it names is one build_parser defines, read off the REAL parsers (option strings,
+        modes included) rather than a copy of the help text, because the flag is what the operator
+        types next. The one key whose flag is not its own name spelled with dashes is pinned by name;
+    (c) fix_sentence owns the parentheses and never raises: it runs while a refusal is being printed;
+    (d) the module imports in a bare interpreter with neither torch nor Qt -- the ladder prints
+        refusals, and one of them can be that the card was not there;
+    (e)(f) every key LITERAL under core/ is registered. The rule functions look a key up at call
+        time, so a typo would surface as a KeyError from inside a refusal, on the one path no test
+        walked. Found by the same AST walk the literal-path scan uses (test_artifact_store.py), over
+        the same CODE_ROOTS + CODE_FILES. The scanner is checked on a snippet FIRST: with no field=
+        literal in the tree yet (Task 5 adds the first), the tree walk alone would pass vacuously.
+    """
+    import argparse
+    import ast
+    import subprocess
+    import sys
+    from pathlib import Path
+    from core.refusals import FIELDS
+    from core.tool import build_parser
+    import core.tool.fields as tool_fields
+
+    # (a) the same key set, in both directions
+    assert set(tool_fields.FLAG) == set(FIELDS), (
+        f"only in FLAG: {sorted(set(tool_fields.FLAG) - set(FIELDS))}; "
+        f"only in FIELDS: {sorted(set(FIELDS) - set(tool_fields.FLAG))}")
+
+    # (b) every flag is a real option string on some subcommand, or on a mode of one
+    def _walk(parser):
+        yield parser
+        for a in parser._actions:
+            if isinstance(a, argparse._SubParsersAction):
+                for sub in a.choices.values():
+                    yield from _walk(sub)
+
+    real = {opt for top in build_parser().subcommands.values()
+            for p in _walk(top) for opt in p._option_string_actions}
+    unreal = {k: f for k, f in tool_fields.FLAG.items() if f is not None and f not in real}
+    assert not unreal, f"FLAG names an option no subcommand defines: {unreal}"
+    assert all(f is None or f.startswith("--") for f in tool_fields.FLAG.values())
+    assert {k for k, f in tool_fields.FLAG.items() if f is None} == {
+        "units", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds"}
+    assert tool_fields.FLAG["num_posterior_samples"] == "--posterior-samples"    # the tree's spelling
+    assert tool_fields.FLAG["hpd_level"] == "--level" and tool_fields.FLAG["n_directions"] == "--directions"
+    assert tool_fields.FLAG["recording_probe"] == tool_fields.FLAG["recording_forced"] == "--forced"
+    assert (tool_fields.FLAG["drive_amplitude"] == tool_fields.FLAG["drive_frequency"]
+            == tool_fields.FLAG["drive_phase"] == "--drive")
+    assert tool_fields.FLAG["max_num_epochs"] == "--max-epochs" and tool_fields.FLAG["run_size_cap"] == "--run-size"
+
+    # (c) fix_sentence owns the parentheses and never raises
+    assert tool_fields.fix_sentence("t_obs") == "(--t-obs)"
+    assert tool_fields.fix_sentence("new_run") == "(--new-run)"
+    assert tool_fields.fix_sentence("repeats") == "(--repeats)"
+    assert tool_fields.fix_sentence("units") == ""
+    assert tool_fields.fix_sentence(None) == ""
+    assert tool_fields.fix_sentence("no_such_key") == ""
+
+    # (d) torch-free and Qt-free in a fresh interpreter
+    root = Path(__file__).resolve().parents[1]
+    probe = ("import sys; import core.tool.fields; "
+             "print('torch' in sys.modules, any(m.startswith('PySide6') for m in sys.modules))")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=root, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0 and r.stdout.split() == ["False", "False"], r.stdout + r.stderr
+
+    # (e) the scanner, on a snippet: one key of each shape it must see, and the shapes it must not
+    snippet = ast.parse(
+        'raise Refusal("x", field="t_obs")\n'                      # 1: field= on a raise
+        'store.StoreError("y", field="no_such_box")\n'             # 2: field= on an attribute call
+        'require_positive("walk_step", v)\n'                       # 3: a rule, bare name
+        'refusals.require_at_least("nor_this", n, 1)\n'            # 4: a rule, through the module
+        'describe("hpd_level")\n'                                  # 5: describe(key)
+        'Refusal("z", field=None)\n'                                # 6: None is not a literal key
+        'refuse(key, "w")\n'                                       # 7: a variable is not a literal
+        'describe(cfg, cell="c")\n'                                # 8: config_args.describe's shape
+        'other(field="not_a_refusal_kw")\n')                       # 9: field= on ANY call counts
+    assert [k for _, k in sorted(_field_key_literals(snippet))] == [
+        "t_obs", "no_such_box", "walk_step", "nor_this", "hpd_level", "not_a_refusal_kw"]
+
+    # (f) the tree: every key literal under CODE_ROOTS and CODE_FILES is a registered key
+    from tests._fixtures import CODE_FILES, CODE_ROOTS
+    files = [py for sub in CODE_ROOTS for py in sorted((root / sub).rglob("*.py"))]
+    files += [root / name for name in CODE_FILES]
+    assert len(files) >= 20, f"the scan walked only {len(files)} files -- CODE_ROOTS is {CODE_ROOTS}"
+    unregistered = []
+    for py in files:
+        for ln, key in _field_key_literals(ast.parse(py.read_text(encoding="utf-8"))):
+            if key not in FIELDS:
+                unregistered.append(f"{py.relative_to(root)}:{ln}: {key!r}")
+    assert not unregistered, ("refusal keys used under core/ but absent from core.refusals.FIELDS:\n"
+                              + "\n".join(unregistered))
