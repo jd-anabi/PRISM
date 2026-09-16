@@ -1226,15 +1226,27 @@ def test_the_round_reads_this_observations_truth_and_no_other():
             "source": {"kind": "experimental"}}
     exp = LoadedObservation(kind="observation", id="e", name="", path=None,
                             manifest=SimpleNamespace(body=body), digest="a" * 16)
+    handed = {}
+
+    def _child(c, *a, **k):
+        # V1: the round installs the observation on its PRIVATE copy and trains on that copy, so the
+        # pins below read the config build_posterior received, not the caller's
+        handed["cfg"] = c
+        return "CHILD"
+
     saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
     orchestrator.build_truncation_region = lambda *a, **k: "REGION"
-    orchestrator.build_posterior = lambda *a, **k: "CHILD"
+    orchestrator.build_posterior = _child
     try:
         orchestrator.tsnpe_round(cfg, _parent(), object(), exp, store=_RoundStore())
     finally:
         orchestrator.build_truncation_region, orchestrator.build_posterior = saved
-    assert not cfg.has_ground_truth, "the round kept a truth that belongs to another observation"
-    assert "cell" not in cfg.sources and not cfg.inits_dict
+    got = handed["cfg"]
+    assert got is not cfg, "the round trained on the caller's config instead of its own copy"
+    assert not got.has_ground_truth, "the round kept a truth that belongs to another observation"
+    assert "cell" not in got.sources and not got.inits_dict
+    assert cfg.has_ground_truth and cfg.sources["cell"].endswith("master_weak.txt"), \
+        "the round cleared the CALLER's truth: the session's earlier inference lost its cell"
 
     # ... and a SIMULATED observation's truth outside the box is still reported, in the one wording
     cli.load_and_validate_gt(cfg, cell)

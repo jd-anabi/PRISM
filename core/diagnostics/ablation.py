@@ -21,6 +21,7 @@ import torch
 
 from core import orchestrator as orch
 from core.artifacts import resolve_store
+from core.runs import public_entry
 
 FLOAT32_EPS = 1.1920929e-07
 
@@ -74,6 +75,7 @@ def _sweep_channels(emb, data, n_sum, n_sweep, labels):
     return [(row, "__base__", 0.0, 0.0, "__base__")] + out
 
 
+@public_entry
 def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
                      name: str = "", note: str = "", fig_sink=None, store=None):
     """Sweep each summary channel across its own p1-p99 range and record the embedding displacement.

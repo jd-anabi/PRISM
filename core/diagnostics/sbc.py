@@ -20,6 +20,7 @@ import torch
 from core import orchestrator as orch
 from core.artifacts import resolve_store
 from core.Helpers import file_manager
+from core.runs import public_entry
 
 from .rng import seeded
 
@@ -74,6 +75,7 @@ def _cell(v, spec: str) -> str:
     return f"{'-':>{width}s}" if v is None else f"{v:{spec}}"
 
 
+@public_entry
 def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
                 num_posterior_samples: int = 1000, cal_n_scales: int | None = None,
                 chi_k_fixed: int | None = None, seed: int = 0,

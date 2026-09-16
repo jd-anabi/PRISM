@@ -37,6 +37,7 @@ from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedC
                         LoadedInference, resolve_store)
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .artifacts.provenance import file_ref as _file_ref
+from .runs import public_entry          # V1: every public stage below works on a private copy of its config
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
 from .SBI.run_guards import (_find_nd_gmm, _gmm_fingerprint,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches_region,
@@ -103,6 +104,7 @@ def _truth_outside_region(T_train, region, truth) -> list:
 
 
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
+@public_entry
 def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig_sink=None,
                           store=None) -> LoadedObservation:
     """
@@ -263,6 +265,7 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
                               title="Ground-truth trace", source=source, forcing_vals=forcing_vals)
 
 
+@public_entry
 def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: str = "", note: str = "",
                                  fig_sink=None, store=None) -> LoadedObservation:
     """A bench recording set -> the observation artifact. Every file is checked and hashed BEFORE any
@@ -424,6 +427,7 @@ def _no_cache_message(ckpt_dir, near) -> str:
     return msg
 
 
+@public_entry
 def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
                 *, name: str = "", note: str = "", fig_sink=None, store=None,
                 num_iterations: int | None = None, sweep_batch: int | None = None,
@@ -595,6 +599,7 @@ def build_forcing_prior(cfg: SimConfig) -> Distribution:
 
 
 # ── Step 3: Posterior construction ──────────────────────────────────────────
+@public_entry
 def build_posterior(
     cfg: SimConfig,
     prior: LoadedPrior,                  # the built/loaded prior wrapper; .prior is the physical inferred prior
@@ -1231,6 +1236,7 @@ def observation_digest(x_obs: torch.Tensor) -> str:
     return tensor_digest(x_obs)
 
 
+@public_entry
 def build_truncation_region(posterior, observation, *,
                             n_directions: int = None, level: float = None,
                             t_scale_idx: int | None = None):
@@ -1535,6 +1541,7 @@ def _sbc_reference_sample(cfg: SimConfig, val_latent_prior, T, truncation, infer
 
 
 # ── Step 4a: Calibration diagnostics (data-free — no chosen observation) ─────
+@public_entry
 def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                          *, name: str = "", note: str = "", fig_sink=None, store=None,
                          n_cal: int | None = None, cal_n_scales: int | None = None,
@@ -1739,6 +1746,7 @@ def _num(x):
 
 
 # ── Step 4b: Inference visualization (requires a chosen observation) ─────────
+@public_entry
 def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation: LoadedObservation,
                         *, name: str = "", note: str = "", fig_sink=None, store=None, accept=None,
                         n_samples: int = 1000) -> LoadedInference:
@@ -2007,6 +2015,7 @@ def _refuse_no_samples(n_samples) -> None:
         raise ValueError(f"n_samples must be at least 1, got {int(n_samples)}")
 
 
+@public_entry
 def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: float, *,
                         cell=None, gt_values=None, prior: "LoadedPrior | None" = None,
                         accept=None, n_samples: int | None = None,
@@ -2087,6 +2096,7 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     return obs, inf
 
 
+@public_entry
 def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "RecordingSet", *,
                            accept=None, n_samples: int | None = None,
                            name: str = "", note: str = "", fig_sink=None, store=None):
@@ -2108,6 +2118,7 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
     return obs, inf
 
 
+@public_entry
 def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                 observation: LoadedObservation, *,
                 n_directions: int | None = None, level: float | None = None,

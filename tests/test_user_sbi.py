@@ -470,12 +470,15 @@ def test_chi_mode_full_sbi_pipeline(tmp_path):
             np.save(p, x_dim[0].numpy())
             forced_paths.append(p)
         # D9: every driven chi recording states its drive frequency. generate_observations recorded the
-        # absolute probe frequencies it measured at on cfg.chi_obs_freqs, in CELL units (orchestrator
-        # :303-304); observations.py multiplies by freq_si_to_cell to get from Hz to cell units, so
-        # divide by it here to undo that and recover Hz.
+        # absolute probe frequencies it measured at in the OBSERVATION's manifest (`chi_obs_freqs`, in
+        # CELL units); since piece 3 (V1) it writes them on its private copy of cfg, never on this one.
+        # observations.py multiplies by freq_si_to_cell to get from Hz to cell units, so divide by it
+        # here to undo that and recover Hz.
+        measured = obs.manifest.body["chi_obs_freqs"]
+        assert measured is not None and len(measured) == config.CHI_N_FREQS, measured
         rec = RecordingSet(spont=str(spont_path),
                            forced=tuple((str(p), float(f) / cfg.freq_si_to_cell)
-                                        for p, f in zip(forced_paths, cfg.chi_obs_freqs)),
+                                        for p, f in zip(forced_paths, measured)),
                            T_obs_s=1.0, F0_si=1.0)
         obs_e = orchestrator.build_experiment_observation(cfg, rec, fig_sink=sink)
         assert obs_e.width == SUMMARY_WIDTH + 1 + K3

@@ -253,3 +253,53 @@ def build_tiny_run(store, hw=None):
         undo_install()
     return SimpleNamespace(cfg=cfg, prior=prior, posterior=posterior, store=store, sink=sink,
                            other_prior=other_prior, teardown=teardown)
+
+
+def _same_value(a, b) -> bool:
+    """Equality for one config field: tensors by shape, dtype and ``torch.equal`` on the CPU; dicts by
+    type, key order and values; lists and tuples by type and elements; NaN equal to NaN; everything
+    else by ``==``. Recursive, because a dict or tuple holding a tensor would make a plain ``==`` raise
+    on the tensor's truth value instead of answering."""
+    import math
+    if isinstance(a, torch.Tensor) or isinstance(b, torch.Tensor):
+        return (isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor) and a.shape == b.shape
+                and a.dtype == b.dtype and torch.equal(a.detach().cpu(), b.detach().cpu()))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return type(a) is type(b) and list(a) == list(b) and all(_same_value(a[k], b[k]) for k in a)
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return type(a) is type(b) and len(a) == len(b) and all(_same_value(x, y) for x, y in zip(a, b))
+    if isinstance(a, float) and isinstance(b, float) and math.isnan(a) and math.isnan(b):
+        return True
+    return a == b
+
+
+def snapshot_cfg(cfg) -> dict:
+    """Everything a run could write on ``cfg``, frozen: every key of ``cfg.__dict__`` except the cached
+    properties (``core.sim_config._CACHED`` -- the time grid and the unit registry, which a read
+    materialises and a copy recomputes, so their presence says nothing about a write), with tensors
+    cloned to the CPU and every other value deep-copied, so a later write through a shared container
+    cannot reach the snapshot. Works on any object with a ``__dict__``.
+
+    The V1 pins of piece 3 (spec §2.4) take one before a public entry and hand it to
+    ``assert_cfg_unchanged`` after, whether the entry returned, refused or raised.
+    """
+    import copy
+    from core.sim_config import _CACHED
+    return {key: (value.detach().cpu().clone() if isinstance(value, torch.Tensor) else copy.deepcopy(value))
+            for key, value in vars(cfg).items() if key not in _CACHED}
+
+
+def assert_cfg_unchanged(cfg, snap) -> None:
+    """``cfg`` holds exactly the keys ``snap`` recorded and every value compares equal to its snapshot
+    (``_same_value``). Keys count as well as values: a stage's write can ADD one (``chi_obs_freqs`` is
+    not a dataclass field, and a freshly built config has no such key). The failure names every added,
+    removed and changed field, with the before and after of each change -- which is what says which
+    write escaped."""
+    from core.sim_config import _CACHED
+    now = {key: value for key, value in vars(cfg).items() if key not in _CACHED}
+    added = sorted(set(now) - set(snap))
+    removed = sorted(set(snap) - set(now))
+    changed = [key for key in snap if key in now and not _same_value(now[key], snap[key])]
+    assert not (added or removed or changed), (
+        f"the caller's config was written: added {added}, removed {removed}, changed "
+        + ("; ".join(f"{key}: {snap[key]!r} -> {now[key]!r}" for key in changed) or "[]"))

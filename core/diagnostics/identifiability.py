@@ -29,6 +29,7 @@ import torch
 from core import orchestrator as orch
 from core.artifacts import resolve_store
 from core.Helpers import file_manager
+from core.runs import public_entry
 
 from . import feature_sets
 from .rng import seeded
@@ -36,6 +37,7 @@ from .rng import seeded
 _SF, _SS, _SC = 1, 2, 3          # CRN seeds: forced / spontaneous / chi block
 
 
+@public_entry
 def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4,
                              name: str = "", note: str = "", fig_sink=None, store=None):
     """Decompose a trained posterior's Fisher eigenbasis. Reads the artifact; simulates nothing.
@@ -347,6 +349,7 @@ def _analyze_point(ctx, nd, res, force):
     return np.sqrt(np.clip(np.diag(cov), 0, None)), meas
 
 
+@public_entry
 def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m_noise: int = 128,
                             rel: float = 0.02, min_valid: float = 0.5, sd_identified: float = 0.3,
                             t_obs_s: float | None = None, seed: int = 0,
@@ -808,6 +811,7 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, vfr, zero_tol, sink):
     return norms_std, norms_raw, unmeasurable, pairs, cond, extra
 
 
+@public_entry
 def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float = 0.02,
                              min_valid: float = 0.5, zero_tol: float = 0.05, noise_eps: float = 1e-6,
                              t_obs_s: float | None = None, seed: int = 0,

@@ -14,7 +14,8 @@ from core.artifacts import manifest as mf
 from core.artifacts import provenance as prov
 
 from tests._fixtures import (CODE_FILES, CODE_ROOTS, _FakeDP, _gmm_in_box, _nad_cfg,
-                             _posterior_artifact, _prior_artifact, _set_path)
+                             _posterior_artifact, _prior_artifact, _set_path, assert_cfg_unchanged,
+                             snapshot_cfg)
 
 
 def _close(title, fig):
@@ -595,7 +596,10 @@ def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, 
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
                                      checkpoint_every=1, max_num_epochs=7)
     ck = captured["plan"].checkpoint
-    assert ck["parents"] == {"prior": lp.id} and ck["inputs"]["model"] == "NADROWSKI" and ck["hw"] is cfg.hw
+    assert ck["parents"] == {"prior": lp.id} and ck["inputs"]["model"] == "NADROWSKI"
+    # V1: the plan shares the hardware of the stage's PRIVATE copy -- equal to the caller's by value
+    # (DeviceConfig is an eq dataclass), never the caller's object
+    assert ck["hw"] == cfg.hw and ck["hw"] is not cfg.hw
     assert ck["identity"] == SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
     assert ck["identity"]["prior_fingerprint"] == lp.fingerprint and ck["dir"].parent == store.kind_dir("simulation")
     assert ck["every"] == 1 and ck["resume"] == "auto", "the cadence and the policy must be the arguments"
@@ -829,7 +833,10 @@ def test_generate_observations_writes_an_artifact_that_reinstalls_its_context(st
     fresh = _nad_cfg()
     assert not fresh.has_ground_truth
     store.load_observation(fresh, obs.id).install(fresh)
-    assert fresh.has_ground_truth and fresh.T_obs == cfg.T_obs and fresh.n_obs == cfg.n_obs
+    # V1: the resolved length is read off the ARTIFACT. The stage wrote it on its private copy, so the
+    # caller's config still has none.
+    assert fresh.has_ground_truth and fresh.T_obs == cfg.T_obs
+    assert fresh.n_obs == obs.manifest.body["n_obs"] == 200 and cfg.n_obs is None
     assert fresh.ground_truth == cfg.ground_truth
     with pytest.raises(ValueError, match="mode"):
         store.load_observation(_nad_cfg(chi_mode=True), obs.id)
@@ -1444,7 +1451,11 @@ def test_simulated_inference_refuses_a_non_amortized_posterior_before_it_simulat
 
 def test_hand_entered_values_replace_the_recorded_cell(store, monkeypatch):
     """inject_ground_truth never touches cfg.sources, so before this the provenance of a hand-entered
-    inference named -- and content-hashed -- whichever cell file the session had loaded earlier."""
+    inference named -- and content-hashed -- whichever cell file the session had loaded earlier.
+
+    Since piece 3 (V1) the composition works on a private copy of the config, so the cell is dropped
+    from THAT copy: the pin reads the config the stubbed generate_observations received, and the
+    caller's config still names the cell it loaded."""
     from core import cli, orchestrator
     from core.config import CELL_PATH
     cfg = _nad_cfg()
@@ -1455,10 +1466,14 @@ def test_hand_entered_values_replace_the_recorded_cell(store, monkeypatch):
           {k: v for k, (v, _) in cfg.params_dict.items()},
           {k: v for k, (v, _) in cfg.rescale_params.items()},
           {k: v for k, (v, _) in cfg.force_params_dict.items()})
-    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: "OBS")
+    handed = []                                                  # the config the composition hands on
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: handed.append(c) or "OBS")
     monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
     orchestrator.simulated_inference(cfg, _sim_post(), 1.0, gt_values=gt, store=store)
-    assert "cell" not in cfg.sources and cfg.has_ground_truth
+    got = handed[-1]
+    assert got is not cfg and "cell" not in got.sources and got.has_ground_truth
+    assert cfg.sources["cell"].endswith("master_weak.txt"), \
+        "the composition dropped the cell from the CALLER's config instead of its own copy"
     for kw in (dict(cell=cell, gt_values=gt), {}):
         with pytest.raises(ValueError, match="exactly one of"):
             orchestrator.simulated_inference(cfg, _sim_post(), 1.0, store=store, **kw)
@@ -1547,7 +1562,8 @@ def test_an_experimental_observation_records_its_own_length_and_drive_frequencie
     # M1: a real forced build on a recording SHORTER than the simulated observation before it
     cfg = _forced_cfg()
     sim = orchestrator.generate_observations(cfg, fig_sink=closing)
-    assert cfg.n_obs == 200
+    # V1: the length is the ARTIFACT's -- the stage resolved it on its private copy of cfg
+    assert sim.manifest.body["n_obs"] == 200 and cfg.n_obs is None
     trace = sim.obs_data[0].numpy()[:150]
     spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
     np.save(spont, trace)
@@ -1588,6 +1604,11 @@ def test_an_experimental_observation_records_its_own_length_and_drive_frequencie
     assert fresh.manifest.body["chi_obs_freqs"] == want, fresh.manifest.body["chi_obs_freqs"]
     assert fresh.manifest.body["n_obs"] == 50
     assert fresh.manifest.body["conditioning"]["chi_n_freqs"] == 2
+    # V1 (spec §2.4): the stage wrote the probe count, the length and the frequencies on ITS copy. A
+    # bench chi observation with two probes must leave the caller's K at config.py's, or the next
+    # simulated chi inference on the same session simulates two.
+    assert chi_cfg.chi_n_freqs == config.CHI_N_FREQS != 2 and chi_cfg.n_obs is None
+    assert getattr(chi_cfg, "chi_obs_freqs", None) is None
     chi_cfg.chi_obs_freqs = torch.tensor([0.1, 0.2, 0.3])          # (b) a stale simulated context
     chi_cfg.n_obs = 7
     stale = orchestrator.build_experiment_observation(chi_cfg, chi_rec, fig_sink=closing)
@@ -1637,31 +1658,46 @@ def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
     """The SECOND hop is where a composition silently drops a caller's choice. accept, the store, the
     figure sink, the name and the note all have to arrive at the stage that WRITES the artifact -- and
     n_samples must be ABSENT when the caller did not set it, so the stage's own literal default stays
-    the single place that number is written down."""
+    the single place that number is written down.
+
+    The CONFIG is the one thing that does not arrive as the caller passed it (piece 3, V1): each
+    composition works on a private copy and hands THAT copy to both of its stages, carrying its own
+    writes (the cell's truth and path, T_obs in cell units), while the caller's config stays exactly as
+    it was. Never compared with == against the caller's: the composition wrote on its copy."""
     from core import orchestrator
     from core.artifacts import Accept
-    from core.config import CELL_PATH
+    from core.config import CELL_PATH, SimConfig
     from core.SBI.observations import RecordingSet
     seen = {}
-    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: seen.update(gen=k) or "OBS")
+    monkeypatch.setattr(orchestrator, "generate_observations",
+                        lambda c, **k: seen.update(gen=k, gen_cfg=c) or "OBS")
     monkeypatch.setattr(orchestrator, "build_experiment_observation",
-                        lambda c, r, **k: seen.update(exp=k, rec=r) or "OBS")
+                        lambda c, r, **k: seen.update(exp=k, rec=r, exp_cfg=c) or "OBS")
     monkeypatch.setattr(orchestrator, "infer_and_visualize",
                         lambda *a, **k: seen.update(inf=k, args=a) or "INF")
     cfg = _nad_cfg()
+    snap = snapshot_cfg(cfg)
     acc = Accept(other_observation=True)
     sink = lambda title, fig: None                                 # noqa: E731
     orchestrator.simulated_inference(cfg, _sim_post(), 1.0, accept=acc, n_samples=7, name="n1",
                                      note="t1", fig_sink=sink, store=store,
                                      cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"))
     assert seen["gen"] == {"fig_sink": sink, "store": store}
-    assert seen["args"][0] is cfg and seen["args"][2] == "OBS"
+    fwd = seen["args"][0]
+    assert isinstance(fwd, SimConfig) and fwd is not cfg and seen["args"][2] == "OBS"
+    assert seen["gen_cfg"] is fwd, "the composition must hand its ONE copy to both of its stages"
+    assert fwd.has_ground_truth and fwd.sources["cell"].endswith("master_weak.txt")
+    assert fwd.T_obs == 1.0 * fwd.get_unit_conversion_factor("s")
+    assert_cfg_unchanged(cfg, snap)
     assert seen["inf"] == {"name": "n1", "note": "t1", "fig_sink": sink, "store": store,
                            "accept": acc, "n_samples": 7}
     rec = RecordingSet(spont="x.npy", T_obs_s=1.0)
     orchestrator.experimental_inference(cfg, _sim_post(), rec, accept=acc, name="n2", note="t2",
                                         fig_sink=sink, store=store)
     assert seen["rec"] is rec and seen["exp"] == {"fig_sink": sink, "store": store}
+    assert isinstance(seen["exp_cfg"], SimConfig) and seen["exp_cfg"] is not cfg and seen["exp_cfg"] is not fwd
+    assert seen["args"][0] is seen["exp_cfg"], "the composition must hand its ONE copy to both of its stages"
+    assert_cfg_unchanged(cfg, snap)
     assert seen["inf"] == {"name": "n2", "note": "t2", "fig_sink": sink, "store": store, "accept": acc}, \
         "n_samples must be ABSENT when the caller did not set it"
 
@@ -1728,3 +1764,423 @@ def test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs():
     c.params_dict[first] = (1.0, c.params_dict[first][1])
     assert cfg.T_obs == 1.0 and "cell" not in cfg.sources
     assert cfg.params_dict[first][0] is None and not cfg.has_ground_truth
+
+
+# ── V1: no public entry writes on the configuration it is handed (piece 3, spec §2.2-§2.4) ──────────
+from types import SimpleNamespace
+
+
+class _Injected(RuntimeError):
+    """Raised by a seam AFTER a write on the stage's config: a stage failing mid-run."""
+
+
+class _BodyDone(Exception):
+    """Raised inside a stage's write block; _EntryWriter absorbs it, so the block ends at its first
+    write and the stage returns its load_*() result as a completed run does."""
+
+
+def _leak(c):
+    """A stage's own writes -- the observation length, the resolved sample count, the probe frequencies
+    and the cell's path -- done to whichever config the seam is handed. Done to the CALLER's object,
+    any one of them is the V1 defect: the next run on that session inherits it."""
+    c.T_obs = 4242.0
+    c.n_obs = 4242
+    c.chi_obs_freqs = torch.tensor([4.0, 2.0])
+    c.sources["cell"] = "written by the stage"
+
+
+def _raise_injected(*a, **k):
+    raise _Injected("the stage failed after writing on its config")
+
+
+def _body_done(*a, **k):
+    raise _BodyDone("the write block ends here")
+
+
+class _EntryWriter:
+    """What _EntryStore.create hands back. Entering is free; the FIRST touch of the writer's surface
+    (fig_sink, payload, parents, config, fingerprints, body) raises _BodyDone, and __exit__ absorbs
+    _BodyDone and nothing else. So a stage's write block ends at its first write -- or at the seam a
+    leg installs before it -- and the stage returns store.load_*(w.id): a success from the caller's
+    side, with no solver, flow or figure run."""
+
+    def __init__(self):
+        object.__setattr__(self, "id", "20260916T000000")
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return exc_type is not None and issubclass(exc_type, _BodyDone)
+
+    def __getattr__(self, name):
+        raise _BodyDone(name)
+
+    def __setattr__(self, name, value):
+        raise _BodyDone(name)
+
+
+class _EntryStore:
+    """The store surface the fifteen entries touch, over nothing. Every method a stage hands its
+    WORKING config to (create, load_prior, load_posterior) writes on it first (_leak) and then, for
+    the "boom" case, raises _Injected. A name of "taken" is refused as the real store refuses one."""
+
+    def __init__(self, case):
+        self.case = case
+
+    def assert_name_free(self, kind, name):
+        if name == "taken":
+            raise st.StoreError(f"A {kind} named 'taken' already exists.")
+
+    def _handed(self, cfg):
+        _leak(cfg)
+        if self.case == "boom":
+            _raise_injected()
+
+    def create(self, kind, cfg, *, name="", note=""):
+        self._handed(cfg)
+        return _EntryWriter()
+
+    def load_prior(self, cfg, ref):
+        self._handed(cfg)
+        return SimpleNamespace(nd_prior=None, id=ref, name="")
+
+    def load_posterior(self, cfg, ref, accept=None):
+        self._handed(cfg)
+        return SimpleNamespace(posterior=SimpleNamespace(truncation=None), id=ref, name="")
+
+    def load_calibration(self, ref):
+        return "LOADED"
+
+    def load_inference(self, ref):
+        return "LOADED"
+
+    def load_diagnostic(self, ref):
+        return "LOADED"
+
+    def get(self, kind, ref):                    # channel_ablation reads the cache's manifest body
+        return SimpleNamespace(body={"batches_done": 1, "identity": {"run_size": 4}})
+
+    def path(self, kind, ref):
+        return Path("unused")
+
+
+def _prior_stub():
+    """The LoadedPrior shape with no GMM: fails open through every fingerprint check."""
+    return SimpleNamespace(prior=None, force_prior=None, id="prior", name="", fingerprint=None)
+
+
+def _experimental_obs(cfg, width=7):
+    """A LoadedObservation of a bench recording, as the loader returns one: install() is REAL, so it
+    writes T_obs, n_obs and chi_obs_freqs, clears the truth and sets the context on the config it is
+    given -- the writes infer_and_visualize and tsnpe_round make before their spend."""
+    from core.artifacts import LoadedObservation
+    body = {"T_obs_cell": 200.0, "n_obs": 200, "chi_obs_freqs": None, "forcing_vals": {},
+            "source": {"kind": "experimental"}}
+    return LoadedObservation(kind="observation", id="obs", name="", path=None,
+                             manifest=SimpleNamespace(body=body), digest="a" * 16,
+                             x_obs=torch.zeros(1, width), obs_data=torch.zeros(1, 200),
+                             t_dim=torch.zeros(1, 200), mode=cfg.observation_mode, width=width)
+
+
+# One leg per public entry: leg(case, monkeypatch, tmp_path) -> (the object the pin watches, the call).
+# "success" returns; "refusal" raises a ValueError before any spend (a Refusal from Tasks 5-8 on is a
+# ValueError too); "boom" raises _Injected after a write on the stage's working config.
+def _leg_generate_observations(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    cfg = _forced_cfg()                     # a real run: `cfg.n_obs = N_obs` is written before the solver
+    if case == "boom":
+        monkeypatch.setattr(orchestrator.pipeline, "gen_obs", _raise_injected)
+    monkeypatch.setattr(orchestrator, "_write_observation", lambda store, c, *a, **k: (_leak(c), "OBS")[1])
+    name = "taken" if case == "refusal" else ""
+    return cfg, lambda: orchestrator.generate_observations(cfg, name=name, fig_sink=_close,
+                                                           store=_EntryStore(case))
+
+
+def _leg_build_experiment_observation(case, monkeypatch, tmp_path):
+    import numpy as np
+    from core import orchestrator
+    from core.SBI.observations import RecordingSet
+    cfg = _nad_cfg(chi_mode=True)           # K = config.CHI_N_FREQS; the bench drives THREE probes
+    paths = []
+    for stem in ("passive", "driven_0", "driven_1", "driven_2"):
+        p = tmp_path / f"{stem}.npy"
+        np.save(p, np.zeros(50, dtype=np.float32))
+        paths.append(str(p))
+
+    def _builder(c, X_spont, forced, T_obs_s, F0_si):
+        c.set_observation_context(T_obs_s * c.get_unit_conversion_factor("s"), {})
+        if case == "boom":
+            _raise_injected()
+        z = torch.zeros(1, 50, dtype=c.hw.dtype)
+        return torch.zeros(1, 1, dtype=torch.float64), z, z
+
+    monkeypatch.setattr(orchestrator, "build_experiment_obs_chi", _builder)
+    monkeypatch.setattr(orchestrator, "_write_observation", lambda store, c, *a, **k: (_leak(c), "OBS")[1])
+    freqs = (5.0, None, 9.0) if case == "refusal" else (5.0, 7.0, 9.0)      # D9: a probe with no frequency
+    rec = RecordingSet(spont=paths[0], forced=tuple(zip(paths[1:], freqs)), T_obs_s=1.0, F0_si=1.0)
+    return cfg, lambda: orchestrator.build_experiment_observation(cfg, rec, fig_sink=_close,
+                                                                  store=_EntryStore(case))
+
+
+def _leg_build_prior(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    cfg = _nad_cfg()
+    monkeypatch.setattr(orchestrator.visualizers, "visualize_dist", lambda *a, **k: None)
+    if case == "refusal":
+        return cfg, lambda: orchestrator.build_prior(cfg, None, True, num_iterations=0,
+                                                     store=_EntryStore(case))
+    return cfg, lambda: orchestrator.build_prior(cfg, "p1", False, fig_sink=_close, store=_EntryStore(case))
+
+
+def _leg_build_posterior(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    cfg = _nad_cfg()
+    if case == "refusal":
+        return cfg, lambda: orchestrator.build_posterior(cfg, _prior_stub(), None, True, num_runs=0,
+                                                         store=_EntryStore(case))
+    return cfg, lambda: orchestrator.build_posterior(cfg, _prior_stub(), "post1", False,
+                                                     store=_EntryStore(case))
+
+
+def _leg_build_truncation_region(case, monkeypatch, tmp_path):
+    """No config at all (spec §2.2: it captures logs only), so this leg watches the OBSERVATION wrapper
+    it is handed, and its seam checks that the decorator handed the posterior wrapper through as is."""
+    from core import orchestrator
+    from core.SBI import reparam
+    T = reparam.build_inferred_bijection(_nad_cfg(), log_params=[])
+    x_obs = torch.zeros(1, 5)
+    obs = SimpleNamespace(x_obs=x_obs, digest="0" * 16 if case == "refusal" else mf.tensor_digest(x_obs),
+                          id="obs", name="")
+    post = SimpleNamespace(posterior=SimpleNamespace(T=T), latent=SimpleNamespace(prior=None),
+                           fingerprint=None, id="post", name="")
+
+    def _region(latent, x, **kw):
+        assert latent is post.latent, "a non-SimConfig first argument must pass through the decorator"
+        if case == "boom":
+            _raise_injected()
+        return "REGION"
+
+    monkeypatch.setattr(orchestrator.truncate, "region_from_posterior", _region)
+    return obs, lambda: orchestrator.build_truncation_region(post, obs, n_directions=1, level=0.999,
+                                                             t_scale_idx=9)
+
+
+def _leg_validate_calibration(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    cfg = _nad_cfg()
+    monkeypatch.setattr(orchestrator, "_calibration_prior", _body_done)
+    kw = {"n_cal": 0} if case == "refusal" else {}
+    return cfg, lambda: orchestrator.validate_calibration(cfg, _sim_post(), _prior_stub(), fig_sink=_close,
+                                                          store=_EntryStore(case), **kw)
+
+
+def _leg_infer_and_visualize(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    cfg = _nad_cfg()
+    obs = _experimental_obs(cfg)
+    post = SimpleNamespace(posterior=SimpleNamespace(x_obs_digest=None, truncation=None, T=None),
+                           manifest=SimpleNamespace(body={"mode": obs.mode,
+                                                          "conditioning": {"width": obs.width}}),
+                           id="post", name="")
+    kw = {"n_samples": 0} if case == "refusal" else {}
+    return cfg, lambda: orchestrator.infer_and_visualize(cfg, post, obs, fig_sink=_close,
+                                                         store=_EntryStore(case), **kw)
+
+
+def _leg_simulated_inference(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    from core.config import CELL_PATH
+    cfg = _nad_cfg()
+
+    def _gen(c, **k):
+        _leak(c)
+        if case == "boom":
+            _raise_injected()
+        return "OBS"
+
+    monkeypatch.setattr(orchestrator, "generate_observations", _gen)
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
+    kw = {"n_samples": 0} if case == "refusal" else {}
+    return cfg, lambda: orchestrator.simulated_inference(cfg, _sim_post(), 2.0,
+                                                         cell=str(CELL_PATH / "nadrowski" / "master_weak.txt"),
+                                                         store=_EntryStore(case), **kw)
+
+
+def _leg_experimental_inference(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    from core.SBI.observations import RecordingSet
+    cfg = _nad_cfg()
+
+    def _build(c, rec, **k):
+        _leak(c)
+        if case == "boom":
+            _raise_injected()
+        return "OBS"
+
+    monkeypatch.setattr(orchestrator, "build_experiment_observation", _build)
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
+    kw = {"n_samples": 0} if case == "refusal" else {}
+    rec = RecordingSet(spont="x.npy", T_obs_s=1.0)
+    return cfg, lambda: orchestrator.experimental_inference(cfg, _sim_post(), rec, store=_EntryStore(case),
+                                                            **kw)
+
+
+def _leg_tsnpe_round(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    cfg = _nad_cfg()
+    obs = _experimental_obs(cfg)
+
+    def _child(c, *a, **k):
+        _leak(c)
+        if case == "boom":
+            _raise_injected()
+        return "CHILD"
+
+    monkeypatch.setattr(orchestrator, "build_truncation_region", lambda *a, **k: "REGION")
+    monkeypatch.setattr(orchestrator, "build_posterior", _child)
+    kw = {"n_directions": 0} if case == "refusal" else {}
+    return cfg, lambda: orchestrator.tsnpe_round(cfg, _sim_post(), _prior_stub(), obs,
+                                                 store=_EntryStore(case), **kw)
+
+
+def _leg_sbc_repeats(case, monkeypatch, tmp_path):
+    from core import orchestrator
+    from core.diagnostics import sbc
+    cfg = _nad_cfg()
+    monkeypatch.setattr(orchestrator, "_calibration_prior", lambda *a, **k: (None, None, None))
+    monkeypatch.setattr(orchestrator, "_draw_calibration_set", _body_done)
+    kw = {"repeats": 0} if case == "refusal" else {}
+    return cfg, lambda: sbc.sbc_repeats(cfg, _sim_post(), _prior_stub(), fig_sink=_close,
+                                        store=_EntryStore(case), **kw)
+
+
+def _leg_identifiability_rotation(case, monkeypatch, tmp_path):
+    from core.diagnostics import identifiability
+    cfg = _nad_cfg()
+    names = list(cfg.params_dict) + list(cfg.rescale_params)
+    V = None if case == "refusal" else torch.eye(len(names), dtype=torch.float64).tolist()
+    body = {"mode": cfg.observation_mode, "conditioning": {},
+            "transform": {"V": V, "param_keys": names, "fisher_eigenvalues": None}}
+    post = SimpleNamespace(manifest=SimpleNamespace(body=body, config={"model": cfg.model}),
+                           id="post", name="")
+    return cfg, lambda: identifiability.identifiability_rotation(cfg, post, n_worst=1, top_n=2,
+                                                                 store=_EntryStore(case))
+
+
+def _leg_identifiability_laplace(case, monkeypatch, tmp_path):
+    from core.diagnostics import identifiability
+    cfg = _forced_cfg()                     # the ground truth is point 1
+    monkeypatch.setattr(identifiability, "_analyze_point", _body_done)
+    post = SimpleNamespace(posterior=SimpleNamespace(T=None), latent=None, id="post", name="")
+    n_points = 0 if case == "refusal" else 1
+    return cfg, lambda: identifiability.identifiability_laplace(cfg, post, n_points=n_points, m=4,
+                                                                m_noise=16, t_obs_s=2.0,
+                                                                store=_EntryStore(case))
+
+
+def _leg_identifiability_jacobian(case, monkeypatch, tmp_path):
+    from core.diagnostics import identifiability
+    cfg = _forced_cfg()
+    monkeypatch.setattr(identifiability, "_jacobian_features", _body_done)
+    m_noise = 0 if case == "refusal" else 16
+    return cfg, lambda: identifiability.identifiability_jacobian(cfg, m=4, m_noise=m_noise, t_obs_s=2.0,
+                                                                 store=_EntryStore(case))
+
+
+def _leg_channel_ablation(case, monkeypatch, tmp_path):
+    from core.diagnostics import ablation
+    from core.SBI import training_checkpoint
+    from core.SBI.statistics import SUMMARY_WIDTH
+    cfg = _nad_cfg()
+    net = SimpleNamespace(input_dim=SUMMARY_WIDTH + 1, forcing_dim=0, _buffers={})
+    monkeypatch.setattr(ablation, "_find_net", lambda est: net)
+    monkeypatch.setattr(training_checkpoint, "load_rows", lambda *a, **k: (torch.zeros(4, 7), None))
+    monkeypatch.setattr(ablation, "_sweep_channels", _body_done)
+    est = SimpleNamespace(embedding_net=SimpleNamespace(eval=lambda: None))
+    post = SimpleNamespace(manifest=SimpleNamespace(parents={"simulation": "d" * 16},
+                                                    body={"mode": cfg.observation_mode,
+                                                          "conditioning": {"width": 7}}),
+                           latent=SimpleNamespace(posterior_estimator=est), id="post", name="")
+    rows = 0 if case == "refusal" else 4
+    return cfg, lambda: ablation.channel_ablation(cfg, post, rows=rows, n_sweep=3, store=_EntryStore(case))
+
+
+_UNTOUCHED_LEGS = {
+    "generate_observations": _leg_generate_observations,
+    "build_experiment_observation": _leg_build_experiment_observation,
+    "build_prior": _leg_build_prior,
+    "build_posterior": _leg_build_posterior,
+    "build_truncation_region": _leg_build_truncation_region,
+    "validate_calibration": _leg_validate_calibration,
+    "infer_and_visualize": _leg_infer_and_visualize,
+    "simulated_inference": _leg_simulated_inference,
+    "experimental_inference": _leg_experimental_inference,
+    "tsnpe_round": _leg_tsnpe_round,
+    "sbc_repeats": _leg_sbc_repeats,
+    "identifiability_rotation": _leg_identifiability_rotation,
+    "identifiability_laplace": _leg_identifiability_laplace,
+    "identifiability_jacobian": _leg_identifiability_jacobian,
+    "channel_ablation": _leg_channel_ablation,
+}
+
+
+def test_the_fifteen_public_entries_carry_public_entry_and_nothing_else_does():
+    """V1 (spec §2.2). The private copy is kept by ONE decorator on exactly fifteen functions: the ten
+    stages and compositions of core/orchestrator.py and the five diagnostics. Read off the source
+    (every `@public_entry` in CODE_ROOTS and CODE_FILES), not off `__wrapped__`, which any
+    functools.wraps decorator sets: a public stage added without it hands its body the caller's config,
+    and a helper given it (`_write_observation`, `_draw_calibration_set`, `training_identity`, ...)
+    copies again inside a stage that already holds a copy. The parametrised pin below runs one leg per
+    name in this set, so the two cannot drift apart."""
+    import ast
+    repo = Path(__file__).resolve().parents[1]
+    found = set()
+    paths = [p for root in CODE_ROOTS for p in (repo / root).rglob("*.py")] + [repo / f for f in CODE_FILES]
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                    ast.unparse(d) == "public_entry" for d in node.decorator_list):
+                found.add((path.relative_to(repo).as_posix(), node.name))
+    want = {("core/orchestrator.py", n) for n in (
+        "generate_observations", "build_experiment_observation", "build_prior", "build_posterior",
+        "build_truncation_region", "validate_calibration", "infer_and_visualize",
+        "simulated_inference", "experimental_inference", "tsnpe_round")}
+    want |= {("core/diagnostics/sbc.py", "sbc_repeats"), ("core/diagnostics/ablation.py", "channel_ablation")}
+    want |= {("core/diagnostics/identifiability.py", n) for n in (
+        "identifiability_rotation", "identifiability_laplace", "identifiability_jacobian")}
+    assert found == want, f"missing {sorted(want - found)}; unexpected {sorted(found - want)}"
+    assert set(_UNTOUCHED_LEGS) == {name for _, name in want}, sorted(set(_UNTOUCHED_LEGS) ^ {n for _, n in want})
+
+
+@pytest.mark.parametrize("case", ("success", "refusal", "boom"))
+@pytest.mark.parametrize("entry", sorted(_UNTOUCHED_LEGS))
+def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, monkeypatch, tmp_path):
+    """V1 (spec §2.4, stage level). No public stage, composition or diagnostic writes on the config it
+    is handed, however the call ends. The window builds ONE config at Build/Load prior and used to let
+    every later run write onto it: a bench chi inference with three probes made the next simulated chi
+    inference simulate three, a refused inference left a cell's truth that the next amortized training
+    anchored its Fisher rotation on, and nothing ever cleared either.
+
+    Three endings per entry, because the decorator's copy has to hold on each: "success" returns;
+    "refusal" is the entry's own pre-spend refusal (a ValueError today, a Refusal from Tasks 5-8 on,
+    which is a ValueError); "boom" raises _Injected AFTER a write on the stage's working config -- the
+    stage's own write where it has one before a cheap seam (generate_observations' resolved length,
+    install's context, the chi builder's context), else _leak's at the first place the stage hands its
+    config on (the store, a composed stage's stub). Every leg is stubbed below its first write, so the
+    forty-five cases cost about two seconds, nearly all of it generate_observations' one real solve.
+
+    The window-level pin (a dispatched simulated inference leaves session.cfg equal to its snapshot)
+    needs the real-session fixture and lands with Task 15."""
+    watched, call = _UNTOUCHED_LEGS[entry](case, monkeypatch, tmp_path)
+    snap = snapshot_cfg(watched)
+    if case == "success":
+        assert call() is not None
+    elif case == "refusal":
+        with pytest.raises(ValueError):
+            call()
+    else:
+        with pytest.raises(_Injected):
+            call()
+    assert_cfg_unchanged(watched, snap)
