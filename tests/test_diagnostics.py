@@ -399,6 +399,16 @@ def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
     with pytest.raises(Refusal, match=r"chi\(omega\) mode") as e:
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, chi_k_fixed=2, fig_sink=r.sink)
     assert e.value.field == "chi_k_fixed" and "--chi-k-fixed" not in str(e.value), str(e.value)
+    # ...and in chi mode, a count outside 1..chi_k_pad is the same field's refusal, here -- not a bare
+    # ValueError from gen_training_data inside the first calibration draw, after store.create
+    chi_cfg = r.cfg.copy_for_run()
+    chi_cfg.chi_mode = True
+    for bad in (chi_cfg.chi_k_pad + 1, 0):
+        with pytest.raises(Refusal, match="fixed chi probe count must be between 1 and") as e:
+            sbc_repeats(chi_cfg, r.posterior, r.prior, repeats=1, n_cal=8, chi_k_fixed=bad,
+                        fig_sink=r.sink)
+        assert e.value.field == "chi_k_fixed" and "--chi-k-fixed" not in str(e.value), str(e.value)
+        assert f"got {bad}" in str(e.value), str(e.value)
     with pytest.raises(StoreError, match="already exists"):
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, fig_sink=r.sink, name="sbc_taken")
     with pytest.raises(ValueError, match="not the one this posterior was trained with"):

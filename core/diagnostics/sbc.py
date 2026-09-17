@@ -96,7 +96,8 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     :param n_cal: calibration datasets PER REPEAT. The KS test's power grows with it; below ~2000 a
                      mild marginal miscalibration does not surface reliably.
     :param chi_k_fixed: hold the chi probe count at this value instead of pooling over the training
-                     mixture. Refused outside chi mode; its range is gen_training_data's own check.
+                     mixture. Refused outside chi mode and outside 1..cfg.chi_k_pad, before the
+                     spend (gen_training_data keeps its own range check behind this one).
     :param seed: base seed. Repeat r runs inside ``seeded(seed + r, cfg.hw.device)``, which restores
                      the caller's RNG afterwards.
     :param fig_sink: (title, fig) -> None; the writer's sink saves the PNG and forwards to this one.
@@ -122,6 +123,15 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
         raise Refusal(
             f"The fixed chi probe count only means something in chi(omega) mode; this config is "
             f"{cfg.observation_mode.upper()}. Leave it unset, or point the run at a chi posterior.",
+            field="chi_k_fixed")
+    if chi_k_fixed is not None and not 1 <= int(chi_k_fixed) <= cfg.chi_k_pad:
+        # The range half, here and before the spend: gen_training_data keeps the same check as its
+        # second line of defence, but reached from here it fires inside the first calibration draw,
+        # after the diagnostic's directory was created.
+        raise Refusal(
+            f"The fixed chi probe count must be between 1 and the number of chi probe slots "
+            f"({cfg.chi_k_pad}); got {int(chi_k_fixed)}. A calibration stratum cannot ask for more "
+            f"probes than the network has slots, and 0 probes is an all-masked observation.",
             field="chi_k_fixed")
     orch._assert_prior_used_matches_posterior(posterior.posterior, prior.prior, "SBC")
 
