@@ -508,7 +508,20 @@ def test_the_run_buffer_is_per_thread_in_fact_not_only_in_name():
     a record or a warning raised from a second thread while a run is active on the main thread used to
     land in that run's buffer too. ``attach`` now records the attaching thread
     (``threading.get_ident()``), and both ``_RunLogHandler.emit`` and ``RunLog._showwarning`` check it
-    before appending -- a record from the main thread still lands; one from another thread does not."""
+    before appending -- a record from the main thread still lands; one from another thread does not,
+    though it must still reach whatever hook was installed before the buffer's own (here pytest's
+    recorder).
+
+    ``pytest.warns`` wraps the OUTSIDE of ``capture_run``, not the inside: entering ``pytest.warns``
+    resets ``warnings.showwarning`` to its own recorder (Lib/warnings.py, ``_pytest/recwarn.py``), so
+    nesting it INSIDE ``capture_run`` would tear out the buffer's tee before the other thread ever
+    warns, and the owner-thread check on ``_showwarning`` would go untested -- the ``active.lines``
+    assertion below would hold even with that check removed. Nested this way instead, ``pytest.warns``
+    passing proves the warning reached the previous hook (the tee forwarded it), and the ``lines``
+    assertion proves it was dropped from THIS buffer. A main-thread warning is checked too, so the
+    test cannot pass merely because the tee is missing altogether -- and the match pattern covers BOTH
+    messages, because ``WarningsChecker.__exit__`` re-``warn``s every recorded warning that does not
+    match, which would otherwise leak the main-thread one into the suite's warning summary."""
     import logging
     import threading
     import warnings
@@ -516,23 +529,27 @@ def test_the_run_buffer_is_per_thread_in_fact_not_only_in_name():
     from core import runs
 
     log = logging.getLogger("core.tests.runs_threading")
-    with runs.capture_run() as active:
-        other_done = threading.Event()
+    with pytest.warns(RuntimeWarning, match=r"from (another|the main) thread"):
+        with runs.capture_run() as active:
+            other_done = threading.Event()
 
-        def _other_thread():
-            log.info("from another thread")
-            warnings.warn("from another thread", RuntimeWarning)
-            other_done.set()
+            def _other_thread():
+                log.info("from another thread")
+                warnings.warn("from another thread", RuntimeWarning)
+                other_done.set()
 
-        with pytest.warns(RuntimeWarning, match="from another thread"):
             t = threading.Thread(target=_other_thread)
             t.start()
             t.join(timeout=5)
-        assert other_done.is_set(), "the other thread never finished"
-        assert not any("from another thread" in line for line in active.lines), active.lines
+            assert other_done.is_set(), "the other thread never finished"
+            assert not any("from another thread" in line for line in active.lines), active.lines
 
-        log.info("from the main thread")
-        assert any("from the main thread" in line for line in active.lines), active.lines
+            log.info("from the main thread")
+            assert any("info from the main thread" in line for line in active.lines), active.lines
+
+            warnings.warn("warning from the main thread", RuntimeWarning)
+            assert any("warning RuntimeWarning: warning from the main thread" in line
+                       for line in active.lines), active.lines
 
 
 def test_the_public_entry_decorator_passes_a_sentinel_through():
