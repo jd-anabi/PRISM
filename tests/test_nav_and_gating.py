@@ -2313,6 +2313,80 @@ def test_the_driven_branch_refuses_a_zero_drive_and_a_missing_recording(tmp_path
     assert sent["kwargs"]["provide_fig_sink"] is True and sent["kwargs"]["accept"] is None
 
 
+def test_the_chi_branch_refuses_a_blank_drive_amplitude_and_a_missing_probe_at_the_click(tmp_path):
+    """The chi page's boxes, at the click, each through _refusal with its own field and nothing
+    dispatched: the physical drive amplitude blank or not positive (require_positive; a blank used to
+    be a division by zero inside the worker), the passive recording blank or not there, zero probes,
+    a problem in the probe table (a row with no recording), and a probe recording that names no file.
+    When every box passes, the recording set carries the passive file, the (recording, frequency)
+    pairs, T_obs and F0 as typed."""
+    from core import orchestrator
+    from core.refusals import Refusal
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.install_config(_chi_cfg(k=2))
+    inf.session.posterior = _posterior_stub()
+    inf.session.inf_prior = _prior_stub()
+    panel = inf.infer_panel
+    sent, refused = {}, []
+    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    panel._refusal = lambda exc: refused.append(exc)
+    passive = tmp_path / "passive.npy"
+    passive.touch()
+    probes = [tmp_path / f"probe{i}.npy" for i in range(2)]
+    for p in probes:
+        p.touch()
+    panel.infer_mode.setCurrentIndex(1)
+    panel.chi_tobs.setText("2.0")
+    panel.chi_f0_si.setText("1.5")
+    panel.chi_spont.edit.setText(str(passive))
+    assert len(panel._chi_forced_fields) == 2
+    for i, row in enumerate(panel._chi_forced_fields):
+        row.path.edit.setText(str(probes[i]))
+        row.freq.setText(str(10.0 + i))
+
+    def click():
+        sent.clear()
+        refused.clear()
+        panel._infer()
+        assert len(refused) <= 1, refused
+        return refused[0] if refused else None
+
+    def refuse(edit, text, field, why):
+        keep = edit.text()
+        edit.setText(text)
+        e = click()
+        assert sent == {}, (text, sent)
+        assert isinstance(e, Refusal) and e.field == field and why in e.message, (text, e)
+        edit.setText(keep)
+
+    refuse(panel.chi_f0_si, "", "chi_f0_si", "is blank")
+    refuse(panel.chi_f0_si, "0", "chi_f0_si", "greater than 0")
+    refuse(panel.chi_f0_si, "-1", "chi_f0_si", "greater than 0")
+    refuse(panel.chi_spont.edit, "", "recording_spont", "is blank")
+    refuse(panel.chi_spont.edit, str(tmp_path / "gone.npy"), "recording_spont", "was not found")
+    refuse(panel._chi_forced_fields[1].path.edit, "", "recording_probe", "probe 2: no recording selected")
+    refuse(panel._chi_forced_fields[0].path.edit, str(tmp_path / "gone.npy"), "recording_probe",
+           "was not found")
+
+    # every box given: dispatched once, with the pairs as typed
+    assert click() is None
+    assert sent["fn"] is orchestrator.experimental_inference, sent
+    rec = sent["args"][2]
+    assert rec.spont == str(passive) and rec.T_obs_s == 2.0 and rec.F0_si == 1.5
+    assert rec.forced == ((str(probes[0]), 10.0), (str(probes[1]), 11.0)), rec.forced
+
+    # zero probes: refused by the probe recording's field, before the (empty) table is read
+    for row in list(panel._chi_forced_fields):
+        panel._remove_chi_probe(row)
+    e = click()
+    assert sent == {} and isinstance(e, Refusal) and e.field == "recording_probe", (sent, e)
+    assert "at least one forced probe" in e.message, e.message
+
+
 def test_the_simulated_branch_refuses_a_missing_or_misfitting_cell_at_the_click(tmp_path):
     """The simulated branch's Cell row, at the click, through _refusal with field "cell": no cell
     picked or a picked file that is not there (require_file), a picked cell the pick-time check found
