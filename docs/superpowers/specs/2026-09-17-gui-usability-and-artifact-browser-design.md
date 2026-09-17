@@ -46,10 +46,10 @@ on 2026-09-17. This is therefore the largest piece since the store itself.
 |---|---|
 | **B1** | The browser is a **fifth Home tile**, "Artifacts", a peer of the four sections — not a stage tab and **not a `BasePanel`**. A `BasePanel` enrols in `BasePanel._instances`, so every run anywhere would grey the browser's controls and you could not read a log while training. It is a plain screen with its own status line (`ModelBuilderScreen`'s pattern) and is added **by name** to `MainWindow._save_state`, because only panel-typed screens get that sweep for free. |
 | **B2** | All **seven** kinds are listed, one kind at a time, in a real sortable table. `Summary` grows so that a row needs no second manifest read. |
-| **B3** | `Summary.complete` keeps its meaning — "has a valid manifest". A separate, explicit **`finished`** answers "did the run finish", and a cache's row carries its own progress (`batches_done`, `rows`). No caller may confuse the two again. |
+| **B3** | `Summary.complete` keeps its meaning — "has a valid manifest". A separate, explicit **`finished`** answers "did the run finish", and a cache's row carries its own progress (`batches_done`, `batches_planned`, `rows`). No caller may confuse the two again. **Amended at planning** (§12 row 2): `batches_planned` was added, because the planned total lives only in the body's identity, and `rows` is written **only** at completion — `save` passes none — so an unfinished cache has no rows-so-far to show. |
 | **B4** | The detail view is **text only**: the manifest rendered, and the run's `log.txt`. No figure rendering, no open-the-folder button, no "use this" jump into a stage tab. |
 | **B5** | A note is **one line**, trimmed, at most **200 characters**; blank clears it. A note containing a newline or over the limit is **refused** (V2: no clamp, no silent default). |
-| **B6** | Delete is **one artifact at a time**. **No `force=True` in either front end** — so an artifact anything depends on cannot be deleted at all, and the browser therefore **refuses** it, naming every dependent (including a training cache that holds a prior only by fingerprint, with no recorded parent link), rather than offering a confirmation that could only fail. With no dependents it asks for confirmation, and an unfinished cache's confirmation names its rows-so-far. Note, delete and sweep are all **refused while any run is live**; reading never is. |
+| **B6** | Delete is **one artifact at a time**. **No `force=True` in either front end** — so an artifact anything depends on cannot be deleted at all, and the browser therefore **refuses** it, naming every dependent (including a training cache that holds a prior only by fingerprint, with no recorded parent link), rather than offering a confirmation that could only fail. With no dependents it asks for confirmation, and an unfinished cache's confirmation names its **committed batches** (§12 row 2: rows-so-far do not exist on disk mid-run, and writing them would mean touching the checkpoint commit protocol for a display nicety). Note, delete and sweep are all **refused while any run is live**; reading never is. |
 | **B7** | **Sweep** removes every incomplete directory of a kind in one action, through a new store call that can only ever remove a directory with no usable manifest. |
 | **B8** | Any store change made in the browser **refreshes the three `StorePicker`s**, the way saving a user model already refreshes the model combos. |
 | **B9** | The tool gets an **`artifacts`** subcommand family with modes `list`, `show`, `note`, `rm`, `sweep`, `summary`. It takes **no configuration flags** and reads `config.artifacts_root()`; heavy imports stay inside the handlers. An empty listing **exits 0**. |
@@ -58,7 +58,7 @@ on 2026-09-17. This is therefore the largest piece since the store itself.
 | **B12** | **Apply** shows a permanent line naming what the session holds, and **confirms** before discarding a non-empty session, defaulting to not applying. Silent when there is nothing to lose. |
 | **B13** | A posterior's amortization is in the **visible** picker text, and a **read-only line under each store picker** spells the selection out in full. |
 | **B14** | Both front ends install a **root-logger handler at start-up**. `core` records pass through untouched; every other logger's record is shown **once**, prefixed with the logger that said it. Because a handler exists from start-up, `logging.basicConfig` never fires. |
-| **B15** | The training rescue save runs inside a **deferred-cancel critical section**, so a pending cancel can no longer skip it; the window reports the **original exception** with the cancel noted. |
+| **B15** | The training rescue save runs inside a **deferred-cancel critical section**, so a pending cancel can no longer skip it; the window reports the **original exception** with the cancel noted. **Narrowed at planning** (§12 row 3): the section delivers that for the collision itself, but the residual race — a cancel raised while unwinding, outside the section — reports a cancel and emits the in-flight failure's traceback at error level, because a blind `__context__` walk would open the red box for a **recovered** OOM, which is a normal survivable path. |
 | **B16** | A newly added chi probe row's frequency box is **blank**, and the wordings for a blank frequency are unified across the tab and the planner. |
 | **B17** | `PaneCapture` wraps **both** pane channels into one ordered list, so a test sees what a user sees. |
 
@@ -87,7 +87,10 @@ constraint, not a style note.
 
 **Start-up work is the icon's known failure mode.** The 2026-09-11 taskbar-icon incident was caused by
 ~150 ms of layout between the native show and the first idle turn. The header's run slot is therefore
-built **empty** — no icon load, no timer, no store read at launch — and walkthrough row 1 is re-run.
+built **empty**: no icon load, no timer, nothing to lay out. The browser lists from its `showEvent`
+rather than its constructor, so it adds no store scan either — and note that start-up is not scan-free
+today, because each of the three `StorePicker`s calls `refresh()` in its own `__init__`. Walkthrough
+row 1 is re-run.
 
 ### 1.3 Out of scope, and who owns it
 
@@ -420,11 +423,14 @@ nothing" stay distinguishable).
 
 - A missing or ambiguous ref, a bad kind, a bad note: **1**, through the existing `refused:` rung, with
   the fix sentence from `core/tool/fields.py`.
+  The kind is a plain positional with NO argparse `choices=`, precisely so a bad one is a refusal at
+  1 and not argparse's usage error at 2; the seven kinds are listed in that argument's help text.
 - **An empty listing is 0**, with a line saying there is nothing there. A script must be able to tell
   "nothing on disk" from "you asked for something wrong"; exiting 1 on an empty store would make the
   two indistinguishable.
 - `sweep` with nothing to remove: **0**. `sweep` that failed to remove something: **1**, naming each.
-- A bug: the existing unhandled rung, **3** with a traceback.
+- A bug: the existing unhandled rung, which sets **1** with a traceback. There is no exit 3 anywhere
+  in the tool, and `main`'s own docstring says "1 a refusal or a bug"; no task touches the ladder.
 
 ## 5. The run summary and the lineage report (B10)
 
@@ -511,7 +517,9 @@ navigation stays free — you must be able to look at another tab while a twenty
 `core/gui/panels/inference/base.py`) naming those contents, refreshed from `refresh_local_gates`,
 which `InferenceScreen.refresh_gates` already calls on every panel after every stage.
 
-**The confirmation.** `_apply` asks `session_contents()` first. When it is non-empty it shows an
+**The confirmation.** `ConfigPanel._build_config` — the method holding the `new_draft` call; there is
+no `_apply` in that module, and it is NOT renamed, because six test sites call it — asks
+`session_contents()` first. When it is non-empty it shows an
 instance `QMessageBox` listing them, stating that **they stay on disk and can be selected again**,
 with No as the default; anything but Yes returns without touching the session. When it is empty,
 nothing is shown and today's behaviour is unchanged.
@@ -823,8 +831,8 @@ unchanged (its existing tests stand as the pin; one new test asserts the two cal
 `tests/test_nav_and_gating.py:662` (the seeded zero, §7.3); `tests/test_user_sbi.py:3782` and `:4006`
 (the rescue block's source and levels, §7.2); `tests/test_worker_dispatch.py:359` (extended for the
 second channel, §7.4); `tests/test_refusals.py:89` (`len(FIELDS)` 61 → 63) and its two table-closure
-tests; the four hand-rolled `log_batch` tests (§7.4); `tests/test_nav_and_gating.py`'s Home-tile and
-screen-count assertions; `tests/test_artifact_store.py`'s `Summary` assertions.
+tests; the four hand-rolled `log_batch` tests (§7.4);
+`tests/test_artifact_store.py`'s `Summary` assertions.
 
 ### 9.4 Count and budget
 
@@ -882,6 +890,32 @@ C1–C11 stand; piece 4 re-checks only what it changes, plus row 1.
 *(Filled in as the piece runs; every row states what was found, what was decided, and what it costs if
 the ruling is wrong. Empty at approval.)*
 
+Rows 1–12 were ruled at **planning** time, before any code was written, from 60 objections raised by the
+ten plan drafters against the interface contract and against this spec. The full text of each, with what
+it costs if the ruling is wrong, is in the ledger's rulings P1–P43
+(`.superpowers/sdd/2026-09-17-gui-usability-and-artifact-browser/progress.md`). Four outright factual
+errors in this spec were corrected **inline** rather than recorded as deviations: an invented exit code 3
+(the tool's unhandled rung sets 1), a claim that start-up performs no store read (the three pickers each
+list in their constructor), two test-change entries for assertions that do not exist, and a reference to
+`config_tab._apply`, a method of that name not existing.
+
 | # | spec section | deviation and why |
 |---|---|---|
-| — | — | *(none yet)* |
+| 1 | §2.4, §2.5 | `set_note`'s missing-artifact refusal carries `field="artifact"`, not `field="note"`: its sentence is about an artifact that is not there, so the note key would send the operator to the note box when the fix is to select an artifact that exists. `field="note"` is kept for `require_note`'s own refusals. `read_log`'s and `delete`'s missing-ref refusals take the same key (P1, P20) |
+| 2 | §2.1, §3.2, B3, B6 | `Summary` gains a **sixth** field, `batches_planned`, from the body's `identity["n_runs"]`, so `3/4 batches` can be rendered. `rows` is written only by `mark_complete` — `save` passes none — so an unfinished cache shows batches and no row count, and the delete confirmation names batches. The alternative was to make the checkpoint commit write rows per batch, which this piece will not do for a display nicety (P2) |
+| 3 | §7.2, B15 | The worker does **not** blindly walk `__context__`: a cancel raised inside a *recovered* `except` block — the OOM ladder logs there — carries that handled exception as its context, so a clean cancel after a survived OOM would open the red box for the OOM. The critical section already makes the real collision report the crash; the residual race reports a cancel plus the in-flight traceback at error level (P26) |
+| 4 | §3.2 | "Incomplete rows sort last" is made a property of the table — a `QTreeWidgetItem.__lt__` comparing `(not complete, then the column)` — rather than the accident it would otherwise be (an incomplete row's `created` is `""`, so it only trails while the sort is by date). `int(Qt.SortOrder)` also raises in PySide6 6.9.3; `.value` is the spelling (P12, P13) |
+| 5 | §3.3 | The stale-folder notice is **suppressed for the simulation kind**: `Manifest.dir_name` is the bare digest there and `write_simulation_manifest` writes wherever it is handed, so a folder name differing from the id is legitimate and the notice would fire on any hand-placed cache (P6) |
+| 6 | §3.3 | `read_log`'s "a run that said nothing" answer gets its own sentence, "the run recorded nothing" — piece 3's invariant is that silence is a record, and a blank pane under a Records heading reads as a bug (P18) |
+| 7 | §4.2 | The tool prints `,` where the GUI prints `·`: `core/tool`'s printed strings are ASCII-only today and this piece does not make the first exception (P10) |
+| 8 | §1.2, §4.2 | The tool cannot import the GUI's `columns_for` — that would pull PySide6 into `python -m core --help` — so it keeps its own column list and a **test** pins the two in step, with the GUI's spelling canonical. §1.2's "one formatter per fact" therefore holds per front end, not across them (P11) |
+| 9 | §3.1 | `KIND_DIRS` is re-exported from `core/artifacts/__init__.py` so the GUI makes no submodule import (P17) |
+| 10 | §3.4 | `core/gui/main_window.py`'s three **static** `QMessageBox` calls are converted to instance dialogs by the task that already edits that file: they are the exact form §1.2 says hangs the offscreen suite, sitting in a file this piece touches (P21) |
+| 11 | §5, §9.2 | Both front ends write their report with `newline="
+"`: `Path.write_text` defaults to translating `
+` to `
+
+` on Windows, which would have made the "same bytes" claim quietly false (P23) |
+| 12 | §6.3 | The picker's tooltip adopts `narrowed (TSNPE)` too, rather than keeping `NON-AMORTIZED (TSNPE)` beside the new item text — one fact, one wording (P25) |
+| 13 | §1.2 | "the GUI's own formatter shared between the table and the pickers' line" does not hold: the table needs a per-kind tuple and the picker one line, so the GUI has two formatters (`artifact_table.cells_for` and `artifact_picker._summary_line`). What §1.2 actually protects — that no two surfaces disagree about whether a cache is finished — holds, because both read the same `Summary` fields (P44) |
+| 14 | §9.2 | The table widget's own tests (the pure `columns_for`/`cells_for` cases and the widget cases) live in `tests/test_worker_dispatch.py`, beside the other widget tests, because the browser's suite does not exist yet at that task. `tests/test_artifact_browser.py` — the eighteenth suite — is created by the screen task and holds the screen's tests (P45) |
