@@ -98,6 +98,15 @@ Every task's requirements implicitly include this section.
   `redirect_streams` swaps `sys.stdout`/`sys.stderr` process-wide.
 - The science guardrails are `PRISM_HANDOFF.md` §11.6 (TSNPE) and the traps in §5.
 
+**Line numbers move.**
+- Every task re-derives its line numbers from the file as it reads it, because an earlier task in the
+  same file has usually moved them. Every number in a Files block or a step was correct against the
+  tree at `6fc399f` and is a hint, not an address.
+- The QUOTED text in a step is the anchor, never the bare number. Find the quoted text; edit what it
+  names; ignore the number if the two disagree.
+- If the quoted text is not found, re-read the file and say so in the task report rather than guessing
+  at the line the step meant.
+
 **Git**
 - Work directly on the local `main` branch. No feature branches, no worktrees.
 - One commit per task, never amended. Subjects are SHORT: one line, a brief body only when the subject
@@ -150,9 +159,9 @@ plan can be corrected rather than quietly diverged from. The rulings most likely
  T9  the screen, registered, listing        ── T3 T8         │
  T10 the detail pane + Save                 ── T4 T6 T9      │
  T11 note / delete / sweep / picker refresh ── T2 T5 T7 T9   │
- T12 the lineage report action              ── T6 T10        │
- T13 tool: artifacts list / show            ── T3 T4 T6      │
- T14 tool: note / rm / sweep / summary      ── T2 T5 T6 T13  │
+ T12 the lineage report action           ── T6 T7 T10 T11    │
+ T13 tool: artifacts list / show            ── T3 T4 T6 T9   │
+ T14 tool: note / rm / sweep / summary   ── T2 T5 T6 T9 T13  │
  T15 RUN_STATE + the shell's banner ────────────────────────┤
  T16 the tile and tab markers               ── T15           │
  T17 session_contents + the Config line ────────────────────┤
@@ -173,22 +182,36 @@ line number that another task may have moved):
 | file | tasks |
 |---|---|
 | `core/artifacts/store.py` | T2, T3, T4, T5, T24 |
-| `tests/test_artifact_store.py` | T3, T4, T5, T6, T24 |
-| `tests/_fixtures.py` | T1, T9 |
+| `core/artifacts/__init__.py` | T3, T6 |
+| `core/gui/design.py` | T8, T15 |
 | `core/gui/main_window.py` | T9, T11, T15, T16, T25 (T25 owns the CLASS docstring; no earlier task edits it) |
 | `core/gui/panels/base_panel.py` | T7, T15, T25 (only T25 edits the stale counts) |
+| `core/gui/panels/inference/config_tab.py` | T17, T18 |
+| `core/gui/screens/artifact_screen.py` (new) | T9, T10, T11, T12 |
+| `core/gui/screens/home_screen.py` | T9, T16 |
+| `core/gui/screens/inference_screen.py` | T16, T17, T18 (T18 owns its module docstring) |
 | `core/gui/screens/nav_shell.py` | T15, T16 |
-| `core/gui/screens/inference_screen.py` | T17, T18 (T18 owns its module docstring) |
-| `core/gui/widgets/artifact_picker.py` | T19 |
-| `tests/test_artifact_browser.py` (new) | T9, T10, T11, T12 |
-| `tests/test_nav_and_gating.py` | T9, T15, T16, T17, T18, T19, T23, T25 |
+| `core/tool/__init__.py` | T13, T20 |
 | `core/tool/browse.py` (new) | T13, T14 |
-| `tests/test_tool.py` | T13, T14, T20 |
+| `tests/_fixtures.py` | T1, T9 |
+| `tests/test_artifact_browser.py` (new) | T9, T10, T11, T12 |
+| `tests/test_artifact_store.py` | T2, T3, T4, T5, T6, T24 |
+| `tests/test_nav_and_gating.py` | T1, T2, T15, T16, T17, T18, T19, T23, T25 |
 | `tests/test_refusals.py` | T2, T20 |
-| `core/gui/streams.py` | T21 |
-| `core/runs.py` | T21 |
-| `tests/test_user_sbi.py` | T21, T22 |
-| `core/gui/design.py` | T8 |
+| `tests/test_tool.py` | T13, T14, T20 |
+| `tests/test_user_sbi.py` | T1, T22 |
+| `tests/test_worker_dispatch.py` | T1, T7, T8, T9, T20, T21, T22 |
+
+Every other file in the piece is touched by exactly one task: `core/refusals.py`, `core/gui/fields.py`
+and `core/tool/fields.py` (T2), `core/artifacts/report.py` (T6), `core/gui/widgets/refusal_box.py`
+(T7), `core/gui/widgets/artifact_table.py` (T8), `core/gui/screens/section_screen.py` (T16),
+`PRISM_HANDOFF.md` (T18), `tests/conftest.py` (T11 — Q10 left its one sentence to that task alone),
+`core/gui/widgets/artifact_picker.py` and the three inference picker tabs
+(T19), `core/logging_root.py`, `core/gui/app.py` and `tests/test_user_models.py` (T20), `core/runs.py`,
+`core/gui/streams.py` and `core/SBI/training_checkpoint.py` (T21), `core/SBI/pipeline.py` and
+`core/gui/worker.py` (T22), `core/gui/widgets/labeled_inputs.py`, `core/gui/panels/inference/rows.py`
+and `core/gui/panels/inference/infer_tab.py` (T23), `core/gui/panels/inference/base.py` (T25), and the
+documents (T26).
 
 ---
 
@@ -875,7 +898,7 @@ git commit -m "refusals: the artifact and note field keys, the note rule, both t
 - Modify: `core/artifacts/store.py:60-80` (the `Summary` dataclass: one sentence on the `complete` comment, six new keyword fields after `parents`)
 - Modify: `core/artifacts/store.py:338-350` (`ArtifactStore.list` fills them)
 - Modify: `core/artifacts/__init__.py:5-8` (one name added to the `.store` re-export list: `KIND_DIRS`)
-- Test: `tests/test_artifact_store.py` — one new helper inserted at `:149` (between `_cal_body` at `:147-148` and `_make` at `:151`), the existing `bodies = {...}` literal at `:161-171` replaced by a call to it, and four new tests appended at the end of the file (after the last line, `assert "setLevel" not in src`, which the Read tool numbers `3239`; the file is CRLF — keep it that way)
+- Test: `tests/test_artifact_store.py` — one new helper inserted at `:149` (between `_cal_body` at `:147-148` and `_make` at `:151`), the existing `bodies = {...}` literal at `:161-171` replaced by a call to it, and four new tests appended at the end of the file (after the last line, `assert "setLevel" not in src`, which the Read tool numbers `3238`; the file is CRLF — keep it that way)
 
 **Interfaces:**
 - Consumes: nothing from an earlier piece-4 task. The store exactly as it stands: `ArtifactStore._entries(kind) -> list[tuple[Path, Manifest | None, str | None]]`, `ArtifactStore.list(kind) -> list[Summary]`, `core.artifacts.store.write_simulation_manifest(path, identity, *, parents=None, inputs=None, hw=None, batches_done=0, complete=False, rows=None, V=None) -> Manifest`, and `core.SBI.training_checkpoint`'s `create / save / mark_complete / resolve_dir / identity_digest`.
@@ -892,7 +915,7 @@ git commit -m "refusals: the artifact and note field keys, the note rule, both t
 
 **Why this task exists:** `ArtifactStore.list` reads every manifest and then throws almost all of it away: a row carries `mode`, `width`, `amortized` and `parents` and nothing else, so a browser row would have to `get()` the manifest a second time to show a cache's progress or a diagnostic's variant (spec §2.1, **B2**: "`Summary` grows so that a row needs no second manifest read"). Worse, `Summary.complete` is the only thing a caller can ask, and for the simulation cache it does **not** mean what it sounds like: `training_checkpoint.create` writes the manifest *before the first batch is simulated*, so a cache is `complete=True` from batch zero — the trap `docs/STATE.md` records as "`Summary.complete` for simulations means only 'has a manifest'". **B3** settles it: `complete` keeps its meaning and a separate, explicit `finished` answers "did the run finish".
 
-`complete` is deliberately **not** redefined, because it is load-bearing in three places and all three want today's meaning: `core/gui/widgets/artifact_picker.py:140-141` (`StorePicker.refresh` does `if not s.complete: continue`, i.e. "only offer rows that have a manifest to load"), `core/artifacts/store.py:349` (`list`'s secondary sort, `rows.sort(key=lambda s: not s.complete)`, puts manifest-less directories last), and the store suite, which asserts on it in at least four places (`tests/test_artifact_store.py:175`, `:246`, `:250`, `:400`, `:767`). Redefining it would change all three for the sake of one word; adding the honest question beside it costs nothing.
+`complete` is deliberately **not** redefined, because it is load-bearing in three places and all three want today's meaning: `core/gui/widgets/artifact_picker.py:139-140` (`StorePicker.refresh` does `if not s.complete: continue`, i.e. "only offer rows that have a manifest to load"), `core/artifacts/store.py:349` (`list`'s secondary sort, `rows.sort(key=lambda s: not s.complete)`, puts manifest-less directories last), and the store suite, which asserts on it in at least four places (`tests/test_artifact_store.py:175`, `:246`, `:250`, `:400`, `:767`). Redefining it would change all three for the sake of one word; adding the honest question beside it costs nothing.
 
 **The sixth field, and why `rows` is not enough (P2).** `batches_planned` is the only one of the six
 whose value a row could not otherwise reach: the planned total lives **only** inside the cache's own
@@ -1224,11 +1247,12 @@ git commit -m "store: a listing row carries dir_name, finished and a cache's pro
 
 **Files:**
 - Modify: `core/artifacts/store.py:366-370` — insert `read_log` after `path` and before the `# ── create / rename / delete ──` banner at `:372`
+- Modify: `core/artifacts/store.py:299-301` — `ArtifactWriter._commit`'s `log.txt` write gains an explicit `newline="\n"` (Q5; the same rule P23 already made for the report)
 - Test: `tests/test_artifact_store.py` — two tests appended at the end of the file
 
 **Interfaces:**
-- Consumes: `core.artifacts.store.LOG_FILE` (`:35`), `KIND_DIRS` (`:29-31`), `ArtifactStore._find(kind, ref)` (`:352-357`), and `ArtifactWriter._commit`'s existing write of that file (`:296-301`). Independent of Task 3 — the two touch different lines and can land in either order.
-  - Also `core.refusals.FIELDS["artifact"]` and its two front-end table entries, from **Task 2** (spec §2.5): `read_log`'s two refusals carry `field="artifact"` (P1), and `tests/test_refusals.py:652` AST-scans every `field="…"` literal under `core/` against the registry, so Task 2 must land first. Step 4 runs that test as the proof.
+- Consumes: `core.artifacts.store.LOG_FILE` (`:35`), `KIND_DIRS` (`:29-31`), `ArtifactStore._find(kind, ref)` (`:352-357`), and `ArtifactWriter._commit`'s existing write of that file (`:294-301`), which this task also edits (Step 4). Independent of Task 3 — the two touch different lines and can land in either order.
+  - Also `core.refusals.FIELDS["artifact"]` and its two front-end table entries, from **Task 2** (spec §2.5): `read_log`'s two refusals carry `field="artifact"` (P1), and `tests/test_refusals.py:652` AST-scans every `field="…"` literal under `core/` against the registry, so Task 2 must land first. Step 5 runs that test as the proof.
 - Produces: `ArtifactStore.read_log(self, kind: str, ref: str, *, max_bytes: "int | None" = None) -> "tuple[str | None, bool]"`, returning `(text, truncated)`, with `text is None` meaning "no file at all". Used by the browser's detail pane (`read_log(kind, id, max_bytes=1 << 20)`), by `artifacts show` and by the GUI's Save.
   - Its own refusals, both `StoreError(..., field="artifact")`: an unknown kind, and a ref that names no complete artifact. It resolves with `_find` rather than through `path()` for exactly that reason — `path()`'s refusal carries no field key, and an inherited field-less refusal would leave both front ends with nothing to name (P1).
 
@@ -1297,7 +1321,9 @@ def test_read_log_returns_the_tail_over_max_bytes(store):
     with runs.capture_run():
         w = _make(store, "calibration", name="long")
     body = "head\n" + "x" * 40 + "\ntail\n"
-    (w.dir / st.LOG_FILE).write_text(body, encoding="utf-8")
+    # newline="\n" so the byte offsets below are the ones this test means: write_text's default
+    # newline=None would put CRLF on disk and every max_bytes leg would be cutting different bytes.
+    (w.dir / st.LOG_FILE).write_text(body, encoding="utf-8", newline="\n")
     size = (w.dir / st.LOG_FILE).stat().st_size
     assert store.read_log("calibration", w.id) == (body, False)
     assert store.read_log("calibration", w.id, max_bytes=size) == (body, False)
@@ -1308,6 +1334,11 @@ def test_read_log_returns_the_tail_over_max_bytes(store):
     # A tail cut through a multi-byte character is replaced, never raised: the pane must still render
     (w.dir / st.LOG_FILE).write_bytes("a\u00b5".encode("utf-8"))        # b'a\xc2\xb5'
     assert store.read_log("calibration", w.id, max_bytes=1) == ("\ufffd", True)
+    # A file an older build wrote is CRLF on disk (write_text's default newline=None on Windows).
+    # It reads back as LF, so one newline convention reaches the pane, the report and both front
+    # ends whoever wrote the file.
+    (w.dir / st.LOG_FILE).write_bytes(b"head\r\nmid\r\ntail\r\n")
+    assert store.read_log("calibration", w.id) == ("head\nmid\ntail\n", False)
 ```
 
 - [ ] **Step 2: Run them and watch them fail**
@@ -1333,6 +1364,11 @@ In `core/artifacts/store.py`, insert this immediately after `path` (which ends a
         With ``max_bytes`` the TAIL is returned and ``truncated`` is True -- the end is where the
         failure is -- and its first line may be a partial one.
 
+        Newlines come back as LF. ``_commit`` writes the file with ``newline="\\n"``, but a log.txt an
+        OLDER build wrote went through ``write_text``'s default ``newline=None`` and is CRLF on
+        Windows; normalising here means one convention reaches the pane, the saved report and both
+        front ends whoever wrote the file.
+
         THE one place that joins ``LOG_FILE``, so "is there a log, and what does it say" is answered
         once and the cache's absence is explained here rather than in each front end (piece 4, B4).
 
@@ -1357,16 +1393,42 @@ In `core/artifacts/store.py`, insert this immediately after `path` (which ends a
             data = data[len(data) - max_bytes:]
         # errors="replace" is the identity over a whole, valid file; it matters only for a tail cut
         # in the middle of a multi-byte character, which must render rather than raise.
-        return data.decode("utf-8", errors="replace"), truncated
+        text = data.decode("utf-8", errors="replace")
+        return text.replace("\r\n", "\n"), truncated
 ```
 
-- [ ] **Step 4: Run the task's own tests, and the registry's closure**
+- [ ] **Step 4: Give `_commit`'s `log.txt` write an explicit `newline="\n"`**
+
+The other half of the same fix: today the write goes through `Path.write_text`'s default
+`newline=None`, which turns every `\n` into `\r\n` on Windows, so the file piece 3's format test
+describes as `HH:MM:SS level message\n` is CRLF on disk. In `core/artifacts/store.py`, inside
+`ArtifactWriter._commit`, replace this line (`:301`, the last of the log-write block that begins with
+the comment at `:294`):
+
+```python
+            (self.dir / LOG_FILE).write_text(run_log.text(), encoding="utf-8")
+```
+
+with:
+
+```python
+            # newline="\n" explicitly: write_text's default would make every record CRLF on Windows,
+            # and this file is read back by read_log, shown in the browser's detail pane and saved
+            # verbatim to a report whose bytes spec §5 says both front ends must agree on.
+            (self.dir / LOG_FILE).write_text(run_log.text(), encoding="utf-8", newline="\n")
+```
+
+Nothing else in the block moves: `run_log = runs.current_run_log()` and its `if run_log is not None:`
+guard stay exactly as they are, and this is still step 2 of the three-step commit protocol — no record
+is logged between the steps.
+
+- [ ] **Step 5: Run the task's own tests, and the registry's closure**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest tests/test_artifact_store.py "tests/test_refusals.py::test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered" -q`
 
-Expected: PASS. The second node id is the proof that the two new `field="artifact"` literals are a registered key with an entry in both front-end tables: it AST-scans every `field="…"` literal under `CODE_ROOTS` against `core.refusals.FIELDS`. If it fails naming `'artifact'`, Task 2 has not landed yet — stop and land that one first rather than dropping the field key here.
+Expected: PASS. Run the whole store suite, not just the two new tests: Step 4 changes the bytes of every `log.txt` the suite writes, and piece 3's own format test (`test_each_artifact_gets_the_log_of_the_entry_that_wrote_it`, `:3032`) reads that file. The second node id is the proof that the two new `field="artifact"` literals are a registered key with an entry in both front-end tables: it AST-scans every `field="…"` literal under `CODE_ROOTS` against `core.refusals.FIELDS`. If it fails naming `'artifact'`, Task 2 has not landed yet — stop and land that one first rather than dropping the field key here.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add core/artifacts/store.py tests/test_artifact_store.py
@@ -1386,7 +1448,7 @@ git commit -m "store: read_log answers whether an artifact has a run log, and wh
 - Consumes:
   - `core.refusals.FIELDS` carrying `Field("artifact", "the artifact", None)`, `core/gui/fields.py::CONTROL["artifact"] = "Select an artifact in the list on the Artifacts screen."` and `core/tool/fields.py::FLAG["artifact"] = None` — all three from **Task 2**, which adds the two new field keys (spec §2.5). Every refusal this task raises or edits carries that key, and `tests/test_refusals.py:652` (`test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered`) **AST-scans every such literal under `core/` against the registry**, so Task 2 must land first (Task 2's `set_note` and Task 4's `read_log` already raise the key, so it is not this task's first use). Step 6 below runs that test as the proof.
   - `ArtifactStore._entries(kind)` (`:316-336`), `_rmtree_retry(path, retries=3, backoff_s=0.1)` (`:180-192`), `KIND_DIRS` (`:29-31`), `ArtifactStore.kind_dir(kind)` (`:310-313`), `ArtifactStore.delete(kind, ref, *, force=False)` (`:478-488`), `ArtifactStore.dependents(kind, id_)` (`:451-476`).
-  - `Summary.dir_name` from Task 3 (the tests read `r.dir_name` off `list`). If Task 3 has not landed, use `r.path.name` in those two assertions instead. The `delete` test also uses Task 3's `_bodies()` helper for its posterior body; inline the six-line literal from `test_delete_refuses_naming_dependents_and_force_deletes` (`tests/test_artifact_store.py:279-280`) if it has not.
+  - `Summary.dir_name` from Task 3 (the tests read `r.dir_name` off `list`) and Task 3's `_bodies()` helper, which the `delete` test uses for its posterior body. Task 3 is a declared dependency (the graph's `T5 ── T3` edge): use `r.dir_name` and `_bodies()`, and if either is missing, Task 3 has not landed — stop and land it first rather than working round it.
 - Produces:
   - `ArtifactStore.remove_incomplete(self, kind: str, dir_name: str) -> Path`
   - `ArtifactStore.sweep_incomplete(self, kind: "str | None" = None) -> "tuple[list, list]"` returning `(removed, failed)` = `([(kind, dir_name)], [(kind, dir_name, reason)])`
@@ -1682,7 +1744,10 @@ git commit -m "store: remove_incomplete and sweep_incomplete, the complement of 
   `ArtifactStore.get(kind, ref) -> Manifest` (`store.py:358`), `ArtifactStore.kind_dir(kind) -> Path`
   (`store.py:310`), `ArtifactStore.StoreError` (`store.py:42`) and the store's parent table
   `store._PARENT_KEYS` (`store.py:37-39`). It does **not** touch `Summary`, `read_log` or anything
-  else piece 4 adds, so it can be built before or after them.
+  else piece 4 adds; the graph's `T6 ── T3` edge is file order only — Task 3 appends to
+  `tests/test_artifact_store.py` and rewrites the `from .store import (...)` line in
+  `core/artifacts/__init__.py` ahead of this task, so append after what it wrote and re-read both
+  files rather than trusting a line number quoted here.
 - Produces:
   - `core.artifacts.report.render_manifest(m) -> str` — also `from core.artifacts import render_manifest`
   - `core.artifacts.report.render_lineage(store, kind: str, ref: str) -> str` — also re-exported
@@ -2131,8 +2196,7 @@ git commit -m "artifacts: render a manifest and a lineage report"
 - Modify: `core/gui/panels/base_panel.py:19` (one new import line, inserted after it)
 - Modify: `core/gui/panels/base_panel.py:384-407` (`BasePanel._refusal` — its body only; the signature
   and the log-pane line stay byte-identical)
-- Test: `tests/test_worker_dispatch.py` (append one test after line 430, i.e. after
-  `test_on_error_routes_a_refusal_to_the_yellow_box`)
+- Test: `tests/test_worker_dispatch.py` (append one test at the end of the file)
 
 This task touches `base_panel.py` for the refusal-box extraction and nothing else. The file's stale
 "Nine of these exist" / "8 of the 9" / "nine independent splitters" sentences (spec §8.2) are **not**
@@ -2162,10 +2226,10 @@ than two lookalikes. That extraction is the only change to `BasePanel`'s refusal
 
 - [ ] **Step 1: Write the failing test**
 
-Append this to the end of `tests/test_worker_dispatch.py` (after
-`test_on_error_routes_a_refusal_to_the_yellow_box`, which ends at line 429). `BasePanel` is already
-imported at the top of that file (line 32), and `monkeypatch` is a pytest fixture the file already
-uses (line 353).
+Append this at the end of `tests/test_worker_dispatch.py` — the end of the file, after whatever
+Task 1 and Task 8 have already put there. `BasePanel` is already imported at the top of that file
+(line 32 before Task 8 adds its three import lines), and `monkeypatch` is a pytest fixture the file
+already uses.
 
 ```python
 def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
@@ -2484,7 +2548,7 @@ def test_columns_for_names_all_seven_kinds_after_name_and_created():
     assert set(at._EXTRA_COLUMNS) == set(KIND_DIRS), "a kind has no column list (or has a stale one)"
     assert columns_for("prior") == ("Name", "Created", "Note")
     assert columns_for("simulation") == ("Name", "Created", "Progress", "Finished", "Note")
-    assert columns_for("posterior") == ("Name", "Created", "Mode", "Width", "Amortization", "Note")
+    assert columns_for("posterior") == ("Name", "Created", "Mode", "Width", "Amortized", "Note")
     assert columns_for("observation") == ("Name", "Created", "Mode", "Width", "Note")
     assert columns_for("calibration") == ("Name", "Created", "Note")
     assert columns_for("inference") == ("Name", "Created", "Note")
@@ -2516,7 +2580,7 @@ def test_cells_for_renders_each_kind_from_the_summary_alone():
     # ablation records variant=None deliberately (core/diagnostics/ablation.py:206): blank, not "None"
     assert cells_for("diagnostic", _row("diagnostic", variant=None))[2] == ""
     # an observation carries no amortization, so it gets no such column at all
-    assert "Amortization" not in columns_for("observation")
+    assert "Amortized" not in columns_for("observation")
 
 
 def test_a_caches_progress_and_whether_it_finished_come_apart():
@@ -2624,7 +2688,7 @@ _LEADING = ("Name", "Created")
 _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
     "prior": (),
     "simulation": ("Progress", "Finished"),
-    "posterior": ("Mode", "Width", "Amortization"),
+    "posterior": ("Mode", "Width", "Amortized"),
     "observation": ("Mode", "Width"),
     "calibration": (),
     "inference": (),
@@ -2833,7 +2897,7 @@ def test_the_sort_state_round_trips_and_a_narrower_kind_falls_back():
     stores ints and a Qt enum does not survive the round trip. Plain both ways, and not as a
     convenience: `int(Qt.SortOrder)` raises `TypeError` in PySide6 6.9.3, so the order is read as
     `header().sortIndicatorOrder().value` inside the widget and no caller ever holds a Qt enum. The
-    kinds have different widths, so a sort on the posterior's "Amortization" column cannot survive a
+    kinds have different widths, so a sort on the posterior's "Amortized" column cannot survive a
     switch to the prior kind: it falls back to the default rather than to column 0, which would
     quietly re-sort by Name -- neither the order the store hands back nor one the user asked for."""
     qt_app()
@@ -2855,7 +2919,7 @@ def test_the_sort_state_round_trips_and_a_narrower_kind_falls_back():
     table.apply_sort_state("1", "0")                   # what a QSettings round trip hands back
     assert table.sort_state() == (1, 0)
 
-    table.apply_sort_state(4, 0)                       # by Amortization: posterior-only, column 4
+    table.apply_sort_state(4, 0)                       # by Amortized: posterior-only, column 4
     assert table.sort_state() == (4, 0)
     table.set_rows("posterior", posteriors)
     assert table.sort_state() == (4, 0), "a refill must keep the sort the user chose"
@@ -3162,8 +3226,10 @@ git commit -m "gui: the artifact table and its stylesheet"
   QSettings WRITE site" sentences): Task 25 owns that whole docstring, runs last, and rewrites it
   once. This task touches the five registration points, the module docstring and the prose comments
   that cite a moved line, and nothing else in the file.
-- Modify: `tests/conftest.py:174` and `tests/test_worker_dispatch.py:338` (both docstrings cite
-  `main_window.py:231`, a line this task moves)
+- Modify: `tests/test_worker_dispatch.py:338` (a docstring citing `main_window.py:231`, a line this
+  task moves). **Only that one.** `tests/conftest.py:174` cites the same line, and Task 11 rewrites
+  that sentence — deleting the number rather than re-pointing it — so this task leaves the conftest
+  alone and does not `git add` it (Q10).
 - Test: `tests/test_artifact_browser.py`
 
 **Interfaces:**
@@ -3193,11 +3259,17 @@ git commit -m "gui: the artifact table and its stylesheet"
   `core/gui/screens/artifact_screen.py::ArtifactScreen(store=None, parent=None)` with
   `store_changed = Signal()`, `refresh(self) -> None`, `kind(self) -> str`,
   `save_settings(self, qs) -> None`, `restore_settings(self, qs) -> None`,
-  `_resolved_store(self)`, `_set_status(self, text: str, error: bool = False) -> None`, and the
-  widgets `kind_combo`, `table`, `status`, `split` (a horizontal `QSplitter` holding the table as its
-  only child, so Task 10's detail pane is one `addWidget`).
+  `_resolved_store(self)`, `_set_status(self, text: str, error: bool = False) -> None`,
+  `_apply_sort(self, kind: str) -> None` and the `_sort` attribute it reads (the remembered
+  `(column, order)`, both plain ints — Task 10 re-quotes `refresh`, which calls `_apply_sort`), and
+  the widgets `kind_combo`, `table`, `status`, `split` (a horizontal `QSplitter` holding the table as
+  its only child, so Task 10's detail pane is one `addWidget`).
 - Produces, in `core/gui/main_window.py`: `MainWindow.artifact_screen`,
-  `MainWindow._refresh_store_pickers(self) -> None`, and `_section_index["Artifacts"]`.
+  `MainWindow._refresh_store_pickers(self) -> None`, and `_section_index["Artifacts"]`. **This task
+  is the only one that defines `_refresh_store_pickers` and the only one that connects
+  `artifact_screen.store_changed` to it** (Q1): Task 11 calls the method from its own test and adds
+  neither (one method defined twice in one class, and one signal connected twice, is what that would
+  otherwise mean).
 - Produces, in `tests/_fixtures.py`: `build_browse_store(root) -> dict` and
   `artifact_screen(store) -> ArtifactScreen`.
 
@@ -3210,7 +3282,7 @@ whatever (spec §1). **B1** puts the browser on a fifth Home tile as a plain `QW
 so a browser built on one would grey out the moment a training started and you could not read the log
 of the thing you were waiting for. **B2** lists all seven kinds, one at a time, in a real sortable
 table, and §3.2 requires the one distinction `StorePicker.refresh` throws away: it swallows the
-exception (`artifact_picker.py:136-138`) so "there is nothing here" and "I could not look" are the
+exception (`artifact_picker.py:135-137`) so "there is nothing here" and "I could not look" are the
 same picture.
 
 - [ ] **Step 1: Add the two fixtures**
@@ -3235,7 +3307,11 @@ def build_browse_store(root):
     ``(unnamed <id>)`` form. It is written at 3 of 4 batches and NOT complete, so its row carries real
     progress and ``finished`` is False while ``complete`` is True -- B3's distinction, on disk. The 4
     is the identity's ``n_runs``, which is where ``Summary.batches_planned`` comes from, so "3/4" on
-    the row is read off the manifest and not assembled by the table.
+    the row is read off the manifest and not assembled by the table. It is written with NO ``rows``,
+    because that is the only state the real writer can be in mid-run: ``training_checkpoint.save``
+    passes none and only ``mark_complete`` records them (P2). A fixture that handed rows to an
+    unfinished cache would be a shape no run produces, and would hide every "rows only once it
+    finished" branch in both front ends.
 
     No artifact gets a ``log.txt``: the writer writes one only when a public entry is active
     (``runs.current_run_log()``), and this helper is not one. A test that wants records writes the
@@ -3273,7 +3349,7 @@ def build_browse_store(root):
     identity = {"format": "training-rows/2", "prior_fingerprint": "f" * 16, "n_runs": 4,
                 "truncation": None}
     m = write_simulation_manifest(store.kind_dir("simulation") / identity_digest(identity), identity,
-                                  batches_done=3, complete=False, rows=[32, 32, 32])
+                                  batches_done=3, complete=False)
     ids["simulation"] = m.id
 
     priors = store.kind_dir("prior")
@@ -3385,7 +3461,7 @@ def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(
 
 
 def test_a_kind_with_nothing_in_it_is_not_a_root_that_cannot_be_read(tmp_path):
-    """§3.2. StorePicker.refresh swallows the exception and lists nothing (artifact_picker.py:136-138),
+    """§3.2. StorePicker.refresh swallows the exception and lists nothing (artifact_picker.py:135-137),
     so today an empty store and an unreadable one are the same picture. The browser is the one place
     that difference has to be visible: an absent kind directory reads "nothing here yet", and a root
     that raises puts the error, with its class, on the status line."""
@@ -3524,9 +3600,13 @@ class ArtifactScreen(QWidget):
     def refresh(self) -> None:
         """Re-list the selected kind. Idempotent, and the only place the store is read for the table."""
         kind = self.kind()
-        col, order = self.table.sort_state()
-        if col >= 0:
-            self._sort = (col, order)          # the user's own header click, kept across the rebuild
+        if self.table.topLevelItemCount():
+            # The user's own header click, kept across the rebuild -- but only off a table that HAS
+            # rows. An empty one still reports DEFAULT_SORT (never anything negative), so an
+            # unguarded capture here would overwrite the sort restore_settings just read out of
+            # QSettings before _apply_sort below could use it, and "the sort survives a relaunch"
+            # would be quietly false.
+            self._sort = self.table.sort_state()
         try:
             rows = self._resolved_store().list(kind)
         except Exception as e:                 # noqa: BLE001 -- REPORTED, never swallowed
@@ -3569,10 +3649,12 @@ class ArtifactScreen(QWidget):
         MainWindow._save_state calls this BY NAME: ``_all_panels()`` is panel-typed and this screen is
         a QWidget (B1), so it gets no sweep for free -- which is also what keeps it out of
         ``_refresh_model_combos``.
+
+        A table with rows in it IS the sort; an empty one reports DEFAULT_SORT whatever was restored,
+        so a window closed without ever opening this screen must save what it read rather than the
+        default it never showed.
         """
-        col, order = self.table.sort_state()
-        if col < 0:
-            col, order = self._sort
+        col, order = self.table.sort_state() if self.table.topLevelItemCount() else self._sort
         qs.beginGroup("artifacts")
         qs.setValue("kind", self.kind())
         qs.setValue("sort_col", str(int(col)))
@@ -3651,14 +3733,20 @@ def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp
     """§3.5 / V5. The kind last viewed and the sort survive a relaunch; the SELECTED artifact
     deliberately does not -- a remembered id that has since been deleted is exactly the dangling
     state §3.4 removes from the pickers. A stale kind an older build left behind is ignored, not
-    restored."""
+    restored.
+
+    The sort that is saved is deliberately NOT the default one: (1, 1) is DEFAULT_SORT, so a test
+    that saved it could not tell a restored sort from a screen that had simply never been sorted at
+    all, and the assertion below would hold even if restore_settings did nothing."""
     from core.gui import settings as st
 
     build_browse_store(tmp_path)
     store = ArtifactStore(tmp_path)
     first = artifact_screen(store)
     _show(first, "posterior")
-    first.table.apply_sort_state(1, 1)
+    assert first.table.sort_state() == (1, 1), \
+        "DEFAULT_SORT moved; pick a saved sort below that differs from it"
+    first.table.apply_sort_state(0, 0)          # Name, ascending -- not the default
     assert _select(first, 0) is not None
 
     qs = st.settings()
@@ -3670,7 +3758,7 @@ def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp
 
     again = artifact_screen(store)
     assert again.kind() == "posterior"
-    assert again.table.sort_state() == (1, 1)
+    assert again.table.sort_state() == (0, 0), "the saved sort was overwritten before it was applied"
     assert again.table.current_summary() is None, "the selected artifact must not come back"
 
     qs.setValue("artifacts/kind", "nosuchkind")
@@ -3703,10 +3791,17 @@ def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
 - [ ] **Step 7: Run them and watch them fail**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest tests/test_artifact_browser.py -v`
-Expected: the two new tests FAIL with
-`AssertionError: ('Reduction Map', 'FDT Analysis', 'Parameter Inference', 'Simulate')` on
-`SECTIONS[-1] == "Artifacts"`, and the third with
-`AttributeError: 'MainWindow' object has no attribute 'artifact_screen'`.
+
+Expected: 5 tests, **2 failed, 3 passed**. Of the three just appended:
+
+- `test_the_artifacts_tile_opens_the_browser_and_the_window_saves_its_state` FAILS with
+  `AssertionError: ('Reduction Map', 'FDT Analysis', 'Parameter Inference', 'Simulate')` on
+  `SECTIONS[-1] == "Artifacts"`;
+- `test_a_store_change_in_the_browser_re_lists_every_artifact_picker` FAILS with
+  `AttributeError: 'MainWindow' object has no attribute 'artifact_screen'`;
+- `test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection` **passes already** — it
+  needs nothing from Steps 8–9, only the screen Step 4 wrote. It is here because it belongs with the
+  other two, and because Step 12 must still see it green after the window changes land.
 
 - [ ] **Step 8: Add the fifth tile**
 
@@ -3821,15 +3916,19 @@ owns that whole docstring — the "five section screens" line and the "the only 
 sentence both change there — and it runs last and rewrites it once. Two tasks editing one docstring
 is how a merge of the two loses one of them.
 
-- [ ] **Step 11: Re-point the two docstrings that cite a line number in main_window.py**
+- [ ] **Step 11: Re-point the ONE docstring that cites a line number in main_window.py**
 
 This task inserts lines above `main_window.py:231`. Find the line's new number:
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -c "print([i for i, l in enumerate(open('core/gui/main_window.py', encoding='utf-8'), 1) if 'box.exec() != QMessageBox.Yes' in l])"`
 
-Then replace `main_window.py:231` with `main_window.py:<that number>` in both
-`tests/conftest.py:174` and `tests/test_worker_dispatch.py:338`. Both are docstring prose, so nothing
-else changes.
+Then replace `main_window.py:231` with `main_window.py:<that number>` in
+`tests/test_worker_dispatch.py:338` — docstring prose, so nothing else changes.
+
+**Do not touch `tests/conftest.py`.** Its `_no_modal_dialogs` docstring cites the same line at `:174`,
+and Task 11 rewrites that sentence for its own reasons and removes the number entirely rather than
+re-pointing it (Q10). Two tasks editing one sentence is how the second one's quoted "before" stops
+matching.
 
 - [ ] **Step 12: Run the task's own tests**
 
@@ -3839,7 +3938,7 @@ Expected: PASS
 - [ ] **Step 13: Commit**
 
 ```bash
-git add core/gui/screens/artifact_screen.py core/gui/screens/home_screen.py core/gui/main_window.py tests/test_artifact_browser.py tests/_fixtures.py tests/conftest.py tests/test_worker_dispatch.py
+git add core/gui/screens/artifact_screen.py core/gui/screens/home_screen.py core/gui/main_window.py tests/test_artifact_browser.py tests/_fixtures.py tests/test_worker_dispatch.py
 git commit -m "gui: an Artifacts screen that lists the store's seven kinds"
 ```
 
@@ -4153,9 +4252,13 @@ already empty emits no change. Add `self._on_selection_changed()` as the last st
     def refresh(self) -> None:
         """Re-list the selected kind. Idempotent, and the only place the store is read for the table."""
         kind = self.kind()
-        col, order = self.table.sort_state()
-        if col >= 0:
-            self._sort = (col, order)          # the user's own header click, kept across the rebuild
+        if self.table.topLevelItemCount():
+            # The user's own header click, kept across the rebuild -- but only off a table that HAS
+            # rows. An empty one still reports DEFAULT_SORT (never anything negative), so an
+            # unguarded capture here would overwrite the sort restore_settings just read out of
+            # QSettings before _apply_sort below could use it, and "the sort survives a relaunch"
+            # would be quietly false.
+            self._sort = self.table.sort_state()
         try:
             rows = self._resolved_store().list(kind)
         except Exception as e:                 # noqa: BLE001 -- REPORTED, never swallowed
@@ -4301,15 +4404,16 @@ git commit -m "gui: the Artifacts screen's detail pane and Save"
   listing) and extended by Task 10 (the detail pane). This task adds an actions row to `__init__`
   and six new methods plus two module-level helpers. **It has no line numbers yet**: Task 9 writes
   the file, so every anchor below is given as the code to search for, not as a number.
-- Modify: `core/gui/main_window.py` — one connect line beside `home.navigate.connect(...)`
-  (line **134** in the file as it stands before Task 9 moves it), one new method between
-  `_refresh_model_combos` (**246-265**) and `_all_panels` (**267-269**), and — Steps 21-23 — the
-  conversion of the window's last three STATIC `QMessageBox` calls (`QMessageBox.warning` at
-  **215** and **236**, `QMessageBox.information` at **221**) into instance dialogs behind one new
-  helper.
+- Modify: `core/gui/main_window.py` — Steps 20-22 only: the conversion of the window's last three
+  STATIC `QMessageBox` calls (`QMessageBox.warning` at **215** and **236**,
+  `QMessageBox.information` at **221**, in the file as it stands before Task 9 moves them) into
+  instance dialogs behind one new helper. **`_refresh_store_pickers` and the
+  `artifact_screen.store_changed` connect are Task 9's, not this task's** (Q1): this task calls the
+  method from its test and writes neither.
 - Modify: `tests/conftest.py` — two sentences of `_no_modal_dialogs`' docstring (**174** and
-  **178-179**), which cite a line number those steps move and record the three statics as outside
-  the guard and unreached.
+  **178-179**), which record the three statics as outside the guard and unreached and cite a line
+  number this task's own helper moves. This task **removes** that number rather than re-pointing it;
+  Task 9 deliberately leaves the sentence alone (Q10).
 - Test: `tests/test_artifact_browser.py` — created by Task 9; this task appends to it.
 
 **Interfaces:**
@@ -4337,7 +4441,7 @@ git commit -m "gui: the Artifacts screen's detail pane and Save"
     (the kind selector, each item's `userData` being the kind key), `self.status` +
     `self._set_status(text, error=False)` (`ModelBuilderScreen`'s pattern,
     `core/gui/screens/model_builder_screen.py:503-504`), and `self._resolved_store()` (the same seam
-    `StorePicker` has at `core/gui/widgets/artifact_picker.py:126-128`, which
+    `StorePicker` has at `core/gui/widgets/artifact_picker.py:125-127`, which
     `tests/_fixtures.py::artifact_screen` monkeypatches). Task 9's outer layout is a `QVBoxLayout`
     holding the heading, the kind row, the splitter and — last — the status label, so the actions row
     goes in with `self.layout().insertWidget(self.layout().count() - 1, ...)`: directly above the
@@ -4346,6 +4450,9 @@ git commit -m "gui: the Artifacts screen's detail pane and Save"
     `set_rows(kind, rows)`, `current_summary(self) -> "Summary | None"`. The tests also use plain
     `QTreeWidget` API (`topLevelItemCount`, `topLevelItem`, `setCurrentItem`), which needs nothing
     new.
+  - From Task 9's `core/gui/main_window.py`: `MainWindow._refresh_store_pickers(self)` and the
+    `self.artifact_screen.store_changed.connect(self._refresh_store_pickers)` line beside the
+    screen's construction. Task 9 writes both; this task only calls the method from its test (Q1).
   - From Task 9's `tests/_fixtures.py`: `artifact_screen(store)`. `build_browse_store(root)` is
     deliberately **not** used here: this task's assertions need exact parents, exact fingerprints and
     exactly one leftover directory, so each test writes what it asserts on through the store suite's
@@ -4358,10 +4465,9 @@ git commit -m "gui: the Artifacts screen's detail pane and Save"
     `._selected(self, doing: str)`, `._dependents_refusal(self, store, s, deps) -> Refusal`,
     `._incomplete(self, store, kind) -> tuple`, and module-level `_delete_prompt(s) -> tuple`,
     `_FINGERPRINT_DEPENDENT` (str).
-  - `MainWindow._refresh_store_pickers(self)`, connected to `self.artifact_screen.store_changed`.
   - `MainWindow._tell(self, title: str, text: str, icon) -> None` — the one place the window shows a
-    plain one-button box, replacing the three statics (Step 23).
-  - In the test file: `_show_kind(scr, kind)`, `_select(table, ident)` and
+    plain one-button box, replacing the three statics (Step 22).
+  - In the test file: `_show_kind(scr, kind)`, `_select_ref(table, ident)` and
     `_answer(monkeypatch, button)`, which Task 12 reuses.
 
 **Why this task exists:** `set_note`, `dependents` and `delete` have no caller anywhere but the
@@ -4375,7 +4481,7 @@ adds the sweep; **B8** refreshes the three `StorePicker`s afterwards, because
 the saved id has vanished, leaving whatever item happens to be current selected — deliberate for a
 picker, a dangling selection the moment a browser can delete.
 
-And since this task is editing `core/gui/main_window.py` anyway, Steps 21-23 pay off the one debt in
+And since this task is editing `core/gui/main_window.py` anyway, Steps 20-22 pay off the one debt in
 that file the global constraint forbids in new code: `QMessageBox.warning` at `:215` and `:236` and
 `QMessageBox.information` at `:221` are C++ **statics**, which escape the session guard
 `tests/conftest.py::_no_modal_dialogs` installs (it patches the instance method only). Offscreen a
@@ -4389,6 +4495,13 @@ dialogs that land in `SHOWN` like every other box, and the comment saying otherw
 Append to `tests/test_artifact_browser.py`. Task 9 put the module docstring and its own imports at
 the top; add these three helpers directly under them (Task 12 reuses them), then the two tests.
 
+The file ends up with **two** selection helpers, deliberately and under different names: Task 9's
+`_select(screen, i)` takes a row INDEX, because its tests are about the order `ArtifactStore.list`
+hands back and what a given row shows; `_select_ref(table, ident)` below takes an artifact's id or an
+incomplete directory's name and hunts for its row, because these tests act on one known artifact and
+must never assume where the sort put it. Two module-level helpers of the same name in one file would
+mean the later `def` silently killed the other's tests, so do not rename either into the other (Q4).
+
 ```python
 def _show_kind(scr, kind):
     """Point the screen at one kind and re-list it. The selector carries the kind key as its item
@@ -4399,7 +4512,7 @@ def _show_kind(scr, kind):
     scr.refresh()
 
 
-def _select(table, ident):
+def _select_ref(table, ident):
     """Make the row for ``ident`` (an artifact id or an incomplete directory's name) current, and
     return its Summary. Plain QTreeWidget API plus the table's own ``current_summary`` -- the rows
     are sorted (complete first, newest first), so a test must never assume an index."""
@@ -4431,7 +4544,7 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
     p = _prior_artifact(store, cfg, name="annotated")
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _select(scr.table, p.id)
+    _select_ref(scr.table, p.id)
     # The control core/gui/fields.py names ("Edit it in the Note box on the Artifacts screen.") has
     # to exist, spelled that way: the table is the ONE place a control is named, and a sentence
     # pointing at a box nobody can find is the failure mode V3 exists to stop.
@@ -4443,7 +4556,7 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
     assert "Set the note" in scr.status.text(), scr.status.text()
     # Re-select: _after_change re-lists the kind, and the screen deliberately remembers no selection
     # (spec §3.5 -- a remembered id that has since been deleted is the dangling state B8 prevents).
-    _select(scr.table, p.id)
+    _select_ref(scr.table, p.id)
     scr.note_edit.setText("")
     scr._set_note()
     assert store.get("prior", p.id).note == ""
@@ -4460,7 +4573,7 @@ def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
     p = _prior_artifact(store, cfg, name="annotated")
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _select(scr.table, p.id)
+    _select_ref(scr.table, p.id)
     scr.note_edit.setText("x" * 201)
     # No setMaxLength on the box, deliberately: it would truncate at 200 and the refusal could never
     # fire, which is exactly the silent clamp B5 forbids.
@@ -4492,7 +4605,6 @@ needs (leave whatever Task 9/10 already imported):
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton,
                                QWidget)
 
-from core.artifacts import KINDS
 from core.refusals import NOTE_MAX_CHARS, Refusal, require_note
 
 from ..design import SPACE
@@ -4500,8 +4612,10 @@ from ..panels.base_panel import BasePanel
 from ..widgets.refusal_box import show_refusal
 ```
 
-`KINDS` (`core/artifacts/manifest.py:19`) is the seven kinds in `KIND_DIRS` order; if Task 9 already
-imports `KIND_DIRS`, use that instead and drop this import. Importing `BasePanel` does **not** enrol
+**No new kinds import.** Task 9 already has `from core.artifacts.store import KIND_DIRS` at the top
+of this file — the seven kinds in order — and Step 13's sweep iterates that. Do not add
+`core.artifacts.KINDS` beside it: one module reading the kinds two ways is how the two lists drift.
+Importing `BasePanel` does **not** enrol
 the screen in `BasePanel._instances` — only constructing one does (`base_panel.py:91`), which is why
 the browser can read the class flag without being greyed out by it.
 
@@ -4649,7 +4763,7 @@ def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
                                          parents=None)             # keyed on the GMM, names nothing
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _select(scr.table, p.id)
+    _select_ref(scr.table, p.id)
     scr._delete()
     box = SHOWN[-1]
     assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
@@ -4664,11 +4778,15 @@ def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
     assert "2 dependent(s) and was not deleted" in scr.status.text(), scr.status.text()
 
 
-def test_deleting_an_unfinished_cache_names_its_rows_and_defaults_to_no(store, monkeypatch):
+def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store, monkeypatch):
     """B3 + B6: a manifested cache is COMPLETE (it has a valid manifest) and not FINISHED, and the
-    rows already committed are the one thing a delete here destroys that a rerun cannot remake -- so
-    the confirmation names them, and No is the default button (which is also what the session dialog
-    guard's exec()==0 reads as)."""
+    batches already committed are the one thing a delete here destroys that a rerun cannot remake --
+    so the confirmation names them, and No is the default button (which is also what the session
+    dialog guard's exec()==0 reads as).
+
+    The cache is written with NO rows, because that is the only mid-run state there is: rows are
+    written by mark_complete alone and ``save`` passes none (P2), so the prompt names batches and
+    says where the row counts come from rather than printing a confident, false "0 rows"."""
     import pytest
     from core.artifacts import StoreError, store as st
     from PySide6.QtWidgets import QMessageBox
@@ -4676,20 +4794,24 @@ def test_deleting_an_unfinished_cache_names_its_rows_and_defaults_to_no(store, m
     qt_app()
     ident = {"format": "training-rows/2", "prior_fingerprint": None, "n_runs": 4, "truncation": None}
     cache = st.write_simulation_manifest(store.kind_dir("simulation") / "beef00112233", ident,
-                                         batches_done=2, complete=False, rows=[48, 48])
+                                         batches_done=2, complete=False)
     scr = artifact_screen(store)
     _show_kind(scr, "simulation")
-    s = _select(scr.table, cache.id)
+    s = _select_ref(scr.table, cache.id)
     assert s.complete and not s.finished, "B3: complete is 'has a manifest', finished is 'it ended'"
+    assert s.rows is None, "``save`` records no rows: a mid-run cache has none to name"
     scr._delete()                                     # exec() returns 0 -> not Yes
     box = SHOWN[-1]
     assert box.button(QMessageBox.No) is box.defaultButton(), "No must be the default"
-    assert "2 committed batch(es), 96 rows" in box.informativeText(), box.informativeText()
+    assert "2 committed batch(es)" in box.informativeText(), box.informativeText()
+    assert "rows are recorded when the cache finishes" in box.informativeText(), \
+        box.informativeText()
+    assert "0 rows" not in box.informativeText(), box.informativeText()
     assert store.get("simulation", cache.id).id == cache.id, "No must leave it on disk"
     assert "was not deleted" in scr.status.text(), scr.status.text()
     # Yes deletes it, and the change is announced (B8)
     _answer(monkeypatch, QMessageBox.Yes)
-    _select(scr.table, cache.id)
+    _select_ref(scr.table, cache.id)
     changed = []
     scr.store_changed.connect(lambda: changed.append(True))
     scr._delete()
@@ -4700,10 +4822,16 @@ def test_deleting_an_unfinished_cache_names_its_rows_and_defaults_to_no(store, m
 
 def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch):
     """dependents() is read twice -- once here to avoid asking a question that could only fail, once
-    inside delete() -- and the store's is the answer that counts. With the browser's read stubbed
+    inside delete() -- and the store's is the answer that counts. With the SCREEN's read stubbed
     empty the confirmation appears, and the store's own sentence is what the operator is shown, with
     its own fix sentence under it: that refusal carries field="artifact" (Task 5), so this race path
-    shows it as it stands and invents nothing."""
+    shows it as it stands and invents nothing.
+
+    The stub is a proxy over the real store, patched onto the SCREEN's _resolved_store, and not
+    monkeypatch.setattr(store, "dependents", ...): ArtifactStore.delete calls self.dependents
+    itself (store.py:482), so patching the store would blind the store too -- the delete would
+    SUCCEED, the prior would be destroyed and every assertion below would be asserting the opposite
+    of what it says (Q6). The proxy lies to the screen only."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -4714,8 +4842,28 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
         w.body = {"results": {}}
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _select(scr.table, p.id)
-    monkeypatch.setattr(store, "dependents", lambda kind, id_: [])
+    _select_ref(scr.table, p.id)
+
+    class _BlindToDependents:
+        """Everything the screen asks of a store, delegated to the real one -- except dependents,
+        which answers "none" the way a store would have a moment before the child was written."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def dependents(self, kind, id_):
+            return []
+
+        def get(self, *a, **k):
+            return self._real.get(*a, **k)
+
+        def list(self, *a, **k):
+            return self._real.list(*a, **k)
+
+        def delete(self, *a, **k):
+            return self._real.delete(*a, **k)
+
+    monkeypatch.setattr(scr, "_resolved_store", lambda: _BlindToDependents(store))
     _answer(monkeypatch, QMessageBox.Yes)
     scr._delete()
     box = SHOWN[-1]
@@ -4750,16 +4898,20 @@ _FINGERPRINT_DEPENDENT = ("a training cache was generated against this prior and
 def _delete_prompt(s) -> tuple:
     """``(text, informative)`` for the confirmation: what goes, and what cannot come back.
 
-    An UNFINISHED cache names its committed rows: ``finished`` is not ``complete`` (B3), and those
-    rows are the only thing deleting one destroys that a later run could not simply remake.
+    An UNFINISHED cache names its committed BATCHES: ``finished`` is not ``complete`` (B3), and those
+    batches are the only thing deleting one destroys that a later run could not simply remake.
+
+    Batches and not rows, deliberately (P2): ``rows`` is written by ``mark_complete`` alone --
+    ``training_checkpoint.save`` passes none -- so every real mid-run cache has ``rows is None``, and
+    a ``sum(())`` here would print a confident, false "0 rows". Where the row counts come from is
+    said instead.
     """
     lines = [f"id {s.id}"]
     if s.kind == "simulation" and not s.finished:
-        rows = tuple(s.rows or ())
-        lines.append(f"This training cache is UNFINISHED: {s.batches_done} committed batch(es), "
-                     f"{sum(rows)} rows"
-                     + (f" ({' + '.join(str(r) for r in rows)})" if rows else "")
-                     + ". Deleting it throws those rows away and a later run starts from zero.")
+        lines.append(f"This training cache is UNFINISHED: {s.batches_done} committed batch(es). "
+                     "Deleting it throws those batches away and a later run starts from zero. "
+                     "(Only the batch count is known while a cache is running: the rows are "
+                     "recorded when the cache finishes.)")
     lines.append(f"This removes {s.path} and everything in it, and cannot be undone.")
     return f"Delete {s.kind} {s.label}?", "\n".join(lines)
 ```
@@ -4905,7 +5057,7 @@ Expected: FAIL, `AttributeError: 'ArtifactScreen' object has no attribute '_swee
         Read off ``list``, so the confirmation shows exactly the rows the table calls incomplete.
         """
         out, problems = [], []
-        for k in ([kind] if kind else list(KINDS)):
+        for k in ([kind] if kind else list(KIND_DIRS)):     # Task 9's import; the seven, in order
             try:
                 rows = store.list(k)
             except Exception as e:      # noqa: BLE001 -- an unreadable kind is reported, not fatal
@@ -4973,7 +5125,7 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
     leftover.mkdir(parents=True, exist_ok=True)
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _select(scr.table, p.id)
+    _select_ref(scr.table, p.id)
     scr.note_edit.setText("written during a train")
     BasePanel._running = True
     try:
@@ -4986,7 +5138,7 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
         assert leftover.is_dir(), "the sweep must not run"
         scr.refresh()                                   # reading is never blocked
         assert scr.table.topLevelItemCount() >= 1
-        _select(scr.table, p.id)
+        _select_ref(scr.table, p.id)
         assert scr.note_edit.isEnabled() and scr.btn_delete.isEnabled(), \
             "the browser is not a BasePanel: a live run greys nothing here"
     finally:
@@ -5033,14 +5185,21 @@ Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest "tests/test
 
 Expected: PASS.
 
-- [ ] **Step 18: Write the failing picker-refresh test**
+- [ ] **Step 18: Write the picker-refresh test**
+
+This one is not test-first, and says so: the window half — `MainWindow._refresh_store_pickers` and
+the `store_changed` connect — is **Task 9's** (Q1), and the delete that drives it is Steps 8-9 above.
+What this test pins is the two halves meeting, which is exactly what neither task can pin alone.
 
 ```python
 def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypatch):
     """B8. Without this a picker keeps pointing at a deleted artifact: StorePicker.restore_key
     (artifact_picker.py:165-170) silently does nothing when the saved id has vanished, leaving
     whatever item happens to be current selected -- deliberate for a picker, and a defect the moment
-    a browser can delete. Mirrors _refresh_model_combos: the window walks its own panels."""
+    a browser can delete. Mirrors _refresh_model_combos: the window walks its own panels.
+
+    The wiring (MainWindow._refresh_store_pickers and the store_changed connect) is the screen task's;
+    the delete that emits store_changed is this task's. This is the test of the two together."""
     from PySide6.QtWidgets import QMessageBox
     from core.gui.main_window import MainWindow
     from core.gui.widgets.artifact_picker import StorePicker
@@ -5058,7 +5217,7 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
         assert picker.key() == doomed.id
         scr = w.artifact_screen
         _show_kind(scr, "prior")
-        _select(scr.table, doomed.id)
+        _select_ref(scr.table, doomed.id)
         _answer(monkeypatch, QMessageBox.Yes)
         scr._delete()
         ids = [picker.combo.itemData(i) for i in range(picker.combo.count())]
@@ -5075,42 +5234,25 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
         w.close()
 ```
 
-- [ ] **Step 19: Run it and watch it fail**
+- [ ] **Step 19: Run it — it must PASS**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest "tests/test_artifact_browser.py::test_a_delete_in_the_browser_reaches_the_three_store_pickers" -v`
 
-Expected: FAIL, `AssertionError: the picker still offers the deleted prior`.
+Expected: **PASS**, with nothing further to write. Task 9 already defined
+`MainWindow._refresh_store_pickers` and connected `artifact_screen.store_changed` to it, and Step 9
+gave this task the delete that emits it, so the loop is closed the moment both have landed.
 
-- [ ] **Step 20: Add `MainWindow._refresh_store_pickers` and connect it**
+Two failures are worth telling apart if it does not pass:
 
-In `core/gui/main_window.py`, insert the method between `_refresh_model_combos` (ends at line 265)
-and `_all_panels` (line 267):
+- `AttributeError: 'MainWindow' object has no attribute '_refresh_store_pickers'` (or
+  `... 'artifact_screen'`) — **Task 9 has not landed.** Stop and land it; do not add a second
+  definition of that method here, which is what this task used to do (Q1) and what would leave one
+  class with two `def`s of one name and one signal connected twice.
+- `AssertionError: the picker still offers the deleted prior` — Task 9's connect line is missing
+  while its method is there. Fix it in the one place it belongs, beside the screen's construction in
+  `MainWindow.__init__`, and say so in the task report.
 
-```python
-    def _refresh_store_pickers(self):
-        """Re-list every StorePicker after the browser changed the store (B8).
-
-        The mirror of _refresh_model_combos, and for the same reason: the window is the one party
-        that knows every picker. It is needed because StorePicker.restore_key silently does nothing
-        when the saved id has vanished, so a picker left pointing at a deleted artifact keeps
-        whatever item happens to be current -- harmless while nothing could delete an artifact, a
-        dangling selection now that something can. findChildren rather than three named attributes:
-        a fourth picker must not be able to appear and be refreshed by nobody.
-        """
-        from .widgets.artifact_picker import StorePicker
-        for panel in self._all_panels():
-            for picker in panel.findChildren(StorePicker):
-                picker.refresh()
-```
-
-and in `__init__`, beside the existing `home.navigate.connect(...)` (line 134 before Task 9's edits),
-after Task 9 built and registered `self.artifact_screen`:
-
-```python
-        self.artifact_screen.store_changed.connect(self._refresh_store_pickers)
-```
-
-- [ ] **Step 21: Write the failing static-dialog test**
+- [ ] **Step 20: Write the failing static-dialog test**
 
 Append to `tests/test_artifact_browser.py`. It reuses `_answer` from Step 1.
 
@@ -5163,7 +5305,7 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
     assert SHOWN[3].icon() == QMessageBox.Warning and "corrupt definition" in SHOWN[3].text()
 ```
 
-- [ ] **Step 22: Run it and watch it fail**
+- [ ] **Step 21: Run it and watch it fail**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest "tests/test_artifact_browser.py::test_the_windows_three_model_dialogs_go_through_the_session_guard" -v`
 
@@ -5171,7 +5313,7 @@ Expected: FAIL, `AssertionError: the window still shows a box with a C++ static:
 'information', 'warning']`. It fails rather than hangs *because* the test patches the two statics
 itself; run it with that loop deleted and it would stall, which is the hazard the conversion removes.
 
-- [ ] **Step 23: Convert the three statics and correct the guard's comment**
+- [ ] **Step 22: Convert the three statics and correct the guard's comment**
 
 In `core/gui/main_window.py` the three calls are at `:215`, `:221` and `:236` in the file as it
 stands **before** Task 9's edits move them down, so search for the code rather than the number.
@@ -5220,7 +5362,11 @@ control flow:
 
 In `tests/conftest.py::_no_modal_dialogs`, two sentences of the docstring are now wrong: the last
 one records these sites as unreached, and the line number it cites for the safe branch is one the
-helper above moves. Replace
+helper above moves.
+
+**This task owns both sentences, and it removes the number rather than re-pointing it** (Q10). Task 9
+moves the same line but deliberately leaves this file alone, so the text below is still on disk
+exactly as quoted — a name outlives an edit where a number does not. Replace
 
 ```
     exec returns 0 -- no clicked button, which the consent dialogs read as Cancel and main_window.py:231
@@ -5255,13 +5401,13 @@ Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest "tests/test
 
 Expected: PASS.
 
-- [ ] **Step 24: Run the task's own tests**
+- [ ] **Step 23: Run the task's own tests**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest tests/test_artifact_browser.py -q`
 
 Expected: PASS (Task 9's and Task 10's tests in the file included; nothing skipped, nothing xfailed).
 
-- [ ] **Step 25: Commit**
+- [ ] **Step 24: Commit**
 
 ```bash
 git add core/gui/screens/artifact_screen.py core/gui/main_window.py tests/conftest.py tests/test_artifact_browser.py
@@ -5294,9 +5440,14 @@ git commit -m "gui: the browser's note, delete and sweep actions" -m "Also conve
     builds under the detail pane (a stretch, then `self.btn_save`). This task appends its button to
     that layout, so it lands to the right of Save — where it belongs, since both write a file about
     the selected artifact. Nothing else here depends on Task 10.
-  - From the test file: `_show_kind`, `_select` and `_answer`, added by Task 11 Step 1. If Task 11
-    has not landed yet, copy `_show_kind` and `_select` from it verbatim (`_answer` is not used
-    here — this task opens no dialog).
+  - From the test file: `_show_kind(scr, kind)` and `_select_ref(table, ident)`, added by **Task 11**
+    Step 1, which is therefore a dependency of this task (Q9). Use them as they stand; do not copy
+    them into a second definition, which would silently kill Task 11's the moment the two drift.
+    (`_answer` is not used here — this task opens no dialog. Task 9's `_select(screen, i)` is a
+    different helper, taking a row index; these tests act on one known artifact, so `_select_ref`.)
+  - From Task 11's module-level imports in `core/gui/screens/artifact_screen.py`: `Refusal` and
+    `show_refusal`, both used by Step 4's `_lineage_report`. Step 3 adds them only if they are not
+    already at the top of the file.
 - Produces: `ArtifactScreen.btn_lineage` (`QPushButton("Lineage report…")`) and
   `ArtifactScreen._lineage_report(self)`.
 
@@ -5331,7 +5482,7 @@ def test_the_lineage_report_writes_exactly_what_render_lineage_returns(store, mo
         w.body = {"results": {"n_samples": 8}}
     scr = artifact_screen(store)
     _show_kind(scr, "inference")
-    _select(scr.table, w.id)
+    _select_ref(scr.table, w.id)
     out = tmp_path / "lineage.txt"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
     scr._lineage_report()
@@ -5353,14 +5504,21 @@ Expected: FAIL, `AttributeError: 'ArtifactScreen' object has no attribute '_line
 
 - [ ] **Step 3: Add the button**
 
-In `core/gui/screens/artifact_screen.py`, add to the import block (leaving anything Task 10 already
-imported):
+In `core/gui/screens/artifact_screen.py`, add to the import block (leaving anything Tasks 9-11
+already imported):
 
 ```python
 from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog
+
+from core.refusals import Refusal
+
+from ..widgets.refusal_box import show_refusal
 ```
+
+Task 11 already imports `Refusal` and `show_refusal` into this module for its own refusals — add
+each of the last two lines only if it is not there, and never a second time.
 
 and in `__init__`, on Task 10's `self.detail_actions` row, directly after its `self.btn_save`:
 
@@ -5435,7 +5593,7 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
     leftover.mkdir(parents=True, exist_ok=True)
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
-    _select(scr.table, p.id)
+    _select_ref(scr.table, p.id)
     # A directory of its own: tmp_path also holds this test's prism.ini (_isolated_settings) and the
     # store fixture's Artifacts/, so it is not a place to count files in.
     out_dir = tmp_path / "out"
@@ -5452,7 +5610,7 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
     assert not bare.exists(), "an extension-less name must gain .txt, not be written as given"
     # a leftover directory: no manifest, no lineage, and no file
     scr._set_status("")
-    _select(scr.table, leftover.name)
+    _select_ref(scr.table, leftover.name)
     scr._lineage_report()
     assert "no usable manifest" in scr.status.text(), scr.status.text()
     assert "lineage" in scr.status.text(), scr.status.text()
@@ -5542,15 +5700,22 @@ git commit -m "gui: a lineage report written to a file, not a store kind"
     subcommand's help path is free of today. So the tool keeps its own `COLUMNS` literal and the two
     column sets are pinned against each other by a test — the TEST imports both front ends, the tool
     imports neither (and the GUI does not import the tool either).
+  - **Task 9's** `tests/_fixtures.py::build_browse_store(root) -> dict` — one artifact of each of the
+    seven kinds plus the three bad-directory shapes, written by the real writer in seconds. Every
+    test below runs against it, which is why Task 9 is a dependency of this task (Q9). Its
+    simulation cache is written at 3 of 4 batches, not complete and with **no rows** — the only state
+    a mid-run cache can be in (P2).
   - The existing handler contract: `main` calls `rc = int(args.handler(args, store) or 0)` inside
     `use_store(ArtifactStore(root))`, with `root = config.artifacts_root()`
     (`core/tool/__init__.py:95-111`), so a handler is handed the open store and resolves no root of
     its own.
 - Produces: `core.tool.browse.register(subparsers) -> dict` returning `{"artifacts": <parser>}`;
-  the module constants `KINDS`, `COLUMNS`, `LOG_TAIL_BYTES`, `EPILOG`; the row formatters
-  `_flat(text) -> str`, `_progress(s) -> str`, `_cells(kind, s) -> tuple`, `_print_kind(kind, rows)
-  -> None`; the handlers `_list(args, store) -> int` and `_show(args, store) -> int`. Task 14 adds
-  four more modes to the same `register` and the same epilog.
+  the module constants `KINDS`, `COLUMNS`, `LOG_TAIL_BYTES`, `EPILOG`, and the two shared argument
+  help strings `_KIND` and `_REF` (Task 14's four `add_parser` blocks use both); the
+  row formatters `_flat(text) -> str`, `_width(s) -> str`, `_progress(s) -> str`,
+  `_cells(kind, s) -> tuple`, `_print_kind(kind, rows) -> None`; the handlers
+  `_list(args, store) -> int` and `_show(args, store) -> int`. Task 14 adds four more modes to the
+  same `register` and the same epilog.
 
 **Why this task exists:** The store has been complete since piece 1 and almost none of it is
 reachable: `set_note`, `delete`, `dependents` and `unnamed` have no caller at all but the suites, and
@@ -5573,7 +5738,7 @@ def browse_store(tmp_path, monkeypatch):
     """A store holding one artifact of each of the seven kinds plus three unusable directories, with
     PRISM_ARTIFACTS pointing at it.
 
-    ``config.artifacts_root()`` reads the variable on EVERY call (core/config.py:187-191) and ``main``
+    ``config.artifacts_root()`` reads the variable on EVERY call (core/config.py:185-189) and ``main``
     opens its store on it, so ``main(["artifacts", ...])`` reads exactly this root -- the same redirect
     test_the_sbc_subcommand_forwards_every_knob_as_a_keyword uses. Yields ``(root, ids)``, where
     ``ids`` is ``{kind: id}`` from tests/_fixtures.py::build_browse_store (Task 9's builder: the real
@@ -5604,7 +5769,9 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
     assert browse.KINDS == tuple(KIND_DIRS), "the seven kinds, in KIND_DIRS order"
     assert set(browse.COLUMNS) == set(browse.KINDS), "every kind has a column set, and no other"
     for kind in browse.KINDS:
-        assert browse.COLUMNS[kind] == tuple(columns_for(kind)), kind
+        # The tool's literal is the GUI's own spelling, lower-cased (P11): one canonical column list,
+        # Title-case in the window and lower-case in a terminal where the output may be piped.
+        assert browse.COLUMNS[kind] == tuple(c.lower() for c in columns_for(kind)), kind
 
 
 def test_artifacts_list_prints_one_line_per_artifact_with_its_kinds_facts(browse_store, capsys):
@@ -5641,8 +5808,8 @@ def test_artifacts_list_prints_one_line_per_artifact_with_its_kinds_facts(browse
 
 
 def test_the_artifacts_listing_progress_cell_is_a_fraction_and_shows_rows_only_once_finished():
-    """Both halves of the progress cell, on stand-in summaries, because ``build_browse_store``'s cache
-    is a finished one and a fixture cannot hold a half-written cache: ``batches_planned`` (the body's
+    """Both halves of the progress cell, on stand-in summaries: ``build_browse_store``'s cache is an
+    unfinished one, so the FINISHED half has no fixture to come from: ``batches_planned`` (the body's
     ``identity["n_runs"]``, spec §12 row 2) makes the cell a FRACTION, and ``rows`` is written only by
     ``mark_complete`` -- ``save`` passes none -- so a cache mid-run shows its batches and no row
     count. A comma and plain ASCII, never the browser's middle dot: this is text a script may read."""
@@ -5780,10 +5947,11 @@ import argparse
 # as --preset's hard-coded choices pinned against cli.SWEEP_PRESETS.
 KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic")
 
-# The columns each kind shows, exactly design §3.2's table. A SECOND formatter on purpose: the
-# browser's own (core/gui/widgets/artifact_table.py) is a Qt module, and importing it here would pull
-# PySide6 into `python -m core --help`. So this module imports NOTHING from core/gui, and the two
-# column sets are kept in step by a test that imports both (tests/test_tool.py).
+# The columns each kind shows, exactly design §3.2's table: the browser's own tuples
+# (core/gui/widgets/artifact_table.columns_for), LOWER-CASED (P11). A SECOND literal on purpose --
+# that module is a Qt module, and importing it here would pull PySide6 into `python -m core --help`.
+# So this module imports NOTHING from core/gui, and the two column sets are kept in step by a test
+# that imports both and lower-cases the GUI's (tests/test_tool.py).
 COLUMNS = {
     "prior": ("name", "created", "note"),
     "simulation": ("name", "created", "progress", "finished", "note"),
@@ -5795,8 +5963,9 @@ COLUMNS = {
 }
 
 # The tail of log.txt ``show`` prints. A DISPLAY cap, not a knob: it bounds what one screenful of
-# records can cost. The browser's detail pane reads the same 1 MiB (design §3.3), so the two front
-# ends show the same thing.
+# records can cost. The browser's detail pane has its own cap (artifact_screen.LOG_MAX_BYTES),
+# chosen independently and today at the same 1 MiB; nothing pins the two equal, because each front
+# end bounds its own surface -- a terminal and a text box are not the same screenful.
 LOG_TAIL_BYTES = 1 << 20
 
 EPILOG = """\
@@ -5815,16 +5984,17 @@ that is what LOADING it does (`python -m core validate --posterior ...`).
 """
 ```
 
-**Before you write `COLUMNS`, read Task 8's `columns_for` and copy its tuples verbatim** — the
-browser's spelling is the canonical one, because its header is what a user reads:
+**`COLUMNS` is Task 8's `columns_for` lower-cased** (P11) — the browser's spelling is the canonical
+one, because its header is what a user reads; the tool lower-cases it because its output is terminal
+text a script may read. Check the literal above against the GUI before you go on:
 
 ```powershell
-& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -c "from core.gui.widgets.artifact_table import columns_for; [print(k, columns_for(k)) for k in ('prior','simulation','posterior','observation','calibration','inference','diagnostic')]"
+& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -c "from core.gui.widgets.artifact_table import columns_for; [print(k, tuple(c.lower() for c in columns_for(k))) for k in ('prior','simulation','posterior','observation','calibration','inference','diagnostic')]"
 ```
 
 (That command imports Qt, so run it from a shell where `QT_QPA_PLATFORM=offscreen` and
 `KMP_DUPLICATE_LIB_OK=TRUE` are set.) If a title differs from the literal above, `COLUMNS` follows
-`columns_for`, not the other way round.
+`columns_for`, lower-cased — not the other way round.
 
 - [ ] **Step 4: Add the row formatters**
 
@@ -6176,14 +6346,18 @@ git commit -m "tool: artifacts list and show over the store"
 
 **Files:**
 - Modify: `core/tool/browse.py` — Task 13 created it; re-read it before editing, because every line
-  number below moved with it. Three places change: the module's import block (it needs `sys` and
-  `pathlib.Path` now), `EPILOG`'s mode list, and `register`'s `metavar` plus four new `modes.add_parser`
-  blocks. Four handlers are appended beside `_list` and `_show`.
+  number below moved with it. Three places change: the module's import block (it needs `sys`,
+  `pathlib.Path` and — Step 3, because the parser is BUILT with it —
+  `from core.refusals import NOTE_MAX_CHARS`), `EPILOG`'s mode list, and `register`'s `metavar` plus
+  four new `modes.add_parser` blocks. Four handlers are appended beside `_list` and `_show`.
 - Test: `tests/test_tool.py` (append at the end; Task 13 left the file longer, so re-read the tail)
 
 **Interfaces:**
 - Consumes:
   - Task 13's `core/tool/browse.py`: `KINDS`, `EPILOG`, `_KIND`, `_REF`, `register`.
+  - Task 13's `browse_store` fixture in `tests/test_tool.py`, and through it **Task 9's**
+    `tests/_fixtures.py::build_browse_store(root)` — which is why Task 9 is on this task's dependency
+    line (Q9).
   - Task 2's `core.refusals.require_note(key: str, text: str) -> str` and `NOTE_MAX_CHARS = 200`, and
     `core/tool/fields.py`'s new entries `"note": "--note"` and `"artifact": None`.
   - Task 5's `ArtifactStore.sweep_incomplete(self, kind: "str | None" = None) -> "tuple[list, list]"`
@@ -6378,8 +6552,8 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
 - [ ] **Step 6: Run them and watch them fail**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest tests/test_tool.py -q -k "artifacts_rm"`
-Expected: FAIL — `KeyError: 'rm'` on the first (no such mode in the parser), `assert 2 == 0` on the
-second.
+Expected: FAIL — `KeyError: 'rm'` on the first (no such mode in the parser), and `assert 2 == 1` on
+the second: it asserts the refusal's exit 1, and argparse rejects the unknown mode with 2 first.
 
 - [ ] **Step 7: Add `_rm` and its mode**
 
@@ -6489,7 +6663,11 @@ def test_artifacts_summary_prints_the_lineage_or_writes_it_to_out(browse_store, 
     """B10: the lineage report is a FILE, never an eighth store kind, and it comes out of the same
     renderer the browser's "Lineage report..." writes -- so the document a reviewer receives is the
     same whichever front end made it (design §5). ``--out`` writes exactly what stdout would have
-    carried."""
+    carried.
+
+    The file is compared as BYTES, not as text: read_text would translate CRLF back to LF on the way
+    in and pass whatever newline=None had written, which is precisely the drift §5 forbids and the
+    GUI's own report test pins the same way (P23)."""
     from core.artifacts import ArtifactStore, render_lineage
     root, ids = browse_store
     want = render_lineage(ArtifactStore(root), "posterior", ids["posterior"])
@@ -6500,7 +6678,8 @@ def test_artifacts_summary_prints_the_lineage_or_writes_it_to_out(browse_store, 
 
     out_file = tmp_path / "lineage.txt"
     assert main(["artifacts", "summary", "posterior", ids["posterior"], "--out", str(out_file)]) == 0
-    assert out_file.read_text(encoding="utf-8") == want
+    assert out_file.read_bytes() == want.encode("utf-8"), \
+        "byte for byte what the browser's Lineage report writes: UTF-8, LF endings"
     assert str(out_file) in capsys.readouterr().out, "the path is named, as report() names an artifact's"
 
 
@@ -6549,7 +6728,10 @@ def test_the_artifacts_family_has_all_six_modes_and_still_no_configuration_flags
 - [ ] **Step 12: Run them and watch them fail**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest tests/test_tool.py -q -k "summary or exit_codes or six_modes"`
-Expected: FAIL — `assert 2 == 0` on the `summary` calls (no such mode), and
+Expected: FAIL in all three — `assert 2 == 0` on the first `summary` call of the summary test (no
+such mode, so argparse exits 2); `assert 2 == 1` in the exit-codes test, on its
+`main(["artifacts", "summary", "prior", "nosuch"]) == 1` line, for the same reason (every rung above
+it passes already, because `note` and `rm` have landed); and
 `AssertionError: ['list', 'note', 'rm', 'show', 'sweep']` on the six-mode set.
 
 - [ ] **Step 13: Add `_summary` and its mode**
@@ -6560,11 +6742,16 @@ Expected: FAIL — `assert 2 == 0` on the `summary` calls (no such mode), and
 def _summary(args, store) -> int:
     """``summary <kind> <ref> [--out PATH]``: the lineage report -- the artifact, then its parents
     transitively, a parent absent from the store printed as MISSING rather than skipped (design §5).
-    A file or stdout, never an eighth store kind (B10)."""
+    A file or stdout, never an eighth store kind (B10).
+
+    newline="\\n" explicitly (P23): write_text's default newline=None translates every "\\n" to
+    "\\r\\n" on Windows, and the browser's own Lineage report button writes the same text with
+    newline="\\n" -- so without it §5's "the same bytes whichever front end made it" is quietly
+    false."""
     from core.artifacts import render_lineage
     text = render_lineage(store, args.kind, args.ref)
     if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
+        Path(args.out).write_text(text, encoding="utf-8", newline="\n")
         print(f"[prism] lineage report: {args.out}")
     else:
         print(text, end="" if text.endswith("\n") else "\n")
@@ -6625,7 +6812,7 @@ git commit -m "tool: artifacts note, rm, sweep and summary"
 
 **Files:**
 - Modify: `core/gui/panels/base_panel.py:6-9` (imports), `:56-57` (the new `_RunState`/`RUN_STATE` block goes here), `:264-280` (`_set_busy`) — and **nothing else in this file**: its stale nine/eight sentences (the class docstring at `:62` and `:69`, the layout-persistence comment at `:315` and `:321-322`) belong to Task 25, which owns every docstring correction and runs last.
-- Modify: `core/gui/screens/nav_shell.py:1-11` (module docstring + the new `running_banner`), `:21-37` (the header row gains the run slot), `:80-82` (append `set_running` after `_sync_back`)
+- Modify: `core/gui/screens/nav_shell.py:1-11` (module docstring + the new `running_banner`), `:21-37` (the header row gains the run slot), `:80-81` (append `set_running` after `_sync_back`, which ends the file at `:81`)
 - Modify: `core/gui/design.py:270-279` (the tool-button QSS block; the new rule goes after line 274)
 - Modify: `core/gui/main_window.py:6-7` (imports), `:14` and `:22` (two import lines), `:131-136` (the destination map + the run slot's wiring, after `_section_index`), `:267-273` (the three new methods go after `_all_panels`)
   - **This task inserts about thirty lines inside `__init__`, so every line number below it moves down by that much.** That includes the `if box.exec() != QMessageBox.Yes:` branch at `main_window.py:231`, which `tests/conftest.py:174` and `tests/test_worker_dispatch.py:338` cite by number in their prose (Task 9 re-points those two). Task 25 must read the final number off the file rather than trusting either task's brief.
@@ -6850,7 +7037,7 @@ stretch, so a growing clock pushes nothing around:
         header_row.addStretch(1)
 ```
 
-Append the writer after `_sync_back` (ends line 82):
+Append the writer after `_sync_back` (ends line 81, the file's last line):
 
 ```python
     def set_running(self, text: "str | None") -> None:
@@ -7107,8 +7294,8 @@ git commit -m "gui: show the live run in the shell header"
 - Modify: `core/gui/screens/nav_shell.py:10-11` (`RUNNING_MARK` beside the imports) and the new `mark_tabs` beside `running_banner`
 - Modify: `core/gui/screens/home_screen.py:8-12` (imports), `:46-58` (the tile loop keeps its buttons, plus `set_running_section`)
 - Modify: `core/gui/screens/section_screen.py:7-9` (imports), `:24-29` (the labels are kept), `:41-43` (plus `set_running_tab`)
-- Modify: `core/gui/screens/inference_screen.py:1-4` (the stale tab count), `:14-20` (imports), `:51-54` (the labels are kept), `:85-87` (plus `set_running_tab`)
-- Modify: `core/gui/main_window.py:101-103` and `:134` (the Home screen becomes `self.home_screen`), `_on_run_state` (one line), plus `_mark_running_section` after `_go_to_running`. All three edits are line-neutral or below `_delete_user_model`, so the `main_window.py:231` citation in `tests/conftest.py:174` and `tests/test_worker_dispatch.py:338` moves no further here — Task 15's insert into `__init__` already moved it, and Task 9 re-points both.
+- Modify: `core/gui/screens/inference_screen.py:14-20` (imports), `:51-54` (the labels are kept), `:85-87` (plus `set_running_tab`). **Not** its module docstring's stale tab count at `:1-4`: Task 18 owns that sentence and rewrites it once (Q3, P38's one-owner rule)
+- Modify: `core/gui/main_window.py:101-103` and `:134` (the Home screen becomes `self.home_screen`), `_on_run_state` (one line), plus `_mark_running_section` after `_go_to_running`. All three edits are line-neutral or below `_delete_user_model`, so the `main_window.py:231` citation in `tests/test_worker_dispatch.py:338` moves no further here — Task 15's insert into `__init__` already moved it, and Task 9 re-points it (the sibling sentence in `tests/conftest.py:174` is Task 11's, which deletes the number rather than re-pointing it).
 - Test: `tests/test_nav_and_gating.py` (append after Task 15's tests)
 
 **Interfaces:**
@@ -7328,28 +7515,15 @@ and append after `panels()` (ends line 87):
         mark_tabs(self.tabs, self._tab_labels, index)
 ```
 
-- [ ] **Step 6: Correct this file's stale tab count (design §8.2)**
-
-`core/gui/screens/inference_screen.py`'s module docstring says five tabs while the class docstring
-twelve lines below says six, and the arrow chain omits TSNPE. There are six. Lines 1-4 become:
-
-```python
-"""The Parameter Inference section: six tabs over ONE shared SbiSession, with cross-tab gating.
-
-    Config -> Prior -> Posterior -> Validate -> Infer -> TSNPE
-```
-
-(TSNPE sits last on purpose: a round needs an observation, and the Infer tab is what records one —
-the comment at lines 49-50 already says so.)
-
-- [ ] **Step 7: Drive the markers from `core/gui/main_window.py`**
+- [ ] **Step 6: Drive the markers from `core/gui/main_window.py`**
 
 The Home screen is a local today (line 101) and the marker needs it. Rename it in place — it is
 referenced twice in `__init__` (lines 103 and 134) and nowhere else:
 
 ```python
         self.home_screen = HomeScreen(
-            live_sections={"Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate"})
+            live_sections={"Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate",
+                           "Artifacts"})
         self.nav.add_screen(self.home_screen)                        # index 0 -- Home
 ```
 
@@ -7359,8 +7533,10 @@ referenced twice in `__init__` (lines 103 and 134) and nowhere else:
         self.home_screen.navigate.connect(lambda name: self.nav.go_to(self._section_index[name]))
 ```
 
-(If the browser task has landed, `live_sections` already carries `"Artifacts"` — leave its contents
-alone and change only the binding.)
+The set has **five** names because Task 9 added `"Artifacts"` (Q12). This step changes only the
+BINDING — the local `home` becomes `self.home_screen`; whatever `live_sections` holds when you get
+here is what it must still hold when you leave, so copy it off the file rather than off this block if
+the two ever differ.
 
 Add one line to `_on_run_state`, immediately after `self._running_panel = panel`, so both branches —
 a run starting and a run ending — go through it:
@@ -7392,15 +7568,16 @@ and add the method after `_go_to_running`:
             screen.set_running_tab(tab_index if section == name else None)
 ```
 
-- [ ] **Step 8: Run the task's own tests**
+- [ ] **Step 7: Run the task's own tests**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest tests/test_nav_and_gating.py tests/test_simulate.py tests/test_worker_dispatch.py -q`
 
-Expected: PASS. (`test_nav_and_gating.py:1378` and `:2488` read the inference tab titles back
-verbatim, and `test_simulate.py:194-196` builds a `MainWindow`; all three are on the paths this task
-changes.)
+Expected: PASS. (`test_every_field_key_has_a_window_control_and_every_control_names_a_real_one` and
+the tab-title pin beside it read the inference tab titles back verbatim, and `test_simulate.py`'s
+`MainWindow` build is on the same path; all of them are on the paths this task changes. Named rather
+than numbered: Tasks 1, 2 and 15 have all appended to `tests/test_nav_and_gating.py` by now.)
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add core/gui/screens/nav_shell.py core/gui/screens/home_screen.py core/gui/screens/section_screen.py core/gui/screens/inference_screen.py core/gui/main_window.py tests/test_nav_and_gating.py
@@ -7416,6 +7593,10 @@ git commit -m "gui: mark the running section's Home tile and tab"
   box) and `core/gui/panels/inference/config_tab.py:111-112` (the end of `__init__`), plus two new
   methods after `_build_config` (which ends at `core/gui/panels/inference/config_tab.py:296`)
 - Test: `tests/test_nav_and_gating.py` (append at the end of the file)
+
+Task 16 has already inserted into `core/gui/screens/inference_screen.py` (an import line and a
+`set_running_tab` after `panels()`); **re-read that file and take your line numbers from what you
+see** rather than trusting the ranges above. The quoted text is the anchor.
 
 **Interfaces:**
 - Consumes: nothing from an earlier task. It uses only what is already on disk:
@@ -7680,11 +7861,17 @@ git commit -m "gui: the Config tab says what the session holds"
 - Modify: `core/gui/panels/inference/config_tab.py:3` (the `QtWidgets` import),
   `core/gui/panels/inference/config_tab.py:278` (the one line the guard goes in front of), and a new
   method after `_read_inputs` (which ends at line 246 with `return out`)
-- Modify: `core/gui/screens/inference_screen.py:1-13` (module docstring: the stale tab count, §8.2),
+- Modify: `core/gui/screens/inference_screen.py:1-13` (module docstring: the stale tab count, §8.2 —
+  **this task owns that sentence and is the only one that edits it**, Q3),
   `core/gui/screens/inference_screen.py:89-94` (`new_draft`'s docstring) and
   `core/gui/screens/inference_screen.py:96-104` (`install_config`'s docstring)
 - Modify: `PRISM_HANDOFF.md:1667-1670` (the M1b bullet)
 - Test: `tests/test_nav_and_gating.py` (append after Task 17's test)
+
+Task 17 has already inserted into `core/gui/panels/inference/config_tab.py` (two methods after
+`_build_config`, and a line in `__init__`) and Task 16 into
+`core/gui/screens/inference_screen.py`; **re-read both files and take your line numbers from what you
+see** rather than trusting the ranges above. The quoted text is the anchor.
 
 **Interfaces:**
 - Consumes: Task 17's `InferenceScreen.session_contents(self) -> list[str]` and
@@ -9011,7 +9198,7 @@ git commit -m "both front ends install THE root-logger handler at start-up"
 
 **Files:**
 - Modify: `core/runs.py:1-26` (docstring) and `core/runs.py:146-147` (the two new functions, inserted between `capture_run` and `public_entry`)
-- Modify: `core/gui/streams.py:191-200` (`_SignalStream.write`'s check) and `core/gui/streams.py:221-241` (`_PumpLogHandler`'s docstring and `emit`'s check)
+- Modify: `core/gui/streams.py:24` (the `from core import runs` line: its `# noqa: F401` and its "never touched here" clause both stop being true once Step 4 lands), `core/gui/streams.py:191-200` (`_SignalStream.write`'s check) and `core/gui/streams.py:221-241` (`_PumpLogHandler`'s docstring and `emit`'s check)
 - Modify: `core/SBI/training_checkpoint.py:40-51` (the ORDERING docstring) and `core/SBI/training_checkpoint.py:325-343` (`save`)
 - Test: `tests/test_worker_dispatch.py` (two new tests appended at the end)
 
@@ -9155,7 +9342,21 @@ Add a third bullet to the module docstring, after the RUN LOG bullet (line 20, b
 
 - [ ] **Step 4: Make both cancel checkpoints consult it**
 
-In `core/gui/streams.py`, `_SignalStream.write` (lines 194-200) becomes:
+First the import at the top of `core/gui/streams.py` (line 24), which currently reads:
+
+```python
+from core import runs  # noqa: F401 -- sets the ``core`` logger to INFO at import (spec §1.2); never touched here
+```
+
+After this step the module really does call `runs.cancel_is_deferred()`, so both halves of that
+comment are false — the `F401` waiver is no longer needed and "never touched here" is wrong. Replace
+it with:
+
+```python
+from core import runs  # also sets the ``core`` logger to INFO at import (spec §1.2)
+```
+
+Then `_SignalStream.write` (lines 194-200) becomes:
 
 ```python
         # The cancel check sits BEFORE the try below: WorkerCancelled is a BaseException, so that
@@ -9933,9 +10134,9 @@ git commit -m "a new chi probe row starts blank, with one wording for a blank fr
 
 **Interfaces:**
 - Consumes: nothing from any earlier task. `ArtifactStore.create` / `ArtifactWriter.payload`
-  (`store.py:415`, `:219`), `ArtifactStore.path(kind, ref) -> Path` (`store.py:366`),
+  (`store.py:219`, `:415`), `ArtifactStore.path(kind, ref) -> Path` (`store.py:366`),
   `ArtifactStore.load_observation(cfg, ref)` (`store.py:682`),
-  `manifest.conditioning_block(cfg)` and `manifest.tensor_digest(t)` (`manifest.py:173`, `:96`),
+  `manifest.conditioning_block(cfg)` and `manifest.tensor_digest(t)` (`manifest.py:96`, `:173`),
   `file_manager.atomic_torch_save(obj, path)` (`core/Helpers/file_manager.py:61`).
 - Produces: `load_observation`'s payload-width `StoreError` now carries `field="observation"`, so both
   front ends name the observation picker for it from their existing tables
@@ -10076,7 +10277,9 @@ git commit -m "store: pin load_observation's payload guards, field the width one
 ### Task 25: the stale counts, and M1b's docstrings
 
 **Files:**
-- Modify: `core/gui/panels/base_panel.py:62`, `:69`, `:315`, `:322`
+- Modify: `core/gui/panels/base_panel.py:62`, `:69`, `:315`, `:321-322` (the `layout_key` docstring
+  says "there are nine independent" at `:321` and "today all nine differ" at `:322` — **both** halves
+  of that sentence are this task's, Q16)
 - Modify: `core/gui/panels/inference/base.py:15`
 - Modify: `core/gui/main_window.py:70-75`
 - Test: `tests/test_nav_and_gating.py`
@@ -10116,11 +10319,17 @@ def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
 
     Phrases, not a subclass count: the suites own throwaway BasePanel subclasses persist for the life
     of the process, so counting __subclasses__() would assert on test order (ledger P37).
+
+    The source is whitespace-NORMALISED before every check. Two of these phrases are wrapped across a
+    newline in the file ("there are nine independent / splitters"), so against raw source the literal
+    would never appear, the assertion would pass before AND after the edit, and the stale sentence
+    would survive behind a green test -- which is the one failure this test exists to prevent (Q16).
     """
     import core.gui.panels.base_panel as bp
     from core.gui.panels.inference import base as inf_base
 
-    bp_src, inf_src = inspect.getsource(bp), inspect.getsource(inf_base)
+    bp_src = " ".join(inspect.getsource(bp).split())
+    inf_src = " ".join(inspect.getsource(inf_base).split())
     for phrase in ("Nine of these", "8 of the 9", "all nine differ", "nine independent splitters"):
         assert phrase not in bp_src, f"base_panel.py still says {phrase!r}"
     assert "the five inference tabs" not in inf_src
@@ -10136,10 +10345,14 @@ def test_main_window_stops_claiming_it_owns_the_only_settings_write():
     """The class docstring said _save_state is "the only QSettings WRITE site ... so panel selections
     and layouts persist from here". Layouts do not: BasePanel._persist_layout writes and sync()s the
     splitter state on a 1500 ms debounce off splitterMoved, deliberately, because save-on-clean-quit
-    lost the drag (base_panel.py own comment says so). Appearance is the third write site."""
+    lost the drag (base_panel.py own comment says so). Appearance is the third write site.
+
+    Whitespace-NORMALISED, for the same reason as the test above: the claim is wrapped as "the only
+    QSettings / WRITE site" in the file, so against raw source this first assertion could never fail
+    and would pass before and after the rewrite (Q16)."""
     from core.gui import main_window as mw
 
-    src = inspect.getsource(mw.MainWindow)
+    src = " ".join(inspect.getsource(mw.MainWindow).split())
     assert "the only QSettings WRITE site" not in src
     assert "_persist_layout" in src and "1500" in src
 ```
@@ -10149,8 +10362,15 @@ def test_main_window_stops_claiming_it_owns_the_only_settings_write():
 - [ ] **Step 2: Run it and watch it fail**
 
 Run: `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest "tests/test_nav_and_gating.py::test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs" "tests/test_nav_and_gating.py::test_main_window_stops_claiming_it_owns_the_only_settings_write" -v`
-Expected: both FAIL — `AssertionError: base_panel.py still says 'Nine of these'`, and
-`AssertionError: assert 'the only QSettings WRITE site' not in src`
+Expected: both FAIL.
+
+- `test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs` fails on the FIRST phrase of
+  the loop: `AssertionError: base_panel.py still says 'Nine of these'`.
+- `test_main_window_stops_claiming_it_owns_the_only_settings_write` fails on its FIRST assertion,
+  `assert 'the only QSettings WRITE site' not in src` — and it fails only because `src` is
+  whitespace-normalised. Against the raw source that phrase is split across `main_window.py:72-73`
+  and the assertion would pass here and after Step 5 alike; if you see this test fail on
+  `assert "_persist_layout" in src` instead, the normalisation was left out (Q16).
 
 - [ ] **Step 3: Correct `base_panel.py`'s four counts**
 
@@ -10165,8 +10385,27 @@ At `:62`, `Nine of these exist (Reduction, FDT, CrossVal, Simulate + the five in
 
 At `:69`, `8 of the 9 subclasses` becomes `9 of the 10 subclasses` — nine is the real number of
 `save_settings` overrides (every subclass but `ValidatePanel`; grep `def save_settings` under
-`core/gui` and count); at `:315`, `8 of the 9 panels`
-becomes `9 of the 10 panels`; at `:322`, `today all nine differ` becomes `today all ten differ`.
+`core/gui` and count); at `:315`, `8 of the 9 panels` becomes `9 of the 10 panels`.
+
+At `:321-322`, `layout_key`'s docstring counts twice in one sentence and **both** halves change
+(Q16) — it reads
+
+```
+        """Settings key for this panel's layout. Distinct per panel -- there are nine independent
+        splitters. Subclasses that share a class name would override this; today all nine differ."""
+```
+
+and becomes
+
+```
+        """Settings key for this panel's layout. Distinct per panel -- there are ten independent
+        splitters. Subclasses that share a class name would override this; today all ten differ."""
+```
+
+The line break falls inside "nine independent / splitters", which is why Step 1's test normalises
+whitespace before looking for that phrase: correcting only the second half would leave a stale
+"nine" behind a green test.
+
 Re-read the surrounding sentences first and keep each one grammatical — these are explanations, not
 counters, and the reason each gives must survive the edit.
 
