@@ -8,6 +8,7 @@ from core.config import CELL_PATH
 from core.SBI import pipeline, training_checkpoint
 
 from ..base_panel import BasePanel
+from ...fields import label
 from ...widgets.artifact_picker import ArtifactPicker
 
 
@@ -55,8 +56,10 @@ class _TrainingBudgetMixin:
     have been a second place for pipeline's cost model to be restated wrongly, and the whole
     point of that method is that it reads the planner's own numbers instead of restating them.
 
-    A user of this mixin must create ``num_runs``, ``run_size_cap`` (FloatField-likes with
-    ``.value()``) and the three ``budget_*`` labels, then call ``_sync_budget()``.
+    A user of this mixin must create ``num_runs``, ``run_size_cap`` (IntFields with
+    ``.value_or_none()``) and the three ``budget_*`` labels, then call ``_sync_budget()``. A blank
+    or out-of-rule box is SAID on the total line (see _budget_problem), never clamped or defaulted;
+    the click refuses it through the same two rules.
     """
     @staticmethod
     def _derived_label() -> QLabel:
@@ -80,7 +83,28 @@ class _TrainingBudgetMixin:
         return self._hw_cache
 
     def _budget_values(self) -> tuple:
-        return self.num_runs.value(), self.run_size_cap.value()
+        """(batches, rows-per-batch cap) as typed, or None where a box is blank or half-typed.
+
+        value_or_none(), never value(): value() reads "" and a lone "-" as 0, and 0 is a legal cap
+        (automatic) but a refusal for the batch count, so the two must be told apart. Neither a
+        clamp nor a default -- the click refuses a None through the shared rules, and the live lines
+        name the box (V2)."""
+        return self.num_runs.value_or_none(), self.run_size_cap.value_or_none()
+
+    def _budget_problem(self) -> "str | None":
+        """The sentence the total line shows INSTEAD of a number while a budget box is blank or out
+        of rule; None when both pass. The same two rules the click runs (batches at least 1, the cap
+        at least 0), said in the box's own label so the line and the yellow box agree on the name."""
+        n_runs, cap = self._budget_values()
+        if n_runs is None:
+            return f"{label('num_runs')} is blank."
+        if n_runs < 1:
+            return f"{label('num_runs')} must be at least 1."
+        if cap is None:
+            return f"{label('run_size_cap')} is blank."
+        if cap < 0:
+            return f"{label('run_size_cap')} must be at least 0."
+        return None
 
     def _effective_width(self, cfg, cap: int) -> tuple:
         """(rows actually simulated per batch, the hardware default it was capped from)."""
@@ -90,17 +114,29 @@ class _TrainingBudgetMixin:
     def _sync_budget(self) -> None:
         """Recompute the three derived lines. Pure and cheap -- safe on every keystroke.
 
+        A BLANK OR OUT-OF-RULE BOX IS SAID, NOT REPAIRED. This used to read value() -- 0 for "" and
+        for a lone "-" mid-typing -- and then max(1, ...) / max(0, ...) the result, so a blank Batches
+        box showed the budget for ONE batch and a negative cap the hardware width, both as if someone
+        had typed them. A live line cannot pop a dialog, so it names the box and shows no number until
+        it is fixed; the memory and checkpoint lines go empty with it, because an estimate for a
+        width nobody asked for is the same lie in GiB. No clamp, no default, no raise.
+
         ⚠ Treats anything without a `.hw` as no-config-yet rather than trusting `session.cfg` to be a
         SimConfig. Two reasons, and the second is the real one: the gate tests set `session.cfg` to a
         bare `object()` sentinel, and more importantly a derived STATUS LINE must never be able to
         raise into refresh_gates() and take the whole tab down with it.
         """
+        problem = self._budget_problem()
+        if problem is not None:
+            self.budget_total.setText(problem)
+            self.budget_mem.setText("")
+            self.budget_ckpt.setText("")
+            return
         cfg = self.session.cfg
         if getattr(cfg, "hw", None) is None:
             cfg = None
         n_runs, cap = self._budget_values()
-        width, hw = self._effective_width(cfg, max(0, cap))
-        n_runs = max(1, n_runs)
+        width, hw = self._effective_width(cfg, cap)
 
         capped = "" if width == hw.batch_size else f" (capped from {hw.batch_size:,})"
         chi = ""

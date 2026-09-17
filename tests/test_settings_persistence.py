@@ -145,13 +145,23 @@ def test_the_training_budget_reaches_build_posterior_as_arguments_not_via_config
         "the panel mutated the config constants, which orchestrator has already snapshotted"
 
 def test_the_budget_refuses_a_batch_count_below_one():
-    """0 batches is a whole run that simulates nothing and then trains on an empty tensor."""
+    """0 batches is a whole run that simulates nothing and then trains on an empty tensor.
+
+    The refusal is the CLICK's, through the shared rule, and it arrives as the yellow "Check your
+    inputs" box (BasePanel._refusal, stubbed here) naming the Batches box by its field key -- not
+    as a log line the user has to notice. Nothing is dispatched."""
+    from core.refusals import Refusal
+
     _inf, panel = _budget_panel(_budget_cfg(), prior=object())
     panel.num_runs.setText("0")
-    seen = []
+    seen, refused = [], []
     panel.dispatch = lambda fn, *a, **kw: seen.append(kw)
+    panel._refusal = lambda exc: refused.append(exc)
     panel._build_posterior()
     assert not seen, "a zero batch count was dispatched"
+    assert len(refused) == 1 and isinstance(refused[0], Refusal), refused
+    assert refused[0].field == "num_runs", refused[0].field
+    assert "at least 1" in str(refused[0]) and "got 0" in str(refused[0]), str(refused[0])
 
 def test_the_budget_memory_line_reads_pipelines_own_cost_model():
     """The estimate must come from pipeline.peak_sim_elements, not a second copy of the formula, and
@@ -188,6 +198,34 @@ def test_the_budget_lines_never_raise_on_a_config_they_do_not_understand():
     panel._sync_budget()                                   # must not raise
     assert panel.budget_total.text(), "the total line went blank on an unknown config"
     assert "config" in panel.budget_ckpt.text().lower(), panel.budget_ckpt.text()
+
+def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
+    """The mixin used to read value() -- 0 for "" and for a lone "-" mid-typing -- and then
+    max(1, ...) / max(0, ...) the result, so a blank Batches box showed the budget for ONE batch and
+    a negative cap showed the hardware width, both as if someone had typed them. A live line cannot
+    pop a dialog, so it says which box is wrong, in the box's own label, and shows no number until
+    it is fixed: no clamp, no default, no raise (V2 for a live line). The memory and checkpoint
+    lines go empty with it -- an estimate for a width nobody asked for is the same lie in GiB."""
+    from core.gui.fields import label
+
+    _inf, panel = _budget_panel(cfg=object(), prior=object())
+    for text in ("", "-"):
+        panel.num_runs.setText(text)                        # textChanged -> _sync_budget; must not raise
+        assert panel.budget_total.text() == f"{label('num_runs')} is blank.", panel.budget_total.text()
+        assert panel.budget_mem.text() == "" and panel.budget_ckpt.text() == ""
+    panel.num_runs.setText("0")
+    assert panel.budget_total.text() == f"{label('num_runs')} must be at least 1.", panel.budget_total.text()
+    panel.num_runs.setText("3")
+    panel.run_size_cap.setText("-5")
+    assert panel.budget_total.text() == f"{label('run_size_cap')} must be at least 0.", panel.budget_total.text()
+    assert panel.budget_mem.text() == "" and panel.budget_ckpt.text() == ""
+    panel.run_size_cap.setText("")
+    assert panel.budget_total.text() == f"{label('run_size_cap')} is blank.", panel.budget_total.text()
+    # A TYPED 0 in the cap box is "automatic", not blank: the lines come back, for 3 batches.
+    panel.run_size_cap.setText("0")
+    assert "simulations" in panel.budget_total.text() and "3 batches" in panel.budget_total.text(), \
+        panel.budget_total.text()
+    assert panel.budget_ckpt.text(), "the checkpoint line must come back once both boxes pass"
 
 def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint():
     """D3's user-facing face. The TSNPE tab shares the Posterior tab's budget group, whose

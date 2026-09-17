@@ -4,9 +4,10 @@ from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLineEdit, QMessageBox, Q
 
 from core import config, orchestrator
 from core.artifacts import Accept, default_store
-from core.refusals import Refusal
+from core.refusals import Refusal, require_at_least, require_positive
 
 from ... import icons, settings
+from ...fields import label
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
@@ -38,7 +39,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         form = make_form()
         self.post_picker = StorePicker("posterior", allow_new=True)
         self.post_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_train_button())
-        add_help_row(form, "Posterior", self.post_picker, HELP["posterior"])
+        add_help_row(form, label("posterior"), self.post_picker, HELP["posterior"])
         v.addLayout(form)
         self.btn_post = QPushButton("Train / Load posterior")
         self.btn_post.setProperty("accent", True)         # primary CTA (Fluent accent)
@@ -60,8 +61,8 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         bform = make_form()
         self.num_runs = IntField(config.TRAINING_NUM_RUNS)
         self.run_size_cap = IntField(config.TRAINING_RUN_SIZE)
-        add_help_row(bform, "Batches", self.num_runs, HELP["num_runs"])
-        add_help_row(bform, "Max rows per batch (0 = auto)", self.run_size_cap, HELP["run_size"])
+        add_help_row(bform, label("num_runs"), self.num_runs, HELP["num_runs"])
+        add_help_row(bform, label("run_size_cap"), self.run_size_cap, HELP["run_size"])
         bv.addLayout(bform)
         self.budget_total = self._derived_label()
         self.budget_mem = self._derived_label()
@@ -81,10 +82,10 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.flow_transforms = IntField(str(config.NSF_NUM_TRANSFORMS))
         self.flow_lr = FloatField(str(config.TRAINING_LEARNING_RATE))
         self.flow_patience = IntField(str(config.TRAINING_STOP_AFTER_EPOCHS))
-        add_help_row(fform, "Hidden features", self.flow_hidden, HELP["flow_hidden"])
-        add_help_row(fform, "Transforms", self.flow_transforms, HELP["flow_transforms"])
-        add_help_row(fform, "Learning rate", self.flow_lr, HELP["flow_lr"])
-        add_help_row(fform, "Early-stop patience", self.flow_patience, HELP["flow_patience"])
+        add_help_row(fform, label("hidden_features"), self.flow_hidden, HELP["flow_hidden"])
+        add_help_row(fform, label("num_transforms"), self.flow_transforms, HELP["flow_transforms"])
+        add_help_row(fform, label("learning_rate"), self.flow_lr, HELP["flow_lr"])
+        add_help_row(fform, label("stop_after_epochs"), self.flow_patience, HELP["flow_patience"])
         fv.addLayout(fform)
         self.controls_layout.addWidget(flow)
 
@@ -94,9 +95,9 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.fisher_m = IntField(str(config.REPARAM_FISHER_M))
         self.fisher_dz = FloatField(str(config.REPARAM_FISHER_DZ))
         self.fisher_points = IntField(str(config.REPARAM_FISHER_POINTS))
-        add_help_row(rform, "Ensemble per perturbation", self.fisher_m, HELP["fisher_m"])
-        add_help_row(rform, "Central-difference step", self.fisher_dz, HELP["fisher_dz"])
-        add_help_row(rform, "Operating points", self.fisher_points, HELP["fisher_points"])
+        add_help_row(rform, label("fisher_m"), self.fisher_m, HELP["fisher_m"])
+        add_help_row(rform, label("fisher_dz"), self.fisher_dz, HELP["fisher_dz"])
+        add_help_row(rform, label("fisher_points"), self.fisher_points, HELP["fisher_points"])
         rv.addLayout(rform)
         self.controls_layout.addWidget(fisher)
 
@@ -111,16 +112,17 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         if is_new and self.session.inf_prior is None:
             self.log_pane.append_line("Build or load a prior first to train a new posterior.", "warning")
             return
-        n_runs, cap = self._budget_values()
-        if n_runs < 1:
-            self.log_pane.append_line("Batches must be at least 1.", "warning")
-            return
-        if cap < 0:
-            self.log_pane.append_line("Max rows per batch cannot be negative (0 = auto).", "warning")
+        # THE CLICK-TIME RULES, on the boxes the chosen branch will read and no other, before any
+        # worker starts. A refusal is the yellow "Check your inputs" box naming the box; the stage
+        # runs the same rules again at entry, so the two front ends cannot disagree.
+        try:
+            v = self._read_inputs(is_new)
+        except Refusal as e:
+            self._refusal(e)
             return
         new_run, accept = False, Accept()
         if is_new:
-            go, new_run = self._confirm_fresh_run(cfg, n_runs, cap)
+            go, new_run = self._confirm_fresh_run(cfg, v["num_runs"], v["run_size_cap"])
             if not go:
                 return
         else:
@@ -134,17 +136,42 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self._screen.refresh_gates()
         # Passed, never written to config: orchestrator does `from .config import TRAINING_NUM_RUNS`,
         # so setting the constant here would be a silent no-op and the run would use the default.
+        # On a load `v` is empty: every knob stays at its default of None, which the load branch
+        # never reads.
         self.dispatch(orchestrator.build_posterior, cfg, self.session.inf_prior,
-                      entry, is_new,
-                      num_runs=n_runs, run_size_cap=cap, accept=accept, new_run=new_run,
-                      hidden_features=max(1, self.flow_hidden.value()),
-                      num_transforms=max(1, self.flow_transforms.value()),
-                      learning_rate=self.flow_lr.value() or config.TRAINING_LEARNING_RATE,
-                      stop_after_epochs=max(1, self.flow_patience.value()),
-                      fisher_m=max(1, self.fisher_m.value()),
-                      fisher_dz=self.fisher_dz.value() or config.REPARAM_FISHER_DZ,
-                      fisher_points=max(1, self.fisher_points.value()),
-                      provide_fig_sink=True, on_result=self._on_posterior)
+                      entry, is_new, accept=accept, new_run=new_run,
+                      provide_fig_sink=True, on_result=self._on_posterior, **v)
+
+    def _read_inputs(self, is_new: bool) -> dict:
+        """Every box the chosen branch of build_posterior will read, as the stage's own keyword
+        arguments, read through value_or_none() and the shared rules -- raising the FIRST Refusal,
+        with the box named by its field key, before any worker starts.
+
+        WHICH BRANCH is decided as the stage decides it: ``is_new`` from the picker mirrors
+        ``trains = train_new or ref is None`` in build_posterior. A LOAD reads the picker and the
+        accept dialog and nothing else, so it returns {} and the knobs are not forwarded at all (the
+        stage resolves None to its default and its load branch never reads them) -- a blank Hidden
+        features box cannot block loading a posterior. A TRAIN reads every knob, in the tab's order.
+
+        NO CLAMP, NO DEFAULT. ``max(1, self.flow_hidden.value())`` turned a blank box into 1 and
+        ``self.flow_lr.value() or config.TRAINING_LEARNING_RATE`` turned a typed 0 into the default,
+        both silently, and the stage then trained a flow nobody had configured. A blank is a refusal
+        ("The number of hidden features is blank (default 128)."), a 0 is refused where the rule says
+        so, and only the cap's 0 means automatic.
+        """
+        if not is_new:
+            return {}
+        return {
+            "num_runs": require_at_least("num_runs", self.num_runs.value_or_none(), 1),
+            "run_size_cap": require_at_least("run_size_cap", self.run_size_cap.value_or_none(), 0),
+            "hidden_features": require_at_least("hidden_features", self.flow_hidden.value_or_none(), 1),
+            "num_transforms": require_at_least("num_transforms", self.flow_transforms.value_or_none(), 1),
+            "learning_rate": require_positive("learning_rate", self.flow_lr.value_or_none()),
+            "stop_after_epochs": require_at_least("stop_after_epochs", self.flow_patience.value_or_none(), 1),
+            "fisher_m": require_at_least("fisher_m", self.fisher_m.value_or_none(), 1),
+            "fisher_dz": require_positive("fisher_dz", self.fisher_dz.value_or_none()),
+            "fisher_points": require_at_least("fisher_points", self.fisher_points.value_or_none(), 1),
+        }
 
     def _confirm_fresh_run(self, cfg, n_runs: int, cap: int) -> tuple:
         """Ask before starting from zero when a committed cache is ONE FIELD away.

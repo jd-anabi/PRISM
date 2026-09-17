@@ -470,16 +470,31 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     assert cap["kwargs"]["n_cal"] == 77 and cap["kwargs"]["cal_n_scales"] == 11, cap["kwargs"]
     assert _cfg.SBC_N_CAL != 77, "the panel wrote the config constant instead of passing an argument"
 
-    inf.posterior_panel.flow_hidden.setText("64")
-    inf.posterior_panel.flow_transforms.setText("3")
-    inf.posterior_panel.flow_patience.setText("7")
-    inf.posterior_panel.post_picker.combo.setCurrentIndex(0)
-    inf.posterior_panel._build_posterior()
+    pp = inf.posterior_panel
+    refused = []
+    pp._refusal = lambda exc: refused.append(exc)       # the yellow box, recorded instead of shown
+    pp.flow_hidden.setText("64")
+    pp.flow_transforms.setText("3")
+    pp.flow_lr.setText("0.0007")
+    pp.flow_patience.setText("7")
+    pp.fisher_dz.setText("0.03")
+    pp.post_picker.combo.setCurrentIndex(0)
+    pp._build_posterior()
+    assert refused == [], [str(e) for e in refused]
     k = cap["kwargs"]
     assert (k["hidden_features"], k["num_transforms"], k["stop_after_epochs"]) == (64, 3, 7), k
+    # The two float knobs arrive as typed, through the rule -- not through `value() or default`.
+    assert (k["learning_rate"], k["fisher_dz"]) == (0.0007, 0.03), k
     assert _cfg.NSF_HIDDEN_FEATURES != 64, "the panel wrote NSF_HIDDEN_FEATURES"
     # the Fisher knobs ride along on the same call
     assert (k["fisher_m"], k["fisher_points"]) == (_cfg.REPARAM_FISHER_M, _cfg.REPARAM_FISHER_POINTS)
+    # A BLANK box is refused at the click, by name, and nothing new is dispatched -- not clamped to 1.
+    pp.flow_transforms.setText("")
+    pp._build_posterior()
+    assert cap["kwargs"] is k, \
+        f"a blank Transforms box was dispatched as {cap['kwargs'].get('num_transforms')!r}"
+    assert len(refused) == 1 and refused[0].field == "num_transforms", [str(e) for e in refused]
+    pp.flow_transforms.setText("3")
 
     # Prior. NON-VACUOUS now: the old version added the bounds item with no userData (so the click
     # returned at "Select a bounds file first.", before the dispatch) and then skipped its assertions
@@ -1834,3 +1849,85 @@ def test_the_prior_tab_rows_are_labelled_from_the_control_table():
                     "stability_units", "min_cluster_size", "min_samples"], keys
     for key in keys:
         assert CONTROL[key] == ("Prior", label(key)), (key, CONTROL[key])
+
+
+def test_the_posterior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
+    """V2 at the Posterior tab's click. Every knob the TRAIN branch reads is validated before any
+    worker starts, through the shared rules, and the refusal carries the box's field key so the
+    yellow box can say where to fix it. Three shapes used to pass silently: a blank box read as 0
+    and was clamped to 1 (`max(1, ...)`), a 0 in a `... or default` box became the default, and a
+    negative Fisher step sailed through. Each is now a refusal, and NOTHING is dispatched.
+
+    The LOAD branch is the other half of the rule, and the half that cuts the other way: a load
+    reads the picker and the accept dialog, never the knob boxes, so a blank Hidden features box
+    must not block loading a posterior -- and the knobs are not forwarded at all (the stage resolves
+    None to its default and its load branch never reads them). Decided as the stage decides it:
+    is_new from the picker mirrors `trains = train_new or ref is None`."""
+    from core.artifacts import Accept
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from core.refusals import Refusal
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub())
+    pp = inf.posterior_panel
+    pp.post_picker.selected = lambda: ("", True)              # "(from scratch)" -> the TRAIN branch
+    pp._confirm_fresh_run = lambda cfg, n_runs, cap: (True, False)
+    sent, refused = [], []
+    pp.dispatch = lambda fn, *a, **k: sent.append(k)
+    pp._refusal = lambda exc: refused.append(exc)
+
+    def click(box, text):
+        """One click with `box` holding `text`; the box is put back afterwards."""
+        good = box.text()
+        box.setText(text)
+        sent.clear()
+        refused.clear()
+        pp._build_posterior()
+        box.setText(good)
+        return list(sent), list(refused)
+
+    cases = [
+        (pp.num_runs, "", "num_runs", "is blank"),
+        (pp.num_runs, "0", "num_runs", "at least 1"),
+        (pp.run_size_cap, "", "run_size_cap", "is blank"),
+        (pp.run_size_cap, "-5", "run_size_cap", "at least 0"),
+        (pp.flow_hidden, "", "hidden_features", "is blank"),
+        (pp.flow_hidden, "0", "hidden_features", "at least 1"),
+        (pp.flow_transforms, "0", "num_transforms", "at least 1"),
+        (pp.flow_lr, "", "learning_rate", "is blank"),
+        (pp.flow_lr, "0", "learning_rate", "greater than 0"),
+        (pp.flow_patience, "0", "stop_after_epochs", "at least 1"),
+        (pp.fisher_m, "0", "fisher_m", "at least 1"),
+        (pp.fisher_dz, "", "fisher_dz", "is blank"),
+        (pp.fisher_dz, "-0.01", "fisher_dz", "greater than 0"),
+        (pp.fisher_points, "0", "fisher_points", "at least 1"),
+    ]
+    for box, text, field, rule in cases:
+        got_sent, got_refused = click(box, text)
+        assert got_sent == [], f"{field}={text!r} was dispatched: {got_sent}"
+        assert len(got_refused) == 1 and isinstance(got_refused[0], Refusal), (field, got_refused)
+        assert got_refused[0].field == field, (field, got_refused[0].field, str(got_refused[0]))
+        assert rule in str(got_refused[0]), (field, str(got_refused[0]))
+
+    # A typed 0 in the cap box is "automatic", not blank: the one 0 this tab accepts.
+    got_sent, got_refused = click(pp.run_size_cap, "0")
+    assert got_refused == [] and len(got_sent) == 1 and got_sent[0]["run_size_cap"] == 0, \
+        (got_refused, got_sent)
+
+    # The LOAD branch: a blank knob box does not block a load, and no knob is forwarded.
+    pp.post_picker.selected = lambda: ("p1", False)
+    pp._accept_for_load = lambda entry: Accept()
+    pp.flow_hidden.setText("")
+    pp.fisher_dz.setText("")
+    sent.clear()
+    refused.clear()
+    pp._build_posterior()
+    assert refused == [] and len(sent) == 1, ([str(e) for e in refused], sent)
+    forwarded = set(sent[0]) & {"num_runs", "run_size_cap", "hidden_features", "num_transforms",
+                                "learning_rate", "stop_after_epochs", "fisher_m", "fisher_dz",
+                                "fisher_points"}
+    assert forwarded == set(), f"a load forwarded knobs the load branch never reads: {forwarded}"
+    assert sent[0]["new_run"] is False and isinstance(sent[0]["accept"], Accept), sent[0]
