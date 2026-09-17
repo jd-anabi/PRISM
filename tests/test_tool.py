@@ -1026,6 +1026,29 @@ def test_smoke_leaves_no_leaked_temp_root_on_a_bad_bounds_file(tool_env, tmp_pat
     assert main(["smoke", "--bounds", bad_bounds, "--device", "cpu", "--cell", cell]) == 1
     after = set(tmp_path.iterdir())
     assert after == before, "a bad --bounds must not leave an empty prism_smoke_* directory behind"
+    # §3.3's file rule at the build: ONE refusal line naming the input kind and the flag, not the
+    # parser's bare FileNotFoundError with a [raised at file_manager.py:...] hedge
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism smoke: refused:")]
+    assert len(lines) == 1, err
+    assert "The bounds file was not found" in lines[0] and lines[0].endswith("(--bounds)"), lines[0]
+    assert "raised at" not in lines[0] and "FileNotFoundError" not in lines[0], lines[0]
+
+
+def test_a_missing_cell_is_refused_at_the_read_naming_the_flag(tool_env, capsys):
+    """The cell half of §3.3's file rule, on a subcommand whose config build reads the truth
+    (identifiability jacobian, through cli.load_and_validate_gt): a --cell that names no file is a
+    Refusal(field="cell") printed as one line ending in the flag, before anything is spent."""
+    bounds, cell, _root = tool_env
+    missing = str(Path(cell).parent / "no_such_cell.txt")
+    capsys.readouterr()
+    assert main(["identifiability", "jacobian", "--bounds", bounds, "--device", "cpu",
+                 "--cell", missing, "--t-obs", "1"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism identifiability: refused:")]
+    assert len(lines) == 1, err
+    assert "The cell file was not found" in lines[0] and lines[0].endswith("(--cell)"), lines[0]
+    assert "raised at" not in lines[0] and "FileNotFoundError" not in lines[0], lines[0]
 
 
 def test_smoke_ctrl_c_advice_depends_on_store_root():

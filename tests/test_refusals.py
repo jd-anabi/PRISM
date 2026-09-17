@@ -251,13 +251,16 @@ def test_require_choice_refuses_an_unknown_option_and_lists_the_choices():
 
 
 def test_require_file_refuses_a_blank_and_a_missing_path_naming_the_input_kind(tmp_path):
-    """The bounds, cell and units files and the three recordings: "given and the file exists",
-    checked at the click and again at stage entry, so ``File not found: <path>`` inside the worker
-    and ``the spont recording was not found: ''`` never happen. ``what`` names the input kind in the
-    blank sentence ("no cell file was given"); without it the field's own description stands in, which
-    reads awkwardly for a key whose description already says "file" -- callers pass ``what``. A
-    directory is not the file. The path comes back as a str, so a Path caller binds the same thing a
-    flag caller does."""
+    """The bounds and cell files and the three recordings: "given and the file exists". The bounds
+    file is checked where the config is built (cli.make_sim_config: the Prior tab's click and every
+    subcommand's first act), the cell where its truth is read (cli.load_and_validate_gt), at the Infer
+    tab's click and at simulated_inference's entry, and the recordings at the click and again at
+    stage entry, so ``File not found: <path>`` and ``the spont recording was not found: ''`` are
+    reached only by a race. (The units file has its own refusal, cli.resolve_units_file.) ``what``
+    names the input kind in the blank sentence ("no cell file was given"); without it the field's own
+    description stands in, which reads awkwardly for a key whose description already says "file" --
+    callers pass ``what``. A directory is not the file. The path comes back as a str, so a Path caller
+    binds the same thing a flag caller does."""
     f = tmp_path / "cell.txt"
     f.write_text("k 1\n", encoding="utf-8")
     assert require_file("cell", str(f), "cell") == str(f)

@@ -1472,7 +1472,8 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
         assert pane.lines[-1] == ("error", "manifest.json is locked"), pane.lines
 
 
-def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_config_error(monkeypatch):
+def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_config_error(monkeypatch,
+                                                                                            tmp_path):
     """"Build / Load prior" builds the SimConfig first. A Refusal from that builder (a bounds file
     the parser will not take, a units declaration that does not parse) opens the yellow box with the
     core's sentence as its TEXT -- not as the informative line under a generic "The configuration
@@ -1524,6 +1525,27 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
     assert box.text() == "division by zero" and "ZeroDivisionError" in box.detailedText()
     assert reached == [] and pane.lines[-1] == ("error", "division by zero")
+
+    # A bounds file that vanished between the picker's refresh and the click, through the REAL
+    # builder: cli.make_sim_config refuses it by the input kind (§3.3), so it is the yellow box naming
+    # the Bounds picker -- not the parser's FileNotFoundError in the red one.
+    from core import cli, registry
+    from core.config import VALID_LABELS, VALID_MODELS
+    gone = str(tmp_path / "gone.txt")
+    pp.bounds_picker.selected_path = lambda: gone
+
+    def _real(bounds_path=None, *, bounds_dicts=None):
+        return cli.make_sim_config("NADROWSKI", VALID_LABELS[VALID_MODELS.index("NADROWSKI")],
+                                   registry.state_dep_drift("NADROWSKI"), bounds_path,
+                                   bounds_dicts=bounds_dicts)
+
+    inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_real))
+    SHOWN.clear()
+    pp._build_prior()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, box.text()
+    assert box.text() == f"The bounds file was not found: {gone!r}."
+    assert box.informativeText() == gui_fields.fix_sentence("bounds") and reached == []
 
     for path in sorted(Path(inference_pkg.__file__).parent.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))

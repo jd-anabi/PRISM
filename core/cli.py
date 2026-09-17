@@ -18,7 +18,7 @@ from .config import (
     BOUNDS_PATH, UNITS_PATH,
 )
 from .Helpers import file_manager
-from .refusals import Refusal
+from .refusals import Refusal, require_file
 
 
 class UnitParseError(Refusal):
@@ -83,7 +83,10 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
     :return: names of cell values the bounds file does not declare, which were therefore IGNORED
              (e.g. f_scale + the drive when a forced cell is paired with spontaneous bounds). Empty in
              the usual matched case; callers may surface it, and existing callers can ignore it.
+    :raises Refusal: (field "cell") for a blank path or one that names no file, before the parser
+             (§3.3's file rule; a file that exists but does not parse keeps the parser's behaviour).
     """
+    require_file("cell", cell_path, "cell")
     inits, param_vals, rescale_vals, forcing_vals = file_manager.parse_values_file(cell_path)
     cfg.sources["cell"] = str(cell_path)
     return cfg.inject_ground_truth(inits, param_vals, rescale_vals, forcing_vals)
@@ -268,6 +271,9 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
     if bounds_dicts is not None:
         params_dict, rescale_params, force_params_dict = (OrderedDict(d) for d in bounds_dicts)
     else:
+        # §3.3: the file is checked by its input kind first, so both front ends refuse a missing one
+        # with the field key; the parser's own FileNotFoundError is then reached only by a race.
+        require_file("bounds", bounds_file, "bounds")
         params_dict, rescale_params, force_params_dict, _ = file_manager.parse_bounds_file(bounds_file)
     units_path = None
     if units_override is None:

@@ -321,6 +321,11 @@ def test_config_build_refusals_name_their_field():
     with pytest.raises(Refusal, match="exactly one of") as e:
         cli.make_sim_config("NADROWSKI", _LABELS, registry.state_dep_drift("NADROWSKI"))
     assert e.value.field is None
+    # the bounds FILE itself (§3.3): a path that names no file is refused by the input kind at the
+    # build, never the parser's bare "File not found" from inside file_manager
+    with pytest.raises(Refusal, match="The bounds file was not found") as e:
+        _cfg("no_such_bounds.txt")
+    assert e.value.field == "bounds"
     with pytest.raises(Refusal, match="time unit") as e:
         cli.units_to_factors(("nm", "pN"))                       # no time unit among them
     assert e.value.field == "units"
