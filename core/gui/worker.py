@@ -7,6 +7,20 @@ from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 from .streams import WorkerCancelled, redirect_streams
 
 
+def _drop_tracebacks(exc: BaseException) -> None:
+    """Set ``__traceback__`` to None on ``exc`` and on every exception along its ``__cause__`` /
+    ``__context__`` chain, so none of them keeps the failed run's frames alive. A chain can loop (an
+    exception re-raised as its own context's context), so each is visited once."""
+    seen, stack = set(), [exc]
+    while stack:
+        e = stack.pop()
+        if e is None or id(e) in seen:
+            continue
+        seen.add(id(e))
+        e.__traceback__ = None
+        stack += [e.__cause__, e.__context__]
+
+
 class WorkerSignals(QObject):
     log = Signal(str, str)          # (text, level in {"info","warning","error"}) -- panel-side messages
     log_batch = Signal(object)      # list[(text, level)]: one pump tick of pipeline output
@@ -56,6 +70,11 @@ class Worker(QRunnable):
                     # box for a Refusal and the red one with the traceback for anything else, and
                     # it can only tell the two apart if the object itself crosses the thread.
                     failure = (e, traceback.format_exc())
+                    # ...but not its traceback. The traceback owns every frame of the failed run
+                    # (the stage's host buffers, the prior, CUDA tensors), and this frame heads it
+                    # while `failure` holds the exception: a cycle only a full collection frees.
+                    # The panel needs the type, message, field and the text formatted above.
+                    _drop_tracebacks(e)
                 finally:
                     # Stray figures a stage built but never handed to the sink (e.g. it unwound on a
                     # cancel before _emit): harmless under Agg, but they pile up across cancelled runs.
@@ -76,6 +95,7 @@ class Worker(QRunnable):
                 self.signals.result.emit(payload)
             else:
                 self.signals.error.emit(*failure)
+                failure = None                       # the queued signal holds its own reference
         except RuntimeError:
             # "Signal source has been deleted": the window was closed while this run was still going,
             # so the QApplication and our WorkerSignals are already gone. Nothing to report to.

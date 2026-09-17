@@ -73,6 +73,69 @@ def test_worker_payload_is_released_after_the_run():
     gc.collect()
     assert ref() is None, "the worker still pins its argument after the run finished"
 
+
+def test_a_failed_run_does_not_pin_its_frames():
+    """The worker carries the EXCEPTION across the thread (so the panel can route a Refusal to the
+    yellow box), and an exception's traceback owns every frame of the failed run -- the stage's host
+    buffers, the prior, the CUDA tensors. Held in a local of Worker.run, whose own frame heads that
+    traceback, it made a reference cycle only a full garbage collection frees, which in a process that
+    has loaded torch, sbi and Qt can be hours away. Worker.run drops the tracebacks once the text is
+    formatted, so reference counting frees the frames when the box is dismissed.
+
+    NO gc.collect() here, and the collector is off for the whole run: a collection is exactly what
+    hides the cycle (test_worker_payload_is_released_after_the_run calls one). Two legs: a bug (the
+    red box) and a Refusal raised from a cause its frame keeps bound (the yellow box; the cause's own
+    traceback is dropped too, which the leg fails without)."""
+    import gc
+    import weakref
+    from PySide6.QtWidgets import QMessageBox
+    from core.refusals import Refusal
+    from tests._fixtures import SHOWN
+
+    app = qt_app()
+
+    class Big:
+        pass
+
+    class P(BasePanel):
+        pass
+
+    def crash(payload):
+        raise RuntimeError("the batch failed")
+
+    def refuse(payload):
+        held = None
+        try:
+            raise OSError("the underlying cause")
+        except OSError as cause:
+            # kept bound, as a stage's retry ladder keeps its `err`: this frame -> cause -> its
+            # traceback -> this frame is a cycle of its own, which only the chain walk breaks
+            held = cause
+        raise Refusal("The run was refused.", field="name") from held
+
+    for fn, title, icon in ((crash, "Error", QMessageBox.Critical),
+                            (refuse, "Check your inputs", QMessageBox.Warning)):
+        panel = P()
+        big = Big()
+        ref = weakref.ref(big)
+        was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            SHOWN.clear()
+            panel.dispatch(fn, big)
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and panel._busy:
+                app.processEvents()
+                time.sleep(0.01)
+            pump(app, 0.2)
+            assert SHOWN and SHOWN[-1].windowTitle() == title and SHOWN[-1].icon() == icon, \
+                (fn.__name__, [(b.windowTitle(), b.text()) for b in SHOWN])
+            del big
+            assert ref() is None, f"{fn.__name__}: a failed run still pins its frames after the box"
+        finally:
+            if was_enabled:
+                gc.enable()
+
 # ── Phase 3: cancellation ────────────────────────────────────────────────────────────────────────
 def test_worker_cancelled_passes_through_except_exception():
     """The cancel exception must be a BaseException so the pipeline's many `except Exception` handlers
