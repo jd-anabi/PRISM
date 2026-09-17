@@ -1673,6 +1673,66 @@ def test_simulated_inference_warns_about_ignored_values_t_obs_and_an_out_of_dist
     assert any("the bounds file does not declare" in m and "f_scale" in m for m in said2), said2
 
 
+def test_a_judgement_points_at_the_caller_not_at_the_run_boundary(store, monkeypatch):
+    """public_entry's wrapper adds a frame between a stage and whoever called it, so a warning whose
+    stacklevel was counted for the undecorated stage named core/runs.py and the wrapper's
+    ``return fn(*args, **kwargs)`` as its source -- on the tool's stderr and in the window. Every such
+    warning skips runs.py's frames when counting (``skip_file_prefixes``, Python 3.12), so the
+    judgement points at the caller again: here, this test.
+
+    The call is made from this file, so each PreflightWarning's filename must be this file. The AST
+    half covers the stage-level sites a CPU test cannot reach cheaply: every ``warnings.warn`` with a
+    ``stacklevel`` made directly in a @public_entry body, and _preflight_warn's own, passes
+    ``skip_file_prefixes``."""
+    import ast
+    import inspect
+    from core import orchestrator, runs
+    import core.diagnostics.ablation as ablation
+    import core.diagnostics.identifiability as identifiability
+    import core.diagnostics.sbc as sbc
+    from core.config import CELL_PATH
+    cfg = _spont_cfg()
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: "INF")
+    with pytest.warns(orchestrator.PreflightWarning) as rec:
+        orchestrator.simulated_inference(cfg, _sim_post(), 0.5, cell=cell, store=store)
+    judged = [w for w in rec if issubclass(w.category, orchestrator.PreflightWarning)]
+    assert len(judged) >= 2, [str(w.message) for w in rec]           # T_obs + the ignored cell values
+    for w in judged:
+        assert Path(w.filename).resolve() != Path(runs.__file__).resolve(), (w.filename, w.lineno)
+        assert Path(w.filename).resolve() == Path(__file__).resolve(), (str(w.message), w.filename)
+
+    def _warns_with_stacklevel(body_owner):
+        out = []
+        stack = list(body_owner.body)
+        while stack:                                             # the body, not nested defs
+            node = stack.pop()
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+                continue
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "warn" and ast.unparse(node.func.value) == "warnings"
+                    and any(k.arg == "stacklevel" for k in node.keywords)):
+                out.append(node)
+            stack.extend(ast.iter_child_nodes(node))
+        return out
+
+    checked = 0
+    for mod in (orchestrator, sbc, identifiability, ablation):
+        tree = ast.parse(inspect.getsource(mod))
+        for fn in ast.walk(tree):
+            if not isinstance(fn, ast.FunctionDef):
+                continue
+            decorated = any(ast.unparse(d).endswith("public_entry") for d in fn.decorator_list)
+            if not (decorated or fn.name == "_preflight_warn"):
+                continue
+            for call in _warns_with_stacklevel(fn):
+                checked += 1
+                assert any(k.arg == "skip_file_prefixes" for k in call.keywords), \
+                    f"{mod.__name__}.{fn.name}:{call.lineno} counts a stacklevel through public_entry's wrapper"
+    assert checked >= 6, checked            # _preflight_warn + the five stage-level sites today
+
+
 def test_simulated_inference_refuses_a_non_amortized_posterior_before_it_simulates(store, monkeypatch):
     """The refusal used to fire inside infer_and_visualize, i.e. AFTER generate_observations had
     simulated and WRITTEN an observation artifact -- one orphan per refusal. And for SIMULATED

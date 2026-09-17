@@ -27,12 +27,22 @@ and the tool's `main` install and remove handlers only.
 import datetime
 import functools
 import logging
+import os
 import threading
 import warnings
 from contextlib import contextmanager
 
 LOGGER = logging.getLogger("core")
 LOGGER.setLevel(logging.INFO)
+
+#: ``skip_file_prefixes`` for a ``warnings.warn`` with a ``stacklevel`` made in a @public_entry body.
+#: The decorator's wrapper is one more frame between the stage and its caller, and it lives in this
+#: file; skipping this file's frames when counting (Python 3.12) points the warning at the caller the
+#: stacklevel was written for, not at the wrapper's ``return fn(*args, **kwargs)``.
+#: The prefix is the path WITHOUT its ".py": the installed 3.12's C matcher never matches a prefix
+#: equal to the whole filename (its tail-match stops one character short), so ``(__file__,)`` skips
+#: nothing. No other file under core/ starts with "runs".
+RUN_BOUNDARY_FILES: tuple[str, ...] = (os.path.splitext(__file__)[0],)
 
 
 def _stamp() -> str:

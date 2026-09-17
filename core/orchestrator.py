@@ -42,7 +42,9 @@ from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedC
                         LoadedInference, resolve_store)
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .artifacts.provenance import file_ref as _file_ref
-from .runs import public_entry          # V1: every public stage below works on a private copy of its config
+# V1: every public stage below works on a private copy of its config. RUN_BOUNDARY_FILES keeps a
+# stage's warnings pointing at its caller through the decorator's extra frame.
+from .runs import RUN_BOUNDARY_FILES, public_entry
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
 from .SBI.run_guards import (_find_nd_gmm, _gmm_fingerprint,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches_region,
@@ -91,8 +93,9 @@ warnings.filterwarnings("always", category=PreflightWarning)
 
 def _preflight_warn(msg: str) -> None:
     """The ONE channel a composition reports a judgement through. stacklevel=3 points the warning at the
-    front end that called the composition, not at this helper."""
-    warnings.warn(msg, PreflightWarning, stacklevel=3)
+    front end that called the composition, not at this helper: the composition's @public_entry wrapper
+    is skipped when counting (RUN_BOUNDARY_FILES), so it is not the frame the warning names."""
+    warnings.warn(msg, PreflightWarning, stacklevel=3, skip_file_prefixes=RUN_BOUNDARY_FILES)
 
 
 def _truth_outside_region(T_train, region, truth) -> list:
@@ -161,7 +164,7 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
             f"Synthetic GT observation out-of-distribution: n_fine_total={n_fine_total} "
             f"> N_ND_MAX={N_ND_MAX}. Network was trained only on combinations with "
             f"n_fine_total <= {N_ND_MAX}. Posterior may extrapolate poorly.",
-            stacklevel=2,
+            stacklevel=2, skip_file_prefixes=RUN_BOUNDARY_FILES,
         )
 
     # Cost ceiling: if simulation exceeds the pre-simulated grid, clip and update T_obs
@@ -174,7 +177,7 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
             f"Observation cost ceiling hit: requested T_obs={cfg.T_obs:.4f} exceeds "
             f"pre-simulated grid. Clipping N_obs to {N_obs} (actual T_obs={actual_T_obs:.4f}). "
             f"cfg.T_obs updated so downstream code sees the consistent value.",
-            stacklevel=2,
+            stacklevel=2, skip_file_prefixes=RUN_BOUNDARY_FILES,
         )
         cfg.T_obs = actual_T_obs  # keep log(T) conditioning consistent across pipeline
 
@@ -1236,7 +1239,7 @@ def build_posterior(
                 # print reached the window at info and a warning at warning. A PreflightWarning, whose
                 # "always" filter says a repeated judgement every time; a bare UserWarning is shown once
                 # per call site and text, so an identical second round in one session would be silent.
-                warnings.warn(_msg, PreflightWarning, stacklevel=2)
+                warnings.warn(_msg, PreflightWarning, stacklevel=2, skip_file_prefixes=RUN_BOUNDARY_FILES)
         train_prior = truncate.TruncatedLatentPrior(train_prior, truncation)
         log.info(f"[tsnpe] training on the PRIOR RESTRICTED to {truncation!r}")
         log.info(f"[tsnpe] this artifact will be marked NON-AMORTIZED; it is valid only near the "
@@ -1878,7 +1881,8 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             # A diagnostic must never be the thing that loses a multi-day run's other results. The
             # sample-based decomposition in particular reaches into the posterior's transform stack.
             warnings.warn(f"informativeness could not be computed ({type(_e).__name__}: {_e}); the "
-                          f"calibration results above are unaffected.", stacklevel=2)
+                          f"calibration results above are unaffected.", stacklevel=2,
+                          skip_file_prefixes=RUN_BOUNDARY_FILES)
             info = None
 
         file_manager.atomic_savez(w.payload("ranks.npz"), {
@@ -1986,7 +1990,8 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         # Said ONCE, as the warning (spec §4.1), with the sentence walkthrough row B3 reads in the pane.
         # A PreflightWarning for the same reason as build_posterior's GROUND TRUTH judgement: the same
         # posterior on the same foreign observation twice in one session must be told twice.
-        warnings.warn(_msg + " Running anyway (accepted).", PreflightWarning, stacklevel=2)
+        warnings.warn(_msg + " Running anyway (accepted).", PreflightWarning, stacklevel=2,
+                      skip_file_prefixes=RUN_BOUNDARY_FILES)
         accepted = accept.used()
     # ONLY NOW: a refused inference must not leave the rejected observation's T_obs, probe frequencies
     # or ground truth on the session's cfg, where the next stage would silently run against them.
