@@ -74,6 +74,29 @@ def _chi_cfg(k=3, pad=12):
     return Cfg()
 
 
+def _spont_cfg():
+    """A stub config that survives the Prior tab's post-build path and install_config: the SimConfig
+    fields the "Config built" line, check_unit_consistency and the Infer tab's on_config_built read,
+    with chi OFF (its twin _chi_cfg puts the Infer tab on the chi page instead). A bare object()
+    stops at cfg.check_unit_consistency(), so a test that wants the Prior click to REACH its
+    dispatch needs this much."""
+    from core import config
+
+    class Cfg:
+        model = "NADROWSKI"
+        params_dict = {}
+        rescale_params = {}
+        force_params_dict = {}
+        has_forcing = False
+        chi_mode = False
+        chi_k_pad = config.CHI_K_PAD
+        observation_mode = "spontaneous"
+
+        def check_unit_consistency(self):
+            return []
+    return Cfg()
+
+
 # ── Phase-2 panels ───────────────────────────────────────────────────────────────────────────────
 def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins(monkeypatch):
     """FDT supports HOPF/BP + additive-noise user models. An FDTModelError (a missing FDT parameter,
@@ -458,20 +481,37 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     # the Fisher knobs ride along on the same call
     assert (k["fisher_m"], k["fisher_points"]) == (_cfg.REPARAM_FISHER_M, _cfg.REPARAM_FISHER_POINTS)
 
-    inf.prior_panel.cluster_size.setText("9")
-    inf.prior_panel.cluster_samples.setText("4")
-    inf.prior_panel.sweep_iters.setText("3")
-    inf.prior_panel.bounds_source.set_direct(False)
-    inf.prior_panel.bounds_picker.combo.clear()
-    inf.prior_panel.bounds_picker.combo.addItem("master.txt")
+    # Prior. NON-VACUOUS now: the old version added the bounds item with no userData (so the click
+    # returned at "Select a bounds file first.", before the dispatch) and then skipped its assertions
+    # when the kwargs never arrived. A config stub that survives install_config lets the click reach
+    # the dispatch, and the assertions are unconditional.
+    pp = inf.prior_panel
+    inf.session.cfg = _spont_cfg()
     inf.session.draft = type("D", (), {"make_config": lambda self, **kw: inf.session.cfg})()
-    try:
-        inf.prior_panel._build_prior()
-    except Exception:
-        pass                                  # config construction is stubbed; the dispatch is the point
-    if "min_cluster_size" in cap.get("kwargs", {}):
-        assert cap["kwargs"]["min_cluster_size"] == 9 and cap["kwargs"]["min_samples"] == 4, cap["kwargs"]
-        assert _cfg.PRIOR_CLUSTER_MIN_SIZE != 9, "the panel wrote PRIOR_CLUSTER_MIN_SIZE"
+    pp.prior_picker.selected = lambda: (None, True)           # "(from scratch)": the build branch
+    pp.bounds_source.set_direct(False)
+    pp.bounds_picker.combo.clear()
+    pp.bounds_picker.combo.addItem("master.txt", userData="master.txt")
+    pp.cluster_size.setText("9")
+    pp.cluster_samples.setText("4")
+    pp.sweep_iters.setText("3")
+    cap.clear()
+    pp._build_prior()
+    k = cap["kwargs"]
+    assert (k["min_cluster_size"], k["min_samples"], k["num_iterations"]) == (9, 4, 3), k
+    assert _cfg.PRIOR_CLUSTER_MIN_SIZE != 9, "the panel wrote PRIOR_CLUSTER_MIN_SIZE"
+    # a blank knob box is REFUSED at the click (the yellow box), never clamped to 2 and dispatched
+    refused = []
+    pp._refusal = lambda e: refused.append(e)
+    cap.clear()
+    pp.cluster_size.setText("")
+    pp._build_prior()
+    assert cap == {} and refused[-1].field == "min_cluster_size", (cap, refused)
+    # a LOAD click with the same blank box still dispatches: the load branch never reads the knobs
+    pp.prior_picker.selected = lambda: ("p1", False)
+    pp._build_prior()
+    assert cap["kwargs"] and "min_cluster_size" not in cap["kwargs"], cap["kwargs"]
+    assert len(refused) == 1, "the load click must not refuse a knob the load branch never reads"
 
 def test_posterior_from_scratch_is_gated_on_a_prior():
     from core.gui.screens.inference_screen import InferenceScreen
@@ -1635,3 +1675,162 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
     assert isinstance(on.chi_n_freqs, int) and isinstance(on.chi_k_pad, int)
     assert isinstance(on.chi_max_cycles, float)
     assert on.chi_f0 is None and on.chi_freq_bounds is None
+
+
+def test_the_prior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
+    """V2 on the Prior tab. A blank, half-typed or out-of-rule knob box is REFUSED at the click --
+    the yellow box, through _refusal -- and nothing is dispatched, the config is not built and the
+    session's downstream is not reset. Until piece 3 the tab clamped (max(2, cluster_size.value()))
+    and defaulted (walk_step or config.PRIOR_SWEEP_STEP), so a blank "Min cluster size" silently
+    built a prior with a floor of 2 that nobody typed, and a blank "Random-walk step" one with the
+    default that nobody chose.
+
+    Three more things the same click must get right, because the stage does (spec §1.2, "a stage
+    with a load branch"): a LOAD click reads none of the seven knobs, so a blank box does not stop
+    it and no knob is forwarded (the stage resolves None to its default); a typed 0 in "Candidates
+    per round" is the automatic value, not a blank; and the live sweep note under the boxes renders
+    a bad box as "<label> is blank." / "<label> must be <rule>." from the SAME rule the click runs,
+    so the note and the refusal can never name different limits."""
+    from core import orchestrator
+    from core.gui.fields import label
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from core.refusals import Refusal
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    cfg = _spont_cfg()
+    inf.session = SbiSession(draft=object(), cfg=None, inf_prior=_prior_stub())
+    inf.session.draft = type("D", (), {"make_config": lambda self, **kw: cfg})()
+    pp = inf.prior_panel
+    pp.bounds_source.set_direct(False)
+    pp.bounds_picker.combo.clear()
+    pp.bounds_picker.combo.addItem("master.txt", userData="master.txt")
+    pp.prior_picker.selected = lambda: (None, True)           # "(from scratch)": the BUILD branch
+    sent, refused = [], []
+    pp.dispatch = lambda fn, *a, **k: sent.append((fn, a, k))
+    pp._refusal = lambda e: refused.append(e)
+
+    def click():
+        sent.clear()
+        refused.clear()
+        pp._build_prior()
+
+    # (a) a blank box: refused with its field named; nothing dispatched, nothing built, nothing reset
+    pp.cluster_size.setText("")
+    click()
+    assert sent == [], "a blank box must be refused at the click, not clamped and dispatched"
+    assert isinstance(refused[-1], Refusal) and refused[-1].field == "min_cluster_size", refused
+    assert "is blank" in refused[-1].message and "default" in refused[-1].message, refused[-1].message
+    assert inf.session.cfg is None, "a refused click must not build the config"
+    assert inf.session.inf_prior is not None, "a refused click must not reset the session's prior"
+
+    # (b) half-typed and out-of-rule boxes, one per rule, each naming its field and its limit
+    pp.cluster_size.setText("50")
+    for attr, text, key, words in (("cluster_size", "-", "min_cluster_size", "is blank"),
+                                   ("cluster_size", "1", "min_cluster_size", "must be at least 2"),
+                                   ("cluster_samples", "0", "min_samples", "must be at least 1"),
+                                   ("sweep_iters", "0", "num_iterations", "must be at least 1"),
+                                   ("sweep_batch", "-1", "sweep_batch", "must be at least 0"),
+                                   ("sweep_max_sets", "0", "max_sets", "must be at least 1"),
+                                   ("sweep_step", "0", "walk_step", "must be greater than 0"),
+                                   ("sweep_step", "", "walk_step", "is blank"),
+                                   ("sweep_units", "-5", "stability_units", "must be greater than 0")):
+        field = getattr(pp, attr)
+        keep = field.text()
+        field.setText(text)
+        click()
+        assert sent == [] and refused and refused[-1].field == key and words in refused[-1].message, \
+            (attr, text, refused[-1].message if refused else None, sent)
+        field.setText(keep)
+
+    # (c) every box in rule: dispatched on the build branch with the seven knobs as numbers, and a
+    # typed 0 in "Candidates per round" travels as 0 (= automatic), not as a refusal
+    pp.sweep_iters.setText("3")
+    pp.sweep_batch.setText("0")
+    pp.sweep_max_sets.setText("40")
+    pp.sweep_step.setText("0.02")
+    pp.sweep_units.setText("250")
+    pp.cluster_size.setText("9")
+    pp.cluster_samples.setText("4")
+    click()
+    assert refused == [], refused
+    fn, args, kw = sent[-1]
+    assert fn is orchestrator.build_prior and args[0] is cfg and args[1] is None and args[2] is True
+    assert (kw["num_iterations"], kw["sweep_batch"], kw["max_sets"]) == (3, 0, 40), kw
+    assert (kw["walk_step"], kw["stability_units"]) == (0.02, 250.0), kw
+    assert (kw["min_cluster_size"], kw["min_samples"]) == (9, 4), kw
+    assert inf.session.cfg is cfg, "the build click installs the config"
+
+    # (d) a LOAD click with a blank knob box still dispatches, and forwards no knob at all
+    pp.prior_picker.selected = lambda: ("abc123def456", False)
+    pp.sweep_iters.setText("")
+    pp.cluster_size.setText("-")
+    click()
+    assert refused == [], "the load branch never reads the knobs, so a blank one must not refuse"
+    fn, args, kw = sent[-1]
+    assert fn is orchestrator.build_prior and args[1] == "abc123def456" and args[2] is False
+    knob_keys = {"num_iterations", "sweep_batch", "max_sets", "walk_step", "stability_units",
+                 "min_cluster_size", "min_samples"}
+    assert not (knob_keys & set(kw)), f"a load must not forward the knobs: {sorted(knob_keys & set(kw))}"
+    assert kw["provide_fig_sink"] is True and kw["on_result"] == pp._on_prior
+
+    # (e) the live note: a bad box renders as the label and the rule -- nothing computed, nothing
+    # raised, no dialog -- and a good set renders the census line again
+    pp.sweep_iters.setText("")
+    assert pp.sweep_note.text() == f"{label('num_iterations')} is blank."
+    pp.sweep_iters.setText("0")
+    assert pp.sweep_note.text() == f"{label('num_iterations')} must be at least 1."
+    pp.sweep_iters.setText("3")
+    pp.sweep_units.setText("-")
+    assert pp.sweep_note.text() == f"{label('stability_units')} is blank."
+    pp.sweep_units.setText("0")
+    assert pp.sweep_note.text() == f"{label('stability_units')} must be greater than 0."
+    pp.sweep_units.setText("250")
+    pp.sweep_max_sets.setText("0")
+    assert pp.sweep_note.text() == f"{label('max_sets')} must be at least 1."
+    pp.sweep_max_sets.setText("40")
+    pp.sweep_batch.setText("-1")
+    assert pp.sweep_note.text() == f"{label('sweep_batch')} must be at least 0."
+    pp.sweep_batch.setText("0")
+    note = pp.sweep_note.text()
+    assert note.startswith("Global census screens") and "(3 rounds x " in note and "40 sets" in note, note
+
+    # (f) the note's words are the click's: for every box the note reads, its "must be" clause is a
+    # substring of the refusal the click raises for the same value
+    from core.gui.panels.inference.prior_tab import _KNOB_RULES, _NOTE_KEYS, _rule_words
+    pp.prior_picker.selected = lambda: (None, True)
+    for key, attr, minimum in _KNOB_RULES:
+        if key not in _NOTE_KEYS:
+            continue
+        field = getattr(pp, attr)
+        keep = field.text()
+        field.setText("-1")
+        assert pp.sweep_note.text() == f"{label(key)} must be {_rule_words(minimum)}.", (key, pp.sweep_note.text())
+        click()
+        assert refused[-1].field == key and f"must be {_rule_words(minimum)}" in refused[-1].message, \
+            (key, refused[-1].message)
+        field.setText(keep)
+
+
+def test_the_prior_tab_rows_are_labelled_from_the_control_table():
+    """Every registered field's row on the Prior tab takes its label from core.gui.fields.label(key),
+    so the name in the yellow box ("Set it in the '<label>' box on the Prior tab.") and the name on
+    the tab are ONE string (spec §3.2). A literal at an add_help_row call is the defect: the row can
+    be renamed while the refusal keeps naming the old label. Task 15's read-back pin checks the
+    rendered QLabels over every tab; this is the source-level half for this tab."""
+    import re
+    from core.gui.fields import CONTROL, label
+    from core.gui.panels.inference.prior_tab import PriorPanel
+    from tests._fixtures import code_only
+
+    src = code_only(PriorPanel.__init__)
+    assert src.count("add_help_row(") == 9, "the Prior tab has nine labelled rows"
+    literal = re.findall(r"add_help_row\(\w+, (['\"][^'\"]*['\"])", src)
+    assert literal == [], f"rows labelled by a literal instead of label(key): {literal}"
+    keys = re.findall(r"add_help_row\(\w+, label\(['\"](\w+)['\"]\)", src)
+    assert keys == ["bounds", "prior", "num_iterations", "sweep_batch", "max_sets", "walk_step",
+                    "stability_units", "min_cluster_size", "min_samples"], keys
+    for key in keys:
+        assert CONTROL[key] == ("Prior", label(key)), (key, CONTROL[key])

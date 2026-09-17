@@ -6,9 +6,10 @@ from core import config, forcing, orchestrator
 from core.artifacts import default_store
 from core.Helpers import file_manager
 from core.config import BOUNDS_PATH
-from core.refusals import Refusal
+from core.refusals import Refusal, require_at_least, require_positive
 
 from ... import icons, settings
+from ...fields import label
 from ...widgets.artifact_picker import ArtifactPicker, StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
@@ -17,6 +18,35 @@ from ...widgets.param_grid import BoundsGrid, ValuesGrid
 from ...widgets.source_toggle import SourceToggle
 from .base import _StagePanel, _TrainingBudgetMixin
 from .help_text import HELP
+
+
+# THE SEVEN KNOB BOXES, in the order the stage checks them (build_prior's resolution block, spec
+# §3.4): the field key (which is also build_prior's keyword name), the attribute holding the box, and
+# the rule's floor -- an int for require_at_least, None for require_positive. ONE table, read by
+# _read_inputs at the click and by _sync_sweep on every keystroke, so the note under the boxes and
+# the refusal at the button can never name different limits.
+_KNOB_RULES = (
+    ("num_iterations", "sweep_iters", 1),
+    ("sweep_batch", "sweep_batch", 0),            # a TYPED 0 = follow the hardware batch
+    ("max_sets", "sweep_max_sets", 1),
+    ("walk_step", "sweep_step", None),
+    ("stability_units", "sweep_units", None),
+    ("min_cluster_size", "cluster_size", 2),
+    ("min_samples", "cluster_samples", 1),
+)
+# The boxes the live sweep note reads: walk_step and the two clustering boxes are not in the census line.
+_NOTE_KEYS = ("num_iterations", "sweep_batch", "max_sets", "stability_units")
+
+
+def _check_knob(key: str, value, minimum):
+    """Run one knob's rule: require_at_least with its floor, or require_positive when the floor is
+    None. Returns the coerced value; raises Refusal(field=key) on a blank or an out-of-rule value."""
+    return require_positive(key, value) if minimum is None else require_at_least(key, value, minimum)
+
+
+def _rule_words(minimum) -> str:
+    """The rule as the live note says it: the words the refusal's own message uses after "must be"."""
+    return "greater than 0" if minimum is None else f"at least {minimum}"
 
 
 # ── 2. Prior (also picks the BOUNDS file, which is what builds the config) ────
@@ -41,9 +71,9 @@ class PriorPanel(_StagePanel):
         self.bounds_source = SourceToggle(self.bounds_picker, self.bounds_grid,
                                           file_label="Use file", direct_label="Edit values")
         self.bounds_source.changed.connect(self._on_bounds_source_changed)
-        add_help_row(form, "Bounds", self.bounds_source, HELP["bounds_source"])
+        add_help_row(form, label("bounds"), self.bounds_source, HELP["bounds_source"])
         self.prior_picker = StorePicker("prior", allow_new=True)
-        add_help_row(form, "Prior", self.prior_picker, HELP["prior"])
+        add_help_row(form, label("prior"), self.prior_picker, HELP["prior"])
         v.addLayout(form)
         self.btn_prior = QPushButton("Build / Load prior")
         self.btn_prior.setProperty("accent", True)        # primary CTA (Fluent accent)
@@ -68,11 +98,11 @@ class PriorPanel(_StagePanel):
         self.sweep_max_sets = IntField(str(config.PRIOR_SWEEP_MAX_SETS))
         self.sweep_step = FloatField(str(config.PRIOR_SWEEP_STEP))
         self.sweep_units = FloatField(str(config.STABILITY_SWEEP_ND_UNITS))
-        add_help_row(sform, "Global rounds", self.sweep_iters, HELP["sweep_iters"])
-        add_help_row(sform, "Candidates per round (0 = auto)", self.sweep_batch, HELP["sweep_batch"])
-        add_help_row(sform, "Max accepted sets", self.sweep_max_sets, HELP["sweep_max_sets"])
-        add_help_row(sform, "Random-walk step", self.sweep_step, HELP["sweep_step"])
-        add_help_row(sform, "Stability duration (ND units)", self.sweep_units, HELP["sweep_units"])
+        add_help_row(sform, label("num_iterations"), self.sweep_iters, HELP["sweep_iters"])
+        add_help_row(sform, label("sweep_batch"), self.sweep_batch, HELP["sweep_batch"])
+        add_help_row(sform, label("max_sets"), self.sweep_max_sets, HELP["sweep_max_sets"])
+        add_help_row(sform, label("walk_step"), self.sweep_step, HELP["sweep_step"])
+        add_help_row(sform, label("stability_units"), self.sweep_units, HELP["sweep_units"])
         sv.addLayout(sform)
         self.sweep_note = _TrainingBudgetMixin._derived_label()
         sv.addWidget(self.sweep_note)
@@ -89,8 +119,8 @@ class PriorPanel(_StagePanel):
         cform = make_form()
         self.cluster_size = IntField(str(config.PRIOR_CLUSTER_MIN_SIZE))
         self.cluster_samples = IntField(str(config.PRIOR_CLUSTER_MIN_SAMPLES))
-        add_help_row(cform, "Min cluster size", self.cluster_size, HELP["cluster_size"])
-        add_help_row(cform, "Min samples", self.cluster_samples, HELP["cluster_samples"])
+        add_help_row(cform, label("min_cluster_size"), self.cluster_size, HELP["cluster_size"])
+        add_help_row(cform, label("min_samples"), self.cluster_samples, HELP["cluster_samples"])
         cv.addLayout(cform)
         self.controls_layout.addWidget(clust)
 
@@ -133,6 +163,16 @@ class PriorPanel(_StagePanel):
         and therefore the observation mode -- so it cannot exist until this tab has been used."""
         draft = self.session.draft
         if draft is None:
+            return
+        entry, is_new = self.prior_picker.selected()
+        # THE CLICK-TIME HALF OF V2, before the config is built and before the session's downstream
+        # is reset: a refused click leaves the session exactly as it found it. What is read depends
+        # on the branch the stage will take (_read_inputs). The stage runs the same rules again at
+        # its entry; this is the early, cheap copy that names the box.
+        try:
+            knobs = self._read_inputs(is_new)
+        except Refusal as e:
+            self._refusal(e)
             return
         if self.bounds_source.is_direct():
             problems = self.bounds_grid.problems()
@@ -184,35 +224,76 @@ class PriorPanel(_StagePanel):
                 f"conditioning is [S(41) | log T | χ({orchestrator.expected_forcing_dim(cfg)})] over "
                 f"{cfg.chi_k_pad} probe slots. Train a NEW posterior (the width differs from a non-χ one).")
 
-        entry, is_new = self.prior_picker.selected()
         # Passed, never written to config: orchestrator does `from .config import
         # PRIOR_SWEEP_ITERATIONS, ...`, so assigning to the constants here would be a silent no-op.
+        # Unclamped and undefaulted: _read_inputs already refused a blank or out-of-rule box. On a
+        # load `knobs` is empty and the stage resolves every None to its config.py default -- its
+        # load branch (`if not build_new and ref is not None:`) never reads them.
         self.dispatch(orchestrator.build_prior, cfg, entry, is_new,
-                      provide_fig_sink=True, on_result=self._on_prior,
-                      num_iterations=max(1, self.sweep_iters.value()),
-                      sweep_batch=max(0, self.sweep_batch.value()),
-                      max_sets=max(1, self.sweep_max_sets.value()),
-                      walk_step=self.sweep_step.value() or config.PRIOR_SWEEP_STEP,
-                      stability_units=self.sweep_units.value() or config.STABILITY_SWEEP_ND_UNITS,
-                      min_cluster_size=max(2, self.cluster_size.value()),
-                      min_samples=max(1, self.cluster_samples.value()))
+                      provide_fig_sink=True, on_result=self._on_prior, **knobs)
+
+    def _read_inputs(self, is_new: bool) -> dict:
+        """The click-time half of V2 for this tab: every knob box the chosen branch will read, read
+        through value_or_none() and the shared rules (core.refusals), as a dict of build_prior's
+        keyword arguments. Raises the FIRST Refusal, before any config is built.
+
+        The branch is decided as the stage decides it: build_prior takes its load branch on
+        ``not build_new and ref is not None`` and never reads a sweep or clustering knob there, so a
+        LOAD click reads none of the seven boxes and forwards none (the stage resolves each None to
+        its config.py default). Refusing a blank "Min cluster size" on a load would refuse a value
+        the run never uses. On a load the picker is the only input, and StorePicker.selected()
+        returns is_new=False only with an id in hand, so there is nothing left to check here.
+        """
+        if not is_new:
+            return {}
+        return {key: _check_knob(key, getattr(self, attr).value_or_none(), minimum)
+                for key, attr, minimum in _KNOB_RULES}
+
+    def _sweep_problem(self) -> "str | None":
+        """The first of the four boxes the note reads that is blank or out of rule, as the line the
+        note shows; None when all four pass. The click's own rule on the same value, rendered short
+        ("<label> is blank." / "<label> must be <rule>."): a line under a box the user is still
+        typing in does not shout the default at them, and it never pops a dialog."""
+        for key, attr, minimum in _KNOB_RULES:
+            if key not in _NOTE_KEYS:
+                continue
+            value = getattr(self, attr).value_or_none()
+            if value is None:
+                return f"{label(key)} is blank."
+            try:
+                _check_knob(key, value, minimum)
+            except Refusal:
+                return f"{label(key)} must be {_rule_words(minimum)}."
+        return None
 
     def _sync_sweep(self) -> None:
         """The one derived line: how many candidates the GLOBAL census screens, and where the time
         goes. Pure and cheap, so it is safe on every keystroke; wrapped because a status line must
-        never be able to raise into refresh_gates and take the tab down."""
+        never be able to raise into refresh_gates and take the tab down.
+
+        A blank, half-typed or out-of-rule box renders as "<label> is blank." or "<label> must be
+        <rule>." and nothing else (spec §1.2, the live lines): no clamp, no default, no dialog. A
+        number computed from a value the user did not type is a lie about the run, and a live line
+        cannot open a dialog mid-typing -- "blank is a refusal" is the click's rule, not the note's.
+        """
         try:
+            problem = self._sweep_problem()
+            if problem is not None:
+                self.sweep_note.setText(problem)
+                return
             cfg = self.session.cfg
             hw_batch = getattr(getattr(cfg, "hw", None), "batch_size", None) or config.detect_device().batch_size
-            per_round = self.sweep_batch.value() or hw_batch
-            rounds = max(1, self.sweep_iters.value())
-            units = self.sweep_units.value() or config.STABILITY_SWEEP_ND_UNITS
+            rounds = self.sweep_iters.value_or_none()
+            batch = self.sweep_batch.value_or_none()
+            per_round = batch if batch else hw_batch      # a TYPED 0 = follow the hardware batch
+            max_sets = self.sweep_max_sets.value_or_none()
+            units = self.sweep_units.value_or_none()
             dt = getattr(cfg, "dt_nd_min", None)
             steps = f"{int(units / dt):,}" if dt else "?"
             self.sweep_note.setText(
                 f"Global census screens {rounds * per_round:,} candidates ({rounds:,} rounds x "
                 f"{per_round:,}), each integrated over {steps} steps.\n"
-                f"The LOCAL flood-fill then runs until {max(1, self.sweep_max_sets.value()):,} sets "
+                f"The LOCAL flood-fill then runs until {max_sets:,} sets "
                 f"are accepted — that is the dominant cost of a prior build, and it now runs on the "
                 f"same device as the global sweep (falling back to the CPU when there is no "
                 f"accelerator).")
