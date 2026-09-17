@@ -1561,6 +1561,24 @@ def test_the_tool_routes_info_to_stdout_and_warnings_to_stderr_and_removes_its_h
         assert "info:" not in cap.out and "warning:" not in cap.out
         assert core_logger.handlers == [], core_logger.handlers
 
+    # ...and a run that ENDS IN A REFUSAL removes them too: the ladder's refusal line is printed after
+    # the handler call has unwound, and a refusal that left its handlers installed would double every
+    # later run's records exactly as a clean one would.
+    from core.refusals import Refusal
+
+    def _refused(cfg, ref, build_new, **kw):
+        log.info("[budget] said before the refusal")
+        raise Refusal("The artifact name is taken.", field="name")
+
+    monkeypatch.setattr(orchestrator, "build_prior", _refused)
+    for _ in range(2):
+        capsys.readouterr()
+        assert main(["prior", *_cfg(bounds)]) == 1
+        cap = capsys.readouterr()
+        assert cap.out.count("[budget] said before the refusal\n") == 1, cap.out
+        assert "prism prior: refused: The artifact name is taken. (--name)" in cap.err, cap.err
+        assert core_logger.handlers == [], core_logger.handlers
+
 
 def test_the_core_logger_is_at_info_by_import_and_stays_so_after_main_and_a_redirect(tool_env, monkeypatch):
     """Python's root logger sits at WARNING. Without core/runs.py's one setLevel at import, the window
