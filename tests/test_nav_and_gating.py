@@ -1423,6 +1423,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.CONTROL["num_runs"] == (("Posterior", "TSNPE"), "Batches")
     assert gui_fields.fix_sentence("run_size_cap") == \
         "Set it in the 'Max rows per batch (0 = auto)' box on the Posterior or TSNPE tab."
+    # piece 4's two, on the Artifacts screen rather than a tab (B5, design §2.5)
+    assert gui_fields.fix_sentence("artifact") == "Select an artifact in the list on the Artifacts screen."
+    assert gui_fields.fix_sentence("note") == "Edit it in the Note box on the Artifacts screen."
 
     # (d) no window control: the six the window never exposes, and the tool-only set
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {

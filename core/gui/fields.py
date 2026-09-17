@@ -14,8 +14,9 @@ Three shapes of entry:
 * ``(tab, label)`` for a box or a picker: the tab title exactly as ``InferenceScreen`` shows it
   (Config, Prior, Posterior, Validate, Infer, TSNPE) and the row label as the tab passes it to
   ``add_help_row``.
-* one sentence, for a consent, a dialog, a table, the name box, or a value fixed by measurement;
-  the sentence quotes the control's own text ("Run on a different observation").
+* one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, or a
+  control on the Artifacts screen, which is a screen of its own and not an inference tab; the
+  sentence quotes the control's own text ("Run on a different observation").
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six
   settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
   two sample counts, the epoch ceiling).
@@ -80,6 +81,10 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "accept_truncated": "Confirm the load in the dialog on the Posterior tab.",
     "accept_other_observation": "Tick 'Run on a different observation' on the Infer tab.",
     "name": "Choose another name in the Save box.",
+    # the artifact browser (piece 4). Sentences, not (tab, label): the browser is a fifth Home tile,
+    # not an inference tab, and the tuple shape is pinned against InferenceScreen's tab titles.
+    "artifact": "Select an artifact in the list on the Artifacts screen.",
+    "note": "Edit it in the Note box on the Artifacts screen.",
     # inputs
     "bounds": ("Prior", "Bounds"),
     "cell": ("Infer", "Cell"),

@@ -108,6 +108,9 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("observation", "the observation", None),
     Field("posterior", "the posterior", None),
     Field("prior", "the prior", None),
+    # the artifact browser (piece 4): the artifact a browse action acts on, and its note
+    Field("artifact", "the artifact", None),
+    Field("note", "the note", None),
     # tool-only (the diagnostics); no window control, CONTROL[key] is None in core/gui/fields.py
     Field("repeats", "the number of SBC repeats", "10"),                               # sbc_repeats
     Field("n_points", "the number of operating points", "6"),                          # identifiability_laplace
@@ -230,3 +233,29 @@ def require_file(key: str, path, what: str | None = None) -> str:
     if not os.path.isfile(p):
         raise Refusal(f"{_what(key)} was not found: {p!r}{_default_clause(key)}.", field=key)
     return p
+
+
+# The note limit, HERE and not in core/config.py: this module imports only the standard library on
+# purpose (see the module docstring), the registry's own defaults are already literals pinned against
+# config.py by tests/test_refusals.py, and a one-line description's length is not a science constant.
+NOTE_MAX_CHARS = 200
+
+
+def require_note(key: str, text: str) -> str:
+    """The trimmed note, or a Refusal. One LINE, at most NOTE_MAX_CHARS characters; "" clears it.
+
+    Surrounding whitespace is trimmed -- the one transformation this module allows, because it changes
+    no meaning -- and everything else is refused rather than fixed (V2): a line break or a tab left
+    INSIDE the text refuses, and so does a note over the limit, whose message gives the limit and the
+    length given. A blank box (None) and an all-whitespace note are not refusals: both mean "clear it"
+    and both come back as "", which is what ``ArtifactStore.set_note`` writes for no note.
+    """
+    trimmed = "" if text is None else str(text).strip()
+    if not trimmed:
+        return ""
+    if any(ch in trimmed for ch in "\n\r\t"):
+        raise Refusal(f"{_what(key)} must be one line; got {trimmed!r}{_default_clause(key)}.", field=key)
+    if len(trimmed) > NOTE_MAX_CHARS:
+        raise Refusal(f"{_what(key)} must be at most {NOTE_MAX_CHARS} characters; got "
+                      f"{len(trimmed)}{_default_clause(key)}.", field=key)
+    return trimmed

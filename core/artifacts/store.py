@@ -441,9 +441,18 @@ class ArtifactStore:
         return m
 
     def set_note(self, kind: str, ref: str, note: str) -> mf.Manifest:
+        """Rewrite one artifact's note. ``field="artifact"`` (piece 4, design §2.4): the front ends
+        name the control or the flag themselves, and this was the one store mutation that named
+        nothing. The key is the ARTIFACT and not the note: what is wrong is the ref, so the fix is to
+        select an artifact that exists, not to edit the note box. ``field="note"`` is
+        ``core.refusals.require_note``'s, for a note whose TEXT is refused.
+
+        The text is not judged here -- ``require_note`` is that rule, and both front ends run it
+        before they call this -- so a caller that reaches past them writes what it passes.
+        """
         sub, m = self._find(kind, ref)
         if m is None:
-            raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}")
+            raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}", field="artifact")
         m.note = str(note)
         _write_manifest(sub, m)
         return m

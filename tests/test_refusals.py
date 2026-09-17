@@ -17,8 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from core.refusals import (FIELDS, Field, Refusal, describe, refuse, require_at_least, require_between,
-                           require_choice, require_file, require_finite, require_given, require_positive)
+from core.refusals import (FIELDS, NOTE_MAX_CHARS, Field, Refusal, describe, refuse, require_at_least,
+                           require_between, require_choice, require_file, require_finite, require_given,
+                           require_note, require_positive)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -34,6 +35,7 @@ BASE_KEYS = (
     "bounds", "cell", "units", "recording_spont", "recording_forced", "recording_probe",
     "drive_amplitude", "drive_frequency", "drive_phase", "chi_f0_si", "chi_n_freqs", "chi_k_pad",
     "chi_max_cycles", "chi_f0", "chi_freq_bounds", "device", "model", "observation", "posterior", "prior",
+    "artifact", "note",
 )
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
                   "n_sweep", "chi_k_fixed")
@@ -86,7 +88,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     shows the default as the operator would type it. ``describe`` is the public reader and refuses
     an unknown key with a KeyError: a message can only be built for a field a front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 61, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 63, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -98,6 +100,11 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     assert FIELDS["t_obs"].default == "none: it must be given"
     assert FIELDS["run_size_cap"].what == "the rows-per-batch cap (0 = automatic)"
     assert FIELDS["new_run"] == Field("new_run", "consent to start a new simulation cache", None)
+    # piece 4's two: the artifact the browser acts on, and its note. Both descriptions obey the
+    # wording ban above (the regex on f.what), and neither has a default -- a note has no default
+    # text and an artifact is chosen, not defaulted.
+    assert FIELDS["artifact"] == Field("artifact", "the artifact", None)
+    assert FIELDS["note"] == Field("note", "the note", None)
     with pytest.raises(KeyError):
         describe("t_obs_seconds")
     with pytest.raises(FrozenInstanceError):
@@ -283,6 +290,35 @@ def test_require_file_refuses_a_blank_and_a_missing_path_naming_the_input_kind(t
     with pytest.raises(Refusal) as e:
         require_file("recording_forced", tmp_path, "driven recording")
     assert _shape(e.value, "recording_forced") == f"The driven recording was not found: {str(tmp_path)!r}."
+
+
+def test_require_note_trims_one_line_and_refuses_a_break_or_the_limit():
+    """B5 (design §2.4). A note is ONE line, at most NOTE_MAX_CHARS characters, and blank clears it.
+
+    Surrounding whitespace is TRIMMED -- the one transformation this module allows, because it changes
+    no meaning -- and everything else is refused rather than fixed (V2): a newline, a carriage return
+    or a tab inside the text refuses, and so does a note over the limit, whose sentence gives BOTH the
+    limit and the length given so the operator knows how much to cut. An all-whitespace note is not a
+    refusal: it is how a note is CLEARED, and it comes back as "". The limit lives here and not in
+    config.py: this module is torch-free on purpose and a note limit is not a science constant."""
+    assert NOTE_MAX_CHARS == 200
+    assert require_note("note", "  kept for the paper  ") == "kept for the paper"
+    assert require_note("note", "kept") == "kept"
+    assert require_note("note", "") == ""
+    assert require_note("note", "   ") == "", "an all-whitespace note clears it"
+    assert require_note("note", " \t \n ") == "", "so does one that is only a break"
+    assert require_note("note", None) == "", "a blank box clears it too"
+    assert require_note("note", "x" * NOTE_MAX_CHARS) == "x" * NOTE_MAX_CHARS
+    assert require_note("note", "  " + "x" * NOTE_MAX_CHARS + "  ") == "x" * NOTE_MAX_CHARS, \
+        "the length is measured AFTER the trim"
+    with pytest.raises(Refusal) as e:
+        require_note("note", "x" * (NOTE_MAX_CHARS + 1))
+    assert _shape(e.value, "note") == "The note must be at most 200 characters; got 201."
+    for bad in ("a\nb", "a\rb", "a\tb"):
+        with pytest.raises(Refusal) as e:
+            require_note("note", bad)
+        assert _shape(e.value, "note") == f"The note must be one line; got {bad!r}."
+    assert e.value.field == "note", "the key the caller passed travels on the refusal"
 
 
 def test_refuse_appends_the_default_clause_to_the_callers_sentence_and_binds_the_field():
@@ -696,13 +732,19 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     assert not unreal, f"FLAG names an option no subcommand defines: {unreal}"
     assert all(f is None or f.startswith("--") for f in tool_fields.FLAG.values())
     assert {k for k, f in tool_fields.FLAG.items() if f is None} == {
-        "units", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds"}
+        "units", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds", "artifact"}
     assert tool_fields.FLAG["num_posterior_samples"] == "--posterior-samples"    # the tree's spelling
     assert tool_fields.FLAG["hpd_level"] == "--level" and tool_fields.FLAG["n_directions"] == "--directions"
     assert tool_fields.FLAG["recording_probe"] == tool_fields.FLAG["recording_forced"] == "--forced"
     assert (tool_fields.FLAG["drive_amplitude"] == tool_fields.FLAG["drive_frequency"]
             == tool_fields.FLAG["drive_phase"] == "--drive")
     assert tool_fields.FLAG["max_num_epochs"] == "--max-epochs" and tool_fields.FLAG["run_size_cap"] == "--run-size"
+    # piece 4: the note is a flag so this table can name one (config_args.add_name_flags), and the
+    # artifact is positional, so its entry is None and fix_sentence adds NOTHING -- set_note's
+    # "no complete <kind> artifact named or id'd ..." refusal carries field="artifact", and the
+    # ladder's line for it therefore ends at the message, with no trailing parenthetical
+    assert tool_fields.FLAG["note"] == "--note" and tool_fields.fix_sentence("note") == "(--note)"
+    assert tool_fields.FLAG["artifact"] is None and tool_fields.fix_sentence("artifact") == ""
 
     # (c) fix_sentence owns the parentheses and never raises
     assert tool_fields.fix_sentence("t_obs") == "(--t-obs)"

@@ -11,9 +11,11 @@ Torch-free and Qt-free on purpose -- it imports nothing from ``core`` -- because
 able to print a refusal whose cause is that torch or the card was not available, and the suite
 imports this module in a fresh interpreter and asserts that torch is absent afterwards.
 
-``None`` marks a key no subcommand can set: the units (the tool declares none) and the four chi
+``None`` marks a key no option string answers: the units (the tool declares none), the four chi
 constants only ``config.py`` sets (``chi_k_pad``, ``chi_max_cycles``, ``chi_f0``,
-``chi_freq_bounds``). One repeatable flag can carry several keys: ``--forced PATH[@HZ]`` is both the
+``chi_freq_bounds``), and ``artifact``, which the ``artifacts`` subcommand names POSITIONALLY
+(``artifacts show <kind> <ref>``) -- there is no flag to print, and the refusal's own sentence already
+quotes the ref. One repeatable flag can carry several keys: ``--forced PATH[@HZ]`` is both the
 driven recording and a chi probe's, ``--drive NAME=VALUE`` is the amplitude, frequency and phase.
 """
 
@@ -55,6 +57,10 @@ FLAG: dict[str, str | None] = {
     "accept_truncated": "--accept-truncated",
     "accept_other_observation": "--accept-other-observation",
     "name": "--name",
+    # the artifact browser: `artifacts note <kind> <ref> --note TEXT`. The note text is a FLAG (and
+    # not a positional) precisely so this table can name one; the artifact itself is positional.
+    "artifact": None,
+    "note": "--note",                                   # add_name_flags defines it beside --name
     # inputs
     "bounds": "--bounds",
     "cell": "--cell",
