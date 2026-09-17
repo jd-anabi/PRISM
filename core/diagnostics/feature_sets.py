@@ -2,9 +2,10 @@
 whose science they do not cover.
 
 Moved from ``scripts/_common.py`` (piece 2 of the 2026-09-11 one-flow design). The computation is
-unchanged; only the guards changed, from ``SystemExit`` to ``ValueError`` naming ``python -m core``
-subcommands and flags rather than environment variables -- these run inside the command-line tool and
-the GUI now, where a SystemExit would walk past the tool's exit-code table or take the app down.
+unchanged; only the guards changed: from ``SystemExit`` to a ``Refusal`` (piece 3) that names the
+diagnostic, the mode and the model and no flag, subcommand or file -- these run inside the
+command-line tool and the GUI now, where a SystemExit would walk past the tool's exit-code table or
+take the app down, and each front end appends its own fix sentence to a refusal.
 
 Every Jacobian / identifiability diagnostic must be built from the features the posterior ACTUALLY
 conditions on, or it answers a question about a different experiment:
@@ -17,8 +18,8 @@ Left on the 41-feature assumption, these diagnostics kept Group G and omitted ch
 results were literally independent of the chi toggle -- they would report the kappa~x_scale /
 lambda~t_scale aliases as strong as ever and falsely refute the hypothesis chi mode exists to test.
 """
-from core import config
 from core.config import SimConfig
+from core.refusals import Refusal
 
 _GROUP_G_PREFIX = "G"
 
@@ -69,32 +70,32 @@ def assert_not_chi(cfg: SimConfig, what: str) -> None:
     Better a loud refusal than a plausible-looking number computed over the wrong feature set --
     which is precisely how these diagnostics failed before.
 
-    :raises ValueError: in chi mode.
+    :raises Refusal: in chi mode; ``field=None``, because no single control answers it.
     """
     if cfg.chi_mode:
         from core.SBI import chi as _chi
-        raise ValueError(
+        raise Refusal(
             f"{what} has not been generalised to chi(omega) mode: it measures the single-frequency "
             f"41-feature information set, while a chi posterior conditions on "
             f"{n_features(cfg)} different features (Group G zeroed, "
             f"{len(_chi.CHI_FISHER_CHANNELS) * cfg.chi_n_freqs} chi features added). Running it here "
-            f"would produce a confident, meaningless answer.\n"
-            f"  -> pass --no-chi to analyse the forced information set, or run "
-            f"`python -m core identifiability jacobian`, which is chi-aware.")
+            f"would produce a confident, meaningless answer. Switch chi mode off to analyse the "
+            f"forced information set, or run the jacobian identifiability diagnostic, which is "
+            f"chi-aware.", field=None)
 
 
 def assert_nadrowski(cfg: SimConfig, why: str = "") -> None:
     """Guard for diagnostics whose SCIENCE is Nadrowski-specific (hardcoded parameter roles, fixed
     column indices). Better a loud refusal than a plausible-looking wrong answer for another model.
 
-    :raises ValueError: for any other model.
+    :raises Refusal: for any other model; ``field=None``.
     """
     if cfg.model != "NADROWSKI":
-        raise ValueError(
+        raise Refusal(
             f"This diagnostic is Nadrowski-specific{(' (' + why + ')') if why else ''}, but the "
-            f"config is for {cfg.model}. It would run and produce meaningless numbers.\n"
-            f"  -> point --bounds at a file under Bounds/nadrowski/ (the bounds file's parent folder "
-            f"is what names the model).")
+            f"config is for {cfg.model}. It would run and produce meaningless numbers. Use a bounds "
+            f"file from the nadrowski folder: the bounds file's parent folder is what names the "
+            f"model.", field=None)
 
 
 def assert_forced(cfg: SimConfig, what: str) -> None:
@@ -102,16 +103,14 @@ def assert_forced(cfg: SimConfig, what: str) -> None:
 
     Whether a drive EXISTS is a property of the bounds file, not the cell values, so pointing one of
     these at a spontaneous cell used to surface as a bare ``KeyError: 'amp'`` twenty lines below the
-    config banner. Say which file to point at instead.
+    config banner. Say what to point at instead -- the bounds file, never the cell.
 
-    :raises ValueError: when the bounds file declares no Forcing section.
+    :raises Refusal: when the bounds file declares no Forcing section; ``field=None``.
     """
     if not cfg.has_forcing:
-        raise ValueError(
+        raise Refusal(
             f"{what} measures the response to the cell's OWN drive, but this config is "
             f"{cfg.observation_mode.upper()}: its bounds file declares no Forcing section, so there "
-            f"is no amp/freq/phase to read.\n"
-            f"  -> pass a bounds file with a Forcing section, e.g. "
-            f"--bounds {config.BOUNDS_PATH / 'nadrowski' / 'master.txt'} , together with a forced "
-            f"cell such as --cell {config.CELL_PATH / 'nadrowski' / 'master_weak.txt'} . The refusal "
-            f"depends on --bounds: the tool never resolves the box from the cell.")
+            f"is no amp/freq/phase to read. Use a bounds file that declares a Forcing section, "
+            f"together with a forced cell. The refusal depends on the bounds file alone: the box is "
+            f"never resolved from the cell.", field=None)

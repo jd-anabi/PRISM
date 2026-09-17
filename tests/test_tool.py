@@ -762,7 +762,8 @@ def test_identifiability_rotation_refuses_a_posterior_without_a_rotation(tool_ru
     tool_run's tpost carries a rotation (the tool has no flag that turns it off), so the posterior
     under test is trained here, through the real build_posterior at tiny size with reparam_rotate off,
     into the tool's own store. It records no V, so there is no basis to decompose: a refusal (exit 1)
-    naming the reason and where it was raised, and no diagnostic written."""
+    naming the reason and the flag to change, with no `[raised at ...]` -- a Refusal is not a bug in
+    disguise -- and no diagnostic written."""
     from matplotlib import pyplot as plt
     from core import cli, config as _config, orchestrator, registry
     from core.artifacts import ArtifactStore
@@ -781,7 +782,7 @@ def test_identifiability_rotation_refuses_a_posterior_without_a_rotation(tool_ru
     capsys.readouterr()
     assert main(["identifiability", "rotation", *_cfg(bounds), "--posterior", "tpost_norot"]) == 1
     err = capsys.readouterr().err
-    assert "no Fisher rotation" in err and "raised at" in err, err
+    assert "no Fisher rotation" in err and "(--posterior)" in err and "raised at" not in err, err
     assert [r.id for r in ArtifactStore(root).list("diagnostic")] == before
 
 
@@ -1454,3 +1455,45 @@ def test_the_tool_prints_a_refusal_with_its_flag_and_a_bug_with_a_traceback(tool
     assert main(argv) == 2
     err, lines = _prism_lines()
     assert lines == ["prism prior: usage: --x needs --y"], err
+
+
+def test_device_cuda_is_refused_when_unavailable(tool_env, monkeypatch, capsys):
+    """`--device cuda` asks for the card explicitly, where `auto` would fall back to the CPU with a
+    warning from the prior sweep (prior.py). The answer is detect_device()'s own -- CUDA absent, or a
+    card below compute capability 8.0, both come back as a cpu DeviceConfig -- and a request it cannot
+    honour is a Refusal at config build, before any stage runs: exit 1, `refused:`, the flag appended
+    by the tool's own table, no traceback, and nothing written. Patched rather than skipped on a CUDA
+    machine, so the refusal is exercised on every gate and not only on a laptop.
+
+    And `cuda` resolves to detect_device()'s OWN DeviceConfig, never a hand-built one: its batch size
+    and dtype enter the simulation identity, so `cuda` and `auto` on a qualifying card share one
+    cache. make_sim_config is stubbed for that leg so no tensor is ever placed on a device the
+    machine may not have."""
+    import torch
+    from core import cli, config
+    from core.tool import config_args
+    bounds, _cell, root = tool_env
+    monkeypatch.setattr(config, "detect_device", config.cpu_device)
+    manifests_before = sorted(Path(root).rglob("manifest.json"))
+    capsys.readouterr()
+    assert main(["prior", "--bounds", bounds, "--device", "cuda"]) == 1
+    out, err = capsys.readouterr()
+    assert "prism prior: refused:" in err and "(--device)" in err, err
+    assert "'cuda' is not available" in err and "detected cpu" in err, err
+    assert "Traceback" not in err and "raised at" not in err, err
+    assert "[cfg]" not in out, "the refusal fires in make_cfg, before the banner"
+    assert sorted(Path(root).rglob("manifest.json")) == manifests_before
+
+    fake = config.DeviceConfig(device=torch.device("cuda"), dtype=torch.float32, batch_size=7)
+    monkeypatch.setattr(config, "detect_device", lambda: fake)
+    seen = {}
+
+    def _rec(*a, **k):
+        seen.update(k)
+        return "CFG"
+
+    monkeypatch.setattr(cli, "make_sim_config", _rec)
+    args = build_parser().parse_args(["prior", "--bounds", bounds, "--device", "cuda"])
+    assert config_args.make_cfg(args) == "CFG" and seen["hw"] is fake
+    args = build_parser().parse_args(["prior", "--bounds", bounds, "--device", "auto"])
+    assert config_args.make_cfg(args) == "CFG" and seen["hw"] is None, "auto keeps passing hw=None"

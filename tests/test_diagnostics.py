@@ -11,6 +11,7 @@ from sbi.inference import DirectPosterior
 
 from core.artifacts import LoadedDiagnostic
 from core.artifacts import store as st
+from core.refusals import Refusal
 from tests._fixtures import _nad_cfg, _posterior_artifact
 
 
@@ -98,44 +99,53 @@ def test_the_chi_feature_set_drops_group_g_and_adds_the_fisher_block(capsys):
     assert f"[mode] {plain.observation_mode.upper()}: feature rows = 41" in capsys.readouterr().out
 
 
-def test_the_diagnostic_guards_refuse_with_value_errors():
-    """SystemExit was right for a script and wrong everywhere else. These guards now run inside the
-    command-line tool, where a SystemExit would walk straight past main's exit-code table, and inside
-    a GUI worker, where it would take the application down. They raise ValueError, and their messages
-    name flags and subcommands, because there are no environment variables left to name.
+def test_the_diagnostic_guards_refuse_naming_no_flag_or_file():
+    """SystemExit was right for a script and wrong everywhere else; a bare ValueError that named
+    `--no-chi` and `--bounds` was right for the tool and wrong for the window, whose user has no flag
+    to pass. The guards now raise Refusal (V3): one refusal kind, a neutral message that names the
+    diagnostic, the mode and the model but no flag, subcommand or file, and `field=None`, because no
+    single control answers them -- each front end appends its own "how to fix here" from its table,
+    and for None that is nothing.
     """
     import inspect
     from core import cli, config, registry
     from core.config import VALID_LABELS, VALID_MODELS
     from core.diagnostics import feature_sets as fs
+    banned = ("--no-chi", "--bounds", "--cell", "python -m core", "master.txt", "master_weak.txt",
+              str(config.BOUNDS_PATH), str(config.CELL_PATH))
 
     chi_cfg = _nad_cfg(chi_mode=True, chi_n_freqs=4)
-    with pytest.raises(ValueError, match="has not been generalised to chi") as e:
+    with pytest.raises(Refusal, match="has not been generalised to chi") as e:
         fs.assert_not_chi(chi_cfg, "identifiability laplace")
-    assert "identifiability laplace" in str(e.value) and "--no-chi" in str(e.value)
+    assert e.value.field is None and "identifiability laplace" in str(e.value)
+    assert "jacobian" in str(e.value), "the chi-aware alternative is still named, as a diagnostic"
+    assert not any(b in str(e.value) for b in banned), str(e.value)
     fs.assert_not_chi(_nad_cfg(), "identifiability laplace")            # not chi: no refusal
 
     other = _nad_cfg()
     other.model = "HOPF"
-    with pytest.raises(ValueError, match="Nadrowski-specific") as e:
+    with pytest.raises(Refusal, match="Nadrowski-specific") as e:
         fs.assert_nadrowski(other, "the printed ND parameter names are Nadrowski's")
-    assert "HOPF" in str(e.value) and "--bounds" in str(e.value)
+    assert e.value.field is None and "HOPF" in str(e.value) and "nadrowski" in str(e.value)
+    assert not any(b in str(e.value) for b in banned), str(e.value)
     fs.assert_nadrowski(_nad_cfg())                                     # NADROWSKI: no refusal
 
     spont = cli.make_sim_config("NADROWSKI", VALID_LABELS[VALID_MODELS.index("NADROWSKI")],
                                 registry.state_dep_drift("NADROWSKI"),
                                 str(config.BOUNDS_PATH / "nadrowski" / "master_spont.txt"))
     assert not spont.has_forcing, "master_spont.txt declares no Forcing section"
-    with pytest.raises(ValueError, match="no amp/freq/phase to read") as e:
+    with pytest.raises(Refusal, match="no amp/freq/phase to read") as e:
         fs.assert_forced(spont, "identifiability jacobian")
-    assert "master_weak.txt" in str(e.value) and "--cell" in str(e.value)
-    # the refusal depends on --bounds, which the tool never resolves from the cell: name a bounds file
-    # with a Forcing section
-    assert "--bounds" in str(e.value) and "master.txt" in str(e.value), str(e.value)
+    assert e.value.field is None and "SPONTANEOUS" in str(e.value)
+    # the refusal depends on the bounds file, which is never resolved from the cell: say so, without
+    # naming a flag or a file
+    assert "Forcing section" in str(e.value) and "bounds file" in str(e.value), str(e.value)
+    assert not any(b in str(e.value) for b in banned), str(e.value)
     fs.assert_forced(_nad_cfg(), "identifiability jacobian")            # master.txt declares Forcing
 
     for guard in (fs.assert_not_chi, fs.assert_nadrowski, fs.assert_forced):
-        assert "SystemExit" not in inspect.getsource(guard), guard.__name__
+        src = inspect.getsource(guard)
+        assert "SystemExit" not in src and "raise ValueError" not in src, guard.__name__
 
 
 def test_seeded_restores_the_callers_rng():
@@ -367,15 +377,21 @@ def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
     drawn, calibrated = [], []
     monkeypatch.setattr(orchestrator.analysis, "gen_cal_data", lambda **k: drawn.append(1))
     monkeypatch.setattr(orchestrator, "_calibration_prior", lambda *a, **k: calibrated.append(1))
-    with pytest.raises(ValueError, match="repeats must be at least 1"):
+    # V3: each is a Refusal carrying the knob's field key, and the message names no flag -- the tool
+    # appends `(--repeats)` and friends from its own table.
+    with pytest.raises(Refusal, match="at least 1") as e:
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=0, n_cal=8, fig_sink=r.sink)
-    with pytest.raises(ValueError, match="n_cal must be at least 1"):
+    assert e.value.field == "repeats"
+    with pytest.raises(Refusal, match="at least 1") as e:
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=0, fig_sink=r.sink)
-    with pytest.raises(ValueError, match="num_posterior_samples must be at least 1"):
+    assert e.value.field == "n_cal"
+    with pytest.raises(Refusal, match="at least 1") as e:
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, num_posterior_samples=0,
                     fig_sink=r.sink)
-    with pytest.raises(ValueError, match="chi_k_fixed"):
+    assert e.value.field == "num_posterior_samples"
+    with pytest.raises(Refusal, match=r"chi\(omega\) mode") as e:
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, chi_k_fixed=2, fig_sink=r.sink)
+    assert e.value.field == "chi_k_fixed" and "--chi-k-fixed" not in str(e.value), str(e.value)
     with pytest.raises(StoreError, match="already exists"):
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=1, n_cal=8, fig_sink=r.sink, name="sbc_taken")
     with pytest.raises(ValueError, match="not the one this posterior was trained with"):
@@ -522,8 +538,9 @@ def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_abse
     assert d.results["directions"][0]["eigenvalue"] is None
     assert "NOT STORED" in capsys.readouterr().out
     flat = _posterior_artifact(store, cfg, name="norot", V=None)
-    with pytest.raises(ValueError, match="records no Fisher rotation"):
+    with pytest.raises(Refusal, match="records no Fisher rotation") as e:
         identifiability_rotation(cfg, store.load_posterior(cfg, flat.id), name="rot_none")
+    assert e.value.field == "posterior", "one control answers it: point at another posterior"
     assert [s.name for s in store.list("diagnostic") if s.name == "rot_none"] == []
 
 
@@ -537,8 +554,10 @@ def test_identifiability_rotation_refuses_n_worst_over_p(store):
     cfg = _nad_cfg()
     P = len(cfg.params_dict) + len(cfg.rescale_params)
     w = _rotation_posterior(store, cfg, V=torch.eye(P, dtype=torch.float64), evals=None)
-    with pytest.raises(ValueError, match=f"n_worst \\({P + 1}\\) cannot exceed"):
+    with pytest.raises(Refusal, match=f"at most {P}") as e:
         identifiability_rotation(cfg, store.load_posterior(cfg, w.id), n_worst=P + 1, name="rot_nw")
+    assert e.value.field == "n_worst" and f"got {P + 1}" in str(e.value), str(e.value)
+    assert "(default 3)" in str(e.value), "the width AND the default, as the direction refusal does"
     assert [s.name for s in store.list("diagnostic") if s.name == "rot_nw"] == []
 
 
@@ -720,8 +739,9 @@ def test_the_laplace_guards_refuse_before_anything_is_created(store, monkeypatch
                             prior=_LatentPriorStub(P))
     monkeypatch.setattr(identifiability, "_laplace_raw",
                         lambda *a, **k: pytest.fail("simulated before the guards"))
-    with pytest.raises(ValueError, match="chi"):
+    with pytest.raises(Refusal, match="chi") as e:
         identifiability_laplace(chi_cfg, store.load_posterior(chi_cfg, w.id), name="lap_chi")
+    assert e.value.field is None and "--no-chi" not in str(e.value), str(e.value)
     assert [s for s in store.list("diagnostic") if s.name == "lap_chi"] == []
 
     spont = cli.make_sim_config("NADROWSKI", VALID_LABELS[VALID_MODELS.index("NADROWSKI")],
@@ -731,17 +751,19 @@ def test_the_laplace_guards_refuse_before_anything_is_created(store, monkeypatch
     Ps = len(spont.params_dict) + len(spont.rescale_params)
     ws = _posterior_artifact(store, spont, name="spont_post", V=torch.eye(Ps, dtype=torch.float64),
                              prior=_LatentPriorStub(Ps))
-    with pytest.raises(ValueError, match="no amp/freq/phase to read"):
+    with pytest.raises(Refusal, match="no amp/freq/phase to read") as e:
         identifiability_laplace(spont, store.load_posterior(spont, ws.id), name="lap_spont")
+    assert e.value.field is None
     assert [s for s in store.list("diagnostic") if s.name == "lap_spont"] == []
 
     forced_cfg = _forced_nad_cfg()
     Pf = len(forced_cfg.params_dict) + len(forced_cfg.rescale_params)
     wf = _posterior_artifact(store, forced_cfg, name="npts_post", V=torch.eye(Pf, dtype=torch.float64),
                              prior=_LatentPriorStub(Pf))
-    with pytest.raises(ValueError, match="n_points must be at least 1"):
+    with pytest.raises(Refusal, match="at least 1") as e:
         identifiability_laplace(forced_cfg, store.load_posterior(forced_cfg, wf.id), n_points=0,
                                 name="lap_npts")
+    assert e.value.field == "n_points"
     assert [s for s in store.list("diagnostic") if s.name == "lap_npts"] == []
 
 
@@ -763,20 +785,29 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
     monkeypatch.setattr(identifiability, "_jacobian_features",
                         lambda *a, **k: pytest.fail("simulated before the guard"))
 
-    with pytest.raises(ValueError, match="t_obs_s"):
-        identifiability_laplace(cfg, lp, t_obs_s=0.0, name="lap_bad_t")
-    with pytest.raises(ValueError, match="t_obs_s"):
-        # R3: a TINY positive value must also refuse -- n_obs floors to 0 samples, not a valid
-        # recording, and the old `t_obs_s <= 0` guard let it straight through.
-        identifiability_laplace(cfg, lp, t_obs_s=1e-12, name="lap_tiny_t")
-    with pytest.raises(ValueError, match="m_noise"):
-        identifiability_laplace(cfg, lp, m_noise=4, name="lap_bad_m")
-    with pytest.raises(ValueError, match="t_obs_s"):
-        identifiability_jacobian(cfg, t_obs_s=-1.0, name="jac_bad_t")
-    with pytest.raises(ValueError, match="t_obs_s"):
-        identifiability_jacobian(cfg, t_obs_s=1e-12, name="jac_tiny_t")
-    with pytest.raises(ValueError, match="m_noise"):
-        identifiability_jacobian(cfg, m_noise=4, name="jac_bad_m")
+    def _refused(field, fn, *a, **kw) -> str:
+        """The call raises a Refusal carrying `field`, and its message names no flag: the tool
+        appends `(--t-obs)` and friends itself, from its own table (V3)."""
+        with pytest.raises(Refusal) as e:
+            fn(*a, **kw)
+        assert e.value.field == field, (field, str(e.value))
+        assert "--" not in str(e.value), str(e.value)
+        return str(e.value)
+
+    assert "greater than 0" in _refused("t_obs", identifiability_laplace, cfg, lp, t_obs_s=0.0,
+                                        name="lap_bad_t")
+    # R3: a TINY positive value must also refuse -- n_obs floors to 0 samples, not a valid
+    # recording, and the old `t_obs_s <= 0` guard let it straight through.
+    assert "at least one sample" in _refused("t_obs", identifiability_laplace, cfg, lp,
+                                             t_obs_s=1e-12, name="lap_tiny_t")
+    assert "at least 10" in _refused("m_noise", identifiability_laplace, cfg, lp, m_noise=4,
+                                     name="lap_bad_m")
+    assert "greater than 0" in _refused("t_obs", identifiability_jacobian, cfg, t_obs_s=-1.0,
+                                        name="jac_bad_t")
+    assert "at least one sample" in _refused("t_obs", identifiability_jacobian, cfg, t_obs_s=1e-12,
+                                             name="jac_tiny_t")
+    assert "at least 10" in _refused("m_noise", identifiability_jacobian, cfg, m_noise=4,
+                                     name="jac_bad_m")
     for nm in ("lap_bad_t", "lap_tiny_t", "lap_bad_m", "jac_bad_t", "jac_tiny_t", "jac_bad_m"):
         assert [s for s in store.list("diagnostic") if s.name == nm] == []
 
@@ -786,10 +817,8 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
     bad = [("m", {"m": 0}), ("rel", {"rel": 0.0}), ("rel", {"rel": float("nan")}),
            ("rel", {"rel": -0.02}), ("min_valid", {"min_valid": 0.0}), ("min_valid", {"min_valid": 1.5})]
     for knob, kw in bad:
-        with pytest.raises(ValueError, match=knob):
-            identifiability_laplace(cfg, lp, name=f"lap_bad_{knob}", **kw)
-        with pytest.raises(ValueError, match=knob):
-            identifiability_jacobian(cfg, name=f"jac_bad_{knob}", **kw)
+        _refused(knob, identifiability_laplace, cfg, lp, name=f"lap_bad_{knob}", **kw)
+        _refused(knob, identifiability_jacobian, cfg, name=f"jac_bad_{knob}", **kw)
         for nm in (f"lap_bad_{knob}", f"jac_bad_{knob}"):
             assert [s for s in store.list("diagnostic") if s.name == nm] == []
 
@@ -797,11 +826,11 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
     from core.diagnostics import identifiability_rotation
     rot = store.load_posterior(cfg, _rotation_posterior(store, cfg, V=torch.eye(P, dtype=torch.float64),
                                                         evals=None).id)
-    with pytest.raises(ValueError, match="n_worst"):
-        identifiability_rotation(cfg, rot, n_worst=0, name="rot_nw0")
-    with pytest.raises(ValueError, match="top_n"):
-        identifiability_rotation(cfg, rot, top_n=0, name="rot_top0")
-    assert [s for s in store.list("diagnostic") if s.name in ("rot_nw0", "rot_top0")] == []
+    assert "at least 1" in _refused("n_worst", identifiability_rotation, cfg, rot, n_worst=0,
+                                    name="rot_nw0")
+    assert "at least 1" in _refused("top_n", identifiability_rotation, cfg, rot, top_n=0,
+                                    name="rot_top0")
+    assert [s.name for s in store.list("diagnostic") if s.name in ("rot_nw0", "rot_top0")] == []
 
 
 def test_laplace_raw_does_not_leak_its_crn_seed(monkeypatch):
@@ -1254,22 +1283,24 @@ def test_ablation_reads_the_cache_its_posterior_names(tiny_run, monkeypatch):
 
 
 def test_channel_ablation_refuses_bad_rows_and_n_sweep_before_the_row_read(store):
-    """I1: --rows < 1 and --n-sweep < 2 are refused before ANYTHING about the posterior or its cache
-    is even touched. Before this guard, a negative --rows silently sliced ``x[:-5]``, --n-sweep 1 wrote
+    """I1: rows < 1 and n_sweep < 2 are refused before ANYTHING about the posterior or its cache is
+    even touched. Before this guard, a negative --rows silently sliced ``x[:-5]``, --n-sweep 1 wrote
     a table measured at p1 only (no range at all), and 0 for either crashed deep inside
-    ``training_checkpoint.load_rows``/``store.create`` well after the read. ``object()`` stands in for
-    the posterior: if either guard did not fire FIRST, this would blow up on ``posterior.name`` with an
-    AttributeError, not the ValueError under test -- so the test is self-checking on ordering too."""
-    import pytest
+    ``training_checkpoint.load_rows``/``store.create`` well after the read. Each is a Refusal
+    carrying the knob's field key and naming no flag (V3). ``object()`` stands in for the posterior:
+    if either guard did not fire FIRST, this would blow up on ``posterior.name`` with an
+    AttributeError, not the Refusal under test -- so the test is self-checking on ordering too."""
     from core.diagnostics import channel_ablation
     cfg = _nad_cfg()
     before = len(store.list("diagnostic"))
     for bad_rows in (-5, 0):
-        with pytest.raises(ValueError, match="--rows"):
+        with pytest.raises(Refusal, match="at least 1") as e:
             channel_ablation(cfg, object(), rows=bad_rows, n_sweep=5, name=f"bad_rows_{bad_rows}")
+        assert e.value.field == "rows" and "--rows" not in str(e.value), str(e.value)
     for bad_sweep in (0, 1):
-        with pytest.raises(ValueError, match="--n-sweep"):
+        with pytest.raises(Refusal, match="at least 2") as e:
             channel_ablation(cfg, object(), rows=10, n_sweep=bad_sweep, name=f"bad_sweep_{bad_sweep}")
+        assert e.value.field == "n_sweep" and "--n-sweep" not in str(e.value), str(e.value)
     assert len(store.list("diagnostic")) == before, "a refused call must write no diagnostic directory"
 
 

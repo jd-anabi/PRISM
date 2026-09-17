@@ -29,6 +29,7 @@ import torch
 from core import orchestrator as orch
 from core.artifacts import resolve_store
 from core.Helpers import file_manager
+from core.refusals import Refusal, require_at_least, require_between, require_positive
 from core.runs import public_entry
 
 from . import feature_sets
@@ -56,22 +57,21 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
     tr, cond = body["transform"], body["conditioning"]
     label = posterior.name or posterior.id
     if tr.get("V") is None:
-        raise ValueError(
+        raise Refusal(
             f"Posterior '{label}' records no Fisher rotation (V is None: the rotation was off for this "
             f"run), so there is no eigenbasis to decompose. Train with cfg.reparam_rotate on -- note "
-            f"that a model without forcing disables it -- or point this at a posterior that has one.")
+            f"that a model without forcing disables it -- or point this at a posterior that has one.",
+            field="posterior")
     # Refused, not clamped: a clamp turned --n-worst 0 into 1 without a word (the D6 trap).
-    n_worst, top_n = int(n_worst), int(top_n)
-    if n_worst < 1:
-        raise ValueError(f"n_worst must be at least 1, got {n_worst}")
-    if top_n < 1:
-        raise ValueError(f"top_n must be at least 1, got {top_n}")
+    n_worst = require_at_least("n_worst", n_worst, 1)
+    top_n = require_at_least("top_n", top_n, 1)
     V = np.asarray(tr["V"], dtype=float)
     P = V.shape[0]
     if n_worst > P:
         # M8: W[i, P-n_worst:] with P-n_worst < 0 is a NEGATIVE slice -- Python reads it "from the
         # end", so bottom_share silently sums fewer than n_worst directions rather than crashing.
-        raise ValueError(f"n_worst ({n_worst}) cannot exceed the number of directions P={P}.")
+        raise Refusal(f"The number of worst directions to report must be at most {P}, this "
+                      f"posterior's latent width; got {n_worst} (default 3).", field="n_worst")
     names = list(tr["param_keys"])
     if len(names) != P:
         names = [f"p{i}" for i in range(P)]
@@ -218,12 +218,9 @@ def _refuse_bad_arm_settings(m, rel, min_valid) -> None:
     jacobian share them): ``m`` rows per arm, the relative step ``rel`` and the validity floor
     ``min_valid``. Unchecked, ``m=0`` ran the whole noise ensemble and then every arm at batch 0, and
     ``rel=0`` on a zero-valued truth divided by zero on its way to lstsq, after the spend."""
-    if int(m) < 1:
-        raise ValueError(f"m must be at least 1 (rows per finite-difference arm), got {int(m)}")
-    if not (math.isfinite(float(rel)) and float(rel) > 0):
-        raise ValueError(f"rel must be a finite positive relative step, got {rel}")
-    if not (0 < float(min_valid) <= 1):
-        raise ValueError(f"min_valid must be a fraction in (0, 1], got {min_valid}")
+    require_at_least("m", m, 1)
+    require_positive("rel", rel)
+    require_between("min_valid", min_valid, 0.0, 1.0, open_lo=True)
 
 
 def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
@@ -371,31 +368,26 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
     store.assert_name_free("diagnostic", name)
     feature_sets.assert_not_chi(cfg, "identifiability laplace")
     feature_sets.assert_forced(cfg, "identifiability laplace")
-    n_points = int(n_points)
-    if n_points < 1:
-        raise ValueError(f"n_points must be at least 1 (the ground truth is point 1), got {n_points}")
-    if int(m_noise) < 10:
-        # Below this the noise-floor ensemble is too small to estimate a per-feature std at all; left
-        # unguarded it produces "Mean of empty slice" / zero-division RuntimeWarnings deep inside
-        # _analyze_point rather than a refusal that names the knob to raise.
-        raise ValueError(f"m_noise must be at least 10 (the feature-noise floor needs an ensemble), "
-                         f"got {int(m_noise)}")
+    n_points = require_at_least("n_points", n_points, 1)       # the ground truth is point 1
+    # Below 10 the noise-floor ensemble is too small to estimate a per-feature std at all; left
+    # unguarded it produces "Mean of empty slice" / zero-division RuntimeWarnings deep inside
+    # _analyze_point rather than a refusal that names the knob to raise.
+    require_at_least("m_noise", m_noise, 10)
     _refuse_bad_arm_settings(m, rel, min_valid)
     _ = cfg.ground_truth                      # refuses a cell-free config, before anything is spent
     feature_sets.describe_features(cfg)
 
     dtype, device = cfg.hw.dtype, cfg.hw.device
-    t_obs_s = float(config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
+    t_obs_s = require_positive("t_obs", config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
     n_obs_f = t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp
     if not math.isfinite(n_obs_f) or n_obs_f < 1:
-        # R3: a bare `t_obs_s <= 0` check lets through a tiny positive value that still floors to
-        # n_obs == 0 (a zero-length recording, not a refusal) and lets a NaN through to crash later
-        # at int(nan). Guard on the computed n_obs instead -- and on non-finite t_obs_s directly,
-        # since NaN * anything is NaN and n_obs_f < 1 alone would not catch +inf.
-        raise ValueError(
-            f"--t-obs must be a positive, finite recording length long enough for at least one "
-            f"sample (n_obs = t_obs_s * unit_conversion_factor / dt_exp); t_obs_s={t_obs_s!r} gives "
-            f"n_obs={n_obs_f!r}.")
+        # R3: require_positive refused zero, negative and non-finite lengths; this catches the tiny
+        # positive one that still floors to n_obs == 0 (a zero-length recording, not a refusal) and a
+        # product that overflows to inf. Guard on the computed n_obs, never on t_obs_s alone.
+        raise Refusal(
+            f"The observation length, in seconds must be long enough for at least one sample "
+            f"(n_obs = t_obs_s * unit_conversion_factor / dt_exp); t_obs_s={t_obs_s!r} gives "
+            f"n_obs={n_obs_f!r}.", field="t_obs")
     n_obs = int(n_obs_f)
     nd_dim = len(cfg.params_dict)
     res_names = list(cfg.rescale_params)
@@ -836,24 +828,22 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
     if not cfg.chi_mode:
         # chi probes at its own frequencies and ignores the cell's drive, so only this branch needs one.
         feature_sets.assert_forced(cfg, "identifiability jacobian in forced mode")
-    if int(m_noise) < 10:
-        raise ValueError(f"m_noise must be at least 10 (the feature-noise floor needs an ensemble), "
-                         f"got {int(m_noise)}")
+    require_at_least("m_noise", m_noise, 10)          # the feature-noise floor needs an ensemble
     _refuse_bad_arm_settings(m, rel, min_valid)
     _ = cfg.ground_truth
     feature_sets.describe_features(cfg)
 
     dtype, device = cfg.hw.dtype, cfg.hw.device
-    t_obs_s = float(config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
+    t_obs_s = require_positive("t_obs", config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
     n_obs_f = t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp
     if not math.isfinite(n_obs_f) or n_obs_f < 1:
-        # R3: see the identical guard in identifiability_laplace -- a bare t_obs_s <= 0 check lets a
-        # tiny positive value through to a zero-length recording (n_obs == 0) and lets NaN through to
-        # crash at int(nan) instead of refusing here, before any simulation.
-        raise ValueError(
-            f"--t-obs must be a positive, finite recording length long enough for at least one "
-            f"sample (n_obs = t_obs_s * unit_conversion_factor / dt_exp); t_obs_s={t_obs_s!r} gives "
-            f"n_obs={n_obs_f!r}.")
+        # R3: see the identical guard in identifiability_laplace -- require_positive refused zero,
+        # negative and non-finite lengths; this catches the tiny positive one that floors to a
+        # zero-length recording (n_obs == 0), here, before any simulation.
+        raise Refusal(
+            f"The observation length, in seconds must be long enough for at least one sample "
+            f"(n_obs = t_obs_s * unit_conversion_factor / dt_exp); t_obs_s={t_obs_s!r} gives "
+            f"n_obs={n_obs_f!r}.", field="t_obs")
     n_obs = int(n_obs_f)
     gt_nd = cfg.params_tensor[0].clone()
     gt_rescale = torch.tensor([v for v, _ in cfg.rescale_params.values()], dtype=dtype, device=device)
@@ -881,11 +871,11 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
                 # estimable at all -- unguarded, np.median(amax0[fin0]) on an empty selection warns
                 # "Mean of empty slice", the derived CAP is NaN, keep0 ends up all-False, and
                 # feats0[keep0].std(0) then warns "Degrees of freedom <= 0" on a zero-size reduction.
-                raise ValueError(
+                raise Refusal(
                     f"identifiability jacobian: only {int(fin0.sum())} of {fin0.size} baseline "
                     f"trajectories at the ground truth were finite, so no feature-noise floor could "
                     f"be measured. The simulation is destabilizing at this T_obs/ground truth; check "
-                    f"the cell and --t-obs.")
+                    f"the cell and the observation length.", field=None)
             amax0 = torch.maximum(xf0.abs().amax(1), xs0.abs().amax(1)).cpu().numpy()
             cap = 100.0 * float(np.median(amax0[fin0]))
             keep0 = fin0 & (amax0 < cap)

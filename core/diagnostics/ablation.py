@@ -21,6 +21,7 @@ import torch
 
 from core import orchestrator as orch
 from core.artifacts import resolve_store
+from core.refusals import require_at_least
 from core.runs import public_entry
 
 FLOAT32_EPS = 1.1920929e-07
@@ -90,12 +91,9 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
     from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH, VALID_FLAG_LABELS
     store = resolve_store(store)
     store.assert_name_free("diagnostic", name)
-    if int(rows) < 1:
-        raise ValueError(f"--rows must be at least 1, got {int(rows)}.")
-    if int(n_sweep) < 2:
-        raise ValueError(
-            f"--n-sweep must be at least 2 -- a sweep with fewer points cannot describe a range, only "
-            f"the channel's p1 value -- got {int(n_sweep)}.")
+    rows = require_at_least("rows", rows, 1)
+    # At least 2: a sweep with fewer points cannot describe a range, only the channel's p1 value.
+    n_sweep = require_at_least("n_sweep", n_sweep, 2)
     label = posterior.name or posterior.id
     digest = posterior.manifest.parents.get("simulation")
     if digest is None:

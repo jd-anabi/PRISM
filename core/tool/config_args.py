@@ -42,8 +42,9 @@ def add_config_flags(p) -> None:
                    help="chi(omega) observation mode (default: config.CHI_MODE)")
     p.add_argument("--chi-k", dest="chi_n_freqs", type=int, default=None, metavar="K",
                    help="probe frequencies per observation (default: config.CHI_N_FREQS)")
-    p.add_argument("--device", choices=("auto", "cpu"), default="auto",
-                   help="auto detects CUDA; cpu forces config.cpu_device() (default: auto)")
+    p.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto",
+                   help="auto detects CUDA; cpu forces config.cpu_device(); cuda is auto's own "
+                        "detection, refused when it does not yield the card (default: auto)")
 
 
 def add_name_flags(p) -> None:
@@ -111,6 +112,7 @@ def make_cfg(args):
     config to check --cell against before the prior build."""
     from core import cli, config, registry
     from core.config import VALID_LABELS, VALID_MODELS
+    from core.refusals import refuse
     model = model_for(args)
     spec = registry.get(model)
     if spec is None or (spec.is_user_model and not registry.is_sbi_user_model(model)):
@@ -121,7 +123,16 @@ def make_cfg(args):
             f"--model, or point --bounds at Bounds/<model>/.")
     labels = (VALID_LABELS[VALID_MODELS.index(model)] if model in VALID_MODELS
               else registry.get(model).labels)
-    hw = config.cpu_device() if args.device == "cpu" else None
+    if args.device == "cuda":
+        # detect_device()'s OWN DeviceConfig, never a hand-built one: its batch size and dtype enter
+        # the simulation identity, so `cuda` and `auto` on a qualifying card share one cache.
+        hw = config.detect_device()
+        if hw.device.type != "cuda":
+            refuse("device", f"The compute device 'cuda' is not available on this machine: CUDA is "
+                             f"absent or the card's compute capability is below 8.0 "
+                             f"(detected {hw.device.type}).")
+    else:
+        hw = config.cpu_device() if args.device == "cpu" else None
     return cli.make_sim_config(model, labels, registry.state_dep_drift(model), args.bounds,
                                chi_mode=args.chi_mode, chi_n_freqs=args.chi_n_freqs, hw=hw)
 

@@ -20,6 +20,7 @@ import torch
 from core import orchestrator as orch
 from core.artifacts import resolve_store
 from core.Helpers import file_manager
+from core.refusals import Refusal, require_at_least
 from core.runs import public_entry
 
 from .rng import seeded
@@ -106,18 +107,16 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     """
     store = resolve_store(store)
     store.assert_name_free("diagnostic", name)            # before K x n_cal simulations
-    repeats, n_cal = int(repeats), int(n_cal)
-    nps = int(num_posterior_samples)
-    if repeats < 1:
-        raise ValueError(f"repeats must be at least 1, got {repeats}")
-    if n_cal < 1:
-        raise ValueError(f"n_cal must be at least 1, got {n_cal}")
-    if nps < 1:
-        raise ValueError(f"num_posterior_samples must be at least 1, got {nps}")
+    # Refused, never clamped, and each a Refusal carrying its field key (V3): the message names the
+    # setting in neutral words and each front end appends its own "how to fix here".
+    repeats = require_at_least("repeats", repeats, 1)
+    n_cal = require_at_least("n_cal", n_cal, 1)
+    nps = require_at_least("num_posterior_samples", num_posterior_samples, 1)
     if chi_k_fixed is not None and not cfg.chi_mode:
-        raise ValueError(
-            f"chi_k_fixed only means something in chi(omega) mode; this config is "
-            f"{cfg.observation_mode.upper()}. Drop --chi-k-fixed, or point the run at a chi posterior.")
+        raise Refusal(
+            f"The fixed chi probe count only means something in chi(omega) mode; this config is "
+            f"{cfg.observation_mode.upper()}. Leave it unset, or point the run at a chi posterior.",
+            field="chi_k_fixed")
     orch._assert_prior_used_matches_posterior(posterior.posterior, prior.prior, "SBC")
 
     labels = list(cfg.params_dict) + list(cfg.rescale_params)
