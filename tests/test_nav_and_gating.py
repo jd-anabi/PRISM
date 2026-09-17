@@ -75,12 +75,17 @@ def _chi_cfg(k=3, pad=12):
 
 
 # ── Phase-2 panels ───────────────────────────────────────────────────────────────────────────────
-def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins():
-    """FDT now supports HOPF/BP + additive-noise user models. The guard turns an FDTModelError (a
-    missing FDT parameter, or a user model with multiplicative/zero observable noise) into a readable
-    RuntimeError instead of a bare traceback; the registry gate admits every built-in."""
+def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins(monkeypatch):
+    """FDT supports HOPF/BP + additive-noise user models. An FDTModelError (a missing FDT parameter,
+    or a user model with multiplicative/zero observable noise) is a Refusal now, so the guard lets it
+    through UNWRAPPED: the worker hands it to BasePanel._on_error, which opens the yellow "Check your
+    inputs" box for it. Wrapping it in a RuntimeError, as the guard used to, re-typed a refusal into a
+    bug and bought it a traceback. The KeyError net for a malformed cell stays -- that one is a bare
+    KeyError nobody raised as a refusal -- so the guard still translates it into a sentence naming the
+    parameter and the model. The registry gate admits every built-in."""
     import core.gui.panels.fdt_panel as fdt_panel
     from core.FDT.campaigns import FDTModelError
+    from core.refusals import Refusal
     from core import registry
 
     class Cfg:
@@ -90,18 +95,20 @@ def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins():
         raise FDTModelError("Observable 'x' has state-dependent (multiplicative) noise; FDT supports "
                             "additive-noise observables only.")
 
-    real, fdt_panel.run_fdt = fdt_panel.run_fdt, boom
-    try:
-        try:
-            fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False)
-        except RuntimeError as e:
-            assert "multiplicative" in str(e), str(e)
-        except FDTModelError:
-            raise AssertionError("the FDTModelError escaped the guard unwrapped")
-        else:
-            raise AssertionError("the guard swallowed the failure entirely")
-    finally:
-        fdt_panel.run_fdt = real
+    def missing(cfg, *, skip_sanity, confirm_production):
+        raise KeyError("k_gs")
+
+    monkeypatch.setattr(fdt_panel, "run_fdt", boom)
+    with pytest.raises(FDTModelError) as e:
+        fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False)
+    assert isinstance(e.value, Refusal), "an FDTModelError must reach the worker as the Refusal it is"
+    assert "multiplicative" in str(e.value), str(e.value)
+
+    monkeypatch.setattr(fdt_panel, "run_fdt", missing)
+    with pytest.raises(RuntimeError) as e:
+        fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False)
+    assert "k_gs" in str(e.value) and "HOPF" in str(e.value), str(e.value)
+    assert not isinstance(e.value, Refusal), "a malformed cell is translated, not promoted to a refusal"
 
     # HOPF / BP / NADROWSKI are no longer rejected by the FDT gate.
     for m in ("NADROWSKI", "HOPF", "BP"):
@@ -1066,19 +1073,26 @@ def test_the_d7_and_d8_dialogs_default_to_cancel(monkeypatch):
         assert ask() is True, f"clicking '{destructive}' did not answer yes"
 
 
-def test_the_tsnpe_tab_dispatches_a_loaded_observation():
+def test_the_tsnpe_tab_dispatches_a_loaded_observation(monkeypatch):
     """The tab loads the observation ITSELF, on the GUI thread, and hands the wrapper to the stage.
 
     Loading is what re-hashes the file and checks its mode and conditioning width against the session's
     config, so a mismatch is a dialog within milliseconds instead of an exception hours into a round.
     No stage loads by reference any more, and no GUI dispatch names a store (build_app installs the
     default once).
+
+    A load REFUSAL reaches _on_error as the exception itself -- no wrapper, no re-typing, no "Could not
+    load observation '<key>':" prefix (every store refusal already names the observation, store.py's
+    load_observation labels each sentence) -- so a Refusal opens the yellow box. The old prefix turned
+    it into a string the yellow box could never be opened for.
     """
     import types
     from core import orchestrator
     from core.gui.panels.inference import tsnpe_tab as tt
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
+    from core.refusals import Refusal
+    from tests._fixtures import qt_app
 
     qt_app()
     inf = InferenceScreen()
@@ -1087,43 +1101,76 @@ def test_the_tsnpe_tab_dispatches_a_loaded_observation():
     panel.obs_picker.key = lambda: "20260910T120000"
 
     sentinel = types.SimpleNamespace(id="20260910T120000", name="obs")
-    real_default_store = tt.default_store
     cap = {}
     panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
     errors = []
-    panel._on_error = lambda message, tb: errors.append(message)
-    try:
-        tt.default_store = lambda: types.SimpleNamespace(load_observation=lambda cfg, ref: sentinel)
-        panel.n_dirs.setText("2")
-        panel.hpd.setText("0.999")
-        panel.num_runs.setText("3")
-        panel.run_size_cap.setText("8")
-        panel._round()
-        assert cap["fn"] is orchestrator.tsnpe_round, cap["fn"]
-        assert cap["args"][3] is sentinel, "the tab must pass the LOADED observation, not its key"
-        assert cap["kwargs"]["n_directions"] == 2 and cap["kwargs"]["level"] == 0.999
-        assert cap["kwargs"]["num_runs"] == 3 and cap["kwargs"]["run_size_cap"] == 8
-        assert cap["kwargs"]["new_run"] is False and cap["kwargs"]["provide_fig_sink"] is True
-        assert "store" not in cap["kwargs"], "the GUI names no store; build_app installs the default"
+    panel._on_error = lambda exc, tb: errors.append(exc)
+    monkeypatch.setattr(tt, "default_store",
+                        lambda: types.SimpleNamespace(load_observation=lambda cfg, ref: sentinel))
+    panel.n_dirs.setText("2")
+    panel.hpd.setText("0.999")
+    panel.num_runs.setText("3")
+    panel.run_size_cap.setText("8")
+    panel._round()
+    assert cap["fn"] is orchestrator.tsnpe_round, cap["fn"]
+    assert cap["args"][3] is sentinel, "the tab must pass the LOADED observation, not its key"
+    assert cap["kwargs"]["n_directions"] == 2 and cap["kwargs"]["level"] == 0.999
+    assert cap["kwargs"]["num_runs"] == 3 and cap["kwargs"]["run_size_cap"] == 8
+    assert cap["kwargs"]["new_run"] is False and cap["kwargs"]["provide_fig_sink"] is True
+    assert "store" not in cap["kwargs"], "the GUI names no store; build_app installs the default"
 
-        # ticked: the consent travels, and the box clears itself so it cannot silently persist
-        cap.clear()
-        panel.new_run.setChecked(True)
-        panel._round()
-        assert cap["kwargs"]["new_run"] is True
-        assert panel.new_run.isChecked() is False, "the box must clear after each dispatch"
+    # ticked: the consent travels, and the box clears itself so it cannot silently persist
+    cap.clear()
+    panel.new_run.setChecked(True)
+    panel._round()
+    assert cap["kwargs"]["new_run"] is True
+    assert panel.new_run.isChecked() is False, "the box must clear after each dispatch"
 
-        # a load failure dispatches NOTHING and reports through _on_error (not _config_error, whose
-        # text begins "The configuration could not be built")
-        cap.clear()
-        def _boom(cfg, ref):
-            raise ValueError("width 61 is not this config's 50")
-        tt.default_store = lambda: types.SimpleNamespace(load_observation=_boom)
-        panel._round()
-        assert cap == {}, "a round was dispatched with an observation that would not load"
-        assert errors and "20260910T120000" in errors[-1] and "width 61" in errors[-1], errors
-    finally:
-        tt.default_store = real_default_store
+    # a load refusal dispatches NOTHING and reaches _on_error as the Refusal it is
+    cap.clear()
+
+    def _boom(cfg, ref):
+        raise Refusal("Observation '20260910T120000' has conditioning width 61, but this config's "
+                      "is 50.", field="observation")
+
+    monkeypatch.setattr(tt, "default_store", lambda: types.SimpleNamespace(load_observation=_boom))
+    panel._round()
+    assert cap == {}, "a round was dispatched with an observation that would not load"
+    assert errors and isinstance(errors[-1], Refusal), errors
+    assert errors[-1].field == "observation"
+    assert "20260910T120000" in str(errors[-1]) and "width 61" in str(errors[-1]), errors
+
+
+def test_the_tsnpe_tab_passes_a_load_bug_to_on_error_unwrapped(monkeypatch):
+    """The other half of the routing: a BUG in the load (not a refusal) reaches _on_error as the bare
+    exception with its traceback, so it opens the RED box. The tab must not decide the kind itself --
+    it passes what it caught, and BasePanel._on_error decides by isinstance."""
+    import types
+    from core.gui.panels.inference import tsnpe_tab as tt
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from core.refusals import Refusal
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    panel = inf.tsnpe_panel
+    panel.obs_picker.key = lambda: "20260910T120000"
+    cap, errors = {}, []
+    panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
+    panel._on_error = lambda exc, tb: errors.append((exc, tb))
+
+    def _bug(cfg, ref):
+        raise RuntimeError("observation.pt is not a tensor")
+
+    monkeypatch.setattr(tt, "default_store", lambda: types.SimpleNamespace(load_observation=_bug))
+    panel._round()
+    assert cap == {}, "a round was dispatched with an observation that would not load"
+    exc, tb = errors[-1]
+    assert isinstance(exc, RuntimeError) and not isinstance(exc, Refusal)
+    assert str(exc) == "observation.pt is not a tensor", "the tab must not re-phrase the exception"
+    assert "Traceback" in tb and "RuntimeError: observation.pt is not a tensor" in tb
 
 
 def test_the_tsnpe_new_run_box_is_not_persisted():
@@ -1275,3 +1322,168 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.label("drive_amplitude") == "A (N)"
     assert gui_fields.label("drive_frequency") == "f (Hz)"
     assert gui_fields.label("drive_phase") == "φ (rad)"
+
+
+def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
+    """Save on the Prior and Posterior tabs is a rename, and a bad or taken name is a StoreError -- a
+    Refusal with field="name" since piece 3 -- so it opens the yellow box with the core's sentence
+    as its text and this front end's fix ("Choose another name in the Save box.") under it. It used
+    to go through _config_error, whose box read "The configuration could not be built." over a
+    sentence about a name: a lie for a rename. A rename that fails for any other reason is a bug and
+    stays red, with its traceback. Either way the loaded artifact keeps its old name."""
+    import types
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts import StoreError
+    from core.gui import fields as gui_fields
+    from core.gui.panels.inference import posterior_tab as post_mod, prior_tab as prior_mod
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from tests._fixtures import SHOWN, PaneCapture, qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+
+    def _taken(kind, ref, new_name):
+        raise StoreError(f"a {kind} named {new_name!r} already exists; rename or delete it first",
+                         field="name")
+
+    def _bug(kind, ref, new_name):
+        raise PermissionError("manifest.json is locked")
+
+    for kind, mod, panel, name_box, save, loaded in (
+            ("prior", prior_mod, inf.prior_panel, inf.prior_panel.prior_name,
+             inf.prior_panel._save_prior, inf.session.inf_prior),
+            ("posterior", post_mod, inf.posterior_panel, inf.posterior_panel.post_name,
+             inf.posterior_panel._save_posterior, inf.session.posterior)):
+        pane = PaneCapture(panel)
+        name_box.setText("p")
+
+        monkeypatch.setattr(mod, "default_store", lambda: types.SimpleNamespace(rename=_taken))
+        SHOWN.clear()
+        save()
+        box = SHOWN[-1]
+        assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, kind
+        assert box.text() == f"a {kind} named 'p' already exists; rename or delete it first", kind
+        assert box.informativeText() == gui_fields.fix_sentence("name") == \
+            "Choose another name in the Save box.", kind
+        assert box.detailedText() == "", kind
+        assert loaded.name == "", "a refused rename must not relabel the loaded artifact"
+        assert pane.lines[-1][0] == "warning" and "already exists" in pane.lines[-1][1], pane.lines
+
+        monkeypatch.setattr(mod, "default_store", lambda: types.SimpleNamespace(rename=_bug))
+        SHOWN.clear()
+        save()
+        box = SHOWN[-1]
+        assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical, kind
+        assert box.text() == "manifest.json is locked", kind
+        assert "Traceback" in box.detailedText() and "PermissionError" in box.detailedText(), kind
+        assert loaded.name == "", kind
+        assert pane.lines[-1] == ("error", "manifest.json is locked"), pane.lines
+
+
+def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_config_error(monkeypatch):
+    """"Build / Load prior" builds the SimConfig first. A Refusal from that builder (a bounds file
+    the parser will not take, a units declaration that does not parse) opens the yellow box with the
+    core's sentence as its TEXT -- not as the informative line under a generic "The configuration
+    could not be built." -- and a bug in the builder opens the red box with its traceback. Nothing is
+    installed on the session and nothing is dispatched either way.
+
+    And a source pin, because the routing is a rule for all five inference tabs: none of
+    core/gui/panels/inference/*.py calls _config_error any more. That method stays on BasePanel for
+    the Simulate, Reduction, CrossVal and FDT panels until piece 5 retires it."""
+    import types
+    from PySide6.QtWidgets import QMessageBox
+    import core.gui.panels.inference as inference_pkg
+    from core.gui import fields as gui_fields
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from core.refusals import Refusal
+    from tests._fixtures import SHOWN, PaneCapture, qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    pp = inf.prior_panel
+    reached = []
+    inf.install_config = lambda cfg: reached.append(("installed", cfg))
+    pp.dispatch = lambda fn, *a, **k: reached.append(("dispatched", fn))
+    pp.bounds_picker.selected_path = lambda: "Resources/Bounds/nadrowski/master.txt"
+    pane = PaneCapture(pp)
+
+    def _refusing(bounds_path=None, *, bounds_dicts=None):
+        raise Refusal("The units are not parseable: 'furlong' is not a length unit.", field="units")
+
+    def _buggy(bounds_path=None, *, bounds_dicts=None):
+        raise ZeroDivisionError("division by zero")
+
+    inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_refusing))
+    SHOWN.clear()
+    pp._build_prior()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert box.text() == "The units are not parseable: 'furlong' is not a length unit."
+    assert box.informativeText() == gui_fields.fix_sentence("units")
+    assert "'Units'" in box.informativeText(), box.informativeText()
+    assert box.detailedText() == "" and reached == []
+    assert pane.lines[-1][0] == "warning" and "'Units'" in pane.lines[-1][1], pane.lines
+
+    inf.session = SbiSession(draft=types.SimpleNamespace(make_config=_buggy))
+    SHOWN.clear()
+    pp._build_prior()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
+    assert box.text() == "division by zero" and "ZeroDivisionError" in box.detailedText()
+    assert reached == [] and pane.lines[-1] == ("error", "division by zero")
+
+    for path in sorted(Path(inference_pkg.__file__).parent.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr == "_config_error"]
+        assert not calls, f"{path.name} still routes a failure through _config_error"
+
+
+def test_the_secondary_panels_still_show_a_bad_cell_as_check_your_inputs(monkeypatch, tmp_path):
+    """The Simulate, Reduction, CrossVal and FDT panels are piece 5's. Until then their builder
+    failures stay on BasePanel._config_error, whose box is titled "Check your inputs" and reads "The
+    configuration could not be built." over the builder's own sentence. Pinned for BOTH shapes the
+    builders raise across piece 3 -- the bare ValueError they raise today for a cell missing a
+    parameter, and the Refusal(field="cell") they raise once cli is converted -- so the four panels
+    keep the same box whichever lands first, and nothing is dispatched. The routing change on the
+    inference tabs must not leak here."""
+    from PySide6.QtWidgets import QMessageBox
+    from core import cli
+    from core.gui.panels import simulate_panel as sim_mod
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from core.refusals import Refusal
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    cell = tmp_path / "bad_cell.txt"
+    cell.write_text("# a cell that will not build\n", encoding="utf-8")
+    panels = {"fdt": FdtPanel(), "reduction": ReductionPanel(), "crossval": CrossValPanel(),
+              "simulate": SimulatePanel()}
+    for p in panels.values():
+        p.cell_picker.selected_path = lambda: str(cell)
+        p.dispatch = lambda *a, **k: pytest.fail("a panel dispatched with a config that did not build")
+    clicks = {"fdt": panels["fdt"]._run, "reduction": panels["reduction"]._run,
+              "crossval": panels["crossval"]._run, "simulate": panels["simulate"]._start}
+    msg = f"Cell file {cell.name!r} does not define the parameter 'k_gs'."
+
+    for make in (ValueError, lambda m: Refusal(m, field="cell")):
+        def _bad(*a, **k):
+            raise make(msg)
+
+        monkeypatch.setattr(cli, "make_fdt_config", _bad)
+        monkeypatch.setattr(cli, "make_reduction_config", _bad)
+        monkeypatch.setattr(cli, "make_param_sweep_config", _bad)
+        monkeypatch.setattr(sim_mod, "build_stream_config", _bad)
+        for name, click in clicks.items():
+            SHOWN.clear()
+            click()
+            box = SHOWN[-1]
+            assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, name
+            assert box.text() == "The configuration could not be built.", name
+            assert box.informativeText() == msg, name
+            assert box.detailedText() == "", name

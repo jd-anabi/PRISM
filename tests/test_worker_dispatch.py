@@ -240,7 +240,8 @@ def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_
 # ── Phase 3: error dialogs ───────────────────────────────────────────────────────────────────────
 def test_on_error_puts_the_traceback_in_details_not_the_body():
     """A run failure's traceback belongs in a collapsible Details panel, not pasted whole into the
-    dialog body."""
+    dialog body. The worker hands over the EXCEPTION now, not its text: a bug is anything that is not
+    a Refusal, and it keeps this red box."""
     from PySide6.QtWidgets import QMessageBox
 
     qt_app()
@@ -259,7 +260,8 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
 
     QMessageBox.exec = fake_exec
     try:
-        panel._on_error("Something failed", "Traceback (most recent call last):\n  ...\nValueError: x")
+        panel._on_error(RuntimeError("Something failed"),
+                        "Traceback (most recent call last):\n  ...\nRuntimeError: Something failed")
     finally:
         QMessageBox.exec = orig_exec
 
@@ -314,3 +316,107 @@ def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
     panel.log_pane.append_line("watch out", "warning")
     assert cap.lines == [("info", "plain"), ("warning", "watch out")]
     assert panel.log_pane.toPlainText() == before, "a captured line must not also reach the widget"
+
+
+def test_on_error_routes_a_refusal_to_the_yellow_box():
+    """The one place the window tells a refusal from a bug. A Refusal reaching _on_error -- from the
+    worker's error signal, or from a click handler that passes what it caught -- opens the YELLOW
+    "Check your inputs" box: the core's neutral sentence as the text, this front end's "where to fix
+    it" (core/gui/fields.py, looked up by the field key) as the informative line, one OK button which
+    is the default, and NO Details -- a refusal is not a crash and a traceback would only say so
+    louder. A refusal with no field has no fix sentence and no informative line. The same sentence
+    goes to the log pane at warning, so it outlives the click that dismisses the box. And the plain
+    string the tabs used to pass still works, and still means "bug": the red box."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui import fields as gui_fields
+    from core.refusals import Refusal
+    from tests._fixtures import SHOWN, PaneCapture, qt_app
+
+    qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    pane = PaneCapture(panel)
+    exc = Refusal("The observation length, in seconds, is blank (default none: it must be given).",
+                  field="t_obs")
+    panel._on_error(exc, "Traceback (most recent call last):\n  ...\nRefusal: blank")
+
+    box = SHOWN[-1]
+    assert isinstance(box, QMessageBox)
+    assert box.windowTitle() == "Check your inputs"
+    assert box.icon() == QMessageBox.Warning
+    assert box.text() == exc.message
+    assert box.informativeText() == "Set it in the 'T_obs (s)' box on the Infer tab."
+    assert box.informativeText() == gui_fields.fix_sentence("t_obs")
+    assert box.detailedText() == "", "a refusal carries no traceback"
+    assert box.standardButtons() == QMessageBox.Ok
+    assert box.buttonRole(box.defaultButton()) == QMessageBox.AcceptRole, "OK is the default"
+    assert pane.lines[-1] == ("warning", f"{exc.message} {box.informativeText()}")
+
+    # field=None: no fix sentence, so no informative line, and the log line is the message alone
+    SHOWN.clear()
+    panel._on_error(Refusal("resume='require' but there is no resumable cache at x."), "")
+    assert SHOWN[-1].windowTitle() == "Check your inputs"
+    assert SHOWN[-1].informativeText() == ""
+    assert pane.lines[-1] == ("warning", "resume='require' but there is no resumable cache at x.")
+
+    # a plain string is still accepted, and is still a bug: the red box
+    SHOWN.clear()
+    panel._on_error("plain text", "")
+    assert SHOWN[-1].windowTitle() == "Error" and SHOWN[-1].icon() == QMessageBox.Critical
+    assert SHOWN[-1].text() == "plain text"
+    assert pane.lines[-1] == ("error", "plain text")
+
+
+def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_one():
+    """End to end through dispatch(): the exception OBJECT crosses the worker thread on the error
+    signal, so the panel can route by type. Worker.run used to flatten every failure to
+    (str(e), traceback) and the panel had nothing left to route on -- a refusal raised inside a
+    stage (the direction count, a near miss, D12, a load mismatch) opened the same red Critical box,
+    traceback and all, as a genuine crash. Read off the conftest's SHOWN record, which is what the
+    class-level QMessageBox.exec guard leaves behind instead of a modal that would stall offscreen."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.refusals import Refusal
+    from tests._fixtures import SHOWN, PaneCapture, pump, qt_app
+
+    app = qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    pane = PaneCapture(panel)
+
+    def _run_to_dialog(fn):
+        SHOWN.clear()
+        panel.dispatch(fn)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (panel._busy or not SHOWN):
+            app.processEvents()
+            time.sleep(0.01)
+        pump(app, 0.2)
+        assert not panel._busy, "the panel stayed busy after the failure"
+        assert SHOWN, "no dialog opened"
+        return SHOWN[-1]
+
+    def refuse():
+        raise Refusal("The observation length, in seconds, must be greater than 0; got 0 "
+                      "(default none: it must be given).", field="t_obs")
+
+    box = _run_to_dialog(refuse)
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert box.text().startswith("The observation length, in seconds, must be greater than 0")
+    assert box.informativeText() == "Set it in the 'T_obs (s)' box on the Infer tab."
+    assert box.detailedText() == "", "a refusal must not carry a traceback"
+    assert pane.lines[-1][0] == "warning" and "'T_obs (s)'" in pane.lines[-1][1], pane.lines
+
+    def bug():
+        raise RuntimeError("Something failed")
+
+    box = _run_to_dialog(bug)
+    assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
+    assert box.text() == "Something failed"
+    assert "Traceback" in box.detailedText() and "RuntimeError: Something failed" in box.detailedText()
+    assert pane.lines[-1] == ("error", "Something failed")

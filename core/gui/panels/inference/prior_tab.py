@@ -1,9 +1,12 @@
+import traceback
+
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout)
 
 from core import config, forcing, orchestrator
 from core.artifacts import default_store
 from core.Helpers import file_manager
 from core.config import BOUNDS_PATH
+from core.refusals import Refusal
 
 from ... import icons, settings
 from ...widgets.artifact_picker import ArtifactPicker, StorePicker
@@ -113,8 +116,12 @@ class PriorPanel(_StagePanel):
             return
         try:
             params, rescale, forcing, _ = file_manager.parse_bounds_file(path)
-        except Exception as e:                       # noqa: BLE001
-            self._config_error(e)
+        except Refusal as e:                         # the file's problem: the yellow box
+            self._refusal(e)
+            self.bounds_source.set_direct(False)
+            return
+        except Exception as e:                       # noqa: BLE001 -- a bug in the parser: the red box
+            self._on_error(e, traceback.format_exc())
             self.bounds_source.set_direct(False)
             return
         self.bounds_grid.load(params, rescale, forcing)
@@ -141,8 +148,11 @@ class PriorPanel(_StagePanel):
             source = dict(bounds_path=bounds_path)
         try:
             cfg = draft.make_config(**source)
-        except Exception as e:                       # noqa: BLE001 -- see BasePanel._config_error
-            self._config_error(e)
+        except Refusal as e:                         # a bounds or units problem: the yellow box
+            self._refusal(e)
+            return
+        except Exception as e:                       # noqa: BLE001 -- a bug in the builder: the red box
+            self._on_error(e, traceback.format_exc())
             return
         for msg in cfg.check_unit_consistency():      # a units declaration that contradicts the pipeline
             self.log_pane.append_line(msg, "warning")
@@ -223,8 +233,11 @@ class PriorPanel(_StagePanel):
             return
         try:
             lp.manifest = default_store().rename("prior", lp.id, name)
-        except Exception as e:                       # noqa: BLE001 -- a bad or duplicate name is user input
-            self._config_error(e)
+        except Refusal as e:                         # a bad or taken name is a StoreError(field="name")
+            self._refusal(e)
+            return
+        except Exception as e:                       # noqa: BLE001 -- anything else is a bug
+            self._on_error(e, traceback.format_exc())
             return
         lp.name = name
         self.prior_picker.refresh()

@@ -16,6 +16,7 @@ import numpy as np
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QGroupBox, QLabel, QPushButton)
 
 from core.config import CELL_PATH, DT_EXP_S, T_MIN_EXP_S, VALID_MODELS
+from core.refusals import Refusal
 
 from .base_panel import BasePanel
 from .simulate_export import (estimate_frame_count, export_animation, export_stride, ffmpeg_available)
@@ -132,9 +133,11 @@ class SimulatePanel(BasePanel):
         if not path.lower().endswith((".mp4", ".gif")):
             path += ".mp4"
         if path.lower().endswith(".mp4") and not ffmpeg_available():
-            self._config_error(RuntimeError(
-                "Saving MP4 needs an ffmpeg binary, which isn't available here. Save as .gif instead, "
-                "or install ffmpeg (or set the IMAGEIO_FFMPEG_EXE environment variable)."))
+            # A refusal, not a config error: the program will not write an MP4 without the codec.
+            # No field -- the fix is on the machine, not in a box -- so no "where to fix it" line.
+            self._refusal(Refusal(
+                "Saving MP4 needs an ffmpeg binary on PATH, which isn't available here. Save as .gif "
+                "instead, or install ffmpeg (or set the IMAGEIO_FFMPEG_EXE environment variable)."))
             return
 
         series = np.concatenate(self._record, axis=0)

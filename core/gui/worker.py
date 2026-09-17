@@ -14,7 +14,7 @@ class WorkerSignals(QObject):
     figure = Signal(str, object, object)  # (title, png_bytes, fig_pickle | None) -- see base_panel._png_fig_sink
     chunk = Signal(object)          # one streamed numpy chunk (worker thread -> GUI) -- see base_panel.dispatch(provide_stream=)
     result = Signal(object)         # the callable's return value
-    error = Signal(str, str)        # (message, traceback)
+    error = Signal(object, str)     # (exception, traceback) -- base_panel._on_error routes by type
     cancelled = Signal()            # the user cancelled: a stop, not a failure -- no error dialog
     finished = Signal()
 
@@ -52,7 +52,10 @@ class Worker(QRunnable):
                     # handler below). Not a failure: report it as such, no traceback, no error dialog.
                     cancelled = True
                 except Exception as e:               # noqa: BLE001 -- surface any failure to the UI
-                    failure = (str(e), traceback.format_exc())
+                    # The EXCEPTION, not its text. The panel opens the yellow "Check your inputs"
+                    # box for a Refusal and the red one with the traceback for anything else, and
+                    # it can only tell the two apart if the object itself crosses the thread.
+                    failure = (e, traceback.format_exc())
                 finally:
                     # Stray figures a stage built but never handed to the sink (e.g. it unwound on a
                     # cancel before _emit): harmless under Agg, but they pile up across cancelled runs.

@@ -1,4 +1,5 @@
 import math
+import traceback
 
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QVBoxLayout, QWidget)
@@ -7,6 +8,7 @@ from core import cli, config, forcing, orchestrator
 from core.artifacts import Accept
 from core.Helpers import file_manager, labels
 from core.config import T_MIN_EXP_S
+from core.refusals import Refusal
 
 from ... import icons, settings
 from ...widgets.adaptive_stack import AdaptiveStack
@@ -133,8 +135,12 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             return
         try:
             inits, params, rescale, forcing = file_manager.parse_values_file(path)
-        except Exception as e:                       # noqa: BLE001
-            self._config_error(e)
+        except Refusal as e:                         # the file's problem: the yellow box
+            self._refusal(e)
+            self.cell_source.set_direct(False)
+            return
+        except Exception as e:                       # noqa: BLE001 -- a bug in the parser: the red box
+            self._on_error(e, traceback.format_exc())
             self.cell_source.set_direct(False)
             return
         self.values_grid.load(inits, params, rescale, forcing)

@@ -1,3 +1,5 @@
+import traceback
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (QCheckBox, QGroupBox, QLabel, QPushButton, QVBoxLayout)
 
@@ -99,8 +101,13 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         # exception hours into the round. The stage takes the wrapper; nothing loads by reference.
         try:
             obs = default_store().load_observation(s.cfg, self.obs_picker.key())
-        except Exception as e:                                  # noqa: BLE001 -- a picked file is user input
-            self._on_error(f"Could not load observation '{self.obs_picker.key()}': {e}", "")
+        except Exception as e:                                  # noqa: BLE001 -- _on_error sorts refusal from bug
+            # The exception itself, unwrapped. A store refusal is a Refusal that already names the
+            # observation (store.py's load_observation labels every sentence), so it reaches the
+            # yellow box through _on_error's isinstance; a bug reaches the red one with its
+            # traceback. The old "Could not load observation '<key>':" prefix re-typed both into
+            # one string, and the yellow box could never be opened for it.
+            self._on_error(e, traceback.format_exc())
             return
         # The HPD / direction-count checks are the STAGE's now (one copy, shared with the command-line
         # tool), and it refuses before it simulates -- so the error dialog still arrives within seconds.

@@ -303,3 +303,35 @@ def test_simulate_panel_records_chunks_and_gates_the_save_button():
     p._record = []
     p.refresh_local_gates()
     assert not p.btn_save_video.isEnabled(), "save must disable again when the recording is cleared"
+
+
+def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
+    """A missing ffmpeg binary is a refusal -- something the program will not do with what this
+    machine has -- so it opens the yellow "Check your inputs" box with the sentence as its TEXT and
+    no traceback. It used to go through _config_error, whose box read "The configuration could not
+    be built." over a sentence about a video codec. No field: the fix is on the machine, not in a
+    box, so the informative line is empty and the log line is the sentence alone. Nothing is
+    exported."""
+    import numpy as np
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+    from core.gui.panels import simulate_panel as sim_mod
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from tests._fixtures import SHOWN, PaneCapture, qt_app
+
+    qt_app()
+    p = SimulatePanel()
+    p._record = [np.array([[0.0, 0.1], [1e-3, 0.2]])]
+    sent = []
+    p.dispatch = lambda *a, **k: sent.append(a)
+    pane = PaneCapture(p)
+    monkeypatch.setattr(sim_mod, "ffmpeg_available", lambda: False)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("clip.mp4", ""))
+    SHOWN.clear()
+    p._save_video()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert box.text().startswith("Saving MP4 needs an ffmpeg binary on PATH"), box.text()
+    assert ".gif" in box.text() and "IMAGEIO_FFMPEG_EXE" in box.text()
+    assert box.informativeText() == "" and box.detailedText() == ""
+    assert pane.lines[-1] == ("warning", box.text()), pane.lines
+    assert sent == [], "an MP4 export was dispatched without ffmpeg"

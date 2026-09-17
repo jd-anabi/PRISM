@@ -11,7 +11,6 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPus
 
 from core import cli, config, registry
 from core.config import CELL_PATH, VALID_MODELS
-from core.FDT.campaigns import FDTModelError
 from core.FDT.fdt_pipeline import run_fdt
 
 from .base_panel import BasePanel
@@ -36,13 +35,15 @@ HELP = {
 
 
 def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production):
-    """Translate a model/cell FDT incompatibility into a readable message. FDTModelError (a missing FDT
-    parameter, or a user model with multiplicative/zero observable noise) is already user-facing; the
-    KeyError net is a defensive backstop for a malformed cell (it should no longer fire for HOPF/BP)."""
+    """Translate a malformed cell into a readable message. An FDTModelError (a missing FDT parameter,
+    or a user model with multiplicative/zero observable noise) is a Refusal and passes through
+    UNWRAPPED: the worker hands it to BasePanel._on_error, which opens the yellow "Check your inputs"
+    box for it -- wrapping it in a RuntimeError, as this used to, re-typed a refusal into a bug and
+    bought it a traceback. The KeyError net is a defensive backstop for a malformed cell (it should
+    no longer fire for HOPF/BP); that one is a bare KeyError nobody raised as a refusal, so it is
+    still translated."""
     try:
         return run_fdt(cfg, skip_sanity=skip_sanity, confirm_production=confirm_production)
-    except FDTModelError as e:
-        raise RuntimeError(str(e)) from e
     except KeyError as e:
         raise RuntimeError(
             f"The FDT pipeline needs the parameter {e}, which the selected {cfg.model} cell does not "

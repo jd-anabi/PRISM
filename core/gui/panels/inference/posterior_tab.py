@@ -1,7 +1,10 @@
+import traceback
+
 from PySide6.QtWidgets import (QGroupBox, QHBoxLayout, QLineEdit, QMessageBox, QPushButton, QVBoxLayout)
 
 from core import config, orchestrator
 from core.artifacts import Accept, default_store
+from core.refusals import Refusal
 
 from ... import icons, settings
 from ...widgets.artifact_picker import StorePicker
@@ -268,8 +271,11 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
             return
         try:
             lp.manifest = default_store().rename("posterior", lp.id, name)
-        except Exception as e:                       # noqa: BLE001 -- a bad or duplicate name is user input
-            self._config_error(e)
+        except Refusal as e:                         # a bad or taken name is a StoreError(field="name")
+            self._refusal(e)
+            return
+        except Exception as e:                       # noqa: BLE001 -- anything else is a bug
+            self._on_error(e, traceback.format_exc())
             return
         lp.name = name
         self.post_picker.refresh()

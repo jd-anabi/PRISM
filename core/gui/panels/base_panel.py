@@ -8,6 +8,9 @@ from PySide6.QtWidgets import (QHBoxLayout, QMessageBox, QPushButton, QScrollAre
                                QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt
 
+from core.refusals import Refusal
+
+from .. import fields as gui_fields
 from ..design import CONTROLS_MIN_W, DEFAULT_RESULTS_SPLIT, DEFAULT_SPLIT
 from ..plot_watcher import NewPngWatcher
 from ..streams import CancelToken
@@ -362,12 +365,13 @@ class BasePanel(QWidget):
     def _config_error(self, exc: Exception):
         """Report a failed config build as user-input trouble, not a crash.
 
-        Deliberately catches broadly at the call sites: cli's builders raise a bare ValueError (NOT
-        UnitParseError) for the two most plausible user mistakes -- a cell with no sibling bounds file
-        (cli.parse_cell) and a cell missing a param the bounds file requires
-        (cli.load_and_validate_gt -> SimConfig.inject_ground_truth). A
-        narrow `except cli.UnitParseError` lets those escape the clicked slot and surface as a raw
-        traceback in app.py's last-resort excepthook, with nothing in the panel's own log.
+        For the Simulate, Reduction, CrossVal and FDT panels until piece 5; the inference tabs route
+        through _refusal/_on_error. Deliberately catches broadly at the call sites: cli's builders
+        raise a bare ValueError (NOT UnitParseError) for the two most plausible user mistakes -- a
+        cell with no sibling bounds file (cli.parse_cell) and a cell missing a param the bounds file
+        requires (cli.load_and_validate_gt -> SimConfig.inject_ground_truth). A narrow
+        `except cli.UnitParseError` lets those escape the clicked slot and surface as a raw traceback
+        in app.py's last-resort excepthook, with nothing in the panel's own log.
         """
         msg = str(exc)
         self.log_pane.append_line(f"Could not build the config: {msg}", "error")
@@ -378,10 +382,41 @@ class BasePanel(QWidget):
         box.setInformativeText(msg)
         box.exec()
 
-    def _on_error(self, message: str, tb: str):
-        """Show a run failure. The traceback goes in a collapsible Details panel, not pasted whole into
-        the body (which produced an unscrollable, un-copyable wall of text stretched to the widest stack
-        frame)."""
+    def _refusal(self, exc: Refusal) -> None:
+        """Show a refusal: the yellow "Check your inputs" box, and no traceback.
+
+        A refusal is something the program will not do with what it was given -- a blank box, a taken
+        name, a training run one setting away from its cache -- and the fix is on this screen, so the
+        box names it. The text is the core's neutral sentence (it names the setting, the rule, what
+        was given and the default; never a box, tab or flag) and the informative line is this front
+        end's own "where to fix it", looked up by the refusal's field key in core/gui/fields.py --
+        the one place a control is named, so a renamed control is renamed once. No Details: nothing
+        here is a crash, and a traceback would only say so louder. A bug keeps the red box
+        (_on_error). The same sentence goes to the log pane at warning, so it outlives the click that
+        dismisses the box.
+        """
+        fix = gui_fields.fix_sentence(exc.field)
+        self.log_pane.append_line(f"{exc.message} {fix}".rstrip(), "warning")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Check your inputs")
+        box.setText(exc.message)
+        if fix:
+            box.setInformativeText(fix)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setDefaultButton(QMessageBox.Ok)          # one button, so the safe default is it
+        box.exec()
+
+    def _on_error(self, exc_or_message, tb: str) -> None:
+        """Show a failure. A Refusal goes to the yellow box (_refusal); anything else is a bug and
+        gets the red one, with the traceback in a collapsible Details panel rather than pasted whole
+        into the body (which produced an unscrollable, un-copyable wall of text stretched to the
+        widest stack frame). Connected to WorkerSignals.error, which carries the exception object;
+        a click handler that catches on the GUI thread passes what it caught the same way. A plain
+        string is still accepted and is still a bug."""
+        if isinstance(exc_or_message, Refusal):
+            return self._refusal(exc_or_message)
+        message = str(exc_or_message)
         self.log_pane.append_line(message, "error")
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Critical)
