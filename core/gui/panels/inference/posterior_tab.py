@@ -325,31 +325,22 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self._sync_budget()
 
     def save_settings(self, qs):
+        """The selection and the budget only (V5). The budget is written as the boxes' TEXT, so a box
+        left blank at close opens at config.py's default on the next launch instead of as the 0 that
+        value() reads a blank as. The network and Fisher boxes are science knobs: they open at
+        config.py on every launch and a stale key an older build left in PRISM.ini is ignored -- a
+        restored learning rate trained a different network with nothing on screen saying so."""
         qs.beginGroup("inference_posterior")
         qs.setValue("posterior", self.post_picker.key())
-        qs.setValue("num_runs", self.num_runs.value())
-        qs.setValue("run_size_cap", self.run_size_cap.value())
-        for name in ("flow_hidden", "flow_transforms", "flow_lr", "flow_patience",
-                     "fisher_m", "fisher_dz", "fisher_points"):
-            qs.setValue(name, str(getattr(self, name).value()))
+        settings.save_field(qs, "num_runs", self.num_runs)
+        settings.save_field(qs, "run_size_cap", self.run_size_cap)
         qs.endGroup()
 
     def restore_settings(self, qs):
         qs.beginGroup("inference_posterior")
         self.post_picker.restore_key(settings.get_str(qs, "posterior"))
-        for name, default, cast in (("flow_hidden", config.NSF_HIDDEN_FEATURES, int),
-                                    ("flow_transforms", config.NSF_NUM_TRANSFORMS, int),
-                                    ("flow_lr", config.TRAINING_LEARNING_RATE, float),
-                                    ("flow_patience", config.TRAINING_STOP_AFTER_EPOCHS, int),
-                                    ("fisher_m", config.REPARAM_FISHER_M, int),
-                                    ("fisher_dz", config.REPARAM_FISHER_DZ, float),
-                                    ("fisher_points", config.REPARAM_FISHER_POINTS, int)):
-            try:
-                getattr(self, name).setText(str(cast(settings.get_str(qs, name, str(default)))))
-            except (TypeError, ValueError):
-                getattr(self, name).setText(str(default))
-        # Defaults are the config constants, so a fresh install and a wiped QSettings both land on
-        # exactly the stage defaults.
+        # Defaults are the config constants, so a fresh install, a wiped QSettings and a box saved
+        # blank all land on exactly the stage defaults (get_int falls back on "" as on a missing key).
         self.num_runs.setText(str(settings.get_int(qs, "num_runs", config.TRAINING_NUM_RUNS)))
         self.run_size_cap.setText(str(settings.get_int(qs, "run_size_cap", config.TRAINING_RUN_SIZE)))
         qs.endGroup()

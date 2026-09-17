@@ -51,10 +51,19 @@ def get_int(qs: QSettings, key: str, default: int) -> int:
 
 
 def get_bool(qs: QSettings, key: str, default: bool) -> bool:
+    """"1"/"true"/"True" is True and "0"/"false"/"False" is False; a missing key or ANY other text --
+    a blank, a hand-edited "maybe" -- falls back to `default`, the rule get_int already follows.
+    It used to return False for every unrecognised value, so a corrupt `reparam_rotate` restored the
+    Fisher rotation OFF instead of at config.REPARAM_ROTATE (piece 3, spec §5.1)."""
     v = qs.value(key, None)
     if v is None:
         return default
-    return str(v) in ("1", "true", "True")
+    text = str(v)
+    if text in ("1", "true", "True"):
+        return True
+    if text in ("0", "false", "False"):
+        return False
+    return default
 
 
 def get_appearance(qs: QSettings) -> str:

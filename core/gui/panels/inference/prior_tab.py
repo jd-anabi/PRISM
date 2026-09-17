@@ -330,13 +330,13 @@ class PriorPanel(_StagePanel):
         self.btn_save_prior.setEnabled(self.session.inf_prior is not None)
 
     def save_settings(self, qs):
+        """The two SELECTIONS only (V5): the prior and the bounds file. The seven sweep and clustering
+        boxes are science knobs -- they decide which prior gets built -- so they open at config.py's
+        values on every launch, and a stale key an older build left in PRISM.ini is ignored. The
+        bounds SOURCE was written and never read back, so it is not written either."""
         qs.beginGroup("inference_prior")
         qs.setValue("prior", self.prior_picker.key())
         qs.setValue("bounds", self.bounds_picker.key())
-        qs.setValue("bounds_source", self.bounds_source.key())
-        for name in ("sweep_iters", "sweep_batch", "sweep_max_sets", "sweep_step", "sweep_units",
-                     "cluster_size", "cluster_samples"):
-            qs.setValue(name, str(getattr(self, name).value()))
         qs.endGroup()
         # The bounds GRID is not persisted: it is seeded from whichever file is selected, so restoring a
         # stale hand-edited grid against a different model/bounds would silently mis-bind parameters.
@@ -347,22 +347,8 @@ class PriorPanel(_StagePanel):
         # The bounds picker points at CONFIG's model, which is not known at __init__ -- stash the key and
         # re-apply it in on_draft_set (the same deferred-restore trap the cell pickers have).
         self._saved_bounds_key = settings.get_str(qs, "bounds")
-        # str + cast, because settings has no get_float; a blank or unparseable value falls back to
-        # the config constant rather than to FloatField.value()'s 0.0 -- and a 0 here would mean a
-        # sweep with no rounds, or a flood-fill that stops at zero accepted sets.
-        for name, default, cast in (("sweep_iters", config.PRIOR_SWEEP_ITERATIONS, int),
-                                    ("sweep_batch", config.PRIOR_SWEEP_BATCH, int),
-                                    ("sweep_max_sets", config.PRIOR_SWEEP_MAX_SETS, int),
-                                    ("sweep_step", config.PRIOR_SWEEP_STEP, float),
-                                    ("sweep_units", config.STABILITY_SWEEP_ND_UNITS, float),
-                                    ("cluster_size", config.PRIOR_CLUSTER_MIN_SIZE, int),
-                                    ("cluster_samples", config.PRIOR_CLUSTER_MIN_SAMPLES, int)):
-            try:
-                getattr(self, name).setText(str(cast(settings.get_str(qs, name, str(default)))))
-            except (TypeError, ValueError):
-                getattr(self, name).setText(str(default))
         # Always start in FILE mode: direct entry has to be seeded from a file, and no file is selected
-        # until on_draft_set runs. The saved mode is deliberately not restored for that reason.
+        # until on_draft_set runs. That is why no mode is saved.
         self.bounds_source.set_direct(False)
         qs.endGroup()
 

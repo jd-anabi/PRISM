@@ -252,7 +252,14 @@ def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint():
         _cfg.TRAINING_CHECKPOINT_EVERY = saved
 
 def test_the_training_budget_round_trips_through_settings():
-    """"I have to retype it every launch" is the complaint L1 already answered for splitters."""
+    """"I have to retype it every launch" is the complaint L1 already answered for splitters.
+
+    The budget stays REMEMBERED under V5, and is saved as the boxes' TEXT (spec §5.1). The old save
+    wrote value(), which reads a blank box as 0, so a Batches box left empty at close came back on
+    the next launch as a 0 nobody typed -- a run that simulates nothing, caught only at the next
+    click. Saved as "", get_int falls back to config.py's default exactly as for a missing key.
+    """
+    from core import config
     from core.gui import settings as st
 
     _inf, panel = _budget_panel(_budget_cfg())
@@ -266,6 +273,20 @@ def test_the_training_budget_round_trips_through_settings():
     assert fresh.run_size_cap.value() == 512, fresh.run_size_cap.text()
     # And the derived line followed the restored values, not the defaults.
     assert "1,234 batches" in fresh.budget_total.text(), fresh.budget_total.text()
+
+    # Both boxes BLANK at close: the file holds the text "", and the next launch opens at config.py.
+    panel.num_runs.setText("")
+    panel.run_size_cap.setText("")
+    qs = st.settings()
+    panel.save_settings(qs)
+    qs.sync()
+    qs.beginGroup("inference_posterior")
+    raw = (str(qs.value("num_runs")), str(qs.value("run_size_cap")))
+    qs.endGroup()
+    assert raw == ("", ""), f"the budget must be saved as the boxes' text, not value()'s 0: {raw}"
+    _inf3, relaunched = _budget_panel(_budget_cfg())
+    assert relaunched.num_runs.text() == str(config.TRAINING_NUM_RUNS), relaunched.num_runs.text()
+    assert relaunched.run_size_cap.text() == str(config.TRAINING_RUN_SIZE), relaunched.run_size_cap.text()
 
 def test_settings_round_trip_reduction_and_fdt():
     from core.gui import settings as st
@@ -294,8 +315,10 @@ def test_settings_round_trip_reduction_and_fdt():
     assert red2.f0.value() == 0.123
     assert red2.cell_picker.key() == want_cell
     assert fdt2.n_freqs.value() == 77
-    assert fdt2.skip_sanity.isChecked() is True
-    assert fdt2.confirm_production.isChecked() is False
+    # The two FDT boxes are consents (V5, spec §1.2): saved flipped, they still open at the
+    # construction defaults -- the sanity checks run, and the production sweep follows them.
+    assert fdt2.skip_sanity.isChecked() is False
+    assert fdt2.confirm_production.isChecked() is True
 
 def test_missing_picker_key_restores_to_default_not_blank():
     """A saved selection whose file is gone must leave the picker at its default, never blank it via
@@ -750,3 +773,301 @@ def test_the_config_tab_science_knobs_open_at_config_and_are_not_written():
     out.endGroup()
     assert not (written & set(stale)), f"science keys written: {sorted(written & set(stale))}"
     assert {"model", "units_mode", "units_text", "chi_mode", "reparam_rotate"} <= written, written
+
+
+def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
+    """V5 on the Prior, Posterior, Validate and TSNPE tabs (Task 11 pins the Config tab the same way):
+    every SCIENCE KNOB opens at config.py's value -- the truncate module's, for the HPD level and the
+    direction count -- on EVERY launch, and its key is neither written nor read. A stale key an older
+    build left in PRISM.ini is IGNORED, never migrated.
+
+    Why: each of these boxes was seeded from config.py and then overwritten from QSettings, so a value
+    typed once won silently over config.py on every later launch. The sweep and clustering boxes
+    decide which prior gets built, the network and Fisher boxes which posterior gets trained, the
+    calibration boxes what "calibrated" was measured with, and nothing on screen compared any of them
+    with config.py. The same seed-then-restore pattern trained the 2026-08-19 retrain on the retired
+    χ band. The selections and the budget stay remembered, and the old file below holds one of those
+    per tab that has one, so "opens at config.py" cannot pass merely because restore_settings never
+    ran.
+
+    Three legs: an empty file; a file holding every old key one step from config.py; a save after
+    every knob box was edited, which must write the selections and the budget and nothing else.
+    """
+    from PySide6.QtCore import QSettings
+    from core import config
+    from core.gui import settings as st
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.SBI import truncate as _tr
+    from tests._fixtures import qt_app
+
+    qt_app()
+    # (group, the screen's panel attribute, {key, which is also the box attribute: config.py's value})
+    knobs = (
+        ("inference_prior", "prior_panel", {
+            "sweep_iters": config.PRIOR_SWEEP_ITERATIONS, "sweep_batch": config.PRIOR_SWEEP_BATCH,
+            "sweep_max_sets": config.PRIOR_SWEEP_MAX_SETS, "sweep_step": config.PRIOR_SWEEP_STEP,
+            "sweep_units": config.STABILITY_SWEEP_ND_UNITS,
+            "cluster_size": config.PRIOR_CLUSTER_MIN_SIZE,
+            "cluster_samples": config.PRIOR_CLUSTER_MIN_SAMPLES}),
+        ("inference_posterior", "posterior_panel", {
+            "flow_hidden": config.NSF_HIDDEN_FEATURES, "flow_transforms": config.NSF_NUM_TRANSFORMS,
+            "flow_lr": config.TRAINING_LEARNING_RATE, "flow_patience": config.TRAINING_STOP_AFTER_EPOCHS,
+            "fisher_m": config.REPARAM_FISHER_M, "fisher_dz": config.REPARAM_FISHER_DZ,
+            "fisher_points": config.REPARAM_FISHER_POINTS}),
+        ("inference_validate", "validate_panel", {
+            "cal_n": config.SBC_N_CAL, "cal_scales": config.CAL_N_SCALES}),
+        ("inference_tsnpe", "tsnpe_panel", {
+            "hpd": _tr.DEFAULT_HPD, "n_dirs": _tr.DEFAULT_N_DIRECTIONS}),
+    )
+
+    def stale(default):
+        """One step from config.py: an int box plus one, a float box halved."""
+        return str(default + 1) if isinstance(default, int) else str(default / 2)
+
+    def off_config(inf):
+        """Every knob box whose number is not config.py's, as {(group, key): text}. Compared as
+        numbers: the old restore wrote str(float(...)), so config.py's 1000 came back as "1000.0"."""
+        return {(group, key): getattr(getattr(inf, attr), key).text()
+                for group, attr, keys in knobs for key, default in keys.items()
+                if float(getattr(getattr(inf, attr), key).text()) != float(default)}
+
+    # (a) an empty file (the autouse settings fixture points at a fresh path for this test)
+    first = InferenceScreen()
+    assert off_config(first) == {}, f"an empty file opened off config.py: {off_config(first)}"
+
+    # (b) a file holding every old knob key one step from config.py, the dead bounds_source, and one
+    # remembered selection or budget per tab that has one -- the proof that restore_settings RAN
+    qs = st.settings()
+    for group, _attr, keys in knobs:
+        for key, default in keys.items():
+            qs.setValue(f"{group}/{key}", stale(default))
+    qs.setValue("inference_prior/bounds_source", "direct")
+    qs.setValue("inference_prior/bounds", "stale_bounds.txt")
+    qs.setValue("inference_posterior/num_runs", "1234")
+    qs.setValue("inference_tsnpe/num_runs", "4321")
+    qs.sync()
+    relaunched = InferenceScreen()
+    assert off_config(relaunched) == {}, f"science knobs restored from an old file: {off_config(relaunched)}"
+    assert relaunched.prior_panel._saved_bounds_key == "stale_bounds.txt", "the bounds file is a selection"
+    assert relaunched.prior_panel.bounds_source.is_direct() is False
+    assert relaunched.posterior_panel.num_runs.text() == "1234", "the Posterior budget is remembered"
+    assert relaunched.tsnpe_panel.num_runs.text() == "4321", "the TSNPE budget is remembered (spec §5.3)"
+
+    # (c) nothing writes them: every knob box edited, the four panels saved into a file of their own
+    for _group, attr, keys in knobs:
+        for key, default in keys.items():
+            getattr(getattr(relaunched, attr), key).setText(stale(default))
+    out = QSettings(str(tmp_path / "saved.ini"), QSettings.IniFormat)
+    for panel in (relaunched.prior_panel, relaunched.posterior_panel, relaunched.validate_panel,
+                  relaunched.tsnpe_panel):
+        panel.save_settings(out)
+    out.sync()
+    expected = {"inference_prior": {"prior", "bounds"},
+                "inference_posterior": {"posterior", "num_runs", "run_size_cap"},
+                "inference_validate": set(),
+                "inference_tsnpe": {"observation", "num_runs", "run_size_cap"}}
+    for group, keys in expected.items():
+        out.beginGroup(group)
+        written = set(out.childKeys())
+        out.endGroup()
+        assert written == keys, f"[{group}] writes {sorted(written)}; the selections and budget are {sorted(keys)}"
+
+
+def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
+    """Spec §5.3. The TSNPE tab's restore_settings was complete and NEVER CALLED: its __init__ was born
+    without the `self.restore_settings(settings.settings())` line every other panel ends with, and
+    nothing else calls it (MainWindow._save_state calls only save_settings). Every launch showed
+    config.py's budget and the store's first observation while PRISM.ini held the last session's,
+    and the tab's keys were dead writes.
+
+    Now the tab restores its SELECTION (the observation) and its BUDGET (batches, rows-per-batch) and
+    nothing else: the HPD level and the direction count are science knobs and open at the truncate
+    module's defaults (V5). The budget is saved as the boxes' TEXT, so a box left blank at close opens
+    at config.py's default; the old save wrote value(), which turns "" into a 0 nobody typed.
+
+    The last leg pins the defect class, not the instance: every panel with a restore_settings of its
+    own calls it from its own __init__.
+    """
+    import types
+    from core import config
+    from core.gui import settings as st
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.panels.inference.config_tab import ConfigPanel
+    from core.gui.panels.inference.infer_tab import InferPanel
+    from core.gui.panels.inference.posterior_tab import PosteriorPanel
+    from core.gui.panels.inference.prior_tab import PriorPanel
+    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+    from core.gui.panels.inference.validate_tab import ValidatePanel
+    from core.gui.panels.reduction_panel import ReductionPanel
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.widgets.artifact_picker import StorePicker
+    from core.SBI import truncate as _tr
+    from tests._fixtures import code_only, qt_app
+
+    qt_app()
+    # Two complete observations, so a restored pick is distinguishable from the default first entry.
+    # The store is stubbed at the picker's one seam; each row carries exactly what refresh() reads.
+    rows = [types.SimpleNamespace(complete=True, label=label, id=id_, created="2026-09-16T12:00:00",
+                                  mode="spontaneous", width=50, amortized=None)
+            for label, id_ in (("first", "20260916T120000"), ("second", "20260916T130000"))]
+    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "observation" else [])
+    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
+
+    defaults = {"hpd": str(_tr.DEFAULT_HPD), "n_dirs": str(_tr.DEFAULT_N_DIRECTIONS),
+                "num_runs": str(config.TRAINING_NUM_RUNS), "run_size_cap": str(config.TRAINING_RUN_SIZE)}
+
+    def boxes(panel):
+        return {"hpd": panel.hpd.text(), "n_dirs": panel.n_dirs.text(),
+                "num_runs": panel.num_runs.text(), "run_size_cap": panel.run_size_cap.text()}
+
+    # (a) an empty file: the first observation and every default. Each screen is HELD in a local:
+    # it owns its panels' C++ objects, and a dropped screen takes its panels with it.
+    inf1 = InferenceScreen()
+    tp = inf1.tsnpe_panel
+    assert tp.obs_picker.key() == "20260916T120000", tp.obs_picker.key()
+    assert boxes(tp) == defaults, boxes(tp)
+
+    # (b) one session picks the second observation and edits all four boxes; the next launch shows
+    # that observation and that budget, and the truncate module's defaults for the other two
+    tp.obs_picker.combo.setCurrentIndex(1)
+    tp.num_runs.setText("1234")
+    tp.run_size_cap.setText("512")
+    tp.hpd.setText("0.99")
+    tp.n_dirs.setText("3")
+    qs = st.settings()
+    tp.save_settings(qs)
+    qs.sync()
+    inf2 = InferenceScreen()
+    again = inf2.tsnpe_panel
+    assert again.obs_picker.key() == "20260916T130000", "the observation is a selection: restored at construction"
+    assert (again.num_runs.text(), again.run_size_cap.text()) == ("1234", "512"), boxes(again)
+    assert "1,234 batches" in again.budget_total.text(), "the budget lines must follow the restored boxes"
+    assert (again.hpd.text(), again.n_dirs.text()) == (defaults["hpd"], defaults["n_dirs"]), \
+        f"the HPD level and the direction count are science knobs: {boxes(again)}"
+
+    # (c) both budget boxes BLANK at close: saved as "", and the next launch opens at config.py
+    again.num_runs.setText("")
+    again.run_size_cap.setText("")
+    qs = st.settings()
+    again.save_settings(qs)
+    qs.sync()
+    qs.beginGroup("inference_tsnpe")
+    raw = (str(qs.value("num_runs")), str(qs.value("run_size_cap")))
+    qs.endGroup()
+    assert raw == ("", ""), f"the budget must be saved as the boxes' text, not value()'s 0: {raw}"
+    inf3 = InferenceScreen()
+    third = inf3.tsnpe_panel
+    assert (third.num_runs.text(), third.run_size_cap.text()) == \
+        (defaults["num_runs"], defaults["run_size_cap"]), boxes(third)
+    assert third.obs_picker.key() == "20260916T130000", "a blank budget must not cost the observation"
+
+    # (d) the defect class: a restore_settings its own __init__ never calls is dead code
+    call = "self.restore_settings(settings.settings())"
+    for cls in (ConfigPanel, PriorPanel, PosteriorPanel, ValidatePanel, InferPanel, TSNPEPanel,
+                SimulatePanel, ReductionPanel, FdtPanel, CrossValPanel):
+        if "restore_settings" in vars(cls):
+            assert call in code_only(cls.__init__), \
+                f"{cls.__name__} defines restore_settings and its __init__ never calls it"
+    assert "restore_settings" in vars(TSNPEPanel)
+    assert "restore_settings" not in vars(ValidatePanel), \
+        "the Validate tab restores nothing (V5), so it carries no restore_settings to forget to call"
+
+
+def test_consents_are_never_persisted(tmp_path):
+    """V5: a CONSENT is answered per run and never remembered -- all four of them. The TSNPE tab's
+    "Start a new simulation even if a cache one setting away exists" (D7) and the Infer tab's "Run on
+    a different observation" (D8) were already unpersisted; the FDT panel's "Skip sanity checks" and
+    "Proceed to the production sweep after sanity" were saved and restored like campaign knobs, so one
+    session's "skip the checks" silently dropped them from every later session. Every consent now
+    opens at its construction default. For the FDT pair that is skip UNTICKED and proceed TICKED, not
+    both unticked (spec §1.2): unticking proceed would make a default click stop after the sanity
+    checks, where today and on the command line (--no-production is opt-in) it runs the sweep.
+
+    Three legs: no save_settings or restore_settings names a consent; a save after all four were
+    flipped writes none of them; an old PRISM.ini that holds all four answers opens at the defaults.
+    """
+    from PySide6.QtCore import QSettings
+    from core.gui import settings as st
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.panels.inference.infer_tab import InferPanel
+    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import code_only, qt_app
+
+    qt_app()
+    # (a) the source: executable code only, so a comment explaining the rule cannot trip it
+    for cls, names in ((TSNPEPanel, ("new_run",)), (InferPanel, ("other_obs",)),
+                       (FdtPanel, ("skip_sanity", "confirm_production"))):
+        for method in (cls.save_settings, cls.restore_settings):
+            src = code_only(method)
+            for name in names:
+                assert name not in src, f"{cls.__name__}.{method.__name__} names the consent {name}"
+
+    # (b) all four flipped, then saved: the groups are written, and no consent is in them
+    inf = InferenceScreen()
+    inf.tsnpe_panel.new_run.setChecked(True)
+    inf.infer_panel.other_obs.setChecked(True)            # setChecked ignores the disabled state
+    fdt = FdtPanel()
+    fdt.skip_sanity.setChecked(True)
+    fdt.confirm_production.setChecked(False)
+    out = QSettings(str(tmp_path / "saved.ini"), QSettings.IniFormat)
+    for panel in (inf.tsnpe_panel, inf.infer_panel, fdt):
+        panel.save_settings(out)
+    out.sync()
+    for group, names in (("inference_tsnpe", {"new_run"}), ("inference_infer", {"other_obs"}),
+                         ("fdt", {"skip_sanity", "confirm_production"})):
+        out.beginGroup(group)
+        written = set(out.childKeys())
+        out.endGroup()
+        assert written and not (written & names), f"[{group}] writes a consent: {sorted(written)}"
+
+    # (c) an old PRISM.ini holding all four answers: a relaunch opens every box at its default
+    qs = st.settings()
+    for key, value in (("inference_tsnpe/new_run", "1"), ("inference_infer/other_obs", "1"),
+                       ("fdt/skip_sanity", "1"), ("fdt/confirm_production", "0")):
+        qs.setValue(key, value)
+    qs.sync()
+    inf2 = InferenceScreen()
+    fdt2 = FdtPanel()
+    assert inf2.tsnpe_panel.new_run.isChecked() is False
+    assert inf2.infer_panel.other_obs.isChecked() is False
+    assert fdt2.skip_sanity.isChecked() is False, "the sanity checks run unless THIS session says skip"
+    assert fdt2.confirm_production.isChecked() is True, "the production sweep follows the checks by default"
+    assert fdt2.confirm_production.isEnabled() is True, "proceed is greyed out only while skip is ticked"
+
+
+def test_get_bool_falls_back_on_an_unparseable_value():
+    """settings.get_bool read "1"/"true"/"True" as True and EVERYTHING else as False, so a blank or
+    hand-edited value ("maybe", "2") restored as False whatever the caller's default said. For the
+    remembered boolean with a True default that is the Fisher rotation silently OFF (the Config tab's
+    reparam_rotate, config.REPARAM_ROTATE). get_int already fell back to its default on text it
+    cannot parse; get_bool now does the same (spec §5.1)."""
+    from core import config
+    from core.gui import settings as st
+    from core.gui.panels import inference_tabs as it
+    from tests._fixtures import qt_app
+
+    qt_app()
+    qs = st.settings()
+    for key, value in (("one", "1"), ("true", "true"), ("True", "True"), ("zero", "0"),
+                       ("false", "false"), ("False", "False"), ("blank", ""), ("maybe", "maybe"),
+                       ("two", "2")):
+        qs.setValue(f"flags/{key}", value)
+    qs.sync()
+    fresh = st.settings()
+    for default in (True, False):
+        for key in ("one", "true", "True"):
+            assert st.get_bool(fresh, f"flags/{key}", default) is True, (key, default)
+        for key in ("zero", "false", "False"):
+            assert st.get_bool(fresh, f"flags/{key}", default) is False, (key, default)
+        for key in ("blank", "maybe", "two", "missing"):
+            assert st.get_bool(fresh, f"flags/{key}", default) is default, (key, default)
+
+    # On screen: a corrupt reparam_rotate opens at config.py's value. (config.REPARAM_ROTATE is True
+    # today, which is what makes this leg tell the fallback from the old unconditional False.)
+    qs.setValue("inference_config/reparam_rotate", "maybe")
+    qs.sync()
+    panel = it.ConfigPanel(None)
+    assert panel.rot_check.isChecked() == config.REPARAM_ROTATE, "a corrupt reparam_rotate did not open at config.py"

@@ -60,6 +60,11 @@ class FdtPanel(BasePanel):
 
     Persists (group "fdt"): model, cell picker, and the campaign knobs. Restore order matters --
     model FIRST, then the pickers, or the model's refresh() wipes the restored picker.
+
+    The two checkboxes are CONSENTS and are never persisted (V5): every launch opens at the
+    construction defaults, sanity checks on and the production sweep after them -- the run
+    ``python -m core fdt`` makes without --skip-sanity or --no-production. A remembered "skip" would
+    silently drop the checks from every later session.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -144,8 +149,7 @@ class FdtPanel(BasePanel):
         for name, fld in (("n_freqs", self.n_freqs), ("ensemble_m", self.ensemble_m),
                           ("freqs_per_batch", self.freqs_per_batch), ("f0", self.f0)):
             settings.save_field(qs, name, fld)
-        settings.set_bool(qs, "skip_sanity", self.skip_sanity.isChecked())
-        settings.set_bool(qs, "confirm_production", self.confirm_production.isChecked())
+        # The two checkboxes are not written: they are consents (see the class docstring).
         qs.endGroup()
 
     def restore_settings(self, qs):
@@ -159,6 +163,6 @@ class FdtPanel(BasePanel):
         for name, fld in (("n_freqs", self.n_freqs), ("ensemble_m", self.ensemble_m),
                           ("freqs_per_batch", self.freqs_per_batch), ("f0", self.f0)):
             settings.restore_field(qs, name, fld)
-        self.skip_sanity.setChecked(settings.get_bool(qs, "skip_sanity", False))
-        self.confirm_production.setChecked(settings.get_bool(qs, "confirm_production", True))
+        # The two checkboxes keep their construction defaults (_build_controls), and a key an older
+        # build left in PRISM.ini is ignored: a consent is answered by the session that runs.
         qs.endGroup()

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (QGroupBox, QLabel, QPushButton, QVBoxLayout)
 from core import config, orchestrator
 from core.refusals import Refusal, require_at_least
 
-from ... import icons, settings
+from ... import icons
 from ...fields import label
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
@@ -19,7 +19,10 @@ class ValidatePanel(_StagePanel):
     Gated on a posterior AND ``inf_prior`` -- deliberately not on ``force_prior``, which is None for
     every no-forcing model and once made this tab permanently unreachable for exactly those.
 
-    Persists: nothing. It has no configurable inputs.
+    Persists: nothing. Its two boxes are science knobs (V5): the calibration's dataset count and its
+    (t_scale, T) operating points open at config.py's SBC_N_CAL and CAL_N_SCALES on every launch, and
+    a `cal_n` / `cal_scales` key an older build left in PRISM.ini is ignored. With nothing to restore,
+    the tab has no save_settings / restore_settings of its own (BasePanel's are no-ops).
     """
     def __init__(self, screen, parent=None):
         super().__init__(screen, parent)
@@ -37,7 +40,6 @@ class ValidatePanel(_StagePanel):
         self.btn_validate.clicked.connect(self._validate)
         v.addWidget(self.btn_validate)
         self.controls_layout.addWidget(box)
-        self.restore_settings(settings.settings())
 
     def _read_inputs(self) -> dict:
         """The two boxes, through the shared rules, or the first Refusal.
@@ -79,15 +81,3 @@ class ValidatePanel(_StagePanel):
     def refresh_local_gates(self):
         s = self.session
         self.btn_validate.setEnabled(s.posterior is not None and s.inf_prior is not None)
-
-    def save_settings(self, qs):
-        qs.beginGroup("inference_validate")
-        qs.setValue("cal_n", self.cal_n.value())
-        qs.setValue("cal_scales", self.cal_scales.value())
-        qs.endGroup()
-
-    def restore_settings(self, qs):
-        qs.beginGroup("inference_validate")
-        self.cal_n.setText(str(settings.get_int(qs, "cal_n", config.SBC_N_CAL)))
-        self.cal_scales.setText(str(settings.get_int(qs, "cal_scales", config.CAL_N_SCALES)))
-        qs.endGroup()

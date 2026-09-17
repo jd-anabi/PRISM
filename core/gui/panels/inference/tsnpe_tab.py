@@ -35,8 +35,9 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
     The budget group is the Posterior tab's, through ``_TrainingBudgetMixin``: a round is a simulation
     campaign, not a click, and the number belongs on screen before the button.
 
-    Persists (group "inference_tsnpe"): the observation, the HPD level, the direction count and the
-    two budget fields.
+    Persists (group "inference_tsnpe"): the observation and the two budget fields. The HPD level and
+    the direction count open at ``truncate.DEFAULT_HPD`` and ``DEFAULT_N_DIRECTIONS`` on every launch
+    (V5), and the new-simulation box is a per-round consent that is never persisted.
     """
 
     def __init__(self, screen, parent=None):
@@ -93,6 +94,12 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         bv.addWidget(with_badge(self.new_run, HELP["tsnpe_new_run"]))
         self.controls_layout.addWidget(budget)
         self._sync_budget()
+        # LAST, like every other panel's __init__ (BasePanel.restore_settings): the budget boxes'
+        # textChanged is wired above, so a restored budget redraws the three lines, and the picker
+        # listed the store at construction, so a saved observation id resolves. This line was missing
+        # from the tab's first commit until piece 3 (spec §5.3): every launch showed config.py's
+        # budget and the first observation while PRISM.ini held the last session's.
+        self.restore_settings(settings.settings())
 
     def _read_inputs(self) -> dict:
         """Every box a round reads, through the shared rules, or the first Refusal.
@@ -184,27 +191,21 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         self._sync_budget()
 
     def save_settings(self, qs):
+        """The observation and the budget only (V5, spec §5.3), the budget as the boxes' TEXT so a box
+        left blank at close opens at config.py's default. The HPD level and the direction count are
+        science knobs and open at the truncate module's defaults on every launch; the consent box
+        under the budget is answered per round and is never written."""
         qs.beginGroup("inference_tsnpe")
         qs.setValue("observation", self.obs_picker.key())
-        qs.setValue("hpd", str(self.hpd.value()))
-        qs.setValue("n_dirs", self.n_dirs.value())
-        qs.setValue("num_runs", self.num_runs.value())
-        qs.setValue("run_size_cap", self.run_size_cap.value())
+        settings.save_field(qs, "num_runs", self.num_runs)
+        settings.save_field(qs, "run_size_cap", self.run_size_cap)
         qs.endGroup()
 
     def restore_settings(self, qs):
-        from core.SBI import truncate as _tr
         qs.beginGroup("inference_tsnpe")
         self.obs_picker.restore_key(settings.get_str(qs, "observation"))
-        # get_str + float, because settings has no get_float and inventing one for a single caller
-        # would be a wider change than this needs. A blank or unparseable value falls back to the
-        # module default rather than to 0.0, which FloatField.value() would otherwise hand back --
-        # and an HPD of 0 would truncate the prior to a point.
-        try:
-            self.hpd.setText(str(float(settings.get_str(qs, "hpd", str(_tr.DEFAULT_HPD)))))
-        except ValueError:
-            self.hpd.setText(str(_tr.DEFAULT_HPD))
-        self.n_dirs.setText(str(settings.get_int(qs, "n_dirs", _tr.DEFAULT_N_DIRECTIONS)))
+        # Defaults are the config constants: a missing key, a wiped file and a box saved blank all
+        # open at the stage defaults (get_int falls back on "" as on a missing key).
         self.num_runs.setText(str(settings.get_int(qs, "num_runs", config.TRAINING_NUM_RUNS)))
         self.run_size_cap.setText(str(settings.get_int(qs, "run_size_cap", config.TRAINING_RUN_SIZE)))
         qs.endGroup()
