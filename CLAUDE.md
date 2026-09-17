@@ -31,10 +31,10 @@ what is on disk, the last gate). Update it at the end of every session.
 
 ## Tests
 
-- pytest. Fast gate: `pytest -m "not slow"` (minutes). Full: `pytest` (about an hour; the slow set
-  is the chi full-pipeline test in `tests/test_user_sbi.py` and the FDT/crossval tiny-size run in
-  `tests/test_tool.py`, ~10 min; the slow set alone is `pytest -m slow`). Count:
-  `pytest --collect-only -q`.
+- pytest. Fast gate: `pytest -m "not slow"` (the recorded one-process target is 16 minutes, piece-3
+  spec §8.4). Full: `pytest` (about an hour; the slow set is the chi full-pipeline test in
+  `tests/test_user_sbi.py` and the FDT/crossval tiny-size run in `tests/test_tool.py`, ~10 min; the
+  slow set alone is `pytest -m slow`). Count: `pytest --collect-only -q`.
 - Markers: `slow`; `gpu` (skipped when CUDA is absent); `display` (skipped offscreen). The
   display-marked tests run on the real screen with `QT_QPA_PLATFORM=windows pytest -m display`
   (the root conftest only DEFAULTS the variable); they create hidden native windows, nothing shows.
@@ -94,6 +94,14 @@ what is on disk, the last gate). Update it at the end of every session.
 - Every knob is an ARGUMENT, never a config write. `core/orchestrator.py` binds config constants
   at import (`from .config import X`), so assigning `config.X` at runtime changes nothing and the
   run silently uses the default. Each tunable travels as a keyword argument; tests pin this.
+- No public stage, composition or diagnostic mutates the configuration it is handed:
+  `core.runs.public_entry` copies it on entry (piece 3, V1). A caller that wants what a stage
+  wrote reads the artifact.
+- Every pre-spend refusal is a `core.refusals.Refusal` with a field key; the front ends name
+  the control or flag from their own tables (`core/gui/fields.py`, `core/tool/fields.py`). In
+  the converted modules no message names a box, tab, flag or button. Stage messages are
+  `logging` records at info/warning/error; never print or log between steps 1 and 3 of a
+  checkpoint save.
 - `Resources/` holds the hand-edited inputs (`Bounds/`, `Cells/`, `Units/`, `Models/`). The
   bounds file declares WHICH parameters are inferred and in what order, and therefore the
   observation mode; a cell's model comes from its parent folder. Everything generated lives under
@@ -122,11 +130,11 @@ what is on disk, the last gate). Update it at the end of every session.
 - `docs/STATE.md` — the moving state. Read first, update last.
 - `docs/superpowers/specs/` — approved designs. `docs/superpowers/plans/` — implementation plans.
 - `docs/checklists/display-walkthrough.md` — GUI features never exercised on a real screen.
-- `tests/` — the sixteen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
-  command-line tool's, `test_diagnostics.py` the five diagnostics'; `_fixtures.py` holds the shared
-  stand-ins, the tiny real prior+posterior, and `CODE_ROOTS` plus `CODE_FILES`, the directories and
-  top-level files the source scans walk); `core/Reduction/tests/` — the reduction map's (out of
-  scope).
+- `tests/` — the seventeen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
+  command-line tool's, `test_diagnostics.py` the five diagnostics', `test_refusals.py` the
+  torch-free rules', tables' and run-buffer's; `_fixtures.py` holds the shared stand-ins, the tiny
+  real prior+posterior, and `CODE_ROOTS` plus `CODE_FILES`, the directories and top-level files the
+  source scans walk); `core/Reduction/tests/` — the reduction map's (out of scope).
 - `core/tool/` — the command-line tool: `python -m core --help` lists every subcommand (the stages
   `prior train tsnpe validate infer`, the diagnostics `sbc identifiability ablation`, plus `smoke`,
   `fdt` and `crossval`). `scripts/` is gone: six of its scripts became `smoke` and the diagnostics

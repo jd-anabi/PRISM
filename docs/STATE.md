@@ -144,6 +144,8 @@ V1–V9) and the 24-task plan `docs/superpowers/plans/2026-09-16-validation-and-
      - The TSNPE manifest records Fisher defaults that did not run.
      - `build_prior`'s load branch calls `plt.show()` when `fig_sink` is None.
      - sbi writes `<cwd>/sbi-logs`.
+     - The display walkthrough's piece-3 rows C1–C11 (added by T23) are the USER's to run on the
+       real screen at the end of the piece.
    - **Piece 4.** The artifact browser, including a listing of diagnostics; annotate (`set_note`
      has no GUI caller); cleanup of incomplete directories; `Summary.complete` for simulations means
      only "has a manifest"; the observation width guard in `load_observation` has no isolated test.

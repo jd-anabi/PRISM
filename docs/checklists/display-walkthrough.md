@@ -70,3 +70,28 @@ what they supersede, because rows A1-A9 are NOT edited:
 | B6 | Simulated inference with T_obs outside `[T_MIN_EXP_S, T_MAX_EXP_S]` | Infer at T_obs 0.5 s. | A warning line in the log pane, new to the GUI, alongside the out-of-distribution warning as before. | 2026-09-15 | pass (the user's run on the real screen) |
 | B7 | A TSNPE round on a non-amortized parent (D12) | Load a round's posterior (accept the B1 dialog), pick a DIFFERENT observation on the TSNPE tab, Run. | An error dialog within seconds naming the parent's own observation digest; nothing written under `posteriors/` or `simulations/`; no `[tsnpe] region…` line. There is no checkbox for this. | 2026-09-15 | pass (the user's run on the real screen) |
 | B8 | FDT full run, after the saved figures started closing (`bb22ac4`; re-checks row 15) | Run the FDT panel at small settings. | The figures still land in the panel as before; the log pane shows no "FigureCanvasAgg is non-interactive" line. | 2026-09-15 | pass (the user's run on the real screen) |
+
+## Piece-3 GUI checks (validation, logging and the private copy; design spec §10)
+
+The rows the piece-3 commits create; the user runs them once on a real display at the end of the
+piece, the way the A- and B-rows were run. Two notes on what they supersede, because rows B1-B8 are
+NOT edited:
+
+- **C3 supersedes B5's "0 directions: an error dialog"**: a refused input now opens the yellow
+  "Check your inputs" box, not the red "Error" box, and the message names the box and the default.
+- **C5 supersedes B7's "An error dialog within seconds"**: the D12 refusal arrives in the same yellow
+  box. Its text and "There is no checkbox for this" stand.
+
+| # | surface | do | expect | date | result |
+|---|---|---|---|---|---|
+| C1 | Config tab: the fixed chi values | Tick χ mode. Try to edit the "χ drive F₀ (ND)" box and the "χ frequency range" boxes. Press "Apply model & options". | The three boxes are read-only, under the caption "fixed by measurement; change it in config.py". The "Model applied" line quotes `config.py`'s amplitude and band. | | |
+| C2 | Infer tab: a blank observation length | With a posterior loaded, clear the "T_obs (s)" box on the simulated page and press Run. Repeat on the experimental page. | A yellow "Check your inputs" box: "The observation length, in seconds is blank (default none: it must be given)." with "Set it in the 'T_obs (s)' box on the Infer tab." underneath; no traceback, nothing runs, the same sentence in the log pane with a triangle. | | |
+| C3 | TSNPE tab: 0 directions | Pick an observation, set "Directions truncated" to 0, press "Run TSNPE round". | The yellow box: "The number of directions to truncate must be at least 1; got 0 (default 5)." naming the "Directions truncated" box on the TSNPE tab; nothing written under `posteriors/` or `simulations/`. | | |
+| C4 | TSNPE tab: what a relaunch restores | Pick an observation, set Batches to 3, HPD to 0.95, Directions to 2; quit; relaunch. | The observation picker and Batches 3 are restored; HPD shows 0.999 and Directions 5. | | |
+| C5 | D12 in the yellow box | Load a round's posterior (accept the B1 dialog), pick a DIFFERENT observation on the TSNPE tab, Run. | The yellow "Check your inputs" box within seconds, naming the parent's own observation digest and ending "There is no override: …"; nothing written; no `[tsnpe] region…` line. There is no checkbox for this. | | |
+| C6 | Posterior tab: science knobs open at config.py | Set "Hidden features" to 7 and "Learning rate" to 0.01; quit; relaunch. | Both boxes show `config.py`'s values; the Batches box and the posterior picker are restored as before. | | |
+| C7 | The budget group's three lines | With a prior loaded and checkpointing on, set Batches 2 and train to completion; then set Batches 3, then 2 again, reading the third line each time. Then blank the Batches box. | The line says "No checkpoint exists yet" before, "Resumes a COMPLETE checkpoint" after, "WARNING: these settings match no checkpoint" at 3 — and Train does exactly what the line said. Blank: the first line reads "Batches is blank." and the other two are empty; Run gives the yellow box. | | |
+| C8 | Bench chi inference, then simulated | In χ mode with K = 4 on the Config tab: run a bench chi inference with 2 probe rows, then a simulated chi inference on a cell. | The simulated observation's manifest records 4 probes (`conditioning.chi_n_freqs`), not 2; the Infer tab still shows 4 probe rows after a config rebuild. | | |
+| C9 | The log pane during training, and `log.txt` | Train a small posterior (Batches 2). Open the posterior's folder under `Artifacts/posteriors/`. | `[mem]` and `[budget]` lines are plain; "[tsnpe] loaded a NON-AMORTIZED posterior" (if a round's posterior is loaded) and any OOM notice carry the triangle; `log.txt` sits beside `manifest.json` with the same lines stamped `HH:MM:SS info/warning`; the matching `simulations/<digest>/` has no `log.txt`. | | |
+| C10 | FDT panel consents | Tick "Skip sanity checks", untick "Proceed to the production sweep after sanity"; quit; relaunch. | "Skip sanity checks" unticked, "Proceed to the production sweep after sanity" ticked. | | |
+| C11 | Config tab after a relaunch | Tick χ mode, set K to 6, slots to 10, the lock-in ceiling to 15; quit; relaunch. | The three boxes show `config.CHI_N_FREQS`, `config.CHI_K_PAD` and `config.CHI_MAX_CYCLES`; the model, units and the χ-mode tick are still remembered. | | |
