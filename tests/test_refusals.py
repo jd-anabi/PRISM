@@ -502,6 +502,39 @@ def test_the_run_buffer_tees_python_warnings_and_calls_the_previous_hook():
     assert len(log2.lines) == 1 and "PreflightWarning" in log2.lines[0]
 
 
+def test_the_run_buffer_is_per_thread_in_fact_not_only_in_name():
+    """Task 2's ruling. RunLog documented itself as per-thread, but its handler sits on the
+    PROCESS-WIDE ``core`` logger and its tee replaces the PROCESS-WIDE ``warnings.showwarning`` -- so
+    a record or a warning raised from a second thread while a run is active on the main thread used to
+    land in that run's buffer too. ``attach`` now records the attaching thread
+    (``threading.get_ident()``), and both ``_RunLogHandler.emit`` and ``RunLog._showwarning`` check it
+    before appending -- a record from the main thread still lands; one from another thread does not."""
+    import logging
+    import threading
+    import warnings
+
+    from core import runs
+
+    log = logging.getLogger("core.tests.runs_threading")
+    with runs.capture_run() as active:
+        other_done = threading.Event()
+
+        def _other_thread():
+            log.info("from another thread")
+            warnings.warn("from another thread", RuntimeWarning)
+            other_done.set()
+
+        with pytest.warns(RuntimeWarning, match="from another thread"):
+            t = threading.Thread(target=_other_thread)
+            t.start()
+            t.join(timeout=5)
+        assert other_done.is_set(), "the other thread never finished"
+        assert not any("from another thread" in line for line in active.lines), active.lines
+
+        log.info("from the main thread")
+        assert any("from the main thread" in line for line in active.lines), active.lines
+
+
 def test_the_public_entry_decorator_passes_a_sentinel_through():
     """V1 (spec §2.2, §2.4). The decorator replaces the config argument -- the first positional, or
     the `cfg` keyword -- with its copy_for_run() and runs the call inside capture_run(). It is

@@ -1,9 +1,12 @@
-"""Route worker-thread stdout/stderr + warnings to Qt signals, so the CLI-first pipeline's tqdm bars,
-print() diagnostics and warnings render in the GUI's progress/log widgets instead of a console.
+"""Route worker-thread stdout/stderr + warnings + the ``core`` logger's records to Qt signals, so the
+CLI-first pipeline's tqdm bars, print() diagnostics, warnings and log records render in the GUI's
+progress/log widgets instead of a console.
 
-Two layers:
+Three layers:
   * core.gui.vt.StreamRouter turns each write() chunk into structured events (a progress row upsert,
     a row retirement, or a completed log line). It is Qt-free and does no I/O.
+  * _PumpLogHandler feeds the ``core`` logger's records to the same sink at the record's OWN level
+    (piece 3, V4): a print is what a library says, a record is what the pipeline says.
   * _Pump coalesces those events on a daemon thread and emits them to Qt at PUMP_HZ.
 
 The pump is load-bearing, not a nicety. tqdm's own `mininterval` does NOT bound the redraw rate here:
@@ -11,11 +14,14 @@ set_description() (tqdm/std.py:1382) and reset() (:1360) both call refresh() -> 
 gate at all, and core/SBI/Priors/{bp,hopf,nadrowski}_prior.py call both on EVERY sweep iteration. Left
 unthrottled, that floods the GUI's event queue with cross-thread queued signals.
 """
+import logging
 import sys
 import threading
 import time
 import warnings
 from contextlib import contextmanager
+
+from core import runs  # noqa: F401 -- sets the ``core`` logger to INFO at import (spec §1.2); never touched here
 
 from .vt import StreamRouter
 
@@ -212,14 +218,44 @@ class _SignalStream:
         return False
 
 
+class _PumpLogHandler(logging.Handler):
+    """The ``core`` logger's handler for one run: a record lands in the log pane at ITS level.
+
+    BESIDE the two _SignalStreams, not instead of them: the streams keep carrying the library's own
+    prints, the progress bars and sbi's epoch counter; a record is the pipeline's own voice (piece 3,
+    V4). Both feed the same pump, so records and prints stay in the order they happened.
+
+    It is the cancel checkpoint too, exactly as _SignalStream.write is -- a run that only logs must
+    still stop at its next message, and the token's latch (one raise, then quiet) holds here as
+    well. That is why training_checkpoint's ordering rule reads "do not print() or log between steps
+    1 and 3": a record emitted between a shard's fsync and the state replace would raise mid-commit.
+    """
+
+    def __init__(self, pump, cancel: "CancelToken | None"):
+        super().__init__()
+        self._pump = pump
+        self._cancel = cancel
+
+    def emit(self, record):
+        if self._cancel is not None:
+            self._cancel.check()
+        level = {"WARNING": "warning", "ERROR": "error", "CRITICAL": "error"}.get(record.levelname, "info")
+        try:
+            self._pump.sink("log", (record.getMessage(), level))
+        except Exception:                     # noqa: BLE001 -- logging's contract: emit never raises
+            self.handleError(record)
+
+
 @contextmanager
 def redirect_streams(signals, cancel: "CancelToken | None" = None):
-    """Swap sys.stdout/stderr for signal-emitting streams and route warnings.warn to the log.
+    """Swap sys.stdout/stderr for signal-emitting streams, route warnings.warn to the log, and feed the
+    ``core`` logger's records to the same pane at their own level (piece 3, V4).
 
-    `cancel`, when given, is shared by both streams: a set-and-not-yet-fired token makes the next
-    write() (i.e. the next print or tqdm redraw) raise WorkerCancelled. Yields the _Pump (or None if
-    another redirect already owns the process's streams) so the caller can drain() it before emitting
-    its result.
+    `cancel`, when given, is shared by both streams AND the logging handler: a set-and-not-yet-fired
+    token makes the next write() (i.e. the next print or tqdm redraw) or the next record raise
+    WorkerCancelled. Yields the _Pump (or None if another redirect already owns the process's streams)
+    so the caller can drain() it before emitting its result. The logger's LEVEL is never touched here:
+    core/runs.py set it once at import.
     """
     if not _REDIRECT.acquire(blocking=False):
         signals.log.emit("Another task already owns the console; this run's output is not captured.",
@@ -231,7 +267,7 @@ def redirect_streams(signals, cancel: "CancelToken | None" = None):
     # do so (thread exhaustion in a torch/BLAS process, or interpreter shutdown) would otherwise leave
     # _REDIRECT held for the rest of the process -- after which EVERY later run takes the decline branch
     # above and silently loses all of its GUI output.
-    pump = out = err = None
+    pump = out = err = handler = None
     old_out, old_err, old_showwarning = sys.stdout, sys.stderr, warnings.showwarning
     if cancel is not None:
         cancel.arm()                          # this runs on the worker thread -> the only one that raises
@@ -240,6 +276,10 @@ def redirect_streams(signals, cancel: "CancelToken | None" = None):
         out = _SignalStream(pump, "out", "info", cancel)
         err = _SignalStream(pump, "err", "warning", cancel)
         sys.stdout, sys.stderr = out, err
+        # The third channel. Installed AFTER the streams and removed FIRST in the finally below, so a
+        # record can never reach a pump that has stopped.
+        handler = _PumpLogHandler(pump, cancel)
+        logging.getLogger("core").addHandler(handler)
 
         def _showwarning(message, category, filename, lineno, file=None, line=None):
             pump.sink("log", (f"{getattr(category, '__name__', 'Warning')}: {message}", "warning"))
@@ -247,6 +287,8 @@ def redirect_streams(signals, cancel: "CancelToken | None" = None):
         warnings.showwarning = _showwarning
         yield pump
     finally:
+        if handler is not None:
+            logging.getLogger("core").removeHandler(handler)
         # Settle both routers (retiring live rows and flushing partial lines) while the streams are
         # still ours, then stop the pump -- so nothing a late/GC'd tqdm writes can reach a dead widget.
         for stream in (out, err):

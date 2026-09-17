@@ -1,8 +1,6 @@
 """A combo box populated from ``file_manager.list_dir(base, keep=...)``: the GUI's INPUT-file picker
 (cells, bounds). Optionally offers a '(from scratch)' sentinel. StorePicker below is its
 generated-kind twin, which reads the artifact store instead of a directory."""
-import contextlib
-import io
 from pathlib import Path
 
 from PySide6.QtCore import Qt
@@ -49,8 +47,7 @@ class ArtifactPicker(QWidget):
             self.combo.addItem(self.NEW_LABEL, userData=None)
         entries = []
         if self.base_path.exists():
-            with contextlib.redirect_stdout(io.StringIO()):   # list_dir prints a tree; suppress it
-                entries = file_manager.list_dir(str(self.base_path), keep=self._keep)
+            entries = file_manager.list_dir(str(self.base_path), keep=self._keep)
         for entry in entries:
             # display forward-slashed for subfoldered layouts; keep the raw relpath as data
             self.combo.addItem(entry.replace("\\", "/"), userData=entry)

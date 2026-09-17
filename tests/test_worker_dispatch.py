@@ -420,3 +420,53 @@ def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_on
     assert box.text() == "Something failed"
     assert "Traceback" in box.detailedText() and "RuntimeError: Something failed" in box.detailedText()
     assert pane.lines[-1] == ("error", "Something failed")
+
+
+def test_list_dir_returns_and_the_picker_no_longer_swaps_stdout(tmp_path, capsys):
+    """file_manager.list_dir used to PRINT a numbered tree and return the list as a side line, and the
+    GUI's ArtifactPicker silenced the tree with contextlib.redirect_stdout -- which reassigns the
+    PROCESS-WIDE sys.stdout, the very stream redirect_streams installs for a running worker. A picker
+    refreshed mid-run swallowed the worker's output, and a worker teardown inside that window left
+    the dead _SignalStream as the process's stdout for good (the hazard base_panel documented and
+    locked the whole column against). The listing is now returned and nothing is printed, so the
+    picker has nothing to silence: pinned on the function's stdout, on what sys.stdout IS while the
+    picker calls it, and on the refresh's source."""
+    import io
+
+    import pytest
+
+    from core.Helpers import file_manager
+    from core.gui.widgets import artifact_picker
+    from core.gui.widgets.artifact_picker import ArtifactPicker
+    from tests._fixtures import code_only, qt_app
+
+    (tmp_path / "a.txt").write_text("a")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.txt").write_text("b")
+    (tmp_path / "sub" / "c.rot.pt").write_bytes(b"")
+    keep = lambda rel: rel.endswith(".txt")                                  # noqa: E731
+    capsys.readouterr()
+    got = file_manager.list_dir(str(tmp_path), keep=keep)
+    assert sorted(got) == ["a.txt", os.path.join("sub", "b.txt")]
+    assert capsys.readouterr().out == "", "list_dir printed its tree"
+
+    qt_app()
+    seen, real = [], file_manager.list_dir
+
+    def _spy(path, keep=None):
+        seen.append(sys.stdout)
+        return real(path, keep=keep)
+
+    marker = io.StringIO()
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(artifact_picker.file_manager, "list_dir", _spy)
+        mp.setattr(sys, "stdout", marker)
+        ap = ArtifactPicker(tmp_path, keep=keep)                             # __init__ refreshes once
+        ap.refresh()
+    assert len(seen) == 2 and all(s is marker for s in seen), \
+        "refresh swapped sys.stdout around list_dir"
+    assert sorted(ap.combo.itemData(i) for i in range(ap.combo.count())) == \
+        ["a.txt", os.path.join("sub", "b.txt")]
+    assert marker.getvalue() == ""
+    src = code_only(ArtifactPicker.refresh)
+    assert "redirect_stdout" not in src and "StringIO" not in src

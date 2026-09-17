@@ -601,3 +601,65 @@ def test_leave_true_pos0_bar_is_retired_not_left_pegged_at_100():
             live.pop(payload, None)
         prog.set_rows(tuple(live.values()))
     assert prog.overall.maximum() == 0, "the overall bar is still determinate after the bar finished"
+
+def test_the_window_handler_feeds_the_pane_at_the_records_level_and_checks_cancel():
+    """V4 in the window. Severity used to come from the CHANNEL: stdout landed at info and stderr at
+    warning (streams.py:240-241), so the memory-statistics line wore a triangle and "loaded a
+    NON-AMORTIZED posterior" did not. A record carries its own level, and the handler hands it to the
+    same pump the streams feed, so it lands in the pane IN ORDER with the prints around it.
+
+    Two more things the handler must do exactly as _SignalStream.write does. It is a CANCEL
+    CHECKPOINT (a run that only logs, never prints, must still stop at its next message), with the
+    same latch -- one raise, then quiet -- so a record emitted during the unwind cannot replace the
+    clean traceback. And it must be GONE when the redirect ends: a handler left on the ``core``
+    logger would feed a stopped pump for the rest of the process.
+
+    No caplog.set_level anywhere here: the ``core`` logger is at INFO by import (core/runs.py), and an
+    info record reaching the pane WITHOUT the fixture's help is the point -- with that help the suite
+    would stay green while the window dropped every information record."""
+    import logging
+
+    import pytest
+
+    from core.gui import streams
+    from core.gui.streams import CancelToken, WorkerCancelled
+    from tests._fixtures import pump, qt_app
+
+    app = qt_app()
+    signals = WorkerSignals()
+    lines = []
+    signals.log_batch.connect(lambda batch: lines.extend(batch))
+    signals.rows.connect(lambda _s: None)
+    rec = logging.getLogger("core.tests.streams")          # a child: the handler sits on "core"
+
+    with redirect_streams(signals):
+        rec.info("[mem] host 1.2 GiB")
+        rec.warning("[tsnpe] loaded a NON-AMORTIZED posterior")
+        rec.error("[checkpoint] could not save on the way out")
+        print("Prior ready.")
+    pump(app)
+    assert ("[mem] host 1.2 GiB", "info") in lines, lines
+    assert ("[tsnpe] loaded a NON-AMORTIZED posterior", "warning") in lines
+    assert ("[checkpoint] could not save on the way out", "error") in lines
+    assert ("Prior ready.", "info") in lines, "the console redirect must keep carrying prints"
+    assert [t for t, _ in lines][:4] == ["[mem] host 1.2 GiB", "[tsnpe] loaded a NON-AMORTIZED posterior",
+                                          "[checkpoint] could not save on the way out", "Prior ready."], \
+        "records and prints share one ordered sink"
+    assert not any(isinstance(h, streams._PumpLogHandler) for h in logging.getLogger("core").handlers), \
+        "the handler outlived the redirect"
+    rec.info("after the redirect")
+    pump(app)
+    assert not any(t == "after the redirect" for t, _ in lines)
+
+    # The cancel checkpoint, with the latch.
+    token = CancelToken()
+    with redirect_streams(signals, token):
+        token.requested.set()
+        with pytest.raises(WorkerCancelled):
+            rec.info("[checkpoint] saving batch 3/4")
+        assert token.fired
+        rec.info("after the latch")                        # one raise, then quiet
+    pump(app)
+    assert ("after the latch", "info") in lines, lines
+    assert not any(t == "[checkpoint] saving batch 3/4" for t, _ in lines), \
+        "the record that raised must not reach the pane"

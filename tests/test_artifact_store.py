@@ -2692,3 +2692,114 @@ def test_the_driven_builder_refuses_a_zero_drive_and_the_chi_builder_a_zero_ampl
         with pytest.raises(Refusal) as e:
             obsm.build_experiment_obs_chi(chi_cfg, torch.zeros(8), [(torch.zeros(8), 5.0)], T_obs_s, F0)
         assert e.value.field == "chi_f0_si" and words in str(e.value), (F0, str(e.value))
+
+
+def test_each_artifact_gets_the_log_of_the_entry_that_wrote_it(store, monkeypatch):
+    """V4's file. Records are buffered from the OUTERMOST public entry (core/runs.py), and the writer
+    commits the buffer so far into ``log.txt`` beside the manifest -- so a composition's two artifacts
+    hold two different files: the observation's ends at its own commit, the inference's holds the
+    whole composition, the pre-spend judgements included. A reviewer opening an inference folder a
+    month later reads what the run said, in order, and the warning it said first.
+
+    The stages are stubs that WRITE through the store and log one line each: this task lands the
+    plumbing before any print is converted (T17-T19), so the records here are the test's own. The
+    format is pinned too -- ``HH:MM:SS level message`` -- because piece 4's browser will show it. An
+    artifact written outside any entry gets no file at all: the file is a run's record, not a
+    directory decoration."""
+    import logging
+    import re
+
+    from core import orchestrator
+    from core.artifacts.store import LOG_FILE
+    from core.config import CELL_PATH
+    log = logging.getLogger("core.orchestrator")
+
+    def _gen(c, **k):
+        log.info("simulating the observation")
+        with k["store"].create("observation", c) as w:
+            w.body = {"mode": c.observation_mode, "conditioning": mf.conditioning_block(c),
+                      "x_obs_digest": "0" * 16, "T_obs_cell": 1.0, "n_obs": 1, "forcing_vals": {},
+                      "chi_obs_freqs": None, "source": {"kind": "simulated"}}
+        return w
+
+    def _inf(c, p, obs, **k):
+        log.warning("inferring on a stub")
+        with k["store"].create("inference", c, name=k["name"]) as w:
+            w.body = {"results": {}}
+        return w
+
+    monkeypatch.setattr(orchestrator, "generate_observations", _gen)
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", _inf)
+    cfg = _spont_cfg()
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")
+    with pytest.warns(orchestrator.PreflightWarning):
+        obs, inf = orchestrator.simulated_inference(cfg, _sim_post(), 0.5, cell=cell, name="logged", store=store)
+    obs_log = (obs.dir / LOG_FILE).read_text(encoding="utf-8")
+    inf_log = (inf.dir / LOG_FILE).read_text(encoding="utf-8")
+    stamp = r"\d\d:\d\d:\d\d"
+    assert re.search(rf"^{stamp} warning PreflightWarning: T_obs=0\.50s is below the training range minimum",
+                     obs_log, re.M), obs_log
+    assert re.search(rf"^{stamp} info simulating the observation$", obs_log, re.M), obs_log
+    assert "inferring on a stub" not in obs_log, "the observation's file must end at its own commit"
+    assert inf_log.startswith(obs_log), "the inference's file holds everything the observation's does"
+    assert re.search(rf"^{stamp} warning inferring on a stub$", inf_log, re.M), inf_log
+    assert obs_log.endswith("\n") and inf_log.endswith("\n")
+    assert LOG_FILE not in store.get("inference", inf.id).payloads, "the log is not a payload"
+    plain = _make(store, "calibration", name="plain")                   # outside any entry
+    assert not (plain.dir / LOG_FILE).exists(), "no run, no file"
+
+
+def test_a_checkpointed_training_logs_into_the_posterior_and_never_into_the_cache(tiny_run, monkeypatch):
+    """The simulation cache is the one artifact kind with no ``log.txt`` (spec §1.2): its manifest is
+    training_checkpoint's, refreshed per batch across resumes, and one cache is shared by every
+    posterior that names it -- no single commit holds one entry's records, and the store refuses the
+    writer for the kind (store.create). The records land in the POSTERIOR's file when build_posterior
+    commits. Pinned on a real checkpointed training at tiny size, with train_nn wrapped to emit one
+    record from inside the entry (the pipeline's own prints become records in T18; until then the
+    wrapper is the only voice in there)."""
+    import logging
+
+    from core import orchestrator
+    from core.artifacts.store import LOG_FILE
+    r = tiny_run
+    real_train_nn = orchestrator.pipeline.train_nn
+
+    def _logged(*a, **k):
+        logging.getLogger("core.SBI.pipeline").info("[stub] training on the cache")
+        return real_train_nn(*a, **k)
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", _logged)
+    post = orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2,
+                                        hidden_features=8, num_transforms=1, stop_after_epochs=1,
+                                        name="logged_post", checkpoint_every=1)
+    text = (post.path / LOG_FILE).read_text(encoding="utf-8")
+    assert "info [stub] training on the cache" in text, text
+    cache = r.store.kind_dir("simulation") / post.manifest.parents["simulation"]
+    assert (cache / "manifest.json").exists(), "the run was not checkpointed"
+    assert not (cache / LOG_FILE).exists(), "the simulation cache must never carry a log file"
+    assert LOG_FILE not in post.manifest.payloads, "the log is not a payload"
+
+
+def test_python_warnings_reach_the_artifact_log(store):
+    """The buffer tees ``warnings.showwarning`` while a run is active (spec §4.4): a PreflightWarning
+    judgement or a library's RuntimeWarning is what a reviewer wants in the file, and neither is a
+    logging record. The tee CALLS THE PREVIOUS HOOK -- here pytest.warns's recorder, in the window
+    streams' own -- and puts it back afterwards, so the window and tool routes for warnings are
+    unchanged and the two nest cleanly."""
+    import re
+    import warnings
+
+    from core import runs
+    from core.artifacts.store import LOG_FILE
+    before = warnings.showwarning
+    with pytest.warns(RuntimeWarning, match="shared with the desktop"):
+        hook_under_pytest = warnings.showwarning
+        with runs.capture_run():
+            assert warnings.showwarning is not hook_under_pytest, "the buffer must tee the hook"
+            warnings.warn("the card is shared with the desktop", RuntimeWarning)
+            w = _make(store, "calibration", name="warned")
+        assert warnings.showwarning is hook_under_pytest, "the tee must put pytest's hook back"
+    assert warnings.showwarning is before
+    text = (w.dir / LOG_FILE).read_text(encoding="utf-8")
+    assert re.search(r"^\d\d:\d\d:\d\d warning RuntimeWarning: the card is shared with the desktop$",
+                     text, re.M), text

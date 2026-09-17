@@ -271,10 +271,9 @@ class BasePanel(QWidget):
             self.progress_pane.begin()
         else:
             self.progress_pane.end()   # authoritative: drops any row a crashed worker left behind
-        # Lock EVERY panel's controls while a run is live, not just this one: redirect_streams swaps
-        # sys.stdout/stderr process-wide, so another panel's ArtifactPicker refresh (which wraps
-        # list_dir in redirect_stdout) or a model combo could swallow / corrupt the running worker's
-        # stream -- the hazard set_controls_enabled documents, now spread across sibling inference tabs.
+        # Lock EVERY panel's controls while a run is live, not just this one: a model combo on a
+        # sibling tab changed mid-run repoints its pickers and re-seeds its inputs under the running
+        # worker -- the hazard set_controls_enabled documents, spread across the inference tabs.
         # Only this panel keeps its Cancel button live (it lives outside `controls`).
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(not busy)
@@ -282,12 +281,12 @@ class BasePanel(QWidget):
     def set_controls_enabled(self, enabled: bool):
         """Lock the whole left-hand column while a task runs.
 
-        The WHOLE column, not just the run button: ArtifactPicker.refresh() (its ⟳ button, and the
-        model combos that call it) wraps file_manager.list_dir in contextlib.redirect_stdout, which
-        reassigns the PROCESS-WIDE sys.stdout -- i.e. the very stream redirect_streams installed for
-        the running worker. Leaving a picker live mid-run lets a click swallow the worker's output,
-        and if the worker's teardown restores sys.stdout inside that window, redirect_stdout.__exit__
-        then reinstates the dead _SignalStream as the process's stdout permanently.
+        The WHOLE column, not just the run button: a model combo changed mid-run repoints the cell
+        picker and re-seeds the panel's inputs (simulate_panel / fdt_panel / config_tab
+        ._on_model_changed) while the worker is still reporting against the selection it started
+        from. The stdout hazard this used to name is gone: file_manager.list_dir returns its listing
+        and prints nothing, so ArtifactPicker.refresh() no longer swaps the process-wide sys.stdout
+        under redirect_streams (piece 3, spec §4.1).
         """
         self.controls.setEnabled(enabled)
         if enabled:

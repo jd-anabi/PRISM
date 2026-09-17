@@ -1497,3 +1497,74 @@ def test_device_cuda_is_refused_when_unavailable(tool_env, monkeypatch, capsys):
     assert config_args.make_cfg(args) == "CFG" and seen["hw"] is fake
     args = build_parser().parse_args(["prior", "--bounds", bounds, "--device", "auto"])
     assert config_args.make_cfg(args) == "CFG" and seen["hw"] is None, "auto keeps passing hw=None"
+
+
+def test_the_tool_routes_info_to_stdout_and_warnings_to_stderr_and_removes_its_handlers(tool_env, monkeypatch, capsys):
+    """V4 on the command line. An information record is stdout, plain -- the GPU recipe reads
+    ``[checkpoint] resuming at batch k/n`` off stdout and must keep doing so once T17 makes it a record.
+    A warning or an error is stderr with its level as a prefix, so an operator's ``2>err.log`` holds
+    exactly what needs acting on.
+
+    The handlers are installed for the handler call ONLY and removed in a finally: this suite calls
+    ``main`` dozens of times in one process, and a handler left behind would print every later run's
+    records twice, then three times. ``main`` runs twice here for that reason, and the ``core``
+    logger's handler list is asserted EMPTY after each -- not "unchanged", which a leak from an
+    earlier test could satisfy.
+
+    The streams are resolved at EMIT time: capsys swaps sys.stdout/stderr per test, and a handler
+    holding the stream it was built with would write into a buffer nobody reads."""
+    import logging
+
+    from core import orchestrator
+    bounds, cell, root = tool_env
+    log = logging.getLogger("core.orchestrator")
+
+    def _prior(cfg, ref, build_new, **kw):
+        log.info("[budget] 2 batches x 8 rows")
+        log.warning("Adaptive batching: capped")
+        log.error("[checkpoint] could not save on the way out")
+        return _art(root, "prior")
+
+    monkeypatch.setattr(orchestrator, "build_prior", _prior)
+    core_logger = logging.getLogger("core")
+    for _ in range(2):
+        capsys.readouterr()
+        assert main(["prior", *_cfg(bounds)]) == 0
+        cap = capsys.readouterr()
+        assert cap.out.count("[budget] 2 batches x 8 rows\n") == 1, cap.out
+        assert "warning: Adaptive batching: capped\n" in cap.err, cap.err
+        assert "error: [checkpoint] could not save on the way out\n" in cap.err, cap.err
+        assert "Adaptive batching" not in cap.out and "[budget]" not in cap.err
+        assert "info:" not in cap.out and "warning:" not in cap.out
+        assert core_logger.handlers == [], core_logger.handlers
+
+
+def test_the_core_logger_is_at_info_by_import_and_stays_so_after_main_and_a_redirect(tool_env, monkeypatch):
+    """Python's root logger sits at WARNING. Without core/runs.py's one setLevel at import, the window
+    handler and the artifact file would drop every information record -- and caplog, which sets its
+    own level, would have hidden that in the suites. So the level is set ONCE, by import, and the two
+    front ends install and remove handlers only: pinned on the level after a real ``main`` and a real
+    redirect, and on their source, so a later "helpful" setLevel cannot creep in."""
+    import logging
+
+    import core.tool as tool
+    from core import orchestrator, runs
+    from core.gui import streams
+    from core.gui.worker import WorkerSignals
+    from core.tool import logging_console
+    from tests._fixtures import code_only, qt_app
+    bounds, cell, root = tool_env
+    core_logger = logging.getLogger("core")
+    assert runs.LOGGER is core_logger and core_logger.level == logging.INFO
+
+    monkeypatch.setattr(orchestrator, "build_prior", _Rec(_art(root, "prior")))
+    assert main(["prior", *_cfg(bounds)]) == 0
+    assert core_logger.level == logging.INFO
+
+    qt_app()
+    with streams.redirect_streams(WorkerSignals()):
+        assert core_logger.level == logging.INFO
+    assert core_logger.level == logging.INFO
+
+    for fn in (streams.redirect_streams, logging_console.console_handlers, tool.main):
+        assert "setLevel" not in code_only(fn), f"{fn.__name__} touches the logger's level"

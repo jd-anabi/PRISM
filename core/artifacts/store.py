@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from core import config
+from core import config, runs
 from core.Helpers import file_manager
 from core.refusals import Refusal
 
@@ -30,6 +30,9 @@ KIND_DIRS = {"prior": "priors", "simulation": "simulations", "posterior": "poste
              "observation": "observations", "calibration": "calibrations", "inference": "inferences",
              "diagnostic": "diagnostics"}
 MANIFEST = "manifest.json"
+# The run's records, written beside the manifest by ArtifactWriter (piece 3, V4). NOT a payload: not
+# hashed, not in ``payloads``, never read by a loader. The simulation cache never gets one (§1.2).
+LOG_FILE = "log.txt"
 # Which ``parents`` keys can name an artifact of a given kind.
 _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 "posterior": ("posterior", "parent_posterior"), "observation": ("observation",),
@@ -200,9 +203,9 @@ def _write_manifest(path: Path, m: mf.Manifest) -> None:
 
 class ArtifactWriter:
     """Context manager handed out by ``ArtifactStore.create``: creates the directory, hands out
-    payload and figure paths, and on a clean exit hashes the payloads and writes the manifest LAST.
-    On ANY exception (a cancel included) the directory is removed and the exception re-raised, so a
-    half-artifact never looks real."""
+    payload and figure paths, and on a clean exit hashes the payloads, writes the run's ``log.txt``
+    and writes the manifest LAST. On ANY exception (a cancel included) the directory is removed and
+    the exception re-raised, so a half-artifact never looks real."""
 
     def __init__(self, store, kind, cfg, *, name, note, id, created):
         self.store, self.kind, self.cfg = store, kind, cfg
@@ -288,6 +291,12 @@ class ArtifactWriter:
             figures=list(self._figures), body=self.body,
         )
         self.manifest = mf.validate(d)
+        # The run's log so far, BEFORE the manifest: every ``core`` record and every Python warning
+        # since the outermost public entry began (core/runs.py). A composition's first artifact
+        # therefore holds the records up to its own commit and its last one the whole run.
+        run_log = runs.current_run_log()
+        if run_log is not None and run_log.lines:
+            (self.dir / LOG_FILE).write_text(run_log.text(), encoding="utf-8")
         _write_manifest(self.dir, self.manifest)
 
 

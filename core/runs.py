@@ -40,13 +40,17 @@ def _stamp() -> str:
 
 
 class _RunLogHandler(logging.Handler):
-    """Appends every record the `core` logger passes at INFO and above to one RunLog."""
+    """Appends every record the `core` logger passes at INFO and above to one RunLog -- but only when
+    it arrives on the THREAD that attached this handler (RunLog.attach records it); a record from any
+    other thread is dropped from this buffer, never appended anywhere else."""
 
     def __init__(self, log: "RunLog"):
         super().__init__(level=logging.INFO)
         self._log = log
 
     def emit(self, record: logging.LogRecord) -> None:
+        if threading.get_ident() != self._log._owner_thread:
+            return
         try:
             self._log.lines.append(f"{_stamp()} {record.levelname.lower()} {record.getMessage()}")
         except Exception:                      # noqa: BLE001 -- a bad format string must not kill a run
@@ -54,14 +58,29 @@ class _RunLogHandler(logging.Handler):
 
 
 class RunLog:
-    """Lines of one outermost public entry: `HH:MM:SS level message`, plus every Python warning."""
+    """Lines of one outermost public entry: `HH:MM:SS level message`, plus every Python warning.
+
+    PER THREAD IN FACT, not only in name: `attach` records the attaching thread
+    (`threading.get_ident()`), and both `_RunLogHandler.emit` and `_showwarning` below check it before
+    appending. Without that check, the handler sits on the process-wide `core` logger and the tee
+    replaces the process-wide `warnings.showwarning`, so a record or a warning raised from ANY other
+    thread while this run is active -- a stray daemon, a callback fired off the worker thread -- would
+    land in a buffer that is supposed to hold this run's own lines alone.
+
+    Detaching relies on there being only ONE RunLog attached to the process at a time -- not on any
+    thread-safety of its own. That is the one-run-at-a-time rule the front ends already enforce (the
+    window's `gui.panels.base_panel.BasePanel._running`, `gui.streams._REDIRECT`), so a non-nested
+    `attach`/`detach` pair never races a second one on another thread.
+    """
 
     def __init__(self):
         self.lines: list[str] = []
         self._handler = _RunLogHandler(self)
         self._prev_showwarning = None
+        self._owner_thread: "int | None" = None
 
     def attach(self) -> None:
+        self._owner_thread = threading.get_ident()
         LOGGER.addHandler(self._handler)
         self._prev_showwarning = warnings.showwarning
         warnings.showwarning = self._showwarning
@@ -71,11 +90,13 @@ class RunLog:
         warnings.showwarning = self._prev_showwarning
 
     def _showwarning(self, message, category, filename, lineno, file=None, line=None):
-        """The tee: record the warning, then hand it to whatever hook was installed before -- the
-        window's log-pane hook under a run, pytest's recorder under `pytest.warns`, Python's own
-        stderr printer otherwise. detach restores that hook, so the tee nests cleanly inside any of
-        them."""
-        self.lines.append(f"{_stamp()} warning {getattr(category, '__name__', 'Warning')}: {message}")
+        """The tee: record the warning ON THE OWNER THREAD ONLY, then hand it to whatever hook was
+        installed before -- the window's log-pane hook under a run, pytest's recorder under
+        `pytest.warns`, Python's own stderr printer otherwise -- REGARDLESS of which thread called (a
+        warning from another thread must still reach that hook; it is only this buffer it must miss).
+        detach restores that hook, so the tee nests cleanly inside any of them."""
+        if threading.get_ident() == self._owner_thread:
+            self.lines.append(f"{_stamp()} warning {getattr(category, '__name__', 'Warning')}: {message}")
         if self._prev_showwarning is not None:
             self._prev_showwarning(message, category, filename, lineno, file, line)
 

@@ -17,6 +17,7 @@ from core.refusals import Refusal
 
 from . import config_args, diagnostics, fdt, smoke, stages
 from .config_args import UsageError  # noqa: F401 -- part of this package's public surface
+from .logging_console import console_handlers
 from .fields import fix_sentence
 
 EPILOG = """\
@@ -103,7 +104,10 @@ def main(argv=None) -> int:
         # use_store AND store= at every call: the context makes the default right for anything that
         # reaches for it, the keyword makes each stage independent of the default. set_default_store
         # is never called -- that was scripts/smoke_train.py's leak.
-        with use_store(ArtifactStore(root)) as store:
+        # The console handlers live exactly as long as the handler call: information to stdout,
+        # warning/error to stderr with a prefix (spec §4.3). The tool's own framing prints ([prism],
+        # [cfg], [smoke], this ladder) stay prints and never pass through them.
+        with use_store(ArtifactStore(root)) as store, console_handlers():
             rc = int(args.handler(args, store) or 0)
     except KeyboardInterrupt:
         # I2, fix round 1: fdt/crossval set their own `interrupt_note` (core/tool/fdt.py) through

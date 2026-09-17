@@ -294,49 +294,32 @@ def parse_values_file(file_name: str) -> tuple:
     return init_conditions, parameters, rescale_params, forcing_params
 
 
-def list_dir(files_dir: str, return_list: bool = True,
-             keep: Callable[[str], bool] | None = None) -> list[str] | list[None]:
-    """
-    Lists all files in the specified directory and its subdirectories, with an option to return a list of files.
+def list_dir(files_dir: str, keep: Callable[[str], bool] | None = None) -> list[str]:
+    """Every file under ``files_dir`` and its subdirectories, as paths RELATIVE to ``files_dir``, in
+    ``os.walk`` order. Returns the listing and prints nothing.
 
-    The function walks through the directory tree starting from the given directory. It prints the directory structure
-    with files ordered and numbered. Optionally, it returns a list of all files found.
+    It used to print a numbered tree as well, and the GUI's ArtifactPicker silenced that tree with
+    ``contextlib.redirect_stdout`` -- which reassigns the PROCESS-WIDE ``sys.stdout``, the very stream
+    ``gui.streams.redirect_streams`` installs for a running worker (piece 3, spec §4.1). The
+    ``return_list`` flag went with the print it was paired with: the listing is the only output.
 
-    :param files_dir: Path to the directory that needs to be traversed.
-    :type files_dir: str
-    :param return_list: A flag indicating whether to return the list of files. If True, the list of files is returned.
-        Default is True.
-    :type return_list: bool
-    :param keep: Optional predicate applied to each file's path (relative to files_dir). Only files for which
-        keep(rel) is True are numbered, printed, and returned -- so the printed ``(N)`` numbering stays in sync
-        with the returned list (e.g. a posterior picker that hides ``.rot.pt`` sidecars / ``.loss.npz`` curves).
-        Default None lists every file.
-    :type keep: Callable[[str], bool] | None
-    :return: A list of all files in the directory and its subdirectories if `return_list` is True; otherwise, None.
-    :rtype: list[str] | None
+    Relative paths, so subfoldered layouts (``Bounds/<model>/<cell>.txt``) resolve and same-named files
+    across subfolders do not collide; for a flat directory that is the basename, so callers doing
+    ``PATH / result[i]`` are unaffected.
+
+    :param files_dir: the directory to walk.
+    :param keep: optional predicate on each relative path; only paths for which ``keep(rel)`` is True
+        are returned (e.g. a posterior picker that hides ``.rot.pt`` sidecars / ``.loss.npz`` curves).
+        None keeps every file.
     """
-    # list files in directory
-    model_files = [""]
-    file_num = 1
+    found = []
     for root, dirs, files in os.walk(files_dir):
-        level = root.replace(files_dir, "").count(os.sep)
-        indent = " " * 2 * level
-        print(f"{indent}{os.path.basename(root)}")
-        subindent = " " * 2 * (level + 1)
         for file in files:
-            # Return the path relative to files_dir so subfoldered layouts (e.g. Bounds/<model>/<cell>.txt)
-            # resolve correctly and same-named files across subfolders don't collide. For a flat directory
-            # this is just the basename, so callers doing `PATH / result[i]` are unaffected.
             rel = os.path.relpath(os.path.join(root, file), files_dir)
             if keep is not None and not keep(rel):
-                continue          # skip before numbering so printed (N) matches the returned list
-            model_files.append(rel)
-            print(f"{subindent}({file_num}) {file}")
-            file_num += 1
-    model_files.pop(0)
-    if return_list:
-        return model_files
-    return []
+                continue
+            found.append(rel)
+    return found
 
 def load_experimental_data(file_path: str, dtype: torch.dtype = torch.float32) -> torch.Tensor:
     """

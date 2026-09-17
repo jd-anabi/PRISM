@@ -45,8 +45,9 @@ Resume only ever loads shards covered by ``batches_done``, so orphans from step 
 are durable before the state that references them, so no commit can point at data still in the page
 cache.
 
-Do not ``print()`` between steps 1 and 3 under the GUI: every write funnels through
-``gui.streams._SignalStream.write``, which calls ``CancelToken.check()`` and would raise mid-commit.
+Do not ``print()`` or log between steps 1 and 3 under the GUI: every write funnels through
+``gui.streams._SignalStream.write`` and every record through ``gui.streams._PumpLogHandler.emit``,
+both of which call ``CancelToken.check()`` and would raise mid-commit.
 """
 import hashlib
 import json
