@@ -293,9 +293,11 @@ class ArtifactWriter:
         self.manifest = mf.validate(d)
         # The run's log so far, BEFORE the manifest: every ``core`` record and every Python warning
         # since the outermost public entry began (core/runs.py). A composition's first artifact
-        # therefore holds the records up to its own commit and its last one the whole run.
+        # therefore holds the records up to its own commit and its last one the whole run. Written
+        # whenever a run is active, empty when it said nothing: every committed artifact but the
+        # simulation cache (which has no writer) carries the file. Outside any entry, no file.
         run_log = runs.current_run_log()
-        if run_log is not None and run_log.lines:
+        if run_log is not None:
             (self.dir / LOG_FILE).write_text(run_log.text(), encoding="utf-8")
         _write_manifest(self.dir, self.manifest)
 

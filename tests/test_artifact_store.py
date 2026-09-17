@@ -3036,6 +3036,15 @@ def test_each_artifact_gets_the_log_of_the_entry_that_wrote_it(store, monkeypatc
     assert LOG_FILE not in store.get("inference", inf.id).payloads, "the log is not a payload"
     plain = _make(store, "calibration", name="plain")                   # outside any entry
     assert not (plain.dir / LOG_FILE).exists(), "no run, no file"
+    # A run that said NOTHING before its commit still gets the file, empty (spec §4.4, V4): a clean
+    # simulated observation logs no record, and "every committed artifact but the cache has one" is
+    # the invariant piece 4's browser reads. Silence is a record too.
+    from core.runs import capture_run
+    with capture_run() as run:
+        quiet = _make(store, "calibration", name="quiet")
+        assert run.lines == [], run.lines                                # non-vacuous: nothing was said
+    assert (quiet.dir / LOG_FILE).exists(), "a run with no records must still write its log.txt"
+    assert (quiet.dir / LOG_FILE).read_text(encoding="utf-8") == ""
 
 
 def test_a_checkpointed_training_logs_into_the_posterior_and_never_into_the_cache(tiny_run, monkeypatch):
