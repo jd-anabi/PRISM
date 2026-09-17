@@ -48,6 +48,19 @@ class IntField(QLineEdit):
         except ValueError:
             return 0
 
+    def value_or_none(self) -> "int | None":
+        """The field's value, or None when it does not parse -- the IntField twin of FloatField's.
+
+        ``value()`` returns 0 for "" and for "-" mid-typing, and 0 is a legal value for the two
+        "0 = automatic" boxes (the rows-per-batch cap, the candidates per sweep round), so a tab
+        that wants to refuse a blank instead of reading it as zero has to ask this. The inference
+        tabs read every integer box through it at the click (piece 3, V2).
+        """
+        try:
+            return int(self.text().strip())
+        except (TypeError, ValueError):
+            return None
+
 
 class PathField(QWidget):
     def __init__(self, file_filter: str = "Data (*.csv *.npy);;All files (*)", parent=None):

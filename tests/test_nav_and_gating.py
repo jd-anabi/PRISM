@@ -617,9 +617,13 @@ def test_config_units_control_declares_units_and_validates_them():
         assert abs(30.0 * cfg.freq_si_to_cell - 30.0) < 1e-12, "in an `s` cell, 30 Hz stays 30"
 
     before = screen.session.draft
+    refused = []
+    cfgp._refusal = lambda exc: refused.append(exc)          # the yellow box, recorded instead of shown
     cfgp.units_text.setText("notaunit")                       # must be refused, draft left alone
     cfgp._build_config()
     assert screen.session.draft is before
+    assert len(refused) == 1 and refused[0].field == "units", refused
+    assert "notaunit" in str(refused[0]), "the message must name the token it could not resolve"
 
 def test_direct_entry_grids_round_trip_their_files():
     """Hand-entered bounds/values must reproduce the parsed file exactly (same names, same ORDER --
@@ -1487,3 +1491,147 @@ def test_the_secondary_panels_still_show_a_bad_cell_as_check_your_inputs(monkeyp
             assert box.text() == "The configuration could not be built.", name
             assert box.informativeText() == msg, name
             assert box.detailedText() == "", name
+
+def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
+    """V5 §5.2. The χ drive amplitude and band are MEASUREMENTS (config.py:541-573), not per-run
+    choices: since D11 any other value is refused by build_prior seconds after Apply, so a box that
+    accepts one only manufactures that refusal. The boxes stay as displays of config.py under a
+    caption saying so; the draft carries None for both, so make_sim_config takes config.py's values
+    exactly as the command-line tool does; and the "Model applied" line reports config.py, not the
+    boxes. The help and the config.py comment stop inviting the edit.
+
+    The proof is not the read-only flag (setText bypasses it, and so would a restore) but the draft:
+    even after a programmatic write into the boxes, the config built from the draft passes the chi
+    guard that would refuse any other band or amplitude.
+    """
+    from pathlib import Path
+    from core import config
+    from core.config import BOUNDS_PATH
+    from core.gui.panels.inference.help_text import HELP
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.SBI.run_guards import _assert_chi_config_is_deliberate
+    from tests._fixtures import PaneCapture, qt_app
+
+    qt_app()
+    screen = InferenceScreen()
+    cfgp = screen.config_panel
+    cfgp.model_combo.setCurrentText("NADROWSKI")
+    cfgp._on_model_changed("NADROWSKI")
+    cfgp.units_toggle.set_direct(False)
+    for box in (cfgp.chi_f0, cfgp.chi_range.lo, cfgp.chi_range.hi):
+        assert box.isReadOnly(), "the drive amplitude and band are displays of config.py"
+    assert "config.py" in cfgp.chi_fixed_note.text(), cfgp.chi_fixed_note.text()
+    assert cfgp.chi_f0.value() == config.CHI_F0
+    assert cfgp.chi_range.value() == tuple(config.CHI_FREQ_BOUNDS)
+
+    cap = PaneCapture(cfgp)
+    cfgp.chi_check.setChecked(True)
+    cfgp.chi_f0.setText("0.05")                          # a programmatic write: the draft must ignore it
+    cfgp.chi_range.lo.setText("0.1")
+    cfgp.chi_range.hi.setText("10")
+    cfgp._build_config()
+    draft = screen.session.draft
+    assert draft is not None and draft.chi_mode is True
+    assert draft.chi_f0 is None and draft.chi_freq_bounds is None, (draft.chi_f0, draft.chi_freq_bounds)
+    lo, hi = config.CHI_FREQ_BOUNDS
+    applied = [text for _level, text in cap.lines if text.startswith("Model applied")]
+    assert len(applied) == 1, cap.lines
+    assert f"over {lo:g}–{hi:g}×Ω₀ at ND amplitude {config.CHI_F0:g}" in applied[0], applied[0]
+
+    bounds = BOUNDS_PATH / "nadrowski" / "master.txt"
+    if bounds.exists():
+        cfg = draft.make_config(str(bounds))
+        assert cfg.chi_f0 == config.CHI_F0 and tuple(cfg.chi_freq_bounds) == tuple(config.CHI_FREQ_BOUNDS)
+        _assert_chi_config_is_deliberate(cfg)             # raises on any other band or amplitude
+
+    # The three texts that used to invite the edit now say the values are fixed by measurement.
+    for key in ("chi_f0", "chi_range"):
+        assert "config.py" in HELP[key] and "measurement" in HELP[key].lower(), (key, HELP[key])
+    src = Path(config.__file__).read_text(encoding="utf-8")
+    assert "TUNABLE per config in the Config tab" not in src, "config.py's CHI_F0 comment is stale"
+
+def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
+    """V2/V3 at Apply. Every bad box is a Refusal naming its field, shown through _refusal (the yellow
+    box), and the session is left exactly as it was: no new draft, no re-gate. A BLANK box is refused,
+    never read as zero -- IntField.value() gave 0 for "" and the old chain refused it only because
+    0 < 2, while the pad was not checked here at all and surfaced one tab later as "The
+    configuration could not be built." with a traceback. With χ mode off the three χ boxes are not
+    read (they are disabled) and Apply goes through with None for them, so make_sim_config takes
+    config.py's values, as the tool does."""
+    from core import config
+    from core.config import CHI_K_MAX
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.refusals import Refusal
+    from tests._fixtures import qt_app
+
+    qt_app()
+    screen = InferenceScreen()
+    cfgp = screen.config_panel
+    cfgp.model_combo.setCurrentText("NADROWSKI")
+    cfgp._on_model_changed("NADROWSKI")
+    cfgp.units_toggle.set_direct(False)
+    refused, drafts = [], []
+    cfgp._refusal = lambda exc: refused.append(exc)      # the yellow box, recorded instead of shown
+    screen.new_draft = lambda draft: drafts.append(draft)
+
+    def apply(**boxes):
+        """Apply with χ on, every χ box at config.py's value except the overrides; the new refusals."""
+        cfgp.chi_check.setChecked(True)
+        cfgp.chi_k.setText(str(config.CHI_N_FREQS))
+        cfgp.chi_pad.setText(str(config.CHI_K_PAD))
+        cfgp.chi_cycles.setText(str(config.CHI_MAX_CYCLES))
+        for name, text in boxes.items():
+            getattr(cfgp, name).setText(text)
+        before = len(refused)
+        cfgp._build_config()
+        return refused[before:]
+
+    cases = [
+        ({"chi_k": ""}, "chi_n_freqs", "is blank"),
+        ({"chi_k": "1"}, "chi_n_freqs", "at least 2"),
+        ({"chi_k": str(CHI_K_MAX + 1)}, "chi_n_freqs", f"at most {CHI_K_MAX}"),
+        ({"chi_k": "5", "chi_pad": "4"}, "chi_n_freqs", "slots"),
+        ({"chi_pad": ""}, "chi_k_pad", "is blank"),
+        ({"chi_pad": "1"}, "chi_k_pad", "at least 2"),
+        ({"chi_pad": str(CHI_K_MAX + 1)}, "chi_k_pad", f"at most {CHI_K_MAX}"),
+        ({"chi_cycles": ""}, "chi_max_cycles", "is blank"),
+        ({"chi_cycles": str(config.CHI_MIN_CYCLES)}, "chi_max_cycles",
+         f"greater than {config.CHI_MIN_CYCLES:g}"),
+    ]
+    for boxes, field, needle in cases:
+        got = apply(**boxes)
+        assert len(got) == 1 and isinstance(got[0], Refusal), (boxes, got)
+        assert got[0].field == field and needle in str(got[0]), (boxes, str(got[0]))
+        assert "(default " in str(got[0]), f"every message carries the default: {got[0]}"
+    assert drafts == [], "a refused Apply must not touch the session"
+
+    # Typed units: blank, then unusable. Both name "units"; neither names a box or a tab.
+    cfgp.units_toggle.set_direct(True)
+    cfgp.units_text.setText("")
+    got = apply()
+    assert len(got) == 1 and got[0].field == "units" and "blank" in str(got[0]), got
+    cfgp.units_text.setText("notaunit")
+    got = apply()
+    assert len(got) == 1 and got[0].field == "units" and "notaunit" in str(got[0]), got
+    assert drafts == []
+    cfgp.units_toggle.set_direct(False)
+
+    # χ mode OFF: the three boxes are not read. Blank them all and Apply goes through with None.
+    n_refused = len(refused)
+    cfgp.chi_check.setChecked(False)
+    for box in (cfgp.chi_k, cfgp.chi_pad, cfgp.chi_cycles):
+        box.setText("")
+    cfgp._build_config()
+    assert len(refused) == n_refused and len(drafts) == 1, (refused[n_refused:], drafts)
+    off = drafts[0]
+    assert off.chi_mode is False
+    assert off.chi_n_freqs is None and off.chi_k_pad is None and off.chi_max_cycles is None
+
+    # The happy path with χ on: the values travel typed, and the amplitude and band travel as None.
+    assert apply() == []
+    on = drafts[1]
+    assert (on.chi_n_freqs, on.chi_k_pad, on.chi_max_cycles) == (
+        config.CHI_N_FREQS, config.CHI_K_PAD, config.CHI_MAX_CYCLES)
+    assert isinstance(on.chi_n_freqs, int) and isinstance(on.chi_k_pad, int)
+    assert isinstance(on.chi_max_cycles, float)
+    assert on.chi_f0 is None and on.chi_freq_bounds is None

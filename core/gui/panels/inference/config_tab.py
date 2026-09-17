@@ -4,10 +4,12 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdi
 
 from core import cli, config, registry
 from core.Helpers import file_manager
+from core.refusals import Refusal, require_at_least, require_finite
 from core.SBI import pipeline
 from core.config import CHI_K_MAX, VALID_LABELS, VALID_MODELS
 
 from ... import icons, settings
+from ...fields import label
 from ...session import ConfigDraft
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
@@ -23,10 +25,16 @@ class ConfigPanel(_StagePanel):
     """Tab 1. Records the MODEL-level choices as a ``ConfigDraft`` -- it does NOT build the SimConfig.
 
     A SimConfig cannot exist without a bounds file, because the bounds file declares which parameters
-    are inferred and hence the observation mode; the Prior tab owns that. Validates the chi knobs
-    here (2 <= K <= CHI_K_MAX, F0 > 0, 0 < lo < hi), since this is where they are entered.
+    are inferred and hence the observation mode; the Prior tab owns that. Reads and validates the
+    boxes at Apply through ``_read_inputs`` (2 <= K <= pad <= CHI_K_MAX, ceiling > CHI_MIN_CYCLES,
+    typed units resolvable), since this is where they are entered; a bad box is a ``Refusal`` shown
+    as the yellow "Check your inputs" box, and the session is left untouched. The chi drive
+    amplitude and band are READ-ONLY displays of config.py (piece 3, V5): the draft carries None for
+    both, so every config built from it carries config.py's values, as the command-line tool's does.
 
-    Persists (group "inference_config"): model, units source/text, and the chi knobs.
+    Persists (group "inference_config"): model, units source/text, the chi-mode tick and the
+    rotation tick -- the selections. The chi probe count, slots and lock-in ceiling open at
+    config.py's values on every launch, and the amplitude and band are never written or read.
     """
     def __init__(self, screen, parent=None):
         super().__init__(screen, parent)
@@ -39,7 +47,7 @@ class ConfigPanel(_StagePanel):
         self.btn_config = QPushButton("Apply model & options")
         self.btn_config.setProperty("accent", True)       # primary CTA (Fluent accent)
         self.btn_config.clicked.connect(self._build_config)
-        add_help_row(form, "Model", self.model_combo, HELP["model"])
+        add_help_row(form, label("model"), self.model_combo, HELP["model"])
 
         # Units DECLARE what the numbers in the bounds/cell files mean; they never convert them.
         self.units_default = QLabel("—")
@@ -48,23 +56,33 @@ class ConfigPanel(_StagePanel):
         self.units_text.setPlaceholderText("e.g. nm ms pN kHz")
         self.units_toggle = SourceToggle(self.units_default, self.units_text,
                                          file_label="Model's units file", direct_label="Type units")
-        add_help_row(form, "Units", self.units_toggle, HELP["units"])
+        add_help_row(form, label("units"), self.units_toggle, HELP["units"])
 
         # chi(omega) mode. Captured onto the config at build time (SimConfig carries K/F0/range), so a
         # posterior is self-describing and toggling this later cannot reinterpret an existing run.
         self.chi_check = QCheckBox("Multi-frequency χ(ω) conditioning")
         self.chi_k = IntField(config.CHI_N_FREQS)
+        # The drive amplitude and band are MEASUREMENTS (config.py's CHI_F0 record), not per-run
+        # choices: since D11 build_prior refuses any other value, so a box that accepted one only
+        # manufactured that refusal seconds after Apply. Read-only displays; the draft never reads
+        # them (see _build_config), so every config built here carries config.py's values.
         self.chi_f0 = FloatField(config.CHI_F0)
+        self.chi_f0.setReadOnly(True)
         self.chi_range = _ChiRangeRow(*config.CHI_FREQ_BOUNDS)
+        self.chi_range.lo.setReadOnly(True)
+        self.chi_range.hi.setReadOnly(True)
         self.chi_pad = IntField(config.CHI_K_PAD)
         self.chi_cycles = FloatField(config.CHI_MAX_CYCLES)
         self.chi_check.toggled.connect(lambda _on: self._sync_chi_enabled())
         form.addRow(with_badge(self.chi_check, HELP["chi_mode"]))
-        add_help_row(form, "χ probes per observation", self.chi_k, HELP["chi_k"])
-        add_help_row(form, "χ probe slots (capacity)", self.chi_pad, HELP["chi_k_pad"])
+        add_help_row(form, label("chi_n_freqs"), self.chi_k, HELP["chi_k"])
+        add_help_row(form, label("chi_k_pad"), self.chi_pad, HELP["chi_k_pad"])
         add_help_row(form, "χ drive F₀ (ND)", self.chi_f0, HELP["chi_f0"])
         add_help_row(form, "χ frequency range", self.chi_range, HELP["chi_range"])
-        add_help_row(form, "χ lock-in ceiling (cycles)", self.chi_cycles, HELP["chi_max_cycles"])
+        self.chi_fixed_note = QLabel("fixed by measurement; change it in config.py")
+        self.chi_fixed_note.setProperty("type", "caption")
+        form.addRow("", self.chi_fixed_note)
+        add_help_row(form, label("chi_max_cycles"), self.chi_cycles, HELP["chi_max_cycles"])
 
         self.rot_check = QCheckBox("Decorrelating Fisher rotation")
         form.addRow(with_badge(self.rot_check, HELP["reparam_rotate"]))
@@ -179,12 +197,65 @@ class ConfigPanel(_StagePanel):
                 f"'{model}' {reason}, so it is Simulate-only. Parameter inference supports "
                 "user-defined models with no forcing and at least one parameter.", "warning")
 
+    def _read_inputs(self) -> dict:
+        """Every box Apply will read, through ``value_or_none()`` and the shared rules; the first bad
+        one raises ``Refusal`` (spec §3.4). The keys are the field keys of ``core.refusals.FIELDS``.
+
+        The χ boxes are read only while χ mode is on: off, they are disabled and the draft carries
+        None for them, so ``make_sim_config`` takes config.py's values -- the tool's behaviour. A
+        blank box is a refusal, never a zero: ``IntField.value()`` returned 0 for "" and the old
+        chain refused it by accident (0 < 2), while a blank pad was not checked here at all and
+        surfaced one tab later as SimConfig.__post_init__'s traceback dialog.
+        """
+        out = {"units": None, "chi_n_freqs": None, "chi_k_pad": None, "chi_max_cycles": None}
+        if self.chi_check.isChecked():
+            # K has an UPPER bound too. Cost is linear in K (each probe is a whole extra simulation
+            # per observation, so training and calibration both scale as K+1), and the Infer tab
+            # grows one file-picker row per probe frequency -- K=500 would mean 500 rows.
+            k = require_at_least("chi_n_freqs", self.chi_k.value_or_none(), 2)
+            if k > CHI_K_MAX:
+                raise Refusal(f"The number of chi probe frequencies must be at most {CHI_K_MAX}; "
+                              f"got {k} (default {config.CHI_N_FREQS}).", field="chi_n_freqs")
+            pad = require_at_least("chi_k_pad", self.chi_pad.value_or_none(), 2)
+            if pad > CHI_K_MAX:
+                raise Refusal(f"The number of chi probe slots must be at most {CHI_K_MAX}; got {pad} "
+                              f"(default {config.CHI_K_PAD}).", field="chi_k_pad")
+            if k > pad:
+                raise Refusal(f"The number of chi probe frequencies must be at most the number of "
+                              f"chi probe slots, {pad}; got {k} (default {config.CHI_N_FREQS}).",
+                              field="chi_n_freqs")
+            # Caught here rather than by SimConfig.__post_init__ so it reads as a form error next to
+            # the box, not as a dialog on the Prior tab's "Build / Load prior".
+            cycles = require_finite("chi_max_cycles", self.chi_cycles.value_or_none())
+            if cycles <= config.CHI_MIN_CYCLES:
+                raise Refusal(f"The chi lock-in ceiling, in cycles must be greater than "
+                              f"{config.CHI_MIN_CYCLES:g}, the floor below which a probe is masked; "
+                              f"got {cycles:g} (default {config.CHI_MAX_CYCLES:g}).",
+                              field="chi_max_cycles")
+            out.update(chi_n_freqs=k, chi_k_pad=pad, chi_max_cycles=cycles)
+        if self.units_toggle.is_direct():
+            units = self._units_override()
+            if units is None:
+                raise Refusal("The units are blank: type at least one unit token, or use the "
+                              "model's units file.", field="units")
+            try:                                       # reject unresolvable tokens HERE, not mid-run
+                cli.units_to_factors(units)
+            except Exception as e:                     # noqa: BLE001 -- UnitParseError, or pint's own
+                raise Refusal(f"The units are not usable: {e}", field="units") from e
+            out["units"] = units
+        return out
+
     def _build_config(self):
         model = self.model_combo.currentText()
         if registry.is_user_model(model) and not registry.is_sbi_user_model(model):   # backstop
             self.log_pane.append_line(
                 "This user-defined model is Simulate-only (needs no forcing + ≥1 parameter for "
                 "inference).", "warning")
+            return
+        try:
+            v = self._read_inputs()
+        except Refusal as e:
+            self._refusal(e)
             return
         # model_labels, NOT `labels`: this module imports the core.Helpers.labels MODULE at the top
         # and calls labels.axis_label(...) / labels.gui_forcing_label(...) elsewhere in this same
@@ -194,49 +265,23 @@ class ConfigPanel(_StagePanel):
         model_labels = VALID_LABELS[VALID_MODELS.index(model)]
         state_dep_drift = registry.state_dep_drift(model)
         chi_on = self.chi_check.isChecked()
-        if chi_on:                                   # FloatField/IntField return 0 on unparseable text
-            lo, hi = self.chi_range.value()
-            # K has an UPPER bound too. Cost is linear in K (each probe is a whole extra simulation
-            # per observation, so training and calibration both scale as K+1), and the Infer tab
-            # grows one file-picker row per probe frequency -- K=500 would mean 500 rows.
-            problem = ("K must be at least 2 to resolve a χ(ω) curve." if self.chi_k.value() < 2 else
-                       f"K must be at most {CHI_K_MAX}: every probe frequency is another full "
-                       f"simulation per observation, and the Infer tab needs one recording per "
-                       f"frequency." if self.chi_k.value() > CHI_K_MAX else
-                       "χ drive F₀ must be > 0." if self.chi_f0.value() <= 0 else
-                       "χ frequency range must satisfy 0 < from < to." if not (0 < lo < hi) else
-                       # Caught here rather than by SimConfig.__post_init__ so it reads as a form
-                       # error next to the box, not as a traceback on "Apply model & options".
-                       f"χ lock-in ceiling must exceed the {config.CHI_MIN_CYCLES:g}-cycle floor, "
-                       f"or every probe is truncated below it and masked."
-                       if self.chi_cycles.value() <= config.CHI_MIN_CYCLES else None)
-            if problem:
-                self.log_pane.append_line(problem, "warning")
-                return
-        units = self._units_override()
-        if self.units_toggle.is_direct():
-            if units is None:
-                self.log_pane.append_line("Enter at least one unit token, or switch back to the "
-                                          "model's units file.", "warning")
-                return
-            try:                                       # reject unresolvable tokens HERE, not mid-run
-                cli.units_to_factors(units)
-            except Exception as e:                     # noqa: BLE001
-                self.log_pane.append_line(f"Those units are not usable: {e}", "warning")
-                return
+        # chi_f0 / chi_freq_bounds are NEVER read from their boxes: they are read-only displays of
+        # config.py, and None makes make_sim_config take config.py's values (cli.py), exactly as the
+        # command-line tool's config does. _assert_chi_config_is_deliberate therefore cannot fire
+        # on a config built from this tab; it stays as the last line of defence for every other caller.
         draft = ConfigDraft(
-            model=model, labels=model_labels, state_dep_drift=state_dep_drift, units_override=units,
-            chi_mode=chi_on, chi_n_freqs=self.chi_k.value(), chi_f0=self.chi_f0.value(),
-            chi_freq_bounds=self.chi_range.value(), chi_k_pad=self.chi_pad.value(),
-            chi_max_cycles=self.chi_cycles.value(),
+            model=model, labels=model_labels, state_dep_drift=state_dep_drift,
+            units_override=v["units"],
+            chi_mode=chi_on, chi_n_freqs=v["chi_n_freqs"], chi_f0=None, chi_freq_bounds=None,
+            chi_k_pad=v["chi_k_pad"], chi_max_cycles=v["chi_max_cycles"],
             reparam_rotate=self.rot_check.isChecked())
         self._screen.new_draft(draft)                # replaces the session + repoints Prior + re-gates
         extras = []
         if chi_on:
-            lo, hi = draft.chi_freq_bounds
-            extras.append(f"χ(ω) on — {draft.chi_n_freqs} frequencies over {lo:g}–{hi:g}×Ω₀ at ND "
-                          f"amplitude {draft.chi_f0:g}, ≤{draft.chi_max_cycles:g} cycles per probe, "
-                          f"so expect ~{(draft.chi_n_freqs + 1) / 2:.1f}× the "
+            lo, hi = config.CHI_FREQ_BOUNDS          # config.py's, not the boxes': the values the run gets
+            extras.append(f"χ(ω) on — {v['chi_n_freqs']} frequencies over {lo:g}–{hi:g}×Ω₀ at ND "
+                          f"amplitude {config.CHI_F0:g}, ≤{v['chi_max_cycles']:g} cycles per probe, "
+                          f"so expect ~{(v['chi_n_freqs'] + 1) / 2:.1f}× the "
                           f"usual training time and train a NEW posterior")
         elif draft.reparam_rotate:
             extras.append("decorrelating Fisher rotation on")
@@ -251,18 +296,18 @@ class ConfigPanel(_StagePanel):
                 "warning")
 
     def save_settings(self, qs):
+        """The SELECTIONS only (V5). The chi probe count, slots and lock-in ceiling are science knobs
+        that open at config.py on every launch, and the amplitude and band are read-only displays:
+        none of the six is written, and a stale `chi_k` / `chi_k_pad` / `chi_f0` / `chi_lo` /
+        `chi_hi` / `chi_max_cycles` key in an old PRISM.ini is ignored by restore_settings. Seeding
+        those boxes from config.py and then restoring them is what trained the 2026-08-19 retrain
+        on the retired band."""
         qs.beginGroup("inference_config")
         qs.setValue("model", self.model_combo.currentText())
         qs.setValue("units_mode", self.units_toggle.key())
         settings.save_field(qs, "units_text", self.units_text)
         settings.set_bool(qs, "chi_mode", self.chi_check.isChecked())
         settings.set_bool(qs, "reparam_rotate", self.rot_check.isChecked())
-        settings.save_field(qs, "chi_k", self.chi_k)
-        settings.save_field(qs, "chi_k_pad", self.chi_pad)
-        settings.save_field(qs, "chi_f0", self.chi_f0)
-        settings.save_field(qs, "chi_lo", self.chi_range.lo)
-        settings.save_field(qs, "chi_hi", self.chi_range.hi)
-        settings.save_field(qs, "chi_max_cycles", self.chi_cycles)
         qs.endGroup()
 
     def restore_settings(self, qs):
@@ -278,10 +323,4 @@ class ConfigPanel(_StagePanel):
         self.units_toggle.restore_key(settings.get_str(qs, "units_mode", "file"))
         self.chi_check.setChecked(settings.get_bool(qs, "chi_mode", False))
         self.rot_check.setChecked(settings.get_bool(qs, "reparam_rotate", config.REPARAM_ROTATE))
-        settings.restore_field(qs, "chi_k", self.chi_k)
-        settings.restore_field(qs, "chi_k_pad", self.chi_pad)
-        settings.restore_field(qs, "chi_f0", self.chi_f0)
-        settings.restore_field(qs, "chi_lo", self.chi_range.lo)
-        settings.restore_field(qs, "chi_hi", self.chi_range.hi)
-        settings.restore_field(qs, "chi_max_cycles", self.chi_cycles)
         qs.endGroup()

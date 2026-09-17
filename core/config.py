@@ -569,8 +569,11 @@ CHI_F0 = 0.15                  # ND drive amplitude for every chi probe. Driving
                                #                itself. Onset at 1.4x detune is F0 = 0.2 -- the OLD default.
                                # 0.15 is the largest amplitude that is still reproducible everywhere in the
                                # band while leaving the bundle running free (own peak >= 84% of undriven at
-                               # every probe from 0.05x to 0.2x). TUNABLE per config in the Config tab;
-                               # re-measure for a cell with a very different Q or noise level.
+                               # every probe from 0.05x to 0.2x). FIXED BY MEASUREMENT: the Config tab
+                               # shows it read-only and every config carries this value (D11 refuses
+                               # any other), so it changes only by editing this line, deliberately,
+                               # for every future run; re-measure for a cell with a very different Q
+                               # or noise level.
 
 # Cycles of the observation's own oscillation shown in the time-domain posterior-overlay figures. The
 # window is derived per observation from its measured peak frequency, so this stays meaningful whatever

@@ -137,18 +137,23 @@ HELP = {
                  "FROZEN into every posterior trained with it (it fixes the input width), so raising "
                  "it later means retraining; pick generously. Costs only input columns — the "
                  "encoder's parameter count does not depend on it.",
-    "chi_f0": "Non-dimensional drive amplitude for every χ probe. χ = response/drive is independent of "
-              "amplitude in the linear regime, so this only needs to be small enough to stay linear "
-              "(≲0.1) and large enough for the lock-in to beat the noise.",
+    "chi_f0": "Non-dimensional drive amplitude for every χ probe, FIXED BY MEASUREMENT (config.CHI_F0: "
+              "the largest amplitude that is still reproducible everywhere in the band while the "
+              "bundle runs free -- the measurement record is the comment beside it in config.py). "
+              "Shown read-only: it is baked into every trained posterior's encoder, so a different "
+              "value means editing config.py deliberately, for every future run, and retraining.",
     "chi_max_cycles": "Longest lock-in, in drive cycles, used for any one probe. A longer lock-in is "
                       "NOT a better one here: past roughly 30 cycles χ stops being reproducible at "
                       "fixed parameters, and the extra recording adds noise rather than signal. "
                       "Recordings longer than this are truncated, not rejected — the leading part is "
                       "exactly what the network was trained on. Frozen into any posterior trained "
                       "with it, so changing it means retraining.",
-    "chi_range": "The K probe frequencies are placed log-spaced across this range, as MULTIPLES of each "
+    "chi_range": "The K probe frequencies are placed log-spaced across this band, as MULTIPLES of each "
                  "observation's own measured spontaneous peak Ω₀ — so the probes track the resonance "
-                 "wherever t_scale puts it, instead of sitting at fixed absolute frequencies.",
+                 "wherever t_scale puts it, instead of sitting at fixed absolute frequencies. The band "
+                 "is FIXED BY MEASUREMENT (config.CHI_FREQ_BOUNDS) and shown read-only: it fixes the "
+                 "encoder's frequency normalisation, so a different band means editing config.py "
+                 "deliberately, for every future run, and retraining.",
     "chi_passive": "The passive (undriven) recording. Its power spectrum sets Ω₀, which anchors the "
                    "frequency of every driven recording below.",
     "chi_forced": "One row per single-tone forced recording: the file, and the frequency you "
