@@ -849,7 +849,7 @@ def test_help_badge_carries_its_text():
     _app()
     assert HelpBadge("what this does").toolTip() == "what this does"
 
-def test_simulated_inference_emits_the_ground_truth_figure():
+def test_simulated_inference_emits_the_ground_truth_figure(tmp_path):
     """The simulated-inference COMPOSITION shows the 'Ground-truth trace' figure before inferring (the
     old Simulate tab did only the first half; the tab is gone, the figure is not). A real SDE sim is too
     slow for a unit test, so stub the heavy pieces and assert the fig_sink wiring. The figure comes from
@@ -886,6 +886,8 @@ def test_simulated_inference_emits_the_ground_truth_figure():
     orchestrator.generate_observations = stub_generate_observations
     orchestrator.infer_and_visualize = lambda *a, **k: types.SimpleNamespace(
         id="i", name="", results={"ppc": {"coverage_90": 0.9}})
+    cell = tmp_path / "cell.txt"
+    cell.touch()                       # require_file("cell", …) runs before the (stubbed) parse
     try:
         post = types.SimpleNamespace(posterior=types.SimpleNamespace(x_obs_digest=None, truncation=None))
         # T_obs=0.1s is below T_MIN_EXP_S on purpose (the spec's test row): record the resulting
@@ -893,7 +895,7 @@ def test_simulated_inference_emits_the_ground_truth_figure():
         # match, and this call is not asserted to emit exactly one.
         with pytest.warns(orchestrator.PreflightWarning) as rec:
             obs, inf = orchestrator.simulated_inference(
-                Cfg(), post, 0.1, cell="cell.txt", fig_sink=lambda title, fig: seen.append(title))
+                Cfg(), post, 0.1, cell=str(cell), fig_sink=lambda title, fig: seen.append(title))
     finally:
         cli.load_and_validate_gt = real_gt
         orchestrator.generate_observations = real_go

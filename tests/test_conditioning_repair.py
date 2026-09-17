@@ -1095,15 +1095,20 @@ def test_tsnpe_round_refuses_bad_direction_counts_and_hpd_levels_before_any_spen
     saved = orchestrator.build_truncation_region
     orchestrator.build_truncation_region = lambda *a, **k: drawn.append(1)
     try:
-        for bad, why in ((dict(n_directions=0), "At least one direction must be truncated"),
-                         (dict(n_directions=14), "the latent has 13"),
-                         (dict(level=0.0), "strictly between 0 and 1"),
-                         (dict(level=1.0), "strictly between 0 and 1")):
+        # Refusals with their field and the default in the sentence (spec §3.3): the yellow box names
+        # the box and the value to type back, which "At least one direction must be truncated" never did.
+        for bad, field, why in ((dict(n_directions=0), "n_directions", "must be at least 1; got 0 (default 5)"),
+                                (dict(n_directions=14), "n_directions",
+                                 "must be at most 13, this posterior's latent width; got 14 (default 5)"),
+                                (dict(level=0.0), "hpd_level",
+                                 "must be between 0 and 1 (exclusive); got 0 (default 0.999)"),
+                                (dict(level=1.0), "hpd_level",
+                                 "must be between 0 and 1 (exclusive); got 1 (default 0.999)")):
             try:
                 orchestrator.tsnpe_round(cfg, _parent(), object(), obs, store=store, **bad)
                 raise AssertionError(f"tsnpe_round accepted {bad}")
-            except ValueError as e:
-                assert why in str(e), f"{bad}: {e}"
+            except Refusal as e:
+                assert e.field == field and why in str(e), f"{bad}: {e.field}: {e}"
     finally:
         orchestrator.build_truncation_region = saved
     assert drawn == [], "a refused round drew a region"
@@ -1279,3 +1284,35 @@ def test_the_round_announces_the_region_it_drew():
     finally:
         orchestrator.build_truncation_region, orchestrator.build_posterior = saved
     assert "[tsnpe] region from observation obs: 'REGION-REPR'" in buf.getvalue(), buf.getvalue()
+
+
+def test_the_direction_refusal_names_the_width_and_the_default():
+    """Walkthrough row C3 at the stage (spec §3.3): a direction count above THIS posterior's latent
+    width is refused in one sentence carrying the width, the value given and the default, with field
+    "n_directions". The TSNPE tab cannot check it at the click -- it has no posterior to measure the
+    width against -- so this sentence is what the yellow box shows. It used to read "14 directions
+    requested but the latent has 13; ...", naming neither the setting nor its default. The width is the
+    posterior's own: a count equal to it is legal and the round proceeds."""
+    from core import orchestrator
+    from core.refusals import FIELDS
+    drawn, store, cfg, obs = [], _RoundStore(), _round_cfg(), _round_obs()
+    saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
+    orchestrator.build_truncation_region = lambda *a, **k: drawn.append(k["n_directions"]) or "REGION"
+    orchestrator.build_posterior = lambda *a, **k: "CHILD"
+    try:
+        try:
+            orchestrator.tsnpe_round(cfg, _parent(), object(), obs, store=store, n_directions=14)
+            raise AssertionError("tsnpe_round accepted 14 directions on a 13-wide latent")
+        except Refusal as e:
+            assert e.field == "n_directions", e.field
+            assert str(e) == (
+                "The number of directions to truncate must be at most 13, this posterior's latent width; "
+                f"got 14 (default {truncate.DEFAULT_N_DIRECTIONS}). Truncating every direction deletes "
+                "support along the flat ones too."), str(e)
+            assert f"(default {FIELDS['n_directions'].default})" in str(e), str(e)
+        assert drawn == [] and obs.events == [], "a refused round drew a region or installed the observation"
+        assert orchestrator.tsnpe_round(cfg, _parent(), object(), _round_obs(), store=store,
+                                        n_directions=13) == "CHILD"
+        assert drawn == [13]
+    finally:
+        orchestrator.build_truncation_region, orchestrator.build_posterior = saved

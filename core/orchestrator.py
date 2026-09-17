@@ -7,7 +7,6 @@ This module owns the pipeline flow: observe -> prior -> posterior -> validate.
 import importlib
 import json
 import math
-import os
 import time
 import warnings
 
@@ -25,13 +24,16 @@ from .config import (
     T_MIN_EXP_S, T_MAX_EXP_S,
     CHUNK_LEN, N_ND_MAX, SBC_N_CAL, STABILITY_SWEEP_ND_UNITS, TRAINING_NUM_RUNS,
     PRIOR_SWEEP_ITERATIONS, PRIOR_SWEEP_BATCH, TRAINING_RUN_SIZE, TRAINING_CHECKPOINT_EVERY,
+    PRIOR_SWEEP_MAX_SETS, PRIOR_SWEEP_STEP, PRIOR_CLUSTER_MIN_SIZE, PRIOR_CLUSTER_MIN_SAMPLES,
+    REPARAM_FISHER_M, REPARAM_FISHER_DZ, REPARAM_FISHER_POINTS, CAL_N_SCALES,
     DENSITY_ESTIMATOR, NSF_HIDDEN_FEATURES, NSF_NUM_TRANSFORMS, NSF_NUM_BINS,
     TRAINING_NUM_ROUNDS, TRAINING_BATCH_SIZE, TRAINING_LEARNING_RATE,
     TRAINING_STOP_AFTER_EPOCHS, TRAINING_MAX_NUM_EPOCHS, TRAINING_SHOW_SUMMARY, FORCING_SI_UNITS,
     EYE_TEST_CYCLES,
 )
 from . import cli, config, forcing
-from .refusals import Refusal
+from .refusals import (Refusal, require_at_least, require_between, require_choice, require_file,
+                       require_positive)
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import thin_ticks as _thin_ticks
 from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
@@ -270,15 +272,21 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
 def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: str = "", note: str = "",
                                  fig_sink=None, store=None) -> LoadedObservation:
     """A bench recording set -> the observation artifact. Every file is checked and hashed BEFORE any
-    compute (a missing recording is a FileNotFoundError here, not a traceback inside a worker), then
-    the mode's builder runs and the artifact records the recordings, the drive and the context."""
+    compute (a blank or missing recording is a Refusal naming that recording's field here, not a
+    traceback inside a worker), then the mode's builder runs -- refusing a bad drive before any lock-in
+    -- and the artifact records the recordings, the drive and the context."""
     store = resolve_store(store)
     store.assert_name_free("observation", name)      # with the file checks, before any compute
     named = [(rec.spont, "spont", None)] + [(p, "forced", f) for p, f in rec.forced]
+    # The field each role answers to, for the front ends' tables: the passive recording, forced mode's
+    # one driven recording, or a chi probe's recording (picked in the probe table).
+    role_field = {"spont": "recording_spont",
+                  "forced": "recording_probe" if cfg.observation_mode == "chi" else "recording_forced"}
     refs = []
     for p, role, f in named:
-        if not p or not os.path.isfile(str(p)):
-            raise FileNotFoundError(f"the {role} recording was not found: {p!r}")
+        # "is blank" for an empty path, "was not found" for a path with no file behind it: the same rule
+        # and the same sentence the Infer tab runs at the click (spec §3.3, §3.4).
+        require_file(role_field[role], p, "recording")
         # D9. Role-scoped on purpose: `named`'s FIRST element is the passive recording, whose frequency
         # is None BY CONSTRUCTION, so an unscoped check would refuse every chi observation. A lock-in
         # aimed at a guessed mult_k * Omega_0 instead of the drive the bench applied decays like a sinc
@@ -512,19 +520,32 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     # Stability is a per-parameter property — screen on a short fixed-length trajectory
     # (STABILITY_SWEEP_ND_UNITS) rather than the full master grid. Global sweep uses
     # half this (t_global_scale=2 inside gen_prior), local sweep uses the full t_stab.
-    stab_units = STABILITY_SWEEP_ND_UNITS if stability_units is None else float(stability_units)
-    n_stab_fine = int(stab_units / cfg.dt_nd_min)
-    t_stab = cfg.t[:n_stab_fine]
-    prior_segs = max(1, math.ceil(n_stab_fine / CHUNK_LEN))
+    # THE SEVEN SWEEP AND CLUSTERING KNOBS, resolved here (None -> the config constant) and refused here,
+    # before cfg.t is sliced and before the ~9-minute sweep (spec §3.4). Four of them used to travel as
+    # None and be resolved -- min_cluster_size and min_samples CLAMPED, max(2, ...) -- inside gen_prior,
+    # so a 1 became a 2 nobody chose and the manifest's knobs recorded None for values the sweep did
+    # use. gen_prior and the manifest now get the resolved numbers. The load branch above returned
+    # before this line, so a load never reads -- and never refuses -- any of them.
+    n_iter = require_at_least("num_iterations",
+                              PRIOR_SWEEP_ITERATIONS if num_iterations is None else num_iterations, 1)
     # The sweep's batch is its OWN knob (C-7), not the training batch. They were the same number,
     # and because the sweep is ITERATION-bounded rather than accept-bounded, shrinking that number for
     # a cheap run made the prior worse WITHOUT making it faster -- 527 s at batch 2048 against >70 min
     # and unfinished at batch 32. PRIOR_SWEEP_BATCH = 0 keeps the historical behaviour (follow the
     # hardware batch), which is still what a real run wants; see config for when to set it.
-    sweep_batch = (PRIOR_SWEEP_BATCH if sweep_batch is None else int(sweep_batch)) or cfg.hw.batch_size
-    n_iter = PRIOR_SWEEP_ITERATIONS if num_iterations is None else int(num_iterations)
-    if n_iter < 1:
-        raise ValueError(f"num_iterations must be at least 1, got {n_iter}")
+    sweep_batch_r = require_at_least("sweep_batch", PRIOR_SWEEP_BATCH if sweep_batch is None else sweep_batch, 0)
+    max_sets_r = require_at_least("max_sets", PRIOR_SWEEP_MAX_SETS if max_sets is None else max_sets, 1)
+    walk_step_r = require_positive("walk_step", PRIOR_SWEEP_STEP if walk_step is None else walk_step)
+    stab_units = require_positive("stability_units",
+                                  STABILITY_SWEEP_ND_UNITS if stability_units is None else stability_units)
+    min_cluster_size_r = require_at_least(
+        "min_cluster_size", PRIOR_CLUSTER_MIN_SIZE if min_cluster_size is None else min_cluster_size, 2)
+    min_samples_r = require_at_least(
+        "min_samples", PRIOR_CLUSTER_MIN_SAMPLES if min_samples is None else min_samples, 1)
+    sweep_batch = sweep_batch_r or cfg.hw.batch_size          # a TYPED 0 = follow the hardware batch
+    n_stab_fine = int(stab_units / cfg.dt_nd_min)
+    t_stab = cfg.t[:n_stab_fine]
+    prior_segs = max(1, math.ceil(n_stab_fine / CHUNK_LEN))
     nd_prior = pipeline.gen_prior(
         model=cfg.model, t=t_stab,
         global_batch_size=sweep_batch,
@@ -533,8 +554,8 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
         prior_bounds=cfg.nd_params_bounds,
         state_dep_drift=cfg.state_dep_drift,
         num_iterations=n_iter,
-        n_max=max_sets, step=walk_step,
-        min_cluster_size=min_cluster_size, min_samples=min_samples,
+        n_max=max_sets_r, step=walk_step_r,
+        min_cluster_size=min_cluster_size_r, min_samples=min_samples_r,
         # geometric/log box on the ND params that asked for one: a user model's own per-parameter
         # choice, else config.REPARAM_LOG_PARAMS. See _log_params_for.
         log_mask=nd_log_mask(cfg, log_params=_log_params_for(cfg)),
@@ -548,9 +569,9 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
                                    model=cfg.model, param_keys=list(cfg.params_dict.keys()))
         visualizers.visualize_dist(nd_prior, labels=cfg.labels, title="Prior", sink=w.fig_sink(fig_sink))
         w.fingerprints["gmm"] = _gmm_fingerprint(nd_prior)
-        knobs = {"num_iterations": n_iter, "sweep_batch": sweep_batch, "max_sets": max_sets,
-                 "walk_step": walk_step, "stability_units": stab_units,
-                 "min_cluster_size": min_cluster_size, "min_samples": min_samples}
+        knobs = {"num_iterations": n_iter, "sweep_batch": sweep_batch, "max_sets": max_sets_r,
+                 "walk_step": walk_step_r, "stability_units": stab_units,
+                 "min_cluster_size": min_cluster_size_r, "min_samples": min_samples_r}
         w.config.update(knobs)
         w.body = {
             "gmm": {"n_components": int(gmm.mixture_distribution.probs.numel()) if gmm is not None else None,
@@ -671,6 +692,8 @@ def build_posterior(
                      ⚠ So does a TRUNCATED run (``truncation=``): it reuses the region's V and never
                      runs the Fisher at all -- the box is measured in the parent's basis and is
                      meaningless in any other (guardrail 7).
+                     Either way, and on an unrotated run, the manifest records all three as None:
+                     they are written only when the Fisher ran in this process (V7).
     :return: a LoadedPosterior; ``.posterior`` is the TransformedPosterior every downstream stage samples.
 
     ⚠ THESE FOUR ARE WHAT A COMPLETE C-11 CHECKPOINT IS FOR. Its own docstring says a finished
@@ -723,41 +746,47 @@ def build_posterior(
         except Exception as _e:                  # noqa: BLE001 -- a banner must never stop a run
             print(f"[tier1] could not describe the derived f_scale: {_e}", flush=True)
 
-    # Resolved before anything reads them: both are part of the checkpoint identity below.
+    # EVERY KNOB IS RESOLVED HERE (None -> the config constant) and refused here, before the Fisher and
+    # every simulation: sbi only objects to a bad flow knob after the whole budget is spent, a zero
+    # patience or learning rate does not object at all -- it writes an untrained posterior -- and
+    # decorrelate's `m or REPARAM_FISHER_M` turned a Fisher 0 into the default without a word. The
+    # manifest records these same resolved names.
+    # Refused only on a call that TRAINS (spec §1.2, "a stage with a load branch"): the branch below
+    # loads exactly when `not train_new and ref is not None`, decided from the arguments alone, and a
+    # load reads none of the budget, cadence, flow or Fisher knobs. The Posterior tab sends its boxes on
+    # a load too, and refusing a load over a box the load never reads is the defect the flow knobs'
+    # exemption fixed first; the budget and the cadence now follow it. The resume POLICY is checked on
+    # both branches.
+    trains = train_new or ref is None
+    # The budget, resolved before anything reads it: both are part of the checkpoint identity below.
     n_runs = TRAINING_NUM_RUNS if num_runs is None else int(num_runs)
     size_cap = TRAINING_RUN_SIZE if run_size_cap is None else int(run_size_cap)
-    if n_runs < 1:
-        raise ValueError(f"num_runs must be at least 1, got {n_runs}")
-    if size_cap < 0:
-        raise ValueError(
-            f"run_size_cap must be >= 0 (0 = follow the hardware default), got {size_cap}")
-    # The cadence and the policy, resolved beside them for the same reason: everything that decides
-    # WHETHER a simulation cache is touched has to be settled before the identity is built.
+    # The cadence, resolved beside them for the same reason: everything that decides WHETHER a
+    # simulation cache is touched has to be settled before the identity is built.
     ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
-    if ck_every < 0:
-        raise ValueError(f"checkpoint_every must be >= 0 (0 = checkpointing off), got {ck_every}")
-    # The flow and training knobs, resolved and range-checked here too, before the Fisher and every
-    # simulation: sbi only objects to a bad one after the whole budget is spent, and a zero patience or
-    # learning rate does not object at all -- it writes an untrained posterior. The manifest records
-    # these same names. Checked only on a call that TRAINS (the branch below loads exactly when
-    # `not train_new and ref is not None`, decided from the arguments alone): a load never reads them,
-    # and the Posterior tab sends its flow fields on a load too.
-    trains = train_new or ref is None
     max_ep = TRAINING_MAX_NUM_EPOCHS if max_num_epochs is None else int(max_num_epochs)
     hf = NSF_HIDDEN_FEATURES if hidden_features is None else int(hidden_features)
     nt = NSF_NUM_TRANSFORMS if num_transforms is None else int(num_transforms)
     lr = TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate)
     patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else int(stop_after_epochs)
+    # The rotation's three, resolved HERE and passed down resolved; the record below names them only
+    # when the Fisher actually ran with them (V7).
+    fm = REPARAM_FISHER_M if fisher_m is None else int(fisher_m)
+    fdz = REPARAM_FISHER_DZ if fisher_dz is None else float(fisher_dz)
+    fp = REPARAM_FISHER_POINTS if fisher_points is None else int(fisher_points)
     if trains:
-        for _knob, _v in (("max_num_epochs", max_ep), ("hidden_features", hf), ("num_transforms", nt),
-                          ("stop_after_epochs", patience)):
-            if _v < 1:
-                raise ValueError(f"{_knob} must be at least 1, got {_v}")
-        if not (math.isfinite(lr) and lr > 0):
-            raise ValueError(f"learning_rate must be a finite positive number, got {lr}")
-    if resume not in ("auto", "require", "never"):
-        raise ValueError(
-            f"resume={resume!r} is not one of 'auto', 'require', 'never'.")
+        n_runs = require_at_least("num_runs", n_runs, 1)
+        size_cap = require_at_least("run_size_cap", size_cap, 0)        # 0 = follow the hardware batch
+        ck_every = require_at_least("checkpoint_every", ck_every, 0)    # 0 = checkpointing off
+        hf = require_at_least("hidden_features", hf, 1)
+        nt = require_at_least("num_transforms", nt, 1)
+        lr = require_positive("learning_rate", lr)
+        patience = require_at_least("stop_after_epochs", patience, 1)
+        max_ep = require_at_least("max_num_epochs", max_ep, 1)
+        fm = require_at_least("fisher_m", fm, 1)
+        fdz = require_positive("fisher_dz", fdz)
+        fp = require_at_least("fisher_points", fp, 1)
+    resume = require_choice("resume", resume, ("auto", "require", "never"))
     if resume != "auto" and not ck_every and train_new:
         # Without this, a `resume='require'` drill with checkpointing off exits 0 having tested
         # nothing: there is no cache for the policy to act on, so the policy is silently ignored.
@@ -1020,7 +1049,7 @@ def build_posterior(
         # GT-free: the rotation anchors on the prior median with a representative drive (force_prior).
         V, fisher_evals = decorrelate.build_latent_fisher_rotation(
             cfg, T, latent_prior=latent_inferred_prior, force_prior=force_prior, with_values=True,
-            m=fisher_m, dz=fisher_dz, n_points=fisher_points)
+            m=fm, dz=fdz, n_points=fp)
         # The eigenvalues ride into the sidecar with V. Without them the saved rotation only says
         # WHICH direction is least constrained, never BY HOW MUCH -- and recovering them afterwards
         # costs a full Fisher re-run. See `python -m core identifiability rotation`.
@@ -1193,16 +1222,18 @@ def build_posterior(
         if observation is not None:
             w.parents["observation"] = observation.id
         w.fingerprints = {"gmm": prior.fingerprint, "V": tensor_digest(V_rec), "probe": tensor_digest(probe)}
-        # RESOLVED exactly as decorrelate.build_latent_fisher_rotation resolves them (`m or
-        # REPARAM_FISHER_M`, `dz if dz is not None else ...`, `n_points or ...`), so the manifest
-        # records the value the Fisher actually used: a 0 passed for m or n_points is falsy and falls
-        # back to the constant there, and recording the 0 would describe a run nobody made.
-        _fm = fisher_m or config.REPARAM_FISHER_M
-        _fdz = config.REPARAM_FISHER_DZ if fisher_dz is None else fisher_dz
-        _fp = fisher_points or config.REPARAM_FISHER_POINTS
+        # V7 (spec §6.2): the three Fisher settings are recorded only when the rotation RAN in this
+        # process, and fisher_evals is its one witness (only the freshly-computed branch sets it). A
+        # resumed run reuses the checkpoint's V -- whose header carries no m, dz or points -- a truncated
+        # round reuses the region's, and an unrotated run has no Fisher at all: each records None, never
+        # the settings of a Fisher nobody computed. When it ran, the values are the ones it was called
+        # with, resolved at entry.
+        _fisher_ran = fisher_evals is not None
         w.config.update({"num_runs": n_runs, "run_size": run_size, "hidden_features": hf, "num_transforms": nt,
-                         "learning_rate": lr, "stop_after_epochs": patience, "fisher_m": _fm,
-                         "fisher_dz": _fdz, "fisher_points": _fp,
+                         "learning_rate": lr, "stop_after_epochs": patience,
+                         "fisher_m": fm if _fisher_ran else None,
+                         "fisher_dz": fdz if _fisher_ran else None,
+                         "fisher_points": fp if _fisher_ran else None,
                          "checkpoint_every": ck_every, "max_num_epochs": max_ep})
         w.body = {
             "mode": cfg.observation_mode,
@@ -1600,13 +1631,14 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     store = resolve_store(store)
     store.assert_name_free("calibration", name)   # before the calibration set is simulated
     post, inferred_prior, force_prior = posterior.posterior, prior.prior, prior.force_prior
-    nps = int(num_posterior_samples)
-    n_cal_used = SBC_N_CAL if n_cal is None else int(n_cal)
-    # Before the calibration set is simulated: run_sbc only objects to zero draws after all of it.
-    if n_cal_used < 1:
-        raise ValueError(f"n_cal must be at least 1, got {n_cal_used}")
-    if nps < 1:
-        raise ValueError(f"num_posterior_samples must be at least 1, got {nps}")
+    # Resolved and refused before the calibration set is simulated: run_sbc only objects to zero draws
+    # after all of it. cal_n_scales is REFUSED below 1 here, where gen_cal_data used to CLAMP it to 1:
+    # it is t_scale's effective sample size (trap X5), so a count nobody typed is a different
+    # measurement, not a cheaper one. The resolved count is what the set is drawn over and what the
+    # artifact records.
+    n_cal_used = require_at_least("n_cal", SBC_N_CAL if n_cal is None else n_cal, 1)
+    nps = require_at_least("num_posterior_samples", num_posterior_samples, 1)
+    n_scales_used = require_at_least("cal_n_scales", CAL_N_SCALES if cal_n_scales is None else cal_n_scales, 1)
     _assert_prior_used_matches_posterior(post, inferred_prior, "SBC/TARP calibration")
     with store.create("calibration", cfg, name=name, note=note) as w:
         device = cfg.hw.device
@@ -1620,7 +1652,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
         # --chi-k-fixed (core.diagnostics.sbc_repeats), run per stratum -- a pooled SBC over a mixture
         # of counts can be flat while each count is miscalibrated in compensating directions.
         x_cal, theta_star = _draw_calibration_set(cfg, val_latent_prior, T, force_prior,
-                                                  n_cal=n_cal_used, cal_n_scales=cal_n_scales,
+                                                  n_cal=n_cal_used, cal_n_scales=n_scales_used,
                                                   chi_k_fixed=None)
         x_cal_dev = x_cal.to(device)
         theta_star_dev = theta_star.to(device)
@@ -1721,7 +1753,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             "kept_fraction": None if truncation is None else {
                 "acceptance": _num(val_latent_prior.acceptance_rate),
                 "containment": _num(val_latent_prior.recorded_containment)},
-            "n_cal": int(n_cal_used), "cal_n_scales": None if cal_n_scales is None else int(cal_n_scales),
+            "n_cal": int(n_cal_used), "cal_n_scales": n_scales_used,
             "num_posterior_samples": nps,
         }
         _write_results_json(w.payload("results.json"), results)
@@ -2018,9 +2050,25 @@ def _build_latent_prior_for_validation(cfg, inferred_prior):
 # module would be a second binding and every one of those patches would miss it.
 def _refuse_no_samples(n_samples) -> None:
     """Zero posterior draws, refused before the observation is simulated or written: otherwise the
-    inference fails at samples.median after the spend, leaving an observation nothing names."""
-    if n_samples is not None and int(n_samples) < 1:
-        raise ValueError(f"n_samples must be at least 1, got {int(n_samples)}")
+    inference fails at samples.median after the spend, leaving an observation nothing names. None is
+    "not given" (infer_and_visualize's own default applies), never a blank to refuse."""
+    if n_samples is not None:
+        require_at_least("n_samples", n_samples, 1)
+
+
+def _t_obs_outside_training(T_obs_s: float) -> "str | None":
+    """The observation length against the range training drew T from, as the judgement's sentence, or
+    None inside it. A judgement, so the compositions WARN with it (PreflightWarning, walkthrough B6)
+    and never refuse. One wording for both paths: until piece 3 only the simulated path said it, though
+    a bench recording outside the range extrapolates exactly as a simulated cell does (spec §3.3).
+    Returns the sentence rather than warning, so _preflight_warn's stacklevel is unchanged."""
+    if T_obs_s < T_MIN_EXP_S:
+        return (f"T_obs={T_obs_s:.2f}s is below the training range minimum T_MIN_EXP_S="
+                f"{T_MIN_EXP_S:.2f}s; the posterior may extrapolate poorly.")
+    if T_obs_s > T_MAX_EXP_S:
+        return (f"T_obs={T_obs_s:.2f}s exceeds the training range maximum T_MAX_EXP_S="
+                f"{T_MAX_EXP_S:.2f}s; the posterior may extrapolate poorly.")
+    return None
 
 
 @public_entry
@@ -2048,14 +2096,24 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     """
     from .artifacts import Accept
     store = resolve_store(store)
+    # THE PRE-SPEND BLOCK, in the order spec §3.4 fixes and the "refused before any spend" pins rely
+    # on: the numeric knobs, then the name, then the files -- all before the cell is parsed, its truth
+    # injected or anything simulated.
+    _refuse_no_samples(n_samples)
+    # A blank or zero length used to pass here, simulate, write the observation and then die in
+    # math.log(0.0) inside the conditioning row: after the spend, with an orphan left behind.
+    T_obs_s = require_positive("t_obs", T_obs_s)
     # Before the simulation, not inside infer_and_visualize: that check used to run after the
     # observation had been simulated AND written, so a taken name cost a simulation and left an
     # observation artifact nothing would ever name.
     store.assert_name_free("inference", name)
-    _refuse_no_samples(n_samples)
     if (cell is None) == (gt_values is None):
         raise Refusal("simulated_inference takes exactly one of cell= (a cell file) and gt_values= "
                       "(hand-entered values in parse_values_file's shape).")
+    if cell is not None:
+        # The file, last: a missing cell surfaced as file_manager's bare FileNotFoundError from inside the
+        # parse. _read_lines keeps that raise for a race (spec §3.6); this is the refusal.
+        require_file("cell", cell, "cell")
     accept = accept or Accept()
     # GUARDRAIL 2, hoisted ahead of the spend. x_obs_digest, truncation and amortized=False are written
     # together by build_posterior and never set independently, so this predicate, the Infer tab's gate
@@ -2077,12 +2135,9 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
         _preflight_warn(f"the bounds file does not declare {', '.join(ignored)}; those cell values were "
                         f"ignored (the bounds file defines the inferred set)")
     cfg.T_obs = T_obs_s * cfg.get_unit_conversion_factor("s")
-    if T_obs_s < T_MIN_EXP_S:
-        _preflight_warn(f"T_obs={T_obs_s:.2f}s is below the training range minimum T_MIN_EXP_S="
-                        f"{T_MIN_EXP_S:.2f}s; the posterior may extrapolate poorly.")
-    elif T_obs_s > T_MAX_EXP_S:
-        _preflight_warn(f"T_obs={T_obs_s:.2f}s exceeds the training range maximum T_MAX_EXP_S="
-                        f"{T_MAX_EXP_S:.2f}s; the posterior may extrapolate poorly.")
+    _outside = _t_obs_outside_training(T_obs_s)
+    if _outside:
+        _preflight_warn(_outside)
     if prior is not None:
         # Bounds-checking cannot answer this: the ND prior is a stability-SCREENED GMM, so a value can
         # sit inside the box and in a corner the training data never visited.
@@ -2109,15 +2164,23 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
                            name: str = "", note: str = "", fig_sink=None, store=None):
     """Any bench recording set (passive, driven, chi) -> the observation artifact -> the inference.
 
-    It adds no checks of its own, and that is deliberate. A recording carries no truth, so there is
-    nothing to compare against the training distribution. And rebuilding the same recordings reproduces
-    a region's digest, which is the LEGITIMATE match -- so the non-amortized refusal stays in
-    infer_and_visualize, where it can tell that case apart from a foreign observation. Nothing is lost
-    by waiting: building an experimental observation costs no simulation.
+    Its own checks are the inputs' alone, before any compute: the sample count, the observation length
+    (a Refusal at or below 0; outside the training range the same PreflightWarning the simulated path
+    gives, spec §3.3) and the name. The recordings are checked by build_experiment_observation's file
+    loop and the drive by the builder, so ``rec`` is forwarded unchecked. A recording carries no truth,
+    so there is nothing to compare against the training distribution. And rebuilding the same
+    recordings reproduces a region's digest, which is the LEGITIMATE match -- so the non-amortized
+    refusal stays in infer_and_visualize, where it can tell that case apart from a foreign observation.
+    Nothing is lost by waiting: building an experimental observation costs no simulation.
     """
     store = resolve_store(store)
-    store.assert_name_free("inference", name)   # with the recordings' own file checks, before any compute
+    # The pre-spend block, in the order spec §3.4 fixes: the numeric knobs, then the name.
     _refuse_no_samples(n_samples)
+    T_obs_s = require_positive("t_obs", rec.T_obs_s)
+    store.assert_name_free("inference", name)   # with the recordings' own file checks, before any compute
+    _outside = _t_obs_outside_training(T_obs_s)
+    if _outside:
+        _preflight_warn(_outside)
     obs = build_experiment_observation(cfg, rec, fig_sink=fig_sink, store=store)
     inf = infer_and_visualize(cfg, posterior, obs, name=name, note=note, fig_sink=fig_sink, store=store,
                               accept=accept,
@@ -2162,19 +2225,20 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
     """
     store = resolve_store(store)
     store.assert_name_free("posterior", name)      # before the region draw and before days of training
-    n = truncate.DEFAULT_N_DIRECTIONS if n_directions is None else int(n_directions)
-    q = truncate.DEFAULT_HPD if level is None else float(level)
-    P = len(cfg.params_dict) + len(cfg.rescale_params)
     # region_from_posterior CLAMPS both ends silently (max(1, min(n, p))). Clamping a 0 up to 1 hides a
     # miskeyed setting; clamping down to P truncates EVERY direction, including the flat ones guardrail
-    # 3 exists to leave at full width. Both are refusals here instead.
-    if n < 1:
-        raise ValueError("At least one direction must be truncated")
+    # 3 exists to leave at full width. Both are refusals here instead, with the default in the sentence;
+    # the width's is built here because only the stage knows the width (the TSNPE tab has no posterior
+    # to measure it against at the click).
+    n = require_at_least("n_directions",
+                         truncate.DEFAULT_N_DIRECTIONS if n_directions is None else n_directions, 1)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
     if n > P:
-        raise ValueError(f"{n} directions requested but the latent has {P}; truncating every direction "
-                         f"deletes support along the flat ones too")
-    if not 0.0 < q < 1.0:
-        raise ValueError("HPD level must be strictly between 0 and 1")
+        raise Refusal(f"The number of directions to truncate must be at most {P}, this posterior's latent "
+                      f"width; got {n} (default {truncate.DEFAULT_N_DIRECTIONS}). Truncating every "
+                      f"direction deletes support along the flat ones too.", field="n_directions")
+    q = require_between("hpd_level", truncate.DEFAULT_HPD if level is None else level, 0.0, 1.0,
+                        open_lo=True, open_hi=True)
     if q < truncate.DEFAULT_HPD - 0.009:           # i.e. below 0.99
         # A judgement, so it warns rather than refuses -- but deleted support is a ONE-WAY ratchet, and
         # a region that is too TIGHT is the expensive mistake, not the cheap one.

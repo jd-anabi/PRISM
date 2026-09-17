@@ -14,7 +14,7 @@ import torch
 from core import config
 from core.config import SimConfig
 from core.SBI import chi, pipeline, statistics
-from core.refusals import Refusal
+from core.refusals import Refusal, require_finite, require_positive
 
 
 @dataclass(frozen=True)
@@ -58,6 +58,13 @@ def build_experiment_obs(
     :return: (obs_stats, obs_data, t_dim): the [S | log(T) | forcing] conditioning vector (1, D), the
              forced recording (1, N_obs) for the eye-test, and the dimensional time axis (1, N_obs).
     """
+    # V2 on the driven bench branch (spec §3.3), on the SI values as given and before any conversion,
+    # lock-in or summary statistic: a zero amplitude or frequency is the passive branch's job, not a
+    # drive (0 Hz used to reach the lock-in), and the phase may be any finite angle. A drive value that
+    # is absent altogether is refused by the loop below, under the same field.
+    for name, rule in (("amp", require_positive), ("freq", require_positive), ("phase", require_finite)):
+        if name in cfg.force_params_dict and name in forcing_params_si:
+            rule(_DRIVE_FIELD[name], forcing_params_si[name])
     dtype = cfg.hw.dtype
 
     # Unit conversions: SI -> cell file units.
@@ -207,6 +214,9 @@ def build_experiment_obs_chi(
     :param F0_si: physical drive amplitude used (SI force, N); converted to cell force units.
     :return: (obs_stats, obs_data=X_spont as (1,N), t_dim in seconds).
     """
+    # The physical drive amplitude, refused before anything is computed from it (spec §3.3): a blank box
+    # arrived as 0.0 and divided every lock-in by zero, inside the worker.
+    F0_si = require_positive("chi_f0_si", F0_si)
     dtype = cfg.hw.dtype
     s_to_cell = cfg.get_unit_conversion_factor("s")
     T_obs = T_obs_s * s_to_cell

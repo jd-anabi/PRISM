@@ -746,7 +746,9 @@ def test_build_posterior_auto_persists_and_returns_the_loaded_wrapper(store, mon
     assert m.body["transform"]["V"] is None and m.body["transform"]["param_keys"][-1] in cfg.rescale_params
     assert m.body["training"]["hidden_features"] == 8 and m.body["training"]["best_validation_loss"] == 0.6
     assert m.config["num_runs"] == 2 and m.fingerprints["gmm"] == lp.fingerprint
-    assert m.config["fisher_m"] == config.REPARAM_FISHER_M, "an unpassed fisher_m must record the value used"
+    # V7: an unrotated run ran no Fisher, so it records no Fisher settings -- not defaults it never used
+    assert (m.config["fisher_m"], m.config["fisher_dz"], m.config["fisher_points"]) == (None, None, None), \
+        m.config
     assert set(m.payloads) == {"posterior.pt", "loss.npz"} and m.figures == ["figures/training_loss.png"]
     assert seen == ["Training loss"]
     back = orchestrator.build_posterior(cfg, lp, out.id, False)
@@ -764,6 +766,7 @@ def test_build_posterior_auto_persists_and_returns_the_loaded_wrapper(store, mon
                                         hidden_features=8, num_transforms=1, stop_after_epochs=1)
     m2 = store.get("posterior", out2.id)
     assert m2.body["transform"]["fisher_eigenvalues"][0] == 13.0
+    assert m2.config["fisher_m"] == config.REPARAM_FISHER_M, "a rotated run records what its Fisher ran with"
 
 
 def test_a_torn_posterior_write_at_the_stage_leaves_no_half_artifact(store, monkeypatch):
@@ -866,10 +869,14 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
     assert [r["role"] for r in recs] == ["spont", "forced"] and all(len(r["sha256"]) == 64 for r in recs)
     assert obs.width == sim.width and obs.manifest.body["source"]["kind"] == "experimental"
     assert obs.manifest.body["forcing_vals"]["freq"] > 0
-    with pytest.raises(FileNotFoundError):
+    # A Refusal naming the passive recording's field (spec §3.3), not a FileNotFoundError: the front
+    # ends show it as "check your inputs" and name the control, not as a crash.
+    with pytest.raises(Refusal) as e:
         orchestrator.build_experiment_observation(
             cfg, RecordingSet(spont=str(tmp_path / "nope.npy"), forced=((str(forced), None),), T_obs_s=T_obs_s,
                               forcing_params_si=si), fig_sink=_close)
+    assert e.value.field == "recording_spont" and "nope.npy" in str(e.value), str(e.value)
+    assert not isinstance(e.value, FileNotFoundError)
 
 
 def test_chi_mode_refuses_a_forced_recording_without_its_drive_frequency(store, tmp_path, monkeypatch):
@@ -1219,9 +1226,10 @@ def test_resume_is_validated_and_refused_before_any_spend(store, monkeypatch):
     spent = []
     monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: spent.append("train"))
     monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("sim"))
-    with pytest.raises(ValueError, match="resume"):
+    with pytest.raises(Refusal, match="resume policy") as e:
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
                                      checkpoint_every=1, resume="yes please")
+    assert e.value.field == "resume" and "'yes please'" in str(e.value), str(e.value)
     with pytest.raises(Refusal, match="checkpointing on") as e:
         orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
                                      checkpoint_every=0, resume="require")
@@ -1238,9 +1246,11 @@ def test_resume_is_validated_and_refused_before_any_spend(store, monkeypatch):
            ("checkpoint_every", {"checkpoint_every": -1})]
     for knob, kw in bad:
         kw = {"checkpoint_every": 1, **kw}
-        with pytest.raises(ValueError) as e:
+        with pytest.raises(Refusal) as e:
             orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4, **kw)
-        assert knob in str(e.value), (kw, str(e.value))
+        # The sentence names the setting in neutral words ("The maximum number of epochs ..."), never by
+        # its keyword; the field key is what names the knob.
+        assert e.value.field == knob, (kw, e.value.field, str(e.value))
         assert spent == [], f"{kw} was refused only after the spend: {spent}"
 
 
@@ -1258,14 +1268,17 @@ def test_flow_knobs_are_range_checked_only_when_the_call_trains(store, monkeypat
     monkeypatch.setattr(orchestrator.pipeline, "train_nn", lambda *a, **k: spent.append("train"))
     monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("sim"))
     bad = {"learning_rate": -0.001, "max_num_epochs": 0, "hidden_features": 0, "num_transforms": 0,
-           "stop_after_epochs": 0}
-    loaded = orchestrator.build_posterior(cfg, lp, post.id, False, **bad)
+           "stop_after_epochs": 0, "fisher_m": 0, "fisher_dz": -0.1, "fisher_points": 0}
+    # Piece 3: the budget and the cadence join the exemption (spec §3.4, "the load path"). A load reads
+    # neither, and the Posterior tab forwards its budget boxes on a load as well.
+    budget = {"num_runs": 0, "run_size_cap": -1, "checkpoint_every": -1}
+    loaded = orchestrator.build_posterior(cfg, lp, post.id, False, **bad, **budget)
     assert loaded.id == post.id and spent == []
-    for knob, value in bad.items():
-        with pytest.raises(ValueError) as e:
-            orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4,
-                                         checkpoint_every=1, **{knob: value})
-        assert knob in str(e.value), str(e.value)
+    for knob, value in {**bad, **budget}.items():
+        kw = {"num_runs": 2, "run_size_cap": 4, "checkpoint_every": 1, knob: value}
+        with pytest.raises(Refusal) as e:
+            orchestrator.build_posterior(cfg, lp, None, True, **kw)
+        assert e.value.field == knob, (knob, e.value.field, str(e.value))
     assert spent == []
 
 
@@ -1665,9 +1678,9 @@ def test_zero_posterior_samples_or_calibration_points_are_refused_before_any_spe
                                                                n_samples=0)),
     ]
     for knob, call in legs:
-        with pytest.raises(ValueError) as e:
+        with pytest.raises(Refusal) as e:
             call()
-        assert knob in str(e.value) and "at least 1" in str(e.value), str(e.value)
+        assert e.value.field == knob and "at least 1" in str(e.value), (knob, e.value.field, str(e.value))
         assert made == [], f"the {knob}=0 refusal came after the spend: {made}"
     assert store.list("calibration") == [] and store.list("observation") == []
 
@@ -2142,6 +2155,23 @@ _UNTOUCHED_LEGS = {
     "channel_ablation": _leg_channel_ablation,
 }
 
+# Task 7's own deferred finding (flagged at dispatch): the "refusal" leg below used to accept any
+# ValueError, so a leg's refusal could silently regress to a different one and the pin would not
+# notice. Named here only for the entries THIS task turned into a Refusal with a field -- the pre-spend
+# numeric knobs at build_prior, build_posterior, validate_calibration and tsnpe_round, and the shared
+# _refuse_no_samples every n_samples=0 leg (infer_and_visualize, simulated_inference,
+# experimental_inference) now raises through. Every other leg's refusal is untouched by this task and
+# keeps the bare ValueError check.
+_REFUSAL_FIELDS = {
+    "build_prior": "num_iterations",
+    "build_posterior": "num_runs",
+    "validate_calibration": "n_cal",
+    "infer_and_visualize": "n_samples",
+    "simulated_inference": "n_samples",
+    "experimental_inference": "n_samples",
+    "tsnpe_round": "n_directions",
+}
+
 
 def test_the_fifteen_public_entries_carry_public_entry_and_nothing_else_does():
     """V1 (spec §2.2). The private copy is kept by ONE decorator on exactly fifteen functions: the ten
@@ -2196,8 +2226,12 @@ def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, mon
     if case == "success":
         assert call() is not None
     elif case == "refusal":
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError) as e:
             call()
+        if entry in _REFUSAL_FIELDS:
+            # Tightened by Task 7 (a deferred Task 3 finding): this leg's refusal is now a Refusal
+            # carrying the field its own rule names, not just some ValueError or other.
+            assert e.value.field == _REFUSAL_FIELDS[entry], (entry, e.value.field, str(e.value))
     else:
         with pytest.raises(_Injected):
             call()
@@ -2285,3 +2319,376 @@ def test_the_experimental_builders_refuse_as_refusals_before_any_lock_in():
     with pytest.raises(Refusal, match="forced recordings") as e:
         obsm.build_experiment_obs_chi(chi_cfg, torch.randn(512), [], 512 * cfg.dt_exp / s_to_cell, 1e-12)
     assert e.value.field == "recording_probe"
+
+
+def test_fisher_settings_are_recorded_only_when_the_rotation_ran(store, monkeypatch):
+    """V7 (spec §6.2). A posterior's record names the Fisher ensemble, step and operating-point count
+    only when the rotation RAN in this process; otherwise all three are None. Until piece 3 the
+    manifest re-resolved them from the arguments at the write, so an unrotated run, a resumed run (which
+    reuses the checkpoint's V and never calls the Fisher) and a truncated round (which reuses the
+    region's V, guardrail 7) all recorded the settings of a Fisher nobody computed -- provenance that
+    reads as a measurement and is not one.
+
+    Also pins that the resolution moved UP: build_posterior resolves the three at entry and hands the
+    Fisher the numbers, so decorrelate's `m or REPARAM_FISHER_M` can no longer turn a 0 into the
+    default out of sight, and what is recorded is exactly what the Fisher was called with."""
+    from core import orchestrator
+    from core.artifacts.identity import SimulationIdentity
+    from core.SBI import reparam, truncate
+    from core.SBI import training_checkpoint as tc
+    from core.SBI.run_guards import _log_params_for
+    cfg = _nad_cfg()
+    cfg.hw.batch_size = 4
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    P = len(cfg.params_dict) + len(cfg.rescale_params)
+
+    def fake_train_nn(plan, **kw):
+        dp = _FakeDP()
+        dp.prior = kw["prior"]                    # the SBIPriorWrapper build_posterior passed in
+        return dp, {"training_loss": [1.0], "validation_loss": [1.0], "best_validation_loss": 1.0,
+                    "epochs_trained": 1, "stop_after_epochs": 1}
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data",
+                        lambda plan, **kw: (torch.zeros(8, 50), torch.zeros(8, 13)))
+    budget = dict(num_runs=2, run_size_cap=4, hidden_features=8, num_transforms=1, stop_after_epochs=1,
+                  fig_sink=_close)
+
+    def recorded(out):
+        m = store.get("posterior", out.id)
+        return (m.config["fisher_m"], m.config["fisher_dz"], m.config["fisher_points"]), m
+
+    # (a) the rotation RAN: the settings it ran with are recorded, passed or defaulted, and the Fisher
+    # itself received the resolved numbers -- never a None for decorrelate to re-resolve
+    calls = []
+    Q, _ = torch.linalg.qr(torch.randn(P, P))
+
+    def fisher(*a, **k):
+        calls.append((k["m"], k["dz"], k["n_points"]))
+        return Q, torch.arange(P, 0, -1).float()
+
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", fisher)
+    cfg.reparam_rotate = True
+    got, _m = recorded(orchestrator.build_posterior(cfg, lp, None, True, checkpoint_every=0, fisher_m=7,
+                                                    fisher_dz=0.3, fisher_points=2, **budget))
+    assert calls == [(7, 0.3, 2)] and got == (7, 0.3, 2), (calls, got)
+    defaults = (config.REPARAM_FISHER_M, config.REPARAM_FISHER_DZ, config.REPARAM_FISHER_POINTS)
+    got, _m = recorded(orchestrator.build_posterior(cfg, lp, None, True, checkpoint_every=0, **budget))
+    assert calls[-1] == defaults, f"the Fisher must receive the resolved settings, not None: {calls[-1]}"
+    assert got == defaults, got
+
+    # (b) UNROTATED: no Fisher, so nothing recorded -- even with a Fisher knob passed
+    cfg.reparam_rotate = False
+    got, m = recorded(orchestrator.build_posterior(cfg, lp, None, True, checkpoint_every=0, fisher_m=7,
+                                                   **budget))
+    assert got == (None, None, None) and m.body["transform"]["fisher_eigenvalues"] is None, (got, m.config)
+
+    # (c) RESUMED: a committed cache of this run's own identity stores V, so the stage reuses it and
+    # never calls the Fisher; the checkpoint header carries no m, dz or points to record instead
+    cfg.reparam_rotate = True
+
+    def fisher_must_not_run(*a, **k):
+        raise AssertionError("a resumed run recomputed the Fisher")
+
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", fisher_must_not_run)
+    ident = SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
+    d = tc.resolve_dir(ident, store.kind_dir("simulation"))
+    tc.create(d, ident, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2), inits=torch.zeros(4, 3),
+              V=Q, probe=torch.zeros(0), run_size=4, n_runs=2)
+    torch.save({"batches_done": 1, "complete": False, "rng": None}, d / "state.pt")
+    got, m = recorded(orchestrator.build_posterior(cfg, lp, None, True, checkpoint_every=1, fisher_m=7,
+                                                   **budget))
+    assert m.body["training"]["resumed_from_batch"] == 1 and m.parents["simulation"] == d.name, m.body
+    assert got == (None, None, None) and m.body["transform"]["fisher_eigenvalues"] is None, (got, m.config)
+
+    # (d) TRUNCATED: the round trains in the region's basis and the Fisher is never reached
+    cfg.reparam_rotate = False
+    T = reparam.build_inferred_bijection(cfg, log_params=_log_params_for(cfg))
+    region = truncate.TruncationRegion([0], [-50.0], [50.0], n_latent=P, V=None,
+                                       probe=tc.bijection_probe(T, P, device=cfg.hw.device),
+                                       x_obs_digest="d" * 16)
+    got, m = recorded(orchestrator.build_posterior(cfg, lp, None, True, checkpoint_every=0, truncation=region,
+                                                   fisher_m=7, **budget))
+    assert m.body["amortized"] is False, m.body["amortized"]
+    assert got == (None, None, None) and m.body["transform"]["fisher_eigenvalues"] is None, (got, m.config)
+    assert len(calls) == 2, "only the two rotated fresh runs may have computed a Fisher"
+
+
+def test_cal_n_scales_and_the_fisher_knobs_are_refused_not_clamped(store, monkeypatch):
+    """Spec §3.3: the calibration operating-point count and the Fisher rotation's three knobs are
+    REFUSED at stage entry, never clamped or defaulted below it. Each was a silent substitution:
+    gen_cal_data clamped cal_n_scales to max(1, ...), and that count is t_scale's effective sample size
+    (trap X5), so a 0 ran a different measurement than the one asked for; decorrelate's `m or
+    REPARAM_FISHER_M` and `n_points or ...` turned a 0 into the default, and a negative dz went straight
+    into the central difference; construct_prior's max(2, min_cluster_size) turned a 1 into a 2, and
+    that count decides how many modes the prior has. Every refusal lands before the draw, the Fisher
+    or the sweep it protects, with the field key the front ends map to their control."""
+    from types import SimpleNamespace
+    from core import orchestrator
+    from core.SBI import analysis
+
+    def reached(what):
+        def _stub(*a, **k):
+            raise AssertionError(f"{what} reached")
+        return _stub
+
+    # validate_calibration: before the calibration prior is even built, let alone the set drawn
+    monkeypatch.setattr(orchestrator, "_calibration_prior", reached("the calibration draw"))
+    monkeypatch.setattr(orchestrator, "_draw_calibration_set", reached("the calibration draw"))
+    prior = SimpleNamespace(prior=None, force_prior=None, id="prior", fingerprint=None)
+    for bad in (0, -3):
+        with pytest.raises(Refusal) as e:
+            orchestrator.validate_calibration(_forced_cfg(), _sim_post(), prior, store=store, n_cal=10,
+                                              cal_n_scales=bad)
+        assert e.value.field == "cal_n_scales", (bad, e.value.field, str(e.value))
+        assert f"must be at least 1; got {bad} (default {config.CAL_N_SCALES})" in str(e.value), str(e.value)
+    assert store.list("calibration") == []
+
+    # ... and gen_cal_data itself, for the callers that do not go through validate_calibration
+    # (core.diagnostics.sbc_repeats): refused before the first calibration batch is simulated
+    monkeypatch.setattr(analysis.pipeline, "gen_training_data", reached("the calibration simulation"))
+    with pytest.raises(Refusal) as e:
+        analysis.gen_cal_data(model="NADROWSKI", prior=None, forcing_prior=None, t=torch.zeros(4),
+                              steady_idx=0, dt_nd_min=1.0, n_cal=10, nd_dim=1, forcing_idx={},
+                              rescale_idx={}, cal_n_scales=0)
+    assert e.value.field == "cal_n_scales", str(e.value)
+
+    # build_posterior: the Fisher knobs, refused before the Fisher (which would run: rotation ON)
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = True
+    cfg.hw.batch_size = 4
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", reached("the Fisher"))
+    monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", reached("the training simulation"))
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", reached("training"))
+    for knob, value, words in (("fisher_m", 0, "must be at least 1; got 0"),
+                               ("fisher_m", -4, "must be at least 1; got -4"),
+                               ("fisher_dz", 0.0, "must be greater than 0; got 0"),
+                               ("fisher_dz", -0.1, "must be greater than 0; got -0.1"),
+                               ("fisher_dz", float("nan"), "must be greater than 0; got nan"),
+                               ("fisher_points", 0, "must be at least 1; got 0")):
+        with pytest.raises(Refusal) as e:
+            orchestrator.build_posterior(cfg, lp, None, True, num_runs=2, run_size_cap=4, checkpoint_every=0,
+                                         **{knob: value})
+        assert e.value.field == knob and words in str(e.value), (knob, value, str(e.value))
+    assert store.list("posterior") == []
+
+    # build_prior: min_cluster_size=1 is refused before the sweep, not clamped up to 2
+    monkeypatch.setattr(orchestrator.pipeline, "gen_prior", reached("the stability sweep"))
+    with pytest.raises(Refusal) as e:
+        orchestrator.build_prior(cfg, None, True, fig_sink=_close, min_cluster_size=1)
+    assert e.value.field == "min_cluster_size", str(e.value)
+    assert "must be at least 2; got 1 (default 50)" in str(e.value), str(e.value)
+
+
+def test_build_prior_resolves_its_knobs_refuses_them_before_the_sweep_and_records_what_it_used(store, monkeypatch):
+    """Spec §3.4, build_prior. The seven sweep and clustering knobs are resolved AT THE STAGE (None ->
+    the config constant) and refused there, before cfg.t is sliced and the ~9-minute sweep starts. Only
+    num_iterations was checked before; max_sets, walk_step, min_cluster_size and min_samples travelled
+    as None into gen_prior, which resolved and clamped them out of sight while the prior's manifest
+    recorded None. So: every out-of-rule value is refused with its field; gen_prior receives numbers,
+    never None; the manifest's knobs are the numbers the sweep used; and a LOAD, which reads none of the
+    seven, is never refused over them (spec §1.2, "a stage with a load branch")."""
+    from core import orchestrator
+    cfg = _nad_cfg()
+    swept = []
+
+    def stub_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds, **kw):
+        swept.append(dict(kw, global_batch_size=global_batch_size))
+        return _gmm_in_box([float(b[0]) for b in prior_bounds], [float(b[1]) for b in prior_bounds],
+                           kw.get("log_mask"))
+
+    monkeypatch.setattr(orchestrator.pipeline, "gen_prior", stub_gen_prior)
+
+    # (a) refused, each with its field and its rule, before the sweep and before any write
+    for knob, value, words in (("num_iterations", 0, "must be at least 1; got 0"),
+                               ("sweep_batch", -1, "must be at least 0; got -1"),
+                               ("max_sets", 0, "must be at least 1; got 0"),
+                               ("walk_step", 0.0, "must be greater than 0; got 0"),
+                               ("walk_step", -0.01, "must be greater than 0; got -0.01"),
+                               ("stability_units", float("nan"), "must be greater than 0; got nan"),
+                               ("min_samples", 0, "must be at least 1; got 0")):
+        with pytest.raises(Refusal) as e:
+            orchestrator.build_prior(cfg, None, True, fig_sink=_close, **{knob: value})
+        assert e.value.field == knob and words in str(e.value), (knob, value, str(e.value))
+    assert swept == [] and store.list("prior") == []
+
+    # (b) nothing passed but the round count: gen_prior gets the config constants as numbers, and the
+    # manifest records those same numbers (sweep_batch 0 = follow the hardware batch, recorded resolved)
+    lp = orchestrator.build_prior(cfg, None, True, fig_sink=_close, num_iterations=1)
+    kw = swept[-1]
+    assert (kw["n_max"], kw["step"], kw["min_cluster_size"], kw["min_samples"]) == (
+        config.PRIOR_SWEEP_MAX_SETS, config.PRIOR_SWEEP_STEP, config.PRIOR_CLUSTER_MIN_SIZE,
+        config.PRIOR_CLUSTER_MIN_SAMPLES), kw
+    assert kw["num_iterations"] == 1 and kw["global_batch_size"] == cfg.hw.batch_size, kw
+    knobs = lp.manifest.config
+    assert (knobs["max_sets"], knobs["walk_step"], knobs["stability_units"], knobs["min_cluster_size"],
+            knobs["min_samples"], knobs["sweep_batch"]) == (
+        config.PRIOR_SWEEP_MAX_SETS, config.PRIOR_SWEEP_STEP, config.STABILITY_SWEEP_ND_UNITS,
+        config.PRIOR_CLUSTER_MIN_SIZE, config.PRIOR_CLUSTER_MIN_SAMPLES, cfg.hw.batch_size), knobs
+    assert lp.manifest.body["sweep"]["min_cluster_size"] == config.PRIOR_CLUSTER_MIN_SIZE
+
+    # (c) passed values arrive as given, at the rules' boundaries: a 2-point cluster floor, one sample
+    orchestrator.build_prior(cfg, None, True, fig_sink=_close, num_iterations=1, sweep_batch=6, max_sets=40,
+                             walk_step=0.02, stability_units=250, min_cluster_size=2, min_samples=1)
+    kw = swept[-1]
+    assert (kw["global_batch_size"], kw["n_max"], kw["step"], kw["min_cluster_size"], kw["min_samples"]) == \
+        (6, 40, 0.02, 2, 1), kw
+
+    # (d) a LOAD reads none of the seven, so out-of-rule values do not stop it and nothing is swept
+    n = len(swept)
+    again = orchestrator.build_prior(cfg, lp.id, False, fig_sink=_close, min_cluster_size=1, max_sets=0,
+                                     walk_step=-1.0, num_iterations=0)
+    assert again.id == lp.id and len(swept) == n
+
+
+def test_the_compositions_refuse_t_obs_at_or_below_zero_before_any_spend(store, monkeypatch):
+    """V2 at the compositions (spec §3.3, §3.4). A blank observation length reached the simulated path
+    as 0.0 from the window, simulated, WROTE the observation and then died in math.log(0.0) inside the
+    conditioning row -- after the spend, with an orphan left behind; the experimental path had no
+    check at all. Both compositions now refuse a length at or below 0, not a number, or blank, with
+    the field key, in the order the pins rely on -- the sample count, then the length, then the name,
+    then the cell file -- and before any cell is parsed, any recording is built or anything simulated.
+    Outside the training range stays a judgement: the experimental path now gives the same
+    PreflightWarning the simulated one always did."""
+    from core import cli, orchestrator
+    from core.config import CELL_PATH, T_MIN_EXP_S
+    from core.SBI.observations import RecordingSet
+    cell = str(CELL_PATH / "nadrowski" / "master_weak.txt")
+    spent = []
+    # cfg BEFORE the monkeypatches: _forced_cfg() calls the real cli.load_and_validate_gt to install its
+    # own ground truth, and that setup call must not count as spend from the compositions under test.
+    cfg = _forced_cfg()
+    monkeypatch.setattr(cli, "load_and_validate_gt", lambda c, p: spent.append("parse") or [])
+    monkeypatch.setattr(orchestrator, "generate_observations", lambda c, **k: spent.append("sim") or "OBS")
+    monkeypatch.setattr(orchestrator, "build_experiment_observation",
+                        lambda c, r, **k: spent.append("exp") or "OBS")
+    monkeypatch.setattr(orchestrator, "infer_and_visualize", lambda *a, **k: spent.append("inf") or "INF")
+
+    def sim(T_obs_s, **kw):
+        return orchestrator.simulated_inference(cfg, _sim_post(), T_obs_s, store=store, **{"cell": cell, **kw})
+
+    def exp(T_obs_s, **kw):
+        return orchestrator.experimental_inference(
+            cfg, _sim_post(), RecordingSet(spont="passive.npy", T_obs_s=T_obs_s), store=store, **kw)
+
+    # (a) at or below zero, not a number, or blank: refused on both paths, naming the length
+    for bad in (0.0, -2.5, float("nan"), None):
+        for run in (sim, exp):
+            with pytest.raises(Refusal) as e:
+                run(bad)
+            assert e.value.field == "t_obs", (run.__name__, bad, e.value.field, str(e.value))
+            assert ("is blank" if bad is None else "must be greater than 0") in str(e.value), str(e.value)
+    assert spent == [], f"a refused length reached the spend: {spent}"
+
+    # (b) the order: the sample count before the length, the length before the name, the name before
+    # the cell file
+    with store.create("inference", cfg, name="taken") as w:
+        w.body = {"results": {}}
+    for run in (sim, exp):
+        with pytest.raises(Refusal) as e:
+            run(0.0, n_samples=0, name="taken")
+        assert e.value.field == "n_samples", str(e.value)
+        with pytest.raises(Refusal) as e:
+            run(0.0, name="taken")
+        assert e.value.field == "t_obs", str(e.value)
+        with pytest.raises(st.StoreError) as e:
+            run(1.0, name="taken")
+        assert e.value.field == "name", str(e.value)
+    missing = cell + ".nope"
+    with pytest.raises(st.StoreError):
+        sim(1.0, name="taken", cell=missing)
+    for bad_cell, words in ((missing, "was not found"), ("", "is blank")):
+        with pytest.raises(Refusal) as e:
+            sim(1.0, cell=bad_cell)
+        assert e.value.field == "cell" and words in str(e.value), str(e.value)
+    assert spent == [], f"a refusal came after the spend: {spent}"
+
+    # (c) positive but below the training range: a judgement on BOTH paths, and the run proceeds
+    for run, spend in ((sim, ["parse", "sim", "inf"]), (exp, ["exp", "inf"])):
+        spent.clear()
+        with pytest.warns(orchestrator.PreflightWarning, match="below the training range minimum"):
+            run(T_MIN_EXP_S / 2)
+        assert spent == spend, (run.__name__, spent)
+
+
+def test_a_missing_or_blank_recording_is_refused_with_its_roles_field_before_anything_is_read(store, tmp_path,
+                                                                                               monkeypatch):
+    """Spec §3.3: every recording is "given, and the file exists", refused as a Refusal whose field is the
+    recording's ROLE -- the passive recording, forced mode's one driven recording, or a chi probe's
+    recording -- so the window's yellow box can say which box to fix and the tool which flag. It was a
+    FileNotFoundError ("the spont recording was not found: ''") that both front ends showed as a crash.
+    Blank and missing are told apart, and both land before any recording is read or any observation is
+    written."""
+    import numpy as np
+    from core import orchestrator
+    from core.Helpers import file_manager
+    from core.SBI.observations import RecordingSet
+    read = []
+
+    def _record_load(path, dtype=None):
+        read.append(str(path))
+        return torch.zeros(200)
+
+    monkeypatch.setattr(file_manager, "load_experimental_data", _record_load)
+    present = tmp_path / "present.npy"
+    np.save(present, np.zeros(200, dtype=np.float32))
+    missing = str(tmp_path / "missing.npy")
+    forced_cfg, chi_cfg = _nad_cfg(), _nad_cfg(chi_mode=True)      # master.txt declares a drive: forced
+    si = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in forced_cfg.force_params_dict}
+    legs = (
+        (forced_cfg, dict(spont=missing, forced=((str(present), None),), forcing_params_si=si),
+         "recording_spont", "was not found"),
+        (forced_cfg, dict(spont="", forced=((str(present), None),), forcing_params_si=si),
+         "recording_spont", "is blank"),
+        (forced_cfg, dict(spont=str(present), forced=((missing, None),), forcing_params_si=si),
+         "recording_forced", "was not found"),
+        (chi_cfg, dict(spont=str(present), forced=((str(present), 12.5), (missing, 25.0)), F0_si=1.0),
+         "recording_probe", "was not found"),
+    )
+    for cfg, rec, field, words in legs:
+        with pytest.raises(Refusal) as e:
+            orchestrator.build_experiment_observation(cfg, RecordingSet(T_obs_s=1.0, **rec), fig_sink=_close)
+        assert e.value.field == field and words in str(e.value), (field, str(e.value))
+        assert words == "is blank" or "missing.npy" in str(e.value), str(e.value)
+        assert read == [], f"a recording was read before the refusal: {read}"
+    assert not list(store.kind_dir("observation").glob("*")), "a refused set wrote an observation"
+
+
+def test_the_driven_builder_refuses_a_zero_drive_and_the_chi_builder_a_zero_amplitude(monkeypatch):
+    """Spec §3.3, the driven bench branch: the drive amplitude and frequency are "finite, > 0" (a zero
+    drive is the passive branch's job, and 0 Hz used to reach the lock-in), the phase is "finite", and
+    the chi builder's physical amplitude is "finite, > 0" (a blank box arrived as 0.0 and divided every
+    lock-in by zero, inside the worker). Refused on the SI values as given, before any unit conversion,
+    peak search, lock-in or summary statistic, each with its field key. A drive value that is absent
+    altogether is Task 6's refusal (test_the_experimental_builders_refuse_as_refusals_before_any_lock_in)."""
+    from core.SBI import observations as obsm
+
+    def reached(what):
+        def _stub(*a, **k):
+            raise AssertionError(f"{what} reached")
+        return _stub
+
+    monkeypatch.setattr(obsm.pipeline, "gen_stats", reached("the summary statistics"))
+    monkeypatch.setattr(obsm.chi, "peak_freq", reached("the passive peak search"))
+    cfg = _nad_cfg()
+    s_to_cell = cfg.get_unit_conversion_factor("s")
+    T_obs_s = 8 * cfg.dt_exp / s_to_cell                         # exactly 8 frames: no length warning
+    good = {n: (5.0 if n == "freq" else 1e-12 if n == "amp" else 0.0) for n in cfg.force_params_dict}
+    assert {"amp", "freq", "phase"} <= set(good), "master.txt's drive is amp/freq/phase"
+    for name, value, field, words in (("amp", 0.0, "drive_amplitude", "must be greater than 0; got 0"),
+                                      ("amp", -1e-12, "drive_amplitude", "must be greater than 0; got -1e-12"),
+                                      ("amp", None, "drive_amplitude", "is blank"),
+                                      ("freq", 0.0, "drive_frequency", "must be greater than 0; got 0"),
+                                      ("freq", float("inf"), "drive_frequency", "must be greater than 0; got inf"),
+                                      ("phase", float("nan"), "drive_phase", "must be a finite number; got nan"),
+                                      ("phase", None, "drive_phase", "is blank")):
+        with pytest.raises(Refusal) as e:
+            obsm.build_experiment_obs(cfg, torch.zeros(8), torch.zeros(8), T_obs_s, dict(good, **{name: value}))
+        assert e.value.field == field and words in str(e.value), (name, value, str(e.value))
+    chi_cfg = _nad_cfg(chi_mode=True)
+    for F0, words in ((0.0, "must be greater than 0; got 0"), (-1.0, "must be greater than 0; got -1"),
+                      (None, "is blank")):
+        with pytest.raises(Refusal) as e:
+            obsm.build_experiment_obs_chi(chi_cfg, torch.zeros(8), [(torch.zeros(8), 5.0)], T_obs_s, F0)
+        assert e.value.field == "chi_f0_si" and words in str(e.value), (F0, str(e.value))

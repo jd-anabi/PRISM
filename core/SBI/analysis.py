@@ -6,6 +6,7 @@ from torch.distributions.transforms import Transform
 
 from core.SBI import pipeline
 from core.config import CAL_N_SCALES, CAL_RUN_SIZE, CAL_RUN_SIZE_MAX
+from core.refusals import require_at_least
 from core.SBI.reparam import transform_device
 
 # === POSTERIOR PREDICTIVE CHECK ===
@@ -156,7 +157,9 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
     # statistical power essentially free.
     # Passed, never read from the module: analysis.py does `from core.config import CAL_N_SCALES`,
     # which SNAPSHOTS it at import, so a caller assigning to config.CAL_N_SCALES changes nothing.
-    n_scales = CAL_N_SCALES if cal_n_scales is None else max(1, int(cal_n_scales))
+    # REFUSED below 1, no longer clamped to 1 (spec §3.3): validate_calibration refuses first, and this
+    # catches every other caller (core.diagnostics.sbc_repeats) before the first simulation.
+    n_scales = CAL_N_SCALES if cal_n_scales is None else require_at_least("cal_n_scales", cal_n_scales, 1)
     cal_run_size = min(n_cal, max(CAL_RUN_SIZE,
                                   min(CAL_RUN_SIZE_MAX, math.ceil(n_cal / max(1, n_scales)))))
     cal_run_size = max(1, cal_run_size)
