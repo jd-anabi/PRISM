@@ -167,14 +167,19 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
             f"observation {payload.posterior.x_obs_digest}, and its manifest records so.", "warning")
         self._screen.refresh_gates()
 
-    def _budget_checkpoint(self, cfg, width: int, n_runs: int) -> str:
+    def _budget_checkpoint(self, preview) -> str:
         """The mixin's line is computed from the AMORTIZED identity, and on this tab it used to say
         "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely" whenever the budget
         matched the parent's -- and that is what a round at that budget did before the region became
         part of the identity (D3). The region is drawn when the round starts, so nothing here can be
-        resolved in advance; the honest line is the rule."""
-        if not config.TRAINING_CHECKPOINT_EVERY:
-            return super()._budget_checkpoint(cfg, width, n_runs)
+        resolved in advance; the honest line is the rule.
+
+        Whether there is a checkpoint AT ALL is the preview's answer (``preview.checkpoint``), which
+        reads the training stage's own binding of the cadence. This used to read
+        config.TRAINING_CHECKPOINT_EVERY -- the live module copy, which a round never reads -- so the
+        line could promise a checkpoint the round would not write, or deny one it would."""
+        if preview.checkpoint == "off":
+            return super()._budget_checkpoint(preview)
         return ("A TSNPE round is checkpointed under its OWN identity: the truncation region is part "
                 "of it and is drawn when the round starts, so it never resumes the amortized checkpoint "
                 "at these settings. Re-running with the SAME posterior, observation, HPD level, "

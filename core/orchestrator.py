@@ -10,6 +10,7 @@ import logging
 import math
 import time
 import warnings
+from dataclasses import dataclass
 
 import torch
 import numpy as np
@@ -389,8 +390,14 @@ def _training_run_size(cfg: SimConfig, size_cap: int) -> int:
     against the stage's `min(hw, cap)` -- and with a cap above the hardware batch it asked about the
     wrong cache. Pure; the announcements stay in build_posterior.
     """
-    run_size = cfg.hw.batch_size
-    return min(size_cap, run_size) if size_cap else run_size
+    return _capped_run_size(cfg.hw.batch_size, size_cap)
+
+
+def _capped_run_size(hw_batch: int, size_cap: int) -> int:
+    """_training_run_size on the hardware batch alone. Split out so training_preview resolves the width
+    with the SAME expression before any config exists: the budget group is on screen at launch, when
+    there is a hardware batch but no config to read it from."""
+    return min(size_cap, hw_batch) if size_cap else hw_batch
 
 
 def fresh_run_near_misses(cfg: SimConfig, prior, *, num_runs=None, run_size_cap=None, truncation=None,
@@ -415,6 +422,125 @@ def fresh_run_near_misses(cfg: SimConfig, prior, *, num_runs=None, run_size_cap=
     if (training_checkpoint.peek(training_checkpoint.resolve_dir(ident, root)) or {}).get("batches_done"):
         return []                            # this IS a resume; there is nothing to warn about
     return training_checkpoint.near_miss_siblings(ident, root)
+
+
+@dataclass(frozen=True)
+class TrainingPreview:
+    """What a training run at a given budget WOULD do, as build_posterior resolves it: every number the
+    budget group's three lines show, so the lines only format (V6).
+
+    ``width`` / ``hw_batch``: rows per batch after the cap, and the hardware batch it is capped from --
+    always ints, because the hardware always resolves. ``n_fine`` / ``n_vars``: the worst-case geometry
+    the memory estimate assumed; None when that arithmetic failed. ``need_elements`` /
+    ``have_elements``: pipeline's own peak for one batch and the planner's budget; None off CUDA (the
+    planner never splits a batch there) and on a failure, which ``estimate_error`` then names.
+    ``checkpoint``: "off" | "needs_config" | "resume_complete" | "resume_partial" |
+    "new_with_siblings" | "new". ``checkpoint_error`` names a failure to build the identity or read
+    the cache; ``checkpoint`` is then "new" with ``batches_done`` 0 and ``siblings`` "", so a front end
+    reads the error first. ``cadence``: the checkpoint cadence the run would use, 0 = off.
+    ``device_type`` / ``itemsize``: the resolved hardware, for the CUDA-only line and the GiB figure.
+    """
+    n_runs: int
+    width: int
+    hw_batch: int
+    n_fine: int | None
+    n_vars: int | None
+    need_elements: int | None
+    have_elements: int | None
+    estimate_error: str | None
+    checkpoint: str
+    batches_done: int
+    siblings: str
+    cadence: int
+    checkpoint_error: str | None
+    device_type: str
+    itemsize: int
+
+
+def training_preview(cfg, prior, *, num_runs: int, run_size_cap: int, truncation=None,
+                     checkpoint_every=None, store=None, hw=None) -> TrainingPreview:
+    """What build_posterior WOULD do at this budget, for the budget group's three lines. Reads the store
+    and writes nothing; copies nothing (a reader, not a public entry); NEVER RAISES.
+
+    ONE RESOLUTION, THE STAGE'S. The lines used to derive their own answers: the width through a helper
+    of the tab's, the cache directory under the process-default root instead of the store the run
+    writes to, and the cadence from config.TRAINING_CHECKPOINT_EVERY -- the LIVE module copy, where the
+    stage reads this module's import-time binding. Each was a way for the line to say one thing and the
+    run to do another. Here, as build_posterior and fresh_run_near_misses resolve them: the width is
+    _capped_run_size (what _training_run_size returns); the identity is training_identity; the
+    directory is resolve_dir under the given or default store's kind_dir("simulation"), and the state
+    and the siblings are read under that same root; the cadence is TRAINING_CHECKPOINT_EVERY as bound
+    here, or ``checkpoint_every``; the memory figures are pipeline's own peak_sim_elements and
+    sim_memory_budget_elements, with n_vars from _observation_inits (the initial-condition width a
+    training batch is simulated from -- len(cfg.inits_dict) is 0 on a config with no cell).
+
+    INTS ONLY: ``num_runs`` and ``run_size_cap`` are what the boxes hold after their rules passed. The
+    tab does not call this while a box is blank or out of rule.
+
+    THE NO-CONFIG BRANCH IS EXPLICIT, because the budget group is on screen at launch with no config.
+    The hardware is ``cfg.hw``, else ``hw`` (the tab's memoised detect_device()), else detect_device(),
+    so ``width`` and ``hw_batch`` always resolve. With ``cfg is None`` the memory geometry is the
+    hardware defaults (n_fine = N_ND_MAX, 3 state variables, no steady-state cut, one force channel),
+    and ``checkpoint`` is "needs_config" when the config or the prior is None (the prior is part of the
+    identity). Checkpointing off is decided first, before anything is read.
+
+    FAIL-SOFT. A config it cannot read (the gate tests' object() sentinel, a stub) or a planner that
+    raises lands in ``estimate_error``; a failure building the identity, resolving the store, peeking
+    the state or describing the siblings lands in ``checkpoint_error``. A status line that raised
+    would take the whole tab down with it.
+    """
+    hw = getattr(cfg, "hw", None) or hw or config.detect_device()
+    n_runs, size_cap = int(num_runs), int(run_size_cap)
+    width = _capped_run_size(hw.batch_size, size_cap)
+
+    # The memory figures: the worst geometry the Sobol pre-filter admits, at this width, through the
+    # planner's own cost model. Off CUDA _max_sim_batch returns the batch unchanged, so there is nothing
+    # to estimate and the elements stay None.
+    n_fine = n_vars = need = have = estimate_error = None
+    try:
+        if cfg is None:
+            n_fine, n_vars, steady, n_ch = N_ND_MAX, 3, 0, 1
+        else:
+            n_fine = min(N_ND_MAX, int(cfg.t.shape[0]))
+            n_vars = int(_observation_inits(cfg).shape[-1])
+            steady = int(cfg.steady_idx)
+            n_ch = forcing.n_force_channels(cfg.model, cfg.forcing_idx, n_vars)
+        if hw.device.type == "cuda":
+            # var_idx=0 on the training path, so exactly one variable is kept (n_out = 1).
+            need = pipeline.peak_sim_elements(width, n_fine, steady, n_vars, n_ch, 1)
+            have = pipeline.sim_memory_budget_elements(hw.device, hw.dtype)
+    except Exception as e:                   # noqa: BLE001 -- a status line must never raise
+        n_fine = n_vars = need = have = None
+        estimate_error = f"{type(e).__name__}: {e}"
+
+    # The cache, in build_posterior's order: the cadence first (nothing is read when it is off), then
+    # the identity, the directory under the store the run writes to, and its committed state.
+    cadence = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
+    checkpoint, batches_done, siblings, checkpoint_error = "new", 0, "", None
+    if not cadence:
+        checkpoint = "off"
+    elif cfg is None or prior is None:
+        checkpoint = "needs_config"
+    else:
+        try:
+            ident = training_identity(cfg, prior, width, n_runs, truncation=truncation)
+            root = resolve_store(store).kind_dir("simulation")
+            state = training_checkpoint.peek(training_checkpoint.resolve_dir(ident, root)) or {}
+            if state.get("batches_done"):
+                batches_done = int(state["batches_done"])
+                checkpoint = "resume_complete" if state.get("complete") else "resume_partial"
+            else:
+                siblings = training_checkpoint.describe_siblings(ident, root)
+                checkpoint = "new_with_siblings" if siblings else "new"
+        except Exception as e:               # noqa: BLE001 -- a status line must never raise
+            checkpoint, batches_done, siblings = "new", 0, ""
+            checkpoint_error = f"{type(e).__name__}: {e}"
+    return TrainingPreview(n_runs=n_runs, width=width, hw_batch=int(hw.batch_size), n_fine=n_fine,
+                           n_vars=n_vars, need_elements=need, have_elements=have,
+                           estimate_error=estimate_error, checkpoint=checkpoint,
+                           batches_done=batches_done, siblings=siblings, cadence=cadence,
+                           checkpoint_error=checkpoint_error, device_type=hw.device.type,
+                           itemsize=int(hw.dtype.itemsize))
 
 
 def _near_miss_lines(ckpt_dir, near) -> str:

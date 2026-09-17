@@ -56,6 +56,9 @@ def _budget_cfg():
         hw = config.detect_device()
         t = type("T", (), {"shape": (250_000,)})()
         inits_dict = {"x": 0.0, "xa": 0.0, "f": 0.0}
+        # training_preview reads n_vars as orchestrator._observation_inits(cfg).shape[-1], and with
+        # inits_dict set that function returns this tensor.
+        inits_tensor = torch.zeros(1, 3)
         steady_idx = 500
         forcing_idx = {}
         model = "NADROWSKI"
@@ -180,7 +183,7 @@ def test_the_budget_memory_line_reads_pipelines_own_cost_model():
         return
 
     n_fine = min(config.N_ND_MAX, cfg.t.shape[0])
-    need = pipeline.peak_sim_elements(width, n_fine, cfg.steady_idx, len(cfg.inits_dict), 1, 1)
+    need = pipeline.peak_sim_elements(width, n_fine, cfg.steady_idx, cfg.inits_tensor.shape[-1], 1, 1)
     gib = need * cfg.hw.dtype.itemsize / float(1 << 30)
     assert f"{gib:.2f} GiB" in panel.budget_mem.text(), panel.budget_mem.text()
     assert f"{n_fine:,}" in panel.budget_mem.text(), "the line must name the geometry it assumed"
@@ -191,13 +194,37 @@ def test_the_budget_memory_line_reads_pipelines_own_cost_model():
     panel.run_size_cap.setText(str(width // 2))
     assert f"{gib / 2:.2f} GiB" in panel.budget_mem.text(), panel.budget_mem.text()
 
-def test_the_budget_lines_never_raise_on_a_config_they_do_not_understand():
+def test_the_budget_lines_never_raise_on_a_config_they_do_not_understand(monkeypatch):
     """_sync_budget runs from refresh_gates(), so an exception in a STATUS LINE would take down the
-    whole tab. The gate tests set session.cfg to a bare object(); so could any future stub."""
-    _inf, panel = _budget_panel(cfg=object(), prior=object())
+    whole tab. The gate tests set session.cfg to a bare object(); so could any future stub.
+
+    Since piece 3 (V6) the tab no longer swaps such a config for None: it goes into
+    orchestrator.training_preview as it is, so this pins the preview's FAIL-SOFT branch. A config the
+    preview cannot read lands in estimate_error and checkpoint_error, and the lines say "unavailable"
+    with the error. The session's cadence is 0 (tests/conftest.py rebinds orchestrator's copy), which
+    keeps the checkpoint line at "off" and the word "config"; checkpointing is turned on here to reach
+    the identity at all. With no config the checkpoint line still carries the word "config"."""
+    from core import orchestrator
+
+    inf, panel = _budget_panel(cfg=object(), prior=object())
     panel._sync_budget()                                   # must not raise
     assert panel.budget_total.text(), "the total line went blank on an unknown config"
     assert "config" in panel.budget_ckpt.text().lower(), panel.budget_ckpt.text()
+
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 50)
+    panel._sync_budget()                                   # must not raise
+    assert "simulations" in panel.budget_total.text(), panel.budget_total.text()
+    assert panel.budget_ckpt.text().startswith("Checkpoint status unavailable: AttributeError"), \
+        panel.budget_ckpt.text()
+    mem = panel.budget_mem.text()
+    assert "CUDA-only" in mem or mem.startswith("Peak-memory estimate unavailable: AttributeError"), mem
+
+    inf.session.cfg = None
+    panel._sync_budget()                                   # must not raise
+    ckpt = panel.budget_ckpt.text()
+    assert "config" in ckpt.lower() and "needs a config and a prior" in ckpt, ckpt
+    mem = panel.budget_mem.text()
+    assert "CUDA-only" in mem or mem.endswith("(Estimated from hardware defaults until a config is built.)"), mem
 
 def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
     """The mixin used to read value() -- 0 for "" and for a lone "-" mid-typing -- and then
@@ -227,29 +254,161 @@ def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
         panel.budget_total.text()
     assert panel.budget_ckpt.text(), "the checkpoint line must come back once both boxes pass"
 
-def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint():
+def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint(monkeypatch):
     """D3's user-facing face. The TSNPE tab shares the Posterior tab's budget group, whose
     checkpoint line is computed from the AMORTIZED identity -- so at the parent's budget it read
     "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely", which is exactly what a
     round at that budget did before the region became part of the identity. The region is drawn
-    when the round starts, so the tab cannot resolve a directory in advance; it states the rule."""
-    from core import config as _cfg
+    when the round starts, so the tab cannot resolve a directory in advance; it states the rule.
+
+    Whether checkpointing is on at all is the TRAINING STAGE's binding of the cadence
+    (orchestrator.TRAINING_CHECKPOINT_EVERY, read through training_preview), so that is the one this
+    test rebinds -- and config's live copy is set to the OPPOSITE value each time, because the tab used
+    to read that copy and a round never does."""
+    from core import config as _cfg, orchestrator
     inf, _ = _budget_panel(cfg=_budget_cfg(), prior=object())
     panel = inf.tsnpe_panel
-    saved = _cfg.TRAINING_CHECKPOINT_EVERY
-    try:
-        _cfg.TRAINING_CHECKPOINT_EVERY = 50
-        panel._sync_budget()
-        inf.posterior_panel._sync_budget()
-        text = panel.budget_ckpt.text()
-        assert "Resumes" not in text and "OWN identity" in text, text
-        assert text != inf.posterior_panel.budget_ckpt.text(), \
-            "the TSNPE tab shows the Posterior tab's amortized checkpoint line"
-        _cfg.TRAINING_CHECKPOINT_EVERY = 0
-        panel._sync_budget()
-        assert "off" in panel.budget_ckpt.text().lower(), panel.budget_ckpt.text()
-    finally:
-        _cfg.TRAINING_CHECKPOINT_EVERY = saved
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 50)
+    monkeypatch.setattr(_cfg, "TRAINING_CHECKPOINT_EVERY", 0)
+    panel._sync_budget()
+    inf.posterior_panel._sync_budget()
+    text = panel.budget_ckpt.text()
+    assert "Resumes" not in text and "OWN identity" in text, text
+    assert text != inf.posterior_panel.budget_ckpt.text(), \
+        "the TSNPE tab shows the Posterior tab's amortized checkpoint line"
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 0)
+    monkeypatch.setattr(_cfg, "TRAINING_CHECKPOINT_EVERY", 50)
+    panel._sync_budget()
+    assert "off" in panel.budget_ckpt.text().lower(), panel.budget_ckpt.text()
+
+
+def test_the_budget_lines_only_format_the_preview(monkeypatch):
+    """V6. The three lines under the training budget used to DERIVE what they showed: the width
+    (_effective_width), the memory geometry (_budget_memory's own n_fine / n_vars / steady), the cache
+    directory (resolve_dir under the process-default root) and the cadence (config's LIVE copy of
+    TRAINING_CHECKPOINT_EVERY, which the training stage never reads). Four places for the line and the
+    run to disagree. Now ONE orchestrator call resolves all of it as build_posterior does, and the tabs
+    only format what it returns.
+
+    Pinned three ways. Every line is exactly the formatting of a preview the test hands in -- a
+    deliberately inconsistent one (width 700 against a 512 box), so a tab that recomputed anything
+    would show a different number. The call receives the session's config and prior as they are, the
+    two boxes as ints and the tab's memoised hardware, and is not made at all while a box is blank
+    (the preview takes ints only). And neither the mixin nor the TSNPE override names any of the
+    machinery it used to call."""
+    import ast
+    import dataclasses
+    import inspect
+    import textwrap
+    from core import orchestrator
+    from core.gui.fields import label
+    from core.gui.panels.inference.base import _TrainingBudgetMixin
+    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+
+    cfg, prior = _budget_cfg(), _prior_stub()
+    inf, panel = _budget_panel(cfg, prior=prior)
+    tsnpe = inf.tsnpe_panel
+    base = orchestrator.TrainingPreview(
+        n_runs=3, width=700, hw_batch=2048, n_fine=250_000, n_vars=3,
+        need_elements=2 ** 28, have_elements=2 ** 30, estimate_error=None,
+        checkpoint="new", batches_done=0, siblings="", cadence=50, checkpoint_error=None,
+        device_type="cuda", itemsize=4)
+    handed = {"preview": base}
+    calls = []
+
+    def fake(c, p, **kw):
+        calls.append((c, p, kw))
+        return handed["preview"]
+
+    monkeypatch.setattr(orchestrator, "training_preview", fake)
+
+    def lines(tab, preview):
+        handed["preview"] = preview
+        calls.clear()
+        tab._sync_budget()
+        return tab.budget_total.text(), tab.budget_mem.text(), tab.budget_ckpt.text()
+
+    panel.num_runs.setText("3")
+    panel.run_size_cap.setText("512")
+    total, mem, _ckpt = lines(panel, base)
+
+    # the call: the session's objects as they are, the boxes as ints, the tab's memoised hardware
+    assert len(calls) == 1, calls
+    c, p, kw = calls[0]
+    assert c is cfg and p is prior, "the preview must see the session's config and prior as they are"
+    assert kw == {"num_runs": 3, "run_size_cap": 512, "hw": panel._hardware()}, kw
+    assert type(kw["num_runs"]) is int and type(kw["run_size_cap"]) is int, kw
+    assert kw["hw"] is panel._hardware(), "detect_device() is memoised by the tab, not probed per keystroke"
+
+    # the total line: the PREVIEW's width (700), never the box's 512
+    assert total == ("2,100 simulations = 3 batches x 700 rows (capped from 2,048).\nBatches is also the "
+                     "(t_scale, T) diversity count: every row in a batch shares one operating point, so "
+                     "batch COUNT is the statistics and batch WIDTH is not."), total
+    assert "capped from" not in lines(panel, dataclasses.replace(base, width=2048))[0]
+
+    # the memory line
+    assert mem.startswith("Worst-case peak ~1.00 GiB per batch (n_fine <= 250,000, 3 state vars); "
+                          "planner budget right now ~4.00 GiB, so it fits in one piece.\n"), mem
+    assert "upper bound" in mem.lower() and "hardware defaults" not in mem, mem
+    assert "does NOT fit" in lines(panel, dataclasses.replace(base, need_elements=2 ** 31))[1]
+    assert lines(panel, dataclasses.replace(base, device_type="cpu"))[1] == \
+        "Peak-memory estimate is CUDA-only; this config runs on cpu."
+    failed = dataclasses.replace(base, estimate_error="RuntimeError: boom", n_fine=None, n_vars=None,
+                                 need_elements=None, have_elements=None)
+    assert lines(panel, failed)[1] == "Peak-memory estimate unavailable: RuntimeError: boom"
+
+    # the checkpoint line, state by state; the TSNPE tab states its rule whenever checkpointing is on
+    sib = ("[checkpoint] 1 other checkpoint(s) exist and do NOT match this run: "
+           "abc123def456 (2 batches, differs in n_runs)")
+    want = {
+        "off": "Checkpointing is off (config.TRAINING_CHECKPOINT_EVERY = 0): a crash loses the run.",
+        "needs_config": "Checkpoint status needs a config and a prior -- the prior is part of the identity.",
+        "resume_complete": ("Resumes a COMPLETE checkpoint (2 batches) -- simulation will be skipped "
+                            "entirely and only the flow retrained."),
+        "resume_partial": "Resumes an existing checkpoint: 2/3 batches already done.",
+        "new_with_siblings": "WARNING: these settings match no checkpoint, so this starts a NEW run.\n" + sib,
+        "new": "No checkpoint exists yet; this starts a new run.",
+    }
+    for state, text in want.items():
+        pv = dataclasses.replace(base, checkpoint=state,
+                                 batches_done=2 if state.startswith("resume") else 0,
+                                 siblings=sib if state == "new_with_siblings" else "",
+                                 cadence=0 if state == "off" else 50)
+        assert lines(panel, pv)[2] == text, (state, panel.budget_ckpt.text())
+        rule = lines(tsnpe, pv)[2]
+        if state == "off":
+            assert rule == text, "with checkpointing off the TSNPE tab says what the Posterior tab says"
+        else:
+            assert "OWN identity" in rule and "Resumes" not in rule, (state, rule)
+    assert lines(panel, dataclasses.replace(base, checkpoint_error="OSError: disk gone"))[2] == \
+        "Checkpoint status unavailable: OSError: disk gone"
+
+    # no config yet: the memory line says its geometry was the hardware defaults
+    inf.session.cfg = None
+    assert lines(panel, base)[1].endswith("\n(Estimated from hardware defaults until a config is built.)")
+    assert calls[0][0] is None
+    inf.session.cfg = cfg
+
+    # a blank box: the preview is not called at all
+    panel.num_runs.setText("")
+    calls.clear()
+    panel._sync_budget()
+    assert calls == [] and panel.budget_total.text() == f"{label('num_runs')} is blank.", calls
+
+    # neither formatter names the machinery it used to call (names and attributes, not string text:
+    # the "off" line keeps the words config.TRAINING_CHECKPOINT_EVERY on purpose)
+    def names(obj):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(obj)))
+        return ({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
+                | {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)})
+
+    gone = {"peak_sim_elements", "sim_memory_budget_elements", "n_force_channels", "training_identity",
+            "training_checkpoint", "peek", "describe_siblings", "resolve_dir", "TRAINING_CHECKPOINT_EVERY",
+            "N_ND_MAX", "_effective_width", "batch_size", "steady_idx", "inits_dict"}
+    mixin = names(_TrainingBudgetMixin)
+    assert "training_preview" in mixin and not (mixin & gone), sorted(mixin & gone)
+    override = names(TSNPEPanel._budget_checkpoint)
+    assert not (override & {"config", "TRAINING_CHECKPOINT_EVERY", "orchestrator"}), sorted(override)
 
 def test_the_training_budget_round_trips_through_settings():
     """"I have to retype it every launch" is the complaint L1 already answered for splitters.

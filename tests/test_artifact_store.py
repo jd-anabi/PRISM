@@ -1392,6 +1392,191 @@ def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
                                               checkpoint_every=0) == [], "off means no question"
 
 
+def test_the_training_preview_agrees_with_the_stage_on_width_directory_and_cadence(store, monkeypatch,
+                                                                                   tmp_path):
+    """V6. The budget group's lines are only as good as their agreement with the run, and they used to
+    derive their answers themselves: the cadence from config.TRAINING_CHECKPOINT_EVERY (the LIVE module
+    copy -- the stage reads orchestrator's import-time binding, and tests/conftest.py rebinds only that
+    one), the directory from resolve_dir's process-default root (not the store the run writes to), and
+    the width through a helper of the tab's own. Each is a way for "Resumes an existing checkpoint" to
+    sit above a Train button that then simulates from zero.
+
+    So the preview is checked against the STAGE ITSELF, not against a restatement of it: build_posterior
+    runs as far as its cache decision and is stopped there (read_header on a resume, near_miss_siblings
+    on a fresh run -- each records the directory and the identity's run_size, then raises), or, with
+    checkpointing off, as far as the Fisher. A cache is laid by hand at the directory the STAGE resolved
+    (as test_a_near_miss_cache_is_refused_before_the_fisher lays one), and the preview must find it."""
+    from core import orchestrator
+    from core.artifacts import ArtifactStore
+    from core.artifacts.identity import SimulationIdentity
+    from core.SBI import training_checkpoint as tc
+
+    cfg = _nad_cfg()
+    cfg.reparam_rotate = True
+    cfg.hw.batch_size = 8
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+
+    class _AtTheCache(Exception):
+        pass
+
+    seen = []
+
+    def _at_resume(path):
+        seen.append(("resume", Path(path), None))
+        raise _AtTheCache()
+
+    def _at_fresh(ident, root):
+        seen.append(("new", tc.resolve_dir(ident, root), ident["run_size"]))
+        raise _AtTheCache()
+
+    def _fisher(*a, **k):
+        raise AssertionError("Fisher reached")
+
+    def stage(**kw):
+        """build_posterior as far as its cache decision: (branch, directory, run_size), or None when it
+        never looked at a cache and ran on to the Fisher (checkpointing off)."""
+        seen.clear()
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr(orchestrator.training_checkpoint, "read_header", _at_resume)
+            m.setattr(orchestrator.training_checkpoint, "near_miss_siblings", _at_fresh)
+            m.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", _fisher)
+            try:
+                orchestrator.build_posterior(cfg, lp, None, True, **kw)
+            except _AtTheCache:
+                return seen[-1]
+            except AssertionError as e:
+                assert "Fisher reached" in str(e), e
+                return None
+        raise AssertionError("build_posterior returned without reaching its cache decision or the Fisher")
+
+    # (1) CADENCE: the stage's own binding, never config's live copy, and an explicit argument wins
+    monkeypatch.setattr(config, "TRAINING_CHECKPOINT_EVERY", 50)       # what the old tab line read
+    assert orchestrator.TRAINING_CHECKPOINT_EVERY == 0, "the session binding (tests/conftest.py)"
+    p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=4)
+    assert (p.checkpoint, p.cadence) == ("off", 0), p
+    assert stage(num_runs=2, run_size_cap=4) is None, "the preview said off, and the stage looked anyway"
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 7)
+    monkeypatch.setattr(config, "TRAINING_CHECKPOINT_EVERY", 0)
+    p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=4)
+    assert (p.checkpoint, p.cadence) == ("new", 7), p
+    assert stage(num_runs=2, run_size_cap=4)[0] == "new", "the preview said on, and the stage never looked"
+    p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=4, checkpoint_every=0)
+    assert (p.checkpoint, p.cadence) == ("off", 0), p
+    assert stage(num_runs=2, run_size_cap=4, checkpoint_every=0) is None
+
+    # (2) WIDTH: the identity's run_size, cap by cap; a cap above the hardware batch is a ceiling
+    dirs = {}
+    for cap, want in ((0, 8), (4, 4), (16, 8)):
+        p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=cap)
+        branch, d, run_size = stage(num_runs=2, run_size_cap=cap)
+        assert (p.width, p.hw_batch) == (want, 8) and run_size == p.width, (cap, p, run_size)
+        assert branch == "new" and p.checkpoint == "new", (cap, branch, p)
+        dirs[cap] = d
+    assert dirs[0] == dirs[16] != dirs[4], dirs
+
+    # (3) DIRECTORY: a partial cache laid where the STAGE looked is the cache the preview finds
+    d = dirs[4]
+    ident = SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
+    assert d == tc.resolve_dir(ident, store.kind_dir("simulation"))
+    (d / "shards").mkdir(parents=True)
+    torch.save({"format": tc.CHECKPOINT_FORMAT, "identity": ident, "V": None, "probe": None}, d / "header.pt")
+    torch.save({"batches_done": 1, "complete": False, "rng": None}, d / "state.pt")
+    p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=4)
+    assert (p.checkpoint, p.batches_done, p.siblings) == ("resume_partial", 1, ""), p
+    assert stage(num_runs=2, run_size_cap=4) == ("resume", d, None), "the stage resumes where the preview said"
+    torch.save({"batches_done": 2, "complete": True, "rng": None}, d / "state.pt")
+    p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=4)
+    assert (p.checkpoint, p.batches_done) == ("resume_complete", 2), p
+
+    # ...under the GIVEN store's simulations directory (the default here is `store`), not another's
+    other = ArtifactStore(tmp_path / "other")
+    assert orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=4, store=other).checkpoint == "new"
+    assert orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=4,
+                                         store=store).checkpoint == "resume_complete"
+
+    # (4) one field away: the stage starts a new directory, and the preview names the sibling it skips
+    p = orchestrator.training_preview(cfg, lp, num_runs=3, run_size_cap=4)
+    branch, d3, _ = stage(num_runs=3, run_size_cap=4)
+    assert branch == "new" and d3 != d, (branch, d3)
+    assert p.checkpoint == "new_with_siblings" and p.batches_done == 0, p
+    assert d.name in p.siblings and "differs in n_runs" in p.siblings, p.siblings
+
+
+def test_the_training_preview_resolves_without_a_config_and_never_raises(store, monkeypatch):
+    """The budget group is on screen at LAUNCH, before any config exists, and _sync_budget runs from
+    refresh_gates(), so the preview's no-config branch is explicit and it never raises (spec §6.1).
+
+    No config: the hardware is the config's, else hw= (the tab's memoised detect_device()), else
+    detect_device(), so the width and the total line always resolve; the memory geometry is the
+    hardware defaults (N_ND_MAX, 3 state variables, no steady-state cut); the checkpoint needs a config
+    AND a prior, the prior being part of the identity. A real config's geometry is its own, and n_vars
+    is the initial-condition width the training batch is simulated from -- the old line's
+    len(cfg.inits_dict) is 0 on a config built from a bounds file with no cell, so it quoted a batch
+    holding no state at all. Off CUDA the planner never splits (_max_sim_batch returns the batch
+    unchanged), so there is nothing to estimate and nothing failed.
+
+    Fail-soft: a config it cannot read, a planner budget that raises and a cache state that cannot be
+    read each land in a field -- estimate_error or checkpoint_error -- and never in an exception."""
+    import types
+    from core import orchestrator
+    from core.SBI import pipeline
+
+    cfg = _nad_cfg()                          # built BEFORE detect_device is replaced below
+    cfg.hw.batch_size = 8
+    lp = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    monkeypatch.setattr(orchestrator, "TRAINING_CHECKPOINT_EVERY", 7)
+    cpu = config.cpu_device()
+
+    # (a) launch: no config, no prior
+    p = orchestrator.training_preview(None, None, num_runs=3, run_size_cap=16, hw=cpu)
+    assert (p.n_runs, p.width, p.hw_batch, p.device_type, p.itemsize) == (3, 16, 64, "cpu", 4), p
+    assert (p.n_fine, p.n_vars) == (config.N_ND_MAX, 3), p
+    assert (p.need_elements, p.have_elements, p.estimate_error) == (None, None, None), p
+    assert (p.checkpoint, p.cadence, p.checkpoint_error) == ("needs_config", 7, None), p
+
+    # neither a config's hardware nor hw=: detect_device(); on CUDA the planner's own two numbers
+    fake_cuda = types.SimpleNamespace(device=torch.device("cuda"), dtype=torch.float32, batch_size=2048)
+    monkeypatch.setattr(config, "detect_device", lambda: fake_cuda)
+    monkeypatch.setattr(pipeline, "sim_memory_budget_elements", lambda device, dtype: 123_456_789)
+    p = orchestrator.training_preview(None, None, num_runs=2, run_size_cap=0)
+    assert (p.width, p.hw_batch, p.device_type, p.itemsize) == (2048, 2048, "cuda", 4), p
+    assert p.need_elements == pipeline.peak_sim_elements(2048, config.N_ND_MAX, 0, 3, 1, 1), p
+    assert p.have_elements == 123_456_789 and p.estimate_error is None, p
+
+    # (b) a config's own hardware wins over hw=, and its geometry is its own
+    p = orchestrator.training_preview(cfg, None, num_runs=2, run_size_cap=0, hw=fake_cuda)
+    assert (p.width, p.hw_batch, p.device_type) == (8, 8, "cpu"), p
+    assert p.n_fine == min(config.N_ND_MAX, cfg.t.shape[0]), p
+    assert not cfg.inits_dict and p.n_vars == orchestrator._observation_inits(cfg).shape[-1] == 3, p
+    assert p.checkpoint == "needs_config", "without a prior the cache cannot be named"
+
+    # (c) fail-soft: a config it cannot read
+    p = orchestrator.training_preview(object(), object(), num_runs=2, run_size_cap=0, hw=cpu)
+    assert p.width == 64 and p.estimate_error.startswith("AttributeError"), p
+    assert (p.n_fine, p.n_vars, p.need_elements, p.have_elements) == (None, None, None, None), p
+    assert p.checkpoint_error.startswith("AttributeError"), p
+    assert (p.checkpoint, p.batches_done, p.siblings) == ("new", 0, ""), p
+
+    # ...a planner budget that raises
+    def _no_card(device, dtype):
+        raise RuntimeError("no card")
+
+    monkeypatch.setattr(pipeline, "sim_memory_budget_elements", _no_card)
+    p = orchestrator.training_preview(None, None, num_runs=2, run_size_cap=512, hw=fake_cuda)
+    assert (p.estimate_error, p.need_elements, p.width) == ("RuntimeError: no card", None, 512), p
+
+    # ...a cache state that cannot be read
+    def _unreadable(path):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(orchestrator.training_checkpoint, "peek", _unreadable)
+    p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=0, store=store)
+    assert (p.checkpoint, p.checkpoint_error, p.batches_done) == ("new", "OSError: disk gone", 0), p
+    # checkpointing off is decided before anything is read, so there is nothing to fail
+    p = orchestrator.training_preview(cfg, lp, num_runs=2, run_size_cap=0, store=store, checkpoint_every=0)
+    assert (p.checkpoint, p.checkpoint_error, p.cadence) == ("off", None, 0), p
+
+
 # ── the compositions: one flow under the GUI and the command line (piece 2, §2.3-§2.4) ───────────
 def _sim_post(*, x_obs_digest=None, truncation=None, T=None):
     """A LoadedPosterior-shaped stand-in. simulated_inference reads only .posterior.x_obs_digest,

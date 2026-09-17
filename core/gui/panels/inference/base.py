@@ -2,10 +2,9 @@
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel
 
-from core import config, forcing, orchestrator
+from core import config, orchestrator
 from core.artifacts.provenance import _nvidia_smi_free_gib  # noqa: F401 -- re-exported for inference_tabs
 from core.config import CELL_PATH
-from core.SBI import pipeline, training_checkpoint
 
 from ..base_panel import BasePanel
 from ...fields import label
@@ -106,11 +105,6 @@ class _TrainingBudgetMixin:
             return f"{label('run_size_cap')} must be at least 0."
         return None
 
-    def _effective_width(self, cfg, cap: int) -> tuple:
-        """(rows actually simulated per batch, the hardware default it was capped from)."""
-        hw = cfg.hw if cfg is not None else self._hardware()
-        return (min(hw.batch_size, cap) if cap else hw.batch_size), hw
-
     def _sync_budget(self) -> None:
         """Recompute the three derived lines. Pure and cheap -- safe on every keystroke.
 
@@ -121,10 +115,15 @@ class _TrainingBudgetMixin:
         it is fixed; the memory and checkpoint lines go empty with it, because an estimate for a
         width nobody asked for is the same lie in GiB. No clamp, no default, no raise.
 
-        ⚠ Treats anything without a `.hw` as no-config-yet rather than trusting `session.cfg` to be a
-        SimConfig. Two reasons, and the second is the real one: the gate tests set `session.cfg` to a
-        bare `object()` sentinel, and more importantly a derived STATUS LINE must never be able to
-        raise into refresh_gates() and take the whole tab down with it.
+        ONLY FORMATS (V6). The width, the memory geometry, the cache directory and the cadence are
+        orchestrator.training_preview's, which resolves them as build_posterior does -- this used to
+        derive each of them itself, and the cadence from config's live copy, which a run never reads.
+
+        ⚠ Passes `session.cfg` through as it is, never trusting it to be a SimConfig: the gate tests set
+        it to a bare `object()` sentinel, and a derived STATUS LINE must never be able to raise into
+        refresh_gates() and take the whole tab down with it. The preview never raises -- a config it
+        cannot read comes back as estimate_error / checkpoint_error, shown as "unavailable" -- and the
+        formatters below read the preview, plus the config's chi flag through getattr.
         """
         problem = self._budget_problem()
         if problem is not None:
@@ -133,23 +132,30 @@ class _TrainingBudgetMixin:
             self.budget_ckpt.setText("")
             return
         cfg = self.session.cfg
-        if getattr(cfg, "hw", None) is None:
-            cfg = None
         n_runs, cap = self._budget_values()
-        width, hw = self._effective_width(cfg, cap)
+        # ONE call, then formatting only. hw= is the memoised detect_device() for the launch-time case
+        # (no config yet); a config's own hw wins inside the preview.
+        preview = orchestrator.training_preview(cfg, self.session.inf_prior, num_runs=n_runs,
+                                                run_size_cap=cap, hw=self._hardware())
+        self.budget_total.setText(self._budget_total(preview, cfg))
+        self.budget_mem.setText(self._budget_memory(preview, cfg))
+        self.budget_ckpt.setText(self._budget_checkpoint(preview))
 
-        capped = "" if width == hw.batch_size else f" (capped from {hw.batch_size:,})"
+    def _budget_total(self, preview, cfg) -> str:
+        """The total line: simulations = batches x rows, the hardware batch the cap binds against, and
+        what the batch COUNT buys. The chi note is the one thing read off the config itself, through
+        getattr, because no config (launch) and a stub have no chi flag."""
+        p = preview
+        capped = "" if p.width == p.hw_batch else f" (capped from {p.hw_batch:,})"
         chi = ""
-        if cfg is not None and cfg.chi_mode:
-            chi = (f"\nIn chi mode each row costs 1+K solver passes, K up to {cfg.chi_k_pad}.")
-        self.budget_total.setText(
-            f"{n_runs * width:,} simulations = {n_runs:,} batches x {width:,} rows{capped}."
-            f"\nBatches is also the (t_scale, T) diversity count: every row in a batch shares one "
-            f"operating point, so batch COUNT is the statistics and batch WIDTH is not.{chi}")
-        self.budget_mem.setText(self._budget_memory(cfg, hw, width))
-        self.budget_ckpt.setText(self._budget_checkpoint(cfg, width, n_runs))
+        if getattr(cfg, "chi_mode", False):
+            chi = (f"\nIn chi mode each row costs 1+K solver passes, K up to "
+                   f"{getattr(cfg, 'chi_k_pad', '?')}.")
+        return (f"{p.n_runs * p.width:,} simulations = {p.n_runs:,} batches x {p.width:,} rows{capped}."
+                f"\nBatches is also the (t_scale, T) diversity count: every row in a batch shares one "
+                f"operating point, so batch COUNT is the statistics and batch WIDTH is not.{chi}")
 
-    def _budget_memory(self, cfg, hw, width: int) -> str:
+    def _budget_memory(self, preview, cfg) -> str:
         """Peak device memory for ONE batch at the worst geometry the Sobol pre-filter admits.
 
         The WORST case is the one worth showing: n_fine swings from a median ~40k to a p99 ~283k, so a
@@ -157,37 +163,28 @@ class _TrainingBudgetMixin:
         2026-08-10 and 2026-08-11 retrains both died. gen_training_data rejects any (t_scale, T) whose
         n_fine exceeds min(N_ND_MAX, len(t)), so that IS the ceiling, by construction.
 
-        Reads pipeline's own cost model rather than restating it, so this cannot drift from what the
-        planner does (pipeline.peak_sim_elements / sim_memory_budget_elements).
+        Formats orchestrator.training_preview, which reads pipeline's own cost model
+        (peak_sim_elements / sim_memory_budget_elements) at the training stage's own width, so this
+        cannot drift from what the planner does. ``cfg`` decides one thing only: whether the geometry
+        was the hardware defaults because no config is built yet.
         """
-        if hw.device.type != "cuda":
-            return f"Peak-memory estimate is CUDA-only; this config runs on {hw.device.type}."
-        n_fine = min(config.N_ND_MAX, cfg.t.shape[0]) if cfg is not None else config.N_ND_MAX
-        n_vars = len(cfg.inits_dict) if cfg is not None else 3
-        steady = cfg.steady_idx if cfg is not None else 0
-        n_ch = 1
-        if cfg is not None:
-            try:
-                n_ch = forcing.n_force_channels(cfg.model, cfg.forcing_idx, n_vars)
-            except Exception:                 # noqa: BLE001 -- a display must not break the tab
-                n_ch = 1
-        try:
-            # var_idx=0 in the training path, so exactly one variable is kept.
-            need = pipeline.peak_sim_elements(width, n_fine, steady, n_vars, n_ch, 1)
-            have = pipeline.sim_memory_budget_elements(hw.device, hw.dtype)
-        except Exception as e:                # noqa: BLE001
-            return f"Peak-memory estimate unavailable: {type(e).__name__}: {e}"
-        gib = hw.dtype.itemsize / float(1 << 30)
-        verdict = ("fits in one piece" if need <= have else
+        p = preview
+        if p.device_type != "cuda":
+            return f"Peak-memory estimate is CUDA-only; this config runs on {p.device_type}."
+        if p.estimate_error is not None:
+            return f"Peak-memory estimate unavailable: {p.estimate_error}"
+        gib = p.itemsize / float(1 << 30)
+        verdict = ("fits in one piece" if p.need_elements <= p.have_elements else
                    "does NOT fit -- the planner will split this batch, costing wall-clock")
-        return (f"Worst-case peak ~{need * gib:.2f} GiB per batch (n_fine <= {n_fine:,}, {n_vars} "
-                f"state vars); planner budget right now ~{have * gib:.2f} GiB, so it {verdict}.\n"
+        return (f"Worst-case peak ~{p.need_elements * gib:.2f} GiB per batch (n_fine <= {p.n_fine:,}, "
+                f"{p.n_vars} state vars); planner budget right now ~{p.have_elements * gib:.2f} GiB, "
+                f"so it {verdict}.\n"
                 f"That budget is an UPPER bound: free-VRAM readings overstate what is really "
                 f"available by roughly the size of the desktop, so closing browsers is a bigger lever "
                 f"than lowering the cap." + ("" if cfg is not None else
                                              "\n(Estimated from hardware defaults until a config is built.)"))
 
-    def _budget_checkpoint(self, cfg, width: int, n_runs: int) -> str:
+    def _budget_checkpoint(self, preview) -> str:
         """THE GUARD THAT MAKES THESE TWO FIELDS SAFE TO EXPOSE AT ALL.
 
         Both are inside the training-checkpoint identity, which is DIGESTED into the checkpoint's
@@ -195,25 +192,26 @@ class _TrainingBudgetMixin:
         directory -- there is no error, just a run that starts from zero. A tooltip is not a strong
         enough guard for that, so the state is stated inline and re-evaluated as you type;
         describe_siblings even names the field that differs.
+
+        Formats the preview's verdict, in its order of precedence. The directory is the one the run
+        will use (the store's simulations directory) and "off" is the training stage's own cadence --
+        so the line and what Train then does cannot disagree. The "off" sentence keeps the words
+        config.TRAINING_CHECKPOINT_EVERY because config.py is where the operator changes it.
         """
-        if not config.TRAINING_CHECKPOINT_EVERY:
+        p = preview
+        if p.checkpoint == "off":
             return "Checkpointing is off (config.TRAINING_CHECKPOINT_EVERY = 0): a crash loses the run."
-        if cfg is None or self.session.inf_prior is None:
+        if p.checkpoint == "needs_config":
             return "Checkpoint status needs a config and a prior -- the prior is part of the identity."
-        try:
-            ident = orchestrator.training_identity(cfg, self.session.inf_prior, width, n_runs)
-            state = training_checkpoint.peek(training_checkpoint.resolve_dir(ident))
-            siblings = training_checkpoint.describe_siblings(ident)
-        except Exception as e:                # noqa: BLE001 -- never let a status line break the tab
-            return f"Checkpoint status unavailable: {type(e).__name__}: {e}"
-        if state and state.get("batches_done"):
-            done = int(state["batches_done"])
-            if state.get("complete"):
-                return (f"Resumes a COMPLETE checkpoint ({done:,} batches) -- simulation will be "
-                        f"skipped entirely and only the flow retrained.")
-            return f"Resumes an existing checkpoint: {done:,}/{n_runs:,} batches already done."
-        if siblings:
+        if p.checkpoint_error is not None:
+            return f"Checkpoint status unavailable: {p.checkpoint_error}"
+        if p.checkpoint == "resume_complete":
+            return (f"Resumes a COMPLETE checkpoint ({p.batches_done:,} batches) -- simulation will be "
+                    f"skipped entirely and only the flow retrained.")
+        if p.checkpoint == "resume_partial":
+            return f"Resumes an existing checkpoint: {p.batches_done:,}/{p.n_runs:,} batches already done."
+        if p.checkpoint == "new_with_siblings":
             return ("WARNING: these settings match no checkpoint, so this starts a NEW run.\n"
-                    + siblings)
+                    + p.siblings)
         return "No checkpoint exists yet; this starts a new run."
 
