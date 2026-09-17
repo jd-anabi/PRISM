@@ -2181,8 +2181,8 @@ class _EntryStore:
         self.case = case
 
     def assert_name_free(self, kind, name):
-        if name == "taken":
-            raise st.StoreError(f"A {kind} named 'taken' already exists.")
+        if name == "taken":                      # as the real store refuses one: field "name"
+            raise st.StoreError(f"A {kind} named 'taken' already exists.", field="name")
 
     def _handed(self, cfg):
         _leak(cfg)
@@ -2236,8 +2236,8 @@ def _experimental_obs(cfg, width=7):
 
 
 # One leg per public entry: leg(case, monkeypatch, tmp_path) -> (the object the pin watches, the call).
-# "success" returns; "refusal" raises a ValueError before any spend (a Refusal from Tasks 5-8 on is a
-# ValueError too); "boom" raises _Injected after a write on the stage's working config.
+# "success" returns; "refusal" raises a Refusal before any spend, with the field _REFUSAL_FIELDS names;
+# "boom" raises _Injected after a write on the stage's working config.
 def _leg_generate_observations(case, monkeypatch, tmp_path):
     from core import orchestrator
     cfg = _forced_cfg()                     # a real run: `cfg.n_obs = N_obs` is written before the solver
@@ -2476,21 +2476,28 @@ _UNTOUCHED_LEGS = {
     "channel_ablation": _leg_channel_ablation,
 }
 
-# Task 7's own deferred finding (flagged at dispatch): the "refusal" leg below used to accept any
-# ValueError, so a leg's refusal could silently regress to a different one and the pin would not
-# notice. Named here only for the entries THIS task turned into a Refusal with a field -- the pre-spend
-# numeric knobs at build_prior, build_posterior, validate_calibration and tsnpe_round, and the shared
-# _refuse_no_samples every n_samples=0 leg (infer_and_visualize, simulated_inference,
-# experimental_inference) now raises through. Every other leg's refusal is untouched by this task and
-# keeps the bare ValueError check.
+# The field each "refusal" leg's refusal carries, for ALL fifteen. The leg used to accept any
+# ValueError, so a leg's refusal could silently regress to a different one -- or to a bug that happens
+# to raise ValueError -- and the pin would not notice. Each leg refuses ON PURPOSE, through the rule
+# its own knob or input names: build_prior's and build_posterior's legs take their build branch
+# deliberately, with a zero sweep-round count and a zero batch count that the knob rules refuse before
+# any prior or simulation is touched.
 _REFUSAL_FIELDS = {
+    "generate_observations": "name",                 # _EntryStore refuses "taken" as the store does
+    "build_experiment_observation": "recording_probe",   # D9: a chi probe with no frequency
     "build_prior": "num_iterations",
     "build_posterior": "num_runs",
+    "build_truncation_region": "observation",        # an observation that does not hash to its digest
     "validate_calibration": "n_cal",
     "infer_and_visualize": "n_samples",
     "simulated_inference": "n_samples",
     "experimental_inference": "n_samples",
     "tsnpe_round": "n_directions",
+    "sbc_repeats": "repeats",
+    "identifiability_rotation": "posterior",         # a posterior with no Fisher rotation
+    "identifiability_laplace": "n_points",
+    "identifiability_jacobian": "m_noise",
+    "channel_ablation": "rows",
 }
 
 
@@ -2533,8 +2540,8 @@ def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, mon
     anchored its Fisher rotation on, and nothing ever cleared either.
 
     Three endings per entry, because the decorator's copy has to hold on each: "success" returns;
-    "refusal" is the entry's own pre-spend refusal (a ValueError today, a Refusal from Tasks 5-8 on,
-    which is a ValueError); "boom" raises _Injected AFTER a write on the stage's working config -- the
+    "refusal" is the entry's own pre-spend refusal, a Refusal carrying the field _REFUSAL_FIELDS
+    names; "boom" raises _Injected AFTER a write on the stage's working config -- the
     stage's own write where it has one before a cheap seam (generate_observations' resolved length,
     install's context, the chi builder's context), else _leak's at the first place the stage hands its
     config on (the store, a composed stage's stub). Every leg is stubbed below its first write, so the
@@ -2547,12 +2554,10 @@ def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, mon
     if case == "success":
         assert call() is not None
     elif case == "refusal":
-        with pytest.raises(ValueError) as e:
+        # A Refusal carrying the field the leg's own rule names -- not just some ValueError or other
+        with pytest.raises(Refusal) as e:
             call()
-        if entry in _REFUSAL_FIELDS:
-            # Tightened by Task 7 (a deferred Task 3 finding): this leg's refusal is now a Refusal
-            # carrying the field its own rule names, not just some ValueError or other.
-            assert e.value.field == _REFUSAL_FIELDS[entry], (entry, e.value.field, str(e.value))
+        assert e.value.field == _REFUSAL_FIELDS[entry], (entry, e.value.field, str(e.value))
     else:
         with pytest.raises(_Injected):
             call()
