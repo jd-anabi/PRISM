@@ -64,9 +64,12 @@ class _ChiProbeRow(QWidget):
             out.append(f"probe {index + 1}: no recording selected")
         # FloatField.value() returns 0.0 on unparseable text, so a BLANK box is indistinguishable from
         # a deliberate zero unless it is checked here -- and 0 Hz is a genuine DC probe the lock-in
-        # would happily attempt. This is the check that stops a typo becoming a measurement.
-        f = self.freq.value()
-        if not (math.isfinite(f) and f > 0):
+        # would happily attempt. This is the check that stops a typo becoming a measurement. Read
+        # through value_or_none() (V2): a blank box is said to be blank, never "got 0".
+        f = self.freq.value_or_none()
+        if f is None:
+            out.append(f"probe {index + 1}: drive frequency is blank")
+        elif not (math.isfinite(f) and f > 0):
             out.append(f"probe {index + 1}: drive frequency must be a positive number (got {f:g})")
         return out
 

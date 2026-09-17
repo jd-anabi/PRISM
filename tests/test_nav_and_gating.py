@@ -633,7 +633,7 @@ def test_chi_probe_rows_keep_each_recording_paired_with_its_own_frequency():
     pairs = [r.pair() for r in panel._chi_forced_fields]
     assert pairs == [("/tmp/rec0.csv", 1.0), ("/tmp/rec2.csv", 3.0), ("/tmp/rec3.csv", 4.0)], pairs
 
-def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency():
+def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency(tmp_path):
     """Two C-2 constraints in one place, because both are about data the GUI cannot regenerate.
 
     PRESERVATION: rows carry hand-typed drive frequencies and browsed paths -- a record of a bench
@@ -642,7 +642,8 @@ def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency
 
     BLANK FREQUENCY: FloatField.value() returns 0.0 on unparseable text, so an empty box is
     indistinguishable from a deliberate zero -- and 0 Hz is a genuine DC probe the lock-in would
-    happily attempt. It has to be caught before the run, not after.
+    happily attempt. It has to be caught before the run, not after, and an emptied box is said to be
+    blank rather than "got 0".
     """
     from core.gui.screens.inference_screen import InferenceScreen
 
@@ -658,10 +659,34 @@ def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency
     assert panel._chi_forced_fields[0].pair() == ("/tmp/keep.csv", 2.5), \
         "a rebuild destroyed hand-entered probe data"
 
-    # Row 1 still has a blank frequency -> 0.0 -> must be reported, naming the row.
+    # Row 2 still holds its seeded zero, which is refused as a zero, naming the row.
     probs = [p for i, r in enumerate(panel._chi_forced_fields) for p in r.problems(i)]
-    assert any("probe 2" in p and "positive" in p for p in probs), probs
+    assert any("probe 2" in p and "positive" in p and "got 0" in p for p in probs), probs
     assert not any("probe 1" in p for p in probs), probs
+    # A box the user EMPTIED is reported as blank (V2: "a blank box is a refusal, never a zero") --
+    # never "must be a positive number (got 0)" about a zero nobody typed.
+    panel._chi_forced_fields[1].freq.setText("")
+    probs = [p for i, r in enumerate(panel._chi_forced_fields) for p in r.problems(i)]
+    assert "probe 2: drive frequency is blank" in probs, probs
+    assert not any("got 0" in p for p in probs), probs
+
+    # ...and at the click, the yellow box's sentence is the same one
+    inf.session.posterior = _posterior_stub()
+    refused, sent = [], {}
+    panel._refusal = lambda exc: refused.append(exc)
+    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn)
+    for name in ("passive.npy", "probe0.npy", "probe1.npy"):
+        (tmp_path / name).touch()
+    panel.infer_mode.setCurrentIndex(1)                          # experimental: the chi page
+    panel.chi_tobs.setText("2.0")
+    panel.chi_f0_si.setText("1.0")
+    panel.chi_spont.edit.setText(str(tmp_path / "passive.npy"))
+    for i, row in enumerate(panel._chi_forced_fields):
+        row.path.edit.setText(str(tmp_path / f"probe{i}.npy"))
+    panel._infer()
+    assert sent == {} and len(refused) == 1 and refused[-1].field == "recording_probe", (sent, refused)
+    assert "probe 2: drive frequency is blank" in refused[-1].message, refused[-1].message
+    assert "got 0" not in refused[-1].message, refused[-1].message
 
 def test_config_units_control_declares_units_and_validates_them():
     """Units DECLARE what the numbers in the files mean (never converting them). Typed units must reach
