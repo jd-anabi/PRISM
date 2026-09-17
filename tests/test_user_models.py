@@ -41,10 +41,7 @@ from core.Models.hopf_model import HopfModel                      # noqa: E402
 from core.Models.user_model import (ModelParseError, UserModel,   # noqa: E402
                                     parse_user_model)
 from core.SBI import pipeline                                     # noqa: E402
-
-
-def _app():
-    return QApplication.instance() or QApplication([])
+from tests._fixtures import qt_app                                # noqa: E402
 
 
 def _remove_user_model(name: str):
@@ -526,7 +523,7 @@ def test_builder_param_row_preserves_and_defaults():
     """The builder's per-parameter row: 'auto' reproduces nd_bounds, a custom (min,max) AND the box
     coordinate survive a re-detect, and _validate refuses a value outside its bounds."""
     from core.gui.screens.model_builder_screen import ModelBuilderScreen, _ParamRow
-    _app()
+    qt_app()
     r = _ParamRow(0.05)                                            # auto -> placeholder box
     assert r.auto.isChecked() and r.spec() == (0.05, *model_store.nd_bounds(0.05), "linear")
     r.set_spec(0.05, 0.01, 0.1)                                    # a custom box turns auto off
@@ -558,7 +555,7 @@ def test_builder_refuses_a_blank_bound_instead_of_reading_it_as_zero():
     between a valid box and one reparam._log_mask silently downgrades to linear.
     """
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
-    _app()
+    qt_app()
     mb = ModelBuilderScreen()
     mb.vars_edit.setText("x")
     mb._set_variables()
@@ -579,7 +576,7 @@ def test_builder_refuses_a_log_box_with_a_non_positive_minimum():
     to warnings.warn, which the GUI never surfaces, so the run would train in a linear coordinate
     while the form still said 'log'."""
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
-    _app()
+    qt_app()
     mb = ModelBuilderScreen()
     mb.vars_edit.setText("x")
     mb._set_variables()
@@ -710,33 +707,25 @@ def test_user_model_streams_through_the_simulate_path():
 def test_combo_refresh_preserves_picker_selections():
     """A user-model save/delete must NOT reset the cell/bounds pickers when the panel's model
     selection did not change (the model-changed hook resets pickers to their first entry)."""
-    import tempfile
-    from core.gui import settings as gui_settings
     from core.gui.main_window import MainWindow
     from core.gui.panels.fdt_panel import FdtPanel
-    _app()
-    ini = tempfile.NamedTemporaryFile(suffix=".ini", delete=False)
-    ini.close()
-    gui_settings.use_ini_file(ini.name)
+    qt_app()
+    window = MainWindow()
+    fdt = window.panel(FdtPanel)
+    assert fdt.cell_picker.combo.count() > 1, "needs >1 nadrowski cells to be meaningful"
+    fdt.cell_picker.combo.setCurrentIndex(1)
+    chosen = fdt.cell_picker.combo.currentText()
+    registry.register(registry.ModelSpec("UMTESTCOMBO", ["a"], is_user_model=True, n_vars=1))
     try:
-        window = MainWindow()
-        fdt = window.panel(FdtPanel)
-        assert fdt.cell_picker.combo.count() > 1, "needs >1 nadrowski cells to be meaningful"
-        fdt.cell_picker.combo.setCurrentIndex(1)
-        chosen = fdt.cell_picker.combo.currentText()
-        registry.register(registry.ModelSpec("UMTESTCOMBO", ["a"], is_user_model=True, n_vars=1))
-        try:
-            window._on_user_models_changed()
-            assert fdt.cell_picker.combo.currentText() == chosen   # unchanged model -> untouched picker
-            # A DELETED selected model must still fall back and re-fire the hook.
-            fdt.model_combo.setCurrentText("UMTESTCOMBO")
-        finally:
-            registry.unregister("UMTESTCOMBO")
         window._on_user_models_changed()
-        assert fdt.model_combo.currentText() == "NADROWSKI"
-        window.close()
+        assert fdt.cell_picker.combo.currentText() == chosen   # unchanged model -> untouched picker
+        # A DELETED selected model must still fall back and re-fire the hook.
+        fdt.model_combo.setCurrentText("UMTESTCOMBO")
     finally:
-        gui_settings.use_ini_file(None)
+        registry.unregister("UMTESTCOMBO")
+    window._on_user_models_changed()
+    assert fdt.model_combo.currentText() == "NADROWSKI"
+    window.close()
 
 
 def test_builder_validate_refuses_while_a_task_runs():
@@ -744,7 +733,7 @@ def test_builder_validate_refuses_while_a_task_runs():
     run on the GUI thread while a worker owns them."""
     from core.gui.panels.base_panel import BasePanel
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
-    _app()
+    qt_app()
     mb = ModelBuilderScreen()
     mb.vars_edit.setText("x")
     mb._set_variables()
@@ -786,7 +775,7 @@ def test_system_accent_returns_a_hex_or_none():
 
 def test_load_app_font_prefers_inter_when_forced():
     from core.gui import fonts
-    app = _app()
+    app = qt_app()
     saved = app.font()
     try:
         assert fonts.load_app_font(app, prefer_inter=True) == "Inter"   # bundled Inter always registers
@@ -799,7 +788,7 @@ def test_icons_register_or_fallback():
     """The bundled icon font registers (or degrades to None), and every semantic name has a real
     codepoint glyph AND a non-empty unicode fallback."""
     from core.gui import icons
-    _app()
+    qt_app()
     fam = icons.register()
     assert fam is None or isinstance(fam, str)
     assert isinstance(icons.available(), bool)
@@ -813,7 +802,7 @@ def test_apply_icon_never_blank():
     the unicode fallback when it is monkeypatched away."""
     from PySide6.QtWidgets import QToolButton
     from core.gui import icons
-    _app()
+    qt_app()
     for name in icons.NAMES:
         b = QToolButton()
         icons.apply_icon(b, name)
@@ -838,7 +827,7 @@ def test_migrated_glyph_buttons_render():
     from core.gui.panels.inference_tabs import _ChiProbeRow
     from core.gui.widgets.artifact_picker import ArtifactPicker
     from core.gui.widgets.help_badge import HelpBadge
-    _app()
+    qt_app()
     ns = NavShell()
     assert ns.btn_back.text() and ns.btn_settings.text()
     ap = ArtifactPicker(tempfile.mkdtemp())
@@ -859,7 +848,7 @@ def test_every_icon_name_has_a_real_glyph_in_the_bundled_font():
     """
     from fontTools.ttLib import TTFont
     from core.gui import icons
-    _app()
+    qt_app()
     if not icons.available():
         return
     ttfs = sorted(icons._ICON_DIR.glob("*.ttf"))
@@ -878,7 +867,7 @@ def test_the_app_icon_loads_at_several_sizes():
     the rendered PNG set is what actually reaches Qt, and that more than one size is present so a
     16 px taskbar entry is not a downscale of the 256."""
     from core.gui import app_icon
-    _app()
+    qt_app()
     icon = app_icon.app_icon()
     assert not icon.isNull(), "no app icon: re-run core/gui/assets/app/build_app_icon.py"
     sizes = sorted({s.width() for s in icon.availableSizes()})
@@ -898,7 +887,7 @@ def test_the_ico_is_the_png_set_and_the_class_icon_call_is_harmless_offscreen():
     from PIL import Image
     from PySide6.QtWidgets import QMainWindow
     from core.gui import app_icon
-    _app()
+    qt_app()
     ico = app_icon._APP_DIR / "prism.ico"
     assert ico.is_file(), "no prism.ico: re-run core/gui/assets/app/build_app_icon.py"
     with Image.open(ico) as im:
@@ -927,7 +916,7 @@ def test_the_window_class_icon_becomes_ours_on_a_real_windows_display():
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QMainWindow
     from core.gui import app_icon
-    _app()
+    qt_app()
     if QGuiApplication.platformName() != "windows":
         pytest.skip(f"needs the windows platform plugin, got {QGuiApplication.platformName()!r}")
     user32 = ctypes.windll.user32
@@ -959,7 +948,7 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
     """
     from core import config as core_config
     from core.gui import app as gui_app
-    _app()
+    qt_app()
     saved_quiet = core_config.QUIET_SEGMENT_BAR
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "Artifacts"))
     from core.artifacts import ArtifactStore, default_store, use_store

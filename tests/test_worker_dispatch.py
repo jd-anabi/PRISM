@@ -39,24 +39,8 @@ from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
 from core.gui.widgets.log_pane import LogPane                     # noqa: E402
 from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
+from tests._fixtures import qt_app, pump                          # noqa: E402
 import contextlib                                                  # noqa: E402
-
-def _app():
-    return QApplication.instance() or QApplication([])
-def _pump(app, seconds=0.5):
-    """Drive the event loop without app.exec(), so the pump's queued signals get delivered."""
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        app.processEvents()
-        time.sleep(0.01)
-# ── Phase 3: QSettings persistence ───────────────────────────────────────────────────────────────
-def _temp_settings():
-    import tempfile
-    from core.gui import settings as st
-    fd, path = tempfile.mkstemp(suffix=".ini")
-    os.close(fd)
-    st.use_ini_file(path)
-    return path
 
 
 def test_worker_payload_is_released_after_the_run():
@@ -66,7 +50,7 @@ def test_worker_payload_is_released_after_the_run():
     import gc
     import weakref
 
-    app = _app()
+    app = qt_app()
 
     class Big:
         pass
@@ -83,7 +67,7 @@ def test_worker_payload_is_released_after_the_run():
     while time.monotonic() < deadline and panel._busy:
         app.processEvents()
         time.sleep(0.01)
-    _pump(app, 0.2)
+    pump(app, 0.2)
 
     del big
     gc.collect()
@@ -148,7 +132,7 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     dropped and stray figures closed, clears the active token, and a fresh run afterwards completes."""
     import matplotlib.pyplot as plt
 
-    app = _app()
+    app = qt_app()
 
     class P(BasePanel):
         pass
@@ -186,7 +170,7 @@ def test_dispatched_run_cancels_cleanly_and_a_later_run_still_works():
     while time.monotonic() - t0 < 10 and panel._busy:
         app.processEvents()
         time.sleep(0.005)
-    _pump(app, 0.3)
+    pump(app, 0.3)
 
     assert not panel._busy, "panel stuck busy after cancel"
     assert outcome["result"] == [], "the run COMPLETED instead of cancelling"
@@ -238,24 +222,20 @@ def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_
     from core.gui import settings as st
     from core.gui.screens.inference_screen import InferenceScreen
 
-    _app()
-    _temp_settings()
-    try:
-        qs = st.settings()
-        qs.beginGroup("inference_config")
-        qs.setValue("model", "NOT_A_REAL_MODEL")
-        qs.endGroup()
-        qs.sync()
+    qt_app()
+    qs = st.settings()
+    qs.beginGroup("inference_config")
+    qs.setValue("model", "NOT_A_REAL_MODEL")
+    qs.endGroup()
+    qs.sync()
 
-        screen = InferenceScreen()
-        model = screen.config_panel.model_combo.currentText()
-        assert model in ("BP", "NADROWSKI", "HOPF"), model
-        screen.config_panel._build_config()                 # apply -> new_draft -> repoint the picker
-        picker = screen.prior_panel.bounds_picker
-        assert picker.base_path.name == model.lower()
-        assert picker.combo.count() > 0, "the bounds picker was left empty by a stale model"
-    finally:
-        st.use_ini_file(None)
+    screen = InferenceScreen()
+    model = screen.config_panel.model_combo.currentText()
+    assert model in ("BP", "NADROWSKI", "HOPF"), model
+    screen.config_panel._build_config()                 # apply -> new_draft -> repoint the picker
+    picker = screen.prior_panel.bounds_picker
+    assert picker.base_path.name == model.lower()
+    assert picker.combo.count() > 0, "the bounds picker was left empty by a stale model"
 
 # ── Phase 3: error dialogs ───────────────────────────────────────────────────────────────────────
 def test_on_error_puts_the_traceback_in_details_not_the_body():
@@ -263,7 +243,7 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
     dialog body."""
     from PySide6.QtWidgets import QMessageBox
 
-    _app()
+    qt_app()
 
     class P(BasePanel):
         pass
@@ -286,3 +266,51 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
     assert captured["text"] == "Something failed"
     assert "Traceback" in captured["detail"], "the traceback was not routed to Details"
     assert "Traceback" not in captured["text"], "the traceback leaked into the body"
+
+
+# ── piece 3: the session dialog guard and the pane recorder ──────────────────────────────────────
+def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
+    """Offscreen, QMessageBox.exec() spins a nested event loop that nothing ever closes: a box a test
+    did not fake itself was a STALL past the ten-minute tool-call limit (no timeout plugin is
+    installed), not a failure anyone could read. The session guard (tests/conftest.py::
+    _no_modal_dialogs) turns it into a record -- the box lands in tests/_fixtures.SHOWN and exec
+    returns 0 with no button clicked, which the consent dialogs read as Cancel and main_window.py:231
+    as the safe branch -- and _clear_shown empties the list before every test, so SHOWN[-1] is always
+    the box the code under test just tried to show. A test's own fake, layered with monkeypatch the
+    way test_the_two_dialogs_default_to_cancel does, wins while it is installed, and the guard is
+    back the moment it is undone."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    assert SHOWN == [], "SHOWN must be empty at the start of every test"
+    box = QMessageBox()
+    box.setText("an unexpected modal")
+    assert box.exec() == 0
+    assert SHOWN == [box] and box.clickedButton() is None
+
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: 7)
+    assert QMessageBox().exec() == 7 and SHOWN == [box], "a test's own fake must win while installed"
+    monkeypatch.undo()
+    assert QMessageBox().exec() == 0 and len(SHOWN) == 2, "the session guard must be back after undo"
+
+
+def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
+    """The window's refusals and warnings are asserted OFF THE PANE. PaneCapture stands in for
+    ``log_pane.append_line`` on one panel and keeps ``(level, text)`` in order, with LogPane's own
+    default level, so the ``lambda text, kind="": lines.append((kind, text))`` stub that five tests
+    each wrote by hand becomes one helper that cannot drift from the real signature."""
+    from tests._fixtures import PaneCapture, qt_app
+
+    qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    before = panel.log_pane.toPlainText()
+    cap = PaneCapture(panel)
+    panel.log_pane.append_line("plain")
+    panel.log_pane.append_line("watch out", "warning")
+    assert cap.lines == [("info", "plain"), ("warning", "watch out")]
+    assert panel.log_pane.toPlainText() == before, "a captured line must not also reach the widget"

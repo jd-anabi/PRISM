@@ -36,7 +36,7 @@ from core.Solvers import sdeint as _sdeint_mod              # noqa: E402
 from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH    # noqa: E402
 from core.config import VALID_MODELS, VALID_LABELS               # noqa: E402
 from core.refusals import Refusal                                # noqa: E402
-from tests._fixtures import _tiny_gen_prior                      # noqa: E402
+from tests._fixtures import _tiny_gen_prior, code_only           # noqa: E402
 
 _N_GROUP_G = 11
 _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
@@ -3236,42 +3236,6 @@ def test_the_graph_cache_is_not_hung_off_the_solver_class():
     assert len(_sd._GRAPH_CACHE) <= _cfg.SOLVER_GRAPH_CACHE_MAX, "graph cache exceeded its bound"
 
 
-def _strip_docstrings(tree):
-    """Remove every docstring from a parsed tree, in place, and return it.
-
-    ⚠ ``ast.unparse`` DROPS COMMENTS BUT KEEPS DOCSTRINGS -- they are real string expressions in the
-    AST, not trivia. An earlier version of _unparsed claimed otherwise, and the claim went unnoticed
-    because the checks that used it happened to forbid strings that appeared only in comments. It
-    stopped being harmless the moment a check forbade `mem_get_info` in a function whose DOCSTRING
-    explains why it does not use mem_get_info: the assertion matched the prose, exactly the
-    false positive the parse was supposed to prevent (the same shape as the _local_map lesson).
-    """
-    for node in ast.walk(tree):
-        body = getattr(node, "body", None)
-        if (isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                and isinstance(body, list) and body
-                and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)):
-            body.pop(0)
-            if not body:
-                body.append(ast.Pass())
-    return ast.fix_missing_locations(tree)
-
-
-def _unparsed(obj) -> str:
-    """Source for a function/method with comments AND docstrings removed -- the executable code only.
-
-    IF YOU ASSERT ON SOURCE TEXT, PARSE IT FIRST. A check that "_local_map no longer hardcodes the
-    CPU" failed on its first run against the very COMMENT that documents the fix, because the comment
-    necessarily contains the string it forbids. The same false positive had already cost time once on
-    the TSNPE runner check, and a THIRD time on 2026-08-28 -- see _strip_docstrings for why
-    ast.unparse alone is not enough.
-    """
-    import inspect as _inspect, textwrap as _textwrap
-    return ast.unparse(_strip_docstrings(ast.parse(_textwrap.dedent(_inspect.getsource(obj)))))
-
-
 def test_n_max_and_step_are_no_longer_hidden_inside_gen_prior():
     """Two of gen_prior's four "constants" were not constants at all.
 
@@ -3294,7 +3258,7 @@ def test_n_max_and_step_are_no_longer_hidden_inside_gen_prior():
             f"gen_prior's {knob!r} must default to None so the CALLER resolves it against config -- "
             f"a literal default here is the hardcode this test exists to prevent")
 
-    body = _unparsed(pipeline_mod.gen_prior)
+    body = code_only(pipeline_mod.gen_prior)
     assert "175000" not in body and "175_000" not in body, (
         "the 175000 max-sets literal is back inside gen_prior; it belongs in "
         "config.PRIOR_SWEEP_MAX_SETS, reached through the n_max argument")
@@ -3314,7 +3278,7 @@ def test_the_local_sweep_is_not_pinned_to_the_cpu_in_any_prior():
     (1024 trajectories x 40,000 steps): 6.32 s per iteration on the CPU against 0.357 s on CUDA, a
     17.7x difference; end to end on a small build, 9.01 s -> 2.83 s.
 
-    Asserted on PARSED source, never raw text -- see _unparsed.
+    Asserted on PARSED source, never raw text -- see tests/_fixtures.code_only.
     """
     from core.SBI.Priors import bp_prior, hopf_prior, nadrowski_prior
     from core.SBI.Priors.user_prior import UserPrior as _UserPrior
@@ -3329,7 +3293,7 @@ def test_the_local_sweep_is_not_pinned_to_the_cpu_in_any_prior():
             f"that is how the CPU hardcode survived in three priors at once")
         assert "self" in _inspect.signature(fn).parameters, \
             f"{cls.__name__}._local_map must be an instance method"
-        body = _unparsed(fn)
+        body = code_only(fn)
         for bad in ("torch.device('cpu')", 'torch.device("cpu")'):
             assert bad not in body, (
                 f"{cls.__name__}._local_map hardcodes {bad} again -- it must simulate on "
@@ -3386,7 +3350,7 @@ def test_the_sweep_and_flow_knobs_are_ARGUMENTS_because_the_constants_are_snapsh
           "fisher_m", "fisher_dz", "fisher_points")),
     ):
         params = _inspect.signature(fn).parameters
-        body = _unparsed(fn)
+        body = code_only(fn)
         for knob in knobs:
             assert knob in params, (
                 f"{fn.__name__} must accept {knob!r} as an ARGUMENT -- assigning to the config "
@@ -3774,7 +3738,7 @@ def test_the_rng_restore_happens_before_the_release_and_the_wait():
 
     Asserted on PARSED source -- the comments in this region name all three calls, so a raw-text
     check would match the prose rather than the code (the lesson recorded for _local_map)."""
-    src = _unparsed(pipeline_mod.gen_training_data)
+    src = code_only(pipeline_mod.gen_training_data)
     i_restore = src.find("_try_rng_restore(")
     i_release = src.find("_release_device_memory(device)")
     i_wait = src.find("_cancellable_wait(")
@@ -3795,7 +3759,7 @@ def test_a_failed_snapshot_never_writes_a_stale_restore_point():
     Recording nothing is correct; recording the wrong thing is not -- but the ROWS must still be
     written either way, because they are hours of simulation and a checkpoint that resumes without
     restoring streams merely draws fresh noise from that point."""
-    src = _unparsed(pipeline_mod.gen_training_data)
+    src = code_only(pipeline_mod.gen_training_data)
     assert "_pending_rng_at = batch_k" in src, (
         "the snapshot must be paired with the batch index it describes")
     assert "_rescue_rng = _pending_rng if _pending_rng_at == batch_k else None" in src, (
@@ -3884,7 +3848,7 @@ def test_the_retry_does_not_wait_when_THIS_process_holds_the_card():
         torch.cuda.mem_get_info, torch.cuda.memory_reserved = saved
 
     # ...and the retry must actually consult it rather than always sleeping.
-    src = _unparsed(pipeline_mod.gen_training_data)
+    src = code_only(pipeline_mod.gen_training_data)
     assert "_we_are_the_holder(device)" in src, "the retry must ask whose memory it is"
     i_hold = src.find("_we_are_the_holder(device)")
     i_wait = src.find("_cancellable_wait(_delay")
@@ -3896,12 +3860,11 @@ def test_the_mem_line_is_printed_on_every_oom_and_its_cadence_is_overridable():
     allocator is fragmented and cannot hand the memory back'. A line every 250 batches told us
     nothing about a run that died at batch 93."""
     import os as _os
-    src = _unparsed(pipeline_mod.gen_training_data)
+    src = code_only(pipeline_mod.gen_training_data)
     assert "_log_memory(device, f'after OOM on " in src or "after OOM on" in src, (
         "every OOM must emit a [mem] line -- that is the moment the numbers matter")
     assert isinstance(pipeline_mod._MEM_LOG_EVERY, int) and pipeline_mod._MEM_LOG_EVERY >= 1
-    mod_src = _strip_docstrings(ast.parse(io.open(pipeline_mod.__file__, encoding="utf-8").read()))
-    assert "PRISM_MEM_LOG_EVERY" in ast.unparse(mod_src), (
+    assert "PRISM_MEM_LOG_EVERY" in code_only(pipeline_mod), (
         "the cadence must be overridable for a diagnostic run without editing a tracked file")
 
 
@@ -4003,7 +3966,7 @@ def test_the_fisher_wraps_each_operating_point_and_skips_on_exhausted_oom():
     cudaErrorUnknown retryable there and only there -- and an exhausted point must be SKIPPED
     (the all-points-failed raise still stops an empty rotation)."""
     from core.SBI import decorrelate as _dec
-    src = _unparsed(_dec.build_latent_fisher_rotation)
+    src = code_only(_dec.build_latent_fisher_rotation)
     assert "retry_on_oom" in src, "the Fisher loop must ride the recovery helper"
     assert "cudaErrorUnknown" in src, "the error that actually killed a rotation must be retryable here"
     i_retry = src.find("retry_on_oom")

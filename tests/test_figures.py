@@ -39,16 +39,9 @@ from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
 from core.gui.widgets.log_pane import LogPane                     # noqa: E402
 from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
+from tests._fixtures import qt_app, pump                          # noqa: E402
 import contextlib                                                  # noqa: E402
 
-def _app():
-    return QApplication.instance() or QApplication([])
-def _pump(app, seconds=0.5):
-    """Drive the event loop without app.exec(), so the pump's queued signals get delivered."""
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        app.processEvents()
-        time.sleep(0.01)
 # ── interactive "Pop out" for figures ────────────────────────────────────────────────────────────
 def _tiny_fig():
     import matplotlib.pyplot as plt
@@ -109,7 +102,7 @@ def test_fig_sink_emits_png_and_a_reloadable_pickle():
     import matplotlib.pyplot as plt
     from core.gui.panels.base_panel import _png_fig_sink
 
-    _app()
+    qt_app()
     sig = WorkerSignals()
     events = []
     sig.figure.connect(lambda title, png, fp: events.append((title, png, fp)))
@@ -130,7 +123,7 @@ def test_fig_sink_pickle_failure_still_emits_the_png():
     import matplotlib.pyplot as plt
     from core.gui.panels.base_panel import _png_fig_sink
 
-    _app()
+    qt_app()
     sig = WorkerSignals()
     events = []
     sig.figure.connect(lambda title, png, fp: events.append((title, png, fp)))
@@ -154,7 +147,7 @@ def test_add_figure_creates_an_interactive_capable_tab():
     from PySide6.QtWidgets import QPushButton
     from core.gui.widgets.figure_stack import FigureStack
 
-    _app()
+    qt_app()
     fs = FigureStack()
     fig = _tiny_fig()
     fs.add_figure("Corner", _png_bytes(fig), fig_pickle=pickle.dumps(fig))
@@ -174,7 +167,7 @@ def test_pop_out_of_a_pickle_builds_a_qtagg_canvas_and_keeps_pyplot_clean():
     from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
     from core.gui.widgets.figure_stack import FigureStack
 
-    app = _app()
+    app = qt_app()
     fs = FigureStack()
     fig = _tiny_fig()
     fs.add_figure("Corner", _png_bytes(fig), fig_pickle=pickle.dumps(fig))
@@ -188,7 +181,7 @@ def test_pop_out_of_a_pickle_builds_a_qtagg_canvas_and_keeps_pyplot_clean():
     assert plt.get_fignums() == before, "the unpickled figure leaked into pyplot's Gcf"
 
     win.close()
-    _pump(app, 0.1)
+    pump(app, 0.1)
     assert len(fs._windows) == 0, "the window ref was not dropped on close"
     plt.close("all")
 
@@ -198,7 +191,7 @@ def test_pop_out_without_a_pickle_uses_the_image_viewer():
     from core.gui.widgets.figure_stack import FigureStack
     from core.gui.widgets.figure_window import ImageZoomWindow
 
-    app = _app()
+    app = qt_app()
     fs = FigureStack()
     fig = _tiny_fig()
     fs.add_figure("NoPickle", _png_bytes(fig), fig_pickle=None)
@@ -209,7 +202,7 @@ def test_pop_out_without_a_pickle_uses_the_image_viewer():
     assert isinstance(win, ImageZoomWindow), "a pickle-less figure should open the image viewer"
     assert isinstance(win.view, QGraphicsView)
     win.close()
-    _pump(app, 0.1)
+    pump(app, 0.1)
 
 def test_disk_png_pop_out_is_an_image_viewer():
     import tempfile
@@ -218,7 +211,7 @@ def test_disk_png_pop_out_is_an_image_viewer():
     from core.gui.widgets.figure_stack import FigureStack
     from core.gui.widgets.figure_window import ImageZoomWindow
 
-    app = _app()
+    app = qt_app()
     png = Path(tempfile.mkdtemp()) / "sweep.png"
     fig = _tiny_fig()
     fig.savefig(str(png), format="png")
@@ -231,7 +224,7 @@ def test_disk_png_pop_out_is_an_image_viewer():
     assert isinstance(win, ImageZoomWindow)
     assert isinstance(win.view, QGraphicsView), "the disk-PNG pop-out has no zoom/pan view"
     win.close()
-    _pump(app, 0.1)
+    pump(app, 0.1)
 
 def test_a_popped_out_figure_survives_a_worker_plt_close_all():
     """Worker.run runs plt.close("all") after every run and every cancel. A figure the user has popped
@@ -240,7 +233,7 @@ def test_a_popped_out_figure_survives_a_worker_plt_close_all():
     import matplotlib.pyplot as plt
     from core.gui.widgets.figure_stack import FigureStack
 
-    app = _app()
+    app = qt_app()
     fs = FigureStack()
     fig = _tiny_fig()
     fs.add_figure("Corner", _png_bytes(fig), fig_pickle=pickle.dumps(fig))
@@ -254,7 +247,7 @@ def test_a_popped_out_figure_survives_a_worker_plt_close_all():
     assert len(win._fig.axes) == 1, "plt.close('all') destroyed a figure being viewed in a pop-out"
 
     win.close()
-    _pump(app, 0.1)
+    pump(app, 0.1)
     plt.close("all")
 
 # ── Labels + units (round 4) ─────────────────────────────────────────────────────────────────────
@@ -321,7 +314,7 @@ def test_gui_form_labels_are_prettified():
     from PySide6.QtWidgets import QLabel
     from core.gui.widgets.help_badge import help_label
 
-    _app()
+    qt_app()
     holder = help_label("F0 (ND forcing amplitude)", "help text")
     lbl = holder.findChild(QLabel)
     assert lbl is not None and "F<sub>0</sub>" in lbl.text()
@@ -346,7 +339,7 @@ def test_a_theme_flip_between_build_and_save_cannot_split_a_figure():
     from core.gui import mpl_theme
     from core.Helpers import visualizers
 
-    _app()
+    qt_app()
     with _rcparams_guard():
         mpl_theme.apply_mpl_theme(True)                 # build under DARK
         fig, ax = plt.subplots()
@@ -387,7 +380,7 @@ def test_the_parameter_table_is_readable_against_its_own_cells():
         r, g, b = (v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in to_rgb(c))
         return 0.2126 * r + 0.7152 * g + 0.0722 * b
 
-    _app()
+    qt_app()
     for dark in (True, False):
         with _rcparams_guard():
             mpl_theme.apply_mpl_theme(dark)
@@ -437,7 +430,7 @@ def test_mpl_theme_follows_the_appearance_signal():
     """install(appearance) applies now AND subscribes: flipping the theme re-applies the rcParams."""
     import matplotlib
     from core.gui import design, mpl_theme
-    _app()
+    qt_app()
     with _rcparams_guard():
         ap = _fake_appearance(True)
         mpl_theme.install(ap)

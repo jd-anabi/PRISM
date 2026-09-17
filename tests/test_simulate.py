@@ -39,24 +39,9 @@ from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
 from core.gui.widgets.log_pane import LogPane                     # noqa: E402
 from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
+from tests._fixtures import qt_app, pump                          # noqa: E402
 import contextlib                                                  # noqa: E402
 
-def _app():
-    return QApplication.instance() or QApplication([])
-def _pump(app, seconds=0.5):
-    """Drive the event loop without app.exec(), so the pump's queued signals get delivered."""
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        app.processEvents()
-        time.sleep(0.01)
-# ── Phase 3: QSettings persistence ───────────────────────────────────────────────────────────────
-def _temp_settings():
-    import tempfile
-    from core.gui import settings as st
-    fd, path = tempfile.mkstemp(suffix=".ini")
-    os.close(fd)
-    st.use_ini_file(path)
-    return path
 # ── Simulate section: "Save video…" export ───────────────────────────────────────────────────────
 def _tiny_series():
     import numpy as np
@@ -113,7 +98,7 @@ def test_simulate_heatmap_center_stays_off_the_edge_when_oscillating():
     0 or 1) does not clip at the field edge -- the on-display 'cut off when oscillating' bug."""
     from core.gui.widgets.live_hair_bundle import LiveHairBundleView
 
-    _app()
+    qt_app()
     v = LiveHairBundleView()
     assert v._margin > 0.0
     assert v._cx(0.0) >= v._margin - 1e-9
@@ -127,7 +112,7 @@ def test_simulate_plan_stream_matches_generate_observations_arithmetic():
     from core.config import CELL_PATH
     from core.gui.panels.simulate_runner import build_stream_config, plan_stream
 
-    _app()
+    qt_app()
     cdir = CELL_PATH / "nadrowski"
     # Resolve through the shared rule, not a same-named-sibling glob: the master cells deliberately
     # share ONE bounds file, so a sibling-only filter would silently skip most of them.
@@ -157,7 +142,7 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     import numpy as np
     from core.gui.streams import WorkerCancelled
 
-    app = _app()
+    app = qt_app()
 
     class P(BasePanel):
         pass
@@ -195,7 +180,7 @@ def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     while time.monotonic() - t0 < 10 and panel._busy:
         app.processEvents()
         time.sleep(0.005)
-    _pump(app, 0.3)
+    pump(app, 0.3)
 
     assert not panel._busy, "panel stuck busy after cancelling a stream"
     assert outcome["cancelled"] == 1 and outcome["error"] == 0, outcome
@@ -207,7 +192,7 @@ def test_simulate_panel_is_wired_and_navigable():
     from core.gui.main_window import MainWindow
     from core.gui.panels.simulate_panel import SimulatePanel
 
-    _app()
+    qt_app()
     w = MainWindow()
     assert w.panel(SimulatePanel) is not None
     assert "Simulate" in w._section_index
@@ -219,30 +204,26 @@ def test_simulate_settings_round_trip():
     from core.gui import settings as st
     from core.gui.panels.simulate_panel import SimulatePanel
 
-    _app()
-    _temp_settings()
-    try:
-        sp = SimulatePanel()
-        sp.tobs.setText("2.5")
-        sp.fps.setText("24")
-        sp.frame_steps.setText("1234")
-        if sp.cell_picker.combo.count():
-            sp.cell_picker.combo.setCurrentIndex(sp.cell_picker.combo.count() - 1)
-        want_cell = sp.cell_picker.key()
-        want_model = sp.model_combo.currentText()
+    qt_app()
+    sp = SimulatePanel()
+    sp.tobs.setText("2.5")
+    sp.fps.setText("24")
+    sp.frame_steps.setText("1234")
+    if sp.cell_picker.combo.count():
+        sp.cell_picker.combo.setCurrentIndex(sp.cell_picker.combo.count() - 1)
+    want_cell = sp.cell_picker.key()
+    want_model = sp.model_combo.currentText()
 
-        qs = st.settings()
-        sp.save_settings(qs)
-        qs.sync()
+    qs = st.settings()
+    sp.save_settings(qs)
+    qs.sync()
 
-        sp2 = SimulatePanel()
-        assert sp2.tobs.value() == 2.5
-        assert sp2.fps.value() == 24
-        assert sp2.frame_steps.value() == 1234
-        assert sp2.model_combo.currentText() == want_model
-        assert sp2.cell_picker.key() == want_cell
-    finally:
-        st.use_ini_file(None)
+    sp2 = SimulatePanel()
+    assert sp2.tobs.value() == 2.5
+    assert sp2.fps.value() == 24
+    assert sp2.frame_steps.value() == 1234
+    assert sp2.model_combo.currentText() == want_model
+    assert sp2.cell_picker.key() == want_cell
 
 def test_export_stride_maps_sample_rate_to_video_fps():
     from core.gui.panels.simulate_export import estimate_frame_count, export_stride
@@ -311,7 +292,7 @@ def test_simulate_panel_records_chunks_and_gates_the_save_button():
     import numpy as np
     from core.gui.panels.simulate_panel import SimulatePanel
 
-    _app()
+    qt_app()
     p = SimulatePanel()
     assert not p.btn_save_video.isEnabled(), "save must be disabled before any recording"
     p._on_chunk(np.array([[0.0, 0.1], [1e-3, 0.2]]))

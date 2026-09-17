@@ -1,4 +1,5 @@
-"""Shared test helpers for the artifact-store suites (piece 1 of the 2026-09-10 hardening programme).
+"""Shared test helpers: the artifact-store stand-ins (piece 1 of the 2026-09-10 hardening programme)
+and, since piece 3, the GUI suites' helpers.
 
 A plain module: importing it imports torch and sbi (``DirectPosterior`` has to be imported at module
 level for ``_FakeDP`` to pickle) and does NOTHING ELSE -- no simulation, no file I/O, no torch
@@ -8,7 +9,18 @@ import and nothing more.
 Moved out of ``tests/test_artifact_store.py`` (Task 7) so ``tests/test_user_sbi.py``,
 ``tests/test_nav_and_gating.py`` and others can share them without importing a whole other test
 module (which pytest would then also collect a second time under a different name).
+
+Piece 3 (Task 9) added what the GUI suites used to copy per file -- ``qt_app``, ``pump``,
+``code_only``, ``PaneCapture`` -- and the dialog record ``SHOWN`` that tests/conftest.py's session
+guard appends to. ONE import spelling, ``tests._fixtures`` (pytest.ini puts the repo root on the
+path; tests/ has no __init__.py): ``from _fixtures import SHOWN`` would import this module a second
+time under another name, with a second, empty SHOWN that the guard never touches.
 """
+import ast
+import inspect
+import textwrap
+import time
+
 import torch
 
 from core.artifacts import manifest as mf
@@ -26,6 +38,76 @@ CODE_ROOTS: tuple[str, ...] = ("core",)
 # The top-level repository files (outside any CODE_ROOTS directory) that hold product code, so the
 # literal-path scan walks these too, and the same guard test keeps this set closed as well.
 CODE_FILES: tuple[str, ...] = ("conftest.py",)
+
+# Every QMessageBox a test did not fake itself, in order. tests/conftest.py::_no_modal_dialogs replaces
+# QMessageBox.exec for the session with a record-and-return-0, and _clear_shown empties this list
+# before each test, so SHOWN[-1] is the box the code under test just tried to show.
+SHOWN: list = []
+
+
+def qt_app():
+    """The one QApplication a process may hold, built on first use (offscreen: the root conftest.py
+    sets QT_QPA_PLATFORM before PySide6 is imported). The seven per-file ``_app`` copies were this."""
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication([])
+
+
+def pump(app, seconds: float = 0.5) -> None:
+    """Drive the event loop without app.exec(), so the pump's queued signals get delivered."""
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        app.processEvents()
+        time.sleep(0.01)
+
+
+def _strip_docstrings(tree):
+    """Remove every docstring from a parsed tree, in place, and return it.
+
+    ⚠ ``ast.unparse`` DROPS COMMENTS BUT KEEPS DOCSTRINGS -- they are real string expressions in the
+    AST, not trivia. An earlier version of the helper claimed otherwise, and the claim went unnoticed
+    because the checks that used it happened to forbid strings that appeared only in comments. It
+    stopped being harmless the moment a check forbade `mem_get_info` in a function whose DOCSTRING
+    explains why it does not use mem_get_info: the assertion matched the prose, exactly the
+    false positive the parse was supposed to prevent (the same shape as the _local_map lesson).
+    """
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and isinstance(body, list) and body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            body.pop(0)
+            if not body:
+                body.append(ast.Pass())
+    return ast.fix_missing_locations(tree)
+
+
+def code_only(obj) -> str:
+    """Executable source of ``obj`` -- a function, method, class or whole MODULE -- with comments and
+    docstrings both gone.
+
+    IF YOU ASSERT ON SOURCE TEXT, PARSE IT FIRST. A check that "_local_map no longer hardcodes the
+    CPU" failed on its first run against the very COMMENT that documents the fix, because the comment
+    necessarily contains the string it forbids. The same false positive had already cost time once on
+    the TSNPE runner check, and a THIRD time on 2026-08-28 -- see _strip_docstrings for why
+    ast.unparse alone is not enough. The suites grew four copies of this (two _strip_docstrings,
+    _code_only, _unparsed) and a fifth that stripped only the outermost docstring; this is the one.
+    """
+    return ast.unparse(_strip_docstrings(ast.parse(textwrap.dedent(inspect.getsource(obj)))))
+
+
+class PaneCapture:
+    """Records what a panel writes to its log pane, as ``(level, text)`` in order, INSTEAD of
+    rendering it: ``PaneCapture(panel)`` replaces ``panel.log_pane.append_line`` on that one pane
+    (LogPane.append_line(text, level="info")). The window's refusals and warnings are asserted off
+    ``.lines``; the widget receives nothing, and the panel is a throwaway built by the test."""
+    def __init__(self, panel):
+        self.lines: list[tuple[str, str]] = []
+        panel.log_pane.append_line = self._append
+
+    def _append(self, text: str, level: str = "info") -> None:
+        self.lines.append((level, text))
 
 
 def _nad_cfg(**over):

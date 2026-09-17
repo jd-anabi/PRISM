@@ -39,16 +39,10 @@ from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
 from core.gui.widgets.log_pane import LogPane                     # noqa: E402
 from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
+from tests._fixtures import code_only, pump, qt_app               # noqa: E402
 import contextlib                                                  # noqa: E402
+import pytest                                                      # noqa: E402
 
-def _app():
-    return QApplication.instance() or QApplication([])
-def _pump(app, seconds=0.5):
-    """Drive the event loop without app.exec(), so the pump's queued signals get delivered."""
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        app.processEvents()
-        time.sleep(0.01)
 # -- the training budget (Posterior tab) ----------------------------------------------------------
 def _budget_cfg():
     """Stub SimConfig carrying exactly the fields the budget lines read.
@@ -79,45 +73,13 @@ def _budget_panel(cfg=None, prior=None):
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.session = SbiSession()
     inf.session.cfg = cfg
     inf.session.inf_prior = prior
     inf.refresh_gates()
     return inf, inf.tabs.widget(2)          # Config Prior Posterior Validate Infer
-# ── Phase 3: QSettings persistence ───────────────────────────────────────────────────────────────
-def _temp_settings():
-    import tempfile
-    from core.gui import settings as st
-    fd, path = tempfile.mkstemp(suffix=".ini")
-    os.close(fd)
-    st.use_ini_file(path)
-    return path
-def _strip_docstrings(tree):
-    """Remove every docstring from a parsed tree, in place, and return it.
-
-    ⚠ ``ast.unparse`` DROPS COMMENTS BUT KEEPS DOCSTRINGS -- they are real string expressions in the
-    AST, not trivia. An earlier version of _unparsed claimed otherwise, and the claim went unnoticed
-    because the checks that used it happened to forbid strings that appeared only in comments. It
-    stopped being harmless the moment a check forbade `mem_get_info` in a function whose DOCSTRING
-    explains why it does not use mem_get_info: the assertion matched the prose, exactly the
-    false positive the parse was supposed to prevent (the same shape as the _local_map lesson).
-    """
-    for node in ast.walk(tree):
-        body = getattr(node, "body", None)
-        if (isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-                and isinstance(body, list) and body
-                and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant)
-                and isinstance(body[0].value.value, str)):
-            body.pop(0)
-            if not body:
-                body.append(ast.Pass())
-    return ast.fix_missing_locations(tree)
-def _code_only(obj) -> str:
-    """Executable source of ``obj`` -- comments and docstrings both gone. See _strip_docstrings."""
-    return ast.unparse(_strip_docstrings(ast.parse(textwrap.dedent(inspect.getsource(obj)))))
 
 
 def test_the_training_budget_shows_the_simulation_count_and_the_cap_trade():
@@ -126,45 +88,36 @@ def test_the_training_budget_shows_the_simulation_count_and_the_cap_trade():
     is kernel-launch-bound (measured 7.37 s at 2048 against 7.74 s at 1024, the SMALLER batch being
     slightly slower), so halving it halves the training rows for the same wall-clock.
 
-    ⚠ ISOLATES THE SETTINGS FILE, and must. The panel seeds these fields from config.py and then
-    RESTORES them from QSettings, so without isolation the assertions read whatever the developer
-    last left in their real PRISM.ini. This test passed all morning and then failed the moment a run
-    was configured with 10000 batches -- nothing to do with the code under test. It is the same
-    restore-wins-over-config mechanism that cost a ~5-day run on 2026-08-19 (the retired chi band),
-    so a test asserting the DEFAULT has to start from a file with no saved value.
+    ⚠ RUNS AGAINST AN EMPTY SETTINGS FILE, and must (tests/conftest.py::_isolated_settings gives every
+    test a fresh, absent one; this test used to redirect by hand). The panel seeds these fields from
+    config.py and then RESTORES them from QSettings, so without isolation the assertions read whatever
+    the developer last left in their real PRISM.ini. This test passed all morning and then failed the
+    moment a run was configured with 10000 batches -- nothing to do with the code under test. It is
+    the same restore-wins-over-config mechanism that cost a ~5-day run on 2026-08-19 (the retired chi
+    band), so a test asserting the DEFAULT has to start from a file with no saved value.
     """
     from core import config
-    import core.gui.settings as st
 
-    fd, path = tempfile.mkstemp(suffix=".ini")
-    os.close(fd)
-    os.unlink(path)                      # QSettings creates it; an empty file is not the same thing
-    st.use_ini_file(path)
-    try:
-        cfg = _budget_cfg()
-        _inf, panel = _budget_panel(cfg)
-        width = cfg.hw.batch_size
+    cfg = _budget_cfg()
+    _inf, panel = _budget_panel(cfg)
+    width = cfg.hw.batch_size
 
-        assert panel.num_runs.value() == config.TRAINING_NUM_RUNS, (
-            f"the field must seed from config.py, not from a saved session: "
-            f"{panel.num_runs.value()} != {config.TRAINING_NUM_RUNS}")
-        assert panel.run_size_cap.value() == config.TRAINING_RUN_SIZE
-        assert f"{config.TRAINING_NUM_RUNS * width:,} simulations" in panel.budget_total.text(), \
-            panel.budget_total.text()
-        assert "diversity" in panel.budget_total.text(), \
-            "the line must say batch COUNT is the (t_scale, T) diversity, not just a budget"
+    assert panel.num_runs.value() == config.TRAINING_NUM_RUNS, (
+        f"the field must seed from config.py, not from a saved session: "
+        f"{panel.num_runs.value()} != {config.TRAINING_NUM_RUNS}")
+    assert panel.run_size_cap.value() == config.TRAINING_RUN_SIZE
+    assert f"{config.TRAINING_NUM_RUNS * width:,} simulations" in panel.budget_total.text(), \
+        panel.budget_total.text()
+    assert "diversity" in panel.budget_total.text(), \
+        "the line must say batch COUNT is the (t_scale, T) diversity, not just a budget"
 
-        panel.run_size_cap.setText(str(width // 4))
-        assert f"{config.TRAINING_NUM_RUNS * (width // 4):,} simulations" in panel.budget_total.text()
-        assert "capped from" in panel.budget_total.text(), panel.budget_total.text()
+    panel.run_size_cap.setText(str(width // 4))
+    assert f"{config.TRAINING_NUM_RUNS * (width // 4):,} simulations" in panel.budget_total.text()
+    assert "capped from" in panel.budget_total.text(), panel.budget_total.text()
 
-        # ...and quadrupling the batch COUNT is what buys those rows back, at 4x the wall-clock.
-        panel.num_runs.setText(str(config.TRAINING_NUM_RUNS * 4))
-        assert f"{config.TRAINING_NUM_RUNS * width:,} simulations" in panel.budget_total.text()
-    finally:
-        st.use_ini_file(None)
-        if os.path.exists(path):
-            os.unlink(path)
+    # ...and quadrupling the batch COUNT is what buys those rows back, at 4x the wall-clock.
+    panel.num_runs.setText(str(config.TRAINING_NUM_RUNS * 4))
+    assert f"{config.TRAINING_NUM_RUNS * width:,} simulations" in panel.budget_total.text()
 
 def test_the_training_budget_reaches_build_posterior_as_arguments_not_via_config():
     """THE WIRING THAT MAKES THE FIELDS DO ANYTHING AT ALL.
@@ -264,56 +217,47 @@ def test_the_training_budget_round_trips_through_settings():
     """"I have to retype it every launch" is the complaint L1 already answered for splitters."""
     from core.gui import settings as st
 
-    path = _temp_settings()
-    try:
-        _inf, panel = _budget_panel(_budget_cfg())
-        panel.num_runs.setText("1234")
-        panel.run_size_cap.setText("512")
-        panel.save_settings(st.settings())
+    _inf, panel = _budget_panel(_budget_cfg())
+    panel.num_runs.setText("1234")
+    panel.run_size_cap.setText("512")
+    panel.save_settings(st.settings())
 
-        _inf2, fresh = _budget_panel(_budget_cfg())
-        fresh.restore_settings(st.settings())
-        assert fresh.num_runs.value() == 1234, fresh.num_runs.text()
-        assert fresh.run_size_cap.value() == 512, fresh.run_size_cap.text()
-        # And the derived line followed the restored values, not the defaults.
-        assert "1,234 batches" in fresh.budget_total.text(), fresh.budget_total.text()
-    finally:
-        st.use_ini_file(None) if hasattr(st, "use_ini_file") else None
-        os.unlink(path)
+    _inf2, fresh = _budget_panel(_budget_cfg())
+    fresh.restore_settings(st.settings())
+    assert fresh.num_runs.value() == 1234, fresh.num_runs.text()
+    assert fresh.run_size_cap.value() == 512, fresh.run_size_cap.text()
+    # And the derived line followed the restored values, not the defaults.
+    assert "1,234 batches" in fresh.budget_total.text(), fresh.budget_total.text()
 
 def test_settings_round_trip_reduction_and_fdt():
     from core.gui import settings as st
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.panels.fdt_panel import FdtPanel
 
-    _app()
-    _temp_settings()
-    try:
-        red = ReductionPanel()
-        red.f0.setText("0.123")
-        if red.cell_picker.combo.count():
-            red.cell_picker.combo.setCurrentIndex(red.cell_picker.combo.count() - 1)
-        want_cell = red.cell_picker.key()
+    qt_app()
+    red = ReductionPanel()
+    red.f0.setText("0.123")
+    if red.cell_picker.combo.count():
+        red.cell_picker.combo.setCurrentIndex(red.cell_picker.combo.count() - 1)
+    want_cell = red.cell_picker.key()
 
-        fdt = FdtPanel()
-        fdt.n_freqs.setText("77")
-        fdt.skip_sanity.setChecked(True)
-        fdt.confirm_production.setChecked(False)
+    fdt = FdtPanel()
+    fdt.n_freqs.setText("77")
+    fdt.skip_sanity.setChecked(True)
+    fdt.confirm_production.setChecked(False)
 
-        qs = st.settings()
-        red.save_settings(qs)
-        fdt.save_settings(qs)
-        qs.sync()
+    qs = st.settings()
+    red.save_settings(qs)
+    fdt.save_settings(qs)
+    qs.sync()
 
-        red2 = ReductionPanel()
-        fdt2 = FdtPanel()
-        assert red2.f0.value() == 0.123
-        assert red2.cell_picker.key() == want_cell
-        assert fdt2.n_freqs.value() == 77
-        assert fdt2.skip_sanity.isChecked() is True
-        assert fdt2.confirm_production.isChecked() is False
-    finally:
-        st.use_ini_file(None)
+    red2 = ReductionPanel()
+    fdt2 = FdtPanel()
+    assert red2.f0.value() == 0.123
+    assert red2.cell_picker.key() == want_cell
+    assert fdt2.n_freqs.value() == 77
+    assert fdt2.skip_sanity.isChecked() is True
+    assert fdt2.confirm_production.isChecked() is False
 
 def test_missing_picker_key_restores_to_default_not_blank():
     """A saved selection whose file is gone must leave the picker at its default, never blank it via
@@ -321,20 +265,16 @@ def test_missing_picker_key_restores_to_default_not_blank():
     from core.gui import settings as st
     from core.gui.panels.reduction_panel import ReductionPanel
 
-    _app()
-    _temp_settings()
-    try:
-        qs = st.settings()
-        qs.beginGroup("reduction")
-        qs.setValue("cell", "nadrowski/does_not_exist.txt")
-        qs.setValue("f0", "0.05")
-        qs.endGroup()
-        qs.sync()
+    qt_app()
+    qs = st.settings()
+    qs.beginGroup("reduction")
+    qs.setValue("cell", "nadrowski/does_not_exist.txt")
+    qs.setValue("f0", "0.05")
+    qs.endGroup()
+    qs.sync()
 
-        red = ReductionPanel()
-        assert red.cell_picker.combo.currentIndex() >= 0, "a stale key blanked the combo"
-    finally:
-        st.use_ini_file(None)
+    red = ReductionPanel()
+    assert red.cell_picker.combo.currentIndex() >= 0, "a stale key blanked the combo"
 
 def test_crossval_does_not_persist_cell_derived_bounds():
     """The S/T grid lo/hi are re-derived from the cell file; a saved value from a different cell would
@@ -342,29 +282,25 @@ def test_crossval_does_not_persist_cell_derived_bounds():
     from core.gui import settings as st
     from core.gui.panels.crossval_panel import CrossValPanel
 
-    _app()
-    _temp_settings()
-    try:
-        xv = CrossValPanel()
-        derived_hi = xv.s_grid.hi.text()          # set by _on_cell_changed from the cell file
-        xv.s_grid.hi.setText("999.0")             # user 'edits' it to a bogus value
-        xv.s_grid.points.setText("13")
-        xv.f0.setText("0.077")
+    qt_app()
+    xv = CrossValPanel()
+    derived_hi = xv.s_grid.hi.text()          # set by _on_cell_changed from the cell file
+    xv.s_grid.hi.setText("999.0")             # user 'edits' it to a bogus value
+    xv.s_grid.points.setText("13")
+    xv.f0.setText("0.077")
 
-        qs = st.settings()
-        xv.save_settings(qs)
-        qs.sync()
-        # the bogus hi must NOT have been written
-        qs.beginGroup("crossval")
-        assert qs.value("s_hi") is None, "cell-derived s_grid.hi was persisted -- it must not be"
-        qs.endGroup()
+    qs = st.settings()
+    xv.save_settings(qs)
+    qs.sync()
+    # the bogus hi must NOT have been written
+    qs.beginGroup("crossval")
+    assert qs.value("s_hi") is None, "cell-derived s_grid.hi was persisted -- it must not be"
+    qs.endGroup()
 
-        xv2 = CrossValPanel()
-        assert xv2.s_grid.points.text() == "13", "the free `points` knob was not restored"
-        assert xv2.f0.value() == 0.077
-        assert xv2.s_grid.hi.text() == derived_hi, "the grid bound must be RE-DERIVED, not restored"
-    finally:
-        st.use_ini_file(None)
+    xv2 = CrossValPanel()
+    assert xv2.s_grid.points.text() == "13", "the free `points` knob was not restored"
+    assert xv2.f0.value() == 0.077
+    assert xv2.s_grid.hi.text() == derived_hi, "the grid bound must be RE-DERIVED, not restored"
 
 def test_panel_splitter_is_sized_and_not_collapsible():
     """Every panel opens with a usable controls column that cannot be dragged to nothing.
@@ -374,7 +310,7 @@ def test_panel_splitter_is_sized_and_not_collapsible():
     one slip past the left edge collapsed the controls to zero width, recoverable only by finding a
     5px handle at x=0.
     """
-    app = _app()
+    app = qt_app()
     from core.gui.panels.base_panel import BasePanel
 
     class P(BasePanel):
@@ -382,7 +318,7 @@ def test_panel_splitter_is_sized_and_not_collapsible():
 
     panel = P()
     panel.resize(1300, 820)
-    _pump(app, 0.15)
+    pump(app, 0.15)
     assert not panel.splitter.childrenCollapsible(), \
         "the controls column can still be collapsed to zero width"
     assert all(s > 0 for s in panel.splitter.sizes()), \
@@ -395,33 +331,28 @@ def test_panel_splitter_is_sized_and_not_collapsible():
 def test_panel_layout_round_trips_through_settings():
     """The splitter position must survive a restart -- 'I have to re-drag it every launch' is the
     complaint. Uses saveState/restoreState, which work before the widget is shown or polished."""
-    app = _app()
+    app = qt_app()
     from core.gui import settings as st
     from core.gui.panels.base_panel import BasePanel
 
     class P(BasePanel):
         pass
 
-    path = _temp_settings()
-    try:
-        a = P()
-        a.resize(1300, 820)
-        _pump(app, 0.15)
-        a.splitter.setSizes([500, 700])
-        _pump(app, 0.05)
-        want = a.splitter.sizes()
-        qs = st.settings()
-        a.save_layout(qs)
-        qs.sync()
+    a = P()
+    a.resize(1300, 820)
+    pump(app, 0.15)
+    a.splitter.setSizes([500, 700])
+    pump(app, 0.05)
+    want = a.splitter.sizes()
+    qs = st.settings()
+    a.save_layout(qs)
+    qs.sync()
 
-        b = P()                                   # restore_layout runs in __init__
-        b.resize(1300, 820)
-        _pump(app, 0.15)
-        assert b.splitter.sizes() == want, \
-            f"layout did not round-trip: saved {want}, restored {b.splitter.sizes()}"
-    finally:
-        st.use_ini_file(None)
-        os.unlink(path)
+    b = P()                                   # restore_layout runs in __init__
+    b.resize(1300, 820)
+    pump(app, 0.15)
+    assert b.splitter.sizes() == want, \
+        f"layout did not round-trip: saved {want}, restored {b.splitter.sizes()}"
 
 def test_forms_grow_their_fields_and_numeric_boxes_have_a_floor():
     """Pins both halves of the 'input boxes are cut off' fix, across every form in every panel.
@@ -437,25 +368,19 @@ def test_forms_grow_their_fields_and_numeric_boxes_have_a_floor():
     from core.gui.panels.reduction_panel import ReductionPanel
     from core.gui.widgets.labeled_inputs import FloatField, IntField
 
-    _app()
-    path = _temp_settings()
-    try:
-        panels = [CrossValPanel(), FdtPanel(), ReductionPanel()]
-        forms = [f for p in panels for f in p.findChildren(QFormLayout)]
-        assert forms, "no QFormLayouts discovered — the test is not exercising anything"
-        bad = [f for f in forms
-               if f.fieldGrowthPolicy() != QFormLayout.AllNonFixedFieldsGrow]
-        assert not bad, f"{len(bad)}/{len(forms)} forms do not grow their fields"
+    qt_app()
+    panels = [CrossValPanel(), FdtPanel(), ReductionPanel()]
+    forms = [f for p in panels for f in p.findChildren(QFormLayout)]
+    assert forms, "no QFormLayouts discovered — the test is not exercising anything"
+    bad = [f for f in forms
+           if f.fieldGrowthPolicy() != QFormLayout.AllNonFixedFieldsGrow]
+    assert not bad, f"{len(bad)}/{len(forms)} forms do not grow their fields"
 
-        narrow = [w for p in panels for w in p.findChildren(QLineEdit)
-                  if isinstance(w, (FloatField, IntField)) and w.minimumWidth() < 80]
-        assert not narrow, \
-            f"{len(narrow)} numeric field(s) have no usable minimum width (e.g. " \
-            f"{narrow[0].minimumWidth()}px)"
-    finally:
-        st_mod = __import__("core.gui.settings", fromlist=["settings"])
-        st_mod.use_ini_file(None)
-        os.unlink(path)
+    narrow = [w for p in panels for w in p.findChildren(QLineEdit)
+              if isinstance(w, (FloatField, IntField)) and w.minimumWidth() < 80]
+    assert not narrow, \
+        f"{len(narrow)} numeric field(s) have no usable minimum width (e.g. " \
+        f"{narrow[0].minimumWidth()}px)"
 
 def test_long_diagnostics_are_readable_without_horizontal_scrolling():
     """Panels emit long single-line diagnostics; the log pane must wrap them, and the crossval cell
@@ -464,17 +389,11 @@ def test_long_diagnostics_are_readable_without_horizontal_scrolling():
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.widgets.log_pane import LogPane
 
-    _app()
+    qt_app()
     assert LogPane().lineWrapMode() == QPlainTextEdit.WidgetWidth, \
         "log pane still truncates long lines instead of wrapping them"
-    path = _temp_settings()
-    try:
-        assert CrossValPanel().cell_values.wordWrap(), \
-            "the crossval cell-values label does not wrap, so a long error widens the whole column"
-    finally:
-        st_mod = __import__("core.gui.settings", fromlist=["settings"])
-        st_mod.use_ini_file(None)
-        os.unlink(path)
+    assert CrossValPanel().cell_values.wordWrap(), \
+        "the crossval cell-values label does not wrap, so a long error widens the whole column"
 
 def test_the_vram_ceiling_is_on_config_live_and_NOT_persisted():
     """The VRAM ceiling is a HARDWARE knob, and it is the one field on the Config tab that is
@@ -521,8 +440,8 @@ def test_the_vram_ceiling_is_on_config_live_and_NOT_persisted():
             _pipe._BUDGET_CAP_ELEMENTS = saved_cap
 
         # Not persisted: neither direction may mention it.
-        src_save = _code_only(it.ConfigPanel.save_settings)
-        src_restore = _code_only(it.ConfigPanel.restore_settings)
+        src_save = code_only(it.ConfigPanel.save_settings)
+        src_restore = code_only(it.ConfigPanel.restore_settings)
         for what, src in (("save_settings", src_save), ("restore_settings", src_restore)):
             assert "vram" not in src.lower(), (
                 f"{what} must NOT touch the VRAM ceiling -- a stale ceiling throttles every future "
@@ -549,7 +468,7 @@ def test_the_free_vram_readout_does_not_use_mem_get_info():
     green-lit the batch which killed the first chi retrain. Printing it next to a field whose entire
     purpose is to bound VRAM would hand the user the exact lie the field defends against."""
     from core.gui.panels import inference_tabs as it
-    src = _code_only(it._nvidia_smi_free_gib)
+    src = code_only(it._nvidia_smi_free_gib)
     assert "mem_get_info" not in src, "the readout must not use the optimistic driver reading"
     assert "nvidia-smi" in src, "the readout must come from nvidia-smi"
     got = it._nvidia_smi_free_gib()
@@ -601,7 +520,7 @@ def test_the_confirmation_is_reached_and_can_refuse():
     directory the run will touch."""
     from core.gui.panels import inference_tabs as it
 
-    src = _code_only(it.PosteriorPanel._build_posterior)
+    src = code_only(it.PosteriorPanel._build_posterior)
     assert "_confirm_fresh_run" in src, "the Train handler must consult the confirmation"
     i_confirm = src.find("_confirm_fresh_run")
     i_dispatch = src.find("self.dispatch(")
@@ -610,7 +529,7 @@ def test_the_confirmation_is_reached_and_can_refuse():
     assert "new_run=" in src, "the dialog's answer must reach build_posterior as an argument"
 
     # Fails open rather than blocking a run it cannot assess.
-    body = _code_only(it.PosteriorPanel._confirm_fresh_run)
+    body = code_only(it.PosteriorPanel._confirm_fresh_run)
     assert body.count("True, False") >= 3, (
         "the check must fail OPEN -- no prior, an unreadable identity, and no near miss must all "
         "proceed; a warning that can block a run is worse than no warning")
@@ -619,3 +538,83 @@ def test_the_confirmation_is_reached_and_can_refuse():
         assert banned not in body, (
             f"_confirm_fresh_run reimplements '{banned}' -- the GUI's own identity derivation is the "
             f"defect D7 removed (it resolved run_size as `cap or hw`, not `min(hw, cap)`)")
+
+
+# ── piece 3: the shared test helpers ─────────────────────────────────────────────────────────────
+def test_code_only_strips_docstrings_and_comments_at_every_depth_and_accepts_a_module():
+    """The AST pins forbid words that the docstrings EXPLAINING the rule necessarily contain, so the
+    helper must drop every docstring -- nested functions and classes too, not only the outermost one
+    (test_nav_and_gating's local _stripped dropped only that) -- and comments, which ast.unparse never
+    carries. One helper for the four copies the suites grew (two _strip_docstrings, _code_only,
+    _unparsed); and it takes a module, so the cadence pin in test_user_sbi no longer re-reads
+    pipeline.py by hand."""
+    from tests._fixtures import code_only
+
+    def outer():
+        """DOCSTRING_OUTER says forbidden_word"""
+        # COMMENT says forbidden_word
+        def inner():
+            """DOCSTRING_INNER says forbidden_word"""
+            return "kept_string"
+
+        class K:
+            """DOCSTRING_CLASS says forbidden_word"""
+
+        return inner, K
+
+    src = code_only(outer)
+    for gone in ("DOCSTRING_OUTER", "DOCSTRING_INNER", "DOCSTRING_CLASS", "COMMENT", "forbidden_word"):
+        assert gone not in src, src
+    assert "kept_string" in src and "def inner" in src and "class K" in src, src
+
+    from core.gui import settings as st
+    mod = code_only(st)
+    assert "def use_ini_file(" in mod and "One QSettings store" not in mod, mod[:200]
+
+
+@pytest.fixture(scope="module")
+def _panel_built_at_module_scope(tmp_path_factory):
+    """A panel built at MODULE scope, the way tiny_run builds its run and screen_run (spec §8.1) will
+    build its screen. pytest sets module fixtures up before the function-scoped ones, so this runs
+    with whatever settings path the SESSION left -- the case a function-only isolation misses. It
+    returns the path it saw, the panel, and the session's temp root for the test to check against."""
+    from core.gui import settings as st
+    from core.gui.panels.reduction_panel import ReductionPanel
+    qt_app()
+    seen = st._override_path
+    panel = ReductionPanel()                  # __init__ ends with restore_settings(st.settings())
+    return panel, seen, tmp_path_factory.getbasetemp()
+
+
+def test_a_module_scoped_fixture_reads_the_session_ini_and_never_the_real_one(_panel_built_at_module_scope):
+    """Spec §5.4: the settings location is never the real PRISM.ini during a test process, AT ANY
+    FIXTURE SCOPE. The old per-test redirect (_temp_settings) covered a test body only; a panel built
+    by a module fixture was set up before it and read the developer's last session -- the same
+    restore-wins-over-config mechanism that cost a ~5-day run on 2026-08-19, now with the answer
+    depending on which test ran first. Two paths are asserted: the one the module fixture saw (the
+    session file, tests/conftest.py::_settings_home) and the one this body sees (its own fresh file,
+    _isolated_settings); both under the session temp, neither the user-scope file, and the fresh one
+    not yet on disk -- QSettings creates it, and an empty file is not the same thing as no file."""
+    from PySide6.QtCore import QSettings
+    from core.gui import settings as st
+
+    _panel, seen, basetemp = _panel_built_at_module_scope
+    real = Path(QSettings(QSettings.IniFormat, QSettings.UserScope, st.ORG, st.APP).fileName()).resolve()
+    assert seen is not None, "a module-scoped fixture built its panel against the real PRISM.ini"
+    assert Path(seen).name == "prism.ini" and Path(seen).resolve() != real, seen
+    assert basetemp in Path(seen).parents, f"{seen} is not under the session temp {basetemp}"
+    now = st._override_path
+    assert now is not None and now != seen and basetemp in Path(now).parents, now
+    assert not Path(now).exists(), "the per-test file must not exist until Qt writes it"
+
+
+def test_no_suite_points_the_settings_back_at_the_real_ini():
+    """The teardown of every per-test redirect used to be a bare `use_ini_file` call with no path --
+    and no path IS the real file. Under the session fixture that call would hand the next
+    module-scoped fixture the developer's PRISM.ini, so the suites may not contain that call at all:
+    tests/conftest.py alone resets the path, once, at session end, after asserting the real file's
+    bytes are unchanged. The needle is assembled so this file does not match itself."""
+    needle = "use_ini_file(" + "None)"
+    here = Path(__file__).resolve().parent
+    offenders = sorted(p.name for p in here.glob("test_*.py") if needle in p.read_text(encoding="utf-8"))
+    assert offenders == [], f"these suites redirect the settings to the real PRISM.ini: {offenders}"

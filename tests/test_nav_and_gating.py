@@ -39,11 +39,10 @@ from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
 from core.gui.widgets.log_pane import LogPane                     # noqa: E402
 from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
+from tests._fixtures import qt_app                                # noqa: E402
 import contextlib                                                  # noqa: E402
 import pytest                                                      # noqa: E402
 
-def _app():
-    return QApplication.instance() or QApplication([])
 def _prior_stub(id_="p1", name=""):
     """A LoadedPrior-shaped stub: the tabs now read ``.prior``/``.force_prior`` off session.inf_prior
     (piece 1, Task 4) rather than carrying the physical prior and forcing prior as separate session
@@ -56,14 +55,6 @@ def _posterior_stub(id_="post1", name="", truncation=None, x_obs_digest=None):
     longer stands in wherever a dispatched call actually reaches ``session.posterior.posterior``."""
     post = type("Post", (), {"truncation": truncation, "x_obs_digest": x_obs_digest, "latent": object()})()
     return type("LoadedPosteriorStub", (), {"posterior": post, "id": id_, "name": name})()
-# ── Phase 3: QSettings persistence ───────────────────────────────────────────────────────────────
-def _temp_settings():
-    import tempfile
-    from core.gui import settings as st
-    fd, path = tempfile.mkstemp(suffix=".ini")
-    os.close(fd)
-    st.use_ini_file(path)
-    return path
 def _chi_cfg(k=3, pad=12):
     """Stub config that puts the Infer tab on its chi page (mirrors the SimConfig fields it reads)."""
     from core import config
@@ -132,9 +123,8 @@ def test_an_unparseable_cell_does_not_brick_the_gui():
     from pathlib import Path
 
     from core.config import CELL_PATH
-    from core.gui import settings as st
 
-    _app()
+    qt_app()
     src = Path(CELL_PATH) / "nadrowski" / "master_weak.txt"
     if not src.exists():
         return                                   # nothing to probe with
@@ -144,12 +134,11 @@ def test_an_unparseable_cell_does_not_brick_the_gui():
             if not ln.strip().startswith("beta ")]
     probe.write_text("\n".join(kept) + "\n", encoding="utf-8")
     try:
-        # Isolate from the developer's real QSettings store. MainWindow() -> CrossValPanel.__init__
-        # restores its saved cell selection; a cell saved from a previous GUI session would be reloaded
-        # OVER our probe, so the picker would land on a valid cell and the prefill would parse fine --
-        # masking the degrade path this test exists to check. A clean temp .ini defaults the picker to
-        # the alphabetically-first entry (the probe), regardless of the machine's state.
-        _temp_settings()
+        # MainWindow() -> CrossValPanel.__init__ restores its saved cell selection; a cell saved from a
+        # previous GUI session would be reloaded OVER our probe, so the picker would land on a valid
+        # cell and the prefill would parse fine -- masking the degrade path this test exists to check.
+        # The per-test .ini (tests/conftest.py::_isolated_settings) is empty, so the picker defaults
+        # to the alphabetically-first entry (the probe), regardless of the machine's state.
         from core.gui.main_window import MainWindow
         from core.gui.panels.crossval_panel import CrossValPanel
         window = MainWindow()                    # must not raise
@@ -158,7 +147,6 @@ def test_an_unparseable_cell_does_not_brick_the_gui():
             f"the bad cell should degrade the prefill label, got: {xval.cell_values.text()!r}"
     finally:
         probe.unlink(missing_ok=True)
-        st.use_ini_file(None)
 
 def test_plot_watcher_only_reports_pngs_written_after_start():
     """The FDT/Reduction/CrossVal runners never return their figure paths, so the panels pick them up
@@ -168,7 +156,7 @@ def test_plot_watcher_only_reports_pngs_written_after_start():
 
     from core.gui.plot_watcher import NewPngWatcher
 
-    app = _app()
+    app = qt_app()
     with tempfile.TemporaryDirectory() as tmp:
         d = Path(tmp)
         (d / "old_plot_20260101_000000.png").write_bytes(b"stale")
@@ -198,7 +186,7 @@ def test_nav_shell_back_arrow_tracks_the_screen():
     from PySide6.QtWidgets import QWidget
     from core.gui.screens.nav_shell import NavShell
 
-    _app()
+    qt_app()
     nav = NavShell()
     for _ in range(3):
         nav.add_screen(QWidget())
@@ -211,23 +199,19 @@ def test_nav_shell_back_arrow_tracks_the_screen():
 
 def test_main_window_always_opens_on_home():
     from core.gui import settings as st
-    _app()
-    _temp_settings()
-    try:
-        qs = st.settings()
-        qs.setValue("window/tab", 2)          # a stale key from the old flat-tab layout
-        qs.sync()
-        from core.gui.main_window import MainWindow
-        w = MainWindow()
-        assert w.nav.stack.currentIndex() == 0, "the app must always open on the home screen"
-    finally:
-        st.use_ini_file(None)
+    qt_app()
+    qs = st.settings()
+    qs.setValue("window/tab", 2)          # a stale key from the old flat-tab layout
+    qs.sync()
+    from core.gui.main_window import MainWindow
+    w = MainWindow()
+    assert w.nav.stack.currentIndex() == 0, "the app must always open on the home screen"
 
 def test_inference_tab_gates_follow_the_session():
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
 
     def enabled():
@@ -260,7 +244,7 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     assert inf.tabs.count() == 6 and inf.tabs.tabText(5) == "TSNPE"
 
@@ -288,16 +272,9 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
     # region and hands it to build_posterior as a truncation, and the TAB does nothing but dispatch it.
     from core import orchestrator
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+    from tests._fixtures import code_only
 
-    def _stripped(obj):
-        tree = ast.parse(textwrap.dedent(inspect.getsource(obj)))
-        fn = tree.body[0]
-        if (fn.body and isinstance(fn.body[0], ast.Expr)
-                and isinstance(fn.body[0].value, ast.Constant) and isinstance(fn.body[0].value.value, str)):
-            fn.body = fn.body[1:]
-        return ast.unparse(tree)
-
-    code = _stripped(orchestrator.tsnpe_round)
+    code = code_only(orchestrator.tsnpe_round)
     assert "build_truncation_region" in code and "truncation=region" in code, \
         "tsnpe_round does not build a truncation region and pass it to build_posterior"
     for banned in ("set_default_x", "proposal"):
@@ -305,7 +282,7 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
             f"tsnpe_round's CODE references '{banned}' -- it must sample the truncated PRIOR, never the "
             f"posterior; that is tempering, and SBC cannot detect it")
 
-    tab = _stripped(TSNPEPanel._round)
+    tab = code_only(TSNPEPanel._round)
     assert "orchestrator.tsnpe_round" in tab, "the tab must dispatch the stage, not reimplement a round"
     for banned in ("build_posterior", "build_truncation_region", "set_default_x", "proposal"):
         assert banned not in tab, (
@@ -337,7 +314,7 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
     trunc_artifact = _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
     loaded = store.load_posterior(cfg, trunc_artifact.id, accept=Accept(truncated=True))
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.session = SbiSession(cfg=cfg, inf_prior=object())
     panel = inf.tsnpe_panel
@@ -385,7 +362,7 @@ def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session(st
     trunc = _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
     amortized = _posterior_artifact(store, cfg, name="amort")
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.session = SbiSession(cfg=cfg, inf_prior=_prior_stub())
     pp, vp = inf.posterior_panel, inf.validate_panel
@@ -449,7 +426,7 @@ def test_the_new_tab_knobs_are_forwarded_and_not_written_to_config():
     from core.gui.session import SbiSession
     from core import config as _cfg
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.session = SbiSession(draft=object(), cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
 
@@ -493,7 +470,7 @@ def test_posterior_from_scratch_is_gated_on_a_prior():
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.session = SbiSession(cfg=object()); inf.refresh_gates()
     pp = inf.posterior_panel
@@ -512,7 +489,7 @@ def test_inference_pickers_repoint_from_draft_and_config():
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import ConfigDraft
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
 
     inf.new_draft(ConfigDraft(model="HOPF", labels=[], state_dep_drift=False))
@@ -539,7 +516,7 @@ def test_chi_probe_table_is_variable_length_and_capped_by_the_posteriors_slots()
     chi_k_pad -- which is FROZEN into the trained artifact, so exceeding it is not a soft limit."""
     from core.gui.screens.inference_screen import InferenceScreen
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.install_config(_chi_cfg(k=3, pad=5))
     panel = inf.infer_panel
@@ -560,7 +537,7 @@ def test_chi_probe_rows_keep_each_recording_paired_with_its_own_frequency():
     sinc and simply returns a smaller number. Delete from the middle and check the survivors."""
     from core.gui.screens.inference_screen import InferenceScreen
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.install_config(_chi_cfg(k=4))
     panel = inf.infer_panel
@@ -585,7 +562,7 @@ def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency
     """
     from core.gui.screens.inference_screen import InferenceScreen
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.install_config(_chi_cfg(k=2))
     panel = inf.infer_panel
@@ -608,7 +585,7 @@ def test_config_units_control_declares_units_and_validates_them():
     from core.config import BOUNDS_PATH
     from core.gui.screens.inference_screen import InferenceScreen
 
-    _app()
+    qt_app()
     screen = InferenceScreen()
     cfgp = screen.config_panel
     cfgp.model_combo.setCurrentText("NADROWSKI")
@@ -645,7 +622,7 @@ def test_direct_entry_grids_round_trip_their_files():
     from core.Helpers import file_manager
     from core.gui.widgets.param_grid import BoundsGrid, ValuesGrid
 
-    _app()
+    qt_app()
     bounds = BOUNDS_PATH / "nadrowski" / "master.txt"
     cell = CELL_PATH / "nadrowski" / "master_weak.txt"
     if not (bounds.exists() and cell.exists()):
@@ -794,7 +771,7 @@ def test_an_empty_predictive_band_is_annotated_on_the_psd_figure():
     import numpy as np
     from core.Helpers import visualizers
 
-    _app()
+    qt_app()
     freqs = np.linspace(0.1, 100, 64)
     nan = np.full(64, np.nan)
     from matplotlib import pyplot as plt
@@ -817,7 +794,7 @@ def test_overlay_figures_render_and_are_picklable():
     import numpy as np
     from core.Helpers import visualizers
 
-    _app()
+    qt_app()
     t = np.linspace(0, 2, 400)
     y = np.sin(2 * np.pi * 7.5 * t)
     labels_ = [f"$p_{{{i}}}$" for i in range(13)]
@@ -846,7 +823,7 @@ def test_overlay_figures_render_and_are_picklable():
 
 def test_help_badge_carries_its_text():
     from core.gui.widgets.help_badge import HelpBadge
-    _app()
+    qt_app()
     assert HelpBadge("what this does").toolTip() == "what this does"
 
 def test_simulated_inference_emits_the_ground_truth_figure(tmp_path):
@@ -863,7 +840,7 @@ def test_simulated_inference_emits_the_ground_truth_figure(tmp_path):
     import torch
     from core import cli, orchestrator
 
-    _app()
+    qt_app()
 
     class Cfg:
         length_unit = "nm"                       # trace y-axis unit (round-4 labels)
@@ -919,7 +896,7 @@ def test_the_infer_tab_dispatches_the_compositions():
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.install_config(_chi_cfg(k=2))
     inf.session.posterior = _posterior_stub()
@@ -988,7 +965,7 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub())
     pp = inf.posterior_panel
@@ -1052,7 +1029,7 @@ def test_the_d7_and_d8_dialogs_default_to_cancel(monkeypatch):
     from PySide6.QtWidgets import QMessageBox
     from core.gui.screens.inference_screen import InferenceScreen
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     pp = inf.posterior_panel
     seen = []
@@ -1103,7 +1080,7 @@ def test_the_tsnpe_tab_dispatches_a_loaded_observation():
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
     panel = inf.tsnpe_panel
@@ -1169,7 +1146,7 @@ def test_the_infer_tab_other_observation_box():
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
 
-    _app()
+    qt_app()
     inf = InferenceScreen()
     inf.install_config(_chi_cfg(k=1))
     panel = inf.infer_panel
@@ -1234,7 +1211,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         f"only in FIELDS: {sorted(set(FIELDS) - set(gui_fields.CONTROL))}")
 
     # (b) the three shapes, against the screen's own tab titles
-    _app()
+    qt_app()
     screen = InferenceScreen()
     tabs = [screen.tabs.tabText(i) for i in range(screen.tabs.count())]
     assert tabs == ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]

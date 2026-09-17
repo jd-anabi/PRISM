@@ -39,16 +39,9 @@ from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
 from core.gui.widgets.log_pane import LogPane                     # noqa: E402
 from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
+from tests._fixtures import qt_app, pump                          # noqa: E402
 import contextlib                                                  # noqa: E402
 
-def _app():
-    return QApplication.instance() or QApplication([])
-def _pump(app, seconds=0.5):
-    """Drive the event loop without app.exec(), so the pump's queued signals get delivered."""
-    end = time.monotonic() + seconds
-    while time.monotonic() < end:
-        app.processEvents()
-        time.sleep(0.01)
 # ── the router, driven by REAL tqdm (no Qt) ──────────────────────────────────────────────────────
 def _drive(fn, level="warning"):
     """Run `fn` with sys.stderr routed through a StreamRouter; return its event list."""
@@ -142,7 +135,7 @@ def test_leave_true_bar_persists_to_log_and_leaves_no_ghost_row():
 def test_pump_never_exposes_the_transient_row_guess():
     """The user-visible guarantee: through the pump, two sequential pos-0 bars never render as two
     rows. The row-1 guess and its correction land inside one 15 Hz tick and are coalesced away."""
-    app = _app()
+    app = qt_app()
     signals = WorkerSignals()
     snapshots = []
     signals.rows.connect(snapshots.append)
@@ -153,7 +146,7 @@ def test_pump_never_exposes_the_transient_row_guess():
             time.sleep(0.05)
         for _ in tqdm(range(2), desc="Campaign 2 (chi sweep)"):
             time.sleep(0.05)
-    _pump(app)
+    pump(app)
 
     worst = max((len(s) for s in snapshots), default=0)
     assert worst <= 1, f"the pump exposed {worst} concurrent rows for two sequential pos-0 bars"
@@ -190,7 +183,7 @@ def test_total_one_bar_is_not_informative():
 # ── the full Qt stack ────────────────────────────────────────────────────────────────────────────
 def test_end_to_end_log_pane_gains_zero_blocks():
     """The whole stack: real nested tqdm -> redirect_streams -> pump -> ProgressPane / LogPane."""
-    app = _app()
+    app = qt_app()
     log, prog = LogPane(), ProgressPane()
     signals = WorkerSignals()
     signals.log.connect(log.append_line)
@@ -211,7 +204,7 @@ def test_end_to_end_log_pane_gains_zero_blocks():
             for _ in tqdm(range(4), desc="Generating training data", leave=False):
                 for _ in tqdm(range(3), desc="Running time segments", leave=False):
                     time.sleep(0.02)          # let the 15 Hz pump actually tick
-    _pump(app)
+    pump(app)
 
     assert log.blockCount() == 1 and not log.toPlainText().strip(), \
         f"log pane gained {log.blockCount()} block(s):\n{log.toPlainText()[:500]}"
@@ -224,7 +217,7 @@ def test_end_to_end_log_pane_gains_zero_blocks():
 
 def test_print_output_still_reaches_the_log():
     """The bars must not swallow ordinary pipeline output."""
-    app = _app()
+    app = qt_app()
     log = LogPane()
     signals = WorkerSignals()
     signals.log.connect(log.append_line)
@@ -236,7 +229,7 @@ def test_print_output_still_reaches_the_log():
         for _ in tqdm(range(3), desc="Generating training data", leave=False):
             time.sleep(0.02)
         print("Prior ready.")
-    _pump(app)
+    pump(app)
 
     text = log.toPlainText()
     assert "Config built: NADROWSKI" in text
@@ -250,7 +243,7 @@ def test_sbi_epoch_counter_becomes_a_progress_row_not_log_spam():
        (sbi/inference/trainers/base.py:1024) -- a LEADING '\\r' and no terminator, so it is an
        overwrite-mode status line. It must render as one updating row, not one log line per epoch,
        and its final value must not be stranded (the old reader dropped it with its buffer)."""
-    app = _app()
+    app = qt_app()
     log = LogPane()
     signals = WorkerSignals()
     snapshots = []
@@ -263,7 +256,7 @@ def test_sbi_epoch_counter_becomes_a_progress_row_not_log_spam():
             print("\r", f"Training neural network. Epochs trained: {epoch}", end="")
             time.sleep(0.03)
         print("\nNeural network successfully converged after 5 epochs.")
-    _pump(app)
+    pump(app)
 
     text = log.toPlainText()
     assert text.count("Epochs trained") == 1, \
@@ -278,7 +271,7 @@ def test_plain_prints_are_not_eaten_by_the_cursor_logic():
     """A print() writes its text and its '\\n' as TWO chunks, so the '\\n' arrives alone -- byte-identical
     to a tqdm moveto(+1). Treating it as cursor motion strands the line forever and shifts the next
     bar down a phantom row. Ordering and line boundaries must survive a print/bar/print interleave."""
-    app = _app()
+    app = qt_app()
     log = LogPane()
     signals = WorkerSignals()
     signals.log.connect(log.append_line)
@@ -295,7 +288,7 @@ def test_plain_prints_are_not_eaten_by_the_cursor_logic():
             time.sleep(0.02)
         print("\nNeural network successfully converged.")
         print("Prior ready.")
-    _pump(app)
+    pump(app)
 
     lines = [ln for ln in log.toPlainText().splitlines() if ln.strip()]
     assert lines == [
@@ -375,7 +368,7 @@ def test_the_solver_bar_never_drives_the_overall_bar_and_is_not_the_caption():
     the deepest bar there is, so it would win the election every time and drag the bar through a full
     0->100% sweep every second instead of showing the top-level count. It is also not a row
     any more -- nothing is -- so it must not surface as the caption either."""
-    _app()
+    qt_app()
     prog = ProgressPane()
     prog.begin()
 
@@ -404,7 +397,7 @@ def test_the_solver_meter_reads_the_step_counter_not_a_rendered_bar():
     from core import progress
     from core.gui.widgets import progress_pane as pp
 
-    _app()
+    qt_app()
     prog = ProgressPane()
     prog.begin()
     prog.set_rows(())                       # no bars at all, anywhere
@@ -482,7 +475,7 @@ def test_spinner_animates_and_then_reports_a_stall():
     """A spinner that keeps twirling on a wedged run asserts progress that is not happening."""
     from core.gui.widgets import progress_pane as pp
 
-    _app()
+    qt_app()
     prog = ProgressPane()
     prog.begin()
 
@@ -546,7 +539,7 @@ def test_the_caption_falls_back_to_the_sbi_epoch_counter():
     emits no tqdm bar at all, only a printed epoch counter (an overwrite-mode row, pct and total both
     None). The only other live row is `Training neural posterior -- 0/1`, which is degenerate. Render
     "no rows, just the bar" literally and that whole phase is a blank indeterminate bar."""
-    _app()
+    qt_app()
     prog = ProgressPane()
     prog.begin()
 
@@ -564,7 +557,7 @@ def test_the_overall_bar_follows_the_largest_non_degenerate_total():
     deeper and far coarser than "Generating training data" -- picking the deepest row would sweep the
     overall bar 0->100% every couple of seconds. (config.QUIET_SEGMENT_BAR hides that bar under the
     GUI today; the election should not depend on it still being set.)"""
-    _app()
+    qt_app()
     prog = ProgressPane()
     prog.begin()
 
@@ -598,7 +591,7 @@ def test_leave_true_pos0_bar_is_retired_not_left_pegged_at_100():
     assert any("100%" in t for t in logs), "its final frame should graduate into the log"
 
     # and the overall bar must not still be reading 100%
-    app = _app()
+    app = qt_app()
     prog = ProgressPane()
     live = {}
     for kind, payload in events:
