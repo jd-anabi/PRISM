@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import torch
 import hdbscan
@@ -9,6 +11,8 @@ from abc import ABC, abstractmethod
 from torch.distributions import TransformedDistribution
 from core import config
 from core.SBI.reparam import build_box_bijection, clamp_to_box
+
+log = logging.getLogger(__name__)
 
 # Fixed k-means init for the latent GMM. A prior must be reproducible or no posterior trained from it
 # can be: sklearn defaults random_state to the global NumPy RNG, which nothing in this pipeline pins.
@@ -28,8 +32,8 @@ def resolve_sweep_device(device: torch.device) -> torch.device:
     with a note rather than raise halfway through a sweep.
     """
     if device.type == "cuda" and not torch.cuda.is_available():
-        print("[prior] CUDA was requested for the parameter sweep but is not available; "
-              "falling back to the CPU.", flush=True)
+        log.warning("[prior] CUDA was requested for the parameter sweep but is not available; "
+                    "falling back to the CPU.")
         return torch.device("cpu")
     return device
 
@@ -106,10 +110,10 @@ class Prior(ABC):
         labels = clusterer.fit_predict(latent_scaled)
         n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
         if n_clusters < 1:
-            print('No clusters found. Defaulting to 1 cluster')
+            log.warning('No clusters found. Defaulting to 1 cluster')
             n_clusters = 1
         else:
-            print(f'Found {n_clusters} clusters (in latent space)')
+            log.info(f'Found {n_clusters} clusters (in latent space)')
 
         if latent_params.shape[0] < n_clusters:
             raise ValueError(

@@ -1,8 +1,8 @@
 import dataclasses
+import logging
 import math
 import os
 import shutil
-import sys
 import time
 import warnings
 from pathlib import Path
@@ -20,6 +20,10 @@ from core.config import CHUNK_LEN, N_ND_MAX
 from core.refusals import Refusal
 from core.Simulator import bp_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics, chi, derived
+
+# This module's records (piece 3, V4): a child of the ``core`` logger, whose level core/runs.py sets
+# once at import and whose handlers each front end installs for a run. Never configured here.
+log = logging.getLogger(__name__)
 
 VALID_SIMS: dict = {"bp":        bp_simulator.BPSimulator,
                     "nadrowski": nadrowski_simulator.NadrowskiSimulator,
@@ -185,7 +189,10 @@ def _log_memory(device: torch.device, tag: str) -> None:
                 f"(optimistic on Windows), learned cap {cap}")
     except Exception as e:                   # noqa: BLE001 -- see the docstring
         line = f"[mem] {tag}: memory statistics unavailable ({_short_err(e, 120)})"
-    print(line, file=sys.stderr, flush=True)
+    # INFORMATION, not a warning (piece 3, V4): a statistics line on a healthy run. As a stderr print
+    # it wore the window's warning triangle every _MEM_LOG_EVERY batches; after an OOM, the notice
+    # that precedes this line carries the warning on its own.
+    log.info(line)
     # Outside the try on purpose: if the reads above failed, the peak was never reported, so
     # resetting it would discard the interval's high-water mark and the NEXT line would understate.
     try:
@@ -299,8 +306,8 @@ def _release_device_memory(device: torch.device, *, plans: bool = True,
         try:
             fn()
         except Exception as e:               # noqa: BLE001 -- see the docstring
-            print(f"{_batch_tag()}: {what} failed during recovery and was ignored "
-                  f"({_short_err(e, 120)})", file=sys.stderr, flush=True)
+            log.warning(f"{_batch_tag()}: {what} failed during recovery and was ignored "
+                        f"({_short_err(e, 120)})")
 
     _try(torch.cuda.empty_cache, "empty_cache()")
     if plans:
@@ -342,11 +349,16 @@ def _cancellable_wait(seconds: float, why: str) -> None:
     """Sleep ``seconds``, in slices, staying responsive to a GUI cancel and saying why we are idle.
 
     A PLAIN time.sleep() CANNOT BE CANCELLED HERE. Cancellation in this app is cooperative and is
-    raised from CancelToken.check() inside the redirected stream's write() on the worker thread
-    (core/gui/streams.py) -- so a run that is sleeping is a run that cannot notice the Cancel button
-    until it wakes. Sleeping in ~1 s slices and PRINTING between them gives the latch its chance,
-    and a multi-minute silent pause in a run that has already logged an OOM would otherwise read as
-    a hang at precisely the moment the user is most likely to reach for Cancel.
+    raised from CancelToken.check() on the worker thread -- inside the redirected stream's write() and
+    inside the window's logging handler (core/gui/streams.py: _SignalStream.write,
+    _PumpLogHandler.emit) -- so a run that is sleeping is a run that cannot notice the Cancel button
+    until it wakes. Sleeping in ~1 s slices and LOGGING between them gives the latch its chance, and
+    a multi-minute silent pause in a run that has already logged an OOM would otherwise read as a hang
+    at precisely the moment the user is most likely to reach for Cancel.
+
+    The line is an information record since piece 3 (it was a stderr print, i.e. a warning row in the
+    window). The checkpoint moved with it: the window's handler checks the token before it sinks the
+    record, exactly as the stream's write() did.
     """
     end = time.monotonic() + max(0.0, seconds)
     last_note = 0.0
@@ -360,8 +372,7 @@ def _cancellable_wait(seconds: float, why: str) -> None:
         now = time.monotonic()
         if now - last_note >= 5.0:
             last_note = now
-            print(f"{_batch_tag()}: {why} -- {max(0.0, end - now):.0f}s remaining",
-                  file=sys.stderr, flush=True)
+            log.info(f"{_batch_tag()}: {why} -- {max(0.0, end - now):.0f}s remaining")
 
 
 def _short_err(err: BaseException, limit: int = 200) -> str:
@@ -399,9 +410,8 @@ def _try_rng_snapshot(tc, device, chi_gen):
     try:
         return tc.rng_snapshot(device, chi_gen)
     except Exception as e:                   # noqa: BLE001
-        print(f"{_batch_tag()}: could not snapshot the RNG ({_short_err(e, 120)}); this batch has no "
-              f"restore point and will not be checkpointed until the next successful snapshot",
-              file=sys.stderr, flush=True)
+        log.warning(f"{_batch_tag()}: could not snapshot the RNG ({_short_err(e, 120)}); this batch has no "
+                    f"restore point and will not be checkpointed until the next successful snapshot")
         return None
 
 
@@ -430,9 +440,8 @@ def _try_rng_restore(tc, rng, device, chi_gen) -> bool:
         tc.rng_restore(rng, device, chi_gen)
         return True
     except Exception as e:                   # noqa: BLE001 -- see the docstring
-        print(f"{_batch_tag()}: could not restore the RNG before re-running ({_short_err(e, 120)}); "
-              f"the re-run proceeds with a fresh draw -- statistically equivalent, not bit-identical",
-              file=sys.stderr, flush=True)
+        log.warning(f"{_batch_tag()}: could not restore the RNG before re-running ({_short_err(e, 120)}); "
+                    f"the re-run proceeds with a fresh draw -- statistically equivalent, not bit-identical")
         return False
 
 
@@ -473,16 +482,15 @@ def vram_ceiling_gib() -> float:
         try:
             return max(0.0, float(raw))
         except ValueError:
-            print(f"{VRAM_CEILING_ENV}={raw!r} is not a number; ignoring it and using "
-                  f"config.SIM_VRAM_CEILING_GIB instead", file=sys.stderr, flush=True)
+            log.warning(f"{VRAM_CEILING_ENV}={raw!r} is not a number; ignoring it and using "
+                        f"config.SIM_VRAM_CEILING_GIB instead")
     # Guarded for the same reason as the env branch: this runs inside the PLANNER, on every batch,
     # and a config.py edited to a non-numeric value would otherwise raise there rather than at the
     # point of the mistake.
     try:
         return max(0.0, float(getattr(config, "SIM_VRAM_CEILING_GIB", 0.0) or 0.0))
     except (TypeError, ValueError):
-        print(f"config.SIM_VRAM_CEILING_GIB is not a number; treating the ceiling as off",
-              file=sys.stderr, flush=True)
+        log.warning(f"config.SIM_VRAM_CEILING_GIB is not a number; treating the ceiling as off")
         return 0.0
 
 
@@ -701,11 +709,12 @@ def _gen_obs_retry(model, params, t, inits, force, n_segs, steady_idx, fixed_dic
     half = batch_size // 2
     # Notice BEFORE release: the release can itself raise on a starved card, outside the except
     # clause the exception context is already cleared, and on 2026-08-27 a run died exactly there
-    # with `note` never seen. Printed on stderr, not warnings.warn -- the "once per location" filter
+    # with `note` never seen. A WARNING RECORD, not warnings.warn -- the "once per location" filter
     # would collapse hundreds of events into one line, and parts of gen_training_data run under
-    # simplefilter("ignore"); stderr also lands in the GUI log as a WARNING row.
-    print(f"{_batch_tag()}: OOM at simulation batch {batch_size}; retrying in chunks of "
-          f"{half}{_free_gib_note(device)}. Original: {note}", file=sys.stderr, flush=True)
+    # simplefilter("ignore"), which silences warnings but not records. The record reaches the GUI log
+    # as a WARNING row and the tool's stderr as "warning: ..." (piece 3, V4).
+    log.warning(f"{_batch_tag()}: OOM at simulation batch {batch_size}; retrying in chunks of "
+                f"{half}{_free_gib_note(device)}. Original: {note}")
     _release_device_memory(device)
 
     # Same preallocation as gen_obs' predictive split, for the same reason -- and note it happens
@@ -790,8 +799,8 @@ def _rows_with_oom_retry(fn, lo: int, hi: int, *, per_row_elements: int,
     # the context already cleared. The release is now best-effort and the notice prints BEFORE it,
     # so the original failure is on the record whatever the recovery manages to free.
     half = n_rows // 2
-    print(f"{_batch_tag()}: OOM with {n_rows} rows OUTSIDE the simulator retry; re-running this batch "
-          f"in halves of {half}{_free_gib_note(device)}. Original: {note}", file=sys.stderr, flush=True)
+    log.warning(f"{_batch_tag()}: OOM with {n_rows} rows OUTSIDE the simulator retry; re-running this batch "
+                f"in halves of {half}{_free_gib_note(device)}. Original: {note}")
     _release_device_memory(device)
 
     parts = []
@@ -898,13 +907,13 @@ def retry_on_oom(fn, *, what: str, device: torch.device, attempts: int | None = 
             note = _short_err(err)
         # Outside the except: while `err` is bound its traceback pins the failed attempt's tensors.
         delay = delay_seq[min(attempt, len(delay_seq) - 1)]
-        print(f"{_batch_tag()}: {what} hit a device error ({attempt + 1}/{n_attempts + 1})"
-              f"{_free_gib_note(device)}. Original: {note}", file=sys.stderr, flush=True)
+        log.warning(f"{_batch_tag()}: {what} hit a device error ({attempt + 1}/{n_attempts + 1})"
+                    f"{_free_gib_note(device)}. Original: {note}")
         _release_device_memory(device)
         _log_memory(device, f"after OOM in {what}")
         if _we_are_the_holder(device):
-            print(f"{_batch_tag()}: THIS process holds most of the card, so waiting cannot free "
-                  f"anything -- retrying {what} immediately.", file=sys.stderr, flush=True)
+            log.warning(f"{_batch_tag()}: THIS process holds most of the card, so waiting cannot free "
+                        f"anything -- retrying {what} immediately.")
         else:
             _cancellable_wait(delay, f"waiting for device memory before retrying {what}")
 
@@ -1393,13 +1402,12 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             # LAST, so nothing above (Sobol is skipped, but prior construction elsewhere may have
             # drawn) leaves the streams anywhere other than where batch _start_k found them.
             _tc.rng_restore(_state.get("rng") or {}, device, chi_gen)
-            print(f"[checkpoint] resuming at batch {_start_k}/{n_runs} from {_ck_dir} "
-                  f"({'reusing the stored rotation V' if _ck_resumed.get('V') is not None else 'no rotation'})",
-                  flush=True)
+            log.info(f"[checkpoint] resuming at batch {_start_k}/{n_runs} from {_ck_dir} "
+                     f"({'reusing the stored rotation V' if _ck_resumed.get('V') is not None else 'no rotation'})")
         else:
             note = _tc.describe_siblings(checkpoint["identity"], _ck_dir.parent)
             if note:
-                print(note, flush=True)
+                log.warning(note)
 
     # SKIPPED ENTIRELY on a resume: batch_t_scales/batch_Ts already came from the checkpoint header.
     # Not merely redundant -- rebuilding the engine would consume the torch global RNG (scramble=True
@@ -1428,8 +1436,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             _w = statistics.SUMMARY_WIDTH + 1 + (
                 config.CHI_ELEM_W * chi_k_pad if chi_mode else 8)
             _need = n_runs * run_size * (_w + 8) * 4
-            print(f"[checkpoint] writing to {_ck_dir} every {_ck_every} batches "
-                  f"(~{_need / 2 ** 30:.1f} GiB total, {_free / 2 ** 30:.1f} GiB free)", flush=True)
+            log.info(f"[checkpoint] writing to {_ck_dir} every {_ck_every} batches "
+                     f"(~{_need / 2 ** 30:.1f} GiB total, {_free / 2 ** 30:.1f} GiB free)")
             if _free < _need:
                 warnings.warn(
                     f"Only {_free / 2 ** 30:.1f} GiB free where the training checkpoint needs about "
@@ -1651,10 +1659,9 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 # `_err` is bound its traceback owns every frame of the failed attempt and the
                 # tensors they hold, so releasing here is what makes the release mean anything.
                 _delay = _delays[min(_attempt, len(_delays) - 1)]
-                print(f"{_batch_tag()}: batch FAILED after both halving retries "
-                      f"({_attempt + 1}/{_attempts + 1}){_free_gib_note(device)}. Waiting "
-                      f"{_delay:.0f}s and re-running the whole batch. Original: {_note}",
-                      file=sys.stderr, flush=True)
+                log.error(f"{_batch_tag()}: batch FAILED after both halving retries "
+                          f"({_attempt + 1}/{_attempts + 1}){_free_gib_note(device)}. Waiting "
+                          f"{_delay:.0f}s and re-running the whole batch. Original: {_note}")
                 # ⚠ RESTORE FIRST, RELEASE SECOND, WAIT LAST. The order is the fix, not decoration.
                 #
                 # This block used to run release -> wait -> restore, and on 2026-08-28 that killed
@@ -1681,11 +1688,14 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 if _we_are_the_holder(device):
                     # Waiting cannot help: we are what is full. Go straight back to the retry, where
                     # the two halving ladders will shrink the work instead.
-                    print(f"{_batch_tag()}: THIS process holds most of the card, so waiting cannot "
-                          f"free anything -- retrying immediately at a smaller size instead of "
-                          f"pausing {_delay:.0f}s. If this repeats, the allocator is fragmented: "
-                          f"restart the run (it resumes from its checkpoint) and consider setting "
-                          f"the VRAM ceiling on the Config tab.", file=sys.stderr, flush=True)
+                    # The tail names the core's own settings, never a window control (spec §3.1): the
+                    # tool has no Config tab, and the window's field writes config.SIM_VRAM_CEILING_GIB.
+                    log.warning(f"{_batch_tag()}: THIS process holds most of the card, so waiting cannot "
+                                f"free anything -- retrying immediately at a smaller size instead of "
+                                f"pausing {_delay:.0f}s. If this repeats, the allocator is fragmented: "
+                                f"restart the run (it resumes from its checkpoint) and consider setting "
+                                f"a per-batch VRAM ceiling (config.SIM_VRAM_CEILING_GIB, or "
+                                f"{VRAM_CEILING_ENV} for one run).")
                 else:
                     _cancellable_wait(_delay, "waiting for device memory before re-running this batch")
 
@@ -1734,10 +1744,10 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             # diagnostic. Silent while there are none, which is the normal case.
             _bad = _patho["nonfinite"] + _patho["constant"] + _patho["overflow"]
             if _bad > _patho_seen:
-                print(f"[patho] batch {batch_k}: {_bad - _patho_seen} new pathological "
-                      f"trajectorie(s) -- {_patho['nonfinite']} non-finite, "
-                      f"{_patho['constant']} exactly constant, {_patho['overflow']} over "
-                      f"{_PATHO_MAG:g} in magnitude, of {_patho['rows']:,} simulated", flush=True)
+                log.warning(f"[patho] batch {batch_k}: {_bad - _patho_seen} new pathological "
+                            f"trajectorie(s) -- {_patho['nonfinite']} non-finite, "
+                            f"{_patho['constant']} exactly constant, {_patho['overflow']} over "
+                            f"{_PATHO_MAG:g} in magnitude, of {_patho['rows']:,} simulated")
                 _patho_seen = _bad
 
             # --- checkpoint the completed batches [_ck_from, batch_k + 1) ---
@@ -1751,9 +1761,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 # boundary writes the whole span. The only cost is a longer crash window.
                 _ck_rng = _try_rng_snapshot(_tc, device, chi_gen)
                 if _ck_rng is None:
-                    print(f"[checkpoint] deferring the write at batch {batch_k + 1}: no RNG "
-                          f"snapshot. The rows are still held and go out at the next boundary.",
-                          file=sys.stderr, flush=True)
+                    log.warning(f"[checkpoint] deferring the write at batch {batch_k + 1}: no RNG "
+                                f"snapshot. The rows are still held and go out at the next boundary.")
                 else:
                     _tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k + 1, rng=_ck_rng,
                              x_buf=x_buf, th_buf=th_buf, run_size=run_size)
@@ -1772,21 +1781,22 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
         if _ck_dir is not None and batch_k > _ck_from:
             _rescue_rng = _pending_rng if _pending_rng_at == batch_k else None
             if _rescue_rng is None:
-                print(f"[checkpoint] no valid RNG snapshot for batch {batch_k}; saving the rows "
-                      f"without a restore point (a resume will draw fresh noise from there)",
-                      file=sys.stderr, flush=True)
+                log.warning(f"[checkpoint] no valid RNG snapshot for batch {batch_k}; saving the rows "
+                            f"without a restore point (a resume will draw fresh noise from there)")
             try:
                 # Announced BEFORE the write, so a multi-second flush is not an unexplained hang after
-                # Cancel. Safe to print here even under a cancel: CancelToken.fired is a one-shot
-                # latch, so the raise has already happened and later writes pass through. Nothing is
-                # printed BETWEEN the shard fsync and the state replace -- see training_checkpoint.
-                print(f"[checkpoint] stopping: saving {batch_k - _ck_from} completed batches "
-                      f"({_ck_from} -> {batch_k}) before unwinding…", flush=True)
+                # Cancel. Safe to log here even under a cancel: the window's logging handler checks the
+                # same CancelToken the streams do, and CancelToken.fired is a one-shot latch, so the
+                # raise has already happened and later records pass through. Nothing is printed or
+                # logged BETWEEN the shard fsync and the state replace -- see training_checkpoint.
+                log.info(f"[checkpoint] stopping: saving {batch_k - _ck_from} completed batches "
+                         f"({_ck_from} -> {batch_k}) before unwinding…")
                 _tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k,
                          rng=_rescue_rng, x_buf=x_buf, th_buf=th_buf, run_size=run_size)
             except Exception as _e:              # noqa: BLE001
-                # A failed rescue write must never REPLACE the cancel/crash with an I/O error.
-                print(f"[checkpoint] could not save on the way out: {_e}", file=sys.stderr, flush=True)
+                # A failed rescue write must never REPLACE the cancel/crash with an I/O error. It is
+                # an ERROR record: a failure reported rather than raised.
+                log.error(f"[checkpoint] could not save on the way out: {_e}")
         raise                                    # UNCONDITIONAL: never swallow a cancel
     finally:
         # Cleared however we leave -- return, OOM, or a cooperative cancel. A stale tag would make the
@@ -1796,16 +1806,15 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
 
     if _patho["rows"]:
         _bad = _patho["nonfinite"] + _patho["constant"] + _patho["overflow"]
-        print(f"[patho] run total: {_bad:,} pathological of {_patho['rows']:,} simulated "
-              f"trajectories ({100.0 * _bad / _patho['rows']:.4f}%) -- "
-              f"{_patho['nonfinite']:,} non-finite, {_patho['constant']:,} exactly constant, "
-              f"{_patho['overflow']:,} over {_PATHO_MAG:g}", flush=True)
+        log.info(f"[patho] run total: {_bad:,} pathological of {_patho['rows']:,} simulated "
+                 f"trajectories ({100.0 * _bad / _patho['rows']:.4f}%) -- "
+                 f"{_patho['nonfinite']:,} non-finite, {_patho['constant']:,} exactly constant, "
+                 f"{_patho['overflow']:,} over {_PATHO_MAG:g}")
     if _region is not None and _region_total:
-        print(f"[tsnpe] post-override containment: {_region_inside:,}/{_region_total:,} = "
-              f"{_region_inside / _region_total:.3%} of the recorded latent targets lie inside the "
-              f"region, resumed rows included (the per-batch t_scale override moves every row after "
-              f"the rejection draw; the sampler's acceptance rate describes PRE-override draws).",
-              flush=True)
+        log.info(f"[tsnpe] post-override containment: {_region_inside:,}/{_region_total:,} = "
+                 f"{_region_inside / _region_total:.3%} of the recorded latent targets lie inside the "
+                 f"region, resumed rows included (the per-batch t_scale override moves every row after "
+                 f"the rejection draw; the sampler's acceptance rate describes PRE-override draws).")
         if hasattr(sampling_dist, "note_recorded"):
             sampling_dist.note_recorded(_region_inside, _region_total)
     if x_buf is None:                       # n_runs == 0: nothing was generated, and nothing to size from
@@ -1823,9 +1832,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                      rng=_try_rng_snapshot(_tc, device, chi_gen),
                      x_buf=x_buf, th_buf=th_buf, run_size=run_size)
         _tc.mark_complete(_ck_dir, n_runs, rows=tuple(int(v) for v in x_buf.shape))
-        print(f"[checkpoint] complete: {n_runs} batches in {_ck_dir}. Safe to delete once the "
-              f"posterior is saved; keeping it lets you retrain the flow without re-simulating.",
-              flush=True)
+        log.info(f"[checkpoint] complete: {n_runs} batches in {_ck_dir}. Safe to delete once the "
+                 f"posterior is saved; keeping it lets you retrain the flow without re-simulating.")
     return x_buf, th_buf
 
 # Extracted seams, re-imported so every existing consumer -- orchestrator, the scripts, the

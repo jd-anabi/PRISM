@@ -7,6 +7,7 @@ bottom, which keeps monkeypatching ``pipeline.<name>`` effective (the kill-at te
 namespace). Calls back into pipeline machinery go through the module object (``_pipeline.``) at
 call time for the same reason.
 """
+import logging
 import warnings
 
 import torch
@@ -14,6 +15,8 @@ import torch
 from core import config
 from core.SBI import statistics
 from core.SBI import pipeline as _pipeline
+
+log = logging.getLogger(__name__)
 
 
 _PATHO_MAG = 1e15          # |x| beyond which a trajectory's features cannot be trusted
@@ -185,8 +188,8 @@ def winsorize_summary_block(data: torch.Tensor, n_summary: int,
     n_moved = int(((s < lo) | (s > hi)).sum())
     s.clamp_(min=lo, max=hi)
     if n_moved:
-        print(f"[winsor] clipped {n_moved:,} of {s.numel():,} summary elements "
-              f"({100.0 * n_moved / max(s.numel(), 1):.3f}%) to their per-column "
-              f"{lo_p:.1%}/{hi_p:.1%} percentiles", flush=True)
+        log.info(f"[winsor] clipped {n_moved:,} of {s.numel():,} summary elements "
+                 f"({100.0 * n_moved / max(s.numel(), 1):.3f}%) to their per-column "
+                 f"{lo_p:.1%}/{hi_p:.1%} percentiles")
     return data
 

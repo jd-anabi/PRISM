@@ -1,3 +1,4 @@
+import logging
 import math
 from typing import Any
 
@@ -6,6 +7,8 @@ from tqdm import tqdm
 
 from core import config
 from core.progress import SOLVER
+
+log = logging.getLogger(__name__)
 
 
 def _bar_kwargs(n: int, batch_size: int) -> dict:
@@ -177,8 +180,8 @@ def _acquire_graph(step, params, x0, force, dt, sqrt_dt, chunk):
         return ent
     except Exception as e:                     # noqa: BLE001 -- a solver must never die on a speedup
         _GRAPH_DISABLED = True
-        print(f"[solver] CUDA graph capture unavailable ({type(e).__name__}: {e}); "
-              f"falling back to the eager step loop for the rest of this process.", flush=True)
+        log.warning(f"[solver] CUDA graph capture unavailable ({type(e).__name__}: {e}); "
+                    f"falling back to the eager step loop for the rest of this process.")
         return None
 
 

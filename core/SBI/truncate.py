@@ -38,12 +38,16 @@ the parent posterior's mass and excluded the ground truth (Appendix A 2026-09-09
 V for a truncated round, refusing on any mismatch, rather than ever running the Fisher again.
 """
 import hashlib
+import logging
 import math
 
 import torch
 
 from core.SBI import reparam as _reparam, training_checkpoint as _tc
 from core.refusals import Refusal
+
+
+log = logging.getLogger(__name__)
 
 
 def t_scale_loading_max(n_latent: int) -> float:
@@ -362,16 +366,14 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
         excluded = [j for j in range(scanned) if j not in dims]
         for j in excluded:
             src = f"|V[t_scale, {j}]|" if V is not None else f"the t_scale axis' weight on direction {j} (unrotated latent)"
-            print(f"[tsnpe] direction {j} NOT truncated: {src} = {float(load[j]):.3f} > {limit:.3f}. The "
-                  f"per-batch t_scale override would carry rows out of a box along it, turning the "
-                  f"restriction into a reweighting (D4).", flush=True)
+            log.warning(f"[tsnpe] direction {j} NOT truncated: {src} = {float(load[j]):.3f} > {limit:.3f}. The "
+                        f"per-batch t_scale override would carry rows out of a box along it, turning the "
+                        f"restriction into a reweighting (D4).")
         if len(dims) < k:
-            print(f"[tsnpe] only {len(dims)} of the requested {k} directions are eligible for truncation.",
-                  flush=True)
+            log.warning(f"[tsnpe] only {len(dims)} of the requested {k} directions are eligible for truncation.")
         if dims:
-            print(f"[tsnpe] fraction of the t_scale axis inside the truncated subspace: "
-                  f"{float((load[dims] ** 2).sum()):.3f} (0 = the override cannot move a row out of the box)",
-                  flush=True)
+            log.info(f"[tsnpe] fraction of the t_scale axis inside the truncated subspace: "
+                     f"{float((load[dims] ** 2).sum()):.3f} (0 = the override cannot move a row out of the box)")
     if not dims:
         raise ValueError("region_from_posterior: every direction loads on t_scale above the limit; "
                          "nothing can be truncated.")

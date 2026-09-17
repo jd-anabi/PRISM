@@ -1824,13 +1824,13 @@ def _gen_td(mode, *, seed=0, n_runs=3, run_size=4, prior=None, **over):
         force_prior, t, **kw)
 
 
-def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override():
+def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override(caplog):
     """⚠ DEFECT D4 MADE VISIBLE. The rejection sampler accepts a row BEFORE gen_training_data
     overwrites its t_scale with the batch's value and recomputes the latent target, so its acceptance
     rate says nothing about the rows the flow trains on. A region that pins the t_scale latent to a
     sliver around the truth accepts every draw of a fixed prior (100 %) and contains NONE of the
-    recorded targets; a region on an ND direction contains all of them. Both numbers are reported."""
-    import contextlib
+    recorded targets; a region on an ND direction contains all of them. Both numbers are reported --
+    since piece 3 as an information record on the pipeline's logger, not a stdout print."""
     from core.SBI import reparam as _rp, truncate as _tr
 
     cfg = _td_cfg()
@@ -1842,26 +1842,32 @@ def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override():
 
     sliver = _tr.TruncationRegion([i_t], [float(z_gt[0, i_t]) - 1e-3], [float(z_gt[0, i_t]) + 1e-3], n_latent=P)
     tp = _tr.TruncatedLatentPrior(fixed, sliver)
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        _gen_td("forced", seed=5, n_runs=3, run_size=4, prior=tp, theta_transform=T)
+
+    def _containment():
+        return [(r.levelname, r.getMessage()) for r in caplog.records
+                if r.name == "core.SBI.pipeline" and "post-override containment" in r.getMessage()]
+
+    caplog.clear()
+    _gen_td("forced", seed=5, n_runs=3, run_size=4, prior=tp, theta_transform=T)
     assert tp.acceptance_rate == 1.0, tp.acceptance_rate
     assert tp.recorded_containment == 0.0, tp.recorded_containment
-    assert "post-override containment: 0/12" in buf.getvalue(), buf.getvalue()[-500:]
+    said = _containment()
+    assert len(said) == 1 and said[0][0] == "INFO" and "post-override containment: 0/12" in said[0][1], said
 
     wide = _tr.TruncationRegion([0], [float(z_gt[0, 0]) - 1.0], [float(z_gt[0, 0]) + 1.0], n_latent=P)
     tp2 = _tr.TruncatedLatentPrior(fixed, wide)
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        _gen_td("forced", seed=5, n_runs=3, run_size=4, prior=tp2, theta_transform=T)
-    assert tp2.recorded_containment == 1.0 and "post-override containment: 12/12" in buf.getvalue()
+    caplog.clear()
+    _gen_td("forced", seed=5, n_runs=3, run_size=4, prior=tp2, theta_transform=T)
+    said = _containment()
+    assert tp2.recorded_containment == 1.0 and len(said) == 1 and said[0][0] == "INFO" \
+        and "post-override containment: 12/12" in said[0][1], said
 
     assert tp2.recorded_counts == (12, 12)
-    # and with no region in sight the tally is silent: the amortized path prints nothing new
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        _gen_td("forced", seed=5, n_runs=1, run_size=2, theta_transform=T)
-    assert "post-override" not in buf.getvalue()
+    # and with no region in sight the tally is silent: the amortized path logs nothing about it
+    caplog.clear()
+    _gen_td("forced", seed=5, n_runs=1, run_size=2, theta_transform=T)
+    assert not any("post-override" in r.getMessage() for r in caplog.records), \
+        [r.getMessage() for r in caplog.records]
 
 
 def test_gen_training_data_is_reproducible_from_a_seed_in_every_mode():
@@ -3311,27 +3317,27 @@ def test_the_local_sweep_is_not_pinned_to_the_cpu_in_any_prior():
             f"{cls.__name__}._local_map must simulate on self.sweep_device")
 
 
-def test_the_sweep_device_degrades_to_the_cpu_instead_of_raising():
+def test_the_sweep_device_degrades_to_the_cpu_instead_of_raising(caplog):
     """A caller's device is normally already CPU on a machine without CUDA, so this is for the case
-    where one is handed a cuda device anyway: it must DEGRADE with a printed note rather than raise
-    halfway through a multi-minute sweep."""
+    where one is handed a cuda device anyway: it must DEGRADE with a logged WARNING rather than raise
+    halfway through a multi-minute sweep. A warning, not an information line: the operator asked for
+    the card and is not getting it."""
     from core.SBI.Priors import prior as _prior_mod
-    import contextlib as _ctx
 
     assert _prior_mod.resolve_sweep_device(torch.device("cpu")).type == "cpu"
 
     saved = torch.cuda.is_available
-    buf = io.StringIO()
+    caplog.clear()
     try:
         torch.cuda.is_available = lambda: False
-        with _ctx.redirect_stdout(buf):
-            got = _prior_mod.resolve_sweep_device(torch.device("cuda"))
+        got = _prior_mod.resolve_sweep_device(torch.device("cuda"))
     finally:
         torch.cuda.is_available = saved
     assert got.type == "cpu", "a cuda device with no CUDA must fall back, not raise"
-    assert "falling back" in buf.getvalue().lower(), (
-        "the fallback must SAY so -- a sweep silently running 17.7x slower than asked is the "
-        "failure this whole change removed")
+    said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.SBI.Priors.prior"]
+    assert len(said) == 1 and said[0][0] == "WARNING" and "falling back" in said[0][1].lower(), (
+        "the fallback must SAY so, as a warning -- a sweep silently running 17.7x slower than asked "
+        f"is the failure this whole change removed: {said}")
 
 
 def test_the_sweep_and_flow_knobs_are_ARGUMENTS_because_the_constants_are_snapshotted():
@@ -3445,29 +3451,31 @@ def test_the_release_path_survives_a_failing_empty_cache():
         pipeline_mod._MIN_SIM_CHUNK = saved_floor
 
 
-def test_the_oom_notice_is_printed_before_the_release():
+def test_the_oom_notice_is_printed_before_the_release(caplog):
     """The notice has to reach the log even when the release that follows it explodes.
 
     On 2026-08-27 the order was the other way round: `note` was captured, the release raised, and the
     only record of the ORIGINAL failure died with it. Ordering, not wording, is what this pins -- so
-    it asserts the notice is present after a release that raises."""
-    import contextlib as _ctx
+    it asserts the notice is present after a release that raises. Since piece 3 the notice is a
+    WARNING record (a logging call has no once-per-location registry, so every OOM is on the record)."""
     saved_empty = torch.cuda.empty_cache
     saved_floor = pipeline_mod._MIN_SIM_CHUNK
-    buf = io.StringIO()
+    caplog.clear()
     try:
         torch.cuda.empty_cache = _raising_empty_cache([])
         pipeline_mod._MIN_SIM_CHUNK = 1
         seen = []
-        with _ctx.redirect_stderr(buf):
-            pipeline_mod._rows_with_oom_retry(
-                _oom_at(4, seen), 0, 8, per_row_elements=10, device=torch.device("cpu"))
+        pipeline_mod._rows_with_oom_retry(
+            _oom_at(4, seen), 0, 8, per_row_elements=10, device=torch.device("cpu"))
     finally:
         torch.cuda.empty_cache = saved_empty
         pipeline_mod._MIN_SIM_CHUNK = saved_floor
-    text = buf.getvalue()
-    assert "OUTSIDE the simulator retry" in text, f"the OOM notice was not printed:\n{text}"
-    assert "out of memory" in text, f"the original error text was not carried into the notice:\n{text}"
+    notices = [r for r in caplog.records
+               if r.name == "core.SBI.pipeline" and "OUTSIDE the simulator retry" in r.getMessage()]
+    assert notices, f"the OOM notice was not logged:\n{caplog.text}"
+    assert all(r.levelname == "WARNING" for r in notices), [(r.levelname, r.getMessage()) for r in notices]
+    assert "out of memory" in notices[0].getMessage(), \
+        f"the original error text was not carried into the notice:\n{notices[0].getMessage()}"
 
 
 def test_the_budget_credits_once_per_training_batch_not_once_per_gen_obs():
@@ -3628,16 +3636,21 @@ def test_the_batch_retry_waits_releases_and_restores_the_rng():
         "the batch-retry notice must be printed BEFORE the release that may itself fail"
 
 
-def test_cancellable_wait_returns_and_stays_short():
-    """It sleeps in slices so the cooperative cancel -- which is raised from a stream write on the
-    worker thread -- gets a chance to fire, and prints so a multi-minute pause is not read as a hang."""
-    import contextlib as _ctx, time as _time
-    buf = io.StringIO()
+def test_cancellable_wait_returns_and_stays_short(caplog):
+    """It sleeps in slices so the cooperative cancel -- which is raised from a stream write or a log
+    record on the worker thread -- gets a chance to fire, and logs so a multi-minute pause is not read
+    as a hang. The line is an INFORMATION record (spec §4.1, the every-5-s wait line): waiting is the
+    remedy, not the fault, and the OOM notice before it already carries the warning."""
+    import time as _time
+    caplog.clear()
     t0 = _time.monotonic()
-    with _ctx.redirect_stderr(buf):
-        pipeline_mod._cancellable_wait(0.2, "unit test")
+    pipeline_mod._cancellable_wait(0.2, "unit test")
     assert 0.15 <= _time.monotonic() - t0 < 3.0, "wait did not sleep about the requested time"
+    said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.SBI.pipeline"]
+    assert len(said) == 1 and said[0][0] == "INFO" and said[0][1].endswith(": unit test -- 0s remaining"), said
+    caplog.clear()
     pipeline_mod._cancellable_wait(0.0, "zero")          # must not hang or raise
+    assert not any("zero" in r.getMessage() for r in caplog.records), "a zero wait has nothing to say"
 
 
 # ── 2026-08-28: the recovery step that fixed round 1 became the next failure point ───────────────
@@ -3672,35 +3685,36 @@ def test_short_err_survives_an_empty_message():
         torch.cuda.empty_cache = saved
 
 
-def test_log_memory_can_never_kill_a_run():
+def test_log_memory_can_never_kill_a_run(caplog):
     """A DIAGNOSTIC MUST NOT BE ABLE TO END A MULTI-DAY RUN. _log_memory makes four device calls --
     mem_get_info, max_memory_allocated, max_memory_reserved, reset_peak_memory_stats -- and runs on
     the SUCCESS path every _MEM_LOG_EVERY batches, which is exactly the moment after a batch has
-    fought its way through all three OOM ladders and the card is at its most degraded."""
-    import contextlib as _ctx
+    fought its way through all three OOM ladders and the card is at its most degraded. The note is an
+    INFORMATION record, like the line it stands in for (walkthrough C9: [mem] lines plain)."""
 
     class _FakeDevice:
         type = "cuda"
 
     saved = (torch.cuda.mem_get_info, torch.cuda.max_memory_allocated,
              torch.cuda.reset_peak_memory_stats)
-    buf = io.StringIO()
+    caplog.clear()
     try:
         def _boom(*a, **k):
             raise torch.AcceleratorError("CUDA error: out of memory")
         torch.cuda.mem_get_info = _boom
         torch.cuda.max_memory_allocated = _boom
         torch.cuda.reset_peak_memory_stats = _boom
-        with _ctx.redirect_stderr(buf):
-            pipeline_mod._log_memory(_FakeDevice(), "training batch 1/5000")
+        pipeline_mod._log_memory(_FakeDevice(), "training batch 1/5000")
     finally:
         (torch.cuda.mem_get_info, torch.cuda.max_memory_allocated,
          torch.cuda.reset_peak_memory_stats) = saved
-    assert "unavailable" in buf.getvalue(), (
-        f"a failed memory read must degrade to a note, not an exception:\n{buf.getvalue()}")
+    said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.SBI.pipeline"]
+    assert len(said) == 1 and said[0][0] == "INFO" and \
+        said[0][1].startswith("[mem] training batch 1/5000: memory statistics unavailable ("), (
+            f"a failed memory read must degrade to a note, not an exception:\n{said}")
 
 
-def test_the_batch_retry_survives_a_failing_rng_restore():
+def test_the_batch_retry_survives_a_failing_rng_restore(caplog):
     """THE 2026-08-28 REGRESSION. The retrain reached batch 3990/10000 and died inside the batch-level
     retry added the day before: `rng_restore` -> `torch.cuda.set_rng_state_all` copies each
     generator's state into DEVICE memory, so it is an allocation, and it was unguarded.
@@ -3708,8 +3722,8 @@ def test_the_batch_retry_survives_a_failing_rng_restore():
     Skipping the restore is safe -- the re-run becomes a different but equally valid iid draw, the
     same licence _rows_with_oom_retry already takes, and the checkpoint still records the ACTUAL
     state at every batch boundary. Dying is not safe. So this asserts the helper reports failure
-    rather than raising, and says so."""
-    import contextlib as _ctx
+    rather than raising, and says so -- as a WARNING record, because the operator should know the
+    re-run is not bit-identical."""
 
     class _FakeTC:
         def rng_restore(self, rng, device, chi_gen):
@@ -3718,20 +3732,26 @@ def test_the_batch_retry_survives_a_failing_rng_restore():
         def rng_snapshot(self, device, chi_gen):
             raise torch.AcceleratorError("CUDA error: out of memory")
 
-    buf = io.StringIO()
-    with _ctx.redirect_stderr(buf):
-        ok = pipeline_mod._try_rng_restore(_FakeTC(), {"cpu": b"x"}, torch.device("cpu"), None)
-    assert ok is False, "a failed restore must report failure, not raise"
-    assert "fresh draw" in buf.getvalue(), f"the fallback must be announced:\n{buf.getvalue()}"
+    def _said():
+        return [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.SBI.pipeline"]
 
-    buf2 = io.StringIO()
-    with _ctx.redirect_stderr(buf2):
-        snap = pipeline_mod._try_rng_snapshot(_FakeTC(), torch.device("cpu"), None)
+    caplog.clear()
+    ok = pipeline_mod._try_rng_restore(_FakeTC(), {"cpu": b"x"}, torch.device("cpu"), None)
+    assert ok is False, "a failed restore must report failure, not raise"
+    said = _said()
+    assert len(said) == 1 and said[0][0] == "WARNING" and "fresh draw" in said[0][1], \
+        f"the fallback must be announced, as a warning:\n{said}"
+
+    caplog.clear()
+    snap = pipeline_mod._try_rng_snapshot(_FakeTC(), torch.device("cpu"), None)
     assert snap is None, "a failed snapshot must return None, not raise"
-    assert "could not snapshot" in buf2.getvalue()
+    said = _said()
+    assert len(said) == 1 and said[0][0] == "WARNING" and "could not snapshot" in said[0][1], said
 
     # An empty/None rng is "nothing to restore", not a failure to shout about.
+    caplog.clear()
     assert pipeline_mod._try_rng_restore(_FakeTC(), None, torch.device("cpu"), None) is False
+    assert _said() == [], "nothing to restore must not be announced as a failure"
 
 
 def test_the_rng_restore_happens_before_the_release_and_the_wait():
@@ -3981,3 +4001,232 @@ def test_the_fisher_wraps_each_operating_point_and_skips_on_exhausted_oom():
     i_retry = src.find("retry_on_oom")
     i_skip = src.find("skipping it")
     assert 0 <= i_retry < i_skip, "the exhausted-retry skip must follow the wrapped call"
+
+
+# ── piece 3, V4: core/SBI and the solver speak through logging ─────────────────────────────────────
+def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
+    """V4 for core/SBI and the solver (spec §4.1). The 35 in-stage prints of pipeline, decorrelate,
+    truncate, summaries, Priors/prior and Solvers/sdeint are logging calls on each module's own
+    ``log = logging.getLogger(__name__)``, at the level the plan's site table gives them -- pinned
+    here AS that table, one row per call, so a call added without a row, a row whose call went, or a
+    level changed in passing fails by name.
+
+    Severity used to come from the STREAM: every stderr print wore the window's warning triangle (the
+    [mem] statistics line and the 5-s wait line among them) and every stdout print went plain (the
+    near-miss account of sibling caches among them). A record carries its own level to the window's
+    pane, to the tool's stdout/stderr split and into the artifact's log.txt alike.
+
+    Parsed, not grepped: each row matches a call's STATIC template -- an f-string's literal parts,
+    "{}" for each field, "{name}" for a bare variable -- so a comment or docstring that quotes a
+    message cannot satisfy it. Also pinned: no print() call is left in the six modules, and the one
+    message that named a window control ("the VRAM ceiling on the Config tab") names the core's own
+    settings instead (spec §3.1: the modules §3.6 converts name no box or tab)."""
+    import logging
+
+    from core.SBI import decorrelate, summaries, truncate
+    from core.SBI.Priors import prior as prior_mod
+    from tests._fixtures import code_only
+
+    table = {
+        pipeline_mod: (
+            ("{line}", "INFO"),                                   # _log_memory's [mem] line
+            ("failed during recovery and was ignored", "WARNING"),
+            (" -- {}s remaining", "INFO"),                        # _cancellable_wait
+            ("could not snapshot the RNG", "WARNING"),
+            ("could not restore the RNG before re-running", "WARNING"),
+            ("is not a number; ignoring it", "WARNING"),
+            ("config.SIM_VRAM_CEILING_GIB is not a number; treating the ceiling as off", "WARNING"),
+            ("OOM at simulation batch", "WARNING"),
+            ("OUTSIDE the simulator retry", "WARNING"),
+            ("hit a device error", "WARNING"),
+            ("anything -- retrying {} immediately.", "WARNING"),
+            ("[checkpoint] resuming at batch", "INFO"),
+            ("{note}", "WARNING"),                                # describe_siblings' near-miss account
+            ("[checkpoint] writing to", "INFO"),
+            ("batch FAILED after both halving retries", "ERROR"),
+            ("restart the run (it resumes from its checkpoint)", "WARNING"),
+            ("new pathological trajectorie(s)", "WARNING"),
+            ("[checkpoint] deferring the write at batch", "WARNING"),
+            ("[checkpoint] no valid RNG snapshot for batch", "WARNING"),
+            ("[checkpoint] stopping: saving", "INFO"),
+            ("[checkpoint] could not save on the way out", "ERROR"),
+            ("[patho] run total:", "INFO"),
+            ("[tsnpe] post-override containment:", "INFO"),
+            ("[checkpoint] complete:", "INFO"),
+        ),
+        decorrelate: (
+            ("failed on device memory after retries", "WARNING"),
+            ("gave non-finite features; skipping", "WARNING"),
+            ("[fisher] averaged simulation Fisher over", "INFO"),
+        ),
+        truncate: (
+            ("NOT truncated:", "WARNING"),
+            ("directions are eligible for truncation.", "WARNING"),
+            ("[tsnpe] fraction of the t_scale axis inside the truncated subspace:", "INFO"),
+        ),
+        summaries: (("[winsor] clipped", "INFO"),),
+        prior_mod: (
+            ("falling back to the CPU.", "WARNING"),
+            ("No clusters found. Defaulting to 1 cluster", "WARNING"),
+            ("clusters (in latent space)", "INFO"),
+        ),
+        _sdeint_mod: (("[solver] CUDA graph capture unavailable", "WARNING"),),
+    }
+    assert sum(len(rows) for rows in table.values()) == 35
+
+    def _template(node) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.JoinedStr):
+            return "".join(v.value if isinstance(v, ast.Constant) else "{}" for v in node.values)
+        if isinstance(node, ast.Name):
+            return "{" + node.id + "}"
+        return "{?}"
+
+    templates = {}
+    for mod, rows in table.items():
+        assert isinstance(getattr(mod, "log", None), logging.Logger), \
+            f"{mod.__name__} has no module logger `log`"
+        assert mod.log.name == mod.__name__, (mod.log.name, mod.__name__)
+        assert mod.log.getEffectiveLevel() == logging.INFO, (
+            f"{mod.__name__}'s information records would be dropped at the logger: the ``core`` "
+            f"level is set once, by core/runs.py at import")
+        tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
+        prints = sorted(n.lineno for n in ast.walk(tree)
+                        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "print")
+        assert prints == [], f"{mod.__name__} still prints at lines {prints}"
+        calls = [(n.func.attr.upper(), _template(n.args[0]) if n.args else "")
+                 for n in ast.walk(tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and isinstance(n.func.value, ast.Name) and n.func.value.id == "log"]
+        assert len(calls) == len(rows), f"{mod.__name__}: {len(calls)} log calls for {len(rows)} rows: {calls}"
+        for _level, text in calls:
+            owners = [needle for needle, _ in rows if needle in text]
+            assert len(owners) == 1, f"{mod.__name__}: the call {text!r} matches the rows {owners}"
+        for needle, level in rows:
+            levels = sorted({lv for lv, text in calls if needle in text})
+            assert levels == [level], f"{mod.__name__}: {needle!r} is logged at {levels}; the table says {level}"
+        templates[mod] = [text for _, text in calls]
+
+    holder = [t for t in templates[pipeline_mod] if "restart the run" in t]
+    assert len(holder) == 1 and "config.SIM_VRAM_CEILING_GIB" in holder[0], holder
+    assert "Config tab" not in code_only(pipeline_mod), "a pipeline message names a window control"
+
+
+def test_the_sbi_records_carry_their_levels_at_run_time(monkeypatch, caplog):
+    """A sample per level, RUN rather than parsed (the test above parses every call): the winsor
+    census at information, the two VRAM-ceiling notices the planner gives on junk at warning, and the
+    one error a CPU box can reach for real -- the batch-level retry after both halving ladders, driven
+    through gen_training_data with _rows_with_oom_retry failing once and the wait stubbed. The run
+    completes; the failed attempt is an ERROR record, the run total an INFO one.
+
+    No caplog.set_level: the ``core`` logger is at INFO by import (core/runs.py), and a sample that
+    only passed with the fixture's help would hide a window and a log.txt that drop every information
+    record. The learned budget cap the stubbed OOM teaches is put back by monkeypatch, so no later
+    test plans against it."""
+    from core.SBI import summaries
+
+    def _said(name):
+        return [(r.levelname, r.getMessage()) for r in caplog.records if r.name == name]
+
+    # information: the winsor census, once per training round
+    torch.manual_seed(5)
+    data = torch.randn(5000, 6)
+    data[0, 0] = 1e29
+    caplog.clear()
+    pipeline_mod.winsorize_summary_block(data, 6)
+    said = _said(summaries.__name__)
+    assert len(said) == 1 and said[0][0] == "INFO" and said[0][1].startswith("[winsor] clipped "), said
+
+    # warning: junk in the live VRAM ceiling, from either source, is announced and survived
+    caplog.clear()
+    monkeypatch.setenv(pipeline_mod.VRAM_CEILING_ENV, "not-a-number")
+    pipeline_mod.vram_ceiling_gib()
+    monkeypatch.delenv(pipeline_mod.VRAM_CEILING_ENV)
+    monkeypatch.setattr(config, "SIM_VRAM_CEILING_GIB", "not-a-number")
+    assert pipeline_mod.vram_ceiling_gib() == 0.0, "a junk config ceiling reads as off"
+    said = _said(pipeline_mod.__name__)
+    assert [lv for lv, _ in said] == ["WARNING", "WARNING"], said
+    assert "'not-a-number' is not a number; ignoring it" in said[0][1], said
+    assert said[1][1] == "config.SIM_VRAM_CEILING_GIB is not a number; treating the ceiling as off", said
+    monkeypatch.undo()
+
+    # error: the whole-batch retry, on the CPU, through the real loop
+    monkeypatch.setattr(pipeline_mod, "_BUDGET_CAP_ELEMENTS", pipeline_mod._BUDGET_CAP_ELEMENTS)
+    monkeypatch.setattr(pipeline_mod, "_budget_clean_runs", pipeline_mod._budget_clean_runs)
+    real_rows, calls, waits = pipeline_mod._rows_with_oom_retry, [], []
+
+    def _oom_once(fn, lo, hi, **kw):
+        calls.append((lo, hi))
+        if len(calls) == 1:
+            raise torch.OutOfMemoryError("CUDA out of memory (stub)")
+        return real_rows(fn, lo, hi, **kw)
+
+    monkeypatch.setattr(pipeline_mod, "_rows_with_oom_retry", _oom_once)
+    monkeypatch.setattr(pipeline_mod, "_cancellable_wait", lambda seconds, why: waits.append(why))
+    monkeypatch.setattr(pipeline_mod, "_we_are_the_holder", lambda device: False)
+    caplog.clear()
+    x, _th = _gen_td("spontaneous", seed=0, n_runs=1, run_size=2)
+    assert x.shape[0] == 2 and len(calls) == 2 and len(waits) == 1, (tuple(x.shape), calls, waits)
+    said = _said(pipeline_mod.__name__)
+    failed = [(lv, m) for lv, m in said if "batch FAILED after both halving retries" in m]
+    assert len(failed) == 1 and failed[0][0] == "ERROR", said
+    assert failed[0][1].startswith("training batch 1/1 [") and \
+        "Original: OutOfMemoryError: CUDA out of memory (stub)" in failed[0][1], failed
+    assert any(lv == "INFO" and m.startswith("[patho] run total: ") for lv, m in said), said
+
+
+def test_the_mem_and_wait_lines_reach_the_window_plain_and_the_wait_still_checks_cancel(monkeypatch):
+    """Walkthrough row C9's first half, offscreen. Both lines were stderr prints, and stderr is the
+    window's WARNING stream, so a healthy multi-day run wore a triangle on every [mem] statistics line
+    and on every 5-s wait line. As information records they land plain, through the window's logging
+    handler.
+
+    The wait line has a second duty, the one the print inventory flagged: _cancellable_wait LOGS
+    between its 1-s slices precisely so the Cancel button has a checkpoint during a multi-minute
+    pause, and a handler that did not check the token would have removed that checkpoint without a
+    single test noticing. The window's handler checks the token before it sinks the record, as the
+    stream's write() did -- pinned by requesting a cancel and asking for an eight-second wait: the
+    raise must come after the first slice, not after eight.
+
+    No caplog here and no caplog.set_level: the ``core`` logger is at INFO by import."""
+    import time as _time
+
+    from core.gui.streams import CancelToken, WorkerCancelled, redirect_streams
+    from core.gui.worker import WorkerSignals
+    from tests._fixtures import pump, qt_app
+
+    class _FakeDevice:
+        type = "cuda"
+
+    app = qt_app()
+    signals = WorkerSignals()
+    lines = []
+    signals.log_batch.connect(lambda batch: lines.extend(batch))
+    signals.rows.connect(lambda _s: None)
+    monkeypatch.setattr(torch.cuda, "mem_get_info", lambda *a, **k: (3 * 2 ** 30, 16 * 2 ** 30))
+    monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda *a, **k: 2 ** 30)
+    monkeypatch.setattr(torch.cuda, "max_memory_reserved", lambda *a, **k: 2 * 2 ** 30)
+    monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda *a, **k: None)
+    why = "waiting for device memory before re-running this batch"
+
+    with redirect_streams(signals):
+        pipeline_mod._log_memory(_FakeDevice(), "training batch 1/5000")
+        pipeline_mod._cancellable_wait(0.2, why)
+    pump(app)
+    mem = [(t, lv) for t, lv in lines
+           if t.startswith("[mem] training batch 1/5000: peak allocated 1.00 GiB, peak reserved 2.00 GiB, "
+                           "3.00/16.00 GiB reported free")]
+    wait = [(t, lv) for t, lv in lines if t.endswith(f"{why} -- 0s remaining")]
+    assert len(mem) == 1 and mem[0][1] == "info", lines
+    assert len(wait) == 1 and wait[0][1] == "info", lines
+
+    token = CancelToken()
+    t0 = _time.monotonic()
+    with redirect_streams(signals, token):
+        token.requested.set()
+        with pytest.raises(WorkerCancelled):
+            pipeline_mod._cancellable_wait(8.0, why)
+    elapsed = _time.monotonic() - t0
+    pump(app)
+    assert token.fired and elapsed < 4.0, f"the wait line stopped being a cancel checkpoint ({elapsed:.1f}s)"

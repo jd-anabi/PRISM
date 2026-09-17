@@ -846,15 +846,15 @@ def test_the_same_posterior_and_observation_redraw_the_same_region():
     assert moved.identity_fields() != a.identity_fields()
 
 
-def test_a_t_scale_loaded_direction_is_excluded_from_the_region():
+def test_a_t_scale_loaded_direction_is_excluded_from_the_region(caplog):
     """⚠ DEFECT D4. gen_training_data overwrites t_scale per batch AFTER the proposal draw and
     recomputes the latent target, so a box along a direction that loads on t_scale never reaches the
     simulator as a restriction: the proposal becomes the prior tilted by P(A | theta_-t) (a no-op when
     the direction IS the t_scale axis), and NPE converges to p(theta|x)*P(A|theta_-t). Such directions
     are skipped, the box takes the next eligible ones, and the region records what was skipped and
-    why. Without t_scale's index the old behaviour (the leading k directions) is untouched."""
-    import contextlib
-
+    why. Without t_scale's index the old behaviour (the leading k directions) is untouched. A skipped
+    direction is a WARNING record (the box is not the one asked for); the t_scale fraction inside the
+    kept subspace is an INFORMATION record."""
     P, i_t = 13, 11
     # a 30-degree rotation in the (1, 11) plane: |V[t_scale, 1]| = sin(30) = 0.5 > 1/sqrt(13)
     V = torch.eye(P)
@@ -864,15 +864,15 @@ def test_a_t_scale_loaded_direction_is_excluded_from_the_region():
 
     def _region(**kw):
         torch.manual_seed(21)
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            r = truncate.region_from_posterior(_Wide(), x, n_directions=5, n_samples=4000, **kw)
-        return r, buf.getvalue()
+        caplog.clear()
+        r = truncate.region_from_posterior(_Wide(), x, n_directions=5, n_samples=4000, **kw)
+        return r, [(rec.levelname, rec.getMessage()) for rec in caplog.records if rec.name == "core.SBI.truncate"]
 
     region, out = _region(V=V, t_scale_idx=i_t)
     assert region.dims == [0, 2, 3, 4, 5], region.dims
     assert region.excluded == [1] and region.t_scale_idx == i_t
-    assert "direction 1 NOT truncated" in out and "0.500" in out and "fraction of the t_scale axis" in out
+    assert any(lv == "WARNING" and "direction 1 NOT truncated" in m and "= 0.500 >" in m for lv, m in out), out
+    assert any(lv == "INFO" and "fraction of the t_scale axis" in m for lv, m in out), out
     assert abs(truncate.t_scale_loading_max(P) - 1 / math.sqrt(13)) < 1e-12
     back = truncate.TruncationRegion.from_dict(region.to_dict())
     assert back.excluded == [1] and back.t_scale_idx == i_t
@@ -880,7 +880,8 @@ def test_a_t_scale_loaded_direction_is_excluded_from_the_region():
     assert _region(V=V)[0].dims == [0, 1, 2, 3, 4]
     # an unrotated latent: the only loaded direction is t_scale's own axis, and the line says so
     r, out = _region(V=None, t_scale_idx=2)
-    assert r.dims == [0, 1, 3, 4, 5] and r.excluded == [2] and "unrotated latent" in out
+    assert r.dims == [0, 1, 3, 4, 5] and r.excluded == [2], (r.dims, r.excluded)
+    assert any(lv == "WARNING" and "unrotated latent" in m for lv, m in out), out
     # the threshold is a parameter: with it above 0.5 direction 1 stays
     assert _region(V=V, t_scale_idx=i_t, max_loading=0.6)[0].dims == [0, 1, 2, 3, 4]
     # FEWER eligible than requested: the box takes what there is, and EVERY skipped direction is
@@ -889,7 +890,8 @@ def test_a_t_scale_loaded_direction_is_excluded_from_the_region():
     V2[i_t, 2:] = 0.5                                    # directions 2..12 all load on t_scale
     r, out = _region(V=V2, t_scale_idx=i_t)
     assert r.dims == [0, 1] and r.excluded == list(range(2, P)), (r.dims, r.excluded)
-    assert "only 2 of the requested 5" in out and "direction 12 NOT truncated" in out
+    assert any(lv == "WARNING" and "only 2 of the requested 5" in m for lv, m in out), out
+    assert any(lv == "WARNING" and "direction 12 NOT truncated" in m for lv, m in out), out
     # nothing eligible at all is refused rather than silently truncating nothing
     try:
         _region(V=torch.eye(P), t_scale_idx=i_t, max_loading=-1.0)

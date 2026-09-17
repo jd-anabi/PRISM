@@ -23,6 +23,7 @@ model. V = I (REPARAM_ROTATE=False) recovers the plain pipeline exactly. Orthogo
 bijection round-trip and the rotation reuse are pinned by tests/test_user_sbi.py's Fisher tests,
 and `python -m core smoke` exercises the rotation end to end on the card.
 """
+import logging
 import math
 
 import numpy as np
@@ -34,6 +35,8 @@ from core.SBI import chi as _chi
 from core.SBI import pipeline
 from core.SBI import derived
 from core.SBI.reparam import build_inferred_bijection, fisher_eigenbasis
+
+log = logging.getLogger(__name__)
 
 
 def _default_inits(cfg, dtype, device) -> torch.Tensor:
@@ -317,19 +320,19 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
             except RuntimeError as err:
                 if not (pipeline._is_oom(err) or "cudaErrorUnknown" in str(err)):
                     raise
-                print(f"[fisher] operating point {k} failed on device memory after retries "
-                      f"({pipeline._short_err(err, 120)}); skipping it", flush=True)
+                log.warning(f"[fisher] operating point {k} failed on device memory after retries "
+                            f"({pipeline._short_err(err, 120)}); skipping it")
                 continue
             if Fk is None:
-                print(f"[fisher] operating point {k} gave non-finite features; skipping", flush=True)
+                log.warning(f"[fisher] operating point {k} gave non-finite features; skipping")
                 continue
             F_accum += Fk; n_used += 1
     if n_used == 0:
         raise RuntimeError(
             "Fisher rotation: every operating point failed (non-finite features or device errors).")
     _anchor = "GT" if cfg.has_ground_truth else "prior median"
-    print(f"[fisher] averaged simulation Fisher over {n_used}/{len(points)} operating points "
-          f"({_anchor} + {n_used - 1} prior draw(s))", flush=True)
+    log.info(f"[fisher] averaged simulation Fisher over {n_used}/{len(points)} operating points "
+             f"({_anchor} + {n_used - 1} prior draw(s))")
     F = torch.tensor(F_accum / n_used, dtype=torch.float64, device=device)
     if with_values:
         V, evals = fisher_eigenbasis(F, with_values=True)
