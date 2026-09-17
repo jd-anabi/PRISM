@@ -14,13 +14,9 @@ THE BUG THESE LOCK DOWN
 Run:  pytest tests/test_settings_persistence.py
       (or just: pytest tests/test_gui_progress.py)
 """
-import ast
-import inspect
-import textwrap
 import os
 import tempfile
 import sys
-import time
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")   # must precede any PySide6 import
@@ -30,7 +26,6 @@ import matplotlib                                                 # noqa: E402
 matplotlib.use("Agg")                                            # match the app (core/gui/__main__.py forces it)
 
 import torch                                                      # noqa: E402
-from PySide6.QtWidgets import QApplication                        # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
 from core.gui.panels.base_panel import BasePanel                  # noqa: E402

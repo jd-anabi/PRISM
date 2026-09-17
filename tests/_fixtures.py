@@ -338,14 +338,20 @@ def build_tiny_run(store, hw=None):
 
 
 def _same_value(a, b) -> bool:
-    """Equality for one config field: tensors by shape, dtype and ``torch.equal`` on the CPU; dicts by
-    type, key order and values; lists and tuples by type and elements; NaN equal to NaN; everything
-    else by ``==``. Recursive, because a dict or tuple holding a tensor would make a plain ``==`` raise
-    on the tensor's truth value instead of answering."""
+    """Equality for one config field: tensors by shape, dtype and every element on the CPU (equal, or
+    both NaN); dicts by type, key order and values; lists and tuples by type and elements; NaN equal to
+    NaN; everything else by ``==``. Recursive, because a dict or tuple holding a tensor would make a
+    plain ``==`` raise on the tensor's truth value instead of answering."""
     import math
     if isinstance(a, torch.Tensor) or isinstance(b, torch.Tensor):
-        return (isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor) and a.shape == b.shape
-                and a.dtype == b.dtype and torch.equal(a.detach().cpu(), b.detach().cpu()))
+        if not (isinstance(a, torch.Tensor) and isinstance(b, torch.Tensor) and a.shape == b.shape
+                and a.dtype == b.dtype):
+            return False
+        a, b = a.detach().cpu(), b.detach().cpu()
+        if a.is_floating_point() or a.is_complex():
+            # torch.equal says NaN != NaN, so an untouched tensor holding one would read as changed
+            return bool(((a == b) | (torch.isnan(a) & torch.isnan(b))).all())
+        return torch.equal(a, b)
     if isinstance(a, dict) and isinstance(b, dict):
         return type(a) is type(b) and list(a) == list(b) and all(_same_value(a[k], b[k]) for k in a)
     if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):

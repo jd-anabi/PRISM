@@ -135,9 +135,10 @@ class _NoSummary:
     Given no writer, sbi's trainer builds a TensorBoard ``SummaryWriter`` under
     ``<cwd>/sbi-logs/NPE_C/<timestamp>/`` when ``SNPE(...)`` is CONSTRUCTED
     (``NeuralInference._default_summary_writer`` over ``sbi.utils.io.get_log_root``). Every training
-    therefore left a directory behind in whatever directory the process was started from: 881 of them
-    at the repo root by piece 3, none ever read. The curves PRISM keeps are the ones train_nn returns
-    in its diagnostics, which build_posterior writes into the posterior artifact.
+    therefore left a directory behind in whatever directory the process was started from: 1359 of
+    them at the repo root by piece 3 (1360 directories with NPE_C), none ever read. The curves PRISM
+    keeps are the ones train_nn returns in its diagnostics, which build_posterior writes into the
+    posterior artifact.
 
     These three methods are the whole surface sbi 0.25 touches. ``_summarize`` calls
     ``add_scalar(tag=, scalar_value=, global_step=)`` and ``flush()``

@@ -30,8 +30,10 @@ class RecordingSet:
     F0_si: "float | None" = None              # chi mode: physical drive amplitude (N)
 
 
-# The drive value that was not given -> the field the front ends map to the drive box for it. The
-# three names are the ones config.FORCING_SI_UNITS converts; any other name has no control behind it.
+# The drive value that was not given -> the field the front ends map to the drive box for it. These
+# are three of the five names config.FORCING_SI_UNITS converts (amp, amp_y, freq, phase, offset): the
+# three with a registered field. amp_y and offset, and any other name, carry field=None -- no single
+# registered control answers them.
 _DRIVE_FIELD = {"amp": "drive_amplitude", "freq": "drive_frequency", "phase": "drive_phase"}
 
 

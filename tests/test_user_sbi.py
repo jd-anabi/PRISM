@@ -12,7 +12,6 @@ Group-G-populated conditioning vector, so the spontaneous-only branching did not
 Run:  pytest tests/test_user_sbi.py   (the chi pipeline test is marked slow; pytest -m "not slow" skips it)
 """
 import ast
-import io
 import math
 import os
 import sys
@@ -4274,9 +4273,10 @@ def test_the_mem_and_wait_lines_reach_the_window_plain_and_the_wait_still_checks
 def test_training_creates_no_sbi_logs_directory(tmp_path, monkeypatch):
     """V9 (spec §6.4). Unless it is handed a writer, sbi's trainer builds a TensorBoard SummaryWriter
     under <cwd>/sbi-logs/NPE_C/<timestamp>/ the moment SNPE(...) is constructed. That is one directory
-    per training, left in whatever directory the process started from: 881 of them at the repo root by
-    piece 3, none ever read. The curves PRISM keeps are the ones train_nn returns in its diagnostics,
-    which build_posterior writes into the posterior artifact (loss.npz and the "Training loss" figure).
+    per training, left in whatever directory the process started from: 1359 of them at the repo root
+    by piece 3 (1360 directories with NPE_C), none ever read. The curves PRISM keeps are the ones
+    train_nn returns in its diagnostics, which build_posterior writes into the posterior artifact
+    (loss.npz and the "Training loss" figure).
     train_nn now hands sbi core.SBI.train._NoSummary, which discards them.
 
     This is the cheapest REAL train_nn. gen_training_data is replaced by 64 rows of a 2-parameter toy

@@ -37,7 +37,7 @@ def _no_sbi_logs():
     _sandbox_default_store for the same reason: the suites leave the repository as they found it.
 
     sbi's default TensorBoard writer made <cwd>/sbi-logs/NPE_C/<timestamp>/ on every training, and
-    every gate trains at the repo root (tiny_run's build_posterior), which is how 881 directories
+    every gate trains at the repo root (tiny_run's build_posterior), which is how 1360 directories
     piled up there. core/SBI/train.py now hands sbi _NoSummary, the tree was deleted, and its
     .gitignore line went. So the directory coming back means a training reached sbi's default writer
     again, and with no ignore line it would also sit in git status.

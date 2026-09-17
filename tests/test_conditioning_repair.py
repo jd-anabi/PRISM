@@ -11,7 +11,6 @@ Every test below was checked to FAIL against the pre-change code.
 
 Run:  pytest tests/test_conditioning_repair.py
 """
-import io
 import math
 import os
 import sys

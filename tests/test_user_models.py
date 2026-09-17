@@ -33,7 +33,6 @@ import numpy as np                                                # noqa: E402
 import pytest                                                     # noqa: E402
 import torch                                                      # noqa: E402
 from PySide6.QtGui import QPalette                                # noqa: E402
-from PySide6.QtWidgets import QApplication                        # noqa: E402
 
 from core import config, forcing, registry                        # noqa: E402
 from core.Helpers import file_manager, model_store                # noqa: E402

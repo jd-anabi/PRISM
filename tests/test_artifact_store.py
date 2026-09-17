@@ -2037,6 +2037,23 @@ def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
         "n_samples must be ABSENT when the caller did not set it"
 
 
+def test_the_config_snapshot_counts_nan_equal_to_nan_inside_a_tensor():
+    """assert_cfg_unchanged's field comparison says NaN equals NaN, and a tensor field is where a NaN
+    lives (a chi_obs_freqs slot, a truth vector). torch.equal says a tensor holding a NaN differs from
+    its own clone, so an untouched config would read as changed. Shapes and dtypes must still match,
+    and every other element must still be equal."""
+    from tests._fixtures import _same_value
+    nan = float("nan")
+    t = torch.tensor([1.0, nan, 3.0])
+    assert _same_value(t, t.clone()), "a tensor holding a NaN must equal its own clone"
+    assert _same_value({"f": (t, nan)}, {"f": (t.clone(), nan)}), "and inside a container"
+    assert not _same_value(t, torch.tensor([1.0, 2.0, 3.0])), "a NaN is not equal to a number"
+    assert not _same_value(t, torch.tensor([1.0, nan, 4.0])), "the other elements still count"
+    assert not _same_value(t, t.to(torch.float64)) and not _same_value(t, t[:2]), "dtype and shape"
+    assert _same_value(torch.tensor([1, 2]), torch.tensor([1, 2]))
+    assert not _same_value(torch.tensor([True]), torch.tensor([False]))
+
+
 def test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs():
     """V1 (spec §2.1). copy_for_run is what every public entry point does to the config it is
     handed, so it has to be cheap enough to do on every call -- and a plain deepcopy is not: with
