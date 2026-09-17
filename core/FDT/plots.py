@@ -1,8 +1,12 @@
 """Plotting helpers for FDT analysis output."""
+import logging
 from os import PathLike
 
 import numpy as np
 from matplotlib import pyplot as plt
+
+# Dropped non-finite points are a warning record (piece 3, V4).
+log = logging.getLogger(__name__)
 
 
 def _normalized_freq_axis(omegas: np.ndarray, omega_natural: float):
@@ -49,7 +53,7 @@ def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
 
     n_bad = int((~np.isfinite(ratio)).sum())
     if n_bad > 0:
-        print(f"plot_eff_temp_ratio: dropping {n_bad}/{len(ratio)} non-finite (NaN/inf) points.")
+        log.warning(f"plot_eff_temp_ratio: dropping {n_bad}/{len(ratio)} non-finite (NaN/inf) points.")
         mask = np.isfinite(ratio)
         omegas, ratio = omegas[mask], ratio[mask]
 
@@ -157,7 +161,7 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
 
     n_bad = int((~np.isfinite(G)).sum())
     if n_bad > 0:
-        print(f"plot_psd: dropping {n_bad}/{len(G)} non-finite PSD points.")
+        log.warning(f"plot_psd: dropping {n_bad}/{len(G)} non-finite PSD points.")
         good = np.isfinite(G)
         omegas, G = omegas[good], G[good]
 

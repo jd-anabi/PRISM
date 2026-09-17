@@ -1568,3 +1568,105 @@ def test_the_core_logger_is_at_info_by_import_and_stays_so_after_main_and_a_redi
 
     for fn in (streams.redirect_streams, logging_console.console_handlers, tool.main):
         assert "setLevel" not in code_only(fn), f"{fn.__name__} touches the logger's level"
+
+
+# The console lines the GPU smoke gate in CLAUDE.md and docs/STATE.md reads by eye (spec §4.5), each with
+# the ONE kind of call that must carry it in its module: an information record (stdout on the tool), a
+# warning record (stderr, behind "warning: "), a framing print (stdout: no file=) or a Python warning
+# (stderr).
+_GATE_LINES = (
+    ("core.orchestrator", "Reusing the Fisher rotation stored with the training checkpoint", "log.info"),
+    ("core.orchestrator", "[fisher] eigenvalue spread", "log.info"),
+    ("core.SBI.pipeline", "[checkpoint] resuming at batch ", "log.info"),
+    ("core.SBI.pipeline", "OOM at simulation batch", "log.warning"),
+    ("core.SBI.pipeline", "OUTSIDE the simulator retry", "log.warning"),
+    ("core.SBI.pipeline", "hit a device error", "log.warning"),
+    ("core.SBI.chi_probes", "probes masked", "warnings.warn"),
+    ("core.tool.smoke", "=== ", "print"),
+    ("core.tool.smoke", "[ok] ", "print"),
+    ("core.tool.smoke", "[smoke] ALL STAGES COMPLETED", "print"),
+    ("core.tool.smoke", "[smoke] *** FAILED in stage", "print"),
+)
+
+
+def _calls_carrying(module_name: str, needle: str) -> list[str]:
+    """Every call in ``module_name``'s executable source whose FIRST argument holds ``needle`` inside
+    one of its string pieces, named by its callee as written (``"log.info"``, ``"print"``,
+    ``"warnings.warn"``), with ``"(file=)"`` appended when the call passes ``file=``. Parsed from
+    ``code_only``, so a comment or docstring quoting the line cannot answer for the code."""
+    import importlib
+
+    from tests._fixtures import code_only
+    tree = ast.parse(code_only(importlib.import_module(module_name)))
+    kinds = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        pieces = [c.value for c in ast.walk(node.args[0])
+                  if isinstance(c, ast.Constant) and isinstance(c.value, str)]
+        if not any(needle in p for p in pieces):
+            continue
+        kind = ast.unparse(node.func)
+        if any(k.arg == "file" for k in node.keywords):
+            kind += "(file=)"
+        kinds.append(kind)
+    return kinds
+
+
+def test_the_gate_lines_keep_their_text_and_stream(capsys):
+    """The GPU smoke gate is read BY EYE off the console (CLAUDE.md, docs/STATE.md): run 2 must show
+    "Reusing the Fisher rotation stored with the training checkpoint" and "[checkpoint] resuming at
+    batch 4/4", run 2b no "[fisher]" line, runs 1 and 3 no OOM line and their masked-probe counts, and
+    the smoke driver frames every stage with "=== <stage> ===", "[ok] <stage> in Xs" and "[smoke] ALL
+    STAGES COMPLETED". No suite assertion read most of these before piece 3, so the conversion to
+    logging could have reworded one, or demoted an OOM notice to information on stdout, with every
+    suite green and the gate silently unreadable.
+
+    Two halves. The SOURCE: each line is carried in its own module by exactly one kind of call, the
+    kind that puts it on its stream, and by no other. The ROUTE: under the tool's console handlers an
+    information record lands on stdout as bare text and a warning record on stderr behind "warning: ",
+    so a level in the source IS a stream on the command line. In the window the same level is the
+    pane's plain line or triangle (Task 16)."""
+    import logging
+
+    from core.tool.logging_console import console_handlers
+
+    for module_name, needle, kind in _GATE_LINES:
+        kinds = _calls_carrying(module_name, needle)
+        assert kinds and set(kinds) == {kind}, (module_name, needle, kinds)
+
+    capsys.readouterr()
+    pipeline_log = logging.getLogger("core.SBI.pipeline")
+    with console_handlers():
+        pipeline_log.info("[checkpoint] resuming at batch 4/4 from X (no rotation)")
+        pipeline_log.warning("training batch 3/4: OOM at simulation batch 64; retrying in chunks of 32")
+    out, err = capsys.readouterr()
+    assert out == "[checkpoint] resuming at batch 4/4 from X (no rotation)\n", out
+    assert err == "warning: training batch 3/4: OOM at simulation batch 64; retrying in chunks of 32\n", err
+
+
+# Every module whose in-stage prints piece 3 converted: Task 16 (file_manager.list_dir), Task 17 (the
+# orchestrator), Task 18 (core/SBI and the solver), Task 19 (the diagnostics, FDT and the plot helpers).
+_CONVERTED = ("core/orchestrator.py", "core/SBI", "core/Solvers/sdeint.py", "core/diagnostics", "core/FDT",
+              "core/Helpers/visualizers.py", "core/Helpers/file_manager.py")
+
+
+def test_no_print_call_remains_in_the_converted_modules():
+    """The definition of done for V4's conversion (spec §4.1): no print() call is left in a module whose
+    messages are the pipeline's own voice. A print there reaches the window at the level of whichever
+    STREAM it used, never reaches the artifact's log.txt, and on the command line ignores the
+    stdout/stderr split -- the three defects the conversion exists to remove. Parsed, not grepped: a
+    docstring or a comment that mentions print() is not a call. The tool's framing prints (core/tool)
+    stay prints and are deliberately outside this set (spec §4.1)."""
+    root = config.REPO_ROOT
+    files = []
+    for rel in _CONVERTED:
+        path = root / rel
+        files += sorted(path.rglob("*.py")) if path.is_dir() else [path]
+    assert len(files) > 20 and all(f.is_file() for f in files), files
+    left = []
+    for f in files:
+        tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
+        left += [f"{f.relative_to(root).as_posix()}:{n.lineno}" for n in ast.walk(tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "print"]
+    assert left == [], f"print() calls left in the converted modules: {sorted(left)}"

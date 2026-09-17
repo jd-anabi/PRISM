@@ -14,6 +14,8 @@ artifact now, which is what the script's ``_pooled`` / ``_k<N>`` filename suffix
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 import torch
 
@@ -24,6 +26,10 @@ from core.refusals import Refusal, require_at_least
 from core.runs import public_entry
 
 from .rng import seeded
+
+# The module's voice (piece 3, V4): the report table and the progress lines are information records,
+# which the window shows at their own level, the tool prints on stdout and the run's log.txt keeps.
+log = logging.getLogger(__name__)
 
 
 def _col(values) -> tuple:
@@ -126,9 +132,8 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     # announcement and belongs on screen either way.
     val_latent_prior, T, truncation = orch._calibration_prior(cfg, posterior, prior)
     stratum = "pooled" if chi_k_fixed is None else f"k{int(chi_k_fixed)}"
-    print(f"[sbc] probe-count stratum: "
-          f"{'POOLED over the training mixture' if chi_k_fixed is None else f'FIXED K = {int(chi_k_fixed)}'}",
-          flush=True)
+    log.info(f"[sbc] probe-count stratum: "
+             f"{'POOLED over the training mixture' if chi_k_fixed is None else f'FIXED K = {int(chi_k_fixed)}'}")
 
     settings = {"repeats": repeats, "n_cal": n_cal, "num_posterior_samples": nps,
                 "cal_n_scales": None if cal_n_scales is None else int(cal_n_scales),
@@ -163,12 +168,12 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
             # calibration set came back empty) must print "nan", not warn "All-NaN slice" from a bare
             # np.nanmin.
             worst = _col(ks[r])[1]
-            print(f"[sbc] repeat {r + 1}/{repeats}: n_valid={n_valid[-1]}  "
-                  f"worst KS p={worst:.4f}", flush=True)
+            log.info(f"[sbc] repeat {r + 1}/{repeats}: n_valid={n_valid[-1]}  "
+                     f"worst KS p={worst:.4f}")
 
         pooled = np.concatenate(ranks_all, axis=0)
-        print("\n=== KS p-value distribution over repeats (sorted by median; low = miscalibrated) ===")
-        print(f"{'param':16s} {'median':>8s} {'min':>8s} {'frac<.05':>9s}")
+        log.info("=== KS p-value distribution over repeats (sorted by median; low = miscalibrated) ===")
+        log.info(f"{'param':16s} {'median':>8s} {'min':>8s} {'frac<.05':>9s}")
         per_param = []
         for j, key in enumerate(labels):
             med, lo, frac = _col(ks[:, j])
@@ -176,8 +181,8 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
                               "frac_ks_below_05": orch._num(frac),
                               "c2st_ranks_median": orch._num(_col(c2st_ranks[:, j])[0])})
         for rec in sorted(per_param, key=lambda p: (p["ks_p_median"] is None, p["ks_p_median"])):
-            print(f"{rec['name']:16s} {_cell(rec['ks_p_median'], '8.2e')} {_cell(rec['ks_p_min'], '8.2e')} "
-                  f"{_cell(rec['frac_ks_below_05'], '9.3f')}")
+            log.info(f"{rec['name']:16s} {_cell(rec['ks_p_median'], '8.2e')} {_cell(rec['ks_p_min'], '8.2e')} "
+                     f"{_cell(rec['frac_ks_below_05'], '9.3f')}")
 
         n_rows = int(np.ceil(len(labels) / 4))
         num_bins = _rank_hist_bins(pooled.shape[0], nps)
@@ -194,8 +199,8 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
             # mean two different things depending on which artifact kind you read it from.
             kept = {"acceptance": orch._num(val_latent_prior.acceptance_rate),
                     "containment": orch._num(val_latent_prior.recorded_containment)}
-            print(f"[tsnpe] kept fraction: the region accepted {val_latent_prior.acceptance_rate:.3%} of "
-                  f"prior draws at the rejection sampler.", flush=True)
+            log.info(f"[tsnpe] kept fraction: the region accepted {val_latent_prior.acceptance_rate:.3%} of "
+                     f"prior draws at the rejection sampler.")
         file_manager.atomic_savez(w.payload("sbc_repeats.npz"), {
             "ks": ks, "c2st_ranks": c2st_ranks, "c2st_dap": c2st_dap, "ranks": pooled,
             "repeat": np.concatenate(repeat_col, axis=0), "n_valid": np.asarray(n_valid, dtype=np.int64),

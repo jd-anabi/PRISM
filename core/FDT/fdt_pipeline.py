@@ -9,6 +9,7 @@ Computes T_eff(omega)/T = N * beta * omega * G(omega) / (4 * chi''(omega))
 (one-sided PSD convention). At equilibrium this ratio is 1; deviations near
 resonance quantify FDT violation (activity of the hair bundle).
 """
+import logging
 import math
 from datetime import datetime
 
@@ -23,6 +24,9 @@ from core.FDT.plots import (
     plot_eff_temp_ratio, plot_chi_components, plot_psd,
     plot_spontaneous_trajectory,
 )
+
+# Banners and saved-plot paths are information; a failed sanity verdict is a warning (piece 3, V4).
+log = logging.getLogger(__name__)
 
 
 def _out_dir():
@@ -67,7 +71,7 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     # 1. Model-specific natural-frequency starting estimate; the production omega_0
     #    is refined from the Campaign 1 PSD peak below.
     cfg.omega_0, omega_0_desc = _estimate_omega_0(cfg)
-    print(f"Cell file natural-frequency estimate: omega_0 ~= {omega_0_desc}")
+    log.info(f"Cell file natural-frequency estimate: omega_0 ~= {omega_0_desc}")
 
     # Single plot dir + timestamp for all outputs from this run (incl. sanity plots).
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -75,14 +79,16 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     # 2. Sanity checks (optional skip). Both booleans are supplied by the caller -- the FDT panel's two
     #    checkboxes, or the `fdt` subcommand's flags. Nothing here prompts.
     if skip_sanity:
-        print("Skipping sanity checks.")
+        log.info("Skipping sanity checks.")
     else:
         passive_plot_path = _out_dir() / f"fdt_ratio_passive_{timestamp}.png"
         results = run_all_sanity(cfg, passive_plot_path=passive_plot_path)
         if not all(passed for passed, _ in results.values()):
-            print("WARNING: one or more sanity checks failed (see metrics above).")
+            # The level carries the severity: the hand-typed "WARNING: " word went with the print (on
+            # the tool it would have read "warning: WARNING: ...").
+            log.warning("One or more sanity checks failed (see metrics above).")
         if not confirm_production:
-            print("Aborted by user.")
+            log.info("Aborted by user.")
             return
 
     # 3. Campaign 1 first: spontaneous PSD gives us a data-driven estimate of the
@@ -90,7 +96,7 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     #    drive-frequency grid. Without this, the grid would sit on the linearized
     #    analytical estimate -- which can be orders of magnitude away from the actual
     #    Hopf-shifted Omega_0 in the active regime.
-    print("\nCampaign 1: spontaneous fluctuations -> PSD")
+    log.info("Campaign 1: spontaneous fluctuations -> PSD")
     freqs_psd, G, t_traj, x_mean_traj = run_campaign1_psd(cfg, return_trajectory=True)
 
     # Save the ensemble-mean unforced trajectory as a diagnostic before moving on.
@@ -102,14 +108,14 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
         title=f"Spontaneous trajectory (Campaign 1): ND {cfg.model}",
         burn_in=cfg.burn_in_nd,
     )
-    print(f"Saved spontaneous trajectory plot to: {traj_path}")
+    log.info(f"Saved spontaneous trajectory plot to: {traj_path}")
 
     # 4. Find natural frequency from the PSD peak directly (no search band).
     #    The PSD's argmax (skipping the DC bin) is robust because the peak is
     #    orders of magnitude above the noise floor for any active oscillator.
     omega_natural = find_spectral_peak(freqs_psd, G)
     cfg.omega_0 = omega_natural   # use data-driven value for the Campaign 2 grid
-    print(f"Spontaneous-oscillation frequency from PSD peak: {omega_natural:.4f} (ND)")
+    log.info(f"Spontaneous-oscillation frequency from PSD peak: {omega_natural:.4f} (ND)")
 
     # 5. Build production grid centered on the data-driven Omega_0.
     #    freq_bounds default (0.1, 30) gives 1 decade below + 1.5 decades above,
@@ -118,7 +124,7 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
                             cfg.hw.device, cfg.hw.dtype)
 
     # 6. Campaign 2: forced chi via lock-in
-    print("\nCampaign 2: forced response -> chi via lock-in")
+    log.info("Campaign 2: forced response -> chi via lock-in")
     chis = run_campaign2_chi(cfg, omegas)
 
     # 7. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y)
@@ -147,4 +153,4 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
                         save_path=chi_path,
                         title=fr"Susceptibility components: ND {cfg.model}",
                         omega_natural=omega_natural)
-    print(f"\nSaved plots to:\n  {psd_path}\n  {ratio_path}\n  {chi_path}")
+    log.info(f"Saved plots to:\n  {psd_path}\n  {ratio_path}\n  {chi_path}")

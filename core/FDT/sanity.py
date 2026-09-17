@@ -4,6 +4,7 @@ Sanity checks for the FDT analysis pipeline.
 Each check runs a mini measurement and asserts a numerical property that would
 catch a common bug class. Run them BEFORE the production sweep.
 """
+import logging
 import math
 import warnings
 
@@ -19,6 +20,9 @@ from core.FDT.spectral import (
     psd_welch, lock_in_chi, eff_temp_ratio, gen_freqs_log, find_spectral_peak,
 )
 from core.FDT.plots import plot_eff_temp_ratio
+
+# The checks' table is information records (piece 3, V4); the verdict warning is fdt_pipeline's.
+log = logging.getLogger(__name__)
 
 
 def _interp_log(x_new: torch.Tensor, x_old: torch.Tensor, y_old: torch.Tensor) -> torch.Tensor:
@@ -111,7 +115,7 @@ def check_passive_baseline(cfg: FDTConfig, save_plot_path=None) -> tuple[bool, d
             title=fr"FDT ratio: PASSIVE baseline ($s=0$, $T_a=T$) -- ND {cfg.model}",
             omega_natural=passive_omega_0,
         )
-        print(f"Saved passive FDT-ratio plot to: {save_plot_path}")
+        log.info(f"Saved passive FDT-ratio plot to: {save_plot_path}")
 
     return passed, {"median_dev": med_dev, "max_dev": max_dev,
                     "passive_omega_0": passive_omega_0,
@@ -281,9 +285,9 @@ def run_all_sanity(cfg: FDTConfig, passive_plot_path=None) -> dict:
     :param passive_plot_path: if provided, the passive-baseline check saves a
                               passive FDT-ratio plot (Martin Fig 3C analogue) there.
     """
-    print("\n" + "=" * 60)
-    print("FDT Sanity Checks")
-    print("=" * 60)
+    log.info("=" * 60)
+    log.info("FDT Sanity Checks")
+    log.info("=" * 60)
 
     checks = [
         ("passive_baseline",      lambda c: check_passive_baseline(c, save_plot_path=passive_plot_path),
@@ -299,17 +303,17 @@ def run_all_sanity(cfg: FDTConfig, passive_plot_path=None) -> dict:
     _NADROWSKI_ONLY = {"passive_baseline", "high_freq_fdt"}
     if cfg.model.lower() != "nadrowski":
         checks = [c for c in checks if c[0] not in _NADROWSKI_ONLY]
-        print(f"Note: the passive-baseline / high-frequency FDT checks are Nadrowski-specific and are "
-              f"skipped for {cfg.model}; running the model-agnostic checks only.")
+        log.info(f"Note: the passive-baseline / high-frequency FDT checks are Nadrowski-specific and are "
+                 f"skipped for {cfg.model}; running the model-agnostic checks only.")
     results = {}
     for name, fn, desc in checks:
-        print(f"\n[{name}] {desc}")
+        log.info(f"[{name}] {desc}")
         passed, metrics = fn(cfg)
         results[name] = (passed, metrics)
-        print(f"  {'PASS' if passed else 'FAIL'}  metrics: {metrics}")
+        log.info(f"  {'PASS' if passed else 'FAIL'}  metrics: {metrics}")
 
-    print("\n" + "=" * 60 + "\nSummary:")
+    log.info("=" * 60 + "\nSummary:")
     for name, (passed, _) in results.items():
-        print(f"  [{'PASS' if passed else 'FAIL'}] {name}")
-    print("=" * 60 + "\n")
+        log.info(f"  [{'PASS' if passed else 'FAIL'}] {name}")
+    log.info("=" * 60)
     return results

@@ -17,6 +17,7 @@ construction (Campaign 2's grid is omega_0 x fixed log-ratios), so rows stack
 with no interpolation.
 """
 from __future__ import annotations
+import logging
 import warnings
 import json
 import math
@@ -34,6 +35,10 @@ from .campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_pr
 from .spectral import gen_freqs_log, eff_temp_ratio
 from .sanity import _interp_log
 from .fdt_pipeline import _estimate_omega_0
+
+# Phase banners and per-point progress are information; a Campaign-2 point that failed and was recorded
+# rather than raised is an error record (piece 3, V4).
+log = logging.getLogger(__name__)
 
 
 def _out_dir() -> Path:
@@ -210,10 +215,10 @@ def run_fdt_param_sweep(
         ops = h5.create_group("operating_points")
 
         # --- Phase A: spontaneous PSD + robust omega_0 per operating point ---
-        print(f"\n--- Phase A ({sweep_param} sweep): spontaneous PSD + omega_0 detection ---")
+        log.info(f"--- Phase A ({sweep_param} sweep): spontaneous PSD + omega_0 detection ---")
         cfg_ops, psds, omega0s, is_res, omega0_lins = [], [], [], [], []
         for idx, value in enumerate(sweep_grid):
-            print(f"  [A {idx+1}/{len(sweep_grid)}] {sweep_param}={value:.6g} ({fixed_str})")
+            log.info(f"  [A {idx+1}/{len(sweep_grid)}] {sweep_param}={value:.6g} ({fixed_str})")
             cfg_op = cfg.with_overrides(**{sweep_param: float(value), **fixed_overrides})
             omega_0_lin, _ = _estimate_omega_0(cfg_op)
             freqs_psd, G = run_campaign1_psd(cfg_op)
@@ -236,7 +241,7 @@ def run_fdt_param_sweep(
             grp.create_dataset("PSD_G", data=G.cpu().numpy().astype(np.float64),
                                compression="gzip")
             tag = "" if res else " [no resonance -> linearized fallback]"
-            print(f"      omega_0 = {w0:.4f}{tag}")
+            log.info(f"      omega_0 = {w0:.4f}{tag}")
             h5.flush()
 
         # --- Common grid covering every row's resonance band ---
@@ -247,14 +252,14 @@ def run_fdt_param_sweep(
         h5.attrs["common_grid_n"] = int(omegas_common.shape[0])
         h5.attrs["common_grid_span"] = np.array([omega_grid_np[0], omega_grid_np[-1]],
                                                 dtype=np.float64)
-        print(f"\nCommon grid: {omegas_common.shape[0]} pts spanning "
-              f"[{omega_grid_np[0]:.4f}, {omega_grid_np[-1]:.4f}] (omega_0_ref={omega_0_ref:.4f})")
+        log.info(f"Common grid: {omegas_common.shape[0]} pts spanning "
+                 f"[{omega_grid_np[0]:.4f}, {omega_grid_np[-1]:.4f}] (omega_0_ref={omega_0_ref:.4f})")
 
         # --- Phase B: forced response on the common grid per operating point ---
-        print(f"\n--- Phase B ({sweep_param} sweep): forced response on common grid ---")
+        log.info(f"--- Phase B ({sweep_param} sweep): forced response on common grid ---")
         n_failed = 0
         for idx, (cfg_op, (freqs_psd, G)) in enumerate(zip(cfg_ops, psds)):
-            print(f"  [B {idx+1}/{len(sweep_grid)}] {sweep_param}={sweep_grid[idx]:.6g}")
+            log.info(f"  [B {idx+1}/{len(sweep_grid)}] {sweep_param}={sweep_grid[idx]:.6g}")
             grp = ops[f"{idx:03d}"]
             try:
                 chis, ratio = _campaign2_ratio(cfg_op, omegas_common, freqs_psd, G)
@@ -262,7 +267,7 @@ def run_fdt_param_sweep(
                 # Recorded per point, and COUNTED. A systematic failure (a CUDA OOM, say) fails every
                 # point identically, so an overnight sweep could "complete" with nothing in it -- the
                 # per-point note scrolled past hours ago and the summary said nothing.
-                print(f"      Campaign 2 FAILED: {e}")
+                log.error(f"      Campaign 2 FAILED: {e}")
                 grp.attrs["error"] = str(e)
                 n_failed += 1
                 continue
@@ -277,7 +282,7 @@ def run_fdt_param_sweep(
             grp.create_dataset("chi_double_prime",
                                data=chis.imag.cpu().numpy().astype(np.float64), compression="gzip")
             grp.attrs["failed"] = False
-            print(f"      T_eff/T peak = {np.nanmax(ratio.cpu().numpy()):.3g}")
+            log.info(f"      T_eff/T peak = {np.nanmax(ratio.cpu().numpy()):.3g}")
             h5.flush()
 
     n_points = len(sweep_grid)
@@ -291,8 +296,8 @@ def run_fdt_param_sweep(
         warnings.warn(
             f"{sweep_param} sweep: {n_failed}/{n_points} operating points failed in Campaign 2 and "
             f"carry no response data. See their 'error' attrs in {output_path}.", stacklevel=2)
-    print(f"\n{sweep_param} sweep complete ({n_points - n_failed}/{n_points} points). "
-          f"Saved to: {output_path}")
+    log.info(f"{sweep_param} sweep complete ({n_points - n_failed}/{n_points} points). "
+             f"Saved to: {output_path}")
     return output_path
 
 
@@ -306,30 +311,30 @@ def run_param_study_cli(cfg: FDTConfig, s_grid: np.ndarray, temp_grid: np.ndarra
     from .cross_validation_plots import plot_fdt_3d_vs_param
 
     # --- S sweep, then plot immediately ---
-    print("\n" + "#" * 64)
-    print("# S sweep:  vary S, hold T_a/T = 1   (FDT restored as S -> 0)")
-    print("#" * 64)
+    log.info("#" * 64)
+    log.info("# S sweep:  vary S, hold T_a/T = 1   (FDT restored as S -> 0)")
+    log.info("#" * 64)
     s_path = run_fdt_param_sweep(cfg, sweep_param="s", sweep_grid=s_grid,
                                  fixed_overrides={"temp": 1.0})
-    print("Plotting S sweep...")
+    log.info("Plotting S sweep...")
     p1 = plot_fdt_3d_vs_param(load_param_sweep(s_path), param_symbol=r"$S$",
                               title=r"FDT ratio vs $(\tilde\omega/\Omega_0,\ S)$  ($T_a/T=1$)",
                               filename_tag="fdt3d_vs_S")
     if p1:
-        print(f"  Saved S-sweep plot: {p1}")
+        log.info(f"  Saved S-sweep plot: {p1}")
 
     # --- T sweep, then plot immediately ---
-    print("\n" + "#" * 64)
-    print("# T sweep:  vary T_a/T, hold S = 0   (FDT restored as T_a/T -> 1)")
-    print("#" * 64)
+    log.info("#" * 64)
+    log.info("# T sweep:  vary T_a/T, hold S = 0   (FDT restored as T_a/T -> 1)")
+    log.info("#" * 64)
     temp_path = run_fdt_param_sweep(cfg, sweep_param="temp", sweep_grid=temp_grid,
                                     fixed_overrides={"s": 0.0})
-    print("Plotting T sweep...")
+    log.info("Plotting T sweep...")
     p2 = plot_fdt_3d_vs_param(load_param_sweep(temp_path), param_symbol=r"$T_a/T$",
                               title=r"FDT ratio vs $(\tilde\omega/\Omega_0,\ T_a/T)$  ($S=0$)",
                               filename_tag="fdt3d_vs_T")
     if p2:
-        print(f"  Saved T-sweep plot: {p2}")
+        log.info(f"  Saved T-sweep plot: {p2}")
 
     return s_path, temp_path
 

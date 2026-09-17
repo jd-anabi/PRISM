@@ -18,8 +18,13 @@ Left on the 41-feature assumption, these diagnostics kept Group G and omitted ch
 results were literally independent of the chi toggle -- they would report the kappa~x_scale /
 lambda~t_scale aliases as strong as ever and falsely refute the hypothesis chi mode exists to test.
 """
+import logging
+
 from core.config import SimConfig
 from core.refusals import Refusal
+
+# The banner is an information record (piece 3, V4).
+log = logging.getLogger(__name__)
 
 _GROUP_G_PREFIX = "G"
 
@@ -56,12 +61,12 @@ def describe_features(cfg: SimConfig) -> None:
     if cfg.chi_mode:
         from core.SBI import chi as _chi
         n_sp, n_ch = len(summary_keep_idx()), len(_chi.CHI_FISHER_CHANNELS)
-        print(f"[mode] CHI: feature rows = {n_sp} spontaneous + {n_ch * cfg.chi_n_freqs} chi "
-              f"= {n_features(cfg)}  (Group G dropped: it is zeroed in this mode)", flush=True)
-        print("[mode] NOTE f_scale is informative here (chi drives at amp = F0 * f_scale).", flush=True)
+        log.info(f"[mode] CHI: feature rows = {n_sp} spontaneous + {n_ch * cfg.chi_n_freqs} chi "
+                 f"= {n_features(cfg)}  (Group G dropped: it is zeroed in this mode)")
+        log.info("[mode] NOTE f_scale is informative here (chi drives at amp = F0 * f_scale).")
     else:
-        print(f"[mode] {cfg.observation_mode.upper()}: feature rows = {n_features(cfg)} "
-              f"(the full single-frequency feature set)", flush=True)
+        log.info(f"[mode] {cfg.observation_mode.upper()}: feature rows = {n_features(cfg)} "
+                 f"(the full single-frequency feature set)")
 
 
 def assert_not_chi(cfg: SimConfig, what: str) -> None:

@@ -20,6 +20,7 @@ hypothesis chi mode exists to test.
 """
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
@@ -34,6 +35,10 @@ from core.runs import public_entry
 
 from . import feature_sets
 from .rng import seeded
+
+# The reports are information records and the dead-channel and missing-eigenvalue notices warnings
+# (piece 3, V4); a warning printed as several lines is ONE record, so it is marked once.
+log = logging.getLogger(__name__)
 
 _SF, _SS, _SC = 1, 2, 3          # CRN seeds: forced / spontaneous / chi block
 
@@ -76,15 +81,16 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
     if len(names) != P:
         names = [f"p{i}" for i in range(P)]
     orth = float(np.abs(V.T @ V - np.eye(P)).max())
-    print(f"[artifact] {label}   mode={body['mode']}   model={posterior.manifest.config.get('model')}")
-    print(f"[V] {P}x{P}, orthogonal to {orth:.1e}")
+    log.info(f"[artifact] {label}   mode={body['mode']}   model={posterior.manifest.config.get('model')}")
+    log.info(f"[V] {P}x{P}, orthogonal to {orth:.1e}")
     if cond.get("chi_k_pad") and cond.get("chi_elem_w"):
         k_pad, elem_w = int(cond["chi_k_pad"]), int(cond["chi_elem_w"])
         supplied, base = int(cond.get("chi_n_freqs") or 0), int(cond["input_dim"])
-        print(f"[conditioning] width {base + k_pad * elem_w} = {base} base + {k_pad} probe slots x {elem_w}")
-        print(f"[conditioning] {supplied} probe(s) supplied into {k_pad} slots -> "
-              f"{(k_pad - supplied) * elem_w} elements are pure padding "
-              f"({100.0 * (k_pad - supplied) / k_pad:.0f}% of the probe block never filled)")
+        log.info(f"[conditioning] width {base + k_pad * elem_w} = {base} base + {k_pad} probe slots "
+                 f"x {elem_w}")
+        log.info(f"[conditioning] {supplied} probe(s) supplied into {k_pad} slots -> "
+                 f"{(k_pad - supplied) * elem_w} elements are pure padding "
+                 f"({100.0 * (k_pad - supplied) / k_pad:.0f}% of the probe block never filled)")
 
     ev = tr.get("fisher_eigenvalues")
     if ev is None:
@@ -92,24 +98,26 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
         # runs a Fisher), and the ordering plus the loadings are still the answer to "which direction
         # is worst, and what it is made of" -- just not to "how much worse". Run this diagnostic on
         # the amortized PARENT, which carries them.
-        print("\n[eigenvalues] NOT STORED for this artifact.")
-        print("  Everything below is an ORDERING and a set of LOADINGS -- which direction is worst,")
-        print("  and what it is made of -- but NOT how much worse it is. That scale is the question:")
-        print("  a 3x spread means the experiment measures everything tolerably; 1e6 means it")
-        print("  measures a handful of directions and returns the prior for the rest.")
-        print("  Run this diagnostic on the amortized PARENT, which carries them.")
+        # ONE warning record for the six lines: the pane's triangle and the tool's "warning: " prefix
+        # mark the block once, and log.txt puts one timestamp over it.
+        log.warning("[eigenvalues] NOT STORED for this artifact.\n"
+                    "  Everything below is an ORDERING and a set of LOADINGS -- which direction is worst,\n"
+                    "  and what it is made of -- but NOT how much worse it is. That scale is the question:\n"
+                    "  a 3x spread means the experiment measures everything tolerably; 1e6 means it\n"
+                    "  measures a handful of directions and returns the prior for the rest.\n"
+                    "  Run this diagnostic on the amortized PARENT, which carries them.")
         ev_a = None
     else:
         ev_a = np.asarray(ev, dtype=float)
         pos = ev_a[ev_a > 0]
         spread = ev_a[0] / ev_a[-1] if ev_a[-1] > 0 else float("inf")
         pr = float((pos.sum() ** 2) / (pos ** 2).sum()) if pos.size else 0.0
-        print(f"\n[eigenvalues] max {ev_a[0]:.4g}  min {ev_a[-1]:.4g}  spread {spread:.4g}")
-        print(f"[eigenvalues] participation ratio {pr:.2f} of {P} "
-              f"-> ~{pr:.1f} effectively constrained direction(s)")
+        log.info(f"[eigenvalues] max {ev_a[0]:.4g}  min {ev_a[-1]:.4g}  spread {spread:.4g}")
+        log.info(f"[eigenvalues] participation ratio {pr:.2f} of {P} "
+                 f"-> ~{pr:.1f} effectively constrained direction(s)")
 
-    print("\n=== Fisher eigen-directions (columns of V), BEST-constrained first ===")
-    print("loadings are in box-normalised coordinates, so they are comparable across parameters")
+    log.info("=== Fisher eigen-directions (columns of V), BEST-constrained first ===")
+    log.info("loadings are in box-normalised coordinates, so they are comparable across parameters")
     directions = []
     for j in range(P):
         col = V[:, j]
@@ -119,11 +127,11 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
         part = "  ".join(f"{col[i]:+.2f}*{names[i]}" for i in top)
         ev_s = "" if ev_a is None else f"  [lambda={float(ev_a[j]):.3g}]"
         tag = "   <-- BEST" if j == 0 else ("   <-- WORST" if j == P - 1 else "")
-        print(f"  dir {j:2d}: {part}{ev_s}{tag}")
+        log.info(f"  dir {j:2d}: {part}{ev_s}{tag}")
 
     W = V ** 2                       # rows sum to 1: how parameter i is spread over the directions
-    print(f"\n=== per parameter: share of its identifiability in the WORST directions ===")
-    print(f"{'param':>10s} {'bottom-' + str(n_worst):>10s} {'top-4':>8s} {'peak dir':>9s}   verdict")
+    log.info(f"=== per parameter: share of its identifiability in the WORST directions ===")
+    log.info(f"{'param':>10s} {'bottom-' + str(n_worst):>10s} {'top-4':>8s} {'peak dir':>9s}   verdict")
     per_param = []
     for i in range(P):
         bot, top4, peak = float(W[i, P - n_worst:].sum()), float(W[i, :4].sum()), int(np.argmax(W[i]))
@@ -138,12 +146,12 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
         per_param.append({"name": names[i], "bottom_share": bot, "top4_share": top4,
                           "peak_dir": peak, "verdict": verdict})
     for rec in sorted(per_param, key=lambda p: -p["bottom_share"]):
-        print(f"{rec['name']:>10s} {rec['bottom_share']:10.3f} {rec['top4_share']:8.3f} "
-              f"{rec['peak_dir']:9d}   {rec['verdict']}")
+        log.info(f"{rec['name']:>10s} {rec['bottom_share']:10.3f} {rec['top4_share']:8.3f} "
+                 f"{rec['peak_dir']:9d}   {rec['verdict']}")
 
-    print("\n=== parameters that are their OWN near-null direction ===")
-    print("(a parameter with ~all its weight on one bottom direction is FLAT, not aliased --")
-    print(" no reparameterisation or prior rotation reaches it; only a new observable does)")
+    log.info("=== parameters that are their OWN near-null direction ===")
+    log.info("(a parameter with ~all its weight on one bottom direction is FLAT, not aliased --")
+    log.info(" no reparameterisation or prior rotation reaches it; only a new observable does)")
     flat_axes = []
     for i in range(P):
         j = int(np.argmax(W[i]))
@@ -151,11 +159,11 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
             partners = [names[q] for q in range(P) if q != i and abs(V[q, j]) > 0.25]
             flat_axes.append({"name": names[i], "share": float(W[i, j]),
                               "loading": float(V[i, j]), "partners": partners})
-            print(f"  {names[i]:>10s}: {W[i, j]:.3f} of its weight on dir {j}, loading {V[i, j]:+.3f}"
-                  + (f", shared with {', '.join(partners)}" if partners else ", ALONE"))
+            log.info(f"  {names[i]:>10s}: {W[i, j]:.3f} of its weight on dir {j}, loading {V[i, j]:+.3f}"
+                     + (f", shared with {', '.join(partners)}" if partners else ", ALONE"))
     if not flat_axes:
-        print("  none -- every poorly-constrained parameter is mixed with others, i.e. aliased "
-              "rather than flat")
+        log.info("  none -- every poorly-constrained parameter is mixed with others, i.e. aliased "
+                 "rather than flat")
 
     settings = {"n_worst": n_worst, "top_n": top_n}
     # S1 (spec 4.1): every float reaching the manifest goes through orch._num here, in one place, so a
@@ -429,11 +437,11 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
                 sd, meas = _analyze_point(ctx, nd, res, force)
                 SD[j] = sd
                 measurable.append(int(meas))
-                print(f"[{tag:8s}] measurable params={meas}/{P}", flush=True)
+                log.info(f"[{tag:8s}] measurable params={meas}/{P}")
 
-        print("\n=== marginal posterior SD per param across points (prior-range units) ===")
-        print(f"{'param':9s} " + " ".join(f"{p[0][:7]:>7s}" for p in points)
-              + f" {'median':>8s} {'frac<' + str(sd_identified):>8s}")
+        log.info("=== marginal posterior SD per param across points (prior-range units) ===")
+        log.info(f"{'param':9s} " + " ".join(f"{p[0][:7]:>7s}" for p in points)
+                 + f" {'median':>8s} {'frac<' + str(sd_identified):>8s}")
         per_param = []
         for p in range(P):
             row = SD[:, p]
@@ -443,9 +451,9 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
             per_param.append({"name": names[p], "unit": "log-range" if is_log[p] else "range",
                               "sd": [orch._num(v) for v in row], "median_sd": orch._num(med),
                               "frac_identified": orch._num(frac)})
-            print(f"{names[p]:9s} "
-                  + " ".join(f"{v:7.3f}" if np.isfinite(v) else f"{'nan':>7s}" for v in row)
-                  + f" {med:8.3f} {frac:8.2f}")
+            log.info(f"{names[p]:9s} "
+                     + " ".join(f"{v:7.3f}" if np.isfinite(v) else f"{'nan':>7s}" for v in row)
+                     + f" {med:8.3f} {frac:8.2f}")
 
         file_manager.atomic_savez(w.payload("laplace_sd.npz"), {
             "SD": SD, "points": np.array([p[0] for p in points]),
@@ -566,11 +574,11 @@ def _probe_budget(ctx, feats0, keep0, xs0, t_obs_s) -> None:
     f0_gt = float(np.median(f_pk))
     t_full = ctx.n_obs * cfg.dt_exp
     n_sp, n_ch = len(ctx.keep_idx), len(chi_mod.CHI_FISHER_CHANNELS)
-    print(f"\n=== probe budget: T_obs={t_obs_cell:g} cell-time = {t_obs_s:g} s, "
-          f"Omega_0={f0_gt * hz:.4g} Hz (ensemble median; p5..p95 "
-          f"{np.percentile(f_pk, 5) * hz:.3g}..{np.percentile(f_pk, 95) * hz:.3g}) ===")
-    print(f"  {'xOmega_0':>9} {'f (Hz)':>9} {'cycles':>8} {'floor':>7} {'ceiling':>8} "
-          f"{'mean log|chi|':>14} {'cos^2+sin^2':>12}")
+    log.info(f"=== probe budget: T_obs={t_obs_cell:g} cell-time = {t_obs_s:g} s, "
+             f"Omega_0={f0_gt * hz:.4g} Hz (ensemble median; p5..p95 "
+             f"{np.percentile(f_pk, 5) * hz:.3g}..{np.percentile(f_pk, 95) * hz:.3g}) ===")
+    log.info(f"  {'xOmega_0':>9} {'f (Hz)':>9} {'cycles':>8} {'floor':>7} {'ceiling':>8} "
+             f"{'mean log|chi|':>14} {'cos^2+sin^2':>12}")
     bad = 0
     for j, mv in enumerate(ctx.mults.tolist()):
         cyc = mv * f0_gt * t_full
@@ -579,21 +587,21 @@ def _probe_budget(ctx, feats0, keep0, xs0, t_obs_s) -> None:
         s = feats0[keep0][:, n_sp + n_ch * j + 2]
         unit = float(np.mean(c ** 2 + s ** 2))
         bad += abs(unit - 1.0) > 1e-3
-        print(f"  {mv:9.4f} {mv * f0_gt * hz:9.4g} {cyc:8.2f} "
-              f"{'ok' if cyc >= CHI_MIN_CYCLES else 'DRIFT':>7} "
-              f"{'PINNED' if cyc > cfg.chi_max_cycles else 'ok':>8} {lm:14.4g} {unit:12.6f}")
+        log.info(f"  {mv:9.4f} {mv * f0_gt * hz:9.4g} {cyc:8.2f} "
+                 f"{'ok' if cyc >= CHI_MIN_CYCLES else 'DRIFT':>7} "
+                 f"{'PINNED' if cyc > cfg.chi_max_cycles else 'ok':>8} {lm:14.4g} {unit:12.6f}")
     if bad:
         raise ValueError(
             f"chi: {bad} probe(s) violate cos^2 + sin^2 == 1, so channels 1 and 2 of the Fisher block "
             f"are not the cosine and sine of one phase. Check what is being passed to "
             f"chi.fisher_features and the gen_chi_raw unpack (trap CHI10).")
     lo_b, hi_b = cfg.chi_freq_bounds
-    print(f"  low edge {lo_b:g}x clears {CHI_MIN_CYCLES:g} cycles at T_obs >= "
-          f"{CHI_MIN_CYCLES / (lo_b * f0_gt) / hz:.3g} s; high edge {hi_b:g}x stays under the "
-          f"{cfg.chi_max_cycles:g}-cycle ceiling below T_obs = "
-          f"{cfg.chi_max_cycles / (hi_b * f0_gt) / hz:.3g} s.")
-    print(f"  adapt_placement (OFF here, see the gen_chi_raw call) would be a NO-OP iff the first of "
-          f"those two numbers is <= this T_obs of {t_obs_s:g} s.", flush=True)
+    log.info(f"  low edge {lo_b:g}x clears {CHI_MIN_CYCLES:g} cycles at T_obs >= "
+             f"{CHI_MIN_CYCLES / (lo_b * f0_gt) / hz:.3g} s; high edge {hi_b:g}x stays under the "
+             f"{cfg.chi_max_cycles:g}-cycle ceiling below T_obs = "
+             f"{cfg.chi_max_cycles / (hi_b * f0_gt) / hz:.3g} s.")
+    log.info(f"  adapt_placement (OFF here, see the gen_chi_raw call) would be a NO-OP iff the first of "
+             f"those two numbers is <= this T_obs of {t_obs_s:g} s.")
 
 
 def _dead_channels(ctx, feats0, keep0, fnoise, noise_eps):
@@ -605,14 +613,17 @@ def _dead_channels(ctx, feats0, keep0, fnoise, noise_eps):
     fscale = np.maximum(np.abs(feats0[keep0]).max(0), 1e-30)
     dead = fnoise <= noise_eps * fscale
     if dead.any():
-        print(f"\n!! DEAD FEATURE CHANNELS: {int(dead.sum())}/{len(fnoise)} rows ZEROED in J -- their "
-              f"standardized entries would be amplified representation or quantization noise, not signal.")
-        for i in np.flatnonzero(dead):
-            print(f"     {ctx.feat_labels[i]:18s} std={fnoise[i]:9.3g}  |feat|={fscale[i]:9.3g}  "
-                  f"ratio={fnoise[i] / fscale[i]:.2g}")
+        # ONE warning record, the header and its per-channel rows together: the pane's triangle and
+        # the tool's "warning: " prefix mark the block once, and log.txt puts one timestamp over it.
+        rows = [f"     {ctx.feat_labels[i]:18s} std={fnoise[i]:9.3g}  |feat|={fscale[i]:9.3g}  "
+                f"ratio={fnoise[i] / fscale[i]:.2g}" for i in np.flatnonzero(dead)]
+        log.warning("\n".join(
+            [f"!! DEAD FEATURE CHANNELS: {int(dead.sum())}/{len(fnoise)} rows ZEROED in J -- their "
+             f"standardized entries would be amplified representation or quantization noise, not signal.",
+             *rows]))
     else:
-        print(f"[noise] no dead channels (min std/|feat| = {float((fnoise / fscale).min()):.2g} vs "
-              f"noise_eps={noise_eps:g})", flush=True)
+        log.info(f"[noise] no dead channels (min std/|feat| = {float((fnoise / fscale).min()):.2g} vs "
+                 f"noise_eps={noise_eps:g})")
     return dead
 
 
@@ -682,30 +693,30 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, vfr, zero_tol, sink):
         # dead row whose largest entry rivals the largest live one is a row that would have led the
         # payload table. ZEROED, not deleted, so every row index still matches feat_labels.
         fin = np.isfinite(J)
-        print(f"[noise] zeroed {int(dead.sum())} dead rows of J; their largest standardized entry was "
-              f"{np.abs(J[dead][fin[dead]]).max(initial=0.0):.3g}, against "
-              f"{np.abs(J[~dead][fin[~dead]]).max(initial=0.0):.3g} over the live rows.", flush=True)
+        log.warning(f"[noise] zeroed {int(dead.sum())} dead rows of J; their largest standardized entry was "
+                    f"{np.abs(J[dead][fin[dead]]).max(initial=0.0):.3g}, against "
+                    f"{np.abs(J[~dead][fin[~dead]]).max(initial=0.0):.3g} over the live rows.")
         J[dead, :] = 0.0
     P = J.shape[1]
     norms_std = np.array([np.linalg.norm(J[:, p]) if np.isfinite(J[:, p]).all() else np.nan
                           for p in range(P)])
     norms_raw = np.array([np.linalg.norm(J[:, p] * fnoise) if np.isfinite(J[:, p]).all() else np.nan
                           for p in range(P)])
-    print("\n=== per-param gradient ===")
-    print(f"{'param':11s} {'kind':9s} {'||g||_std':>10s} {'||g||_raw':>10s} {'valid':>6s}")
+    log.info("=== per-param gradient ===")
+    log.info(f"{'param':11s} {'kind':9s} {'||g||_std':>10s} {'||g||_raw':>10s} {'valid':>6s}")
     for p in range(P):
-        print(f"{names[p]:11s} {kinds[p]:9s} {norms_std[p]:10.3f} {norms_raw[p]:10.4g} {vfr[p]:6.2f}")
+        log.info(f"{names[p]:11s} {kinds[p]:9s} {norms_std[p]:10.3f} {norms_raw[p]:10.4g} {vfr[p]:6.2f}")
 
     # ---- which rows are driving J ---- advisory, no threshold: a row leading this table on a std
     # 1000x under the median is quantization (the probe budget above says which probe), not signal.
     abs_j = np.abs(np.nan_to_num(J, nan=0.0))
     rowmax, fmed = abs_j.max(1), float(np.median(fnoise))
-    print(f"\n=== feature rows dominating J (median fnoise {fmed:.3g}; check it before believing one) ===")
-    print(f"  {'row':18s} {'fnoise':>10s} {'/median':>9s} {'max|J|':>9s}  at param")
+    log.info(f"=== feature rows dominating J (median fnoise {fmed:.3g}; check it before believing one) ===")
+    log.info(f"  {'row':18s} {'fnoise':>10s} {'/median':>9s} {'max|J|':>9s}  at param")
     row_top = np.argsort(-rowmax)[:8]
     for i in row_top:
-        print(f"  {ctx.feat_labels[i]:18s} {fnoise[i]:10.3g} {fnoise[i] / max(fmed, 1e-30):9.3g} "
-              f"{rowmax[i]:9.3g}  {names[int(np.argmax(abs_j[i]))]}")
+        log.info(f"  {ctx.feat_labels[i]:18s} {fnoise[i]:10.3g} {fnoise[i] / max(fmed, 1e-30):9.3g} "
+                 f"{rowmax[i]:9.3g}  {names[int(np.argmax(abs_j[i]))]}")
 
     measurable = np.array([kinds[p] != "UNMEAS" for p in range(P)])
     stiff = measurable & (np.nan_to_num(norms_std) > zero_tol)
@@ -713,21 +724,21 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, vfr, zero_tol, sink):
     si = [p for p in range(P) if stiff[p]]
     unmeasurable = [names[p] for p in range(P) if not measurable[p]]
     no_local_info = [names[p] for p in range(P) if measurable[p] and not stiff[p]]
-    print(f"\nunmeasurable (both sides destabilize): {unmeasurable or 'none'}")
-    print(f"no local info (||g||_std<{zero_tol}): {no_local_info or 'none'}")
+    log.info(f"unmeasurable (both sides destabilize): {unmeasurable or 'none'}")
+    log.info(f"no local info (||g||_std<{zero_tol}): {no_local_info or 'none'}")
 
     ns = [names[p] for p in mi]
     Jm = J[:, mi]
     Jn = Jm / np.maximum(np.linalg.norm(Jm, axis=0), 1e-12)
     C = np.abs(Jn.T @ Jn)
-    print("\n=== |cos(grad_p, grad_q)| over measurable params (|cos|->1 = degenerate) ===")
-    print("            " + " ".join(f"{n[:7]:>7s}" for n in ns))
+    log.info("=== |cos(grad_p, grad_q)| over measurable params (|cos|->1 = degenerate) ===")
+    log.info("            " + " ".join(f"{n[:7]:>7s}" for n in ns))
     for i in range(len(mi)):
-        print(f"{ns[i]:11s} " + " ".join(f"{C[i, j]:7.2f}" for j in range(len(mi))))
+        log.info(f"{ns[i]:11s} " + " ".join(f"{C[i, j]:7.2f}" for j in range(len(mi))))
     pairs = [{"a": ns[i], "b": ns[j], "cos": float(C[i, j])}
              for i in range(len(mi)) for j in range(i + 1, len(mi)) if C[i, j] > 0.9]
-    print("\ndegenerate pairs (|cos|>0.90): "
-          + (", ".join(f"{p['a']}~{p['b']} ({p['cos']:.2f})" for p in pairs) or "none"))
+    log.info("degenerate pairs (|cos|>0.90): "
+             + (", ".join(f"{p['a']}~{p['b']} ({p['cos']:.2f})" for p in pairs) or "none"))
 
     Js = J[:, si]
     if Js.size:
@@ -736,24 +747,24 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, vfr, zero_tol, sink):
         S, Vt = np.zeros(0), np.zeros((0, 0))
     nss = [names[p] for p in si]
     cond = float(S[0] / max(S[-1], 1e-12)) if S.size else float("nan")
-    print(f"\n=== SVD over stiff columns {nss} ===")
+    log.info(f"=== SVD over stiff columns {nss} ===")
     for k in range(S.size):
-        print(f"  sigma[{k}] = {S[k]:9.3f}  (norm {S[k] / S[0]:.4f})")
-    print(f"  condition number = {cond:.1f}")
-    print("\n=== sloppiest stiff direction (smallest singular value) loadings ===")
+        log.info(f"  sigma[{k}] = {S[k]:9.3f}  (norm {S[k] / S[0]:.4f})")
+    log.info(f"  condition number = {cond:.1f}")
+    log.info("=== sloppiest stiff direction (smallest singular value) loadings ===")
     sloppiest = Vt[-1] if Vt.shape[0] else np.zeros(0)
     for j in np.argsort(-np.abs(sloppiest)):
-        print(f"  {nss[j]:11s} {sloppiest[j]:+.3f}")
+        log.info(f"  {nss[j]:11s} {sloppiest[j]:+.3f}")
 
     # ---- unique-handle over measurable columns: ||g_p projected off span(others)|| / ||g_p|| ----
-    print("\n=== unique-handle ||g_p _|_ span(others)|| / ||g_p|| (low = degenerate) ===")
+    log.info("=== unique-handle ||g_p _|_ span(others)|| / ||g_p|| (low = degenerate) ===")
     unique_frac = np.zeros(len(mi))
     for p in range(len(mi)):
         others = np.delete(Jm, p, axis=1)
         coef, *_ = np.linalg.lstsq(others, Jm[:, p], rcond=None)
         unique_frac[p] = np.linalg.norm(Jm[:, p] - others @ coef) / max(np.linalg.norm(Jm[:, p]), 1e-12)
     for p in sorted(range(len(mi)), key=lambda q: unique_frac[q]):
-        print(f"  {ns[p]:11s} unique={unique_frac[p]:.3f}   ||g||_std={np.linalg.norm(Jm[:, p]):.3f}")
+        log.info(f"  {ns[p]:11s} unique={unique_frac[p]:.3f}   ||g||_std={np.linalg.norm(Jm[:, p]):.3f}")
 
     fig, ax = plt.subplots(figsize=(8.5, 7.5))
     im = ax.imshow(C, vmin=0, vmax=1, cmap="magma")
@@ -776,19 +787,19 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, vfr, zero_tol, sink):
 
     # ---- top features per parameter -- the script calls this "the scientific payload": not merely
     # whether an alias weakened, but WHICH features drove it.
-    print("\n=== top features per parameter ===")
+    log.info("=== top features per parameter ===")
     top_k = min(5, J.shape[0])
     top_feat_idx = np.full((P, top_k), -1, dtype=int)
     top_feat_val = np.full((P, top_k), np.nan)
     for p in range(P):
         col = J[:, p]
         if not np.isfinite(col).all():
-            print(f"  {names[p]:11s} (unmeasurable)")
+            log.info(f"  {names[p]:11s} (unmeasurable)")
             continue
         top = np.argsort(-np.abs(col))[:top_k]
         top_feat_idx[p, :len(top)] = top
         top_feat_val[p, :len(top)] = col[top]
-        print(f"  {names[p]:11s} " + ", ".join(f"{ctx.feat_labels[i]}={col[i]:+.2f}" for i in top))
+        log.info(f"  {names[p]:11s} " + ", ".join(f"{ctx.feat_labels[i]}={col[i]:+.2f}" for i in top))
 
     extra = {
         "measurable_mask": measurable, "stiff_mask": stiff,
@@ -856,8 +867,8 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
                   n_force_ch=forcing.n_force_channels(cfg.model, cfg.forcing_idx,
                                                       cfg.inits_tensor.shape[-1]))
     if cfg.chi_mode:
-        print(f"[mode] probe multipliers of Omega_0: "
-              f"{[round(v, 4) for v in ctx.mults.tolist()]}", flush=True)
+        log.info(f"[mode] probe multipliers of Omega_0: "
+                 f"{[round(v, 4) for v in ctx.mults.tolist()]}")
     settings = {"m": int(m), "m_noise": int(m_noise), "rel": float(rel), "min_valid": float(min_valid),
                 "zero_tol": float(zero_tol), "noise_eps": float(noise_eps), "t_obs_s": t_obs_s,
                 "seed": int(seed)}
@@ -880,8 +891,8 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
             cap = 100.0 * float(np.median(amax0[fin0]))
             keep0 = fin0 & (amax0 < cap)
             fnoise = np.maximum(feats0[keep0].std(0), 1e-9)
-            print(f"[noise] CAP={cap:.4g}  GT valid frac={keep0.mean():.2f}  "
-                  f"median feature noise={np.median(fnoise):.4g}", flush=True)
+            log.info(f"[noise] CAP={cap:.4g}  GT valid frac={keep0.mean():.2f}  "
+                     f"median feature noise={np.median(fnoise):.4g}")
             _probe_budget(ctx, feats0, keep0, xs0, t_obs_s)
             dead = _dead_channels(ctx, feats0, keep0, fnoise, float(noise_eps))
             J, names, kinds, vfr = _jacobian(ctx, gt_nd, gt_rescale, fnoise, cap, int(m),

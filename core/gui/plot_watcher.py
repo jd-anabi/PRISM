@@ -2,11 +2,12 @@
 
 WHY NOT just take them from the runner's return value: the FDT / Reduction / CrossVal runners don't
 hand their figures back. run_fdt returns None, run_reduction_map returns a ReductionRecord, and
-run_param_study_cli returns the two HDF5 *data* paths -- the figure paths are only print()ed
-(FDT.fdt_pipeline.run_fdt, Reduction.sweep, FDT.cross_validation.run_fdt_param_sweep).
+run_param_study_cli returns the two HDF5 *data* paths -- the figure paths are only reported as text:
+log records in FDT.fdt_pipeline.run_fdt and FDT.cross_validation.run_param_study_cli (piece 3), a
+print() in Reduction.sweep.
 
-WHY NOT scrape those prints: four modules, four different formats, and it would weld the GUI to
-print() text inside core.
+WHY NOT scrape those messages: several modules, several formats, and it would weld the GUI to message
+text inside core.
 
 So instead we snapshot the plot directory when a run starts and pick up whatever appears. That needs
 no core change at all, and -- the real payoff -- it shows figures INCREMENTALLY: the FDT sanity plot

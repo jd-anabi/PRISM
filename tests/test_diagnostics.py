@@ -65,7 +65,7 @@ def test_a_diagnostic_loads_without_a_config_and_blocks_deleting_what_it_names(s
     assert store.load_diagnostic("sbc_rep").id == w.id            # the measurement itself survives
 
 
-def test_the_chi_feature_set_drops_group_g_and_adds_the_fisher_block(capsys):
+def test_the_chi_feature_set_drops_group_g_and_adds_the_fisher_block(caplog):
     """The whole reason these helpers exist: a diagnostic built over the 41-feature single-frequency
     set while the posterior conditions on chi answers a question about a DIFFERENT experiment -- it
     reports the kappa~x_scale / lambda~t_scale aliases as strong as ever and falsely refutes the very
@@ -91,12 +91,19 @@ def test_the_chi_feature_set_drops_group_g_and_adds_the_fisher_block(capsys):
     assert labels[30:] == chi_mod.chi_labels(4, chi_mod.CHI_FISHER_CHANNELS)
     assert labels[30] == "chi0_logmag" and len(labels) == 30 + 3 * 4 == fs.n_features(chi_cfg)
 
+    # The banner is a record at INFO from the feature-set module (piece 3, V4): same words, but the
+    # window shows it plain, the tool prints it on stdout and the run's log.txt keeps it.
+    caplog.clear()
     fs.describe_features(chi_cfg)
-    out = capsys.readouterr().out
-    assert "[mode] CHI: feature rows = 30 spontaneous + 12 chi = 42" in out, out
-    assert "f_scale is informative here" in out
+    got = [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
+    assert [(n, lvl) for n, lvl, _ in got] == [("core.diagnostics.feature_sets", "INFO")] * 2, got
+    assert got[0][2].startswith("[mode] CHI: feature rows = 30 spontaneous + 12 chi = 42"), got
+    assert "f_scale is informative here" in got[1][2], got
+    caplog.clear()
     fs.describe_features(plain)
-    assert f"[mode] {plain.observation_mode.upper()}: feature rows = 41" in capsys.readouterr().out
+    got = [(r.levelname, r.getMessage()) for r in caplog.records]
+    assert len(got) == 1 and got[0][0] == "INFO", got
+    assert got[0][1].startswith(f"[mode] {plain.observation_mode.upper()}: feature rows = 41"), got
 
 
 def test_the_diagnostic_guards_refuse_naming_no_flag_or_file():
@@ -433,7 +440,7 @@ def test_the_sbc_rank_histogram_bin_count_stays_near_its_cap(n_pooled, nps, want
 
 
 def test_sbc_prints_small_p_values_as_numbers_and_bins_ranks_at_least_ten_wide(tiny_run, monkeypatch,
-                                                                             capsys):
+                                                                             caplog):
     """Two display defects on the rows that matter most.
 
     The KS table formatted str(float) truncated to 8 characters, so 3.212345646893978e-20 printed as
@@ -465,9 +472,16 @@ def test_sbc_prints_small_p_values_as_numbers_and_bins_ranks_at_least_ten_wide(t
     monkeypatch.setattr(orch, "check_sbc", lambda **k: {"ks_pvals": [tiny_p] * P,
                                                         "c2st_ranks": [0.5] * P, "c2st_dap": [0.5] * P})
     monkeypatch.setattr(orch, "sbc_rank_plot", _plot)
+    caplog.clear()
     sbc_repeats(r.cfg, r.posterior, r.prior, repeats=10, n_cal=N, num_posterior_samples=nps,
                 fig_sink=lambda title, fig: plt.close(fig))
-    out = capsys.readouterr().out
+    # The report table is records at INFO from the sbc module, one per line as the prints were
+    # (piece 3, V4); the blank line the header's print opened with went with the print.
+    sbc_lines = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.diagnostics.sbc"]
+    assert ("INFO", "=== KS p-value distribution over repeats (sorted by median; low = miscalibrated) ===") \
+        in sbc_lines, sbc_lines
+    assert {lvl for lvl, _ in sbc_lines} == {"INFO"}, sbc_lines
+    out = "\n".join(msg for _, msg in sbc_lines)
     assert seen["num_bins"] <= (nps + 1) // 10, seen["num_bins"]
     # sbi draws plt.hist(ranks, bins=<int>): edges linspace(min, max, bins + 1) with the last bin
     # closed, so over ranks 0..nps each bin holds the same number of integer ranks only when the bin
@@ -523,7 +537,7 @@ def test_identifiability_rotation_decomposes_a_stored_basis(store):
     assert d.manifest.payloads == {} and d.manifest.figures == []
 
 
-def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_absent_rotation(store, capsys):
+def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_absent_rotation(store, caplog):
     """Eigenvalues absent is a REPORT: every TSNPE round carries None (it reuses the parent's V and
     never runs a Fisher), and the loadings still answer "which direction is worst". V absent is a
     REFUSAL: there is no basis to decompose at all."""
@@ -536,7 +550,12 @@ def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_abse
     d = identifiability_rotation(cfg, store.load_posterior(cfg, w.id), name="rot_noev")
     assert d.results["eigenvalues"] is None and len(d.results["directions"]) == P
     assert d.results["directions"][0]["eigenvalue"] is None
-    assert "NOT STORED" in capsys.readouterr().out
+    # A WARNING, said once: the six explanatory lines travel in one record, so the pane's triangle and
+    # the tool's "warning: " prefix mark the block once and log.txt stamps it once (piece 3, V4).
+    warned = [r.getMessage() for r in caplog.records
+              if r.name == "core.diagnostics.identifiability" and r.levelname == "WARNING"]
+    assert len(warned) == 1 and warned[0].startswith("[eigenvalues] NOT STORED for this artifact.\n"), warned
+    assert warned[0].endswith("Run this diagnostic on the amortized PARENT, which carries them."), warned
     flat = _posterior_artifact(store, cfg, name="norot", V=None)
     with pytest.raises(Refusal, match="records no Fisher rotation") as e:
         identifiability_rotation(cfg, store.load_posterior(cfg, flat.id), name="rot_none")
@@ -1509,3 +1528,58 @@ def test_channel_ablation_writes_a_non_finite_displacement_as_an_explicit_verdic
     # json.dumps(allow_nan=False), which would have raised mid-write rather than merely mislabelling.
     reloaded = store.load_diagnostic(d.id)
     assert reloaded.results == res
+
+
+def test_the_diagnostic_warnings_are_records_and_the_reports_are_information(caplog, capsys):
+    """V4 in the diagnostics and the plot helpers. A diagnostic's report -- its tables, banners and
+    per-point progress -- is information; what the operator must act on is a warning: feature channels
+    whose Jacobian rows were ZEROED as noise, and a loss plot with nothing to draw. Until piece 3 every
+    one of them was print(), so on the command line the dead-channel block sat in stdout between two
+    tables, and in the window it wore no triangle.
+
+    A warning printed as several lines is ONE record: the header and its per-channel rows travel
+    together, so the pane's triangle and the tool's "warning: " prefix mark the block once and log.txt
+    puts one timestamp over the rows it explains. Nothing reaches stdout any more -- on the command line
+    the tool's information handler puts the report there (Task 16), not a print."""
+    import logging
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from core.diagnostics import identifiability
+    from core.Helpers import visualizers
+
+    assert logging.getLogger("core").level == logging.INFO, "core/runs.py sets it at import"
+    ctx = SimpleNamespace(feat_labels=["A1_mean", "B2_std"])
+    feats0 = np.array([[1.0, 5.0], [1.0, 6.0]])
+    keep0 = np.array([True, True])
+
+    # a dead channel: one WARNING record, header first, the channel's row inside it
+    caplog.clear()
+    dead = identifiability._dead_channels(ctx, feats0, keep0, np.array([1e-12, 0.5]), 1e-6)
+    assert dead.tolist() == [True, False]
+    got = [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
+    assert len(got) == 1, got
+    name, level, msg = got[0]
+    assert (name, level) == ("core.diagnostics.identifiability", "WARNING"), got
+    head, *rows = msg.split("\n")
+    assert head.startswith("!! DEAD FEATURE CHANNELS: 1/2 rows ZEROED in J -- "), msg
+    assert len(rows) == 1 and rows[0].startswith("     A1_mean ") and "ratio=1e-12" in rows[0], msg
+
+    # no dead channel: one INFO record
+    caplog.clear()
+    dead = identifiability._dead_channels(ctx, feats0, keep0, np.array([0.5, 0.5]), 1e-6)
+    assert not dead.any()
+    got = [(r.levelname, r.getMessage()) for r in caplog.records]
+    assert len(got) == 1 and got[0][0] == "INFO", got
+    assert got[0][1].startswith("[noise] no dead channels (min std/|feat| = "), got
+
+    # a loss plot with no validation curve: a WARNING from the plot helpers, and no figure
+    caplog.clear()
+    assert visualizers.plot_training_loss({"training_loss": [1.0, 0.9]}) is None
+    got = [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
+    assert got == [("core.Helpers.visualizers", "WARNING",
+                    "plot_training_loss: no validation_loss curve in diagnostics; nothing to plot.")], got
+
+    out, err = capsys.readouterr()
+    assert out == "" and err == "", (out, err)

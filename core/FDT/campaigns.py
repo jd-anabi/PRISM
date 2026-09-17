@@ -4,6 +4,7 @@ Simulation campaigns for FDT analysis.
 Campaign 1: spontaneous fluctuations -> Welch PSD G(omega).
 Campaign 2: forced response at each driving frequency -> chi(omega) via lock-in.
 """
+import logging
 import math
 import torch
 from tqdm import tqdm
@@ -14,6 +15,9 @@ from core.Simulator.nadrowski_simulator import NadrowskiSimulator
 from core.Simulator.hopf_simulator import HopfSimulator
 from core.Simulator.bp_simulator import BPSimulator
 from core.FDT.spectral import psd_welch, lock_in_chi
+
+# Progress is information and a memory-capped batching plan a warning (piece 3, V4).
+log = logging.getLogger(__name__)
 
 # Model -> simulator class. Matches core/SBI/pipeline.py:VALID_SIMS so FDT and SBI
 # stay consistent.
@@ -262,8 +266,8 @@ def run_campaign2_chi(cfg: FDTConfig, omegas: torch.Tensor, M: int = None,
 
     reduced = [(s, c) for s, c in batches if c < fpb_max]
     if reduced:
-        print(f"Adaptive batching: {len(reduced)}/{len(batches)} groups capped below fpb_max={fpb_max} "
-              f"due to memory budget. Smallest group: fpb={min(c for _, c in batches)}.")
+        log.warning(f"Adaptive batching: {len(reduced)}/{len(batches)} groups capped below fpb_max={fpb_max} "
+                    f"due to memory budget. Smallest group: fpb={min(c for _, c in batches)}.")
 
     iterator = batches
     if show_progress:

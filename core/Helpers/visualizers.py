@@ -1,9 +1,14 @@
+import logging
 from os import PathLike
 
 import corner
 import numpy as np
 import torch
 from matplotlib import pyplot as plt
+
+# The plot helpers' voice (piece 3, V4): a helper with nothing to draw says so as a warning record.
+log = logging.getLogger(__name__)
+
 
 def save_figure(fig: "plt.Figure", target, **kwargs) -> None:
     """``fig.savefig`` with the SAVED BACKGROUND PINNED TO THE FIGURE'S OWN COLOURS.
@@ -428,7 +433,7 @@ def plot_training_loss(diagnostics: dict, save_path: str | PathLike[str] = None,
     val = diagnostics.get("validation_loss") or []
     train = diagnostics.get("training_loss") or []
     if len(val) == 0:
-        print("plot_training_loss: no validation_loss curve in diagnostics; nothing to plot.")
+        log.warning("plot_training_loss: no validation_loss curve in diagnostics; nothing to plot.")
         return None
 
     fig, ax = plt.subplots(figsize=fig_size)

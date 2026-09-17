@@ -15,6 +15,7 @@ noise, identical because neither channel moves the output at all.
 """
 from __future__ import annotations
 
+import logging
 import math
 
 import torch
@@ -23,6 +24,10 @@ from core import orchestrator as orch
 from core.artifacts import resolve_store
 from core.refusals import require_at_least
 from core.runs import public_entry
+
+# The report is information records (piece 3, V4): the window shows them plain, the tool prints them on
+# stdout, and the diagnostic's log.txt keeps them beside its manifest.
+log = logging.getLogger(__name__)
 
 FLOAT32_EPS = 1.1920929e-07
 
@@ -114,8 +119,8 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
             f"which is exactly the table this diagnostic exists to read.")
     labels = list(FEATURE_LABELS) + list(VALID_FLAG_LABELS) + ["logT"]
     width = int(posterior.manifest.body["conditioning"]["width"])
-    print(f"[artifact] {label}   summary {n_sum} + forcing {int(net.forcing_dim)} = {width}")
-    print(f"[standardizer] {'rank-Gaussian' if 'rg_knots' in net._buffers else 'sbi affine'}")
+    log.info(f"[artifact] {label}   summary {n_sum} + forcing {int(net.forcing_dim)} = {width}")
+    log.info(f"[standardizer] {'rank-Gaussian' if 'rg_knots' in net._buffers else 'sbi affine'}")
 
     data, _ = training_checkpoint.load_rows(store.path("simulation", digest),
                                            int(sm.body["batches_done"]),
@@ -127,7 +132,7 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
         raise ValueError(
             f"the cache {digest} holds {int(data.shape[1])}-wide rows but posterior '{label}' "
             f"conditions on {width}; they do not describe the same measurement.")
-    print(f"[data] {data.shape[0]:,} rows x {data.shape[1]} from {digest}")
+    log.info(f"[data] {data.shape[0]:,} rows x {data.shape[1]} from {digest}")
 
     live_probes = None
     cond = posterior.manifest.body["conditioning"]
@@ -141,19 +146,19 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
             elem_w = int(cond["chi_elem_w"])
             blk = data[base_row, n_sum:].reshape(-1, elem_w)
             live_probes = int((blk[:, -1] > 0.5).sum())
-        print(f"[base] real row {base_row}"
-              + ("" if live_probes is None
-                 else f", {live_probes} live probe(s) of {int(cond['chi_k_pad'])} slots"))
+        log.info(f"[base] real row {base_row}"
+                 + ("" if live_probes is None
+                    else f", {live_probes} live probe(s) of {int(cond['chi_k_pad'])} slots"))
 
         # NaN/Inf is excluded from the median baseline too: one channel whose sweep drove the network
         # to a non-finite output must not corrupt the scale every OTHER channel's verdict is judged
         # against.
         live = [d for d, _, _, _, n in swept if n != "CONSTANT" and math.isfinite(d)]
         med = float(torch.tensor(live).median()) if live else 0.0
-        print(f"\n=== max ||delta embedding|| over each channel's real p1-p99 range ===")
-        print(f"median over non-constant channels: {med:.4g};  float32 eps = {FLOAT32_EPS:.3g}\n")
-        print(f"{'channel':<24} {'max|d emb|':>12} {'vs median':>10}   {'p1':>12} {'p99':>12}  verdict")
-        print("-" * 92)
+        log.info(f"=== max ||delta embedding|| over each channel's real p1-p99 range ===")
+        log.info(f"median over non-constant channels: {med:.4g};  float32 eps = {FLOAT32_EPS:.3g}")
+        log.info(f"{'channel':<24} {'max|d emb|':>12} {'vs median':>10}   {'p1':>12} {'p99':>12}  verdict")
+        log.info("-" * 92)
         channels, n_const, n_invis, n_nonfinite = [], 0, 0, 0
         for d, lab, lo, hi, tag in sorted(swept):
             if tag == "CONSTANT":
@@ -186,12 +191,12 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
             # whole sweep has already run).
             channels.append({"label": lab, "max_disp": orch._num(d), "rel_median": orch._num(rel),
                              "p1": orch._num(lo), "p99": orch._num(hi), "verdict": verdict})
-            print(f"{lab:<24} {d:12.4g} {(f'{rel:.3g}x' if rel is not None else '-'):>10}   "
-                  f"{lo:12.4g} {hi:12.4g}  {verdict}")
+            log.info(f"{lab:<24} {d:12.4g} {(f'{rel:.3g}x' if rel is not None else '-'):>10}   "
+                     f"{lo:12.4g} {hi:12.4g}  {verdict}")
         counts = {"constant": n_const, "invisible": n_invis, "nonfinite": n_nonfinite,
                   "usable": n_sum - n_const - n_invis - n_nonfinite, "total": n_sum}
-        print(f"\n{n_const} structurally dead, {n_invis} numerically invisible, {n_nonfinite} "
-              f"non-finite, {counts['usable']} usable of {n_sum} summary channels")
+        log.info(f"{n_const} structurally dead, {n_invis} numerically invisible, {n_nonfinite} "
+                 f"non-finite, {counts['usable']} usable of {n_sum} summary channels")
 
         results = {"n_rows": int(data.shape[0]), "base_row": base_row, "live_probes": live_probes,
                    "median_disp": orch._num(med), "channels": channels, "counts": counts,
