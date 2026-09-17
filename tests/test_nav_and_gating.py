@@ -1931,3 +1931,154 @@ def test_the_posterior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing
                                 "fisher_points"}
     assert forwarded == set(), f"a load forwarded knobs the load branch never reads: {forwarded}"
     assert sent[0]["new_run"] is False and isinstance(sent[0]["accept"], Accept), sent[0]
+
+
+def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
+    """V2 on the Validate tab. Both boxes were clamped with max(1, ...) at the click, so a blank or a 0
+    became a 1 nobody typed -- and for the operating points a 1 is a DIFFERENT measurement, not a
+    smaller one: cal_n_scales is t_scale's effective sample size (trap X5), which is why the stage now
+    refuses it instead of clamping (spec 3.3). A refused box is the yellow box (stubbed here as
+    _refusal) naming the box, the Validate tab and the default, and NOTHING is dispatched; a typed
+    value in rule reaches validate_calibration as an int, and 1 operating point is allowed -- it is a
+    choice, not a typo."""
+    from core import config, orchestrator
+    from core.gui import fields as gui_fields
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from core.refusals import Refusal
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    vp = inf.validate_panel
+    sent, refused = {}, []
+    vp.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    vp._refusal = lambda exc: refused.append(exc)
+    vp._on_error = lambda exc, tb: pytest.fail(f"a refused box reached _on_error: {exc!r}")
+
+    def click(cal_n, cal_scales):
+        vp.cal_n.setText(cal_n)
+        vp.cal_scales.setText(cal_scales)
+        sent.clear()
+        refused.clear()
+        vp._validate()
+
+    for cal_n, cal_scales, field, rule in (("", "200", "n_cal", "is blank"),
+                                          ("0", "200", "n_cal", "must be at least 1; got 0"),
+                                          ("2000", "", "cal_n_scales", "is blank"),
+                                          ("2000", "0", "cal_n_scales", "must be at least 1; got 0"),
+                                          ("2000", "-3", "cal_n_scales", "must be at least 1; got -3")):
+        click(cal_n, cal_scales)
+        assert sent == {}, (
+            f"a calibration was dispatched with cal_n={cal_n!r} cal_scales={cal_scales!r}: {sent}")
+        assert len(refused) == 1 and isinstance(refused[0], Refusal), refused
+        e = refused[0]
+        assert e.field == field and rule in str(e), (e.field, str(e))
+        default = config.SBC_N_CAL if field == "n_cal" else config.CAL_N_SCALES
+        assert f"(default {default})" in str(e), str(e)
+        fix = gui_fields.fix_sentence(e.field)
+        assert gui_fields.label(field) in fix and "Validate" in fix, fix
+
+    click("2000", "1")
+    assert refused == [] and sent["fn"] is orchestrator.validate_calibration, (refused, sent)
+    assert sent["kwargs"]["n_cal"] == 2000 and sent["kwargs"]["cal_n_scales"] == 1, sent["kwargs"]
+
+
+def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(monkeypatch):
+    """V2 on the TSNPE tab, and walkthrough row C3 offscreen. A blank HPD box used to reach the stage
+    as 0.0 (FloatField.value()) and a blank direction box as 0, and the stage refused each with a
+    sentence naming neither the box nor the default; the batch count was clamped to 1 and a blank
+    rows-per-batch became a 0 nobody typed. Now the click reads every box through the shared rules
+    BEFORE the observation is re-hashed (a refused box must cost nothing), shows a refusal as the
+    yellow box (stubbed here as _refusal) naming the box, the TSNPE tab and the default, and dispatches
+    nothing. A TYPED 0 in the rows-per-batch box still means automatic. The latent-width ceiling on
+    the direction count stays the STAGE's -- the click has no posterior to measure it against -- so an
+    oversized count is dispatched, and tsnpe_round refuses it with the width and the default in the
+    sentence (T7's pin)."""
+    import types
+    from core import config, orchestrator
+    from core.gui import fields as gui_fields
+    from core.gui.panels.inference import tsnpe_tab as tt
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from core.refusals import Refusal
+    from core.SBI import truncate as _tr
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    panel = inf.tsnpe_panel
+    panel.obs_picker.key = lambda: "20260910T120000"
+
+    def _never(cfg, ref):
+        raise AssertionError("the observation was loaded before the boxes were read")
+
+    monkeypatch.setattr(tt, "default_store", lambda: types.SimpleNamespace(load_observation=_never))
+    sent, refused = {}, []
+    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    panel._refusal = lambda exc: refused.append(exc)
+    panel._on_error = lambda exc, tb: pytest.fail(f"a refused box reached _on_error: {exc!r}")
+
+    def click(**boxes):
+        panel.n_dirs.setText(str(_tr.DEFAULT_N_DIRECTIONS))
+        panel.hpd.setText(str(_tr.DEFAULT_HPD))
+        panel.num_runs.setText("3")
+        panel.run_size_cap.setText("8")
+        for name, text in boxes.items():
+            getattr(panel, name).setText(text)
+        sent.clear()
+        refused.clear()
+        panel._round()
+
+    for boxes, field, rule, default in (
+            ({"num_runs": "0"}, "num_runs", "must be at least 1; got 0", config.TRAINING_NUM_RUNS),
+            ({"num_runs": ""}, "num_runs", "is blank", config.TRAINING_NUM_RUNS),
+            ({"run_size_cap": ""}, "run_size_cap", "is blank", config.TRAINING_RUN_SIZE),
+            ({"hpd": ""}, "hpd_level", "is blank", _tr.DEFAULT_HPD),
+            ({"hpd": "1"}, "hpd_level", "between 0 and 1", _tr.DEFAULT_HPD),
+            ({"n_dirs": ""}, "n_directions", "is blank", _tr.DEFAULT_N_DIRECTIONS),
+            ({"n_dirs": "0"}, "n_directions", "must be at least 1; got 0", _tr.DEFAULT_N_DIRECTIONS)):
+        click(**boxes)
+        assert sent == {}, f"a round was dispatched with {boxes}: {sent}"
+        assert len(refused) == 1 and isinstance(refused[0], Refusal), (boxes, refused)
+        e = refused[0]
+        assert e.field == field and rule in str(e), (boxes, e.field, str(e))
+        assert f"(default {default})" in str(e), str(e)
+        fix = gui_fields.fix_sentence(e.field)
+        assert gui_fields.label(field) in fix and "TSNPE" in fix, fix
+
+    # in rule: the loaded observation and the read values travel; a typed 0 cap is automatic; the
+    # direction count is NOT checked against a width the tab cannot know
+    sentinel = types.SimpleNamespace(id="20260910T120000", name="obs")
+    monkeypatch.setattr(tt, "default_store",
+                        lambda: types.SimpleNamespace(load_observation=lambda cfg, ref: sentinel))
+    click(run_size_cap="0", n_dirs="99")
+    assert refused == [] and sent["fn"] is orchestrator.tsnpe_round, (refused, sent)
+    k = sent["kwargs"]
+    assert k["run_size_cap"] == 0, "a TYPED 0 is automatic; only a blank is refused"
+    assert k["n_directions"] == 99, "the latent-width ceiling is the stage's; the click must not guess P"
+    assert k["level"] == _tr.DEFAULT_HPD and k["num_runs"] == 3 and sent["args"][3] is sentinel, sent
+
+
+def test_the_validate_and_tsnpe_rows_are_named_from_the_control_table():
+    """The rows' names are the CONTROL table's, through label(key), so the refusal's "Set it in the
+    '<label>' box on the <tab> tab" and the row on screen can never disagree: renaming a control is
+    one edit in core/gui/fields.py, and T15's read-back pins the rendered text. A literal here would be
+    a second copy of the name -- the kind that goes stale the day the first one moves."""
+    from core.gui import fields as gui_fields
+    from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
+    from core.gui.panels.inference.validate_tab import ValidatePanel
+    from tests._fixtures import code_only
+
+    for panel, keys in ((ValidatePanel, ("n_cal", "cal_n_scales")),
+                        (TSNPEPanel, ("observation", "hpd_level", "n_directions", "num_runs",
+                                      "run_size_cap"))):
+        src = code_only(panel.__init__)
+        for key in keys:
+            assert f"label({key!r})" in src, (
+                f"{panel.__name__}.__init__ does not build its {key!r} row from label({key!r})")
+            assert repr(gui_fields.label(key)) not in src, (
+                f"{panel.__name__}.__init__ still names its {key!r} row by the literal "
+                f"{gui_fields.label(key)!r}")

@@ -5,8 +5,10 @@ from PySide6.QtWidgets import (QCheckBox, QGroupBox, QLabel, QPushButton, QVBoxL
 
 from core import config, orchestrator
 from core.artifacts import default_store
+from core.refusals import Refusal, require_at_least, require_between
 
 from ... import icons, settings
+from ...fields import label
 from ...widgets.artifact_picker import StorePicker
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
@@ -53,11 +55,11 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
 
         form = make_form()
         self.obs_picker = StorePicker("observation")
-        add_help_row(form, "Observation", self.obs_picker, HELP["tsnpe_obs"])
+        add_help_row(form, label("observation"), self.obs_picker, HELP["tsnpe_obs"])
         self.hpd = FloatField(str(_tr.DEFAULT_HPD))
         self.n_dirs = IntField(str(_tr.DEFAULT_N_DIRECTIONS))
-        add_help_row(form, "HPD level", self.hpd, HELP["tsnpe_hpd"])
-        add_help_row(form, "Directions truncated", self.n_dirs, HELP["tsnpe_dirs"])
+        add_help_row(form, label("hpd_level"), self.hpd, HELP["tsnpe_hpd"])
+        add_help_row(form, label("n_directions"), self.n_dirs, HELP["tsnpe_dirs"])
         v.addLayout(form)
 
         self.btn_round = QPushButton("Run TSNPE round")
@@ -72,8 +74,8 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         bform = make_form()
         self.num_runs = IntField(str(config.TRAINING_NUM_RUNS))
         self.run_size_cap = IntField(str(config.TRAINING_RUN_SIZE))
-        add_help_row(bform, "Batches", self.num_runs, HELP["num_runs"])
-        add_help_row(bform, "Max rows per batch (0 = auto)", self.run_size_cap, HELP["run_size"])
+        add_help_row(bform, label("num_runs"), self.num_runs, HELP["num_runs"])
+        add_help_row(bform, label("run_size_cap"), self.run_size_cap, HELP["run_size"])
         bv.addLayout(bform)
         self.budget_total = self._derived_label()
         self.budget_mem = self._derived_label()
@@ -92,9 +94,36 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         self.controls_layout.addWidget(budget)
         self._sync_budget()
 
+    def _read_inputs(self) -> dict:
+        """Every box a round reads, through the shared rules, or the first Refusal.
+
+        A blank box is a refusal, never a zero: FloatField.value() handed a blank HPD to the stage as
+        0.0 and IntField.value() a blank direction box as 0, and the stage refused each with a
+        sentence naming neither the box nor the default. The batch count was clamped to 1 and a blank
+        rows-per-batch became a 0 nobody typed; rows-per-batch accepts a TYPED 0 (= automatic) and
+        nothing blank. The latent-width ceiling on the direction count is the stage's: it needs the
+        posterior, and the click does not have its width.
+        """
+        n_runs, cap = self._budget_values()
+        return {
+            "n_directions": require_at_least("n_directions", self.n_dirs.value_or_none(), 1),
+            "hpd_level": require_between("hpd_level", self.hpd.value_or_none(), 0.0, 1.0,
+                                         open_lo=True, open_hi=True),
+            "num_runs": require_at_least("num_runs", n_runs, 1),
+            "run_size_cap": require_at_least("run_size_cap", cap, 0),
+        }
+
     def _round(self):
         s = self.session
         if s.posterior is None or s.inf_prior is None or not self.obs_picker.key():
+            return
+        # The boxes first, before the observation is re-hashed: a refused box costs nothing. The stage
+        # runs the same rules again at entry and adds the one check only it can make, the direction
+        # count against the latent width -- this tab has no posterior width to measure it against.
+        try:
+            v = self._read_inputs()
+        except Refusal as e:
+            self._refusal(e)
             return
         # Loaded HERE, on the GUI thread: the load re-hashes the file and checks its mode and
         # conditioning width against this config, so a mismatch is a dialog now rather than an
@@ -109,12 +138,9 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
             # one string, and the yellow box could never be opened for it.
             self._on_error(e, traceback.format_exc())
             return
-        # The HPD / direction-count checks are the STAGE's now (one copy, shared with the command-line
-        # tool), and it refuses before it simulates -- so the error dialog still arrives within seconds.
-        n_runs, cap = self._budget_values()
         self.dispatch(orchestrator.tsnpe_round, s.cfg, s.posterior, s.inf_prior, obs,
-                      n_directions=self.n_dirs.value(), level=self.hpd.value(),
-                      num_runs=max(1, n_runs), run_size_cap=max(0, cap),
+                      n_directions=v["n_directions"], level=v["hpd_level"],
+                      num_runs=v["num_runs"], run_size_cap=v["run_size_cap"],
                       new_run=self.new_run.isChecked(),
                       provide_fig_sink=True, on_result=self._on_round)
         self.new_run.setChecked(False)
