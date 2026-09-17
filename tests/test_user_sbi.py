@@ -4113,6 +4113,45 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
     assert "Config tab" not in code_only(pipeline_mod), "a pipeline message names a window control"
 
 
+def test_nothing_prints_or_logs_inside_a_checkpoint_commit():
+    """CLAUDE.md and training_checkpoint's module docstring: never print or log between steps 1 and 3
+    of a checkpoint save. Under the window every print passes _SignalStream.write and, since piece 3,
+    every ``core`` record passes _PumpLogHandler.emit; both call CancelToken.check(), so a helpful
+    ``log.info("[checkpoint] committed ...")`` inside the commit would let a Cancel raise
+    WorkerCancelled between the shard fsync and the state replace. No suite runs a GUI cancel at that
+    moment, so the rule is pinned here, on the code: no print, no ``log.*``/``logging.*`` call and no
+    ``sys.stdout``/``sys.stderr`` write in the commit's functions or the atomic helpers they call.
+    Parsed (code_only), so a docstring that quotes the rule cannot trip it."""
+    from core.Helpers import file_manager
+    from core.SBI import training_checkpoint as tc
+
+    commit = [tc.save, tc.mark_complete, tc._refresh_manifest, file_manager._atomic_write]
+    if hasattr(file_manager, "atomic_torch_save"):
+        commit.append(file_manager.atomic_torch_save)
+    loggers = {"log", "logger", "LOGGER", "logging", "_log"}
+    for fn in commit:
+        tree = ast.parse(code_only(fn))
+        said = []
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call):
+                continue
+            f = n.func
+            if isinstance(f, ast.Name) and f.id == "print":
+                said.append(ast.unparse(n))
+            elif isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) and f.value.id in loggers:
+                said.append(ast.unparse(n))
+            elif isinstance(f, ast.Attribute) and ast.unparse(f.value) in ("sys.stdout", "sys.stderr"):
+                said.append(ast.unparse(n))
+        assert said == [], f"{fn.__module__}.{fn.__name__} speaks inside a checkpoint commit: {said}"
+    # non-vacuous: the scan does see a call it should flag
+    probe = ast.parse("def f():\n    log.info('x')\n    print('y')\n")
+    flagged = [n for n in ast.walk(probe) if isinstance(n, ast.Call)
+               and ((isinstance(n.func, ast.Name) and n.func.id == "print")
+                    or (isinstance(n.func, ast.Attribute) and isinstance(n.func.value, ast.Name)
+                        and n.func.value.id in loggers))]
+    assert len(flagged) == 2, flagged
+
+
 def test_the_sbi_records_carry_their_levels_at_run_time(monkeypatch, caplog):
     """A sample per level, RUN rather than parsed (the test above parses every call): the winsor
     census at information, the two VRAM-ceiling notices the planner gives on junk at warning, and the
