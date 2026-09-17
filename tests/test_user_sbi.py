@@ -2282,7 +2282,7 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
     assert diffs == {"truncation"}
 
 
-def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
+def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplog):
     """⚠ GUARDRAIL 7, end to end through build_posterior, with ZERO simulation.
 
     The 2026-09-02 TSNPE round computed a FRESH Fisher rotation and enforced the parent's box in it:
@@ -2296,8 +2296,11 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
     train_nn is stubbed to capture the plan and return a bare DirectPosterior, so the whole path up to
     the first TRAINING simulation runs for real (the tiny prior build does simulate, for seconds) and
     no training row is ever generated.
+
+    The round's lines are records on core.orchestrator since piece 3 (V4), read off caplog with their
+    level; the GROUND TRUTH judgement is said ONCE, as the warning (spec §4.1), so leg (v) pins the
+    warning and the absence of a record repeating it.
     """
-    import contextlib
     from types import SimpleNamespace
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
     # Module-level (not defined here) so it pickles: every build_posterior call now auto-persists
@@ -2368,14 +2371,14 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
 
         # (i) + (ii): the parent's basis is reused, the Fisher stub never fires, the plan's prior is
         # THIS region over a latent rotated by exactly Q, and the posterior carries the region
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            post = _round(region)
-        _out = buf.getvalue()
-        assert "at the rejection sampler (P(A), PRE-override)" in _out, _out[-600:]
-        assert "post-override containment of the recorded training targets: not measured" in _out, \
+        caplog.clear()
+        post = _round(region)
+        said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.orchestrator"]
+        assert any(lv == "INFO" and "at the rejection sampler (P(A), PRE-override)" in m for lv, m in said), said
+        assert any(lv == "INFO" and "post-override containment of the recorded training targets: not measured" in m
+                   for lv, m in said), \
             "with train_nn stubbed nothing is recorded, and the line must say so rather than print a number"
-        assert "[tsnpe] prior: NOT verifiable" in _out, \
+        assert any(lv == "WARNING" and m.startswith("[tsnpe] prior: NOT verifiable") for lv, m in said), \
             "a region carrying no prior fingerprint must say the loaded prior went unverified"
         assert isinstance(seen["prior"], _tr.TruncatedLatentPrior), type(seen["prior"])
         assert seen["prior"].region is region
@@ -2424,10 +2427,10 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
             n_directions=1, t_scale_idx=len(cfg.params_dict) + cfg.rescale_idx["t_scale"])
         assert own_prior.prior_fingerprint == _fp(inferred_prior), \
             "the parent's pickled training prior and the supplied prior digest differently"
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            _round(own_prior, observation=None)            # the region's own observation digest fills in
-        assert "verified against the loaded one" in buf.getvalue(), buf.getvalue()[-400:]
+        caplog.clear()
+        _round(own_prior, observation=None)                # the region's own observation digest fills in
+        said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.orchestrator"]
+        assert any(lv == "INFO" and m.endswith("verified against the loaded one.") for lv, m in said), said
         # x_obs_digest, like `region` above (and `far`/`near` below): since the residual fix a
         # non-amortized round's region must name the observation it was drawn around, checked before
         # the prior-fingerprint refusal this leg means to exercise.
@@ -2528,28 +2531,31 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch():
         # build_truncation_region always carries the digest; only a hand-made one can lack it.)
         far = _tr.TruncationRegion([0], [lo], [hi], n_latent=P, V=Q, probe=probe,
                                    x_obs_digest="deadbeefdeadbeef")
-        buf = io.StringIO()
-        with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(buf):
+        caplog.clear()
+        with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             _round(far)
-        out = buf.getvalue()
-        assert "GROUND TRUTH" in out and "direction 0" in out, out[-600:]
-        assert any("GROUND TRUTH" in str(c.message) for c in caught)
+        truth = [c for c in caught if "GROUND TRUTH" in str(c.message)]
+        assert len(truth) == 1 and "direction 0" in str(truth[0].message), [str(c.message) for c in caught]
+        assert issubclass(truth[0].category, orchestrator.PreflightWarning), truth[0].category
+        assert not any("GROUND TRUTH" in r.getMessage() for r in caplog.records), \
+            "the judgement is said ONCE, as the warning; a record repeating it is the duplicate V4 removed"
         near = _tr.TruncationRegion([0], [min(z0, float(w0.quantile(0.02))) - 0.5],
                                     [max(z0, float(w0.quantile(0.98))) + 0.5], n_latent=P, V=Q, probe=probe,
                                     x_obs_digest="deadbeefdeadbeef")
-        buf = io.StringIO()
-        with warnings.catch_warnings(record=True) as caught, contextlib.redirect_stdout(buf):
+        caplog.clear()
+        with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             _round(near)
-        assert "GROUND TRUTH" not in buf.getvalue() and not any("GROUND TRUTH" in str(c.message) for c in caught)
+        assert not any("GROUND TRUTH" in str(c.message) for c in caught)
+        assert not any("GROUND TRUTH" in r.getMessage() for r in caplog.records)
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.decorrelate.build_latent_fisher_rotation = saved_fisher
         pipeline_mod.train_nn = saved_train_nn
 
 
-def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_path):
+def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_path, caplog):
     """⚠ GUARDRAIL 8, end to end through validate_calibration with the real gen_cal_data (10 rows).
 
     For a TSNPE posterior the calibration prior must be the prior RESTRICTED to its region -- drawn
@@ -2568,7 +2574,6 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
     these very helpers: a diagnostic that reported extrapolation as miscalibration would be worse
     than no diagnostic, because its numbers look exactly like a real result.
     """
-    import contextlib
     import matplotlib.pyplot as plt
     from types import SimpleNamespace
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
@@ -2639,9 +2644,8 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
             setattr(orchestrator, n, fn)
 
         lp_post = SimpleNamespace(posterior=_rp.TransformedPosterior(_Lat(), T, truncation=region), id="stub_post")
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            cal = orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
+        caplog.clear()
+        cal = orchestrator.validate_calibration(cfg, lp_post, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         assert isinstance(cap["prior"], _tr.TruncatedLatentPrior) and cap["prior"].region is region
         z_star = T.inv(cap["thetas"].cpu()).double()
         assert z_star.shape[0] > 0 and bool(region.contains(z_star).all()), \
@@ -2651,10 +2655,12 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
         assert cap["prior_samples"].shape[0] == cap["thetas"].shape[0]
         # the reference mirrors the per-batch t_scale override: its t_scale column is theta*'s own
         assert torch.equal(cap["prior_samples"][:, i_t].sort().values, cap["thetas"].cpu()[:, i_t].sort().values)
-        out = buf.getvalue()
-        assert "PRIOR RESTRICTED" in out and "kept fraction" in out and "-log P(A) = " in out, out[-800:]
-        assert math.isfinite(float(out.split("-log P(A) = ")[1].split(" nats")[0]))
-        assert "of the recorded calibration targets lie inside it after the override" in out, out[-800:]
+        said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.orchestrator"]
+        assert any(lv == "INFO" and "PRIOR RESTRICTED" in m for lv, m in said), said
+        kept = [m for lv, m in said if lv == "INFO" and m.startswith("[tsnpe] kept fraction")]
+        assert len(kept) == 1 and "-log P(A) = " in kept[0], said
+        assert math.isfinite(float(kept[0].split("-log P(A) = ")[1].split(" nats")[0]))
+        assert "of the recorded calibration targets lie inside it after the override" in kept[0], kept[0]
         assert cap["prior"].recorded_containment == 1.0, "a t_scale-free region must contain every recorded target"
         kf = cal.results["kept_fraction"]
         assert kf is not None and 0.0 < kf["acceptance"] <= 1.0, kf
@@ -2687,8 +2693,8 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
         from core.artifacts import ArtifactStore, use_store
         from core.diagnostics import sbc_repeats
         cap.clear()
-        buf = io.StringIO()
-        with use_store(ArtifactStore(tmp_path / "sbc_diag")), contextlib.redirect_stdout(buf):
+        caplog.clear()
+        with use_store(ArtifactStore(tmp_path / "sbc_diag")):
             diag = sbc_repeats(cfg, lp_post, lp, repeats=1, n_cal=10, num_posterior_samples=40,
                                cal_n_scales=1, seed=0, fig_sink=sink)
         assert isinstance(cap["prior"], _tr.TruncatedLatentPrior) and cap["prior"].region is region
@@ -2699,19 +2705,22 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
         assert torch.equal(cap["prior_samples"][:, i_t].sort().values,
                            cap["thetas"].cpu()[:, i_t].sort().values), \
             "sbc_repeats' reference sample did not mirror the t_scale override"
-        assert "PRIOR RESTRICTED" in buf.getvalue(), buf.getvalue()[-800:]
+        assert any(r.name == "core.orchestrator" and r.levelname == "INFO" and "PRIOR RESTRICTED" in r.getMessage()
+                   for r in caplog.records), [r.getMessage() for r in caplog.records][-10:]
         assert diag.results["stratum"] == "pooled"
         assert diag.results["kept_fraction"]["acceptance"] > 0.0
         assert diag.manifest.parents["posterior"] == "stub_post"
 
         cap.clear()
         lp_post_plain = SimpleNamespace(posterior=post, id="stub_post_plain")
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            orchestrator.validate_calibration(cfg, lp_post_plain, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
+        caplog.clear()
+        orchestrator.validate_calibration(cfg, lp_post_plain, lp, fig_sink=sink, n_cal=10, cal_n_scales=1)
         assert type(cap["prior"]).__name__ == "ProductPrior", type(cap["prior"])
         assert cap["prior_samples"].shape[0] == cap["thetas"].shape[0]
-        assert "kept fraction" not in buf.getvalue()
+        said = [r.getMessage() for r in caplog.records if r.name == "core.orchestrator"]
+        assert "SBC uniformity checks:" in said, \
+            "the negative below is vacuous unless this call's records were captured at all"
+        assert not any("kept fraction" in m or "PRIOR RESTRICTED" in m for m in said), said
     finally:
         orchestrator.pipeline.gen_prior = saved_gen_prior
         orchestrator.analysis.gen_cal_data = real_gen_cal

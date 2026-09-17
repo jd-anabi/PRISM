@@ -1282,10 +1282,14 @@ def test_flow_knobs_are_range_checked_only_when_the_call_trains(store, monkeypat
     assert spent == []
 
 
-def test_the_budget_line_prints_with_default_arguments(store, monkeypatch, capsys):
+def test_the_budget_line_prints_with_default_arguments(store, monkeypatch, caplog):
     """Guardrail 6 on the command line: what this run will actually simulate, said once, whether or
     not a cap or a batch count was overridden. The two conditional announcements stay -- with the
-    defaults neither of them fires, which is precisely the run whose size used to be invisible."""
+    defaults neither of them fires, which is precisely the run whose size used to be invisible.
+
+    Since piece 3 the line is an INFO record on core.orchestrator (V4): the tool's stdout handler
+    prints it with exactly this text, where the GPU recipe reads it (spec §4.5), and the window puts
+    it in the pane. So it is read off caplog, with its logger and its level."""
     from core import orchestrator
     cfg = _nad_cfg()
     cfg.reparam_rotate = False
@@ -1296,12 +1300,13 @@ def test_the_budget_line_prints_with_default_arguments(store, monkeypatch, capsy
         raise RuntimeError("stop before training")
 
     monkeypatch.setattr(orchestrator.pipeline, "train_nn", stop)
+    caplog.clear()
     with pytest.raises(RuntimeError, match="stop before training"):
         orchestrator.build_posterior(cfg, lp, None, True)
-    out = capsys.readouterr().out
     n = config.TRAINING_NUM_RUNS
-    assert f"[budget] {n:,} batches x 4 rows = {n * 4:,} training rows" in out
-    assert "capped at" not in out and "COUNT overridden" not in out, (
+    said = [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
+    assert ("core.orchestrator", "INFO", f"[budget] {n:,} batches x 4 rows = {n * 4:,} training rows") in said, said
+    assert not any("capped at" in m or "COUNT overridden" in m for _, _, m in said), (
         "the default run fires neither conditional announcement -- that is why [budget] is unconditional")
 
 
@@ -2803,3 +2808,101 @@ def test_python_warnings_reach_the_artifact_log(store):
     text = (w.dir / LOG_FILE).read_text(encoding="utf-8")
     assert re.search(r"^\d\d:\d\d:\d\d warning RuntimeWarning: the card is shared with the desktop$",
                      text, re.M), text
+
+
+def test_the_duplicated_judgements_are_said_once(store, caplog, capsys):
+    """Two judgements used to be said TWICE, once per channel. build_posterior's "the loaded cell's
+    GROUND TRUTH lies OUTSIDE the truncation region" and infer_and_visualize's accepted "this
+    posterior is NOT AMORTIZED ... Running anyway (accepted)." were each a print, which the window
+    showed at info, AND a warnings.warn, which it showed at warning -- so the pane and the tool's
+    terminal carried each one twice, and a per-artifact log.txt would have too. A message carries
+    its own level now, so each is said ONCE, as the Python warning (spec §4.1): the pane shows it with
+    a triangle, the tool prints it on stderr, the run buffer tees it into log.txt. The accepted
+    sentence keeps "Running anyway (accepted)." because walkthrough row B3 reads it in the pane.
+
+    The warning is a PreflightWarning, not a bare UserWarning. A bare one is shown once per call site
+    and text, so a second identical judgement in one session -- the same posterior on the same foreign
+    observation, twice -- would be silent, where the print it replaces said it every time; the
+    module's "always" filter on PreflightWarning keeps the single channel saying it.
+
+    Behaviourally on the cheap site: the stand-in observation stops infer_and_visualize at install,
+    the first step after the judgement, so nothing is sampled. The GROUND TRUTH block sits behind a
+    prior build and a region; its behaviour is pinned end to end by test_user_sbi.py::
+    test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch, and both sites are pinned
+    here at the AST: the message variable reaches warnings.warn, as a PreflightWarning, and nothing
+    else but the Refusal it is also raised as."""
+    import ast
+    import warnings
+    from types import SimpleNamespace
+
+    from core import orchestrator
+    from core.artifacts import Accept
+    from tests._fixtures import code_only
+
+    class _Stop(Exception):
+        """Raised by the stand-in observation's install: the step right after the judgement."""
+
+    def _install(cfg):
+        raise _Stop("stopped at install")
+
+    post = SimpleNamespace(posterior=SimpleNamespace(x_obs_digest="f" * 16), name="", id="post",
+                           manifest=SimpleNamespace(body={"mode": "forced", "conditioning": {"width": 61}}))
+    obs = SimpleNamespace(digest="a" * 16, mode="forced", width=61, name="bench", id="obs",
+                          manifest=SimpleNamespace(body={"source": {"kind": "experimental"}}),
+                          install=_install)
+    caplog.clear()
+    capsys.readouterr()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(_Stop):
+            orchestrator.infer_and_visualize(SimpleNamespace(), post, obs, store=store,
+                                             accept=Accept(other_observation=True))
+    said = [w for w in caught if "NOT AMORTIZED" in str(w.message)]
+    assert len(said) == 1, [str(w.message) for w in caught]
+    assert str(said[0].message).endswith(" Running anyway (accepted)."), str(said[0].message)
+    assert "a" * 16 in str(said[0].message) and "f" * 16 in str(said[0].message), str(said[0].message)
+    assert issubclass(said[0].category, orchestrator.PreflightWarning), said[0].category
+    echoed = [(r.levelname, r.getMessage()) for r in caplog.records if "NOT AMORTIZED" in r.getMessage()]
+    assert echoed == [], f"the judgement was said again as a record: {echoed}"
+    assert "NOT AMORTIZED" not in capsys.readouterr().out, "the judgement was said again on stdout"
+
+    def _handed(fn, var):
+        """The callee of every call in fn's code that is handed ``var`` anywhere in its arguments."""
+        return sorted(ast.unparse(c.func) for c in ast.walk(ast.parse(code_only(fn)))
+                      if isinstance(c, ast.Call)
+                      and any(isinstance(n, ast.Name) and n.id == var
+                              for a in (*c.args, *(k.value for k in c.keywords)) for n in ast.walk(a)))
+
+    assert _handed(orchestrator.build_posterior, "_msg") == ["warnings.warn"], \
+        "build_posterior's GROUND TRUTH judgement must be said once, as the warning"
+    assert _handed(orchestrator.infer_and_visualize, "_msg") == ["Refusal", "warnings.warn"], \
+        "the NOT AMORTIZED judgement is raised, or warned once when accepted -- never also printed or logged"
+    for fn in (orchestrator.build_posterior, orchestrator.infer_and_visualize):
+        warns = [c for c in ast.walk(ast.parse(code_only(fn))) if isinstance(c, ast.Call)
+                 and ast.unparse(c.func) == "warnings.warn" and "_msg" in ast.unparse(c)]
+        assert len(warns) == 1 and len(warns[0].args) == 2 \
+            and ast.unparse(warns[0].args[1]) == "PreflightWarning", \
+            (fn.__name__, [ast.unparse(w) for w in warns])
+
+
+def test_the_orchestrator_says_everything_through_its_logger():
+    """V4 in core/orchestrator.py: every in-stage message is a record on ONE logger named for the
+    module, and the module sets no level (core/runs.py set the family's, once, at import). A print
+    left behind reaches the window at info whatever it says, is never in the artifact's log.txt (the
+    run buffer hears records and Python warnings, not stdout), and on the tool lands on stdout even
+    when it is a warning. Pinned at the AST over the whole module, because the regression is the next
+    print someone adds."""
+    import ast
+    import logging
+
+    from core import orchestrator
+    from tests._fixtures import code_only
+
+    src = code_only(orchestrator)
+    printed = [ast.unparse(n)[:90] for n in ast.walk(ast.parse(src))
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "print"]
+    assert printed == [], f"core/orchestrator.py still prints ({len(printed)}): {printed}"
+    assert orchestrator.log is logging.getLogger("core.orchestrator")
+    assert orchestrator.log.level == logging.NOTSET, "the module must not set a level of its own"
+    assert orchestrator.log.getEffectiveLevel() == logging.INFO
+    assert "setLevel" not in src

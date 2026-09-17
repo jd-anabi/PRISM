@@ -181,7 +181,7 @@ def test_seeded_restores_the_callers_rng():
     assert not torch.equal(a_t, before_t), "the seed inside the block must actually take effect"
 
 
-def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(store, monkeypatch):
+def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(store, monkeypatch, caplog):
     """T16's sbc_repeats draws its per-repeat calibration set through EXACTLY the code
     validate_calibration draws its own through. That is what gives the repeat-SBC run the four things
     scripts/sbc_characterize.py never had: check_basis, the t_scale-override mirror in the reference
@@ -194,9 +194,7 @@ def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(stor
     itself always passes None: its SBC is the POOLED one, over the same mixture of counts training saw.
     """
     import ast
-    import contextlib
     import inspect
-    import io
     import textwrap
     from types import SimpleNamespace
 
@@ -238,12 +236,14 @@ def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(stor
 
     monkeypatch.setattr(region, "check_basis", _recording_check_basis)
 
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        vlp, T_out, truncation = orch._calibration_prior(cfg, trunc_post, lp)
+    caplog.clear()
+    vlp, T_out, truncation = orch._calibration_prior(cfg, trunc_post, lp)
     assert truncation is region and T_out is trunc_post.posterior.T
     assert isinstance(vlp, _tr.TruncatedLatentPrior) and vlp.region is region
-    assert "PRIOR RESTRICTED" in buf.getvalue(), buf.getvalue()
+    said = [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
+    assert any(n == "core.orchestrator" and lv == "INFO"
+               and m.startswith("[tsnpe] calibration draws theta* from the PRIOR RESTRICTED to ")
+               for n, lv, m in said), said
     assert len(basis_calls) == 1 and basis_calls[0][0][0] is T_out, \
         "_calibration_prior must call check_basis exactly once, with the posterior's own T"
 

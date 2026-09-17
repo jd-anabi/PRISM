@@ -1268,22 +1268,23 @@ def test_the_round_reads_this_observations_truth_and_no_other():
     assert said and said[0].startswith("direction 0:") and "outside [9" in said[0], said
 
 
-def test_the_round_announces_the_region_it_drew():
+def test_the_round_announces_the_region_it_drew(caplog):
     """Walkthrough row A7 quotes this line, and it is the operator's only view of which observation a
-    multi-day round was drawn around."""
-    import contextlib
+    multi-day round was drawn around. Since piece 3 it is an INFO record on core.orchestrator (V4): the
+    tool's stdout handler prints exactly this text (spec §4.5) and the window's handler puts it in the
+    pane, so it is pinned off caplog with its logger, its level and its whole text."""
     from core import orchestrator
     cfg, store = _round_cfg(), _RoundStore()
     saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
     orchestrator.build_truncation_region = lambda *a, **k: "REGION-REPR"
     orchestrator.build_posterior = lambda *a, **k: "CHILD"
-    buf = io.StringIO()
+    caplog.clear()
     try:
-        with contextlib.redirect_stdout(buf):
-            orchestrator.tsnpe_round(cfg, _parent(), object(), _round_obs(), store=store)
+        orchestrator.tsnpe_round(cfg, _parent(), object(), _round_obs(), store=store)
     finally:
         orchestrator.build_truncation_region, orchestrator.build_posterior = saved
-    assert "[tsnpe] region from observation obs: 'REGION-REPR'" in buf.getvalue(), buf.getvalue()
+    said = [(r.name, r.levelname, r.getMessage()) for r in caplog.records]
+    assert ("core.orchestrator", "INFO", "[tsnpe] region from observation obs: 'REGION-REPR'") in said, said
 
 
 def test_the_direction_refusal_names_the_width_and_the_default():
