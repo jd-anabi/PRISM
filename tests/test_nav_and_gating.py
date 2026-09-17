@@ -1085,6 +1085,7 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     from core import orchestrator
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
+    from tests._fixtures import PaneCapture
 
     qt_app()
     inf = InferenceScreen()
@@ -1134,8 +1135,8 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
         raise RuntimeError("unreadable header")
 
     monkeypatch.setattr(orchestrator, "fresh_run_near_misses", _boom)
-    lines = []
-    pp.log_pane.append_line = lambda text, kind="": lines.append((kind, text))
+    pane = PaneCapture(pp)              # both pane channels, as (level, text) -- the stub's own order
+    lines = pane.lines
     pp._build_posterior()
     assert sent["kwargs"]["new_run"] is False
     assert any(k == "warning" and "unreadable header" in t for k, t in lines), lines
@@ -2446,15 +2447,16 @@ def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path
     ran first and let the click through."""
     from core.refusals import Refusal
     from core.gui.screens.inference_screen import InferenceScreen
-    from tests._fixtures import qt_app
+    from tests._fixtures import PaneCapture, qt_app
 
     qt_app()
     inf = InferenceScreen()
     inf.install_config(_chi_cfg(k=2))
     panel = inf.infer_panel
-    refused, lines = [], []
+    refused = []
     panel._refusal = lambda exc: refused.append(exc)
-    panel.log_pane.append_line = lambda text, kind="": lines.append((kind, text))
+    pane = PaneCapture(panel)           # both pane channels, as (level, text) -- the stub's own order
+    lines = pane.lines                  # the list the capture appends to, so plan()'s clear() still works
     passive = tmp_path / "passive.npy"
     passive.touch()
 

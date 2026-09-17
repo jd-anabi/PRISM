@@ -99,15 +99,44 @@ def code_only(obj) -> str:
 
 class PaneCapture:
     """Records what a panel writes to its log pane, as ``(level, text)`` in order, INSTEAD of
-    rendering it: ``PaneCapture(panel)`` replaces ``panel.log_pane.append_line`` on that one pane
-    (LogPane.append_line(text, level="info")). The window's refusals and warnings are asserted off
-    ``.lines``; the widget receives nothing, and the panel is a throwaway built by the test."""
+    rendering it. ``PaneCapture(panel)`` replaces BOTH of that one pane's channels:
+
+      * ``LogPane.append_line(text, level="info")`` -- the panel's own GUI-thread messages (a refusal,
+        a warning, "Run cancelled.") and ``WorkerSignals.log``;
+      * ``LogPane.append_lines(batch)`` -- ``WorkerSignals.log_batch``, one pump tick of the RUN's
+        output, and therefore every print, every retired tqdm bar, every ``core`` record (through
+        ``streams._PumpLogHandler``) and every Python warning (through ``redirect_streams``'
+        ``showwarning``). That channel is the one the helper used to miss, so a test could assert on
+        what the pane said while being blind to almost everything in it (B17).
+
+    TWO ORDERS, ONE LIST. A captured entry is ``(level, text)``: that is what the hand-written stubs
+    this helper replaced appended and what every assertion in the suites reads. A batch's pairs arrive
+    as ``(text, level)``, because that is the order ``WorkerSignals.log_batch`` carries
+    (``core/gui/worker.py:27``; ``tests/test_vt_progress.py``'s handler test pins that payload
+    directly). Each pair is therefore FLIPPED as it is appended, so ``.lines`` reads in one order --
+    the order a user sees the lines in -- whichever channel each line came from. A test that wants one
+    channel alone filters on what it knows only that channel says.
+
+    ``BasePanel.dispatch`` resolves both attributes AT CONNECT TIME, so a capture installed before the
+    dispatch sees both channels and one installed after sees neither. A batch is published by the
+    pump's daemon thread at 15 Hz as a queued cross-thread signal, so a test must drive the event loop
+    (``pump(app)``) before asserting on run output. The widget receives nothing, and the panel is a
+    throwaway built by the test."""
     def __init__(self, panel):
         self.lines: list[tuple[str, str]] = []
         panel.log_pane.append_line = self._append
+        panel.log_pane.append_lines = self._append_batch
 
     def _append(self, text: str, level: str = "info") -> None:
         self.lines.append((level, text))
+
+    def _append_batch(self, batch) -> None:
+        """One pump tick: each ``(text, level)`` appended as ``(level, text)``, in order. A falsy batch
+        appends nothing, which is what ``LogPane.append_lines`` renders for one."""
+        if not batch:
+            return
+        for text, level in batch:
+            self.lines.append((level, text))
 
 
 def _nad_cfg(**over):

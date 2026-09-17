@@ -4240,6 +4240,8 @@ def test_the_mem_and_wait_lines_reach_the_window_plain_and_the_wait_still_checks
     app = qt_app()
     signals = WorkerSignals()
     lines = []
+    # the RAW payload: the assertions below unpack (text, level), log_batch's own order, not
+    # PaneCapture's (level, text)
     signals.log_batch.connect(lambda batch: lines.extend(batch))
     signals.rows.connect(lambda _s: None)
     monkeypatch.setattr(torch.cuda, "mem_get_info", lambda *a, **k: (3 * 2 ** 30, 16 * 2 ** 30))

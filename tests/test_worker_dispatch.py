@@ -357,10 +357,16 @@ def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
 
 
 def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
-    """The window's refusals and warnings are asserted OFF THE PANE. PaneCapture stands in for
-    ``log_pane.append_line`` on one panel and keeps ``(level, text)`` in order, with LogPane's own
-    default level, so the ``lambda text, kind="": lines.append((kind, text))`` stub that five tests
-    each wrote by hand becomes one helper that cannot drift from the real signature."""
+    """The window's refusals and warnings are asserted OFF THE PANE. PaneCapture stands in for BOTH of
+    ``log_pane``'s channels on one panel -- ``append_line``, the panel's own messages, and
+    ``append_lines``, one pump tick of the run's output -- and keeps ``(level, text)`` in order, with
+    LogPane's own default level, so the ``lambda text, kind="": lines.append((kind, text))`` stub that
+    five tests each wrote by hand becomes one helper that cannot drift from the real signatures.
+
+    ONE list, in the order the lines happened, because that is the order the user reads them in: a
+    batch's pairs arrive as ``(text, level)`` (WorkerSignals.log_batch, worker.py:27) and are flipped
+    into the helper's ``(level, text)`` as they are appended. An empty batch appends nothing, exactly
+    as LogPane.append_lines renders nothing for one."""
     from tests._fixtures import PaneCapture, qt_app
 
     qt_app()
@@ -372,9 +378,63 @@ def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
     before = panel.log_pane.toPlainText()
     cap = PaneCapture(panel)
     panel.log_pane.append_line("plain")
+    panel.log_pane.append_lines([("Config built: NADROWSKI", "info"),
+                                 ("[tsnpe] loaded a NON-AMORTIZED posterior", "warning")])
     panel.log_pane.append_line("watch out", "warning")
-    assert cap.lines == [("info", "plain"), ("warning", "watch out")]
+    panel.log_pane.append_lines([])
+    panel.log_pane.append_lines(None)
+    assert cap.lines == [("info", "plain"),
+                         ("info", "Config built: NADROWSKI"),
+                         ("warning", "[tsnpe] loaded a NON-AMORTIZED posterior"),
+                         ("warning", "watch out")]
     assert panel.log_pane.toPlainText() == before, "a captured line must not also reach the widget"
+
+
+def test_pane_capture_sees_the_pumps_batch_channel_through_a_dispatch():
+    """B17 end to end, through the machinery the helper exists for. ``BasePanel.dispatch`` resolves
+    ``self.log_pane.append_line`` AND ``self.log_pane.append_lines`` at CONNECT time
+    (base_panel.py:219-220), so a capture installed before the dispatch sees both; the batch channel is
+    the only way a print, a retired tqdm bar, a ``core`` record or a Python warning from the WORKER
+    reaches the pane, and before this task it went to the widget and nowhere a test could read it.
+
+    A batch is published by the pump's daemon thread at 15 Hz as a QUEUED cross-thread signal, so the
+    Qt loop has to be driven before asserting -- ``pump(app)``, as every other worker test here does.
+    The two lines must also keep their order relative to each other: records and prints share one
+    ordered sink (streams._Pump)."""
+    import logging
+
+    from tests._fixtures import PaneCapture, qt_app
+
+    app = qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    cap = PaneCapture(panel)                     # BEFORE the dispatch, or neither channel is captured
+    before = panel.log_pane.toPlainText()
+
+    def work():
+        print("Config built: NADROWSKI")
+        logging.getLogger("core.tests.pane_capture").warning("[tsnpe] loaded a NON-AMORTIZED posterior")
+        return "done"
+
+    got = []
+    panel.dispatch(work, on_result=got.append)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and (panel._busy or not got):
+        app.processEvents()
+        time.sleep(0.01)
+    pump(app, 0.3)
+
+    assert got == ["done"], got
+    assert ("info", "Config built: NADROWSKI") in cap.lines, cap.lines
+    assert ("warning", "[tsnpe] loaded a NON-AMORTIZED posterior") in cap.lines, cap.lines
+    texts = [t for _level, t in cap.lines]
+    assert texts.index("Config built: NADROWSKI") < \
+        texts.index("[tsnpe] loaded a NON-AMORTIZED posterior"), cap.lines
+    assert panel.log_pane.toPlainText() == before, \
+        "a captured batch must not also reach the widget"
 
 
 def test_on_error_routes_a_refusal_to_the_yellow_box():

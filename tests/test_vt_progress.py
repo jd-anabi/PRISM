@@ -135,6 +135,7 @@ def test_pump_never_exposes_the_transient_row_guess():
     signals = WorkerSignals()
     snapshots = []
     signals.rows.connect(snapshots.append)
+    # the payload is (text, level); this test asserts only on `rows` and drains the log channel
     signals.log_batch.connect(lambda _b: None)
 
     with redirect_streams(signals):
@@ -624,6 +625,8 @@ def test_the_window_handler_feeds_the_pane_at_the_records_level_and_checks_cance
     app = qt_app()
     signals = WorkerSignals()
     lines = []
+    # the RAW payload, deliberately: this is the pin on log_batch's own (text, level) order, which
+    # tests/_fixtures.PaneCapture flips into (level, text). Do not move this test onto the helper.
     signals.log_batch.connect(lambda batch: lines.extend(batch))
     signals.rows.connect(lambda _s: None)
     rec = logging.getLogger("core.tests.streams")          # a child: the handler sits on "core"
