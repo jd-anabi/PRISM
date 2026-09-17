@@ -8,9 +8,10 @@ from core import cli, config, forcing, orchestrator
 from core.artifacts import Accept
 from core.Helpers import file_manager, labels
 from core.config import T_MIN_EXP_S
-from core.refusals import Refusal
+from core.refusals import Refusal, require_file, require_finite, require_positive
 
 from ... import icons, settings
+from ...fields import label
 from ...widgets.adaptive_stack import AdaptiveStack
 from ...widgets.forms import make_form
 from ...widgets.help_badge import add_help_row, with_badge
@@ -22,6 +23,26 @@ from core.SBI.observations import RecordingSet
 from .rows import _ChiProbeRow
 from .base import _CellPreviewMixin, _StagePanel
 from .help_text import HELP
+
+# The driven page's drive boxes, by forcing name: the registered field key each answers to. Those
+# three rows take their label from the control table (fields.CONTROL, through label(key)), so a
+# rename there renames the row and the refusal's "Set it in the '…' box" sentence together; a forcing
+# name outside the registry (offset, amp_y) keeps its derived pretty label and answers to no key.
+_DRIVE_FIELD = {"amp": "drive_amplitude", "freq": "drive_frequency", "phase": "drive_phase"}
+
+
+def _drive_label(name: str) -> str:
+    key = _DRIVE_FIELD.get(name)
+    if key is not None:
+        return label(key)
+    return labels.gui_forcing_label(name, config.FORCING_DISPLAY_UNITS.get(name, ""))
+
+
+def _probe_frequency(row) -> "float | None":
+    """A probe row's drive frequency when one is given, finite and positive; None for a blank, a
+    half-typed or a non-positive box (0 Hz is a DC probe the lock-in would attempt)."""
+    f = row.freq.value_or_none()
+    return f if f is not None and math.isfinite(f) and f > 0 else None
 
 
 # ── 5. Infer ──────────────────────────────────────────────────────────────────
@@ -62,17 +83,19 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         self.cell_source = SourceToggle(self.cell_picker, self.values_grid,
                                         file_label="Use file", direct_label="Edit values")
         self.cell_source.changed.connect(self._on_cell_source_changed)
-        add_help_row(sim_f, "Cell", self.cell_source, HELP["cell_source"])
-        add_help_row(sim_f, "T_obs (s)", self.sim_tobs, HELP["tobs"])
+        add_help_row(sim_f, label("cell"), self.cell_source, HELP["cell_source"])
+        add_help_row(sim_f, label("t_obs"), self.sim_tobs, HELP["tobs"])
         self.infer_stack.addWidget(sim_w)
         # experimental inputs
         exp_w = QWidget(); self.exp_form = make_form(exp_w)
         self.exp_spont = PathField()
         self.exp_forced = PathField()
         self.exp_tobs = FloatField(T_MIN_EXP_S)
+        # "Spontaneous" and the χ page's "Passive" are one field key (recording_spont) with two boxes,
+        # so its CONTROL entry is a sentence naming both, and the two literals stay here.
         add_help_row(self.exp_form, "Spontaneous", self.exp_spont, HELP["spont"])
-        add_help_row(self.exp_form, "Forced", self.exp_forced, HELP["forced"])
-        add_help_row(self.exp_form, "T_obs (s)", self.exp_tobs, HELP["tobs"])
+        add_help_row(self.exp_form, label("recording_forced"), self.exp_forced, HELP["forced"])
+        add_help_row(self.exp_form, label("t_obs"), self.exp_tobs, HELP["tobs"])
         self._forcing_anchor = QLabel("(build config to list drive params)")
         self.exp_form.addRow(self._forcing_anchor)
         self.infer_stack.addWidget(exp_w)
@@ -83,8 +106,8 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         self.chi_f0_si = FloatField(1.0)
         self._chi_forced_fields = []
         add_help_row(self.chi_form, "Passive", self.chi_spont, HELP["chi_passive"])
-        add_help_row(self.chi_form, "T_obs (s)", self.chi_tobs, HELP["tobs"])
-        add_help_row(self.chi_form, "Drive F₀ (N)", self.chi_f0_si, HELP["chi_f0_si"])
+        add_help_row(self.chi_form, label("t_obs"), self.chi_tobs, HELP["tobs"])
+        add_help_row(self.chi_form, label("chi_f0_si"), self.chi_f0_si, HELP["chi_f0_si"])
         # The probe table. Rows live in their OWN container rather than as form rows, so
         # adding and removing one is a local layout edit that cannot disturb the fields above it.
         self._chi_probe_host = QWidget()
@@ -253,16 +276,18 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
 
         The band is RELATIVE to the cell's own Ω₀, so nothing useful can be said until a passive
         recording exists. Measuring it needs one load and one FFT, which is why this is a button
-        rather than something recomputed on every keystroke.
+        rather than something recomputed on every keystroke. A button is a click, and a click is
+        refused like one (V2): a blank or non-positive T_obs and a blank or missing passive recording
+        go to the yellow box through _refusal before anything is loaded.
         """
         cfg = self.session.cfg
         if cfg is None or not cfg.chi_mode:
             return
-        path = self.chi_spont.value()
-        if not path:
-            self.log_pane.append_line(
-                "Select the passive recording first — Ω₀ is measured from it, and the χ band is "
-                "defined relative to Ω₀, so there is nothing to plan without it.", "warning")
+        try:
+            t_obs = require_positive("t_obs", self.chi_tobs.value_or_none())
+            path = require_file("recording_spont", self.chi_spont.value(), "recording")
+        except Refusal as e:
+            self._refusal(e)
             return
         try:
             from core.SBI import chi as _chi
@@ -273,7 +298,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             return
         hz = cfg.get_unit_conversion_factor("s")
         lo_hz, hi_hz = _chi.band_hz(cfg, f_peak)
-        n_samp = max(1, int(round(self.chi_tobs.value() * hz / cfg.dt_exp)))
+        n_samp = max(1, int(round(t_obs * hz / cfg.dt_exp)))
         self.log_pane.append_line(
             f"Ω₀ = {f_peak * hz:.4g} Hz for this recording. In band for this cell: "
             f"{lo_hz:.3g}–{hi_hz:.3g} Hz "
@@ -285,7 +310,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             f"{cfg.chi_max_cycles:g}-cycle ceiling (which is fine — only the tail is dropped).")
         # Fill blank frequency boxes with the nominal in-band grid so the table is usable immediately.
         # Only BLANK ones: a typed frequency is a record of what the bench actually did.
-        blanks = [r for r in self._chi_forced_fields if r.freq.value() <= 0]
+        blanks = [r for r in self._chi_forced_fields if _probe_frequency(r) is None]
         if blanks:
             grid = _chi.chi_multipliers(n_freqs=len(blanks), bounds=cfg.chi_freq_bounds).tolist()
             for row, mult in zip(blanks, grid):
@@ -296,20 +321,23 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                 f"at, because a lock-in decays like a sinc and a small mismatch destroys it.")
         # Now report each row's verdict against the T_obs entered.
         for i, row in enumerate(self._chi_forced_fields):
-            f = row.freq.value()
-            if not (math.isfinite(f) and f > 0):
+            f = _probe_frequency(row)
+            if f is None:
                 self.log_pane.append_line(f"  probe {i + 1}: no frequency entered.", "warning")
                 continue
             v = _chi.probe_verdict(cfg, f_peak, f, n_samp)
             if v.action == "use":
                 self.log_pane.append_line(
                     f"  probe {i + 1}: {f:g} Hz — OK, {v.cycles:.1f} drive cycles at "
-                    f"T_obs = {self.chi_tobs.value():g} s.")
+                    f"T_obs = {t_obs:g} s.")
             else:
                 self.log_pane.append_line(f"  probe {i + 1}: {f:g} Hz — {v.action.upper()}: "
                                           f"{v.reason}.", "warning" if v.action != "refuse" else "error")
 
     def _rebuild_forcing_fields(self, cfg):
+        """One drive box per forcing name of the built config. These rows ARE derivable from the
+        config, so they are rebuilt freely (contrast _rebuild_chi_fields); their labels come from
+        _drive_label, i.e. from the control table for the three registered names."""
         for fld in self._forcing_fields.values():
             self.exp_form.removeRow(fld)
         self._forcing_fields = {}
@@ -317,81 +345,124 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             self.exp_form.removeRow(self._forcing_anchor)
             self._forcing_anchor = None
         for name in cfg.force_params_dict:
-            unit = cli.INFERENCE_PROMPT_UNITS.get(name, "")
             fld = FloatField(0.0)
             self._forcing_fields[name] = fld
-            add_help_row(self.exp_form, labels.gui_forcing_label(name, unit), fld, HELP["forcing"])
+            add_help_row(self.exp_form, _drive_label(name), fld, HELP["forcing"])
 
-    def _infer(self):
-        cfg, post = self.session.cfg, self.session.posterior
-        if post is None:
-            return
-        if self.infer_mode.currentIndex() == 0:      # simulated
-            gt_dicts, cell = None, None
+    def _branch(self) -> str:
+        """Which of the four Run paths the mode combo and the built config select: "simulated", "chi",
+        "passive" or "driven". ONE decision, read by _read_inputs and _infer, so the boxes validated
+        at the click are the boxes the dispatch reads."""
+        if self.infer_mode.currentIndex() == 0:
+            return "simulated"
+        cfg = self.session.cfg
+        if cfg.observation_mode == "chi":
+            return "chi"
+        return "driven" if cfg.has_forcing else "passive"
+
+    def _read_inputs(self) -> dict:
+        """Every box the chosen branch will read, through core.refusals' rules; the first bad one
+        raises Refusal and the click dispatches nothing (V2). Numbers first, then files, in the
+        stage's own order.
+
+        Keys are the field keys. ``cell`` is the picked file's path or, in direct entry, the
+        hand-entered value dicts (the two sides of the one Cell row); ``recording_probe`` is the χ
+        table's (path, Hz) pairs; ``drive`` is the name-keyed SI dict the recording set takes, whose
+        amp/freq/phase entries answer to the three registered drive keys (the tool's one --drive flag
+        carries them the same way).
+        """
+        branch = self._branch()
+        if branch == "simulated":
+            v = {"t_obs": require_positive("t_obs", self.sim_tobs.value_or_none())}
             if self.cell_source.is_direct():
                 problems = self.values_grid.problems()
                 if problems:
-                    self.log_pane.append_line("Fix the values first: " + "; ".join(problems), "warning")
-                    return
-                gt_dicts = self.values_grid.to_dicts()
-            else:
-                cell = self.cell_picker.selected_path()
-                if not cell:
-                    self.log_pane.append_line("Select a cell file first.", "warning")
-                    return
-                if self._cell_problems:
-                    self.log_pane.append_line(
-                        "Fix the cell selection first: " + "; ".join(self._cell_problems), "warning")
-                    return
-            # ONE flow: the composition in orchestrator carries the ignored-cell note, the T_obs range
-            # check, the out-of-distribution check and the up-front non-amortized refusal that used to
-            # live in three copies (the GUI runner, orchestrator.run and scripts/_common).
-            self.dispatch(orchestrator.simulated_inference, cfg, post, self.sim_tobs.value(),
-                          cell=cell, gt_values=gt_dicts, prior=self.session.inf_prior,
-                          accept=self._accept(), provide_fig_sink=True,
-                          on_result=self._on_observation)
-        elif cfg.observation_mode == "chi":          # experimental, χ(ω): 1 passive + K forced
-            if not self.chi_spont.value():
-                self.log_pane.append_line("Select the passive recording first — it sets Ω₀.",
-                                          "warning")
-                return
+                    raise Refusal("Fix the values first: " + "; ".join(problems), field="cell")
+                v["cell"] = self.values_grid.to_dicts()
+                return v
+            v["cell"] = require_file("cell", self.cell_picker.selected_path(), "cell")
+            if self._cell_problems:
+                raise Refusal("This cell does not fit the bounds file used to build the config: "
+                              + "; ".join(self._cell_problems) + ". Choose another cell (or rebuild the "
+                              "config against matching bounds).", field="cell")
+            return v
+        if branch == "chi":                          # 1 passive + K single-tone forced
+            v = {"t_obs": require_positive("t_obs", self.chi_tobs.value_or_none()),
+                 "chi_f0_si": require_positive("chi_f0_si", self.chi_f0_si.value_or_none()),
+                 "recording_spont": require_file("recording_spont", self.chi_spont.value(), "recording")}
             if not self._chi_forced_fields:
-                self.log_pane.append_line(
-                    "Add at least one forced probe. χ mode conditions on a passive recording plus "
-                    "any number of single-tone forced ones, but zero probes is a spontaneous "
-                    "observation wearing a χ conditioning vector.", "warning")
-                return
+                raise Refusal("Add at least one forced probe. χ mode conditions on a passive recording "
+                              "plus any number of single-tone forced ones, but zero probes is a "
+                              "spontaneous observation wearing a χ conditioning vector.",
+                              field="recording_probe")
             problems = [p for i, r in enumerate(self._chi_forced_fields) for p in r.problems(i)]
             if problems:
-                self.log_pane.append_line("Fix the probe table first: " + "; ".join(problems),
-                                          "warning")
-                return
+                raise Refusal("Fix the probe table first: " + "; ".join(problems), field="recording_probe")
             # (recording, drive frequency in Hz) PAIRS, never a bare path list. The core locks in at
             # the frequency it is TOLD, rather than assuming mult_k * Omega_0 -- the frequencies a
             # bench achieves are not exactly that, and a lock-in at the wrong frequency decays like a
             # sinc. Pairs come straight off each row widget, so they cannot be mismatched by an
             # add/remove in the middle of the table.
-            pairs = [r.pair() for r in self._chi_forced_fields]
-            rec = RecordingSet(spont=self.chi_spont.value(), forced=tuple(pairs),
-                               T_obs_s=self.chi_tobs.value(), F0_si=self.chi_f0_si.value())
-            self.dispatch(orchestrator.experimental_inference, cfg, post, rec,
-                          accept=self._accept(), provide_fig_sink=True,
-                          on_result=self._on_observation)
-        elif not cfg.has_forcing:                    # experimental, passive (no drive)
-            if not self.exp_spont.value():
-                self.log_pane.append_line("Select a passive recording first.", "warning")
-                return
-            rec = RecordingSet(spont=self.exp_spont.value(), T_obs_s=self.exp_tobs.value())
-            self.dispatch(orchestrator.experimental_inference, cfg, post, rec,
-                          accept=self._accept(), provide_fig_sink=True,
-                          on_result=self._on_observation)
+            v["recording_probe"] = tuple((require_file("recording_probe", p, "recording"), f)
+                                         for p, f in (r.pair() for r in self._chi_forced_fields))
+            return v
+        v = {"t_obs": require_positive("t_obs", self.exp_tobs.value_or_none())}
+        if branch == "driven":
+            v["drive"] = self._read_drive()
+        v["recording_spont"] = require_file("recording_spont", self.exp_spont.value(), "recording")
+        if branch == "driven":
+            v["recording_forced"] = require_file("recording_forced", self.exp_forced.value(), "recording")
+        return v
+
+    def _read_drive(self) -> dict:
+        """The driven page's drive boxes as {forcing name: SI value}. Amplitude and frequency must be
+        > 0 (a zero drive is the passive branch's job, and 0 Hz would reach the lock-in), the phase
+        finite. A forcing name outside the registry (offset, amp_y) is a finite number of either
+        sign, refused under its own row label with no field key to point at."""
+        out = {}
+        for name, fld in self._forcing_fields.items():
+            key, v = _DRIVE_FIELD.get(name), fld.value_or_none()
+            if key == "drive_phase":
+                out[name] = require_finite(key, v)
+            elif key is not None:
+                out[name] = require_positive(key, v)
+            elif v is None:
+                raise Refusal(f"{_drive_label(name)} is blank.")
+            elif not math.isfinite(v):
+                raise Refusal(f"{_drive_label(name)} must be a finite number; got {v!r}.")
+            else:
+                out[name] = v
+        return out
+
+    def _infer(self):
+        cfg, post = self.session.cfg, self.session.posterior
+        if post is None:
+            return
+        try:
+            v = self._read_inputs()
+        except Refusal as e:
+            self._refusal(e)
+            return
+        branch = self._branch()
+        common = dict(accept=self._accept(), provide_fig_sink=True, on_result=self._on_observation)
+        if branch == "simulated":
+            direct = self.cell_source.is_direct()
+            # ONE flow: the composition in orchestrator carries the ignored-cell note, the T_obs range
+            # check, the out-of-distribution check and the up-front non-amortized refusal that used to
+            # live in three copies (the GUI runner, orchestrator.run and scripts/_common).
+            self.dispatch(orchestrator.simulated_inference, cfg, post, v["t_obs"],
+                          cell=None if direct else v["cell"], gt_values=v["cell"] if direct else None,
+                          prior=self.session.inf_prior, **common)
+            return
+        if branch == "chi":                          # experimental, χ(ω): 1 passive + K forced
+            rec = RecordingSet(spont=v["recording_spont"], forced=v["recording_probe"],
+                               T_obs_s=v["t_obs"], F0_si=v["chi_f0_si"])
+        elif branch == "passive":                    # experimental, passive (no drive)
+            rec = RecordingSet(spont=v["recording_spont"], T_obs_s=v["t_obs"])
         else:                                        # experimental, driven
-            forcing_si = {name: fld.value() for name, fld in self._forcing_fields.items()}
-            rec = RecordingSet(spont=self.exp_spont.value(), forced=((self.exp_forced.value(), None),),
-                               T_obs_s=self.exp_tobs.value(), forcing_params_si=forcing_si)
-            self.dispatch(orchestrator.experimental_inference, cfg, post, rec,
-                          accept=self._accept(), provide_fig_sink=True,
-                          on_result=self._on_observation)
+            rec = RecordingSet(spont=v["recording_spont"], forced=((v["recording_forced"], None),),
+                               T_obs_s=v["t_obs"], forcing_params_si=v["drive"])
+        self.dispatch(orchestrator.experimental_inference, cfg, post, rec, **common)
 
     def _accept(self):
         """The Accept this run opts in with, or None for the default (refuse everything).

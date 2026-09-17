@@ -74,6 +74,28 @@ def _chi_cfg(k=3, pad=12):
     return Cfg()
 
 
+def _forced_cfg(names=("amp", "freq", "phase", "offset")):
+    """Stub config that puts the Infer tab on its DRIVEN page, with one drive row per forcing name --
+    the four the nadrowski master bounds declare, by default (mirrors the SimConfig fields the tab
+    reads; ``force_params_dict`` values are ``(value, (lo, hi))`` as on a SimConfig). ``names=()`` is
+    the PASSIVE page: no drive rows and no forced recording."""
+    from core import config
+
+    class Cfg:
+        model = "NADROWSKI"
+        params_dict = {}
+        rescale_params = {}
+        force_params_dict = {n: (0.0, (0.0, 1.0)) for n in names}
+        has_forcing = bool(names)
+        chi_mode = False
+        chi_n_freqs = config.CHI_N_FREQS
+        chi_k_pad = config.CHI_K_PAD
+        chi_freq_bounds = config.CHI_FREQ_BOUNDS
+        chi_max_cycles = config.CHI_MAX_CYCLES
+        observation_mode = "forced" if names else "spontaneous"
+    return Cfg()
+
+
 def _spont_cfg():
     """A stub config that survives the Prior tab's post-build path and install_config: the SimConfig
     fields the "Config built" line, check_unit_consistency and the Infer tab's on_config_built read,
@@ -950,7 +972,7 @@ def test_simulated_inference_emits_the_ground_truth_figure(tmp_path):
     assert (obs.id, inf.id) == ("o", "i"), "the composition must return (observation, inference)"
 
 
-def test_the_infer_tab_dispatches_the_compositions():
+def test_the_infer_tab_dispatches_the_compositions(tmp_path):
     """The Infer tab's four Run paths must call the COMPOSITIONS, not a GUI-local runner.
 
     The runner module existed only to be module-level and Qt-free with an injectable fig_sink; the
@@ -972,27 +994,36 @@ def test_the_infer_tab_dispatches_the_compositions():
     cap = {}
     panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
 
-    # simulated, from a cell FILE
+    # simulated, from a cell FILE. Real (empty) files: the click now refuses a missing cell or
+    # recording before it dispatches (V2), and the dispatch is stubbed so nothing reads them.
+    cell = tmp_path / "cell.txt"
+    cell.touch()
     panel.infer_mode.setCurrentIndex(0)
     panel.cell_source.set_direct(False)
-    panel.cell_picker.selected_path = lambda: "/tmp/cell.txt"
+    panel.cell_picker.selected_path = lambda: str(cell)
     panel._cell_problems = []
     panel.sim_tobs.setText("3.5")
     panel._infer()
     assert cap["fn"] is orchestrator.simulated_inference, cap["fn"]
-    assert cap["args"][2] == 3.5 and cap["kwargs"]["cell"] == "/tmp/cell.txt"
+    assert cap["args"][2] == 3.5 and cap["kwargs"]["cell"] == str(cell)
     assert cap["kwargs"]["gt_values"] is None and cap["kwargs"]["prior"] is inf.session.inf_prior
     assert cap["kwargs"]["provide_fig_sink"] is True
     assert cap["kwargs"]["on_result"] == panel._on_observation
     assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
 
     # experimental, chi: one passive recording + the probe pairs, as a RecordingSet
+    passive = tmp_path / "passive.npy"
+    passive.touch()
+    probes = [tmp_path / f"probe{i}.npy" for i in range(len(panel._chi_forced_fields))]
+    for p in probes:
+        p.touch()
+
     def _chi_run():
         cap.clear()
         panel.infer_mode.setCurrentIndex(1)
-        panel.chi_spont.edit.setText("/tmp/passive.npy")
+        panel.chi_spont.edit.setText(str(passive))
         for i, row in enumerate(panel._chi_forced_fields):
-            row.path.edit.setText(f"/tmp/probe{i}.npy")
+            row.path.edit.setText(str(probes[i]))
             row.freq.setText(str(10.0 + i))
         panel.chi_tobs.setText("2.0")
         panel._infer()
@@ -1000,8 +1031,8 @@ def test_the_infer_tab_dispatches_the_compositions():
     _chi_run()
     assert cap["fn"] is orchestrator.experimental_inference, cap["fn"]
     rec = cap["args"][2]
-    assert rec.spont == "/tmp/passive.npy" and rec.forced == (("/tmp/probe0.npy", 10.0),
-                                                              ("/tmp/probe1.npy", 11.0))
+    assert rec.spont == str(passive) and rec.forced == ((str(probes[0]), 10.0),
+                                                        (str(probes[1]), 11.0))
     assert rec.T_obs_s == 2.0 and cap["kwargs"]["provide_fig_sink"] is True
     assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
 
@@ -2082,3 +2113,415 @@ def test_the_validate_and_tsnpe_rows_are_named_from_the_control_table():
             assert repr(gui_fields.label(key)) not in src, (
                 f"{panel.__name__}.__init__ still names its {key!r} row by the literal "
                 f"{gui_fields.label(key)!r}")
+
+
+def test_a_blank_t_obs_is_refused_on_all_three_infer_branches(tmp_path):
+    """V2 on the three observation-length boxes. Today FloatField.value() turns a blank or half-typed
+    box into 0.0 and every branch forwards it: the simulated one spends the simulation and then dies
+    in math.log(0.0) (statistics.py), the bench ones build a zero-length observation. Now the click
+    reads the box through value_or_none() and require_positive("t_obs", ...): a blank, a lone "-" and
+    a typed 0 are each refused through _refusal (the yellow box) with field "t_obs", and NOTHING is
+    dispatched. One box per page: sim_tobs, exp_tobs (the passive and driven branches share it) and
+    chi_tobs. Every file the click also checks is a real (empty) file, so the refusal seen is the
+    box's and not a missing file's; the dispatch is stubbed, so nothing reads them."""
+    from core import orchestrator
+    from core.refusals import Refusal
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.session.posterior = _posterior_stub()
+    inf.session.inf_prior = _prior_stub()
+    panel = inf.infer_panel
+    sent, refused = {}, []
+    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    panel._refusal = lambda exc: refused.append(exc)
+    files = {}
+    for stem in ("cell.txt", "passive.npy", "forced.npy", "probe0.npy", "probe1.npy"):
+        files[stem] = tmp_path / stem
+        files[stem].touch()
+
+    def click(box, text):
+        sent.clear()
+        refused.clear()
+        box.setText(text)
+        panel._infer()
+
+    def refused_t_obs(box):
+        for text, why in (("", "is blank"), ("-", "is blank"), ("0", "greater than 0")):
+            click(box, text)
+            assert sent == {}, (text, sent)
+            assert len(refused) == 1 and isinstance(refused[0], Refusal), (text, refused)
+            assert refused[0].field == "t_obs" and why in refused[0].message, (text, refused[0].message)
+
+    # simulated: sim_tobs
+    inf.install_config(_forced_cfg())
+    panel.infer_mode.setCurrentIndex(0)
+    panel.cell_source.set_direct(False)
+    panel.cell_picker.selected_path = lambda: str(files["cell.txt"])
+    panel._cell_problems = []
+    refused_t_obs(panel.sim_tobs)
+    click(panel.sim_tobs, "3.5")
+    assert refused == [] and sent["fn"] is orchestrator.simulated_inference and sent["args"][2] == 3.5
+
+    # driven: exp_tobs, with every drive box and both recordings given
+    panel.infer_mode.setCurrentIndex(1)
+    panel.exp_spont.edit.setText(str(files["passive.npy"]))
+    panel.exp_forced.edit.setText(str(files["forced.npy"]))
+    for name, text in (("amp", "1.5"), ("freq", "5"), ("phase", "0"), ("offset", "0")):
+        panel._forcing_fields[name].setText(text)
+    refused_t_obs(panel.exp_tobs)
+    click(panel.exp_tobs, "2.0")
+    assert refused == [] and sent["fn"] is orchestrator.experimental_inference
+    assert sent["args"][2].T_obs_s == 2.0 and sent["args"][2].forced == ((str(files["forced.npy"]), None),)
+
+    # passive: the same exp_tobs box on the no-drive branch
+    inf.install_config(_forced_cfg(names=()))
+    refused_t_obs(panel.exp_tobs)
+    click(panel.exp_tobs, "2.0")
+    assert refused == [] and sent["fn"] is orchestrator.experimental_inference
+    assert sent["args"][2].forced == () and sent["args"][2].forcing_params_si is None
+
+    # chi: chi_tobs, with the passive recording, F0 and two complete probe rows given
+    inf.install_config(_chi_cfg(k=2))
+    panel.chi_spont.edit.setText(str(files["passive.npy"]))
+    panel.chi_f0_si.setText("1.0")
+    for i, row in enumerate(panel._chi_forced_fields):
+        row.path.edit.setText(str(files[f"probe{i}.npy"]))
+        row.freq.setText(str(10.0 + i))
+    refused_t_obs(panel.chi_tobs)
+    click(panel.chi_tobs, "2.0")
+    assert refused == [] and sent["fn"] is orchestrator.experimental_inference
+    assert sent["args"][2].F0_si == 1.0 and sent["args"][2].T_obs_s == 2.0
+
+
+def test_the_driven_branch_refuses_a_zero_drive_and_a_missing_recording(tmp_path):
+    """The driven page's boxes, at the click. A zero amplitude is the passive branch's job and a 0 Hz
+    drive would reach the lock-in, so both are refused (require_positive); a blank phase is a blank
+    (require_finite); each recording is refused by its own role -- "recording_spont" or
+    "recording_forced" -- whether blank or pointing at a file that is not there (require_file).
+    Today none of this is checked: FloatField(0.0)'s "0.0" dispatched a zero drive, and a wrong path
+    surfaced as a FileNotFoundError inside the worker's red box. The offset row is a forcing name
+    outside the registry: it is read as a finite number of either sign under its own row label, with
+    no field key to point at. When every box passes, the recording set carries the SI drive keyed by
+    forcing NAME (what build_experiment_obs takes) and the forced file with no frequency."""
+    from core import orchestrator
+    from core.refusals import Refusal
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.install_config(_forced_cfg())
+    inf.session.posterior = _posterior_stub()
+    inf.session.inf_prior = _prior_stub()
+    panel = inf.infer_panel
+    sent, refused = {}, []
+    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    panel._refusal = lambda exc: refused.append(exc)
+    spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
+    spont.touch()
+    forced.touch()
+    panel.infer_mode.setCurrentIndex(1)
+    panel.exp_tobs.setText("2.0")
+    panel.exp_spont.edit.setText(str(spont))
+    panel.exp_forced.edit.setText(str(forced))
+    amp, freq, phase, offset = (panel._forcing_fields[n] for n in ("amp", "freq", "phase", "offset"))
+    for box, text in ((amp, "1.5"), (freq, "5"), (phase, "0"), (offset, "-3")):
+        box.setText(text)
+
+    def click():
+        sent.clear()
+        refused.clear()
+        panel._infer()
+        assert len(refused) <= 1, refused
+        return refused[0] if refused else None
+
+    def refuse(edit, text, field, why):
+        keep = edit.text()
+        edit.setText(text)
+        e = click()
+        assert sent == {}, (text, sent)
+        assert isinstance(e, Refusal) and e.field == field and why in e.message, (text, e)
+        edit.setText(keep)
+
+    refuse(amp, "0", "drive_amplitude", "greater than 0")
+    refuse(amp, "", "drive_amplitude", "is blank")
+    refuse(freq, "0", "drive_frequency", "greater than 0")
+    refuse(freq, "-1", "drive_frequency", "greater than 0")
+    refuse(phase, "", "drive_phase", "is blank")
+    refuse(offset, "", None, "offset (N) is blank")
+    refuse(panel.exp_forced.edit, str(tmp_path / "gone.npy"), "recording_forced", "gone.npy")
+    refuse(panel.exp_forced.edit, "", "recording_forced", "is blank")
+    refuse(panel.exp_spont.edit, str(tmp_path / "gone.npy"), "recording_spont", "was not found")
+    refuse(panel.exp_spont.edit, "", "recording_spont", "is blank")
+
+    # every box given: dispatched once, with the drive by NAME and the forced file with no frequency
+    assert click() is None
+    assert sent["fn"] is orchestrator.experimental_inference, sent
+    rec = sent["args"][2]
+    assert rec.spont == str(spont) and rec.forced == ((str(forced), None),) and rec.T_obs_s == 2.0
+    assert rec.forcing_params_si == {"amp": 1.5, "freq": 5.0, "phase": 0.0, "offset": -3.0}
+    assert sent["kwargs"]["provide_fig_sink"] is True and sent["kwargs"]["accept"] is None
+
+
+def test_the_simulated_branch_refuses_a_missing_or_misfitting_cell_at_the_click(tmp_path):
+    """The simulated branch's Cell row, at the click, through _refusal with field "cell": no cell
+    picked or a picked file that is not there (require_file), a picked cell the pick-time check found
+    does not fit the bounds (a warning line today, a refusal now), and in direct entry a values grid
+    with problems. Today the first dispatched a path the worker then failed on, and the other two
+    were warning lines with no dialog. The bounds-fit check itself is the pick-time one
+    (_on_cell_changed) and is unchanged; the grid's own validation is pinned at its widget tests."""
+    from core.refusals import Refusal
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.install_config(_forced_cfg())
+    inf.session.posterior = _posterior_stub()
+    panel = inf.infer_panel
+    sent, refused = {}, []
+    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    panel._refusal = lambda exc: refused.append(exc)
+    panel.infer_mode.setCurrentIndex(0)
+    panel.sim_tobs.setText("3.5")
+
+    def click() -> str:
+        sent.clear()
+        refused.clear()
+        panel._infer()
+        assert sent == {}, sent
+        assert len(refused) == 1 and isinstance(refused[0], Refusal), refused
+        assert refused[0].field == "cell", refused[0]
+        return refused[0].message
+
+    panel.cell_source.set_direct(False)
+    panel.cell_picker.selected_path = lambda: None
+    panel._cell_problems = []
+    assert "is blank" in click()
+    panel.cell_picker.selected_path = lambda: str(tmp_path / "gone.txt")
+    assert "was not found" in click()
+    cell = tmp_path / "cell.txt"
+    cell.touch()
+    panel.cell_picker.selected_path = lambda: str(cell)
+    panel._cell_problems = ["k = 9 is outside its bounds"]
+    msg = click()
+    assert "does not fit the bounds file" in msg and "k = 9" in msg, msg
+    # direct entry: the grid's problems, verbatim, under the same key
+    panel._cell_problems = []
+    panel.cell_source.is_direct = lambda: True
+    panel.values_grid.problems = lambda: ["k: must be a number"]
+    assert click() == "Fix the values first: k: must be a number"
+
+
+def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path):
+    """"Plan probes…" is a click, so it is refused like one (V2): a blank or non-positive T_obs and a
+    blank or missing passive recording go to _refusal with their field, BEFORE the recording is
+    loaded. Today a blank T_obs read as 0.0 and the planner ran on a one-sample window, and a blank
+    recording was a warning line. A complete click passes the rules and goes on to load the
+    recording; the stub config has no hardware, so on this test's path that load fails inside the
+    planner's own guarded step, and its "Could not measure Ω₀" error line is the evidence the rules
+    ran first and let the click through."""
+    from core.refusals import Refusal
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.install_config(_chi_cfg(k=2))
+    panel = inf.infer_panel
+    refused, lines = [], []
+    panel._refusal = lambda exc: refused.append(exc)
+    panel.log_pane.append_line = lambda text, kind="": lines.append((kind, text))
+    passive = tmp_path / "passive.npy"
+    passive.touch()
+
+    def plan():
+        refused.clear()
+        lines.clear()
+        panel._plan_chi_probes()
+
+    panel.chi_spont.edit.setText(str(passive))
+    panel.chi_tobs.setText("")
+    plan()
+    assert len(refused) == 1 and isinstance(refused[0], Refusal) and refused[0].field == "t_obs", refused
+    assert "is blank" in refused[0].message and lines == [], lines
+    panel.chi_tobs.setText("0")
+    plan()
+    assert refused[0].field == "t_obs" and "greater than 0" in refused[0].message and lines == []
+    panel.chi_tobs.setText("4.5")
+    panel.chi_spont.edit.setText("")
+    plan()
+    assert refused[0].field == "recording_spont" and "is blank" in refused[0].message and lines == []
+    panel.chi_spont.edit.setText(str(tmp_path / "gone.npy"))
+    plan()
+    assert refused[0].field == "recording_spont" and "gone.npy" in refused[0].message and lines == []
+    # a complete click passes the rules and reaches the load
+    panel.chi_spont.edit.setText(str(passive))
+    plan()
+    assert refused == [], refused
+    assert lines and lines[0][0] == "error" and lines[0][1].startswith("Could not measure Ω₀ from"), lines
+
+
+def test_the_gui_control_table_matches_the_tabs_labels():
+    """§3.2's pin. fields.CONTROL is where a refusal learns which box to name ("Set it in the
+    'T_obs (s)' box on the Infer tab."), and the tabs build their rows FROM it (label(key)), so the two
+    cannot drift -- this reads every tab's form rows back and checks that each (tab, label) entry is
+    a label that tab actually shows. The rows are read the way Qt holds them: the QLabel inside each
+    help_label holder (help_badge.py), or the plain QLabel of a row added without help text, compared
+    against labels.pretty_gui(label), which is what the holder was given. The Infer tab is read after
+    install_config with a FORCED stub config so its three drive rows exist; a chi config would build
+    none (no force_params_dict) and the drive entries would pass vacuously.
+
+    The second half is this task's own: the Infer tab's registered rows are built from label(key),
+    not from a literal that happens to match today."""
+    from PySide6.QtWidgets import QFormLayout, QLabel
+    from core.gui import fields as gui_fields
+    from core.gui.panels.inference.infer_tab import InferPanel
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.Helpers import labels
+    from tests._fixtures import code_only, qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.install_config(_forced_cfg())
+    tabs = {"Config": inf.config_panel, "Prior": inf.prior_panel, "Posterior": inf.posterior_panel,
+            "Validate": inf.validate_panel, "Infer": inf.infer_panel, "TSNPE": inf.tsnpe_panel}
+
+    def shown(panel) -> list:
+        out = []
+        for form in panel.findChildren(QFormLayout):
+            for i in range(form.rowCount()):
+                item = form.itemAt(i, QFormLayout.LabelRole)
+                w = item.widget() if item is not None else None
+                if w is None:
+                    continue                      # a spanning row: a checkbox, a button, an anchor
+                lab = w if isinstance(w, QLabel) else w.findChild(QLabel)
+                if lab is not None:
+                    out.append(lab.text())
+        return out
+
+    seen = {tab: shown(panel) for tab, panel in tabs.items()}
+    tuples = {k: e for k, e in gui_fields.CONTROL.items() if isinstance(e, tuple)}
+    assert tuples, "the control table has no (tab, label) entries"
+    for key in ("drive_amplitude", "drive_frequency", "drive_phase"):
+        assert key in tuples, f"{key} must be a (tab, label) entry so the read-back covers the drive rows"
+    missing = []
+    for key, (tab, text) in tuples.items():
+        for name in (tab if isinstance(tab, tuple) else (tab,)):   # the budget boxes name two tabs
+            assert name in seen, f"{key}: CONTROL names a tab that does not exist: {name!r}"
+            if labels.pretty_gui(text) not in seen[name]:
+                missing.append((key, name, text))
+    assert not missing, f"CONTROL names labels no tab shows: {missing}\nshown: {seen}"
+
+    src = code_only(InferPanel.__init__)
+    for key in ("t_obs", "cell", "recording_forced", "chi_f0_si"):
+        assert f"label({key!r})" in src, f"the Infer tab must build its {key} row from label({key!r})"
+    for literal in ("'T_obs (s)'", "'Drive F₀ (N)'"):
+        assert literal not in src, f"a literal row label {literal} survives in InferPanel.__init__"
+
+
+def _pick_simulated(panel, cell: str, t_obs: str) -> None:
+    """Put the Infer tab on its simulated page with a picked cell file and a typed T_obs. The picker is
+    pointed at the file directly, as test_the_infer_tab_dispatches_the_compositions does: what these
+    pins are about is the session config, not the picker's folder listing."""
+    panel.infer_mode.setCurrentIndex(0)
+    panel.cell_source.set_direct(False)
+    panel.cell_picker.selected_path = lambda: cell
+    panel._cell_problems = []
+    panel.sim_tobs.setText(t_obs)
+
+
+def _wait_for_run(app, panel, limit: float = 300.0) -> None:
+    """Spin the event loop until the panel's run has finished, then deliver the queued signals.
+    `finished` is emitted after `result`/`error`, and `_set_busy(False)` hangs off it, so once `_busy`
+    drops the outcome has already been handled on this thread."""
+    import time
+    t0 = time.monotonic()
+    while panel._busy and time.monotonic() - t0 < limit:
+        app.processEvents()
+        time.sleep(0.01)
+    assert not panel._busy, f"the run did not finish within {limit:.0f} s"
+    for _ in range(30):
+        app.processEvents()
+        time.sleep(0.01)
+
+
+def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monkeypatch):
+    """V1 at the window, on the FAILURE path: the composition injects the cell's truth, records the
+    cell and sets T_obs on the config it holds, then the run dies inside generate_observations. Until
+    piece 3 all three writes stayed on the session, so the NEXT training anchored its Fisher rotation on
+    that cell and the next manifest named it as an input. The error reaches the red box (a bug, not a
+    Refusal), and the session's config is untouched.
+
+    (a) makes the pin non-vacuous: with SimConfig.copy_for_run switched off (public_entry then hands the
+    composition the caller's own object), the same click leaves the truth on a throwaway session
+    config -- the leak this test exists to catch."""
+    from PySide6.QtWidgets import QMessageBox
+    from core import orchestrator
+    from core.sim_config import SimConfig
+    from tests._fixtures import SHOWN, assert_cfg_unchanged, qt_app, snapshot_cfg
+
+    app = qt_app()
+    inf = screen_run.screen
+    panel = inf.infer_panel
+    pristine = inf.session.cfg
+
+    def boom(*_a, **_kw):
+        raise RuntimeError("stopped after the truth was injected")
+
+    monkeypatch.setattr(orchestrator, "generate_observations", boom)
+    _pick_simulated(panel, screen_run.cell, "1.5")
+
+    # (a) the copy switched off: the leak happens, on a throwaway config
+    probe = pristine.copy_for_run()
+    inf.session.cfg = probe
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(SimConfig, "copy_for_run", lambda self: self)
+            panel._infer()
+            _wait_for_run(app, panel)
+    finally:
+        inf.session.cfg = pristine
+    assert probe.has_ground_truth and "cell" in probe.sources, \
+        "with the copy off the composition must write onto the session config; the pin below is vacuous"
+    SHOWN.clear()
+
+    # (b) the copy on: the same failure leaves nothing behind
+    snap = snapshot_cfg(pristine)
+    panel._infer()
+    _wait_for_run(app, panel)
+    assert_cfg_unchanged(pristine, snap)
+    assert not pristine.has_ground_truth and "cell" not in pristine.sources
+    assert len(SHOWN) == 1 and SHOWN[-1].icon() == QMessageBox.Critical, \
+        [(b.windowTitle(), b.text()) for b in SHOWN]
+
+
+def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
+    """V1 at the window, on the SUCCESS path, with nothing stubbed: a real simulated inference on the
+    tiny posterior, dispatched by this tab through the worker, writes its observation and inference
+    and hands them to the session -- and leaves the session's config exactly as install_config set
+    it: no truth, no cell among its sources, the T_obs it had (1.0 s from the fixture) although the
+    run was typed 1.5 s. The box value differs from the session's on purpose, so the T_obs clause is
+    not satisfied by coincidence."""
+    from tests._fixtures import SHOWN, assert_cfg_unchanged, qt_app, snapshot_cfg
+
+    app = qt_app()
+    inf = screen_run.screen
+    panel = inf.infer_panel
+    cfg = inf.session.cfg
+    _pick_simulated(panel, screen_run.cell, "1.5")
+    before_obs, before_t_obs = inf.session.observation, cfg.T_obs
+    snap = snapshot_cfg(cfg)
+
+    panel._infer()
+    _wait_for_run(app, panel)
+
+    assert SHOWN == [], [(b.windowTitle(), b.text()) for b in SHOWN]
+    assert inf.session.observation is not None and inf.session.observation is not before_obs, \
+        "the run did not complete: _on_observation never installed an observation"
+    assert_cfg_unchanged(cfg, snap)
+    assert not cfg.has_ground_truth and "cell" not in cfg.sources
+    assert cfg.T_obs == before_t_obs

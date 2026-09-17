@@ -53,6 +53,30 @@ def tiny_run(tmp_path_factory):
             run.teardown()
 
 
+@pytest.fixture(scope="module")
+def screen_run(tiny_run):
+    """An InferenceScreen whose session holds the tiny run's prior and posterior and a TRUTH-FREE
+    copy of its config -- the window's own shape: a session config is bounds-built at Build/Load prior
+    and never carries a cell (spec §2.4). A COPY, because tiny_run is module-scoped and its siblings in
+    the same file need the truth it injected; a truth-carrying session would also make the pin
+    vacuous, since the composition re-injects the very same cell on its copy.
+
+    Module-scoped like tiny_run, so a file pays for one screen. Its panels restore from the session's
+    temporary settings file (_settings_home), never from the real PRISM.ini."""
+    from types import SimpleNamespace
+    from core.gui.screens.inference_screen import InferenceScreen
+    from tests._fixtures import qt_app
+    qt_app()
+    cfg = tiny_run.cfg.copy_for_run()
+    cfg.clear_ground_truth()
+    inf = InferenceScreen()
+    inf.install_config(cfg)
+    inf.session.inf_prior = tiny_run.prior
+    inf.session.posterior = tiny_run.posterior
+    inf.refresh_gates()
+    return SimpleNamespace(screen=inf, run=tiny_run, cell=tiny_run.cfg.sources["cell"])
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _checkpointing_off_unless_asked():
     """Training-data checkpointing OFF for the whole session. A test that wants a simulation cache
