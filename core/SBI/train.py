@@ -129,6 +129,33 @@ def _capped_zscore_check(max_rows: int = _ZSCORE_CHECK_MAX_ROWS):
             mod.warn_if_zscoring_changes_data = original
 
 
+class _NoSummary:
+    """The summary writer train_nn hands sbi by default: it discards the training curves (V9, spec §6.4).
+
+    Given no writer, sbi's trainer builds a TensorBoard ``SummaryWriter`` under
+    ``<cwd>/sbi-logs/NPE_C/<timestamp>/`` when ``SNPE(...)`` is CONSTRUCTED
+    (``NeuralInference._default_summary_writer`` over ``sbi.utils.io.get_log_root``). Every training
+    therefore left a directory behind in whatever directory the process was started from: 881 of them
+    at the repo root by piece 3, none ever read. The curves PRISM keeps are the ones train_nn returns
+    in its diagnostics, which build_posterior writes into the posterior artifact.
+
+    These three methods are the whole surface sbi 0.25 touches. ``_summarize`` calls
+    ``add_scalar(tag=, scalar_value=, global_step=)`` and ``flush()``
+    (``sbi/inference/trainers/base.py:932-1000``), ``__init__`` stores the object with no isinstance
+    check (``:212-214``), and ``close`` is there for a caller that tidies up. Only the trainer's
+    unpickling path (``__setstate__``) still builds sbi's default writer, and PRISM never pickles a
+    trainer. tests/conftest.py::_no_sbi_logs fails the test session if the directory comes back.
+    """
+
+    def add_scalar(self, *, tag, scalar_value, global_step=None):
+        pass
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
 
 def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributions.Distribution, embedding_net: torch.nn.Module,
              forcing_prior: torch.distributions.Distribution, nd_dim: int, forcing_idx: dict, rescale_idx: dict,
@@ -137,7 +164,8 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
              hidden_features: int = 50, num_transforms: int = 5, num_bins: int = 10,
              learning_rate: float = 5e-4, stop_after_epochs: int = 20, max_num_epochs: int = 2_147_483_647,
              show_train_summary: bool = False,
-             batch_size: int = 128, device: torch.device = torch.device('cpu')) -> DirectPosterior | tuple[DirectPosterior, dict]:
+             batch_size: int = 128, device: torch.device = torch.device('cpu'),
+             summary_writer=None) -> DirectPosterior | tuple[DirectPosterior, dict]:
     """
     Generate training data and fit the NPE flow (SNPE when ``num_rounds > 1``).
 
@@ -153,6 +181,9 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
         count; ``num_bins`` the spline bins (NSF only); ``learning_rate`` /
         ``stop_after_epochs`` / ``max_num_epochs`` / ``batch_size`` sbi's fit-loop knobs;
         ``show_train_summary`` prints sbi's per-epoch loss table.
+    :param summary_writer: what sbi reports its per-epoch curves to; None (every PRISM caller) =
+        ``_NoSummary``, which discards them instead of letting sbi write ``<cwd>/sbi-logs``. Any object
+        with ``add_scalar(*, tag, scalar_value, global_step)`` and ``flush()`` is handed to sbi as is.
     :return: the trained ``DirectPosterior`` -- ``(posterior, diagnostics)`` when
         ``return_diagnostics``.
     """
@@ -179,7 +210,10 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
                                     z_score_x=("none" if _owns else "independent"),
                                     hidden_features=hidden_features, num_transforms=num_transforms,
                                     num_bins=num_bins)
-    infer = SNPE(prior=prior, density_estimator=neural_posterior, device=str(device))
+    # summary_writer: sbi's default builds a TensorBoard writer under <cwd>/sbi-logs at THIS line (see
+    # _NoSummary). The loss curve PRISM keeps is the one returned in the diagnostics below.
+    infer = SNPE(prior=prior, density_estimator=neural_posterior, device=str(device),
+                 summary_writer=_NoSummary() if summary_writer is None else summary_writer)
 
     proposal = None # set up initial proposal distribution
     posterior = None

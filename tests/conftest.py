@@ -31,6 +31,31 @@ def _sandbox_default_store(tmp_path_factory):
     assert after == before, f"the suite wrote into {real}: {sorted(map(str, after - before))[:5]}"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_sbi_logs():
+    """<repo>/sbi-logs must not exist before or after the session (V9, spec §6.4). This sits beside
+    _sandbox_default_store for the same reason: the suites leave the repository as they found it.
+
+    sbi's default TensorBoard writer made <cwd>/sbi-logs/NPE_C/<timestamp>/ on every training, and
+    every gate trains at the repo root (tiny_run's build_posterior), which is how 881 directories
+    piled up there. core/SBI/train.py now hands sbi _NoSummary, the tree was deleted, and its
+    .gitignore line went. So the directory coming back means a training reached sbi's default writer
+    again, and with no ignore line it would also sit in git status.
+
+    It is checked at SETUP as well: a tree left by some earlier run would otherwise make the teardown
+    blame this session for it. A training started from another working directory is covered by
+    tests/test_user_sbi.py::test_training_creates_no_sbi_logs_directory."""
+    from core import config
+    logs = config.REPO_ROOT / "sbi-logs"
+    assert not logs.exists(), (
+        f"{logs} exists before the session: delete it (nothing in PRISM writes it since piece 3), "
+        f"or this session's teardown check would blame the tests for it")
+    yield
+    assert not logs.exists(), (
+        f"the suite created {logs}: a training reached sbi's default TensorBoard writer instead of "
+        f"core.SBI.train._NoSummary (train_nn's summary_writer=None)")
+
+
 @pytest.fixture
 def store(tmp_path):
     """A fresh store that is ALSO the process default for the duration of the test."""

@@ -596,7 +596,9 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
                      HERE, at the entry, not by the write at the end: the stability sweep is ~9
                      minutes and there is no reason to spend it to learn the name is in use.
     :param note: free-text note recorded on the artifact when building.
-    :param fig_sink: Optional (title, fig) -> None display callback for the corner plot; None => plt.show().
+    :param fig_sink: Optional (title, fig) -> None display callback for the corner plot. Every front end
+                     passes one; a stage given None closes what it draws (a build saves the PNG into
+                     the artifact first).
     :param store: the ArtifactStore to read/write; None = the process default.
     :param num_iterations: GLOBAL sweep rounds; None = config.PRIOR_SWEEP_ITERATIONS.
     :param sweep_batch: candidates per global round; None = config.PRIOR_SWEEP_BATCH (0 = follow the
@@ -644,7 +646,12 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
 
     if not build_new and ref is not None:
         loaded = store.load_prior(cfg, ref)
-        visualizers.visualize_dist(loaded.nd_prior, labels=cfg.labels, title="Prior (loaded)", sink=fig_sink)
+        # V8: a stage given no sink closes what it draws, as the build branch below does through its
+        # writer's sink (ArtifactWriter.fig_sink). Handing None on to visualize_dist reached its
+        # bare-library plt.show(), which under the tool's Agg backend only warns "non-interactive" and
+        # never closes the corner figure: one leaked figure per load for the life of the process.
+        sink = fig_sink if fig_sink is not None else (lambda _title, fig: plt.close(fig))
+        visualizers.visualize_dist(loaded.nd_prior, labels=cfg.labels, title="Prior (loaded)", sink=sink)
         return loaded
 
     # --- Build from scratch ---
@@ -787,7 +794,8 @@ def build_posterior(
                      completion -- the Save button is a rename -- so a multi-day run can no longer be
                      lost to a forgotten click, and every posterior has an id its children can name.
     :param fig_sink: Optional (title, fig) -> None display callback for the training-loss curve
-                     (a GUI embeds it); None saves the loss curve to PNG instead of showing it.
+                     (a GUI embeds it). Every front end passes one; a stage given None closes what it
+                     draws, after the artifact's writer has saved the PNG.
     :param store: the ArtifactStore the simulation cache and the region-fingerprint lookup read/write
                      under; None = the process default.
     :param num_runs: Training BATCHES to simulate; None (the default) = config.TRAINING_NUM_RUNS;
@@ -1941,8 +1949,9 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
                      other than its region's; the flag is recorded in the artifact.
     :param n_samples: posterior draws for the corner, the PPC and the summary (1000 = the historical
                      constant).
-    :param fig_sink: Optional (title, fig) -> None display callback (a GUI embeds the figures); every
-                     front end passes one, and None is the bare-library fallback to plt.show().
+    :param fig_sink: Optional (title, fig) -> None display callback (a GUI embeds the figures). Every
+                     front end passes one; a stage given None closes what it draws, after the
+                     artifact's writer has saved the PNG.
     """
     from .artifacts import Accept
     store = resolve_store(store)

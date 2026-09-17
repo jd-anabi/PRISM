@@ -4230,3 +4230,63 @@ def test_the_mem_and_wait_lines_reach_the_window_plain_and_the_wait_still_checks
     elapsed = _time.monotonic() - t0
     pump(app)
     assert token.fired and elapsed < 4.0, f"the wait line stopped being a cancel checkpoint ({elapsed:.1f}s)"
+
+
+def test_training_creates_no_sbi_logs_directory(tmp_path, monkeypatch):
+    """V9 (spec §6.4). Unless it is handed a writer, sbi's trainer builds a TensorBoard SummaryWriter
+    under <cwd>/sbi-logs/NPE_C/<timestamp>/ the moment SNPE(...) is constructed. That is one directory
+    per training, left in whatever directory the process started from: 881 of them at the repo root by
+    piece 3, none ever read. The curves PRISM keeps are the ones train_nn returns in its diagnostics,
+    which build_posterior writes into the posterior artifact (loss.npz and the "Training loss" figure).
+    train_nn now hands sbi core.SBI.train._NoSummary, which discards them.
+
+    This is the cheapest REAL train_nn. gen_training_data is replaced by 64 rows of a 2-parameter toy
+    (train.py calls it through the pipeline module object, so the monkeypatch takes effect). Everything
+    from SNPE construction through sbi's fit loop and _summarize runs for real, with the working
+    directory at tmp_path, so the repository's own state cannot confuse the check. The second call
+    passes a recording writer. It shows the parameter is forwarded and that sbi really reports its
+    curves through add_scalar(tag=, scalar_value=, global_step=) and flush(): the stub has the shape
+    sbi calls, and the absence after the first call is not vacuous. About a second on the CPU."""
+    from sbi.inference import DirectPosterior
+    from sbi.utils import BoxUniform
+
+    monkeypatch.chdir(tmp_path)
+    torch.manual_seed(0)
+    prior = BoxUniform(torch.zeros(2), torch.ones(2))
+
+    def fake_gen(*args, **kwargs):
+        theta = prior.sample((64,))
+        x = torch.cat([theta, theta.sum(1, keepdim=True)], 1) + 0.05 * torch.randn(64, 3)
+        return x, theta
+
+    monkeypatch.setattr(pipeline_mod, "gen_training_data", fake_gen)
+    plan = pipeline_mod.TrainingPlan(model="toy", prior=prior, t=torch.zeros(1), run_size=64, num_runs=1,
+                                     steady_idx=0, dt_nd_min=1.0, dt_exp=1.0, t_min_exp=1.0,
+                                     t_max_exp=1.0, t_scale_bounds=(1.0, 1.0), dtype=torch.float32,
+                                     device=torch.device("cpu"))
+    knobs = dict(hidden_features=8, num_transforms=1, stop_after_epochs=1, max_num_epochs=1, batch_size=16)
+    logs = tmp_path / "sbi-logs"
+
+    post = pipeline_mod.train_nn(plan, "nsf", prior, torch.nn.Identity(), None, 2, {}, {}, **knobs)
+    assert isinstance(post, DirectPosterior), type(post)
+    assert not logs.exists(), f"train_nn created {logs}: {sorted(p.name for p in logs.iterdir())}"
+
+    class Recording:
+        def __init__(self):
+            self.tags, self.flushed = [], 0
+
+        def add_scalar(self, *, tag, scalar_value, global_step=None):
+            self.tags.append(tag)
+
+        def flush(self):
+            self.flushed += 1
+
+        def close(self):
+            pass
+
+    writer = Recording()
+    pipeline_mod.train_nn(plan, "nsf", prior, torch.nn.Identity(), None, 2, {}, {},
+                          summary_writer=writer, **knobs)
+    assert {"training_loss", "validation_loss", "epochs_trained"} <= set(writer.tags), writer.tags
+    assert writer.flushed >= 1, "sbi's _summarize ends with flush(); the recorder must have seen it"
+    assert not logs.exists(), f"an explicit writer must be used instead of sbi's default: {logs}"

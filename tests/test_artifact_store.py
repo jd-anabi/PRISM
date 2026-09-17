@@ -453,6 +453,44 @@ def test_build_prior_auto_persists_and_loads_back(store, monkeypatch):
     assert orchestrator.build_prior(cfg, "master_prior", False, fig_sink=_close).name == "master_prior"
 
 
+def test_loading_a_prior_with_no_sink_closes_its_figure(store):
+    """V8 (spec §6.3). build_prior's LOAD branch handed fig_sink straight to visualize_dist, whose None
+    fallback is a bare plt.show(). Under the tool's Agg backend (and the suites') that does nothing but
+    warn "FigureCanvasAgg is non-interactive, and thus cannot be shown", and it never closed the corner
+    figure, so every library load leaked one live figure for the life of the process. The BUILD branch
+    never did: its writer's sink (ArtifactWriter.fig_sink) saves the PNG and closes the figure when
+    nothing is forwarded. Now both branches close what they draw when given no sink, while
+    visualize_dist and emit_figure keep their own fallback for a bare-library caller. Pinned as the FDT
+    precedent is (test_tool.py::test_fdt_plot_functions_close_a_saved_figure_instead_of_show): no new
+    open figure, no non-interactive warning.
+
+    The three fig_sink docstrings (build_prior, build_posterior, infer_and_visualize) now say the same
+    one thing, and it is true of every stage. Before, one said "None => plt.show()", one said "None is
+    the bare-library fallback to plt.show()", and only the load branch behaved like either."""
+    import inspect
+    import warnings
+
+    from matplotlib import pyplot as plt
+
+    from core import orchestrator
+
+    cfg = _nad_cfg()
+    _prior_artifact(store, cfg, name="p")
+    before = plt.get_fignums()
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        loaded = orchestrator.build_prior(cfg, "p", False)
+    assert loaded.name == "p"
+    assert not any("non-interactive" in str(w.message) for w in rec), [str(w.message) for w in rec]
+    assert plt.get_fignums() == before, \
+        f"the load leaked figures {sorted(set(plt.get_fignums()) - set(before))}"
+
+    for fn in (orchestrator.build_prior, orchestrator.build_posterior, orchestrator.infer_and_visualize):
+        doc = " ".join(inspect.getdoc(fn).split())
+        assert "Every front end passes one; a stage given None closes what it draws" in doc, fn.__name__
+        assert "plt.show()" not in doc, fn.__name__
+
+
 def _weights_that_renormalise_inexactly(n=64):
     """Float32 mixture weights whose SAVED form is not a fixed point of torch's Categorical
     re-normalisation on this CPU. ``Categorical(probs=w)`` stores ``w / w.sum()``; the sum of an
@@ -1113,16 +1151,17 @@ def test_the_source_scans_cover_every_code_directory():
     Directories excluded by name, each for its own reason: tests/ (the suites themselves, not
     shipped code); the gitignored archive/ (not shipped code); the gitignored .claude/ (Claude
     Code's local state, which can hold other checkouts -- machine-local, not code that lives in
-    .claude on purpose); the gitignored sbi-logs/ (a log directory; holds no *.py, listed for the
-    same reason as the rest below); and .git/, .pytest_cache/, __pycache__/, Artifacts/,
-    Resources/ (data, caches, VCS or tool state, not product code). .idea/, .superpowers/ and
+    .claude on purpose); and .git/, .pytest_cache/, __pycache__/, Artifacts/, Resources/ (data,
+    caches, VCS or tool state, not product code). sbi-logs/ is not excluded any more: nothing writes
+    it since piece 3 (V9), and tests/conftest.py::_no_sbi_logs fails the session if it reappears.
+    .idea/, .superpowers/ and
     docs/ hold no *.py today so they need no explicit exclusion; they fall out of `with_py` on
     their own, and would have to be added here (or to CODE_ROOTS) the day one of them gained a
     Python file. Loose top-level files need no exclusion set: every *.py at the repo root must be
     in CODE_FILES."""
     root = Path(__file__).resolve().parents[1]
-    skip = {"tests", "archive", ".claude", ".git", ".pytest_cache", "sbi-logs", "Artifacts",
-            "Resources", "__pycache__"}
+    skip = {"tests", "archive", ".claude", ".git", ".pytest_cache", "Artifacts", "Resources",
+            "__pycache__"}
     with_py = {d.name for d in root.iterdir()
                if d.is_dir() and d.name not in skip and next(d.rglob("*.py"), None) is not None}
     assert with_py == set(CODE_ROOTS), (
