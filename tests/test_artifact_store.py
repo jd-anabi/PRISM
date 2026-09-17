@@ -704,7 +704,7 @@ def test_manifest_V_must_equal_the_rotation_in_the_pickled_prior(store):
     assert reparam.rotation_of(store.load_posterior(cfg, "plain").posterior.T) is not None
 
 
-def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store):
+def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store, caplog):
     from core.artifacts import Accept
     from core.refusals import Refusal
     from core.SBI import reparam, truncate
@@ -727,6 +727,21 @@ def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store):
     lp = store.load_posterior(cfg, "trunc", accept=Accept(truncated=True))
     assert lp.posterior.truncation.dims == [0, 1] and lp.posterior.x_obs_digest == "d" * 16
     assert lp.accepted == ["truncated"] and torch.equal(lp.posterior.truncation.probe, region.probe)
+    # The same load through build_posterior's LOAD branch says so at WARNING, once, from
+    # core.orchestrator (spec §4.1, walkthrough row C9): this line reaching the pane plain, at info,
+    # is the defect piece 3 was motivated by. A stand-in prior: the load branch reads none of it.
+    import logging
+    from types import SimpleNamespace
+    from core import orchestrator
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="core"):
+        got = orchestrator.build_posterior(cfg, SimpleNamespace(prior=None, force_prior=None), "trunc",
+                                           False, accept=Accept(truncated=True), store=store)
+    assert got.posterior.x_obs_digest == "d" * 16
+    said = [(r.name, r.levelname) for r in caplog.records
+            if r.getMessage().startswith("[tsnpe] loaded a NON-AMORTIZED posterior")]
+    assert said == [("core.orchestrator", "WARNING")], \
+        [(r.name, r.levelname, r.getMessage()[:60]) for r in caplog.records]
     no_basis = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=None, probe=None, x_obs_digest="e" * 16)
     _posterior_artifact(store, cfg, name="noprobe", amortized=False, region=no_basis)
     with pytest.raises(ValueError, match="basis"):
