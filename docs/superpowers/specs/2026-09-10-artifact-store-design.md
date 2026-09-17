@@ -24,17 +24,25 @@ directory (today `config._ROOT` is cwd-first, `core/config.py:178`). Inputs reso
 
 ```
 Artifacts/
-  priors/<name>__<id>/         manifest.json  prior.pt  figures/corner.png
+  priors/<name>__<id>/         manifest.json  log.txt  prior.pt  figures/corner.png
   simulations/<digest12>/      manifest.json  header.pt  state.pt  state.prev.pt  shards/
-  posteriors/<name>__<id>/     manifest.json  posterior.pt  loss.npz  figures/loss.png
-  observations/<name>__<id>/   manifest.json  observation.pt  figures/trace.png
-  calibrations/<name>__<id>/   manifest.json  results.json  ranks.npz  figures/*.png
-  inferences/<name>__<id>/     manifest.json  results.json  samples.pt  figures/*.png
+  posteriors/<name>__<id>/     manifest.json  log.txt  posterior.pt  loss.npz  figures/loss.png
+  observations/<name>__<id>/   manifest.json  log.txt  observation.pt  figures/trace.png
+  calibrations/<name>__<id>/   manifest.json  log.txt  results.json  ranks.npz  figures/*.png
+  inferences/<name>__<id>/     manifest.json  log.txt  results.json  samples.pt  figures/*.png
+  diagnostics/<name>__<id>/    manifest.json  log.txt  <diagnostic>.npz  figures/*.png
 ```
 
-`Plots/` is removed; figures live with the run that made them. FDT, cross-validation and reduction
-outputs move to plain directories `Artifacts/fdt`, `Artifacts/crossval`, `Artifacts/reduction` in
-this piece (today they hard-code `Path("Resources/...")`); piece 5 wraps FDT/CrossVal in the store.
+The seventh kind, `diagnostics/`, arrived with piece 2 (D4/D5): `sbc`, `identifiability` and
+`ablation` each write one directory, whose payload is that diagnostic's own `.npz`
+(`sbc_repeats.npz`, `laplace_sd.npz`, `degeneracy_map.npz`) and whose numbers live in the manifest.
+`core/artifacts/store.py`'s `KIND_DIRS` is the list of record.
+
+`log.txt` is the run's records, added to every kind but the simulation cache by piece 3 (V4); the
+cache has no writer and so no file. `Plots/` is removed; figures live with the run that made them.
+FDT, cross-validation and reduction outputs move to plain directories `Artifacts/fdt`,
+`Artifacts/crossval`, `Artifacts/reduction` in this piece (today they hard-code
+`Path("Resources/...")`); piece 5 wraps FDT/CrossVal in the store.
 
 - **id:** UTC `YYYYMMDDTHHMMSS`, unique within a kind; a same-second collision appends `-2`, `-3`.
   Stored in the manifest. The directory name `<name>__<id>` sorts by creation and is convenience
@@ -68,6 +76,11 @@ payloads:     {"posterior.pt": sha256, ...}
 figures:      ["figures/corner.png", ...]
 body:         kind-specific (below)
 ```
+
+`config` has one exception since piece 3 (V7): a posterior's `fisher_m`, `fisher_dz` and
+`fisher_points` are recorded null unless the Fisher rotation ran in that process
+(`orchestrator.py`'s `_fisher_ran`). A resumed run reuses the `V` stored with the checkpoint, so it
+records "not run" rather than the setting it would have used.
 
 **Kind-specific body:**
 
@@ -115,7 +128,9 @@ Package `core/artifacts/`: `manifest.py` (schema, dataclasses, validation, JSON 
 `figure_path(title)`, `fig_sink(forward=None)` (saves the PNG, then forwards to the GUI sink or
 closes the figure). `__enter__` creates the directory (`exist_ok=False`). `__exit__` on any
 `BaseException` (a cancel included) removes the directory and re-raises; otherwise it hashes the
-payloads, builds and validates the manifest, and writes it last via `file_manager._atomic_write`.
+payloads, builds and validates the manifest, writes the run's `log.txt` (piece 3, V4 — every kind
+but the simulation cache, which has no writer), and writes the manifest last via
+`file_manager._atomic_write`.
 The simulation cache is the exception: its manifest is written by `training_checkpoint` at
 create, refreshed on every save and at completion, because a resumable cache must survive an
 interrupted run.

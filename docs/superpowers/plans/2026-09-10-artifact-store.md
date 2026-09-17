@@ -1,6 +1,8 @@
 # Artifact Store, Run Contract and Provenance — Implementation Plan (piece 1)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Status: IMPLEMENTED** — piece 1, merged as `461d780` (branch `piece-1-artifact-store`, 28 commits). The checkboxes were never ticked; `docs/STATE.md` is the record of what landed. Read this plan as the record of what was built, not as work to do.
 
 **Goal:** Every generated artifact (prior, simulation cache, posterior, observation, calibration, inference) becomes a self-describing directory under `Artifacts/` with a `manifest.json`; every stage reads its parents by reference through one store, writes its own result at completion, and refuses on any verifiable mismatch.
 

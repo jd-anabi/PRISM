@@ -1,5 +1,6 @@
 """Generic background worker: run a callable off the UI thread on the global QThreadPool, with its
-stdout/stderr/warnings routed to signals, and its return value / any figures / errors emitted back."""
+log records, stdout/stderr/warnings routed to signals, and its return value / any figures / errors
+emitted back."""
 import traceback
 
 from PySide6.QtCore import QObject, QRunnable, Signal, Slot

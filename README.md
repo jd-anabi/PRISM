@@ -144,10 +144,12 @@ The `requirements.txt` torch/torchvision lines pin `+cu130` for Linux, so for a 
 
 Use the launchers below (they `cd` to the repository root for you). The working directory does not matter to the code: `core/config.py` resolves the `Resources/` inputs and the `Artifacts/` root from its own location, and `PRISM_RESOURCES` / `PRISM_ARTIFACTS` override them.
 
-| Platform        | Launch the GUI            |
-| --------------- | ------------------------- |
-| macOS / Linux   | `bash run.sh`             |
-| Windows         | `run.bat`                 |
-| Any OS (direct) | `python -m core.gui`      |
+| Platform        | Launch the GUI                                 |
+| --------------- | ---------------------------------------------- |
+| macOS / Linux   | `bash run.sh`                                  |
+| Windows         | `run.bat`                                      |
+| Any OS (direct) | `KMP_DUPLICATE_LIB_OK=TRUE python -m core.gui` |
+
+The launchers set `KMP_DUPLICATE_LIB_OK=TRUE` for you (on Windows, `set KMP_DUPLICATE_LIB_OK=TRUE` first, or `$env:KMP_DUPLICATE_LIB_OK="TRUE"` in PowerShell); torch and MKL ship two OpenMP runtimes under conda and without it the first simulation aborts with OMP Error #15 and no traceback.
 
 `python -m core --help` lists the command-line tool's subcommands. On macOS/Linux, remember to activate the environment (`conda activate biophys-env`, or the `source .../activate biophys-env` line if you set up Miniforge by full path) before launching.

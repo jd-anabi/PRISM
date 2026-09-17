@@ -198,7 +198,8 @@ FIELDS: dict[str, Field]   # the registry; every key raised anywhere in core is 
 def require_given(key, value)                       # None (a blank box) -> Refusal "… is blank"
 def require_positive(key, value)                    # blank, or <= 0 -> Refusal
 def require_at_least(key, value, minimum)           # blank, or < minimum -> Refusal "… at least <minimum>"
-def require_between(key, value, lo, hi, *, open=…)  # blank, or outside -> Refusal
+def require_between(key, value, lo, hi, *, open_lo=…, open_hi=…)  # blank, or outside -> Refusal
+def require_choice(key, value, choices)             # not one of choices -> Refusal (the resume policy)
 def require_finite(key, value)                      # NaN/inf -> Refusal
 def require_file(key, path, what)                   # blank or missing -> Refusal naming the input kind
 def refuse(key, message)                            # a Refusal with the field's what/default appended
@@ -405,11 +406,13 @@ per run). `main` never touches the logger's level.
 none is active and pops it on exit; while active, the buffer receives every `core` record at `info`
 and above (formatted `HH:MM:SS level message`) and tees `warnings.showwarning` (calling the previous
 hook, which under the window is `streams`' own and under `pytest.warns` is pytest's; both restore
-theirs afterwards, so the tee nests cleanly). `ArtifactWriter._commit` (`store.py:265-289`) writes the
-active buffer's lines so far to `<dir>/log.txt` before the manifest. The file is not a payload (not
-hashed, not in `payloads`); the store indexes by `manifest.json` only (`store.py:304-324`) and
-`validate()` checks dict keys only, so loading ignores it and the manifest schema is unchanged. The
-simulation cache gets no file (§1.2).
+theirs afterwards, so the tee nests cleanly). Both append on the thread that pushed the buffer only
+(§11 row 14); a warning raised on another thread still reaches the previous hook, not the buffer.
+`ArtifactWriter._commit` (`store.py:269-302`) writes the active buffer's lines so far to
+`<dir>/log.txt` before the manifest. The file is not a payload (not hashed, not in `payloads`); the
+store indexes by `manifest.json` only (`store.py:316-336`) and `validate()` checks dict keys only,
+so loading ignores it and the manifest schema is unchanged. The simulation cache gets no file
+(§1.2).
 
 What is not in the file: sbi's printed epoch counter and table, the progress bars, and anything
 printed by a library or by the tool's framing. What is: every stage record and every Python warning
@@ -542,9 +545,10 @@ passes a sink, and a stage given None closes what it draws. Pinned as the FDT pr
 to `SNPE(...)` (`train.py:182`; sbi 0.25's `NeuralInference.__init__` does no `isinstance` check,
 `trainers/base.py:212-214`, and `_summarize` uses only `add_scalar` and `flush`, `:932-1000`).
 `build_posterior` passes nothing (the default is the stub). The repository-root `sbi-logs/` (878
-timestamped directories) is deleted in the task that lands the stub; `.gitignore:1` and the scan skip
-at `test_artifact_store.py:1103` go; `tests/conftest.py` gains a session-autouse guard that asserts at
-teardown that `<repo>/sbi-logs` does not exist, beside `_sandbox_default_store`.
+timestamped directories when this spec was written; 1360 by the time T22 deleted it) is deleted in
+the task that lands the stub; `.gitignore:1` and the scan skip at `test_artifact_store.py:1103` go;
+`tests/conftest.py` gains a session-autouse guard that asserts at teardown that `<repo>/sbi-logs`
+does not exist, beside `_sandbox_default_store`.
 
 ## 7. What changes on screen
 
@@ -718,7 +722,9 @@ teardown that `<repo>/sbi-logs` does not exist, beside `_sandbox_default_store`.
 Every ruling that departs from this spec, with the task that made it. Rows whose task reads "plan (Tn)"
 were ruled while the implementation plan was written (`docs/superpowers/plans/2026-09-16-validation-and-logging.md`)
 and are carried out by that task; every other row is appended by the task that made the ruling, in its
-own commit, numbered one past the last row.
+own commit, numbered one past the last row. A ruling made mid-piece but written up later names both
+tasks (row 9); rows 10-13 were written at the final review and rows 14-15 by the document audit of
+2026-09-17, which found two rulings of the piece with no row.
 
 | # | task | deviation from this spec | why |
 |---|---|---|---|
@@ -730,8 +736,10 @@ own commit, numbered one past the last row.
 | 6 | T8 | `m_noise` keeps its floor of 10 and `n_sweep` its floor of 2, where §3.3 lists both among the "≥ 1" knobs. The diagnostics' posterior- and cache-shape checks (ablation's "names no simulation cache", "holds no committed rows", the two width mismatches and `_find_net`; `_latent_gen_dist`'s "carries no latent training prior") stay bare `ValueError`s and print through the ladder's unconverted-refusal rung. | A feature-noise floor needs an ensemble, and a one-point sweep describes no range; the suite pins both floors. The shape checks answer to no single field, and §3.6 lists only the diagnostics' pre-spend knob guards. |
 | 7 | T17 | The two judgements said once (§4.1: build_posterior's truth outside the region, infer_and_visualize's accepted other observation) are warned as `PreflightWarning` with `stacklevel=2`, not as a bare `UserWarning`. | A bare `UserWarning` is shown once per call site and text (probed): with the print gone, the same judgement a second time in one session would be silent in the pane and in that artifact's `log.txt`, where the print said it every time. `PreflightWarning`'s `always` filter keeps that; the class, its filter and `_preflight_warn` are unchanged. |
 | 8 | T21 | `TrainingPreview` carries two fields §6.1 does not list, `device_type` and `itemsize`; `need_elements`/`have_elements` are None off CUDA with no `estimate_error`; when `checkpoint_error` is set, `checkpoint` is `"new"` with `batches_done` 0 and `siblings` `""`; the width resolves through a new `_capped_run_size(hw_batch, cap)` that `_training_run_size` returns; the mixin passes `session.cfg` through unchanged (the `object()` sentinel reaches the preview's fail-soft branch) | the CUDA-only line and the GiB figure need the resolved device and item size without the tab touching the hardware; off CUDA `_max_sim_batch` never splits, so there is nothing to estimate; §6.1's six checkpoint values have no "unknown", so the formatter reads the error first; with no config there is no `cfg.hw` for `_training_run_size` to read; §6.1's hardware expression `getattr(cfg, "hw", None) or hw or detect_device()` already expects a config without `hw` |
-| 9 | T6 | One converted refusal still names a screen: `build_posterior`'s refusal of a user model out of sync with its bounds file says "Re-save the model from the Settings model builder", with `field=None`, although §3.1 says no message in a converted module names a box, tab, flag or button. | No field key and no flag answers that refusal, and deleting the pointer leaves the user no way out. The cost is one message that names a screen. |
+| 9 | T6, recorded at T24 | One converted refusal still names a screen: `build_prior`'s user-model guard (`core/orchestrator.py:637-648`), which refuses a user model whose compiled parameter order disagrees with its bounds file, says "Re-save the model from the Settings model builder", with `field=None`, although §3.1 says no message in a converted module names a box, tab, flag or button. | No field key and no flag answers that refusal, and deleting the pointer leaves the user no way out. The cost is one message that names a screen. |
 | 10 | T24 (final review) | §3.5's worker carries the exception object across the thread with its traceback removed: `Worker.run` formats the text, then drops `__traceback__` from the exception and from every exception on its `__cause__`/`__context__` chain before emitting. | A traceback owns the frames of the failed run, and those frames own its host buffers and GPU tensors. Stored in the worker's own frame, the exception formed a reference cycle that only a full garbage collection frees, so a retry after a failed training could run out of memory. The yellow and red boxes read only the type, `message`, `field` and the formatted text. Pinned without `gc.collect()`. |
-| 11 | T24 (final review) | Row 7's warnings, and every `warnings.warn` reached inside a `@public_entry` function, also pass `skip_file_prefixes=core.runs.RUN_BOUNDARY_FILES` (the path of `core/runs.py` without its extension). | The decorator adds one frame, so `stacklevel` pointed every such warning at `core/runs.py` instead of at the caller. On Python 3.12 the C matcher never matches a prefix equal to the whole filename, so the prefix drops the extension (probed). It would over-match a future `core/runs_*.py` or a `core/runs/` package; the runtime pin asserts the caller's own filename. |
+| 11 | T24 (final review) | Row 7's warnings, and every `warnings.warn` with a `stacklevel` written directly in the body of a `@public_entry` function, plus `_preflight_warn`'s own (six sites today; pinned by AST at `tests/test_artifact_store.py:1735-1748`), also pass `skip_file_prefixes=core.runs.RUN_BOUNDARY_FILES` (the path of `core/runs.py` without its extension). A `warnings.warn` in a helper module reached from such a function does not, and needs not: its `stacklevel` counts to its own caller and never crosses the wrapper. | The decorator adds one frame, so `stacklevel` pointed every such warning at `core/runs.py` instead of at the caller. On Python 3.12 the C matcher never matches a prefix equal to the whole filename, so the prefix drops the extension (probed). It would over-match a future `core/runs_*.py` or a `core/runs/` package; the runtime pin asserts the caller's own filename. |
 | 12 | T24 (final review), left open | §4.6 says sbi's root-logger warnings "reach stderr through `lastResort`". In fact a module-level `logging.warning` calls `basicConfig()` when the root has no handler, which installs a root `StreamHandler`, after which every `core` record is shown twice (in the pane as `INFO:core.…`, on the tool's stderr). | No trigger was found on today's paths (sbi's `pairplot` warns only on samples holding NaN). The fix, a front-end root handler that drops `core` records, touches both front ends and pytest's own root handlers, so it is handed to piece 4 (`docs/STATE.md` "Owed" item 7). |
 | 13 | T24 (final review), left open | §3.3's `chi_n_freqs` floor of 2 holds at the Config tab's Apply only. The tool's `--chi-k 1` passes `SimConfig.__post_init__`, which allows `1 ≤ K ≤ chi_k_pad`, and simulates one-probe observations. | This predates piece 3, which converted the exception without changing its range. The bench path legitimately takes one probe. Whether a one-probe simulated observation is in distribution is the owner's call (`docs/STATE.md` "Open"). |
+| 14 | T2 (ruled), T16 (implemented) | §4.4 says the active buffer receives every `core` record at `info` and above and tees `warnings.showwarning`. `_RunLogHandler.emit` and `RunLog._showwarning` append only when `threading.get_ident()` equals the thread that attached the buffer (`core/runs.py:61-63,108`); a record or a warning from any other thread is dropped from the buffer, though a warning still reaches the previous `showwarning` hook. | The handler sits on the process-wide `core` logger and the tee replaces the process-wide `warnings.showwarning`, so a stray daemon or a callback fired on another thread would write into a buffer that must hold one run's own lines. Latent either way today: the window runs one task app-wide (`BasePanel._running`, `streams._REDIRECT`), the tool is single-threaded, and no `core.gui.*` logger exists. `detach` still relies on that one-run-at-a-time rule rather than on nesting. |
+| 15 | T24 | §9 orders the fix loop, then the slow set, then the final fast gate. The slow set ran once, at `e78cc8d`, before the twelve-commit fix wave `87a0e06`..`9e2f7ef`, and was not re-run at `9e2f7ef`; and per the pre-Task-1 ruling each task committed its tree before that task's fast gate had exited. | The fix wave touches the slow tests' paths only on happy-path checks (`require_file` on files that exist, an empty `log.txt` when a run is silent, a warning's reported filename, the worker's error payload) and the final fast gate covers each, so re-running it would have cost about 23 minutes for no new evidence. A tool call cannot hold a suite past ten minutes, so the gate runs in the background after the commit; commits are never amended, so a red gate becomes a new commit. |

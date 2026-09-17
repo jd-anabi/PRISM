@@ -1583,15 +1583,20 @@ solver, and its it/s is the number the user wants.
   Two things depend on it still writing: the cooperative **cancel**, whose checkpoint is
   `_SignalStream.write()` and for which this is by far the most frequent writer (the next-most is the
   per-batch `Generating training data` redraw, ~2 s at production geometry and longer at large
-  `T_obs`); and the **stall detector**, which fires on no output of any kind. Cost of keeping it is
-  ~600 chars per 0.7 s call. *(The pane's `_sample_solver` also heartbeats on a moving counter, so
-  the stall side is now belt-and-braces — the cancel side is not.)*
+  `T_obs`; since piece 3 a run that only logs is caught by the second checkpoint,
+  `streams._PumpLogHandler.emit`, which checks the same token); and the **stall detector**, which
+  fires on no output of any kind. Cost of keeping it is ~600 chars per 0.7 s call. *(The pane's
+  `_sample_solver` also heartbeats on a moving counter, so the stall side is now belt-and-braces —
+  the cancel side is not.)*
 
 ### C — Cancellation (`core/gui/streams.py`)
 
 Cancellation is **cooperative and needs zero core changes**: every `print()` and tqdm redraw funnels
 through `_SignalStream.write()` on the worker thread, and sbi prints an epoch counter *inside* its fit
 loop — so a flag checked in `write()` is a checkpoint reaching even inside sbi's training loop.
+Since piece 3 the stages no longer print: their `logging` records funnel through
+`streams._PumpLogHandler.emit`, which checks the same token, so the cancel reaches a run that only
+logs.
 `WorkerCancelled` derives from **`BaseException`** so it sails through the pipeline's many
 `except Exception`; it is caught by name only in `Worker.run`.
 
@@ -1618,15 +1623,20 @@ block (~46 s) — those are silent, so the button reads "Cancelling…".
 - **Q3. Pickers: persist `combo.currentData()`** (the model-namespaced relpath) and restore via
   `findData` with a **−1 guard** (file gone → leave at default, never `setCurrentIndex(-1)`).
 - **Q4. A PERSISTED SCIENCE CONSTANT OUTLIVES THE CONFIG CHANGE THAT RETIRED IT — this cost a 5-day
-  retrain.** `inference_tabs` seeds the χ widgets from `config.CHI_*` (lines ~297-299) and `_restore`
-  then overwrites them from QSettings (~465-469). That is correct for a *preference*; it is a trap
+  retrain.** CLOSED since piece 3 (V5, 2026-09-17): the drive amplitude and band are read-only
+  displays of `config.py` and none of the six χ boxes is persisted
+  (`core/gui/panels/inference/config_tab.py:69-73,298-326`), so no saved value can outlive a config
+  change. The general rule below still governs any future persisted field. `inference_tabs` SEEDED
+  the χ widgets from `config.CHI_*` and `_restore` then overwrote them from QSettings (that module
+  is now a re-export shim over `inference/`). That is correct for a *preference*; it is a trap
   for a **measurement definition**. When C-5 moved `CHI_FREQ_BOUNDS` from `(0.1, 10.0)` to
   `(0.03, 0.3)` on 2026-08-06, every machine with a saved value silently kept training at the retired
   band, and nothing anywhere compared the two. The 2026-08-19 retrain is the bill (Appendix A).
   **The general rule: if a persisted value defines what is measured rather than how it is displayed,
   something must compare it against the module default before the spend.**
   `orchestrator._assert_chi_config_is_deliberate` now does exactly that for the band and F₀, on both
-  `build_prior` and `build_posterior`, with `PRISM_CHI_OVERRIDE=1` as the deliberate escape hatch.
+  `build_prior` and `build_posterior`, with no override: since piece 2's D11 a non-default band or
+  drive amplitude means editing `config.py` deliberately.
   ⚠ It gates the band and drive only — **`chi_n_freqs` is NOT gated**, because K is the count an
   *observation* supplies and training draws its own per batch; failing on it would refuse a
   legitimate 7-recording experiment and break the K-agnosticism the set encoder exists to provide.
@@ -2811,8 +2821,10 @@ the module raises `AttributeError` on a `list`.** Rename the local to `model_lab
 >
 > `Resources/Checkpoints/` (C-11) was added to `.gitignore` at birth and was never tracked.
 
-- **`sbc_run.log` — 6.9 MB, tracked at the repo root.** `.gitignore` is three lines
-  (`/sbi-logs/`, `/archive/`, `/.claude/`).
+- **`sbc_run.log` — 6.9 MB, tracked at the repo root.** `.gitignore` was three lines then
+  (`/sbi-logs/`, `/archive/`, `/.claude/`); `sbc_run.log` was un-tracked and deleted by the clean
+  break (2026-09-11) and the `/sbi-logs/` line went with piece 3's V9, which switched sbi's
+  TensorBoard writer off and deleted the tree.
 - **`Resources/` tracks generated outputs** — 7 `.h5` sweeps, `.pt` priors/posteriors, `.png` plots,
   `.parquet` — **interleaved with the hand-written `Bounds/`/`Cells/`/`Units/` files a user is
   supposed to edit.** Inputs and outputs are indistinguishable in the same tree.
@@ -3005,7 +3017,8 @@ was **verified non-vacuous** (deepest → 66 %, largest-total → 38 %).
 It is tempting — it would delete the `SOLVER_BAR_DESC` seam outright, the way `QUIET_SEGMENT_BAR`
 deletes the segment bar. **Do not.** Two things depend on that bar still writing:
 
-- **Cancellation** (trap **C**) is cooperative and its checkpoint is `_SignalStream.write()`. During
+- **Cancellation** (trap **C**) is cooperative and its checkpoints are `_SignalStream.write()` and,
+  since piece 3, `streams._PumpLogHandler.emit` for a run that only logs. During
   training-data generation the solver bar is by far the most frequent writer; the next-most is the
   per-batch `Generating training data` redraw, ~2 s at production geometry and longer at large
   `T_obs`. Quieting it turns ~0.1 s cancel latency into one batch.
@@ -4461,7 +4474,8 @@ between them, so the substring vanished and `str.index` raised. **Assert on ORDE
 
 ### The ceiling is now settable per run
 
-`PRISM_VRAM_CEILING_GIB` overrides `config.SIM_VRAM_CEILING_GIB` (the `PRISM_CHI_OVERRIDE` shape), so
+`PRISM_VRAM_CEILING_GIB` overrides `config.SIM_VRAM_CEILING_GIB` (the shape the retired
+`PRISM_CHI_OVERRIDE` had: an environment variable read at the point of use), so
 a single run can be throttled without editing a tracked file; junk values are ignored with a note.
 ⚠ **It needs headroom to cap to.** With the card at 115 MiB actually free it does nothing —
 `_max_sim_batch` finds that not even a floor-sized chunk fits and runs the batch as asked. What it
@@ -4476,11 +4490,11 @@ will actually take effect. Three things about it are deliberate:
   `from .config import …` and binds at import, so writing to the constant is a silent no-op
   (trap X12). `pipeline._vram_ceiling_gib()` does a `getattr` on the module every time the planner
   asks, so this one genuinely takes effect with no plumbing.
-- **It is NOT persisted** — the only field on that tab that is not. Stale QSettings already cost a
-  ~5-day run (2026-08-19, the retired band). A ceiling fails the same way but far more quietly: a
-  forgotten 2 GiB does not error, it just makes every future run split from batch 0 and take several
-  times longer with nothing in the log to explain it. Starting each session at 0.0 keeps the
-  throttle a decision somebody just made.
+- **It is NOT persisted** — nor, since piece 3 (V5), are the six χ boxes on that tab. Stale
+  QSettings already cost a ~5-day run (2026-08-19, the retired band). A ceiling fails the same way
+  but far more quietly: a forgotten 2 GiB does not error, it just makes every future run split from
+  batch 0 and take several times longer with nothing in the log to explain it. Starting each session
+  at 0.0 keeps the throttle a decision somebody just made.
 - **The note reads `nvidia-smi`, never `mem_get_info`.** The optimistic reading is the number that
   green-lit the batch which killed the first chi retrain (trap X6); printing it beside a field whose
   purpose is to bound VRAM would hand the user the exact lie the field defends against. If the env
@@ -5388,7 +5402,8 @@ separates them was checked for vacuity explicitly: deepest gives 66 %, largest-t
 ### Deliberately NOT done, and the reason is cancellation
 
 Quieting the solver's tqdm bar under the GUI would have retired the `SOLVER_BAR_DESC` seam entirely.
-It was rejected: the cancel is cooperative and its checkpoint is `_SignalStream.write()`, and during
+It was rejected: the cancel is cooperative and its checkpoints are `_SignalStream.write()` and,
+since piece 3, `streams._PumpLogHandler.emit` for a run that only logs, and during
 training-data generation that bar is by far the most frequent writer. Quieting it would turn ~0.1 s
 cancel latency into one training batch (~2 s at production geometry, longer at large `T_obs`). The
 desc seam therefore survives — but *only* as an exclusion predicate for the overall-bar election
@@ -5677,8 +5692,12 @@ why it compares against `config.py` rather than against another artifact.
 
 `orchestrator._assert_chi_config_is_deliberate(cfg)` — called at the top of `build_prior` **and**
 `build_posterior`, before any simulation. Refuses when `chi_freq_bounds` or `chi_f0` differ from the
-`config.CHI_*` defaults, names both values, points at `PRISM.ini` as the likely source, and offers
-`PRISM_CHI_OVERRIDE=1` for a deliberate sweep. Placed above the load branch as well as the training
+`config.CHI_*` defaults and names both values. **Two clauses of this paragraph are out of date:** the
+message no longer points at `PRISM.ini` (`run_guards.py:135-137`), because since piece 3 (V5) the χ
+drive amplitude and band are read-only displays of `config.py` and no χ box is persisted; and
+`PRISM_CHI_OVERRIDE=1` is gone with piece 2's D11 — there is NO escape hatch, and a non-default band
+or drive amplitude means editing `config.py` deliberately (`tests/test_artifact_consistency.py:283-293`
+pins that the variable does nothing). Placed above the load branch as well as the training
 one, for the self-agreeing-stale-config reason above. Keyed on the module defaults, never a literal,
 so C-5's successor moves one constant and the guard follows. **`chi_n_freqs` is deliberately not
 gated** (K is per-observation; training draws its own). Pinned by

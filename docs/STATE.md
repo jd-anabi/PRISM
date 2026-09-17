@@ -1,17 +1,24 @@
 # PRISM — state
 
 **Last updated:** 2026-09-17. **Piece 3, "validation, logging and the private copy", is DONE**:
-commits `3db271e`..`9e2f7ef` (37) plus the documents commit that records it, on the local `main`
-branch, NOT YET PUSHED (the user pushes). Its design is
+commits `3db271e`..`9e2f7ef` (37) plus the two documents commits that record it, on the local `main`
+branch, NOT YET PUSHED (the user pushes) — `main` is 42 commits ahead of `origin/main`
+(`83545b8`): `ca583f8`, `a8bcec2` and `53c27b2` (the spec, the plan and the interim state), the 37
+of `3db271e`..`9e2f7ef`, `dcd73da` (this file and the spec's deviation rows) and the 2026-09-17
+document audit's commit (every document and memory file re-checked against the code; 49 findings
+applied, the two `core/gui` docstrings that described the retired print-only channel among them). Its design is
 `docs/superpowers/specs/2026-09-15-validation-and-logging-design.md` (`ca583f8`, decisions V1–V9,
 §11 the deviations) and its plan `docs/superpowers/plans/2026-09-16-validation-and-logging.md`
 (`a8bcec2`, 24 tasks). No public stage writes the caller's config any more. Every pre-spend refusal
 is a `Refusal` with a field key that each front end turns into its own control or flag. Stage
 messages are `logging` records at three levels, with a `log.txt` in every committed artifact. The
-window remembers selections and the budget only. A whole-piece review by four independent readers
-found two must-fix defects and thirteen cheap fixes; they landed in `87a0e06`..`9e2f7ef` with a scoped
-re-review. The final fast gate, the slow set and the GPU gate of record are in the table below. **The
-user still has to run rows C1–C11 of `docs/checklists/display-walkthrough.md` on the real screen.**
+inference tabs remember selections — the pickers, the mode and the boxes that describe the
+recording — plus the training budget; every inference science knob opens at `config.py` on every
+launch, and the Simulate, FDT and CrossVal panels still remember their own numeric fields (piece
+5's). A whole-piece review by four independent readers found two must-fix defects and thirteen
+cheap fixes; they landed in `87a0e06`..`9e2f7ef` with a scoped re-review. The final fast gate, the
+slow set and the GPU gate of record are in the table below. **The user still has to run rows
+C1–C11 of `docs/checklists/display-walkthrough.md` on the real screen.**
 **Next: piece 4 ∥ piece 5** ("Owed" item 7). Piece 2 (`0016dae`..`d34997c`) was pushed on
 2026-09-15 and its rows B1–B8 all pass.
 
@@ -41,7 +48,8 @@ user still has to run rows C1–C11 of `docs/checklists/display-walkthrough.md` 
   refuses any verifiable mismatch with `Accept(truncated, other_observation)` as the only
   hatches; the simulation identity is `training-rows/2`; pickers list the store; scripts are
   re-pointed (nine marked broken until piece 2). Defects 3–4 of the decomposition are fixed
-  (the forced-recording path runs); defect 1 disappeared with `load_prior`; defect 2 is piece 3's.
+  (the forced-recording path runs); defect 1 disappeared with `load_prior`; defect 2 was fixed by
+  piece 3 (T20, `42d8f5b`).
 - **Piece 2 is DONE** (2026-09-15, commits `0016dae`..`d34997c`, on the local `main` branch, pushed 2026-09-15). It
   follows the design `docs/superpowers/specs/2026-09-11-one-flow-design.md` (§1.1 holds decisions
   D1–D13; §11 lists the 58 deviations ruled during execution) and the 25 tasks of
@@ -77,8 +85,12 @@ user still has to run rows C1–C11 of `docs/checklists/display-walkthrough.md` 
   for a bug (V3); standard `logging` at info, warning and error in place of the in-stage prints, a
   window handler that is also the cancel checkpoint, the tool's info-to-stdout and
   `warning: `-to-stderr handlers, and a `log.txt` in every committed artifact but the simulation cache
-  (V4); the window remembers selections and the budget only, the chi drive and band are read-only,
-  and the FDT consents are never persisted (V5); one `orchestrator.training_preview` behind the
+  (V4); the inference tabs remember SELECTIONS — the pickers, the mode, and the boxes that describe
+  the recording (the three observation lengths, the physical drive amplitude `Drive F₀ (N)`, the
+  recording paths) — plus the training budget, every inference science knob opens at `config.py` on
+  every launch, the Config tab's non-dimensional χ drive amplitude and band are read-only displays
+  of it, and a consent is never persisted (V5; the Simulate, FDT and CrossVal panels still remember
+  their own numeric fields — piece 5's, spec §1.3); one `orchestrator.training_preview` behind the
   budget lines (V6); the Fisher settings recorded only when the rotation ran (V7); a loaded prior
   closes its figure (V8); sbi's summary writer is switched off, and the repository root's `sbi-logs/` tree
   (1359 run directories under `NPE_C`) was deleted (V9).
@@ -146,8 +158,9 @@ user still has to run rows C1–C11 of `docs/checklists/display-walkthrough.md` 
    screen: **all eight pass**, recorded in that file's last two columns and in the gate table below.
    B8 re-checked the FDT panel's full run, because `bb22ac4` changed the plots it draws.
 7. **Pieces 3 → (4 ∥ 5) → 6**, each brainstormed → spec → plan → implementation. Carried into them
-   from piece 2 (design spec §1.3, the final review's "left open" list, and the ledger):
-   - **Piece 3** — DONE 2026-09-17 (`3db271e`..`9e2f7ef`). Every bullet piece 2 carried into it is
+   from pieces 2 and 3 (each design spec's §1.3, the final reviews' "left open" lists, and the
+   ledgers):
+   - **Piece 3** — DONE 2026-09-16/17 (`3db271e`..`9e2f7ef`). Every bullet piece 2 carried into it is
      closed:
      - ~~Copy-on-run session config~~ (a refused stage leaves nothing on the session; training in a
        session with a ground truth is truth-free; an experimental chi inference no longer leaves its
@@ -183,7 +196,12 @@ user still has to run rows C1–C11 of `docs/checklists/display-walkthrough.md` 
    - **Piece 5.** FDT/CrossVal hardening and wrapping them in the store (their outputs still go to
      `artifacts_root()/fdt` and `/crossval`). Two test gaps: the cell-folder branch of the `fdt`
      unsupported-model hint is untested (`core/tool/fdt.py`), and only `plot_psd` of the four
-     `core/FDT/plots.py` functions is unit-tested for closing its figure.
+     `core/FDT/plots.py` functions is unit-tested for closing its figure. Handed on by piece 3
+     (spec §1.3, §11 row 2): the Simulate, FDT, CrossVal, Reduction and model-builder panels adopt
+     `core/refusals.py`'s rules and the two field tables (their numeric fields are still remembered
+     and their builder failures still go to `BasePanel._config_error`); and `load_and_validate_gt`'s
+     `Refusal(field="cell")` and the FDT dry run's problem strings are still two wordings for one
+     rule.
    - **Piece 6.** The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes
      false (`:49,53-54,76,190-191`), and a README reference section for the tool.
    - **Open, with no piece owning them yet** (the owner decides each, or where it goes):
@@ -299,7 +317,7 @@ user still has to run rows C1–C11 of `docs/checklists/display-walkthrough.md` 
 | **final fast gate, piece 2**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-15 at `d34997c`, after the whole-branch review's fixes: **457 passed, 1 skipped** (the display-marked class-icon test, offscreen), 2 deselected (the two slow tests), 174 warnings, **13 min 38 s** (inside spec §8.5's 14-minute target), exit 0. No "More than 20 figures" line. The real `Artifacts/` gained nothing, and `Resources/Models` held only `SHM.json` and `SHM2.json` afterwards. The gpu-marked `tests/test_gpu_paths.py` ran on the RTX 5070 Ti inside it. Slowest test: `test_user_sbi.py::test_train_and_validate_without_a_loaded_cell`, 180 s. Per-suite durations were not measured, so §8.5's ~90 s targets for `test_tool.py` and `test_diagnostics.py` are unchecked. Every task had its own one-process gate; those results are in the execution ledger (spec §11 row 42) |
 | slow set, `pytest -m slow -q --durations=5` (piece 2) | 2026-09-15 at `d34997c`: **2 passed**, 458 deselected, 96 warnings, **30 min 53 s**, exit 0. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1606 s (26 min 46 s); `test_tool.py::test_fdt_and_crossval_run_at_tiny_size` 243 s. No "More than 20 figures" line (the slow chi test's sink now closes its figures). The warnings are the known library classes (sklearn KMeans, sbi's SBC-count and `__array__` warnings, nflows `triangular_solve`, the reparam batch cap) plus the expected chi probe-masking notices; `Resources/` was left clean. The set is the chi full-pipeline test in `tests/test_user_sbi.py` (it now passes the drive frequencies it simulated as `(path, Hz)` pairs, D9) and the FDT/crossval tiny-size run in `tests/test_tool.py`. The chi test feeds back exactly the frequencies it simulated, so it cannot tell a stale recorded frequency from a correct one; `tests/test_artifact_store.py::test_an_experimental_observation_records_its_own_length_and_drive_frequencies` pins that |
 | display walkthrough, piece-2 rows B1–B8 (`docs/checklists/display-walkthrough.md`) | 2026-09-15, the user on the real screen, piece 2 as pushed: **rows B1–B8 all pass** — the D8 load dialog and its Cancel, the round's own install with no dialog, the other-observation box, the D7 near-miss dialog, the TSNPE stage checks (0 directions, HPD 0.95, the near-miss refusal after reloading the amortized parent), the short-T_obs warning, the D12 refusal, and the FDT panel's full run after `bb22ac4` (B8, added in `d6b1f03`). Rows 1–20 and A1–A9 stand from 2026-09-11 |
-| `pytest --collect-only -q` after piece 3 | 2026-09-17 at `9e2f7ef`: **603** collected (the fast gate's 600 passed and 1 skipped, plus the 2 slow tests), 143 more than the 460 at `d34997c`. `tests/test_*.py` holds seventeen suites (the new one is `tests/test_refusals.py`, torch-free) |
+| `pytest --collect-only -q` after piece 3 | 2026-09-17 at `9e2f7ef`: **603** collected (the fast gate's 600 passed and 1 skipped, plus the 2 slow tests), 143 more than the 460 at `d34997c`, where spec §8.4 had budgeted about 80 ± 20 added — over the budget and unrecorded in spec §11. `tests/test_*.py` holds seventeen suites (the new one is `tests/test_refusals.py`, torch-free) |
 | **final fast gate, piece 3**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-17 at `9e2f7ef`, after the whole-piece review's fixes: **600 passed, 1 skipped** (the display-marked class-icon test, offscreen), 2 deselected, 175 warnings, **12 min 13 s** (inside spec §8.4's 16-minute target), exit 0. `git status` clean afterwards, no `sbi-logs/` at the root, and the real `Artifacts/` gained nothing (it still holds only the `fdt/` folder from the user's walkthrough on 2026-09-15). The conftest teardown also asserts the real `PRISM.ini` is unchanged. The gpu-marked `tests/test_gpu_paths.py` ran on the RTX 5070 Ti inside it. Slowest: `test_user_sbi.py::test_train_and_validate_without_a_loaded_cell` 147 s, then `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 55 s and `test_no_forcing_user_model_full_sbi_pipeline` 41 s. The warning baseline is 175 since T15 (sklearn's KMeans notice through the `screen_run` fixture). Every task had its own one-process gate, recorded in the execution ledger; the last before the review, at `e78cc8d`, was 594 passed in 12 min 08 s |
 | slow set, `pytest -m slow -q --durations=5` (piece 3) | 2026-09-16/17 at `e78cc8d`, run during the read-only whole-piece review: **2 passed**, 595 deselected, 104 warnings, **23 min 13 s**, exit 0. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1181 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size` 208 s. No "More than 20 figures" line; `git status` clean and no `sbi-logs/` afterwards. The warnings are piece 2's classes; the count moved from 96 because each chi probe-masking notice carries its masked count in its text, so the de-duplicated total follows the random draws. It stands for the piece: the fix wave `87a0e06`..`9e2f7ef` reaches the two slow tests' paths only through happy-path checks, which the final fast gate covers |
 | **GPU gate of record, piece 3** (`python -m core smoke`, the four command lines of `CLAUDE.md` with the same arguments, run from a bash script that kept each run's stdout, stderr and exit code apart, at `9e2f7ef`) | 2026-09-17, alone on the card: **run 1** chi `master_spont`: prior 92 s, posterior 196 s, validate 22 s, infer 84 s, exit 0 (piece 2 at `0d96d2f`: 92/198/22/85); **run 2** `--resume require`: "Reusing the Fisher rotation stored with the training checkpoint (4/4 batches — COMPLETE, so generation will be skipped)", `[checkpoint] resuming at batch 4/4`, exit 0 in 8 s; **run 2b** `--num-runs 2`: **exit 1** in 6 s, the refusal on stderr reads "differs only in n_runs: this run 2, that cache 4" and ends `(--new-run)`, no `[fisher]` line, `simulations/` still only `4d8022b100db`; **run 3** forced `master_weak` (own store): prior 92 s, posterior 60 s, validate 13 s, infer 18 s, exit 0 (piece 2: 92/61/14/20). No OOM line, no Traceback and no `warning: ` record line in any run. Run 1's training masked probes 79/224, 15/96, 108/192, 58/192 = 260/704 (36.9 %), the same as piece 2. **New this piece:** `smoke_posterior/log.txt` holds stamped lines (`01:14:03 info [budget] 4 batches x 32 rows = 128 training rows`, the two `[fisher]` lines, the masking notices at `warning`); every committed artifact in both stores has a `log.txt`, and neither `simulations/<digest>/` has one; the ground-truth `PreflightWarning` is reported at `core/tool/smoke.py:235`, the caller, not at `core/runs.py`. The diagnostic card was not run: piece 3 changed guards, messages and logging under `core/diagnostics`, but no changed line there creates or moves a tensor (checked by grep over the piece's diff), and the tool's new `--device cuda` choice resolves to `config.detect_device()`, the same device configuration `auto` picks on this machine. Scratch stores deleted |
@@ -493,15 +511,20 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
   are neutral and each front end names its own control (`core/gui/fields.py`) or flag
   (`core/tool/fields.py`); a refusal opens the yellow "Check your inputs" box and a bug the red one. V4
   standard `logging` at info, warning and error, plus a `log.txt` in every committed artifact (none
-  for the simulation cache). V5 the window remembers selections and the budget only; every science
-  knob opens at `config.py`, the chi drive and band are read-only, the FDT consents are never saved.
-  V6 one `orchestrator.training_preview` behind the budget lines. V7 the Fisher settings are recorded
+  for the simulation cache). V5 the inference tabs remember SELECTIONS — the pickers, the mode, and
+  the boxes that describe the recording (the three observation lengths, the physical drive amplitude
+  `Drive F₀ (N)`, the recording paths) — plus the training budget; every inference science knob
+  opens at `config.py` on every launch, the Config tab's non-dimensional χ drive amplitude and band
+  are read-only displays of it, and a consent is never persisted. The Simulate, FDT and CrossVal
+  panels still remember their own numeric fields — piece 5's (spec §1.3). V6 one
+  `orchestrator.training_preview` behind the budget lines. V7 the Fisher settings are recorded
   only when the rotation ran. V8 a loaded prior closes its figure. V9 sbi's summary writer is off.
   The fast-gate target is 16 minutes, one process.
   - The spec's self-review rulings: the diagnostics convert their guards too; the simulation cache
     gets no `log.txt`; the tool's framing prints (`prism <cmd>: refused: …`, the ladder) stay prints;
     the FDT proceed box opens ticked because its consent is never remembered.
-  - Execution rulings that carry weight (spec §11 holds all thirteen): `config.unit_registry` IS an
+  - Execution rulings that carry weight (spec §11 holds all fifteen; rows 14–15 were added by the
+    2026-09-17 document audit): `config.unit_registry` IS an
     `lru_cache` singleton, so the deep copy must share it (row 3); the stage-entry order is the name
     first in the four stages and the knobs first only in the two compositions (row 5); the judgements
     said once are `PreflightWarning`s with the `always` filter (row 7); one refusal still names the

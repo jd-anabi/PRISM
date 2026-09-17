@@ -1,8 +1,10 @@
 # PRISM piece 3: validation, logging and the private copy — implementation plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> **Status: IMPLEMENTED** — piece 3, commits `3db271e`..`9e2f7ef`. Progress was tracked in the gitignored execution ledger `.superpowers/sdd/2026-09-16-validation-and-logging/progress.md`, not in these checkboxes. Read this plan as the record of what was built, not as work to do.
 
-**Goal:** Make the inference application proof against misuse: every run works on a private copy of the configuration, every bad input is refused at the click with a message that names the fix, every stage message carries its own severity and is kept beside the artifact it belongs to, and the window remembers only selections and the training budget between launches.
+**Goal:** Make the inference application proof against misuse: every run works on a private copy of the configuration, every bad input is refused at the click with a message that names the fix, every stage message carries its own severity and is kept beside the artifact it belongs to, and the inference tabs remember only selections and the training budget between launches (the Simulate, FDT and CrossVal panels keep their own fields — piece 5's, spec §1.3).
 
 **Architecture:** A torch-free `core/refusals.py` holds one refusal error, a registry of the fields it can name and the rule functions; each front end keeps its own table from field key to control or flag. A torch-free `core/runs.py` holds the `public_entry` decorator that copies the configuration on entry to every public stage, composition and diagnostic, buffers that entry's log records, and sets the `core` logger's level. Standard logging replaces the in-stage prints; the window routes records through its existing stream pump, the tool through two stdout/stderr handlers, and the artifact writer copies the buffer into `log.txt` at commit. The inference tabs read their boxes through `value_or_none()` and the shared rules before dispatching, the worker carries the exception object to the panel so a refusal opens the yellow box and a bug the red one, and the QSettings keys for science knobs are neither written nor read.
 

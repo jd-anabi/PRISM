@@ -1,6 +1,9 @@
 /archive/
 /.claude/
 
+# The superpowers execution workspaces (ledgers, task briefs, review reports): scratch, per piece.
+/.superpowers/
+
 # A 6.9 MB run log that was once committed to the repo root; untracked and deleted by the clean
 # break (2026-09-11). Ignoring it stops it coming back.
 /sbc_run.log

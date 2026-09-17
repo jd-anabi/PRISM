@@ -174,9 +174,9 @@ class BasePanel(QWidget):
     # ── background dispatch ──────────────────────────────────────────────────
     def dispatch(self, fn, *args, provide_fig_sink: bool = False, provide_stream: bool = False,
                  on_chunk=None, watch_dir=None, on_result=None, on_finished=None, **kwargs):
-        """Run ``fn`` on a worker thread. Its print()s and warnings stream to the log pane and its tqdm
-        bars to the progress pane; figures (when ``provide_fig_sink``) embed in the figure stack; the
-        return value goes to ``on_result``.
+        """Run ``fn`` on a worker thread. Its log records, print()s and warnings stream to the log
+        pane and its tqdm bars to the progress pane; figures (when ``provide_fig_sink``) embed in
+        the figure stack; the return value goes to ``on_result``.
 
         ONE TASK AT A TIME APP-WIDE, not merely per panel -- redirect_streams swaps sys.stdout/stderr
         process-wide, so two concurrent runs would fight over the console (see GOTCHA #4).

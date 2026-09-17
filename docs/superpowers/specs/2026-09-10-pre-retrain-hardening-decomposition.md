@@ -26,6 +26,10 @@ retrain starts only after all seven have landed.
 
 ## 3. What the audit found
 
+*This is what the audit of 2026-09-10 found, and §4 below is the plan it proposed on that date.
+Pieces 1-3 have since closed the silent-wrong paths and the provenance gaps; `docs/STATE.md` is the
+current state.*
+
 - **Silent-wrong paths.** A blank observation length reads as 0 and nothing checks it. Stale file
   paths restored from settings fail only inside the worker. The driven experimental branch checks
   no paths. Runners mutate the session's `SimConfig` in place, so a failed inference leaves the
@@ -60,7 +64,7 @@ retrain starts only after all seven have landed.
 | 2 | **One flow underneath** | unify GUI `runners.py`, `orchestrator.run` and `scripts/_common.py` into one stage API; retire the prompt CLI; one command-line tool (`prior`, `train`, `tsnpe`, `validate`, `infer`, `sbc`, `identifiability`, `ablation`, `smoke`, …) over the same stages; scripts folded in with tests | Hardening three copies is wasted work; the tool is the reviewer's reproduction path |
 | 3 | **Validation and misuse-proofing** | boundary validation for every field (`T_obs > 0`, paths exist, budgets, device); science constants never restored from QSettings; copy-on-run and reset-after-success for session state; `logging` with severity replacing `print`; error dialogs that name the fix; defect 2 | Depends on the stage API from 2 |
 | 4 | **GUI usability and artifact browser** | list/inspect/delete artifacts with their manifests; picker shows mode, width, amortized/truncated; the two-entry-point trap (M1b) resolved; one-task-at-a-time made visible; the never-seen list walked on a display with the checklist; a saveable run summary | Depends on the store from 1 |
-| 5 | **Secondary panels** | FDT/CrossVal tests and validation (the all-rows-failed completion, the atomicity decision, the prompt booleans); Simulate and the model builder round trip verified | Independent of 4; after 3 |
+| 5 | **Secondary panels** | FDT/CrossVal tests and validation (the all-rows-failed completion, the atomicity decision, and the numeric FDT/CrossVal fields, which still persist and still refuse through `BasePanel._config_error`); Simulate and the model builder round trip verified. The prompt booleans are CLOSED: required keyword arguments since piece 2 (D1), consents never persisted since piece 3 (V5) | Independent of 4; after 3 |
 | 6 | **Documentation and the retrain runbook** | user guide per audience; per-subsystem design docs; the runbook as a document and a scripted pipeline; the handoff archived | Documents the finished app |
 
 **Sequence:** 0 → 1 → 2 → 3 → (4 ∥ 5) → 6. Each piece returns to brainstorming for its own spec.
