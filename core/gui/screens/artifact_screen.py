@@ -21,14 +21,19 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QPlainTextEdit,
-                               QPushButton, QSplitter, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QVBoxLayout,
+                               QWidget)
 
 from core.artifacts import render_manifest
 from core.artifacts.store import KIND_DIRS
+from core.refusals import NOTE_MAX_CHARS, Refusal, require_note
 
 from .. import settings
+from ..design import SPACE
+from ..panels.base_panel import BasePanel
 from ..widgets.artifact_table import DEFAULT_SORT, ArtifactTable, columns_for
+from ..widgets.refusal_box import show_refusal
 
 # The kind selector's visible text, in KIND_DIRS order; each item's userData is the kind key itself,
 # which is what the store, the settings key and the table all speak.
@@ -56,6 +61,12 @@ _NO_RUN_LOG = "written outside a run"
 _EMPTY_LOG = "the run recorded nothing"
 _RECORDS_HEADER = "── the run's records (log.txt) ──"
 
+# The one dependent that names nothing. A cache's directory is keyed on the prior's GMM, so
+# ArtifactStore.dependents reports it whether or not the manifest records the parent link -- and a
+# bare list of ids gives an operator no way to tell that one from a child that named it.
+_FINGERPRINT_DEPENDENT = ("a training cache was generated against this prior and its rows are "
+                          "meaningless without it")
+
 
 def _stale_folder_note(actual: str, expected: str) -> str:
     """Said when Summary.dir_name disagrees with the manifest's own dir_name (§3.3).
@@ -70,6 +81,27 @@ def _stale_folder_note(actual: str, expected: str) -> str:
             f"rename writes the manifest first and moves the directory second, and the move can be "
             f"refused (a handle held open on Windows). The manifest is what resolves an artifact, so "
             f"nothing is lost -- only the folder name is out of date.")
+
+
+def _delete_prompt(s) -> tuple:
+    """``(text, informative)`` for the confirmation: what goes, and what cannot come back.
+
+    An UNFINISHED cache names its committed BATCHES: ``finished`` is not ``complete`` (B3), and those
+    batches are the only thing deleting one destroys that a later run could not simply remake.
+
+    Batches and not rows, deliberately (P2): ``rows`` is written by ``mark_complete`` alone --
+    ``training_checkpoint.save`` passes none -- so every real mid-run cache has ``rows is None``, and
+    a ``sum(())`` here would print a confident, false "0 rows". Where the row counts come from is
+    said instead.
+    """
+    lines = [f"id {s.id}"]
+    if s.kind == "simulation" and not s.finished:
+        lines.append(f"This training cache is UNFINISHED: {s.batches_done} committed batch(es). "
+                     "Deleting it throws those batches away and a later run starts from zero. "
+                     "(Only the batch count is known while a cache is running: the rows are "
+                     "recorded when the cache finishes.)")
+    lines.append(f"This removes {s.path} and everything in it, and cannot be undone.")
+    return f"Delete {s.kind} {s.label}?", "\n".join(lines)
 
 
 class ArtifactScreen(QWidget):
@@ -151,6 +183,11 @@ class ArtifactScreen(QWidget):
         layout.addLayout(kind_row)
         layout.addWidget(self.split, 1)
         layout.addWidget(self.status)
+
+        # The actions row sits directly above the status line.
+        self.layout().insertWidget(self.layout().count() - 1, self._build_actions())
+        self.table.selection_changed.connect(self._sync_actions)
+        self._sync_actions()
 
         # Restore BEFORE connecting currentIndexChanged: setCurrentIndex fires it, and a refresh()
         # during __init__ would read the store at launch -- the start-up work §1.2 keeps off that
@@ -289,6 +326,246 @@ class ArtifactScreen(QWidget):
             self._set_status(f"Could not write {path}: {e}", error=True)
             return
         self._set_status(f"Saved what is shown to {Path(path).name}.")
+
+    # ── the actions (§3.4; B5, B6, B7, B8) ────────────────────────────────────
+    def _build_actions(self) -> QWidget:
+        """The Note box and the Delete/Sweep buttons: one row under the listing.
+
+        A plain group box, not the model builder's sticky action bar -- this screen does not scroll a
+        form of unbounded length, so nothing can fall below the fold.
+        """
+        box = QGroupBox("Actions")
+        row = QHBoxLayout(box)
+        self.note_edit = QLineEdit()
+        self.note_edit.setPlaceholderText(
+            f"one line, at most {NOTE_MAX_CHARS} characters; empty clears it")
+        # NO setMaxLength: B5 REFUSES an over-long note and names both numbers. A maxLength would
+        # silently truncate it instead, which is the clamp V2 exists to forbid.
+        self.btn_note = QPushButton("Set")
+        self.btn_note.clicked.connect(self._set_note)
+        self.btn_delete = QPushButton("Delete…")
+        self.btn_delete.clicked.connect(self._delete)
+        self.btn_sweep = QPushButton("Sweep this kind…")
+        self.btn_sweep.setToolTip("Remove this kind's directories that have no usable manifest")
+        self.btn_sweep.clicked.connect(lambda: self._sweep(all_kinds=False))
+        self.btn_sweep_all = QPushButton("Sweep all kinds…")
+        self.btn_sweep_all.clicked.connect(lambda: self._sweep(all_kinds=True))
+        row.addWidget(QLabel("Note"))
+        row.addWidget(self.note_edit, 1)
+        row.addWidget(self.btn_note)
+        row.addSpacing(SPACE[2])
+        row.addWidget(self.btn_delete)
+        row.addSpacing(SPACE[2])
+        row.addWidget(self.btn_sweep)
+        row.addWidget(self.btn_sweep_all)
+        return box
+
+    def _sync_actions(self) -> None:
+        """Enable what the selected row can answer, and show its note.
+
+        An incomplete directory has no manifest, so there is no note to rewrite and nothing for
+        ``delete`` to resolve (it goes through ``_find``, which only ever returns manifest-bearing
+        entries): the sweep is what removes those, which is also why the sweep is the one action that
+        needs no selection at all.
+        """
+        s = self.table.current_summary()
+        live = s is not None and s.complete
+        self.note_edit.setEnabled(live)
+        self.btn_note.setEnabled(live)
+        self.btn_delete.setEnabled(live)
+        self.note_edit.setText(s.note if live else "")
+
+    def _after_change(self) -> None:
+        """Re-list the kind and announce the change (B8). The three StorePickers are the WINDOW's to
+        refresh: it is the one party that knows all of them, exactly as for the model combos.
+
+        Its CALLERS set their own status line AFTER calling this, never before: ``refresh`` ends by
+        reporting the kind's row counts (or, when the kind cannot be read, the error), so a sentence
+        written first would be overwritten by the re-list it triggered and the operator would be
+        told the row count in answer to a Delete.
+        """
+        self.refresh()
+        self._sync_actions()
+        self.store_changed.emit()
+
+    def _refuse_while_running(self, doing: str) -> bool:
+        """True when a run is live: the status line says so and the caller returns (B6).
+
+        Every WRITE goes through this and nothing that only READS does. The wording is the window's
+        own, from the two model-builder sites (model_builder_screen.py:371, :447); the status line is
+        this screen's surface, so there is no dialog to dismiss either.
+        """
+        if BasePanel._running:
+            self._set_status(f"A task is running -- wait for it to finish before {doing}.", error=True)
+            return True
+        return False
+
+    def _selected(self, doing: str):
+        """The selected COMPLETE row, or None with the refusal already shown.
+
+        Two different answers: nothing selected is a fielded refusal (the yellow box's fix sentence
+        names the list), while a selected LEFTOVER is not a refusal at all -- there is no artifact
+        there to act on, and saying so on the status line points at the sweep without pretending a
+        rule was broken.
+        """
+        s = self.table.current_summary()
+        if s is None:
+            show_refusal(self, Refusal("No artifact is selected.", field="artifact"))
+            return None
+        if not s.complete:
+            self._set_status(f"{s.dir_name} has no usable manifest ({s.reason}), so there is nothing "
+                             f"to {doing}: it is one of the leftovers a sweep removes.", error=True)
+            return None
+        return s
+
+    def _set_note(self) -> None:
+        """B5: one trimmed line, at most NOTE_MAX_CHARS; blank clears it.
+
+        The rule runs at the click, in ``core.refusals``, so ``python -m core artifacts note``
+        refuses the same note with the same sentence; the front end only adds where to fix it.
+        """
+        if self._refuse_while_running("setting a note"):
+            return
+        s = self._selected("annotate")
+        if s is None:
+            return
+        try:
+            note = require_note("note", self.note_edit.text())
+            self._resolved_store().set_note(s.kind, s.id, note)
+        except Refusal as exc:      # StoreError is one: the row can have gone since it was listed,
+            show_refusal(self, exc)  # and since Task 2 that refusal carries field="note" too
+            self._set_status(exc.message, error=True)
+            return
+        self._after_change()        # before the sentence, never after: see _after_change
+        self._set_status(f"Set the note on {s.kind} {s.label}." if note
+                         else f"Cleared the note on {s.kind} {s.label}.")
+
+    def _dependents_refusal(self, store, s, deps) -> Refusal:
+        """The sentence for a delete that nothing can perform: the artifact, then every artifact
+        that depends on it WITH WHY.
+
+        ``field="artifact"`` sends the operator to the list to delete the children first -- the same
+        key the store's own dependents refusal carries since Task 5. This one exists for the WORDING
+        alone: the store's message ends "pass force=True to orphan them", which no front end offers
+        (B6), and a bare list of ids cannot say which dependent named this artifact and which the
+        store found by fingerprint.
+        """
+        parents = {}
+        for kind in sorted({k for k, _, _ in deps}):
+            for row in store.list(kind):
+                parents[(kind, row.id)] = row.parents
+        lines = []
+        for kind, id_, name in deps:
+            held = parents.get((kind, id_)) or {}
+            # dependents()'s first pass matches parents[<kind key>] == id; its second adds simulation
+            # caches by fingerprint alone. "prior" is the only parent key a prior can occupy, so a
+            # cache that does not hold it there came from that second pass.
+            fingerprint_only = (s.kind == "prior" and kind == "simulation"
+                                and held.get("prior") != s.id)
+            why = _FINGERPRINT_DEPENDENT if fingerprint_only else f"it names this {s.kind} as a parent"
+            lines.append(f"  {kind} {name or '(unnamed)'} [{id_}]: {why}.")
+        return Refusal(
+            f"Refusing to delete {s.kind} {s.label} [{s.id}]: {len(deps)} artifact(s) depend on it.\n"
+            + "\n".join(lines)
+            + "\nDelete those first. Nothing here can orphan them.", field="artifact")
+
+    def _delete(self) -> None:
+        """One artifact, no force, TWO outcomes (B6).
+
+        ``dependents`` is read here, before anything is asked, because ``store.delete`` refuses
+        anything with dependents and no front end offers ``force=True``: a confirmation for such an
+        artifact could only ever be followed by a failure. With dependents this is a refusal naming
+        every one of them; without, a confirmation that defaults to No. The store reads
+        ``dependents`` again inside ``delete`` and stays the last word -- two directory scans, which
+        is irrelevant at this scale.
+        """
+        if self._refuse_while_running("deleting an artifact"):
+            return
+        s = self._selected("delete")
+        if s is None:
+            return
+        store = self._resolved_store()
+        deps = store.dependents(s.kind, s.id)
+        if deps:
+            show_refusal(self, self._dependents_refusal(store, s, deps))
+            self._set_status(f"{s.kind} {s.label} has {len(deps)} dependent(s) and was not deleted.",
+                             error=True)
+            return
+        text, detail = _delete_prompt(s)
+        box = QMessageBox(self)                     # an INSTANCE dialog: the statics escape the
+        box.setIcon(QMessageBox.Warning)            # suite's guard and hang it offscreen
+        box.setWindowTitle("Delete artifact")
+        box.setText(text)
+        box.setInformativeText(detail)
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)        # the safe branch, and what exec() == 0 reads as
+        if box.exec() != QMessageBox.Yes:
+            self._set_status(f"{s.kind} {s.label} was not deleted.")
+            return
+        try:
+            store.delete(s.kind, s.id)              # never force, from either front end (B6)
+        # A row that went, or dependents that arrived, since the list -- shown as the store wrote
+        # it, fix sentence and all (its refusals are fielded).
+        except Refusal as exc:
+            show_refusal(self, exc)
+            self._set_status(exc.message, error=True)
+            return
+        self._after_change()        # before the sentence, never after: see _after_change
+        self._set_status(f"Deleted {s.kind} {s.label}.")
+
+    def _incomplete(self, store, kind) -> tuple:
+        """``([(kind, dir_name, reason)], [str])``: what a sweep would remove, and any kind that
+        could not be read at all -- an unreadable directory is not an empty one (§3.2).
+
+        Read off ``list``, so the confirmation shows exactly the rows the table calls incomplete.
+        """
+        out, problems = [], []
+        for k in ([kind] if kind else list(KIND_DIRS)):     # Task 9's import; the seven, in order
+            try:
+                rows = store.list(k)
+            except Exception as e:      # noqa: BLE001 -- an unreadable kind is reported, not fatal
+                problems.append(f"The {k} directory could not be read: {e}")
+                continue
+            out += [(k, row.dir_name, row.reason) for row in rows if not row.complete]
+        return out, problems
+
+    def _sweep(self, *, all_kinds: bool) -> None:
+        """B7: remove every directory of this kind -- or of all seven -- that has no usable manifest.
+
+        The candidates are listed BEFORE anything is removed, and ``sweep_incomplete`` is what
+        removes them: a call that can only ever touch a directory ``_entries`` classifies as
+        incomplete, the complement of ``delete``, which can only ever touch a real artifact.
+        """
+        if self._refuse_while_running("removing leftover directories"):
+            return
+        store = self._resolved_store()
+        kind = None if all_kinds else self.kind_combo.currentData()
+        cands, problems = self._incomplete(store, kind)
+        tail = (" " + " ".join(problems)) if problems else ""
+        if not cands:
+            where = "any kind's" if kind is None else f"{kind}"
+            self._set_status(f"Nothing to remove: every {where} directory has a usable manifest."
+                             + tail, error=bool(problems))
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Remove leftover directories")
+        box.setText(f"Remove {len(cands)} director{'y' if len(cands) == 1 else 'ies'} with no "
+                    f"usable manifest?")
+        box.setInformativeText("\n".join(f"{k}/{d} — {why}" for k, d, why in cands)
+                               + "\n\nA directory that holds a manifest is never touched by this.")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+        if box.exec() != QMessageBox.Yes:
+            self._set_status("Nothing was removed." + tail, error=bool(problems))
+            return
+        removed, failed = store.sweep_incomplete(kind)
+        said = f"Removed {len(removed)} of {len(cands)} leftover director" \
+               f"{'y' if len(cands) == 1 else 'ies'}."
+        for k, d, why in failed:
+            said += f" {k}/{d} could not be removed: {why}."
+        self._after_change()        # before the sentence, never after: see _after_change
+        self._set_status(said + tail, error=bool(failed or problems))
 
     def _set_status(self, text: str, error: bool = False) -> None:
         """One line, with a ⚠ prefix when it is trouble -- ModelBuilderScreen._set_status's pattern."""

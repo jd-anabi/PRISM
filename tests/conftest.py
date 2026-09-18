@@ -171,12 +171,13 @@ def _no_modal_dialogs():
     """Offscreen, QMessageBox.exec() spins a nested event loop that nothing ever closes, so a dialog a
     test did not expect is a STALL past the ten-minute tool-call limit (no timeout plugin is
     installed), not a failure. For the whole session the box is appended to tests/_fixtures.SHOWN and
-    exec returns 0 -- no clicked button, which the consent dialogs read as Cancel and main_window.py:231
-    as the safe branch. A test that wants its own fake layers it on top with monkeypatch, as
-    test_the_two_dialogs_default_to_cancel does; the undo puts this guard back, because on a class
-    MonkeyPatch records the class __dict__ entry, which is this lambda. Same MonkeyPatch shape as
-    _checkpointing_off_unless_asked. The three static QMessageBox.warning/information calls in
-    main_window.py are C++ statics and outside this guard; no test reaches them offscreen."""
+    exec returns 0 -- no clicked button, which the consent dialogs read as Cancel and
+    MainWindow._delete_user_model's confirmation as the safe branch. A test that wants its own fake
+    layers it on top with monkeypatch, as test_the_two_dialogs_default_to_cancel does; the undo puts
+    this guard back, because on a class MonkeyPatch records the class __dict__ entry, which is this
+    lambda. Same MonkeyPatch shape as _checkpointing_off_unless_asked. Nothing under core/ calls the
+    statics any more: main_window.py's last three went through MainWindow._tell in piece 4, so this
+    guard covers every box the GUI shows and a test reads one off SHOWN."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN
     mp = pytest.MonkeyPatch()

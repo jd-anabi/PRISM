@@ -11,7 +11,8 @@ import pytest                                                          # noqa: E
 
 from core.artifacts import ArtifactStore                               # noqa: E402
 from core.artifacts.store import KIND_DIRS                             # noqa: E402
-from tests._fixtures import artifact_screen, build_browse_store, qt_app  # noqa: E402
+from tests._fixtures import (_nad_cfg, _prior_artifact, artifact_screen,  # noqa: E402
+                             build_browse_store, qt_app)
 
 KINDS = list(KIND_DIRS)
 
@@ -33,6 +34,37 @@ def _select(screen, i: int):
     """Select row ``i`` and return its Summary."""
     screen.table.setCurrentItem(screen.table.topLevelItem(i))
     return screen.table.current_summary()
+
+
+def _show_kind(scr, kind):
+    """Point the screen at one kind and re-list it. The selector carries the kind key as its item
+    data (Task 9), so a test names a kind rather than an index."""
+    i = scr.kind_combo.findData(kind)
+    assert i >= 0, f"the kind selector does not offer {kind!r}"
+    scr.kind_combo.setCurrentIndex(i)
+    scr.refresh()
+
+
+def _select_ref(table, ident):
+    """Make the row for ``ident`` (an artifact id or an incomplete directory's name) current, and
+    return its Summary. Plain QTreeWidget API plus the table's own ``current_summary`` -- the rows
+    are sorted (complete first, newest first), so a test must never assume an index."""
+    for i in range(table.topLevelItemCount()):
+        table.setCurrentItem(table.topLevelItem(i))
+        s = table.current_summary()
+        if s is not None and ident in (s.id, s.dir_name):
+            return s
+    raise AssertionError(f"no row for {ident!r} among {table.topLevelItemCount()} row(s)")
+
+
+def _answer(monkeypatch, button):
+    """Layer a chosen answer over tests/conftest.py::_no_modal_dialogs, the pattern at
+    tests/test_nav_and_gating.py:1179-1186. The session guard records every box and returns 0, which
+    every confirmation here reads as No; these dialogs use STANDARD buttons, so the answer is the
+    returned enum rather than a click on an added button."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: SHOWN.append(self) or button)
 
 
 def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(tmp_path):
@@ -388,3 +420,399 @@ def test_save_writes_exactly_what_the_pane_shows(tmp_path, monkeypatch):
     screen.btn_save.click()
     assert calls == [1] and screen.status.text() == ""
     assert sorted(p.name for p in tmp_path.glob("report*")) == ["report.txt"]
+
+
+def test_setting_a_note_trims_it_and_asks_nothing(store):
+    """B5: the rule is core's (require_note) and the box is the front end's. One trimmed line,
+    written through set_note; a blank clears it; nothing is asked."""
+    from PySide6.QtWidgets import QLabel
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="annotated")
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _select_ref(scr.table, p.id)
+    # The control core/gui/fields.py names ("Edit it in the Note box on the Artifacts screen.") has
+    # to exist, spelled that way: the table is the ONE place a control is named, and a sentence
+    # pointing at a box nobody can find is the failure mode V3 exists to stop.
+    assert any(lbl.text() == "Note" for lbl in scr.findChildren(QLabel)), "no 'Note' label"
+    scr.note_edit.setText("   spontaneous, 4.5 s   ")
+    scr._set_note()
+    assert store.get("prior", p.id).note == "spontaneous, 4.5 s"
+    assert SHOWN == [], "setting a note must not ask anything"
+    assert "Set the note" in scr.status.text(), scr.status.text()
+    # Re-select: _after_change re-lists the kind, and the screen deliberately remembers no selection
+    # (spec §3.5 -- a remembered id that has since been deleted is the dangling state B8 prevents).
+    _select_ref(scr.table, p.id)
+    scr.note_edit.setText("")
+    scr._set_note()
+    assert store.get("prior", p.id).note == ""
+    assert "Cleared the note" in scr.status.text(), scr.status.text()
+
+
+def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
+    """V2: refused, never clamped. The box carries core's neutral sentence (both numbers) and the
+    front end's own "where to fix it" from core/gui/fields.py, and the manifest is untouched."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="annotated")
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _select_ref(scr.table, p.id)
+    scr.note_edit.setText("x" * 201)
+    # No setMaxLength on the box, deliberately: it would truncate at 200 and the refusal could never
+    # fire, which is exactly the silent clamp B5 forbids.
+    assert len(scr.note_edit.text()) == 201, "the Note box must not clamp what was typed"
+    scr._set_note()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert "200" in box.text() and "201" in box.text(), box.text()
+    assert box.informativeText() == "Edit it in the Note box on the Artifacts screen."
+    assert store.get("prior", p.id).note == ""
+
+
+def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
+    """B6. No front end offers force=True, so store.delete (store.py:478-488) refuses anything with
+    dependents -- a confirmation could only ever be followed by a failure. dependents() is therefore
+    read FIRST, and the yellow box names every dependent, including the training cache that holds
+    the prior only by fingerprint and names it nowhere (store.py:468-476)."""
+    from core.artifacts import store as st
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="ancestor")
+    fp = store.get("prior", p.id).fingerprints["gmm"]
+    with store.create("inference", cfg, name="child") as w:        # names the prior as its parent
+        w.parents = {"prior": p.id}
+        w.body = {"results": {}}
+    ident = {"format": "training-rows/2", "prior_fingerprint": fp, "n_runs": 3, "truncation": None}
+    cache = st.write_simulation_manifest(store.kind_dir("simulation") / "abcdef012345", ident,
+                                         parents=None)             # keyed on the GMM, names nothing
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _select_ref(scr.table, p.id)
+    scr._delete()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert len(box.buttons()) == 1, "a refusal offers no Yes"
+    assert "prior ancestor" in box.text() and p.id in box.text(), box.text()
+    assert f"inference child [{w.id}]" in box.text(), box.text()
+    assert f"simulation (unnamed) [{cache.id}]" in box.text(), box.text()
+    assert ("a training cache was generated against this prior and its rows are meaningless "
+            "without it") in box.text(), box.text()
+    assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
+    assert store.get("prior", p.id).name == "ancestor", "nothing may be deleted"
+    assert "2 dependent(s) and was not deleted" in scr.status.text(), scr.status.text()
+
+
+def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store, monkeypatch):
+    """B3 + B6: a manifested cache is COMPLETE (it has a valid manifest) and not FINISHED, and the
+    batches already committed are the one thing a delete here destroys that a rerun cannot remake --
+    so the confirmation names them, and No is the default button (which is also what the session
+    dialog guard's exec()==0 reads as).
+
+    The cache is written with NO rows, because that is the only mid-run state there is: rows are
+    written by mark_complete alone and ``save`` passes none (P2), so the prompt names batches and
+    says where the row counts come from rather than printing a confident, false "0 rows"."""
+    import pytest
+    from core.artifacts import StoreError, store as st
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    ident = {"format": "training-rows/2", "prior_fingerprint": None, "n_runs": 4, "truncation": None}
+    cache = st.write_simulation_manifest(store.kind_dir("simulation") / "beef00112233", ident,
+                                         batches_done=2, complete=False)
+    scr = artifact_screen(store)
+    _show_kind(scr, "simulation")
+    s = _select_ref(scr.table, cache.id)
+    assert s.complete and not s.finished, "B3: complete is 'has a manifest', finished is 'it ended'"
+    assert s.rows is None, "``save`` records no rows: a mid-run cache has none to name"
+    scr._delete()                                     # exec() returns 0 -> not Yes
+    box = SHOWN[-1]
+    assert box.button(QMessageBox.No) is box.defaultButton(), "No must be the default"
+    assert "2 committed batch(es)" in box.informativeText(), box.informativeText()
+    assert "rows are recorded when the cache finishes" in box.informativeText(), \
+        box.informativeText()
+    assert "0 rows" not in box.informativeText(), box.informativeText()
+    assert store.get("simulation", cache.id).id == cache.id, "No must leave it on disk"
+    assert "was not deleted" in scr.status.text(), scr.status.text()
+    # Yes deletes it, and the change is announced (B8)
+    _answer(monkeypatch, QMessageBox.Yes)
+    _select_ref(scr.table, cache.id)
+    changed = []
+    scr.store_changed.connect(lambda: changed.append(True))
+    scr._delete()
+    with pytest.raises(StoreError):
+        store.get("simulation", cache.id)
+    assert changed, "a delete must emit store_changed"
+
+
+def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch):
+    """dependents() is read twice -- once here to avoid asking a question that could only fail, once
+    inside delete() -- and the store's is the answer that counts. With the SCREEN's read stubbed
+    empty the confirmation appears, and the store's own sentence is what the operator is shown, with
+    its own fix sentence under it: that refusal carries field="artifact" (Task 5), so this race path
+    shows it as it stands and invents nothing.
+
+    The stub is a proxy over the real store, patched onto the SCREEN's _resolved_store, and not
+    monkeypatch.setattr(store, "dependents", ...): ArtifactStore.delete calls self.dependents
+    itself (store.py:482), so patching the store would blind the store too -- the delete would
+    SUCCEED, the prior would be destroyed and every assertion below would be asserting the opposite
+    of what it says (Q6). The proxy lies to the screen only."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="ancestor")
+    with store.create("inference", cfg, name="child") as w:
+        w.parents = {"prior": p.id}
+        w.body = {"results": {}}
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _select_ref(scr.table, p.id)
+
+    class _BlindToDependents:
+        """Everything the screen asks of a store, delegated to the real one -- except dependents,
+        which answers "none" the way a store would have a moment before the child was written."""
+
+        def __init__(self, real):
+            self._real = real
+
+        def dependents(self, kind, id_):
+            return []
+
+        def get(self, *a, **k):
+            return self._real.get(*a, **k)
+
+        def list(self, *a, **k):
+            return self._real.list(*a, **k)
+
+        def delete(self, *a, **k):
+            return self._real.delete(*a, **k)
+
+    monkeypatch.setattr(scr, "_resolved_store", lambda: _BlindToDependents(store))
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._delete()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs", "the store's refusal takes the yellow box"
+    assert "refusing to delete" in box.text() and w.id in box.text(), box.text()
+    # Task 5 gave delete()'s dependents refusal field="artifact", so show_refusal adds the same fix
+    # sentence it adds to every other fielded refusal -- the race path needs no refusal of its own.
+    # The normal path still builds one, for the wording only: the store's sentence ends "pass
+    # force=True to orphan them", and no front end offers that (B6).
+    assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
+    assert store.get("prior", p.id).name == "ancestor", "the artifact survives its own refusal"
+
+
+def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, monkeypatch):
+    """B7: one action per kind and one for all seven, behind a confirmation that lists exactly the
+    rows the table calls incomplete. A directory that holds a manifest is never touched, a directory
+    that will not delete is reported and the rest still go, and nothing to do says so without
+    asking."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="keeper")
+    leftover = store.kind_dir("prior") / "_unnamed__20260917T090000"
+    leftover.mkdir(parents=True, exist_ok=True)
+    (leftover / "prior.pt").write_bytes(b"half a run, no manifest")
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    scr._sweep(all_kinds=False)                          # No -> nothing goes
+    box = SHOWN[-1]
+    assert box.button(QMessageBox.No) is box.defaultButton()
+    assert leftover.name in box.informativeText(), box.informativeText()
+    assert "no manifest.json" in box.informativeText(), box.informativeText()
+    assert leftover.is_dir() and "Nothing was removed." in scr.status.text()
+    _answer(monkeypatch, QMessageBox.Yes)                # Yes -> the leftover goes, the artifact stays
+    scr._sweep(all_kinds=False)
+    assert not leftover.exists()
+    assert store.get("prior", p.id).name == "keeper"
+    assert "Removed 1 of 1" in scr.status.text(), scr.status.text()
+    SHOWN.clear()                                        # nothing to do: no dialog at all
+    scr._sweep(all_kinds=False)
+    assert SHOWN == [] and "Nothing to remove" in scr.status.text(), scr.status.text()
+    # a directory that will not delete (a handle held open on Windows) is reported, never fatal
+    (store.kind_dir("prior") / "stuck__20260917T091000").mkdir()
+    monkeypatch.setattr(store, "sweep_incomplete",
+                        lambda kind=None: ([], [("prior", "stuck__20260917T091000",
+                                                 "PermissionError: held open")]))
+    scr._sweep(all_kinds=True)
+    assert "could not be removed" in scr.status.text() and "held open" in scr.status.text()
+
+
+def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_not(store):
+    """B6's second half, in the window's own wording (model_builder_screen.py:371 and :447). Every
+    WRITE is refused while a run is live; READING never is -- which is the whole reason the browser
+    is a plain screen and not a BasePanel (B1), so nothing here is greyed out either."""
+    from core.gui.panels.base_panel import BasePanel
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="busy")
+    leftover = store.kind_dir("prior") / "_unnamed__20260917T090000"
+    leftover.mkdir(parents=True, exist_ok=True)
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _select_ref(scr.table, p.id)
+    scr.note_edit.setText("written during a train")
+    BasePanel._running = True
+    try:
+        for action in (scr._set_note, scr._delete, lambda: scr._sweep(all_kinds=False)):
+            scr._set_status("")
+            action()
+            assert "A task is running" in scr.status.text(), scr.status.text()
+        assert SHOWN == [], "a refused action must not ask or explain in a box"
+        assert store.get("prior", p.id).note == "", "the note must not be written"
+        assert leftover.is_dir(), "the sweep must not run"
+        scr.refresh()                                   # reading is never blocked
+        assert scr.table.topLevelItemCount() >= 1
+        _select_ref(scr.table, p.id)
+        assert scr.note_edit.isEnabled() and scr.btn_delete.isEnabled(), \
+            "the browser is not a BasePanel: a live run greys nothing here"
+    finally:
+        BasePanel._running = False
+    # _select above re-read the row's (empty) note into the box, as a selection change must; type it
+    # again and the same click works now that nothing is running.
+    scr.note_edit.setText("written after the train")
+    scr._set_note()
+    assert store.get("prior", p.id).note == "written after the train"
+
+
+def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypatch):
+    """B8. Without this a picker keeps pointing at a deleted artifact: StorePicker.restore_key
+    (artifact_picker.py:165-170) silently does nothing when the saved id has vanished, leaving
+    whatever item happens to be current selected -- deliberate for a picker, and a defect the moment
+    a browser can delete. Mirrors _refresh_model_combos: the window walks its own panels.
+
+    The wiring (MainWindow._refresh_store_pickers and the store_changed connect) is the screen task's;
+    the delete that emits store_changed is this task's. This is the test of the two together."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui.main_window import MainWindow
+    from core.gui.widgets.artifact_picker import StorePicker
+    from tests._fixtures import qt_app
+    qt_app()
+    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
+    cfg = _nad_cfg()
+    keep = _prior_artifact(store, cfg, name="keep")
+    doomed = _prior_artifact(store, cfg, name="doomed", seed=3)
+    w = MainWindow()
+    try:
+        picker = w.inference_screen.prior_panel.prior_picker
+        picker.refresh()
+        picker.restore_key(doomed.id)
+        assert picker.key() == doomed.id
+        scr = w.artifact_screen
+        _show_kind(scr, "prior")
+        _select_ref(scr.table, doomed.id)
+        _answer(monkeypatch, QMessageBox.Yes)
+        scr._delete()
+        ids = [picker.combo.itemData(i) for i in range(picker.combo.count())]
+        assert doomed.id not in ids, "the picker still offers the deleted prior"
+        assert keep.id in ids and picker.key() != doomed.id
+        # and it is all THREE pickers, not just the one that happened to be looked at
+        seen = []
+        real = StorePicker.refresh
+        monkeypatch.setattr(StorePicker, "refresh",
+                            lambda self: seen.append(self.kind) or real(self))
+        w._refresh_store_pickers()
+        assert sorted(seen) == ["observation", "posterior", "prior"], seen
+    finally:
+        w.close()
+
+
+def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatch):
+    """The window's last three boxes are INSTANCE dialogs, so every box the GUI shows lands in
+    SHOWN. main_window.py showed these three with the C++ statics (QMessageBox.warning at :215 and
+    :236, QMessageBox.information at :221), which escape tests/conftest.py::_no_modal_dialogs -- it
+    patches QMessageBox.exec, the instance method. Offscreen a static spins a nested event loop
+    nothing ever closes, so a test that reached one STALLED instead of failing, which is why these
+    three sites had no test at all. The statics are patched here as a tripwire rather than left
+    live: if the conversion is ever undone, this fails naming the site instead of hanging the run.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from core.Helpers import model_store
+    from core.gui.main_window import MainWindow
+    from core.gui.panels.base_panel import BasePanel
+    from tests._fixtures import SHOWN, qt_app
+    qt_app()
+    statics = []
+    for name in ("warning", "information"):
+        monkeypatch.setattr(QMessageBox, name,
+                            lambda *a, _n=name, **k: statics.append(_n) or QMessageBox.Ok)
+
+    def boom(*a, **k):
+        raise RuntimeError("corrupt definition")
+
+    w = MainWindow()
+    try:
+        SHOWN.clear()                       # this test is about the three sites, not construction
+        monkeypatch.setattr(w.model_builder_screen, "load_existing", boom)
+        w._edit_user_model("BROKEN")        # :215 -- a definition that will not load
+        monkeypatch.setattr(model_store, "delete_user_model", boom)
+        BasePanel._running = True
+        try:
+            w._delete_user_model("BROKEN")  # :221 -- refused while a run is live, nothing asked
+        finally:
+            BasePanel._running = False
+        _answer(monkeypatch, QMessageBox.Yes)
+        w._delete_user_model("BROKEN")      # the confirmation, then :236 -- the delete itself fails
+    finally:
+        w.close()
+    assert statics == [], f"the window still shows a box with a C++ static: {statics}"
+    assert [b.windowTitle() for b in SHOWN] == ["Cannot edit model", "A task is running",
+                                                "Delete model", "Delete failed"], \
+        [b.windowTitle() for b in SHOWN]
+    assert SHOWN[0].icon() == QMessageBox.Warning and "corrupt definition" in SHOWN[0].text()
+    assert SHOWN[1].icon() == QMessageBox.Information
+    assert "before deleting a model" in SHOWN[1].text(), SHOWN[1].text()
+    assert SHOWN[3].icon() == QMessageBox.Warning and "corrupt definition" in SHOWN[3].text()
+
+
+def test_a_leftover_row_is_nothing_to_act_on_and_no_row_at_all_is_a_refusal(store):
+    """``_selected``'s two answers, which no other test here reaches.
+
+    An INCOMPLETE directory is not an artifact: the Note box and Delete are DISABLED for it and, if
+    a stale click gets through anyway, the status line says there is nothing there and points at the
+    sweep -- no rule was broken, so no yellow box. Nothing selected IS a refusal, and it carries the
+    field key whose fix sentence names the list (core/gui/fields.py's "artifact").
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    _prior_artifact(store, cfg, name="real")
+    leftover = store.kind_dir("prior") / "half_a_run__20260917T090000"
+    leftover.mkdir(parents=True, exist_ok=True)
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+
+    # (a) nothing selected -- a refresh leaves no selection (§3.5), so this is the launch state
+    assert scr.table.current_summary() is None
+    assert not scr.btn_delete.isEnabled() and not scr.note_edit.isEnabled()
+    scr._delete()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert box.text() == "No artifact is selected."
+    assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
+
+    # (b) a leftover selected: disabled, and a forced call explains rather than refuses
+    s = _select_ref(scr.table, leftover.name)
+    assert not s.complete and s.dir_name == leftover.name
+    assert not (scr.note_edit.isEnabled() or scr.btn_note.isEnabled()
+                or scr.btn_delete.isEnabled()), "an incomplete row is not an artifact"
+    assert scr.note_edit.text() == "", "there is no manifest, so there is no note to show"
+    for doing, action in (("delete", scr._delete), ("annotate", scr._set_note)):
+        SHOWN.clear()
+        scr._set_status("")
+        action()
+        assert SHOWN == [], "nothing was refused, so nothing is explained in a box"
+        said = scr.status.text()
+        assert leftover.name in said and f"nothing to {doing}" in said, said
+        assert "no manifest.json" in said and "a sweep removes" in said, said
+    assert leftover.is_dir(), "neither action may touch it"

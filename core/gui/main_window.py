@@ -220,18 +220,35 @@ class MainWindow(QMainWindow):
         self.model_builder_screen.reset()
         self.nav.go_to(self._section_index["Model builder"])
 
+    def _tell(self, title: str, text: str, icon) -> None:
+        """One plain box with an Ok button: an INSTANCE dialog shown with .exec().
+
+        Never QMessageBox.warning/information. Those are C++ statics, and the suite's session guard
+        patches the instance method only (tests/conftest.py::_no_modal_dialogs): offscreen a static
+        spins a nested event loop nothing closes, so a test that reaches one stalls instead of
+        failing. Every box in this window now goes through here or is built inline like the
+        confirmation below and the one in closeEvent.
+        """
+        box = QMessageBox(self)
+        box.setIcon(icon)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.exec()
+
     def _edit_user_model(self, name: str):
         try:
             self.model_builder_screen.load_existing(name)
         except Exception as e:                       # noqa: BLE001 -- a corrupt file must not crash
-            QMessageBox.warning(self, "Cannot edit model", f"Could not load '{name}':\n{e}")
+            self._tell("Cannot edit model", f"Could not load '{name}':\n{e}", QMessageBox.Warning)
             return
         self.nav.go_to(self._section_index["Model builder"])
 
     def _delete_user_model(self, name: str):
         if BasePanel._running:
-            QMessageBox.information(self, "A task is running",
-                                    "Wait for the running task to finish before deleting a model.")
+            self._tell("A task is running",
+                       "Wait for the running task to finish before deleting a model.",
+                       QMessageBox.Information)
             return
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
@@ -245,7 +262,7 @@ class MainWindow(QMainWindow):
         try:
             model_store.delete_user_model(name)
         except Exception as e:                       # noqa: BLE001
-            QMessageBox.warning(self, "Delete failed", str(e))
+            self._tell("Delete failed", str(e), QMessageBox.Warning)
             return
         registry.unregister(name)
         self._on_user_models_changed()
