@@ -1,11 +1,12 @@
 """Build the QApplication + MainWindow and install a last-resort excepthook that surfaces unhandled
 errors in a dialog instead of silently killing the app."""
+import logging
 import sys
 import traceback
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from core import config, registry
+from core import config, logging_root, registry
 
 from . import app_icon, fonts, mpl_theme, settings, theming
 from .main_window import MainWindow
@@ -33,7 +34,44 @@ def _install_excepthook(parent_getter):
     sys.excepthook = _excepthook
 
 
+def _library_record_sink(record) -> None:
+    """One record from a logger OUTSIDE the ``core`` tree, on the console, named by its logger (B14).
+
+    The stream is resolved AT EMIT TIME, never at construction, and that is the fix rather than the
+    bug: what broke was ``logging.basicConfig``'s handler binding ``sys.stderr`` at construction and
+    then writing into a stopped pump for the rest of the process. core/tool/logging_console.py states
+    the same rule for the tool's two handlers.
+
+    Resolving late also solves three problems at once and adds no plumbing. DURING A RUN these two
+    names ARE the run's ``_SignalStream``s (core/gui/streams.py), which are thread-safe by
+    construction and feed the pump -- so a library record arriving on the WORKER thread never touches
+    a widget, which a ``log_pane.append_line`` from the handler would have done -- and outside a run
+    they are the real console.
+
+    The level split exists because ``_SignalStream`` on err is hard-wired to the pane's ``warning``
+    level: routing an information record through stderr would put a warning triangle on it.
+
+    Named by its logger, EXCEPT for ``root``. The trigger this handler exists for is
+    ``logging.warning`` -- the module-level function, whose logger is the root logger -- so
+    ``record.name`` would read ``root`` and name nothing. For that one name the prefix falls back to
+    ``record.module``, the basename of the file that logged, and sbi's leakage warning therefore reads
+    ``library: rejection:`` (sbi/samplers/rejection/rejection.py). Walkthrough row D15 expects that
+    module name.
+    """
+    who = record.name if record.name != "root" else record.module
+    stream = sys.stderr if record.levelno >= logging.WARNING else sys.stdout
+    stream.write(f"library: {who}: {record.getMessage()}\n")
+    stream.flush()
+
+
 def build_app(argv=None):
+    # THE root-logger handler, before anything else in this process can log (B14, spec §7.1). A
+    # handler on the root FROM START-UP is what stops a library's logging.warning from calling
+    # basicConfig and installing a second one -- after which every ``core`` record would be emitted
+    # twice, the second copy into whatever stream that handler captured at construction. Never
+    # removed: the window owns the process for as long as it lives.
+    logging_root.install(_library_record_sink)
+
     # Quiet the per-time-segment bar: it wraps segs in {1,2,3} and nests a whole level under the
     # training-data bar for nothing. The solver's per-step bar stays ON -- it feeds the Solver
     # Performance meter. The GUI is the only caller that flips this; the tool keeps both bars.

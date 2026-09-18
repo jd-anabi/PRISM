@@ -2311,3 +2311,59 @@ def test_the_shows_two_honest_gaps_are_word_for_word_the_browsers_own_constants(
     capsys.readouterr()
     assert main(["artifacts", "show", "observation", ids["observation"]]) == 0
     assert ascreen._NO_RUN_LOG in capsys.readouterr().out
+
+
+# ── piece 4, B14: the tool's root sink ───────────────────────────────────────────────────────────
+def test_main_installs_the_root_handler_for_the_run_and_leaves_nothing_behind(tool_env, monkeypatch,
+                                                                             capsys):
+    """Every record from a logger OUTSIDE the ``core`` tree goes to STDERR, whatever its level,
+    prefixed with the logger that said it. Deliberately unlike the window's level split: this tool's
+    STDOUT carries results a script reads (the GPU recipe in CLAUDE.md greps ``[checkpoint] resuming
+    at batch`` off it), so a library's chatter may never land there.
+
+    ``logging.warning`` -- the module-level function, on the ROOT logger -- is sbi's own shape
+    (sbi/samplers/rejection/rejection.py:336,359), and ``root`` names nothing, so for that ONE logger
+    name the prefix falls back to ``record.module``, the basename of the file that logged:
+    ``library: rejection:`` under sbi, and this test file's own stem here (the ``logging.warning``
+    below is called from ``_prior``, which lives in this file). Walkthrough row D15 expects the module
+    name.
+
+    Two more things are pinned here, both of which only a repeated-call test can see: the handler is
+    installed FOR the handler call and removed in a finally (``main`` runs dozens of times in one
+    process under this suite), and a ``core`` record still appears exactly once, on stdout, through
+    ``console_handlers`` alone -- the doubling this handler exists to prevent would show up as the
+    same line on stderr as well."""
+    import logging
+
+    from core import logging_root, orchestrator
+    bounds, cell, root = tool_env
+    lib = logging.getLogger("a_library")
+    lib.setLevel(logging.INFO)
+    root_logger = logging.getLogger()
+    before = root_logger.handlers[:]
+
+    def _prior(cfg, ref, build_new, **kw):
+        assert logging_root.installed() is True, "the handler must exist FOR the handler call"
+        logging.warning("Only 0.5% proposal samples are accepted.")
+        lib.info("a library information record")
+        logging.getLogger("core.orchestrator").info("[budget] 2 batches x 8 rows")
+        return _art(root, "prior")
+
+    monkeypatch.setattr(orchestrator, "build_prior", _prior)
+    here = Path(__file__).stem              # record.module: the file that called logging.warning
+    try:
+        for _ in range(2):
+            capsys.readouterr()
+            assert main(["prior", *_cfg(bounds)]) == 0
+            cap = capsys.readouterr()
+            assert cap.err.count(
+                f"library: {here}: Only 0.5% proposal samples are accepted.\n") == 1, cap.err
+            assert cap.err.count("library: a_library: a library information record\n") == 1, cap.err
+            assert "library:" not in cap.out, f"a library record reached the results stream:\n{cap.out}"
+            assert cap.out.count("[budget] 2 batches x 8 rows\n") == 1, cap.out
+            assert "[budget]" not in cap.err, cap.err
+            assert logging_root.installed() is False, "main left its root handler installed"
+            assert root_logger.handlers == before, root_logger.handlers
+    finally:
+        logging_root.remove()
+        lib.setLevel(logging.NOTSET)

@@ -961,7 +961,14 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
             assert window.windowTitle() == "PRISM", window.windowTitle()
             assert default_store().root == tmp_path / "Artifacts"
             assert (tmp_path / "Artifacts").is_dir()
+            from core import logging_root
+            assert logging_root.installed() is True, \
+                "build_app must install THE root-logger handler at start-up (piece 4, B14)"
             window.close()
         assert default_store() is before, "build_app's store install leaked past the test"
     finally:
         core_config.QUIET_SEGMENT_BAR = saved_quiet
+        # build_app never removes it (the window owns the process); a test must, or every later test
+        # in this process gets a handler writing library records into its captured streams.
+        from core import logging_root
+        logging_root.remove()

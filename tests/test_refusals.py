@@ -815,3 +815,110 @@ def test_every_domain_error_is_a_refusal_and_carries_a_field():
         assert e.field == "name", cls.__name__
         assert cls("why").field is None, f"{cls.__name__}: field must default to None"
         assert cls.__doc__ and cls.__doc__.strip(), f"{cls.__name__} lost its docstring"
+
+
+# ── piece 4, B14: THE root-logger handler (spec §7.1) ────────────────────────────────────────────
+def test_the_root_handler_exists_from_startup_so_basicconfig_never_fires():
+    """WHY NO SUITE HAS EVER SEEN THIS DEFECT: pytest attaches a handler to the root logger for every
+    test phase (_pytest/logging.py, ``catching_logs.__enter__``, around line 349), so
+    ``len(root.handlers) == 0`` is never true during a test and ``basicConfig`` cannot fire. This test
+    therefore takes pytest's root handlers off, asserts the defect's PRECONDITION -- a handler-less
+    root logger makes ``logging.warning`` install a StreamHandler of its own -- asserts that
+    ``logging_root.install`` prevents exactly that, and puts them back in a finally.
+
+    Then the two halves of the filter: a record from the ``core`` tree reaches its OWN handler once
+    and the root sink NOT AT ALL (it already has the front end's handler and the artifact's log.txt),
+    while every other logger's record is handed to the sink once, with its level and its logger's
+    name intact.
+    """
+    import logging
+
+    from core import logging_root, runs
+
+    root = logging.getLogger()
+    pytest_handlers = root.handlers[:]
+    core_seen, sink_seen = [], []
+
+    class _Count(logging.Handler):
+        def emit(self, record):
+            core_seen.append((record.name, record.levelname, record.getMessage()))
+
+    own = _Count()
+    runs.LOGGER.addHandler(own)            # stands in for the front end's own handler on ``core``
+    try:
+        for h in pytest_handlers:
+            root.removeHandler(h)
+        assert root.handlers == [], "the precondition needs a handler-less root logger"
+
+        logging.warning("a library warning, with no handler installed")
+        assert len(root.handlers) == 1 and isinstance(root.handlers[0], logging.StreamHandler), \
+            "logging.warning no longer calls basicConfig: the defect this handler prevents is gone"
+        for h in root.handlers[:]:
+            root.removeHandler(h)
+
+        logging_root.install(sink_seen.append)
+        assert logging_root.installed() is True
+        logging.warning("a library warning, with THE root handler installed")
+        assert len(root.handlers) == 1, [type(h).__name__ for h in root.handlers]
+        assert [r.getMessage() for r in sink_seen] == \
+            ["a library warning, with THE root handler installed"], sink_seen
+        assert sink_seen[-1].levelno == logging.WARNING and sink_seen[-1].name == "root", \
+            (sink_seen[-1].levelno, sink_seen[-1].name)
+
+        sink_seen.clear()
+        logging.getLogger("core.probe").info("the pipeline's own voice")
+        assert sink_seen == [], "a core record reached the root sink: the filter is not dropping it"
+        assert core_seen == [("core.probe", "INFO", "the pipeline's own voice")], core_seen
+
+        logging_root.remove()
+        assert logging_root.installed() is False and root.handlers == []
+    finally:
+        logging_root.remove()
+        runs.LOGGER.removeHandler(own)
+        for h in pytest_handlers:
+            root.addHandler(h)
+
+
+def test_caplog_still_sees_core_records_while_the_root_handler_is_installed(caplog):
+    """The drop is a ``logging.Filter`` ON THE HANDLER, never ``core.propagate = False``: ``caplog``
+    reads off the root logger and the propagation is pinned by
+    test_the_core_logger_is_at_info_by_import above, and ``RunLog`` plus both front-end handlers sit
+    on the ``core`` logger itself, so a filter leaves all three untouched."""
+    import logging
+
+    from core import logging_root
+
+    seen = []
+    logging_root.install(seen.append)
+    try:
+        with caplog.at_level(logging.INFO, logger="core"):
+            logging.getLogger("core.probe").info("a record caplog must still see")
+            logging.getLogger("a_library").warning("and one the sink may have")
+    finally:
+        logging_root.remove()
+    assert "a record caplog must still see" in caplog.text
+    assert [r.getMessage() for r in seen] == ["and one the sink may have"], seen
+
+
+def test_logging_root_imports_only_the_standard_librarys_logging():
+    """``python -m core --help`` must stay torch-free and the tool imports this module at its top, so
+    the same pin the refusals module carries applies here: the import statements name ``logging`` and
+    nothing else, a fresh interpreter that imports it has no torch loaded, and no logger's level is
+    touched (core/runs.py sets the ``core`` level once, at import, and nothing else ever does)."""
+    src = (REPO / "core" / "logging_root.py").read_text(encoding="utf-8")
+    imported = set()
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Import):
+            imported |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module)
+    assert imported == {"logging"}, imported
+    calls = [ast.unparse(n.func) for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)]
+    assert not any(c.endswith("setLevel") for c in calls), calls
+    probe = ("import sys, core.logging_root; "
+             "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.')); "
+             "sys.exit(repr(bad) if bad else 0)")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(REPO), capture_output=True, text=True,
+                       timeout=120)
+    assert r.returncode == 0, r.stderr

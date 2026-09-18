@@ -13,6 +13,7 @@ import tempfile
 import traceback
 from pathlib import Path
 
+from core import logging_root
 from core.refusals import Refusal
 
 from . import browse, config_args, diagnostics, fdt, smoke, stages
@@ -77,6 +78,25 @@ def _remove_if_still_empty(root: Path) -> None:
         pass
 
 
+def _library_record_sink(record) -> None:
+    """One record from a logger OUTSIDE the ``core`` tree, on STDERR, named by its logger (B14).
+
+    Everything, whatever its level, and never stdout: this tool's stdout carries results a script
+    reads, so a library's chatter may not land there. Resolved AT EMIT TIME for the reason
+    logging_console.py gives -- capsys swaps the streams per test, and a handler holding the stream it
+    was built with writes into a buffer that is nobody's.
+
+    Named by its logger, EXCEPT for ``root``: the trigger this handler exists for is
+    ``logging.warning``, the module-level function, whose logger is the root logger, so
+    ``record.name`` would read ``root`` and name nothing. There the prefix falls back to
+    ``record.module``, the basename of the file that logged -- ``library: rejection:`` under sbi
+    (sbi/samplers/rejection/rejection.py), which is what walkthrough row D15 expects.
+    """
+    who = record.name if record.name != "root" else record.module
+    sys.stderr.write(f"library: {who}: {record.getMessage()}\n")
+    sys.stderr.flush()
+
+
 def main(argv=None) -> int:
     """Parse, build the store, run one handler. Exit codes: 0 success or --help; 2 a usage error;
     1 a refusal or a bug; 130 Ctrl-C."""
@@ -99,6 +119,12 @@ def main(argv=None) -> int:
     else:
         root = config.artifacts_root()
     rc = 1
+    # THE root-logger handler for this process (piece 4, B14, spec §7.1). Because a handler exists
+    # from here on, a library's ``logging.warning`` can no longer call ``basicConfig`` and install a
+    # second one, which would emit every ``core`` record a second time. AFTER the parse, so ``--help``
+    # stays torch-free; REMOVED IN THE FINALLY below, because ``main`` runs repeatedly in one process
+    # under the suite and a handler left behind would repeat every later run's library records.
+    logging_root.install(_library_record_sink)
     try:
         root.mkdir(parents=True, exist_ok=True)
         # use_store AND store= at every call: the context makes the default right for anything that
@@ -153,6 +179,8 @@ def main(argv=None) -> int:
         traceback.print_exc()
         print(f"prism {args.cmd}: *** FAILED ***", file=sys.stderr)
         rc = 1
+    finally:
+        logging_root.remove()
     if auto_root and rc != 0:
         _remove_if_still_empty(root)
     return rc

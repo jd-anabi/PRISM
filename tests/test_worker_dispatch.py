@@ -1026,3 +1026,64 @@ def test_a_sort_applied_before_the_first_fill_is_held_and_not_lost():
     assert other.sort_state() == at.DEFAULT_SORT
     other.set_rows("posterior", [_row("posterior", name="p")])
     assert other.sort_state() == at.DEFAULT_SORT, "a spent sort came back on a wider kind"
+
+
+# ── piece 4, B14: the window's root sink ─────────────────────────────────────────────────────────
+def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream_late(capsys):
+    """Below WARNING to ``sys.stdout``, at WARNING and above to ``sys.stderr``, BOTH RESOLVED AT EMIT
+    TIME, as ``library: <logger name>: <message>``.
+
+    Resolving late is the FIX, not the bug: what broke was basicConfig's handler binding the stream at
+    CONSTRUCTION and then writing into a stopped pump for the rest of the process, and
+    core/tool/logging_console.py already states the resolve-late rule for exactly this reason.
+    Resolving late also solves three problems at once with no plumbing -- DURING A RUN those two names
+    ARE the run's ``_SignalStream``s, which are thread-safe by construction and feed the pump, so a
+    library record arriving on the WORKER thread never touches a widget (a ``log_pane.append_line``
+    from the handler would have), and outside a run they are the real console.
+
+    The level split is not cosmetic: ``_SignalStream`` on err is hard-wired to the pane's ``warning``
+    level, so routing an information record through stderr would put a warning triangle on it.
+
+    ``logging.warning`` (the module-level function, on the ROOT logger) is sbi's own shape -- its
+    leakage warnings at sbi/samplers/rejection/rejection.py:336,359 are that call -- and its logger
+    name is ``root``, which names nothing. So for that ONE name the prefix falls back to
+    ``record.module``, the basename of the file that logged: ``library: rejection:`` under sbi, and
+    this test file's own stem here. Walkthrough row D15 expects that module name.
+    """
+    import logging
+
+    from core import logging_root
+    from core.gui.app import _library_record_sink
+    from tests._fixtures import pump, qt_app
+
+    app = qt_app()
+    lib = logging.getLogger("a_library")
+    lib.setLevel(logging.INFO)          # a library that lowers its own level; the root sits at WARNING
+    logging_root.install(_library_record_sink)
+    try:
+        capsys.readouterr()
+        lib.info("an information record")
+        logging.warning("Only 0.5% proposal samples are accepted.")
+        cap = capsys.readouterr()
+        here = Path(__file__).stem          # record.module: the file that called logging.warning
+        assert cap.out == "library: a_library: an information record\n", cap.out
+        assert cap.err == f"library: {here}: Only 0.5% proposal samples are accepted.\n", cap.err
+
+        capsys.readouterr()
+        logging.getLogger("core.probe").warning("the pipeline's own voice")
+        cap = capsys.readouterr()
+        assert (cap.out, cap.err) == ("", ""), cap
+
+        signals = WorkerSignals()
+        lines = []
+        signals.log_batch.connect(lambda batch: lines.extend(batch))
+        signals.rows.connect(lambda _s: None)
+        with redirect_streams(signals):
+            lib.warning("a leaky posterior")
+            lib.info("and a quiet note")
+        pump(app)
+        assert ("library: a_library: a leaky posterior", "warning") in lines, lines
+        assert ("library: a_library: and a quiet note", "info") in lines, lines
+    finally:
+        logging_root.remove()
+        lib.setLevel(logging.NOTSET)
