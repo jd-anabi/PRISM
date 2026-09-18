@@ -2075,15 +2075,21 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
     """The other half of B6: because no force is offered, an artifact anything depends on cannot be
     deleted AT ALL, and the refusal names every dependent -- in the TOOL's OWN WORDS (fix round 1,
     IMPORTANT 1), never the store's raw sentence, which ends "pass force=True to orphan them": a step
-    nothing in either front end offers, so it must never reach an operator. ``tool_run``'s ``tp`` has
-    both kinds: the posterior ``tpost`` names it as a parent, and the real pipeline's
-    ``--checkpoint-every 1`` cache records the same parent link (only a synthetic, hand-built
-    manifest omits it -- the fingerprint-only case ``_FINGERPRINT_DEPENDENT`` states in its own
-    words, which the GUI's own dependents test exercises)."""
+    nothing in either front end offers, so it must never reach an operator.
+
+    Fix round 2: ``tool_run`` is MODULE-scoped, so every test in this file shares one store, and
+    ``tp`` -- the one prior every SBI test in this module trains against -- accumulates a dependent
+    for every posterior, calibration and cache an EARLIER-running test in this module built against
+    it (``test_validate_and_simulated_infer``'s ``tcal`` among them). A hard-coded "2 artifact(s)"
+    was true only when this test happened to run first, or alone -- so the expected COUNT and the
+    expected IDS are read off ``s.dependents`` itself, which is the one ground truth that holds no
+    matter what the rest of the module has built by the time this runs."""
     from core.artifacts import ArtifactStore
     bounds, cell, root = tool_run
     s = ArtifactStore(root)
     before = s.get("prior", "tp").id
+    deps = s.dependents("prior", before)
+    assert deps, "tool_run's tp is trained against and always has at least one dependent"
 
     capsys.readouterr()
     assert main(["artifacts", "rm", "prior", "tp"]) == 1
@@ -2092,9 +2098,9 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
     assert len(lines) == 1, err
     line = lines[0]
     assert "refusing to delete prior tp" in line, line
-    assert "2 artifact(s) depend on it" in line, line
-    assert "posterior tpost" in line and "it names this prior as a parent" in line, line
-    assert "simulation (unnamed)" in line, line
+    assert f"{len(deps)} artifact(s) depend on it" in line, line
+    for dep_kind, dep_id, _dep_name in deps:
+        assert f"[{dep_id}]" in line, (dep_kind, dep_id, line)
     assert "Delete those first." in line, line
     assert "force" not in line.lower(), line
     assert s.get("prior", "tp").id == before, "a refusal removed something"
