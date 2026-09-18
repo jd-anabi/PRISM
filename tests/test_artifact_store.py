@@ -3642,3 +3642,99 @@ def test_delete_refuses_with_the_artifact_field_and_says_force_true(store):
     store.delete("inference", child.id)
     store.delete("posterior", parent.id)           # the dependent is gone; no force needed
     assert store.list("posterior") == [] and store.list("inference") == []
+
+
+def _short_name(path: Path) -> "str | None":
+    """The Windows 8.3 short name for ``path``'s own component, or None when this platform is not
+    Windows, or the volume's 8dot3name generation is disabled (a per-volume policy) so no distinct
+    short alias exists -- the leg that uses this skips cleanly rather than assume one exists."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    buf = ctypes.create_unicode_buffer(260)
+    n = ctypes.windll.kernel32.GetShortPathNameW(str(path), buf, len(buf))
+    if not n:
+        return None
+    short = Path(buf.value[:n]).name
+    return short if short.lower() != path.name.lower() else None
+
+
+def test_remove_incomplete_cannot_be_defeated_by_an_alias_for_a_real_directory(store):
+    """Fix round 1 (CRITICAL, reproduced against the pre-fix code by the review): a plain string
+    compare (``s.name == dir_name``) against ``_entries``'s listing can be defeated by any spelling
+    Windows resolves to the SAME directory as a real artifact's -- a case variant, an 8.3 short
+    name, or a trailing dot that Win32 strips -- deleting a complete, possibly dependency-bearing
+    artifact while bypassing ``delete()``'s dependency check entirely. The fix drives the match off
+    the filesystem's own identity (``os.path.samefile`` against each ``_entries`` row) rather than
+    a string, so it cannot be fooled by a spelling; this test pins that every alias is refused and
+    the artifact is untouched.
+    """
+    real = _make(store, "posterior", name="mother", body=_bodies()["posterior"])
+    real_name = real.dir.name
+
+    def _still_there():
+        assert real.dir.is_dir() and store.get("posterior", real.id).name == "mother"
+
+    aliases = [real_name.upper()]
+    if real_name.lower() != real_name:
+        aliases.append(real_name.lower())
+    aliases.append(real_name + ".")
+    for alias in aliases:
+        with pytest.raises(st.StoreError, match="holds a valid posterior manifest") as e:
+            store.remove_incomplete("posterior", alias)
+        assert e.value.field == "artifact", (alias, e.value.field)
+        _still_there()
+
+    short = _short_name(real.dir)
+    if short is not None:
+        with pytest.raises(st.StoreError, match="holds a valid posterior manifest") as e:
+            store.remove_incomplete("posterior", short)
+        assert e.value.field == "artifact"
+        _still_there()
+
+    # The dependency-bearing artifact from the delete tests: remove_incomplete refuses it as a
+    # COMPLETE artifact before dependents even enter into it -- it does not need the dependency
+    # check to refuse it -- but it must never be reachable through this path either.
+    child = _make(store, "inference", name="child", body={"results": {"n_samples": 5}},
+                  parents={"posterior": real.id})
+    with pytest.raises(st.StoreError, match="holds a valid posterior manifest") as e:
+        store.remove_incomplete("posterior", real_name)
+    assert e.value.field == "artifact"
+    _still_there()
+    assert child.dir.is_dir()
+
+
+def test_remove_incomplete_wraps_an_rmtree_failure_as_a_fielded_refusal(store, monkeypatch):
+    """Fix round 1 [Important]: a junction or symlink makes ``shutil.rmtree`` raise a plain OSError,
+    which is not a ``Refusal`` and carries no field key -- a front end catching ``Refusal`` would
+    see an unhandled crash instead. ``remove_incomplete`` must wrap it as a fielded ``StoreError``,
+    the way ``sweep_incomplete`` already handles its own per-directory failures."""
+    names = _leftovers(store, "prior")
+    target = store.kind_dir("prior") / names[0]
+
+    def _boom(path, **kw):
+        raise OSError("simulated junction failure")
+
+    monkeypatch.setattr(st, "_rmtree_retry", _boom)
+    with pytest.raises(st.StoreError, match="simulated junction failure") as e:
+        store.remove_incomplete("prior", names[0])
+    monkeypatch.undo()
+    assert e.value.field == "artifact"
+    assert target.is_dir(), "the injected failure must not have removed anything"
+
+
+def test_remove_incomplete_refuses_to_report_success_when_the_directory_survives(store, monkeypatch):
+    """Fix round 1 [Minor]: a path trick (a trailing space or ``...`` that Win32 quietly resolves to
+    nothing) can make ``shutil.rmtree`` raise ``FileNotFoundError``, which ``_rmtree_retry`` treats
+    as "already gone" -- so a naive caller reports success on a directory it never touched.
+    ``remove_incomplete`` must check for itself that the directory is actually gone before
+    returning it. The failure is injected (a no-op fake ``_rmtree_retry``) so the pin holds on any
+    filesystem."""
+    names = _leftovers(store, "prior")
+    target = store.kind_dir("prior") / names[0]
+    monkeypatch.setattr(st, "_rmtree_retry", lambda path, **kw: None)   # "succeeds" but removes nothing
+    with pytest.raises(st.StoreError, match="was not removed") as e:
+        store.remove_incomplete("prior", names[0])
+    monkeypatch.undo()
+    assert e.value.field == "artifact"
+    assert target.is_dir(), "the monkeypatched rmtree never actually removed it"

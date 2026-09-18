@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import math
+import os
 import re
 import shutil
 import time
@@ -611,8 +612,19 @@ class ArtifactStore:
         real artifact without the dependency check (piece 4, B7).
 
         Refuses, as a StoreError with ``field="artifact"``: an unknown kind; a ``dir_name`` that is
-        not a direct child (any separator, ``..``, an absolute path); a name that is no directory; and
-        -- the one that matters -- a directory ``_entries`` classifies as COMPLETE.
+        not a direct child (any separator, ``..``, an absolute path); a name that resolves to no
+        directory at all; and -- the one that matters -- a directory ``_entries`` classifies as
+        COMPLETE.
+
+        Fix round 1 (CRITICAL): the completeness check does NOT compare ``dir_name`` as a string
+        against each entry's name. Windows addresses one directory through many spellings -- a case
+        variant, an 8.3 short name, a trailing dot it silently strips -- so a string compare against
+        ``d / dir_name`` could resolve to a REAL artifact's directory while failing to match that
+        same artifact's name in ``_entries``'s listing, and the manifest check would then see no
+        match and treat a real, possibly dependency-bearing artifact as a nameless leftover. Instead,
+        every directory in ``_entries(kind)`` is checked with ``os.path.samefile`` against the
+        candidate path: that asks the FILESYSTEM whether the two names denote the same object, so
+        the match is exact by construction and no spelling can defeat it.
         """
         if kind not in KIND_DIRS:
             # Not kind_dir()'s own refusal, which carries no field key: every refusal on this path
@@ -622,20 +634,43 @@ class ArtifactStore:
         if (not dir_name or dir_name in (".", "..") or "/" in dir_name or "\\" in dir_name
                 or dir_name != Path(dir_name).name):
             # The separator checks are not redundant with the Path comparison: on POSIX a backslash
-            # is an ordinary character, so "sub\\x" would pass it.
+            # is an ordinary character, so "sub\\x" would pass it. Necessary, but -- per the review --
+            # NOT sufficient: they reject an obvious path, not an alias of a single real name.
             raise StoreError(f"{dir_name!r} is not the name of a directory directly under {d}; a "
                              f"leftover is removed by its own folder name, never by a path",
                              field="artifact")
-        sub = d / dir_name
-        if not sub.is_dir():
+        candidate = d / dir_name
+        if not candidate.is_dir():
             raise StoreError(f"no directory named {dir_name!r} under {d}", field="artifact")
-        m = next((mm for s, mm, _ in self._entries(kind) if s.name == dir_name), None)
+        sub = m = None
+        for s, mm, _ in self._entries(kind):
+            try:
+                if os.path.samefile(candidate, s):
+                    sub, m = s, mm
+                    break
+            except OSError:
+                continue        # an entry that vanished mid-scan is not a match, not a crash
+        if sub is None:
+            raise StoreError(f"no directory named {dir_name!r} under {d}", field="artifact")
         if m is not None:
             raise StoreError(
                 f"{dir_name!r} holds a valid {kind} manifest, so it is a real artifact and not a "
                 f"leftover; remove it with delete(), which refuses it while anything depends on it",
                 field="artifact")
-        _rmtree_retry(sub)
+        try:
+            _rmtree_retry(sub)
+        except OSError as e:
+            # A junction or symlink can make rmtree fail in a way _rmtree_retry's own
+            # FileNotFoundError/PermissionError handling does not absorb. That exception is not a
+            # Refusal and carries no field key, so a front end catching Refusal would see it as an
+            # unhandled crash rather than a reported refusal.
+            raise StoreError(f"could not remove {dir_name!r} under {d}: {type(e).__name__}: {e}",
+                             field="artifact") from e
+        if sub.exists():
+            # A path trick (a trailing space or "..." that Win32 quietly resolves to nothing) can
+            # make shutil.rmtree raise FileNotFoundError, which _rmtree_retry treats as "already
+            # gone" -- so trust is verified here rather than assumed from a call that returned.
+            raise StoreError(f"{dir_name!r} under {d} was not removed", field="artifact")
         return sub
 
     def sweep_incomplete(self, kind: "str | None" = None) -> "tuple[list, list]":
