@@ -37,6 +37,10 @@ to read the column titles from the one place that owns them: importing it would 
 tests/test_tool.py imports BOTH front ends and pins the two column sets against each other.
 """
 import argparse
+import sys
+from pathlib import Path
+
+from core.refusals import NOTE_MAX_CHARS
 
 # The seven kinds in KIND_DIRS order, restated as a literal: reading core.artifacts.store.KIND_DIRS
 # at parser-build time would import torch (core/artifacts/__init__.py imports .store, which imports
@@ -74,6 +78,13 @@ that is what LOADING it does (`python -m core validate --posterior ...`).
 
   list [<kind>]         one line per artifact; with no kind, all seven under headings
   show <kind> <ref>     the manifest, then the records of the run that wrote it
+  note <kind> <ref> --note TEXT
+                        set the note: one line, at most 200 characters; '' clears it
+  rm <kind> <ref>       delete one artifact. There is no --force: an artifact anything depends on
+                        cannot be deleted at all, so delete its children first
+  sweep [<kind>]        remove every directory with no usable manifest; with no kind, all seven
+  summary <kind> <ref> [--out PATH]
+                        the lineage report: this artifact, then its parents, oldest last
 
 <kind> is one of prior, simulation, posterior, observation, calibration, inference, diagnostic.
 <ref> is an artifact's name or its id. An empty listing exits 0: a script must be able to tell
@@ -188,17 +199,82 @@ def _show(args, store) -> int:
     text, truncated = store.read_log(args.kind, args.ref, max_bytes=LOG_TAIL_BYTES)
     if text is None:
         # TWO honest gaps behind one answer: read_log says (None, False) for both, so the KIND is
-        # what tells them apart. Both sentences are the browser's, word for word (design §3.3) --
-        # one operator reads both front ends.
+        # what tells them apart. Both sentences are the browser's OWN CONSTANTS, word for word
+        # (core/gui/screens/artifact_screen.py's _CACHE_NO_LOG and _NO_RUN_LOG) -- one operator
+        # reads both front ends.
         print("  a training cache keeps no log: it is written batch by batch across resumes and "
-              "shared by every posterior that names it."
+              "shared by every posterior that names it"
               if args.kind == "simulation" else
-              "  written outside a run: nothing captured this artifact's records.")
+              "  written outside a run")
         return 0
     if truncated:
         print(f"  (only the last {LOG_TAIL_BYTES} bytes are shown; the log is longer)")
     if not text:
         print("  the run wrote no records. Silence is a record too: the file is there and empty.")
+    else:
+        print(text, end="" if text.endswith("\n") else "\n")
+    return 0
+
+
+def _note(args, store) -> int:
+    """``note <kind> <ref> --note TEXT``. B5's rule runs BEFORE the store is touched, so a bad note
+    rewrites no manifest; ``""`` clears the note, which is why ``--note`` is required rather than
+    defaulted -- a note must never be cleared by leaving a flag off.
+
+    Two refusals, two field keys, both from elsewhere: ``require_note``'s (the over-long note, the
+    newline) carries field="note", so the ladder prints ``(--note)``, while ``set_note``'s "no
+    complete artifact" carries field="artifact", whose entry in core/tool/fields.py is None -- the
+    tool names the artifact positionally -- so that line simply ends at the message."""
+    from core.refusals import require_note
+    text = require_note("note", args.note)
+    m = store.set_note(args.kind, args.ref, text)
+    label = m.name or m.id
+    if m.note:
+        print(f"[prism] {args.kind} {label}: note = {m.note!r}")
+    else:
+        print(f"[prism] {args.kind} {label}: note cleared")
+    return 0
+
+
+def _rm(args, store) -> int:
+    """``rm <kind> <ref>``. NO ``--force`` (B6): the store refuses anything with dependents, naming
+    each, and that refusal is the last word -- there is no flag here that can orphan a child. The
+    path is read before the delete so the line can say what went."""
+    sub = store.path(args.kind, args.ref)        # a missing ref: StoreError -> the ladder's exit 1
+    store.delete(args.kind, args.ref)
+    print(f"[prism] removed {args.kind} {args.ref}: {sub}")
+    return 0
+
+
+def _sweep(args, store) -> int:
+    """``sweep [<kind>]``: remove every directory of a kind (or of all seven) with no usable
+    manifest. §4.3: nothing to remove is 0; a directory that would not delete is 1, naming each. A
+    failure never stops the sweep -- ``sweep_incomplete`` finishes the rest and reports it."""
+    removed, failed = store.sweep_incomplete(args.kind)
+    for kind, dir_name in removed:
+        print(f"[prism] removed {kind} leftover {dir_name}")
+    for kind, dir_name, reason in failed:
+        print(f"prism artifacts: could not remove {kind} leftover {dir_name}: {reason}",
+              file=sys.stderr)
+    if not removed and not failed:
+        print("[prism] nothing to sweep: every directory here carries a usable manifest.")
+    return 1 if failed else 0
+
+
+def _summary(args, store) -> int:
+    """``summary <kind> <ref> [--out PATH]``: the lineage report -- the artifact, then its parents
+    transitively, a parent absent from the store printed as MISSING rather than skipped (design §5).
+    A file or stdout, never an eighth store kind (B10).
+
+    newline="\\n" explicitly (P23): write_text's default newline=None translates every "\\n" to
+    "\\r\\n" on Windows, and the browser's own Lineage report button writes the same text with
+    newline="\\n" -- so without it §5's "the same bytes whichever front end made it" is quietly
+    false."""
+    from core.artifacts import render_lineage
+    text = render_lineage(store, args.kind, args.ref)
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8", newline="\n")
+        print(f"[prism] lineage report: {args.out}")
     else:
         print(text, end="" if text.endswith("\n") else "\n")
     return 0
@@ -215,7 +291,8 @@ def register(subparsers) -> dict:
         "artifacts", help="read, annotate and tidy the artifact store (loads nothing, simulates "
                           "nothing)",
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
-    modes = p.add_subparsers(dest="mode", required=True, metavar="{list,show}")
+    modes = p.add_subparsers(dest="mode", required=True,
+                             metavar="{list,show,note,rm,sweep,summary}")
 
     ls = modes.add_parser("list", help="one line per artifact of a kind, or of all seven")
     ls.add_argument("kind", nargs="?", default=None, metavar="<kind>", help=_KIND)
@@ -226,4 +303,29 @@ def register(subparsers) -> dict:
     show.add_argument("kind", metavar="<kind>", help=_KIND)
     show.add_argument("ref", metavar="<ref>", help=_REF)
     show.set_defaults(handler=_show)
+
+    note = modes.add_parser("note", help="set or clear one artifact's note")
+    note.add_argument("kind", metavar="<kind>", help=_KIND)
+    note.add_argument("ref", metavar="<ref>", help=_REF)
+    note.add_argument("--note", required=True, metavar="TEXT",
+                      help=f"one line, at most {NOTE_MAX_CHARS} characters; '' clears it. A note "
+                           f"with a newline, or a longer one, is refused rather than trimmed to fit")
+    note.set_defaults(handler=_note)
+
+    rm = modes.add_parser("rm", help="delete one artifact; refused when anything depends on it")
+    rm.add_argument("kind", metavar="<kind>", help=_KIND)
+    rm.add_argument("ref", metavar="<ref>", help=_REF)
+    rm.set_defaults(handler=_rm)
+
+    sweep = modes.add_parser("sweep", help="remove every directory with no usable manifest")
+    sweep.add_argument("kind", nargs="?", default=None, metavar="<kind>",
+                       help=f"{_KIND}; with no kind, all seven")
+    sweep.set_defaults(handler=_sweep)
+
+    summary = modes.add_parser("summary", help="the lineage report: this artifact, then its parents")
+    summary.add_argument("kind", metavar="<kind>", help=_KIND)
+    summary.add_argument("ref", metavar="<ref>", help=_REF)
+    summary.add_argument("--out", default=None, metavar="PATH",
+                         help="write the report here instead of to stdout")
+    summary.set_defaults(handler=_summary)
     return {"artifacts": p}

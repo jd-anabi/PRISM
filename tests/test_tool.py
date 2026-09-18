@@ -1991,3 +1991,220 @@ def test_the_artifacts_family_takes_no_configuration_flags_and_its_help_costs_no
     r = subprocess.run([sys.executable, "-c", probe], cwd=str(config.REPO_ROOT),
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_artifacts_note_sets_trims_and_clears_a_note(browse_store, capsys):
+    """B5: the note is one line, trimmed, and a blank one CLEARS it. ``--note`` is a flag rather than
+    a positional precisely so core/tool/fields.py can map the ``note`` key to a real option string --
+    the table's values are pinned against build_parser()'s own option strings, both ways."""
+    from core.artifacts import ArtifactStore
+    root, ids = browse_store
+    s = ArtifactStore(root)
+
+    capsys.readouterr()
+    assert main(["artifacts", "note", "prior", ids["prior"], "--note", "  the first fit  "]) == 0
+    assert s.get("prior", ids["prior"]).note == "the first fit", "require_note trims, and only trims"
+    assert "the first fit" in capsys.readouterr().out
+
+    assert main(["artifacts", "note", "prior", ids["prior"], "--note", ""]) == 0
+    assert s.get("prior", ids["prior"]).note == "", "a blank note clears it"
+
+
+def test_a_note_that_breaks_the_rule_is_refused_naming_the_flag(browse_store, capsys):
+    """V2 on the note: no clamp and no silent default. An over-long note is refused with BOTH numbers
+    in the sentence, a newline is refused rather than flattened, and the manifest is untouched in
+    either case. The flag comes from core/tool/fields.py's table, appended by main's ladder -- and
+    only for a refusal about the note TEXT, which is ``require_note``'s (field="note"). The third leg
+    is the other refusal this mode can raise: ``set_note``'s own "no complete artifact", which carries
+    field="artifact" (spec §12 row 1), a key whose flag is None -- so that line ends at the message."""
+    from core.artifacts import ArtifactStore
+    from core.refusals import NOTE_MAX_CHARS
+    root, ids = browse_store
+    s = ArtifactStore(root)
+    before = s.get("prior", ids["prior"]).note
+
+    capsys.readouterr()
+    assert main(["artifacts", "note", "prior", ids["prior"],
+                 "--note", "a" * (NOTE_MAX_CHARS + 1)]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+    assert len(lines) == 1 and lines[0].endswith("(--note)"), err
+    assert str(NOTE_MAX_CHARS) in lines[0] and str(NOTE_MAX_CHARS + 1) in lines[0], lines[0]
+    assert "raised at" not in err and "Traceback" not in err, err
+
+    capsys.readouterr()
+    assert main(["artifacts", "note", "prior", ids["prior"], "--note", "a\nb"]) == 1
+    assert "(--note)" in capsys.readouterr().err
+    assert s.get("prior", ids["prior"]).note == before, "a refused note changed the manifest"
+
+    # A ref that names no artifact is a DIFFERENT refusal: set_note's, with field="artifact" (spec
+    # §12 row 1), whose entry in core/tool/fields.py is None because the tool names the artifact
+    # positionally. fix_sentence owns the parentheses, so the line simply ends at the message -- no
+    # "(--note)" here, because the note is not what is wrong.
+    capsys.readouterr()
+    assert main(["artifacts", "note", "prior", "nosuch", "--note", "a fine note"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+    assert len(lines) == 1 and "nosuch" in lines[0], err
+    assert not lines[0].rstrip().endswith(")"), f"no trailing parenthetical: {lines[0]}"
+    assert "--note" not in lines[0], lines[0]
+
+
+def test_artifacts_rm_offers_no_force_and_deletes_one_artifact(browse_store, capsys):
+    """B6: delete is one artifact at a time and there is NO force in either front end, so the store's
+    refusal is the last word. A diagnostic is the leaf case -- ``_PARENT_KEYS["diagnostic"]`` is
+    empty, so nothing can ever name one as a parent."""
+    import argparse
+    from core.artifacts import ArtifactStore, StoreError
+    root, ids = browse_store
+    modes = {name: sub for a in build_parser().subcommands["artifacts"]._actions
+             if isinstance(a, argparse._SubParsersAction) for name, sub in a.choices.items()}
+    assert "--force" not in modes["rm"]._option_string_actions, "B6: no force in either front end"
+
+    s = ArtifactStore(root)
+    gone = s.path("diagnostic", ids["diagnostic"])
+    capsys.readouterr()
+    assert main(["artifacts", "rm", "diagnostic", ids["diagnostic"]]) == 0
+    assert str(gone) in capsys.readouterr().out
+    assert not gone.exists()
+    with pytest.raises(StoreError):
+        s.get("diagnostic", ids["diagnostic"])
+
+
+def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys):
+    """The other half of B6: because no force is offered, an artifact anything depends on cannot be
+    deleted AT ALL, and the refusal names every dependent. ``tool_run``'s ``tp`` has both kinds: the
+    posterior ``tpost`` names it as a parent, and the training cache ``--checkpoint-every 1`` wrote
+    holds it only by FINGERPRINT, with no recorded parent link -- the case the browser has to state in
+    its own words and the tool gets from the store's message."""
+    from core.artifacts import ArtifactStore
+    bounds, cell, root = tool_run
+    s = ArtifactStore(root)
+    before = s.get("prior", "tp").id
+
+    capsys.readouterr()
+    assert main(["artifacts", "rm", "prior", "tp"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+    assert len(lines) == 1, err
+    assert "refusing to delete" in lines[0] and "name it as a parent" in lines[0], lines[0]
+    assert "posterior" in lines[0] and "simulation" in lines[0], lines[0]
+    assert s.get("prior", "tp").id == before, "a refusal removed something"
+
+
+def test_artifacts_sweep_removes_only_the_unusable_directories(browse_store, capsys):
+    """B7: one action removes every directory of a kind that has no usable manifest, through a store
+    call that CAN ONLY remove such a directory -- ``delete`` resolves through ``_find``, which never
+    returns a manifest-less entry, and ``remove_incomplete`` is its complement. §4.3: nothing to
+    remove is exit 0, and it says so rather than printing nothing.
+
+    NOTE (repository fact the brief could not know): ``build_browse_store`` (Task 9) already seeds
+    THREE unusable directories under ``priors/`` -- ``ids["bad"]`` -- for the store shapes
+    ``_entries`` classifies (no manifest, unparseable manifest, a valid manifest of another kind).
+    All three carry no usable ``prior`` manifest, so a correct sweep removes them too, alongside this
+    test's own leftover; the property under test is that the one directory with a USABLE manifest
+    survives, not that every OTHER pre-existing directory does."""
+    root, ids = browse_store
+    leftover = root / "priors" / "_unnamed__20260101T000000"
+    leftover.mkdir(parents=True, exist_ok=True)
+    bad_names = set(ids["bad"]) | {leftover.name}
+    kept = [p for p in (root / "priors").iterdir() if p.name not in bad_names]
+    assert kept, "build_browse_store wrote a prior"
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior"]) == 0
+    out = capsys.readouterr().out
+    assert "_unnamed__20260101T000000" in out, out
+    for name in ids["bad"]:
+        assert name in out, out
+        assert not (root / "priors" / name).exists()
+    assert not leftover.exists()
+    assert all(p.exists() for p in kept), "sweep removed an artifact with a usable manifest"
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior"]) == 0
+    assert "nothing to sweep" in capsys.readouterr().out
+
+
+def test_a_sweep_that_could_not_remove_something_exits_1_naming_it(browse_store, monkeypatch, capsys):
+    """§4.3: a sweep that removed everything is 0; one that could not remove a directory is 1, naming
+    each failure. A held handle on Windows is what that stands for and it cannot be provoked on
+    demand, so the two lists are injected on the store's own method -- what is under test is the
+    ladder, not the removal."""
+    from core.artifacts import ArtifactStore
+    root, ids = browse_store
+    monkeypatch.setattr(
+        ArtifactStore, "sweep_incomplete",
+        lambda self, kind=None: ([("prior", "gone__1")],
+                                 [("posterior", "stuck__2", "PermissionError: in use")]))
+    capsys.readouterr()
+    assert main(["artifacts", "sweep"]) == 1
+    cap = capsys.readouterr()
+    assert "gone__1" in cap.out, cap.out
+    assert "stuck__2" in cap.err and "in use" in cap.err, cap.err
+
+
+def test_artifacts_summary_prints_the_lineage_or_writes_it_to_out(browse_store, tmp_path, capsys):
+    """B10: the lineage report is a FILE, never an eighth store kind, and it comes out of the same
+    renderer the browser's "Lineage report..." writes -- so the document a reviewer receives is the
+    same whichever front end made it (design §5). ``--out`` writes exactly what stdout would have
+    carried.
+
+    The file is compared as BYTES, not as text: read_text would translate CRLF back to LF on the way
+    in and pass whatever newline=None had written, which is precisely the drift §5 forbids and the
+    GUI's own report test pins the same way (P23)."""
+    from core.artifacts import ArtifactStore, render_lineage
+    root, ids = browse_store
+    want = render_lineage(ArtifactStore(root), "posterior", ids["posterior"])
+
+    capsys.readouterr()
+    assert main(["artifacts", "summary", "posterior", ids["posterior"]]) == 0
+    assert want in capsys.readouterr().out, "the one renderer, not a second one"
+
+    out_file = tmp_path / "lineage.txt"
+    assert main(["artifacts", "summary", "posterior", ids["posterior"], "--out", str(out_file)]) == 0
+    assert out_file.read_bytes() == want.encode("utf-8"), \
+        "byte for byte what the browser's Lineage report writes: UTF-8, LF endings"
+    assert str(out_file) in capsys.readouterr().out, "the path is named, as report() names an artifact's"
+
+
+def test_the_artifacts_family_keeps_the_ladders_exit_codes(browse_store, capsys):
+    """§4.3, one line per rung: a usage error is 2 (argparse, one rung earlier than every refusal); a
+    missing ref, a bad kind and a bad note are 1; an empty listing and a sweep with nothing to remove
+    are 0. ``--note`` being REQUIRED is part of this: a note must never be cleared by omission.
+
+    There is no exit 3 anywhere in the tool and this family adds none: a BUG is the existing unhandled
+    rung, which sets 1 with a traceback, so 1 covers a refusal and a bug alike (``main``'s own
+    docstring: "1 a refusal or a bug") and no task here touches the ladder."""
+    root, ids = browse_store
+    assert main(["artifacts"]) == 2, "a mode is required"
+    assert main(["artifacts", "nosuchmode"]) == 2
+    assert main(["artifacts", "show", "prior"]) == 2, "<ref> is required"
+    assert main(["artifacts", "note", "prior", ids["prior"]]) == 2, "--note is required"
+    assert main(["artifacts", "rm", "prior", "nosuch"]) == 1
+    assert main(["artifacts", "summary", "prior", "nosuch"]) == 1
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "nosuchkind"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+    assert len(lines) == 1 and "nosuchkind" in lines[0], err
+    assert not lines[0].rstrip().endswith(")"), \
+        "the artifact key has no flag, so fix_sentence adds nothing and the line ends at the message"
+
+
+def test_the_artifacts_family_has_all_six_modes_and_still_no_configuration_flags():
+    """The closure of B9's list, and the extension of Task 13's own pin to the four modes that write:
+    six modes, no configuration flag on any of them, and --note exactly where core/tool/fields.py
+    says it is (that table is pinned against these very option strings, both ways)."""
+    import argparse
+    p = build_parser().subcommands["artifacts"]
+    modes = {name: sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
+             for name, sub in a.choices.items()}
+    assert set(modes) == {"list", "show", "note", "rm", "sweep", "summary"}, sorted(modes)
+    for name, parser in [("artifacts", p), *sorted(modes.items())]:
+        for flag in ("--bounds", "--model", "--chi", "--chi-k", "--device", "--store-root",
+                     "--force", "--accept-truncated"):
+            assert flag not in parser._option_string_actions, (name, flag)
+    assert "--note" in modes["note"]._option_string_actions
+    assert "--out" in modes["summary"]._option_string_actions
