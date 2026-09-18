@@ -622,9 +622,14 @@ class ArtifactStore:
         ``d / dir_name`` could resolve to a REAL artifact's directory while failing to match that
         same artifact's name in ``_entries``'s listing, and the manifest check would then see no
         match and treat a real, possibly dependency-bearing artifact as a nameless leftover. Instead,
-        every directory in ``_entries(kind)`` is checked with ``os.path.samefile`` against the
-        candidate path: that asks the FILESYSTEM whether the two names denote the same object, so
-        the match is exact by construction and no spelling can defeat it.
+        every directory in ``_entries(kind)`` is checked with ``os.path.samefile`` AND a resolved-path
+        comparison against the candidate path (fix round 2): ``samefile`` catches an alias no string
+        compare would (its identity check is ``(st_dev, st_ino)``), but on a volume where ``st_ino``
+        is 0 for every entry -- FAT/exFAT, some network shares, and the artifacts root is
+        relocatable to exactly such a drive -- ``samefile`` would call EVERY entry a match, matching
+        whichever one ``_entries`` happens to list first. ``os.path.realpath`` catches that
+        degenerate case because it compares the resolved path STRING, which is not built from the
+        (possibly all-zero) inode. Neither check alone is sufficient; both must hold.
         """
         if kind not in KIND_DIRS:
             # Not kind_dir()'s own refusal, which carries no field key: every refusal on this path
@@ -645,7 +650,7 @@ class ArtifactStore:
         sub = m = None
         for s, mm, _ in self._entries(kind):
             try:
-                if os.path.samefile(candidate, s):
+                if os.path.samefile(candidate, s) and os.path.realpath(candidate) == os.path.realpath(s):
                     sub, m = s, mm
                     break
             except OSError:
@@ -685,6 +690,13 @@ class ArtifactStore:
         Walks ``_entries`` rather than calling ``remove_incomplete`` per directory: the same
         classifier, one scan per kind instead of one per directory, and no StoreError to catch that
         could have meant "it was complete after all".
+
+        Fix round 2 [Important]: a directory is only ever counted in ``removed`` once it has been
+        CONFIRMED gone. A path trick, or a directory that vanishes between classification and the
+        removal attempt, can make ``shutil.rmtree`` raise ``FileNotFoundError``, which
+        ``_rmtree_retry`` treats as "already gone" and swallows -- without this check that call
+        would report success on a directory it never touched, the same false-success class fixed in
+        ``remove_incomplete`` above.
         """
         if kind is not None and kind not in KIND_DIRS:
             raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
@@ -695,6 +707,8 @@ class ArtifactStore:
                     continue
                 try:
                     _rmtree_retry(sub)
+                    if sub.exists():
+                        raise OSError(f"{sub} was not removed")
                 except OSError as e:           # noqa: BLE001 -- one held handle must not stop the sweep
                     failed.append((k, sub.name, f"{type(e).__name__}: {e}"))
                 else:

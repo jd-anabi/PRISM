@@ -3738,3 +3738,53 @@ def test_remove_incomplete_refuses_to_report_success_when_the_directory_survives
     monkeypatch.undo()
     assert e.value.field == "artifact"
     assert target.is_dir(), "the monkeypatched rmtree never actually removed it"
+
+
+def test_remove_incomplete_is_not_defeated_by_a_degenerate_inode_volume(store, monkeypatch):
+    """Fix round 2: ``os.path.samefile`` identifies a file by ``(st_dev, st_ino)``; on a volume where
+    every entry's ``st_ino`` is 0 -- FAT/exFAT, some network shares, and the artifacts root is
+    relocatable to exactly such a drive -- EVERY comparison would report a match, so the loop would
+    settle on whichever ``_entries`` row happens to come first rather than the one actually named,
+    possibly deleting a directory that was never named at all. ``os.path.realpath`` is the second,
+    independent check: it compares the resolved path STRING, which is not built from the (possibly
+    all-zero) inode, so it disagrees with every wrong candidate even when ``samefile`` is fooled.
+
+    Simulated by monkeypatching ``samefile`` to always return True (a real exFAT mount cannot be
+    made in this environment): a leftover that sorts before the real, complete artifact must not be
+    the one removed when the real artifact is what was actually named.
+    """
+    d = store.kind_dir("calibration")
+    d.mkdir(parents=True, exist_ok=True)
+    decoy = d / "aaa_leftover__20260101T000000"
+    decoy.mkdir()
+    real = _make(store, "calibration", name="keepme", body=_cal_body())
+    monkeypatch.setattr(os.path, "samefile", lambda a, b: True)
+    with pytest.raises(st.StoreError, match="holds a valid calibration manifest") as e:
+        store.remove_incomplete("calibration", real.dir.name)
+    monkeypatch.undo()
+    assert e.value.field == "artifact"
+    assert real.dir.is_dir() and store.get("calibration", real.id).name == "keepme"
+    assert decoy.is_dir(), "a stubbed samefile match must not delete a directory that was never named"
+
+
+def test_sweep_incomplete_reports_a_directory_the_removal_never_actually_touched_as_failed(store, monkeypatch):
+    """Fix round 2 [Important]: the same false-success class fixed in ``remove_incomplete`` lives in
+    its sibling. A directory that vanishes between ``_entries``' classification and the removal
+    attempt -- or a path trick that makes ``shutil.rmtree`` raise ``FileNotFoundError``, which
+    ``_rmtree_retry`` treats as "already gone" and swallows -- must not be reported as removed.
+    Injected with a no-op fake ``_rmtree_retry`` so the pin holds on any filesystem."""
+    names = _leftovers(store, "prior")
+    real_rmtree = st._rmtree_retry
+    survivor = store.kind_dir("prior") / names[1]
+
+    def _fake(path, **kw):
+        if Path(path) == survivor:
+            return None                 # "succeeds" but removes nothing
+        return real_rmtree(path, **kw)
+
+    monkeypatch.setattr(st, "_rmtree_retry", _fake)
+    removed, failed = store.sweep_incomplete("prior")
+    monkeypatch.undo()
+    assert sorted(removed) == [("prior", names[0]), ("prior", names[2])]
+    assert failed == [("prior", names[1], f"OSError: {survivor} was not removed")]
+    assert survivor.is_dir(), "the one the fake rmtree never actually touched is still there"
