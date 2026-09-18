@@ -1667,7 +1667,10 @@ bounds file declares which parameters are inferred and hence the observation mod
 - **M1b. TWO screen entry points; mixing them up wipes your work.** `new_draft(draft)` **REPLACES**
   the whole session (a different model invalidates every artifact). `install_config(cfg)` sets
   `session.cfg` **IN PLACE** — deliberately not a new session, because Prior installs the config as
-  the first step of building the prior.
+  the first step of building the prior. Piece 4 (B12) answered the **user-facing** half: the Config
+  tab now carries a permanent line naming what the session holds and confirms — defaulting to
+  keeping it — before `new_draft` releases it, so mixing the two up can no longer discard a prior, a
+  posterior and a recorded observation in silence; the rest of trap group M is still piece 6's.
 - **M2. The Infer CELL PICKER follows the BUILT cfg's model**, not a live combo (there isn't one in
   that tab). The Prior tab's bounds picker has the same deferred-restore trap.
 - **M2b. DIRECT ENTRY always SEEDS FROM the selected file.** Parameter names and ORDER belong to the

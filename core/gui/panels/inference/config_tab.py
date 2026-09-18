@@ -1,6 +1,7 @@
 import os
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdit, QPushButton, QVBoxLayout)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QGroupBox, QLabel, QLineEdit, QMessageBox,
+                               QPushButton, QVBoxLayout)
 
 from core import cli, config, registry
 from core.Helpers import file_manager
@@ -257,6 +258,48 @@ class ConfigPanel(_StagePanel):
             out["units"] = units
         return out
 
+    def _confirm_replace_session(self) -> bool:
+        """Ask before Apply throws this session's work away (B12). True = go ahead.
+
+        SILENT WHEN THERE IS NOTHING TO LOSE. An empty ``session_contents()`` shows no dialog at all,
+        so the first Apply of a sitting -- and every Apply made before a prior exists -- behaves
+        exactly as it did before this guard. A confirmation that fires when nothing is at stake is
+        trained away within a day, and then it is not a guard.
+
+        NOTHING IS DELETED EITHER WAY, and the informative text says so in as many words: every stage
+        writes its artifact at completion, so what Apply releases is the SESSION's hold on them. The
+        one thing the operator cannot get back by re-picking is the minute spent re-running the
+        stages, which is why this is a question and not a warning after the fact.
+
+        "Keep this session" is the default BY NAME, not by index: ``QMessageBox.buttons()`` orders by
+        role (Reject before Destructive), so ``buttons()[-1]`` is the destructive one -- that is how
+        Enter once started the very run the Posterior tab's D7 dialog exists to stop
+        (posterior_tab._ask_new_run). And it is an INSTANCE ``QMessageBox`` shown with ``.exec()``:
+        tests/conftest.py patches the instance method only, so ``QMessageBox.question`` would hang
+        the offscreen suite rather than fail it.
+
+        A method of its own so a test can answer it without a click, like the Posterior tab's two.
+        """
+        held = self._screen.session_contents()
+        if not held:
+            return True
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Start a new session?")
+        box.setText("Applying a model replaces the whole session.")
+        box.setInformativeText(
+            "This session holds:\n\n"
+            + "\n".join(f"  • {phrase}" for phrase in held)
+            + "\n\nEvery one of them STAYS ON DISK and can be selected again in the pickers — what "
+              "is released is this session's hold on them. They cannot be carried over: a different "
+              "model or unit system invalidates them, which is why applying one starts a new "
+              "session rather than keeping what it can.")
+        go = box.addButton("Apply and start a new session", QMessageBox.DestructiveRole)
+        keep = box.addButton("Keep this session", QMessageBox.RejectRole)
+        box.setDefaultButton(keep)
+        box.exec()
+        return box.clickedButton() is go
+
     def _build_config(self):
         model = self.model_combo.currentText()
         if registry.is_user_model(model) and not registry.is_sbi_user_model(model):   # backstop
@@ -287,6 +330,12 @@ class ConfigPanel(_StagePanel):
             chi_mode=chi_on, chi_n_freqs=v["chi_n_freqs"], chi_f0=None, chi_freq_bounds=None,
             chi_k_pad=v["chi_k_pad"], chi_max_cycles=v["chi_max_cycles"],
             reparam_rotate=self.rot_check.isChecked())
+        # AFTER the boxes are read and the draft is built, and BEFORE anything is installed: a
+        # refused box must never cost a dialog, and a dialog answered "keep" must leave the session
+        # byte-for-byte as it found it -- including the log, which is why the "Model applied" lines
+        # below are downstream of this return.
+        if not self._confirm_replace_session():
+            return
         self._screen.new_draft(draft)                # replaces the session + repoints Prior + re-gates
         extras = []
         if chi_on:

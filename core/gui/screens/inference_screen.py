@@ -1,6 +1,6 @@
-"""The Parameter Inference section: five tabs over ONE shared SbiSession, with cross-tab gating.
+"""The Parameter Inference section: six tabs over ONE shared SbiSession, with cross-tab gating.
 
-    Config -> Prior -> Posterior -> Validate -> Infer
+    Config -> Prior -> Posterior -> Validate -> Infer -> TSNPE
 
 Config records the MODEL-level choices (model, units, chi/rotation knobs) as a ConfigDraft. The Prior tab
 picks the BOUNDS file and turns that draft into the SimConfig, because the bounds file is what declares
@@ -146,18 +146,35 @@ class InferenceScreen(QWidget):
         mark_tabs(self.tabs, self._tab_labels, index)
 
     def new_draft(self, draft):
-        """Config applied: replace the WHOLE session (a different model or unit system invalidates every
-        artifact) and repoint the Prior tab's bounds picker at the new model's folder."""
+        """Config applied: replace the WHOLE session (a different model or unit system invalidates
+        every artifact) and repoint the Prior tab's bounds picker at the new model's folder.
+
+        THE DESTRUCTIVE ONE OF THE SCREEN'S TWO ENTRY POINTS, AND THE CONFIRMATION IS NOW THE GUARD
+        (piece 4, B12). The Config tab asks before it calls here whenever ``session_contents()`` is
+        non-empty, defaulting to keeping the session, so a mis-aimed Apply can no longer drop a
+        prior, a posterior and a recorded observation in silence -- which is the half of the
+        handoff's trap M1b that a reader could not defend themselves against.
+
+        Nothing is deleted either way: every stage writes its artifact at completion, so what this
+        drops is the session's HANDLES, and the artifacts stay on disk to be selected again. Its
+        in-place twin is ``install_config``.
+        """
         self.session = SbiSession(draft=draft)
         self.prior_panel.on_draft_set(draft)
         self.refresh_gates()
 
     def install_config(self, cfg):
-        """Prior stage: bounds chosen, so the SimConfig now exists. Set it IN PLACE and fan out to the
-        tabs whose pickers/fields depend on it.
+        """Prior stage: bounds chosen, so the SimConfig now exists. Set it IN PLACE and fan out to
+        the tabs whose pickers/fields depend on it.
 
-        Deliberately NOT a new session: the Prior stage installs the config as the first step of building
-        the prior, so replacing the session here would wipe the artifact it is about to store."""
+        THE IN-PLACE ONE OF THE TWO ENTRY POINTS, and in place BECAUSE OF WHEN IT IS CALLED: the
+        Prior stage installs the config as the first step of building the prior, so a new session
+        here would wipe the draft that built this config and the artifact the stage is about to
+        store -- mid-stage, with nothing to confirm against, because the operator pressed a button
+        that promised to build a prior and not to start over. That asymmetry is the whole of the
+        handoff's trap M1b: its destructive twin ``new_draft`` is the one the Config tab now
+        confirms (B12), and this one is never confirmed at all.
+        """
         self.session.cfg = cfg
         self.infer_panel.on_config_built(cfg)
         self.refresh_gates()

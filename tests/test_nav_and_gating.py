@@ -2954,3 +2954,80 @@ def test_the_config_tab_says_what_the_session_holds():
                                       "the prior (unidentified)",
                                       "the posterior (unidentified)"], inf.session_contents()
     assert "(unidentified)" in cfgp.session_line.text(), cfgp.session_line.text()
+
+
+def test_apply_confirms_before_it_discards_the_session(monkeypatch):
+    """B12's second half (spec §6.2). Apply is the destructive one of the screen's two entry points,
+    so it asks -- but ONLY when there is something to lose.
+
+    Four legs, and the first is the one that keeps the guard tolerable: an empty session is replaced
+    in silence, with SHOWN empty, so nothing about the first Apply of a sitting changes. A non-empty
+    one raises an INSTANCE QMessageBox (never QMessageBox.question -- the statics are C++ and escape
+    tests/conftest.py's dialog guard, so a static call STALLS the offscreen suite instead of failing
+    it) that lists exactly what ``session_contents()`` reports, says those artifacts stay on disk,
+    and has "Keep this session" as its default BY NAME -- the D7/D8 lesson at
+    tests/test_nav_and_gating.py:1175, where buttons() orders by role and Enter landed on the
+    destructive button. Anything but the destructive button leaves the session object identical.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from tests._fixtures import PaneCapture, SHOWN, qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    cfgp = inf.config_panel
+    cfgp.model_combo.setCurrentText("NADROWSKI")
+    cfgp._on_model_changed("NADROWSKI")
+    cfgp.units_toggle.set_direct(False)
+    cfgp.chi_check.setChecked(False)
+    cap = PaneCapture(cfgp)
+
+    def applied():
+        return [text for _level, text in cap.lines if text.startswith("Model applied")]
+
+    # (a) an EMPTY session: no dialog at all, and the session is replaced exactly as before
+    SHOWN.clear()
+    cfgp._build_config()
+    assert SHOWN == [], "an empty session must be replaced silently"
+    assert inf.session.draft is not None and len(applied()) == 1, applied()
+
+    # (b) a non-empty session, nothing clicked: the dialog names what is held and nothing changes
+    inf.session = SbiSession(draft=inf.session.draft, cfg=_spont_cfg(),
+                             inf_prior=_prior_stub(id_="20260914T100000", name="p_master"))
+    inf.refresh_gates()
+    before = inf.session
+    held = inf.session_contents()
+    SHOWN.clear()
+    cfgp._build_config()
+    assert len(SHOWN) == 1, SHOWN
+    box = SHOWN[-1]
+    assert box.icon() == QMessageBox.Warning
+    assert box.defaultButton() is not None, "no default button: Enter would do the destructive thing"
+    assert box.defaultButton().text() == "Keep this session", box.defaultButton().text()
+    for phrase in held:
+        assert phrase in box.informativeText(), (phrase, box.informativeText())
+    assert "STAYS ON DISK" in box.informativeText(), box.informativeText()
+    assert inf.session is before, "a dialog nobody answered replaced the session"
+    assert len(applied()) == 1, "a refused Apply must not report a model as applied"
+
+    # (c) Enter -- i.e. the default button -- keeps the session too
+    SHOWN.clear()
+    monkeypatch.setattr(QMessageBox, "exec",
+                        lambda self: SHOWN.append(self) or self.defaultButton().click() or 0)
+    cfgp._build_config()
+    assert inf.session is before, "clicking the default button replaced the session"
+    assert len(applied()) == 1, applied()
+
+    # (d) the destructive button: the session IS replaced, and the prior goes with it
+    def _click_apply(self):
+        SHOWN.append(self)
+        next(b for b in self.buttons() if b.text() == "Apply and start a new session").click()
+        return 0
+
+    monkeypatch.setattr(QMessageBox, "exec", _click_apply)
+    cfgp._build_config()
+    assert inf.session is not before, "the destructive button did not replace the session"
+    assert inf.session.inf_prior is None and inf.session.cfg is None, inf.session
+    assert len(applied()) == 2, applied()
+    assert inf.session_contents() == [] and "nothing yet" in cfgp.session_line.text()
