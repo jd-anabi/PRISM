@@ -2812,13 +2812,17 @@ def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_n
 
     orphan = P()
     assert orphan not in w._panel_home
-    w.nav.go_home()
+    # Start on a section that is NOT Home, so "stays where it is" is distinguishable from a wrong
+    # fallback that navigates Home.
+    start = w._section_index["Simulate"]
+    assert start != 0
+    w.nav.go_to(start)
     orphan._set_busy(True)
     try:
         assert not w.nav.btn_running.isHidden()
         assert w.nav.btn_running.text().startswith("Running: a task — ")
         assert w.nav.btn_running.toolTip() == ""
         w.nav.btn_running.click()
-        assert w.nav.stack.currentIndex() == 0, "an unknown panel must not navigate anywhere"
+        assert w.nav.stack.currentIndex() == start, "an unknown panel must not navigate anywhere"
     finally:
         orphan._set_busy(False)

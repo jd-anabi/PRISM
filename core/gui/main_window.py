@@ -348,9 +348,13 @@ class MainWindow(QMainWindow):
     def _on_run_state(self, panel) -> None:
         """A run started (``panel``) or ended (None): fill or clear the shell's run slot.
 
-        Connected to the module-level RUN_STATE in base_panel.py, which _set_busy publishes on. Qt
-        drops the connection when this window is destroyed, so a window a test threw away is never
-        called for a later run. The title is looked up ONCE per run, not per tick.
+        Connected to the module-level RUN_STATE in base_panel.py, which _set_busy publishes on.
+        EVERY window constructed in the process receives EVERY run-state signal -- including one a
+        test has discarded: such a window is never destroyed (PySide holds the lambda slots that
+        capture ``self``, which Python's collector cannot reach), so Qt never drops its connection
+        and its handler runs, and its timer ticks, on every later run. This handler must therefore
+        touch ONLY its own window's widgets and be safe to run on a window nobody is looking at.
+        The title is looked up ONCE per run, not per tick.
         """
         self._running_panel = panel
         if panel is None:
