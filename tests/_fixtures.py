@@ -366,6 +366,95 @@ def build_tiny_run(store, hw=None):
                            other_prior=other_prior, teardown=teardown)
 
 
+def build_browse_store(root):
+    """One artifact of each of the SEVEN kinds plus the three bad-directory shapes, in a store at
+    ``root``. Returns ``{kind: id, ..., "bad": (dir_name, dir_name, dir_name)}``.
+
+    SECONDS, not minutes -- the browser suite must not reach for ``tiny_run``, whose cost is why
+    ``screen_run`` is module-scoped (spec §9.1). Every writer is handed ``cfg=None`` and every body is
+    the smallest dict its kind's ``manifest.BODY_KEYS`` allows, so nothing here reads a bounds file,
+    builds a SimConfig, fits a GMM or trains anything. Nothing ever loads these payloads (there are
+    none): the browser only reads manifests. The one real cost is ``ArtifactWriter._commit``'s three
+    ``git`` subprocesses per artifact.
+
+    Each artifact is named ``browse_<kind>`` and carries a note, so the name and note columns have
+    content. The simulation cache is the exception: it is ALWAYS unnamed
+    (``write_simulation_manifest`` writes ``name=""``), so its row also covers ``Summary.label``'s
+    ``(unnamed <id>)`` form. It is written at 3 of 4 batches and NOT complete, so its row carries real
+    progress and ``finished`` is False while ``complete`` is True -- B3's distinction, on disk. The 4
+    is the identity's ``n_runs``, which is where ``Summary.batches_planned`` comes from, so "3/4" on
+    the row is read off the manifest and not assembled by the table. It is written with NO ``rows``,
+    because that is the only state the real writer can be in mid-run: ``training_checkpoint.save``
+    passes none and only ``mark_complete`` records them (P2). A fixture that handed rows to an
+    unfinished cache would be a shape no run produces, and would hide every "rows only once it
+    finished" branch in both front ends.
+
+    No artifact gets a ``log.txt``: the writer writes one only when a public entry is active
+    (``runs.current_run_log()``), and this helper is not one. A test that wants records writes the
+    file itself, which is exactly what ``read_log`` reads.
+
+    The three bad directories all sit under ``priors/``, one per shape ``ArtifactStore._entries``
+    classifies: no manifest at all, a manifest that will not parse, and a valid manifest of another
+    kind (the calibration's own bytes, so the shape is real rather than hand-rolled).
+    """
+    from core.artifacts import ArtifactStore, write_simulation_manifest
+    from core.artifacts.store import MANIFEST
+    from core.SBI.training_checkpoint import identity_digest
+
+    store = ArtifactStore(root)
+    bodies = {
+        "prior": {"gmm": {"n_components": 2, "param_keys": ["k"],
+                          "box": {"nd_lows": [0.0], "nd_highs": [1.0], "log_mask": [False]}},
+                  "sweep": {}, "stability": {"accepted_sets": None, "iterations": 1}},
+        "posterior": {"mode": "chi", "conditioning": {"width": 61, "forcing_dim": 12},
+                      "transform": {}, "amortized": True, "truncation": None, "training": {}},
+        "observation": {"mode": "spontaneous", "conditioning": {"width": 50, "forcing_dim": 1},
+                        "x_obs_digest": "0" * 16, "T_obs_cell": 4.5, "n_obs": None,
+                        "forcing_vals": {}, "chi_obs_freqs": None, "source": {"kind": "bench"}},
+        "calibration": {"results": {}},
+        "inference": {"results": {}},
+        "diagnostic": {"diagnostic": "identifiability", "variant": "laplace",
+                       "settings": {}, "results": {}},
+    }
+    ids = {}
+    for kind, body in bodies.items():
+        with store.create(kind, None, name=f"browse_{kind}", note=f"the {kind} row") as w:
+            w.body = dict(body)
+        ids[kind] = w.id
+
+    identity = {"format": "training-rows/2", "prior_fingerprint": "f" * 16, "n_runs": 4,
+                "truncation": None}
+    m = write_simulation_manifest(store.kind_dir("simulation") / identity_digest(identity), identity,
+                                  batches_done=3, complete=False)
+    ids["simulation"] = m.id
+
+    priors = store.kind_dir("prior")
+    bad = ("leftover_no_manifest", "leftover_bad_json", "leftover_wrong_kind")
+    for name in bad:
+        (priors / name).mkdir(parents=True, exist_ok=True)
+    (priors / bad[1] / MANIFEST).write_text("{not json", encoding="utf-8")
+    (priors / bad[2] / MANIFEST).write_text(
+        (store.path("calibration", ids["calibration"]) / MANIFEST).read_text(encoding="utf-8"),
+        encoding="utf-8")
+    ids["bad"] = bad
+    return ids
+
+
+def artifact_screen(store):
+    """The Artifacts screen wired to ``store`` and refreshed once.
+
+    ``store`` travels through the screen's own ``_store`` / ``_resolved_store()`` seam -- the one
+    ``StorePicker`` already uses and the picker tests already monkeypatch -- so no process default is
+    swapped and nothing is patched. The screen reads the store only when it is shown or refreshed, so
+    the ``refresh()`` here is what puts rows in the table.
+    """
+    from core.gui.screens.artifact_screen import ArtifactScreen
+    qt_app()
+    screen = ArtifactScreen(store=store)
+    screen.refresh()
+    return screen
+
+
 def _same_value(a, b) -> bool:
     """Equality for one config field: tensors by shape, dtype and every element on the CPU (equal, or
     both NaN); dicts by type, key order and values; lists and tuples by type and elements; NaN equal to

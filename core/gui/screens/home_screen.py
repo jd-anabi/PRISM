@@ -8,8 +8,10 @@ from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
-# The four sections, in display order. All four are live; MainWindow passes them all in live_sections.
-SECTIONS = ("Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate")
+# The five sections, in display order. All five are live; MainWindow passes them all in
+# live_sections. "Artifacts" is the artifact browser (piece 4, B1) -- a peer of the four stage
+# sections, and a plain screen rather than a panel.
+SECTIONS = ("Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate", "Artifacts")
 
 
 def greeting(hour: int) -> str:
@@ -24,7 +26,7 @@ def greeting(hour: int) -> str:
 class HomeScreen(QWidget):
     """Emits ``navigate(section_name)`` when a live section button is clicked. The owner (MainWindow)
     maps the name to a stack index. `live_sections` is the set of names that actually have a screen;
-    any name NOT in it becomes a no-op button with a "Coming soon" tooltip (all four are live today)."""
+    any name NOT in it becomes a no-op button with a "Coming soon" tooltip (all five are live today)."""
 
     navigate = Signal(str)
 

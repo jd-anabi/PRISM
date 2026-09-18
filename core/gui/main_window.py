@@ -1,8 +1,9 @@
 """The PRISM main window: a NavShell (persistent "PRISM" title + back arrow) over a home/splash screen,
-four section screens, and two Settings-reached screens (the Settings/Help screen and the user-defined
-model builder). Replaces the old flat four-tab layout; the section panels are reused unchanged in
-behaviour -- only where they are mounted changes. Cross-validation now lives inside the FDT Analysis
-section, and the SBI panel is split into the Parameter Inference section's gated tabs."""
+four section screens, the Artifacts browser, and two Settings-reached screens (the Settings/Help screen
+and the user-defined model builder). Replaces the old flat four-tab layout; the section panels are
+reused unchanged in behaviour -- only where they are mounted changes. Cross-validation now lives inside
+the FDT Analysis section, and the SBI panel is split into the Parameter Inference section's gated
+tabs."""
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import QMainWindow, QMenu, QMessageBox
 
@@ -16,12 +17,14 @@ from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
 from .panels.reduction_panel import ReductionPanel
 from .panels.simulate_panel import SimulatePanel
+from .screens.artifact_screen import ArtifactScreen
 from .screens.home_screen import HomeScreen
 from .screens.inference_screen import InferenceScreen
 from .screens.model_builder_screen import ModelBuilderScreen
 from .screens.nav_shell import NavShell
 from .screens.section_screen import SectionScreen
 from .screens.settings_screen import SettingsScreen
+from .widgets.artifact_picker import StorePicker
 
 
 # ── screen-geometry guards ────────────────────────────────────────────────────
@@ -99,12 +102,20 @@ class MainWindow(QMainWindow):
             "Simulate", [("Live simulation", SimulatePanel())])
 
         home = HomeScreen(
-            live_sections={"Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate"})
+            live_sections={"Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate",
+                           "Artifacts"})
         self.nav.add_screen(home)                                    # index 0 -- Home
         idx_red = self.nav.add_screen(self.reduction_screen)
         idx_fdt = self.nav.add_screen(self.fdt_screen)
         idx_inf = self.nav.add_screen(self.inference_screen)
         idx_sim = self.nav.add_screen(self.simulate_screen)
+
+        # The artifact browser: AFTER the four sections and BEFORE the Settings screen, so the
+        # back-arrow slide direction stays monotone with the Home tile order. A plain QWidget, not a
+        # BasePanel (B1) -- a run anywhere must not grey out the log you are reading.
+        self.artifact_screen = ArtifactScreen()
+        idx_artifacts = self.nav.add_screen(self.artifact_screen)
+        self.artifact_screen.store_changed.connect(self._refresh_store_pickers)
 
         # The Settings/Help screen: reached only from the gear popover's "Full settings…" (never a Home
         # button), so the back arrow still returns Home.
@@ -130,6 +141,7 @@ class MainWindow(QMainWindow):
 
         self._section_index = {"Reduction Map": idx_red, "FDT Analysis": idx_fdt,
                                "Parameter Inference": idx_inf, "Simulate": idx_sim,
+                               "Artifacts": idx_artifacts,
                                "Settings": idx_settings, "Model builder": idx_builder}
         home.navigate.connect(lambda name: self.nav.go_to(self._section_index[name]))
         self._build_settings_menu(current_mode)
@@ -264,6 +276,21 @@ class MainWindow(QMainWindow):
                 if handler is not None:
                     handler(combo.currentText())
 
+    def _refresh_store_pickers(self):
+        """Re-list every artifact picker after the browser changed the store (B8) -- the twin of
+        _refresh_model_combos, which a saved or deleted user model already drives.
+
+        Found by TYPE rather than by naming the three attributes (prior_picker, post_picker,
+        obs_picker), so a fourth picker added to a tab is covered by construction.
+        StorePicker.refresh re-reads its kind and re-applies its own current key, so a selection that
+        still exists survives and one that was just deleted falls back to whatever is current --
+        which is the point: restore_key silently does nothing when the saved id has vanished, and that
+        silence becomes a defect the moment a browser can delete.
+        """
+        for panel in self._all_panels():
+            for picker in panel.findChildren(StorePicker):
+                picker.refresh()
+
     def _all_panels(self):
         return (self.reduction_screen.panels() + self.fdt_screen.panels()
                 + self.inference_screen.panels() + self.simulate_screen.panels())
@@ -309,4 +336,7 @@ class MainWindow(QMainWindow):
         qs.setValue("window/geometry", self.saveGeometry())
         for panel in self._all_panels():
             panel.save_settings(qs)
+        # BY NAME (B1): the browser is a QWidget, not a BasePanel, so it is not in _all_panels() and
+        # gets no sweep for free -- which is also what keeps it out of _refresh_model_combos.
+        self.artifact_screen.save_settings(qs)
         qs.sync()
