@@ -21,7 +21,7 @@ import time
 import warnings
 from contextlib import contextmanager
 
-from core import runs  # noqa: F401 -- sets the ``core`` logger to INFO at import (spec §1.2); never touched here
+from core import runs  # also sets the ``core`` logger to INFO at import (spec §1.2)
 
 from .vt import StreamRouter
 
@@ -196,7 +196,10 @@ class _SignalStream:
         # -- a cancel is not a "parser broke" degradation. Every print() and every tqdm redraw funnels
         # through here, so this is the pipeline's cancellation checkpoint, reaching even inside sbi's
         # fit loop (it prints an epoch counter every epoch).
-        if self._cancel is not None:
+        # ...except inside a runs.cancel_deferred() section (piece 4, B15), where raising would land
+        # between two writes that must both happen. The token is NOT cleared there: it stays requested
+        # and the next write outside the section raises.
+        if self._cancel is not None and not runs.cancel_is_deferred():
             self._cancel.check()
         if self._broken:                      # degraded: dumb line split, but never lose output
             self._pump.sink("log", (text.rstrip(), self._level))
@@ -228,7 +231,9 @@ class _PumpLogHandler(logging.Handler):
     It is the cancel checkpoint too, exactly as _SignalStream.write is -- a run that only logs must
     still stop at its next message, and the token's latch (one raise, then quiet) holds here as
     well. That is why training_checkpoint's ordering rule reads "do not print() or log between steps
-    1 and 3": a record emitted between a shard's fsync and the state replace would raise mid-commit.
+    1 and 3". Since piece 4 (B15) that rule is also a MECHANISM: the commit runs inside
+    runs.cancel_deferred(), and both checkpoints consult it before raising, so a record emitted
+    between a shard's fsync and the state replace is carried rather than fatal.
     """
 
     def __init__(self, pump, cancel: "CancelToken | None"):
@@ -237,7 +242,7 @@ class _PumpLogHandler(logging.Handler):
         self._cancel = cancel
 
     def emit(self, record):
-        if self._cancel is not None:
+        if self._cancel is not None and not runs.cancel_is_deferred():
             self._cancel.check()
         level = {"WARNING": "warning", "ERROR": "error", "CRITICAL": "error"}.get(record.levelname, "info")
         try:

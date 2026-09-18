@@ -1110,3 +1110,123 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
     finally:
         logging_root.remove()
         lib.setLevel(logging.NOTSET)
+
+
+# ── piece 4, B15: the deferred-cancel critical section ───────────────────────────────────────────
+def test_cancel_deferred_defers_a_cancel_and_never_discards_it():
+    """Inside the section neither cancel checkpoint fires -- ``_SignalStream.write`` (every print and
+    every tqdm redraw) and ``_PumpLogHandler.emit`` (every ``core`` record) -- and the records still
+    flow. What must NOT happen is the cancel being lost: the token stays REQUESTED, its latch stays
+    unfired, and the very next check OUTSIDE the block raises exactly as it would have.
+
+    Re-entrant, because the section nests: Task 22 puts the pipeline's rescue block inside one and the
+    ``training_checkpoint.save`` it calls opens another, so a plain boolean would be cleared by the
+    inner block's exit and leave the rest of the outer block unprotected."""
+    import logging
+
+    import pytest
+
+    from core import runs
+    from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler, _SignalStream
+
+    class _FakePump:
+        def __init__(self):
+            self.logs = []
+
+        def sink(self, kind, payload):
+            self.logs.append((kind, payload))
+
+    token = CancelToken()
+    token.arm()                                # redirect_streams does this on the worker thread
+    token.requested.set()                      # Cancel pressed, latch not yet fired
+    fake = _FakePump()
+    stream = _SignalStream(fake, "out", "info", token)
+    handler = _PumpLogHandler(fake, token)
+    record = logging.LogRecord("core.probe", logging.INFO, __file__, 1, "inside the commit", (), None)
+
+    assert runs.cancel_is_deferred() is False, "no section is active outside one"
+    with runs.cancel_deferred():
+        assert runs.cancel_is_deferred() is True
+        with runs.cancel_deferred():           # nested: the section must count, not toggle
+            stream.write("a line written mid-commit\n")
+            handler.emit(record)
+        assert runs.cancel_is_deferred() is True, "the inner block's exit ended the outer section"
+        stream.write("and another, still inside the outer section\n")
+        assert token.fired is False and token.requested.is_set(), \
+            "the cancel fired inside the section instead of being deferred"
+    assert runs.cancel_is_deferred() is False
+
+    assert ("log", ("inside the commit", "info")) in fake.logs, fake.logs
+    assert any(kind == "log" and "a line written mid-commit" in payload[0]
+               for kind, payload in fake.logs), fake.logs
+
+    with pytest.raises(WorkerCancelled):
+        stream.write("the first write after the section\n")
+    assert token.fired is True, "the deferred cancel was discarded instead of deferred"
+
+
+def test_the_checkpoint_commit_runs_inside_the_deferred_cancel_section(tmp_path, monkeypatch):
+    """Steps 1-3 of a checkpoint save -- the shard writes, the state.prev copy and the atomic replace
+    of state.pt -- are the two-writes-that-must-both-happen case the section exists for: a record
+    emitted between the shard fsync and the state replace would raise mid-commit and leave a
+    checkpoint pointing at data still in the page cache. The rule in CLAUDE.md and in
+    training_checkpoint's module docstring stays, and so does the source-reading test that polices it
+    (tests/test_user_sbi.py::test_nothing_prints_or_logs_inside_a_checkpoint_commit): the section is
+    the guard, that test is the proof the guard is where it is claimed to be.
+
+    ``_refresh_manifest`` is deliberately OUTSIDE the section: it is the store's view of the cache,
+    never its commit point, and it is best-effort already."""
+    from core import runs
+    from core.SBI import training_checkpoint as tc
+
+    seen = []
+    real = tc.atomic_torch_save
+    monkeypatch.setattr(tc, "atomic_torch_save",
+                        lambda obj, dest: seen.append(runs.cancel_is_deferred()) or real(obj, dest))
+    tc.save(tmp_path / "commit", from_batch=0, batch_k=1, rng={},
+            x_buf=torch.zeros(2, 3), th_buf=torch.zeros(2, 2), run_size=2)
+    assert seen == [True, True, True], \
+        f"the two shard writes and the state replace must all be inside the section: {seen}"
+    assert runs.cancel_is_deferred() is False, "the section leaked past the commit"
+
+
+def test_cancel_deferred_applies_only_to_the_thread_that_entered_it():
+    """PER THREAD: the window runs its task on a worker thread while tqdm's monitor and the GUI thread
+    write too, so a section held on ANOTHER thread must not defer the armed thread's cancel. A
+    process-wide flag would let any thread's section swallow the worker's checkpoint for as long as
+    that section stayed open."""
+    import threading
+
+    import pytest
+
+    from core import runs
+    from core.gui.streams import CancelToken, WorkerCancelled, _SignalStream
+
+    class _FakePump:
+        def sink(self, kind, payload):
+            pass
+
+    token = CancelToken()
+    token.arm()                                # this thread plays the worker
+    token.requested.set()
+    stream = _SignalStream(_FakePump(), "out", "info", token)
+    inside, release, other = threading.Event(), threading.Event(), {}
+
+    def hold_a_section():
+        with runs.cancel_deferred():
+            other["deferred"] = runs.cancel_is_deferred()
+            inside.set()
+            release.wait(10)
+
+    t = threading.Thread(target=hold_a_section, daemon=True)
+    t.start()
+    try:
+        assert inside.wait(10), "the other thread never entered its section"
+        assert other["deferred"] is True
+        assert runs.cancel_is_deferred() is False, "another thread's section leaked onto this one"
+        with pytest.raises(WorkerCancelled):
+            stream.write("the worker's write while another thread holds a section\n")
+    finally:
+        release.set()
+        t.join(10)
+    assert token.fired is True

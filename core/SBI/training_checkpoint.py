@@ -47,7 +47,9 @@ cache.
 
 Do not ``print()`` or log between steps 1 and 3 under the GUI: every write funnels through
 ``gui.streams._SignalStream.write`` and every record through ``gui.streams._PumpLogHandler.emit``,
-both of which call ``CancelToken.check()`` and would raise mid-commit.
+both of which call ``CancelToken.check()`` and would raise mid-commit. Since piece 4 (B15) ``save``
+runs steps 1-3 inside ``core.runs.cancel_deferred()``, so both checkpoints carry such a line instead
+of raising on it -- the rule is still the rule, and the section is what enforces it.
 """
 import hashlib
 import json
@@ -57,6 +59,7 @@ from pathlib import Path
 import torch
 
 from core.Helpers.file_manager import atomic_torch_save
+from core.runs import cancel_deferred
 
 # Bumped when the on-disk layout changes in a way an older/newer PRISM cannot read. It rides in the
 # identity, so a bump routes to a fresh directory rather than misreading an existing one.
@@ -333,13 +336,18 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
     path = Path(path)
     (path / _SHARDS).mkdir(parents=True, exist_ok=True)
     lo, hi = from_batch * run_size, batch_k * run_size
-    if hi > lo:
-        atomic_torch_save(x_buf[lo:hi].clone(), _shard(path, "x", from_batch, batch_k))
-        atomic_torch_save(th_buf[lo:hi].clone(), _shard(path, "th", from_batch, batch_k))
-    prev = path / _STATE
-    if prev.exists():
-        shutil.copyfile(prev, path / _STATE_PREV)
-    atomic_torch_save({"batches_done": int(batch_k), "complete": False, "rng": rng}, prev)
+    # Steps 1-3, inside the deferred-cancel section (piece 4, B15): a GUI cancel landing between the
+    # shard fsync and the state replace would commit a batches_done that points at data still in the
+    # page cache. _refresh_manifest stays OUTSIDE it -- the manifest is the store's view of the cache,
+    # never its commit point, and it is best-effort already.
+    with cancel_deferred():
+        if hi > lo:
+            atomic_torch_save(x_buf[lo:hi].clone(), _shard(path, "x", from_batch, batch_k))
+            atomic_torch_save(th_buf[lo:hi].clone(), _shard(path, "th", from_batch, batch_k))
+        prev = path / _STATE
+        if prev.exists():
+            shutil.copyfile(prev, path / _STATE_PREV)
+        atomic_torch_save({"batches_done": int(batch_k), "complete": False, "rng": rng}, prev)
     _refresh_manifest(path, batches_done=batch_k)
 
 

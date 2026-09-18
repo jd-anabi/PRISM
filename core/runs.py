@@ -18,6 +18,10 @@ write to it or to an artifact (spec §2.2 lists the fifteen):
   (PreflightWarning judgements included); ArtifactWriter._commit writes the buffer so far to
   `log.txt` in every artifact the entry commits. A composition and the stages it calls share one
   buffer: `capture_run` pushes only when none is active on this thread.
+- THE DEFERRED CANCEL (piece 4, B15). `cancel_deferred()` is the named critical section inside which
+  the window's cancel checkpoints do not fire, so a Cancel pressed between two writes that must both
+  happen -- the checkpoint commit, the training rescue save -- is deferred rather than taken. The
+  token stays requested and the next check outside the section raises as usual.
 
 The `core` logger's level is set to INFO here, ONCE, at import. Python's root logger sits at
 WARNING, so without this the window's handler and the artifact file would drop every information
@@ -143,6 +147,36 @@ def capture_run():
     finally:
         _active.log = None
         log.detach()
+
+
+_deferred = threading.local()                  # _deferred.depth: how many sections are open here
+
+
+def cancel_is_deferred() -> bool:
+    """True inside a ``cancel_deferred()`` block ON THIS THREAD. Read by the window's two cancel
+    checkpoints (``gui.streams._SignalStream.write`` and ``_PumpLogHandler.emit``) before they call
+    ``CancelToken.check()``."""
+    return getattr(_deferred, "depth", 0) > 0
+
+
+@contextmanager
+def cancel_deferred():
+    """Inside this block a front end's cancel checkpoint does not fire: records still flow, the token
+    stays REQUESTED, and the next check outside the block raises as usual.
+
+    It exists for the unwind path and the checkpoint commit -- the two places where raising between
+    two writes loses committed work. It defers a cancel; it never discards one.
+
+    PER THREAD and COUNTED. Per thread, because the token only ever raises on the armed (worker)
+    thread and a GUI-thread print must not be silenced by a worker's section. Counted, because the
+    sections nest: the pipeline's rescue block opens one and the ``training_checkpoint.save`` it calls
+    opens another, and a boolean would leave the rest of the outer block unprotected.
+    """
+    _deferred.depth = getattr(_deferred, "depth", 0) + 1
+    try:
+        yield
+    finally:
+        _deferred.depth -= 1
 
 
 def public_entry(fn):
