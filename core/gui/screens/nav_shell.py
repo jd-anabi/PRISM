@@ -3,12 +3,32 @@
 Navigation is two levels deep -- a Home/splash screen (index 0) and the section screens -- so the back
 arrow always returns Home. The "PRISM" title stays in the top-left AT ALL TIMES; the back arrow sits
 just below it and is hidden on Home.
+
+The header row also carries the app-wide RUN SLOT (``btn_running``): a flat button naming what is
+running, where and for how long, hidden whenever nothing is (piece 4, B11). MainWindow owns what it
+says and when -- this module owns only the widget and the wording.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QStackedWidget, QToolButton, QVBoxLayout, QWidget
 
 from .. import icons
 from ..widgets.anim import slide_screens, snapshot
+
+
+def running_banner(panel_title: str, seconds: int) -> str:
+    """"Running: Posterior — 4:07": what is running, and for how long.
+
+    PURE, so a test asserts every shape without waiting for a clock. Under an hour the clock is
+    ``m:ss``; from an hour it grows an hours field (``h:mm:ss``) rather than counting to 90 minutes.
+    Seconds below zero read as 0 -- a wall-clock jump must not print a negative age -- and a blank
+    title reads "a task", which is what a panel MainWindow's destination map does not know shows: the
+    banner still says something is running, it just cannot say where (spec §6.1).
+    """
+    secs = max(0, int(seconds))
+    hours, rest = divmod(secs, 3600)
+    minutes, sec = divmod(rest, 60)
+    clock = f"{hours}:{minutes:02d}:{sec:02d}" if hours else f"{minutes}:{sec:02d}"
+    return f"Running: {panel_title.strip() or 'a task'} — {clock}"
 
 
 class NavShell(QWidget):
@@ -26,6 +46,15 @@ class NavShell(QWidget):
         self.btn_back.clicked.connect(self.go_home)
         self.btn_back.setVisible(False)                  # hidden on Home; shown on any section
 
+        # The app-wide run slot. Created EMPTY and hidden: no icon load, no timer, no store read.
+        # The 2026-09-11 taskbar-icon incident was ~150 ms of layout between the native show and the
+        # first idle turn, and this button is on that path, so it does nothing at launch (spec §1.2).
+        # MainWindow fills it from base_panel.RUN_STATE and starts the 1 s clock.
+        self.btn_running = QToolButton()
+        self.btn_running.setObjectName("navRunning")     # -> QToolButton#navRunning in the global QSS
+        self.btn_running.setAutoRaise(True)
+        self.btn_running.setVisible(False)
+
         header = QVBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(2)
@@ -34,6 +63,7 @@ class NavShell(QWidget):
 
         header_row = QHBoxLayout()
         header_row.addLayout(header)
+        header_row.addWidget(self.btn_running, alignment=Qt.AlignVCenter)
         header_row.addStretch(1)
 
         self.stack = QStackedWidget()
@@ -79,3 +109,16 @@ class NavShell(QWidget):
 
     def _sync_back(self) -> None:
         self.btn_back.setVisible(self.stack.currentIndex() != 0)
+
+    def set_running(self, text: "str | None") -> None:
+        """Show the run slot with ``text``, or hide and clear it on None. The ONLY writer of the run
+        button's text and visibility; MainWindow owns what it says and when (RUN_STATE plus its 1 s
+        timer), and sets the tooltip itself right after -- this clears it only on the way out, so a
+        hidden slot cannot keep pointing at a run that has finished."""
+        if text:
+            self.btn_running.setText(text)
+            self.btn_running.setVisible(True)
+        else:
+            self.btn_running.setText("")
+            self.btn_running.setToolTip("")
+            self.btn_running.setVisible(False)

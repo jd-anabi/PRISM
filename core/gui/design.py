@@ -292,6 +292,11 @@ QToolButton { border: none; background: transparent; border-radius: ${radius_sm}
 QToolButton:hover   { background: $button_hover; }
 QToolButton:pressed { background: $button_press; }
 QToolButton#navBack, QToolButton#navSettings { font-size: ${fs_nav_btn}px; padding: 2px 6px; }
+QToolButton#navRunning {
+    font-size: ${fs_caption}px; padding: 2px 8px; color: $text_2nd;
+    border: 1px solid $mid; border-radius: ${radius_sm}px;
+}
+QToolButton#navRunning:hover { color: $text; border-color: $accent; }
 QToolButton#helpBadge {
     border: 1px solid $mid; border-radius: 8px; color: $text_2nd;
     font-size: ${fs_badge}px; padding: 0px; background: transparent;

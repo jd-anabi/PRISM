@@ -3,7 +3,7 @@ progress pane + log pane), plus ``dispatch()`` to run a callable on a background
 output wired to those widgets."""
 import weakref
 
-from PySide6.QtCore import QThreadPool, QTimer
+from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
 from PySide6.QtWidgets import (QHBoxLayout, QMessageBox, QPushButton, QScrollArea, QSplitter,
                                QVBoxLayout, QWidget)
 from PySide6.QtCore import Qt
@@ -54,6 +54,27 @@ def _png_fig_sink(figure_signal):
             plt.close(fig)
         figure_signal.emit(title, buf.getvalue(), fig_pickle)
     return _sink
+
+
+class _RunState(QObject):
+    """The app-wide "something is running" broadcast: ``changed`` carries the running BasePanel, or
+    None the moment it stops.
+
+    A module-level singleton rather than a signal on BasePanel, for the reason ``BasePanel._running``
+    is class-level (see its comment): redirect_streams swaps sys.stdout/stderr PROCESS-WIDE, so only
+    one panel may run at a time and "what is running" is ONE app-wide fact -- a second such fact
+    belongs beside the first. A per-panel signal would also make every listener subscribe to ten
+    senders and re-subscribe to any panel built later.
+
+    Constructed at import, before any QApplication exists: a plain QObject may be, and the emission
+    is a direct same-thread call, so no event loop is needed for the shell to be updated.
+    """
+    changed = Signal(object)
+
+
+# The one broadcaster. BasePanel._set_busy publishes here and nothing else may; core/gui/main_window.py
+# listens and fills the shell's run slot (piece 4, B11).
+RUN_STATE = _RunState()
 
 
 class BasePanel(QWidget):
@@ -278,6 +299,10 @@ class BasePanel(QWidget):
         # Only this panel keeps its Cancel button live (it lives outside `controls`).
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(not busy)
+        # Publish app-wide, LAST: every panel's controls are in their final state before anything
+        # listening can look at them. The shell's run slot is filled from this (piece 4, B11), and it
+        # is the only thing that knows WHICH panel -- _running is a bare bool.
+        RUN_STATE.changed.emit(self if busy else None)
 
     def set_controls_enabled(self, enabled: bool):
         """Lock the whole left-hand column while a task runs.

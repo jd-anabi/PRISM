@@ -2650,3 +2650,175 @@ def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
     assert_cfg_unchanged(cfg, snap)
     assert not cfg.has_ground_truth and "cell" not in cfg.sources
     assert cfg.T_obs == before_t_obs
+
+
+# ── piece 4: a live run is visible app-wide (spec §6.1, B11) ─────────────────────────────────────
+def test_run_state_publishes_the_running_panel_and_none_on_idle():
+    """The app-wide broadcast. `_set_busy` already sets the class flag every panel's controls hang
+    off; it now also says WHICH panel, so the shell can name it. A module-level singleton, for the
+    reason ``BasePanel._running`` is class-level: the stream swap is process-wide, so "what is
+    running" is one app-wide fact and the second one belongs beside the first.
+
+    The payload is the panel itself on a run and None on idle -- not a bool, because the listener has
+    to name the panel, and not a title, because a BasePanel carries none (MainWindow's destination
+    map supplies it). Published LAST in _set_busy, after every panel's controls have reached their
+    final state, so a listener cannot see a half-locked window."""
+    from core.gui.panels.base_panel import RUN_STATE, BasePanel
+    from tests._fixtures import qt_app
+
+    qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    seen = []
+
+    def record(p):
+        seen.append(p)
+
+    RUN_STATE.changed.connect(record)
+    try:
+        panel._set_busy(True)
+        assert seen == [panel], seen
+        assert BasePanel._running, "the class flag and the broadcast must agree"
+        panel._set_busy(False)
+        assert seen == [panel, None], seen
+    finally:
+        panel._set_busy(False)
+        RUN_STATE.changed.disconnect(record)
+    assert not BasePanel._running
+
+
+def test_the_running_banner_is_a_pure_clock():
+    """The header's text comes from a PURE helper, so this asserts every shape without waiting a
+    second: m:ss under an hour, h:mm:ss from an hour, 0:00 at the start, and "a task" for a panel
+    the window's destination map does not know (it still says something is running). A negative age
+    -- a wall-clock jump -- reads as 0 rather than as a minus sign."""
+    from core.gui.screens.nav_shell import running_banner
+
+    assert running_banner("Posterior", 0) == "Running: Posterior — 0:00"
+    assert running_banner("Posterior", 59) == "Running: Posterior — 0:59"
+    assert running_banner("Posterior", 60) == "Running: Posterior — 1:00"
+    assert running_banner("Posterior", 247) == "Running: Posterior — 4:07"
+    assert running_banner("Posterior", 3599) == "Running: Posterior — 59:59"
+    assert running_banner("Posterior", 3600) == "Running: Posterior — 1:00:00"
+    assert running_banner("Posterior", 3725) == "Running: Posterior — 1:02:05"
+    assert running_banner("Sweep study cross-validation", 5) == \
+        "Running: Sweep study cross-validation — 0:05"
+    assert running_banner("", 12) == "Running: a task — 0:12"
+    assert running_banner("   ", 12) == "Running: a task — 0:12"
+    assert running_banner("Posterior", -5) == "Running: Posterior — 0:00"
+
+
+def test_the_shells_run_slot_starts_empty_and_is_the_only_styled_writer():
+    """The slot is built EMPTY and hidden: no icon load, no timer, no store read. The 2026-09-11
+    taskbar-icon incident was ~150 ms of layout between the native show and the first idle turn, and
+    this button sits on that path (spec §1.2, walkthrough row D16). `set_running` is the only writer:
+    a string shows it, None hides and clears it. The objectName is what the global QSS keys on, so
+    the two are pinned against each other here -- a renamed button would otherwise silently lose its
+    styling."""
+    from core.gui import design
+    from core.gui.screens.nav_shell import NavShell
+    from tests._fixtures import code_only, qt_app
+
+    qt_app()
+    nav = NavShell()
+    assert nav.btn_running.objectName() == "navRunning"
+    assert "QToolButton#navRunning" in design.build_qss(False)
+    assert "QToolButton#navRunning" in design.build_qss(True)
+    assert nav.btn_running.isHidden(), "the run slot must be hidden until something runs"
+    assert nav.btn_running.text() == ""
+    assert nav.btn_running.autoRaise(), "a flat tool button, like the other two nav glyphs"
+    # no icon font is touched for this button: NavShell loads exactly the two glyphs it always did
+    assert code_only(NavShell.__init__).count("apply_icon") == 2
+
+    nav.set_running("Running: Posterior — 0:03")
+    assert not nav.btn_running.isHidden() and nav.btn_running.text() == "Running: Posterior — 0:03"
+    nav.btn_running.setToolTip("somewhere")
+    nav.set_running(None)
+    assert nav.btn_running.isHidden()
+    assert nav.btn_running.text() == "" and nav.btn_running.toolTip() == ""
+
+
+def test_the_window_fills_the_run_slot_while_a_panel_runs_and_clears_it_after():
+    """The window's half of B11: the header says what is running and for how long, and stops saying
+    it the moment the run ends. And LAUNCH IS QUIET -- the slot is empty, no clock is ticking and no
+    panel is named until something actually runs. The QTimer is constructed in __init__ and never
+    started there: an unstarted QTimer registers nothing with the OS, which is what keeps the 150 ms
+    of layout the 2026-09-11 taskbar-icon incident was made of off the launch path (spec §1.2)."""
+    from core.gui.main_window import MainWindow
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.screens.nav_shell import running_banner
+    from tests._fixtures import qt_app
+
+    qt_app()
+    w = MainWindow()
+    assert w.nav.btn_running.isHidden() and w.nav.btn_running.text() == ""
+    assert not w._run_timer.isActive(), "a clock is ticking before anything has run"
+    assert w._running_panel is None
+
+    label = "Sweep study cross-validation"
+    panel = w.panel(CrossValPanel)
+    panel._set_busy(True)
+    try:
+        assert not w.nav.btn_running.isHidden()
+        # tolerant by one tick: this is real elapsed time, not a stub
+        assert w.nav.btn_running.text() in (running_banner(label, 0), running_banner(label, 1)), \
+            w.nav.btn_running.text()
+        assert w.nav.btn_running.toolTip() == f"FDT Analysis → {label}: go to it"
+        assert w._running_panel is panel
+        assert w._run_timer.isActive() and w._run_timer.interval() == 1000
+    finally:
+        panel._set_busy(False)
+    assert w.nav.btn_running.isHidden() and w.nav.btn_running.text() == ""
+    assert w.nav.btn_running.toolTip() == "" and w._running_panel is None
+    assert not w._run_timer.isActive(), "the clock must stop when the run does"
+
+
+def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_nowhere():
+    """The banner is clickable and lands on the panel that is running -- the section screen AND its
+    tab, because a run on the second tab of a section is not found by arriving at the first.
+
+    The destination map is built ONCE, in __init__, off the screens' own QTabWidgets, so a renamed
+    tab cannot leave the banner naming a tab that is gone. A panel the map does not know -- the model
+    builder is not a BasePanel, a future screen might not be mounted in a tab -- shows the banner with
+    no destination rather than raising a KeyError inside a signal handler."""
+    from core.gui.main_window import MainWindow
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from tests._fixtures import qt_app
+
+    qt_app()
+    w = MainWindow()
+    panel = w.panel(CrossValPanel)
+    assert w._panel_home[panel] == ("FDT Analysis", "Sweep study cross-validation",
+                                    w._section_index["FDT Analysis"], 1)
+    assert w._panel_home[w.inference_screen.posterior_panel] == (
+        "Parameter Inference", "Posterior", w._section_index["Parameter Inference"], 2)
+
+    w.nav.go_home()
+    w.fdt_screen.tabs.setCurrentIndex(0)
+    panel._set_busy(True)
+    try:
+        w.nav.btn_running.click()
+        assert w.nav.stack.currentIndex() == w._section_index["FDT Analysis"]
+        assert w.fdt_screen.tabs.currentIndex() == 1, "the click must land on the running TAB"
+    finally:
+        panel._set_busy(False)
+
+    class P(BasePanel):
+        pass
+
+    orphan = P()
+    assert orphan not in w._panel_home
+    w.nav.go_home()
+    orphan._set_busy(True)
+    try:
+        assert not w.nav.btn_running.isHidden()
+        assert w.nav.btn_running.text().startswith("Running: a task — ")
+        assert w.nav.btn_running.toolTip() == ""
+        w.nav.btn_running.click()
+        assert w.nav.stack.currentIndex() == 0, "an unknown panel must not navigate anywhere"
+    finally:
+        orphan._set_busy(False)

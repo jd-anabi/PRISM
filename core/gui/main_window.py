@@ -4,6 +4,9 @@ and the user-defined model builder). Replaces the old flat four-tab layout; the 
 reused unchanged in behaviour -- only where they are mounted changes. Cross-validation now lives inside
 the FDT Analysis section, and the SBI panel is split into the Parameter Inference section's gated
 tabs."""
+import time
+
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import QMainWindow, QMenu, QMessageBox
 
@@ -12,7 +15,7 @@ from core.config import VALID_MODELS
 from core.Helpers import model_store
 
 from . import settings, theming
-from .panels.base_panel import BasePanel
+from .panels.base_panel import RUN_STATE, BasePanel
 from .panels.crossval_panel import CrossValPanel
 from .panels.fdt_panel import FdtPanel
 from .panels.reduction_panel import ReductionPanel
@@ -21,7 +24,7 @@ from .screens.artifact_screen import ArtifactScreen
 from .screens.home_screen import HomeScreen
 from .screens.inference_screen import InferenceScreen
 from .screens.model_builder_screen import ModelBuilderScreen
-from .screens.nav_shell import NavShell
+from .screens.nav_shell import NavShell, running_banner
 from .screens.section_screen import SectionScreen
 from .screens.settings_screen import SettingsScreen
 from .widgets.artifact_picker import StorePicker
@@ -144,6 +147,35 @@ class MainWindow(QMainWindow):
                                "Artifacts": idx_artifacts,
                                "Settings": idx_settings, "Model builder": idx_builder}
         home.navigate.connect(lambda name: self.nav.go_to(self._section_index[name]))
+
+        # Where each panel LIVES. A BasePanel carries no title of its own, so this is what lets the
+        # header's run slot say "Posterior" and jump there. Built ONCE, off the screens' own tab
+        # widgets -- the same QTabWidgets the screens were built from, and the only thing MainWindow
+        # already has that pairs a panel with a label -- so a renamed tab cannot leave the banner
+        # naming a tab that is gone. Both screen kinds expose `.tabs` and `panels()` in tab order, so
+        # one loop covers the generic sections and the inference screen alike. A panel that is NOT in
+        # the map (the model builder, which is not a BasePanel, or a future screen) gets the banner
+        # with no destination rather than a KeyError inside a signal handler.
+        self._tab_screens = [(name, self.nav.stack.widget(self._section_index[name]))
+                             for name in ("Reduction Map", "FDT Analysis", "Parameter Inference",
+                                          "Simulate")]
+        self._panel_home = {}
+        for name, screen in self._tab_screens:
+            for tab_index in range(screen.tabs.count()):
+                self._panel_home[screen.tabs.widget(tab_index)] = (
+                    name, screen.tabs.tabText(tab_index), self._section_index[name], tab_index)
+
+        # The run slot, EMPTY at launch (spec §1.2): the timer is constructed here but never started,
+        # and an unstarted QTimer registers nothing with the OS, so nothing on the launch path ticks.
+        self._running_panel = None
+        self._run_title = ""
+        self._run_started = 0.0
+        self._run_timer = QTimer(self)
+        self._run_timer.setInterval(1000)
+        self._run_timer.timeout.connect(self._tick_running)
+        self.nav.btn_running.clicked.connect(self._go_to_running)
+        RUN_STATE.changed.connect(self._on_run_state)
+
         self._build_settings_menu(current_mode)
         self.nav.go_home()                                          # ALWAYS open on Home
 
@@ -311,6 +343,45 @@ class MainWindow(QMainWindow):
     def _all_panels(self):
         return (self.reduction_screen.panels() + self.fdt_screen.panels()
                 + self.inference_screen.panels() + self.simulate_screen.panels())
+
+    # ── the live run, visible app-wide (piece 4, B11) ─────────────────────────
+    def _on_run_state(self, panel) -> None:
+        """A run started (``panel``) or ended (None): fill or clear the shell's run slot.
+
+        Connected to the module-level RUN_STATE in base_panel.py, which _set_busy publishes on. Qt
+        drops the connection when this window is destroyed, so a window a test threw away is never
+        called for a later run. The title is looked up ONCE per run, not per tick.
+        """
+        self._running_panel = panel
+        if panel is None:
+            self._run_timer.stop()
+            self.nav.set_running(None)
+            return
+        where = self._panel_home.get(panel)
+        self._run_title = where[1] if where is not None else ""
+        self._run_started = time.monotonic()
+        self._tick_running()                       # paint immediately, not a second from now
+        self.nav.btn_running.setToolTip(
+            f"{where[0]} → {where[1]}: go to it" if where is not None else "")
+        self._run_timer.start()
+
+    def _tick_running(self) -> None:
+        """Re-render the elapsed time. One second's work: a divmod and a setText."""
+        self.nav.set_running(
+            running_banner(self._run_title, int(time.monotonic() - self._run_started)))
+
+    def _go_to_running(self) -> None:
+        """Click the run slot: show the panel that is running -- its screen AND its tab, since a run
+        on a section's second tab is not found by arriving at the first. A panel with no known home
+        does nothing: the banner still says what is running, it just has nowhere to send you."""
+        where = self._panel_home.get(self._running_panel)
+        if where is None:
+            return
+        _name, _label, screen_index, tab_index = where
+        self.nav.go_to(screen_index)
+        tabs = getattr(self.nav.stack.widget(screen_index), "tabs", None)
+        if tabs is not None:
+            tabs.setCurrentIndex(tab_index)
 
     def panel(self, cls):
         """The first panel of type ``cls`` across all screens (convenience for callers + tests)."""
