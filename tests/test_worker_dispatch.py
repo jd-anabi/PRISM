@@ -1303,6 +1303,88 @@ def test_a_cancel_raised_by_anything_the_manifest_refresh_reaches_is_carried_thr
         core_logger.removeHandler(handler)
 
 
+def test_the_completion_write_runs_inside_the_deferred_cancel_section(tmp_path, monkeypatch):
+    """``mark_complete`` is two writes that must both happen: state.pt flips to ``complete`` and the
+    manifest follows it. A cancel between them -- or out of anything the manifest refresh reaches,
+    whose ``except Exception`` cannot stop a BaseException -- leaves every row committed and the
+    manifest still saying the cache is unfinished, so the Artifacts browser labels a finished
+    multi-day cache "unfinished" until the next resume happens to rewrite it. So both writes sit in
+    one ``runs.cancel_deferred()`` section, as ``save``'s commit does.
+
+    Pinned the way the fault would arrive, as the test above pins ``save``: BOTH writes learn to
+    speak -- the state write through ``atomic_torch_save`` and the store's manifest writer -- and a
+    Cancel is pressed before the call. Move either write back out of the section and its own record
+    raises the cancel before that write happens: state.pt or the manifest is left unfinished and this
+    fails by name. The cancel must still be taken at the first record OUTSIDE the section."""
+    import logging
+
+    import pytest
+
+    from core.artifacts import manifest as mf
+    from core.artifacts import store
+    from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler
+    from core.SBI import training_checkpoint as tc
+
+    class _FakePump:
+        def __init__(self):
+            self.logs = []
+
+        def sink(self, kind, payload):
+            self.logs.append((kind, payload))
+
+    run_size, n_runs = 2, 2
+    d = tmp_path / "ck"
+    x = torch.arange(float(n_runs * run_size * 3)).reshape(n_runs * run_size, 3)
+    th = torch.arange(float(n_runs * run_size * 2)).reshape(n_runs * run_size, 2)
+    tc.create(d, {"model": "task22-probe", "run_size": run_size, "n_runs": n_runs},
+              schedule_t_scales=torch.ones(n_runs), schedule_Ts=torch.ones(n_runs),
+              inits=torch.zeros(run_size, 3), V=None, probe=torch.zeros(0, dtype=torch.float64),
+              run_size=run_size, n_runs=n_runs)
+    tc.save(d, from_batch=0, batch_k=n_runs, rng={}, x_buf=x, th_buf=th, run_size=run_size)
+
+    real_state_write, real_writer = tc.atomic_torch_save, store.write_simulation_manifest
+
+    def a_state_write_that_speaks(obj, dest):
+        logging.getLogger("core.Helpers.file_manager").info(f"writing {Path(dest).name}")
+        return real_state_write(obj, dest)
+
+    def a_writer_that_speaks(path, identity, **kwargs):
+        logging.getLogger("core.artifacts.store").info("refreshing the simulation manifest")
+        return real_writer(path, identity, **kwargs)
+
+    monkeypatch.setattr(tc, "atomic_torch_save", a_state_write_that_speaks)
+    monkeypatch.setattr(store, "write_simulation_manifest", a_writer_that_speaks)
+
+    token = CancelToken()
+    token.arm()                                # this thread plays the worker
+    fake = _FakePump()
+    handler = _PumpLogHandler(fake, token)
+    core_logger = logging.getLogger("core")
+    core_logger.addHandler(handler)
+    try:
+        token.requested.set()                  # Cancel pressed, latch not yet fired
+        try:
+            tc.mark_complete(d, n_runs, rows=(n_runs * run_size, 3))
+        except WorkerCancelled:
+            pytest.fail("a record from inside the completion write raised the cancel out of "
+                        "mark_complete(): a write is outside the deferred-cancel section")
+        assert token.fired is False and token.requested.is_set(), "the cancel was taken mid-write"
+        said = [p for k, p in fake.logs if k == "log"]
+        assert said == [("writing state.pt", "info"), ("refreshing the simulation manifest", "info")], \
+            ("both writes must have spoken, or this test measures nothing", fake.logs)
+        st = tc.peek(d)
+        assert st["complete"] is True and st["batches_done"] == n_runs, st
+        m = mf.from_json_text((d / store.MANIFEST).read_text(encoding="utf-8"))
+        assert m.body["complete"] is True and m.body["batches_done"] == n_runs, m.body
+        assert m.body["rows"] == [n_runs * run_size, 3], m.body
+
+        with pytest.raises(WorkerCancelled):   # deferred, never discarded
+            logging.getLogger("core.probe").info("the first record after the completion write")
+        assert token.fired is True
+    finally:
+        core_logger.removeHandler(handler)
+
+
 def test_cancel_deferred_applies_only_to_the_thread_that_entered_it():
     """PER THREAD: the window runs its task on a worker thread while tqdm's monitor and the GUI thread
     write too, so a section held on ANOTHER thread must not defer the armed thread's cancel. A
@@ -1343,3 +1425,123 @@ def test_cancel_deferred_applies_only_to_the_thread_that_entered_it():
         release.set()
         t.join(10)
     assert token.fired is True
+
+
+def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
+    """Three shapes, one branch (piece 4, B15).
+
+    (a) THE COLLISION -- Cancel pressed in the moment before a crash. The pipeline's rescue write now
+    runs inside ``runs.cancel_deferred()`` (Step 3), so the checkpoint it crosses does not fire, the
+    rows are committed, and the ORIGINAL exception keeps propagating. It reaches ``Worker.run``'s
+    generic handler and is reported like any other crash: the red box, its traceback in Details, the
+    message in the pane, and NO cancellation. The window needs no special case for this, and this leg
+    is the pin that keeps that true. The fn below is the rescue block's SHAPE, not the pipeline: a
+    token requested-and-not-yet-fired, a record and a print inside the section, then a bare ``raise``.
+    The section is per thread and the fn runs on the worker thread, so the token is armed there too.
+    No tqdm bar is live, deliberately (P35): a bar's teardown write would consume the latch on the way
+    out, and the ``fired is False`` assertion is what stops this leg from measuring nothing.
+
+    (b) THE RESIDUAL RACE, and why the chain is not the verdict. A cancel raised inside a RECOVERED
+    ``except`` block -- which is exactly where the OOM ladders log -- carries the handled exception as
+    its ``__context__``. Reporting the first non-cancel link as THE failure would therefore open a red
+    box for an OOM the run survived. So this stays a CANCEL: no error signal, no dialog. Nothing is
+    discarded either -- what was in flight goes to the pane at ERROR, whole traceback, under a warning
+    line saying a failure was in flight.
+
+    (c) A CLEAN cancel -- nothing chained -- is exactly what it was: one ``Run cancelled.`` line.
+
+    Whether the run was reported as a cancel is read off the PANE, not off a signal this test
+    connects: ``BasePanel.dispatch`` connects ``cancelled`` to the pane's ``Run cancelled.`` line
+    before the worker starts, so there is no window in which a fast worker could emit before the test
+    is listening.
+    """
+    import logging
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from core import runs
+    from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler, _SignalStream
+    from tests._fixtures import SHOWN, PaneCapture, pump, qt_app
+
+    app = qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    pane = PaneCapture(panel)
+
+    class _FakePump:
+        def __init__(self):
+            self.logs = []
+
+        def sink(self, kind, payload):
+            self.logs.append((kind, payload))
+
+    token, fake = CancelToken(), _FakePump()
+    rescue = logging.LogRecord("core.SBI.pipeline", logging.INFO, __file__, 1,
+                               "[checkpoint] stopping: saving 1 completed batches", (), None)
+
+    def crash_behind_the_section():
+        token.arm()                            # the fn runs on the worker thread, and so must the
+        token.requested.set()                  # section: Cancel pressed just before the failure
+        try:
+            raise RuntimeError("the batch failed")
+        except RuntimeError:
+            with runs.cancel_deferred():       # what pipeline.py's rescue block now opens
+                _PumpLogHandler(fake, token).emit(rescue)
+                _SignalStream(fake, "out", "info", token).write("a print beside the rescue write\n")
+            raise                              # the ORIGINAL exception, unconditionally
+
+    def cancel_inside_a_recovered_handler():
+        try:
+            raise RuntimeError("the OOM the ladder survived")
+        except RuntimeError:
+            # The ladder logs from HERE and carries on, and that log is a cancel checkpoint -- so the
+            # cancel it raises carries the handled, already-dealt-with exception as its __context__.
+            raise WorkerCancelled()
+
+    def clean_cancel():
+        raise WorkerCancelled()
+
+    def _run(fn, wait_for_dialog):
+        SHOWN.clear()
+        del pane.lines[:]                      # each leg reads only its own lines
+        panel.dispatch(fn)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and (panel._busy or (wait_for_dialog and not SHOWN)):
+            app.processEvents()
+            time.sleep(0.01)
+        pump(app, 0.2)
+        assert not panel._busy, "the panel stayed busy"
+
+    stop = ("warning", "Run cancelled.")
+
+    # (a) the collision: a crash, reported as a crash
+    _run(crash_behind_the_section, True)
+    assert stop not in pane.lines, "a run that CRASHED was reported as a cancellation"
+    assert token.requested.is_set() and token.fired is False, (
+        "the section did not defer the cancel -- something else consumed the latch, so this leg is "
+        "measuring nothing")
+    said = [payload for kind, payload in fake.logs if kind == "log"]
+    assert ("[checkpoint] stopping: saving 1 completed batches", "info") in said, fake.logs
+    assert any("a print beside the rescue write" in text for text, _lv in said), fake.logs
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
+    assert box.text() == "the batch failed", box.text()
+    assert "RuntimeError: the batch failed" in box.detailedText(), box.detailedText()
+    assert pane.lines == [("error", "the batch failed")], \
+        "a crash is reported by the ordinary crash path and by nothing else"
+
+    # (b) the residual race: a cancel, with what was in flight kept
+    _run(cancel_inside_a_recovered_handler, False)
+    assert pane.lines.count(stop) == 1, ("a cancel must still be reported as a cancel", pane.lines)
+    assert SHOWN == [], "a recovered exception behind a cancel opened an error dialog"
+    assert any(lv == "warning" and "failure was in flight" in t for lv, t in pane.lines), pane.lines
+    assert any(lv == "error" and "RuntimeError: the OOM the ladder survived" in t
+               for lv, t in pane.lines), pane.lines
+    assert pane.lines[-1] == stop, pane.lines
+
+    # (c) a clean cancel: unchanged
+    _run(clean_cancel, False)
+    assert pane.lines == [stop] and SHOWN == [], (pane.lines, SHOWN)

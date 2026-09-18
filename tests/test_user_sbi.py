@@ -3786,7 +3786,13 @@ def test_a_failed_snapshot_never_writes_a_stale_restore_point():
 
     Recording nothing is correct; recording the wrong thing is not -- but the ROWS must still be
     written either way, because they are hours of simulation and a checkpoint that resumes without
-    restoring streams merely draws fresh noise from that point."""
+    restoring streams merely draws fresh noise from that point.
+
+    Also pinned, since piece 4 (B15): the whole rescue write sits inside a ``cancel_deferred()``
+    section, so neither of its two log calls can raise between the completed batches and the write
+    that commits them. Needled on ``rng=_rescue_rng`` rather than on the call's opening, because the
+    CADENCE write two screens up is ``_tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k + 1``
+    and would match a shorter needle first."""
     src = code_only(pipeline_mod.gen_training_data)
     assert "_pending_rng_at = batch_k" in src, (
         "the snapshot must be paired with the batch index it describes")
@@ -3796,6 +3802,17 @@ def test_a_failed_snapshot_never_writes_a_stale_restore_point():
     assert "if _ck_dir is not None and batch_k > _ck_from:" in src, (
         "the rescue write must not be conditional on having an RNG snapshot -- that would throw "
         "away the completed batches to avoid an imperfect restore point")
+    i_section = src.find("with cancel_deferred():")
+    i_guard = src.find("if _ck_dir is not None and batch_k > _ck_from:")
+    i_save = src.find("rng=_rescue_rng")
+    assert i_section != -1, "the rescue write is no longer inside a cancel_deferred() section"
+    assert i_section < i_guard < i_save, (i_section, i_guard, i_save)
+    # ...and INSIDE it, not merely after its opening line: the section's own body holds the write and
+    # both of the log calls that could otherwise raise ahead of it.
+    inside = "\n".join(ast.unparse(n) for n in ast.walk(ast.parse(src)) if isinstance(n, ast.With)
+                       and any(ast.unparse(i.context_expr) == "cancel_deferred()" for i in n.items))
+    for needle in ("rng=_rescue_rng", "[checkpoint] no valid RNG snapshot", "[checkpoint] stopping"):
+        assert needle in inside, f"{needle!r} is outside the rescue block's cancel_deferred() section"
 
 
 def test_the_vram_ceiling_env_override_wins_and_tolerates_junk():
@@ -4331,3 +4348,82 @@ def test_training_creates_no_sbi_logs_directory(tmp_path, monkeypatch):
     assert {"training_loss", "validation_loss", "epochs_trained"} <= set(writer.tags), writer.tags
     assert writer.flushed >= 1, "sbi's _summarize ends with flush(); the recorder must have seen it"
     assert not logs.exists(), f"an explicit writer must be used instead of sbi's default: {logs}"
+
+
+def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_original(monkeypatch):
+    """THE collision no gate can provoke (piece 4, B15). The run crashes with the cancel token
+    REQUESTED AND NOT YET FIRED -- Cancel pressed in the moment before the failure -- and the rescue
+    block's own announcement is then the next cancel checkpoint. Before B15 that announcement raised
+    WorkerCancelled from inside the ``except BaseException`` handler: ``_tc.save`` was skipped, the
+    re-raise at the end of the block was never reached, and every batch since the last cadence write
+    was lost while the window reported a clean cancellation.
+
+    Both halves of the repair are pinned here: the rows are committed, AND the original exception is
+    what escapes. The second half is what lets the window report the crash through its ordinary crash
+    path with no special case in ``Worker.run``
+    (tests/test_worker_dispatch.py::test_a_cancel_never_reports_a_failure_as_a_clean_stop, leg (a)).
+
+    Driven through the window's THIRD channel rather than a stream swap: ``_PumpLogHandler`` is the
+    handler the window puts on the ``core`` logger for a run, and it checks the same token the streams
+    do, so installing it alone makes the pipeline's records the ONLY cancel checkpoint in the process
+    -- which is what makes this deterministic. ``sys.stdout``/``sys.stderr`` are untouched, so no tqdm
+    teardown write can consume the latch on the way out; the assertion on ``token.fired`` below is
+    what keeps that true, and a future seam change fails loudly instead of quietly measuring nothing.
+
+    Cadence 2 over 4 batches: [0,2) is committed at the end of batch 1, batch 2 completes uncommitted,
+    and batch 3 crashes -- so the rescue write owes exactly batch 2 and ``batches_done`` must be 3.
+    """
+    import logging
+    import tempfile
+
+    from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler
+    from core.SBI import training_checkpoint as tc
+
+    tmp = Path(tempfile.mkdtemp()) / "rescue"
+    token = CancelToken()
+    token.arm()                                # redirect_streams does this on the worker thread
+
+    class _FakePump:
+        def __init__(self):
+            self.logs = []
+
+        def sink(self, kind, payload):
+            self.logs.append(payload)
+
+    fake = _FakePump()
+    handler = _PumpLogHandler(fake, token)
+    core_logger = logging.getLogger("core")
+    real = pipeline_mod.gen_stats
+    seen = {"n": -1, "last": None}
+
+    def _cancel_then_crash(x_spont, *a, **k):
+        if seen["last"] is not pipeline_mod._BATCH_TAG:
+            seen["last"] = pipeline_mod._BATCH_TAG
+            seen["n"] += 1
+        if seen["n"] >= 3:
+            token.requested.set()              # Cancel pressed; the latch has NOT fired
+            raise _KillRun("the batch failed")
+        return real(x_spont, *a, **k)
+
+    monkeypatch.setattr(pipeline_mod, "gen_stats", _cancel_then_crash)
+    core_logger.addHandler(handler)
+    try:
+        with pytest.raises(_KillRun):
+            _gen_td("chi", seed=11, n_runs=4, run_size=2, checkpoint=_ck(tmp, resume="never"))
+
+        assert token.requested.is_set() and token.fired is False, (
+            "the rescue block's own record was NOT the next cancel checkpoint -- something else "
+            "consumed the latch on the way out, so this test is measuring nothing")
+        st = tc.peek(tmp)
+        assert st and st["batches_done"] == 3, (
+            f"the rescue write did not run: {st}. The cadence write covered [0,2); batch 2 completed "
+            f"and must be committed on the way out even with a cancel requested")
+        assert any("[checkpoint] stopping: saving 1 completed batches" in text
+                   for text, _level in fake.logs), fake.logs
+
+        # DEFERRED, never discarded: the first record after the section still raises.
+        with pytest.raises(WorkerCancelled):
+            logging.getLogger("core.probe").info("the first record after the rescue write")
+        assert token.fired is True
+    finally:
+        core_logger.removeHandler(handler)

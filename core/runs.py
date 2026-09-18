@@ -20,8 +20,9 @@ context manager the front ends' cancel checkpoints consult:
   `log.txt` in every artifact the entry commits. A composition and the stages it calls share one
   buffer: `capture_run` pushes only when none is active on this thread.
 - THE DEFERRED CANCEL (piece 4, B15). `cancel_deferred()` is the named critical section inside which
-  the window's cancel checkpoints do not fire, so a Cancel pressed between two writes that must both
-  happen -- the checkpoint commit, the training rescue save -- is deferred rather than taken. The
+  the window's cancel checkpoints do not fire, so a Cancel that would otherwise land where a raise
+  skips a write that must happen -- inside the checkpoint commit and the completion write, and in
+  the training rescue save a crashing run makes on its way out -- is deferred rather than taken. The
   token stays requested and the next check outside the section raises as usual.
 
 The `core` logger's level is set to INFO here, ONCE, at import. Python's root logger sits at
@@ -165,8 +166,10 @@ def cancel_deferred():
     """Inside this block a front end's cancel checkpoint does not fire: records still flow, the token
     stays REQUESTED, and the next check outside the block raises as usual.
 
-    It exists for the unwind path and the checkpoint commit -- the two places where raising between
-    two writes loses committed work. It defers a cancel; it never discards one.
+    It exists for the unwind path (the training rescue save), the checkpoint commit and the
+    completion write -- the places where a raise would skip a write that must happen: the rescue
+    save that commits a crashed run's completed batches, the state replace after the shards' fsync,
+    the manifest refresh after state.pt moves. It defers a cancel; it never discards one.
 
     PER THREAD and COUNTED. Per thread, because the token only ever raises on the armed (worker)
     thread and a GUI-thread print must not be silenced by a worker's section. Counted, because the

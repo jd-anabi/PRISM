@@ -18,6 +18,7 @@ from core.Helpers import helpers
 from core import config
 from core.config import CHUNK_LEN, N_ND_MAX
 from core.refusals import Refusal
+from core.runs import cancel_deferred
 from core.Simulator import bp_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics, chi, derived
 
@@ -1778,25 +1779,34 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
         # write: a checkpoint that resumes without restoring the streams draws fresh noise from
         # batch_k onward -- statistically equivalent, the same licence the OOM ladders take -- while
         # a skipped write throws away hours of simulation outright.
-        if _ck_dir is not None and batch_k > _ck_from:
-            _rescue_rng = _pending_rng if _pending_rng_at == batch_k else None
-            if _rescue_rng is None:
-                log.warning(f"[checkpoint] no valid RNG snapshot for batch {batch_k}; saving the rows "
-                            f"without a restore point (a resume will draw fresh noise from there)")
-            try:
-                # Announced BEFORE the write, so a multi-second flush is not an unexplained hang after
-                # Cancel. Safe to log here even under a cancel: the window's logging handler checks the
-                # same CancelToken the streams do, and CancelToken.fired is a one-shot latch, so the
-                # raise has already happened and later records pass through. Nothing is printed or
-                # logged BETWEEN the shard fsync and the state replace -- see training_checkpoint.
-                log.info(f"[checkpoint] stopping: saving {batch_k - _ck_from} completed batches "
-                         f"({_ck_from} -> {batch_k}) before unwinding…")
-                _tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k,
-                         rng=_rescue_rng, x_buf=x_buf, th_buf=th_buf, run_size=run_size)
-            except Exception as _e:              # noqa: BLE001
-                # A failed rescue write must never REPLACE the cancel/crash with an I/O error. It is
-                # an ERROR record: a failure reported rather than raised.
-                log.error(f"[checkpoint] could not save on the way out: {_e}")
+        #
+        # INSIDE A DEFERRED-CANCEL SECTION (piece 4, B15), because TWO of the calls below can raise,
+        # not one: the log.warning is outside the inner try altogether, and the log.info is inside one
+        # whose only handler is `except Exception` while WorkerCancelled is a BaseException. Either
+        # would raise under a cancel that is REQUESTED AND NOT YET FIRED -- Cancel pressed in the
+        # moment before a crash -- skipping _tc.save and the re-raise below and losing every batch
+        # since the last cadence write. The comment this replaces claimed the log was safe because the
+        # latch is one-shot and "the raise has already happened": true only when the cancel is what
+        # unwound the run, which is exactly not this case. The section defers that cancel; it does not
+        # discard it -- the token stays requested and the next check outside this block raises.
+        with cancel_deferred():
+            if _ck_dir is not None and batch_k > _ck_from:
+                _rescue_rng = _pending_rng if _pending_rng_at == batch_k else None
+                if _rescue_rng is None:
+                    log.warning(f"[checkpoint] no valid RNG snapshot for batch {batch_k}; saving the rows "
+                                f"without a restore point (a resume will draw fresh noise from there)")
+                try:
+                    # Announced BEFORE the write, so a multi-second flush is not an unexplained hang
+                    # after Cancel. Nothing is printed or logged BETWEEN the shard fsync and the state
+                    # replace -- see training_checkpoint, whose commit opens a section of its own.
+                    log.info(f"[checkpoint] stopping: saving {batch_k - _ck_from} completed batches "
+                             f"({_ck_from} -> {batch_k}) before unwinding…")
+                    _tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k,
+                             rng=_rescue_rng, x_buf=x_buf, th_buf=th_buf, run_size=run_size)
+                except Exception as _e:              # noqa: BLE001
+                    # A failed rescue write must never REPLACE the cancel/crash with an I/O error. It is
+                    # an ERROR record: a failure reported rather than raised.
+                    log.error(f"[checkpoint] could not save on the way out: {_e}")
         raise                                    # UNCONDITIONAL: never swallow a cancel
     finally:
         # Cleared however we leave -- return, OOM, or a cooperative cancel. A stale tag would make the

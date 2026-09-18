@@ -22,6 +22,33 @@ def _drop_tracebacks(exc: BaseException) -> None:
         stack += [e.__cause__, e.__context__]
 
 
+def _pending_failure(cancel: BaseException) -> "BaseException | None":
+    """The first non-cancel exception on ``cancel``'s ``__cause__``/``__context__`` chain, or None.
+
+    A cancel checkpoint (a print, a tqdm redraw, a ``core`` record) that fires while something is
+    already unwinding raises WorkerCancelled CHAINED to it, so the chain is the only place that
+    exception still exists once the cancel has replaced it.
+
+    It is looked up to be LOGGED, never to decide the run's verdict. The chain cannot tell a failure
+    that was still propagating from one the code had already dealt with: a cancel raised inside a
+    RECOVERED ``except`` block -- where the OOM ladders log -- carries the handled exception as its
+    context, so treating a chained exception as THE failure would open a red box for an OOM the run
+    survived. THE collision (a Cancel in the moment before a crash) is not fixed here at all: the
+    pipeline's rescue write runs inside ``runs.cancel_deferred()``, so the original exception
+    propagates by itself and lands in Worker.run's generic handler.
+
+    ``__cause__`` first (an explicit ``raise ... from``), then ``__context__``. A chain can loop, so
+    each link is visited once.
+    """
+    seen, e = set(), cancel
+    while e is not None and id(e) not in seen:
+        seen.add(id(e))
+        e = e.__cause__ if e.__cause__ is not None else e.__context__
+        if e is not None and not isinstance(e, WorkerCancelled):
+            return e
+    return None
+
+
 class WorkerSignals(QObject):
     log = Signal(str, str)          # (text, level in {"info","warning","error"}) -- panel-side messages
     log_batch = Signal(object)      # list[(text, level)]: one pump tick of pipeline output
@@ -57,15 +84,38 @@ class Worker(QRunnable):
 
     @Slot()
     def run(self):
-        payload, failure, cancelled = None, None, False
+        payload, failure, cancelled, in_flight = None, None, False, None
         try:
             with redirect_streams(self.signals, self.cancel):
                 try:
                     payload = self.fn(*self.args, **self.kwargs)
-                except WorkerCancelled:
+                except WorkerCancelled as cancel:
                     # A cooperative cancel -- caught by name (BaseException, so it skipped the generic
-                    # handler below). Not a failure: report it as such, no traceback, no error dialog.
+                    # handler below). ALWAYS reported as a cancel: no traceback, no error dialog.
+                    #
+                    # THE COLLISION IS NOT HANDLED HERE. A Cancel pressed in the moment before a crash
+                    # is handled where the work is: the pipeline's rescue save runs inside
+                    # runs.cancel_deferred() (piece 4, B15), so the checkpoint it crosses does not
+                    # fire, the rows are committed, and the ORIGINAL exception keeps propagating --
+                    # into the generic handler below, which reports it like any other crash.
+                    #
+                    # What is left is the residual race: a checkpoint OUTSIDE any section firing while
+                    # something is already unwinding. Python chains it, so __context__ still holds
+                    # what was in flight, and that is NOT discarded -- its whole traceback goes to the
+                    # log pane at ERROR below. It is deliberately not reported as THE failure: a
+                    # cancel raised inside a RECOVERED `except` block (the OOM ladders log from
+                    # exactly there) carries the handled exception as its context, so reporting the
+                    # chain would open a red box for an OOM the run survived.
                     cancelled = True
+                    original = _pending_failure(cancel)
+                    if original is not None:
+                        # rstrip: format_exception ends on a newline, which the pane would render as
+                        # a blank line after the traceback.
+                        in_flight = "".join(traceback.format_exception(
+                            type(original), original, original.__traceback__)).rstrip()
+                    # ...and then the frames go, for the reason the Exception branch gives below.
+                    # _drop_tracebacks walks the chain, so `original` is covered by this one call.
+                    _drop_tracebacks(cancel)
                 except Exception as e:               # noqa: BLE001 -- surface any failure to the UI
                     # The EXCEPTION, not its text. The panel opens the yellow "Check your inputs"
                     # box for a Refusal and the red one with the traceback for anything else, and
@@ -89,8 +139,14 @@ class Worker(QRunnable):
             # stopped, so (a) every line the pipeline produced -- including a leave=True bar's final
             # frame, which is only flushed on teardown -- is queued AHEAD of the result, and (b) the
             # modal dialog that _on_error opens cannot spin a nested event loop while the process's
-            # streams are still swapped out from under it.
+            # streams are still swapped out from under it. The in-flight note and its traceback are
+            # emitted HERE, not inside the `with`, for the same ordering reason -- and BEFORE
+            # cancelled.emit(), so the panel's "Run cancelled." stays the last line of the run.
             if cancelled:
+                if in_flight is not None:
+                    self.signals.log.emit("Cancelled while a failure was in flight. The cancel did "
+                                          "not cause it; its traceback follows.", "warning")
+                    self.signals.log.emit(in_flight, "error")
                 self.signals.cancelled.emit()
             elif failure is None:
                 self.signals.result.emit(payload)

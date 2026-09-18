@@ -48,9 +48,10 @@ cache.
 Do not ``print()`` or log between steps 1 and 3 under the GUI: every write funnels through
 ``gui.streams._SignalStream.write`` and every record through ``gui.streams._PumpLogHandler.emit``,
 both of which call ``CancelToken.check()`` and would raise mid-commit. Since piece 4 (B15) ``save``
-runs steps 1-3 -- and the manifest refresh after them -- inside ``core.runs.cancel_deferred()``, so
-both checkpoints carry such a line instead of raising on it -- the rule is still the rule, and the
-section is what enforces it.
+runs steps 1-3 -- and the manifest refresh after them -- inside ``core.runs.cancel_deferred()``, and
+``mark_complete`` runs its state flip and manifest refresh inside one too, so both checkpoints carry
+such a line instead of raising on it -- the rule is still the rule, and the section is what enforces
+it.
 """
 import hashlib
 import json
@@ -359,9 +360,15 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
 def mark_complete(path, batch_k: int, rows=None) -> None:
     path = Path(path)
     st = peek(path) or {}
-    atomic_torch_save({"batches_done": int(batch_k), "complete": True,
-                       "rng": st.get("rng")}, path / _STATE)
-    _refresh_manifest(path, batches_done=batch_k, complete=True, rows=rows)
+    # ONE deferred-cancel section around both writes (piece 4, B15), for the reason save() gives:
+    # a cancel between the state flip and the manifest refresh -- or out of anything the refresh
+    # reaches, whose `except Exception` cannot stop a BaseException -- leaves every row committed and
+    # the manifest still saying the cache is unfinished, so the Artifacts browser labels a finished
+    # cache "unfinished" until the next resume rewrites it.
+    with cancel_deferred():
+        atomic_torch_save({"batches_done": int(batch_k), "complete": True,
+                           "rng": st.get("rng")}, path / _STATE)
+        _refresh_manifest(path, batches_done=batch_k, complete=True, rows=rows)
 
 
 def _refresh_manifest(path: Path, *, batches_done: int, complete: bool = False, rows=None) -> None:
