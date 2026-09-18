@@ -159,6 +159,11 @@ def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp
         "DEFAULT_SORT moved; pick a saved sort below that differs from it"
     first.table.apply_sort_state(0, 0)          # Name, ascending -- not the default
     assert _select(first, 0) is not None
+    # Asserted HERE, on a screen that HAS a selection, because a re-list is the one place a
+    # remembered id could come back. The same assertion on the fresh screen below could not fail
+    # whatever the code did -- that screen's table is a different object that never had a selection.
+    first.refresh()
+    assert first.table.current_summary() is None, "a re-list must not restore the selected artifact"
 
     qs = st.settings()
     first.save_settings(qs)
@@ -170,7 +175,6 @@ def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp
     again = artifact_screen(store)
     assert again.kind() == "posterior"
     assert again.table.sort_state() == (0, 0), "the saved sort was overwritten before it was applied"
-    assert again.table.current_summary() is None, "the selected artifact must not come back"
 
     qs.setValue("artifacts/kind", "nosuchkind")
     qs.sync()
@@ -178,22 +182,50 @@ def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp
     assert third.kind() == KINDS[0], "a stale kind key must be ignored, not restored"
 
 
+def test_a_sort_clicked_on_a_kind_with_no_artifacts_is_still_saved(tmp_path):
+    """§3.5. A kind with nothing in it still has a HEADER, so a sort clicked there is the user's
+    choice like any other -- and it is exactly the case a "does the table have rows" test throws
+    away. save_settings asks the table whether it has COLUMNS (i.e. whether set_rows has run), which
+    is the question it means."""
+    from PySide6.QtCore import Qt
+    from core.gui import settings as st
+
+    store = ArtifactStore(tmp_path)                    # empty: not one artifact of any kind
+    screen = artifact_screen(store)
+    assert store.list(screen.kind()) == []
+    assert screen.table.topLevelItemCount() == 0 and screen.table.columnCount() >= 3
+    stale = screen._sort
+
+    # The user clicks the last header -- what a click does is move the sort indicator.
+    screen.table.header().setSortIndicator(2, Qt.DescendingOrder)
+    assert screen.table.sort_state() == (2, 1) != stale
+
+    qs = st.settings()
+    screen.save_settings(qs)
+    qs.sync()
+    assert (st.get_int(qs, "artifacts/sort_col", -1), st.get_int(qs, "artifacts/sort_order", -1)) \
+        == (2, 1), "the sort clicked on an empty kind was discarded in favour of the stale one"
+
+
 def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
     """B8. MainWindow connects the screen's store_changed to _refresh_store_pickers, the twin of
     _refresh_model_combos that a saved user model already drives. The pickers are found by TYPE, not
     by naming prior_picker / post_picker / obs_picker, so a fourth one added to a tab is covered by
-    construction."""
+    construction -- which is why what is asserted is EVERY picker the window holds, not a count. A
+    count would make a later task that adds a picker break this test instead of being covered by it.
+    The three kinds today are asserted as a SUBSET for the same reason."""
     from core.gui.main_window import MainWindow
     from core.gui.widgets.artifact_picker import StorePicker
 
     qt_app()
     w = MainWindow()
     pickers = [p for panel in w._all_panels() for p in panel.findChildren(StorePicker)]
-    assert len(pickers) == 3, [p.kind for p in pickers]
-    assert {p.kind for p in pickers} == {"prior", "posterior", "observation"}
+    assert pickers, "the window holds no artifact picker at all, so this proves nothing"
+    assert {"prior", "posterior", "observation"} <= {p.kind for p in pickers}
 
     seen = []
     for p in pickers:
-        p.refresh = lambda _p=p: seen.append(_p.kind)
+        p.refresh = lambda _p=p: seen.append(_p)
     w.artifact_screen.store_changed.emit()
-    assert sorted(seen) == ["observation", "posterior", "prior"], seen
+    assert [id(p) for p in seen] == [id(p) for p in pickers], \
+        f"refreshed {[p.kind for p in seen]}, but the window holds {[p.kind for p in pickers]}"

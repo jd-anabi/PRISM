@@ -157,11 +157,15 @@ class ArtifactScreen(QWidget):
         a QWidget (B1), so it gets no sweep for free -- which is also what keeps it out of
         ``_refresh_model_combos``.
 
-        A table with rows in it IS the sort; one that was never filled reports DEFAULT_SORT whatever
-        was restored, so a window closed without ever opening this screen must save what it read
-        rather than the default it never showed.
+        A table that HAS BEEN FILLED is the sort, whether or not that fill produced any rows: a kind
+        with nothing in it still has a header, and a sort clicked on it is the user's choice like any
+        other. One that was never filled reports DEFAULT_SORT whatever was restored, so a window
+        closed without ever opening this screen must save what it read rather than the default it
+        never showed. ``columnCount()`` is the exact question -- ``set_rows`` is what gives the table
+        its columns -- where ``topLevelItemCount()`` would answer "did that kind have any artifacts"
+        and silently discard a header click on an empty one.
         """
-        col, order = self.table.sort_state() if self.table.topLevelItemCount() else self._sort
+        col, order = self.table.sort_state() if self.table.columnCount() else self._sort
         qs.beginGroup("artifacts")
         qs.setValue("kind", self.kind())
         qs.setValue("sort_col", str(int(col)))
