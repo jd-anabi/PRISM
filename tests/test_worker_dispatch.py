@@ -29,9 +29,12 @@ matplotlib.use("Agg")                                            # match the app
 import torch                                                      # noqa: E402
 from tqdm import tqdm                                             # noqa: E402
 
+from core.artifacts.store import KIND_DIRS, Summary                # noqa: E402
 from core.gui.panels.base_panel import BasePanel                  # noqa: E402
 from core.gui.streams import redirect_streams                     # noqa: E402
 from core.gui.vt import StreamRouter, parse_bar                   # noqa: E402
+from core.gui.widgets import artifact_table as at                 # noqa: E402
+from core.gui.widgets.artifact_table import ArtifactTable, cells_for, columns_for   # noqa: E402
 from core.gui.widgets.log_pane import LogPane                     # noqa: E402
 from core.gui.widgets.progress_pane import ProgressPane           # noqa: E402
 from core.gui.worker import WorkerSignals                         # noqa: E402
@@ -653,3 +656,322 @@ def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
     assert SHOWN == [], "the panel built a box of its own instead of delegating"
     assert pane.lines[-1] == ("warning", f"{exc.message} {fix}"), \
         "the log-pane line is the panel's own (a plain QWidget has no pane) and must stay"
+
+
+# ── the artifact browser's table (piece 4, design §3.2) ──────────────────────────────────────────
+# NOTHING BELOW READS A STORE. columns_for/cells_for are pure over a Summary (B2: a row needs no
+# second manifest read), so every formatting leg builds by hand the Summary it wants, including the
+# shapes a real store is slow or awkward to produce -- a cache mid-run, a posterior whose manifest
+# records no amortization, a directory with no manifest at all.
+
+
+def _row(kind, **over):
+    """A COMPLETE ``Summary`` of ``kind``, with every field every kind shows set to a recognisable
+    value. The cache-only ones (``batches_done``, ``batches_planned``, ``rows``) and the per-kind ones
+    (``mode``, ``width``, ``amortized``, ``variant``) keep their dataclass defaults, so a leg that
+    wants them passes them: ``over`` replaces any field, and that is how the awkward shapes -- a cache
+    mid-run, a posterior with no recorded amortization -- are reached."""
+    base = dict(kind=kind, id="20260914T102231", name="run-a", created="2026-09-14T10:22:31",
+                note="a note", path=Path("nowhere"), complete=True, reason=None,
+                dir_name="run-a__20260914T102231", finished=True)
+    base.update(over)
+    return Summary(**base)
+
+
+def _bad_row(kind, **over):
+    """An INCOMPLETE ``Summary``, laid out exactly as ``ArtifactStore.list`` builds one
+    (core/artifacts/store.py:342): the directory name in both ``id`` and ``dir_name``, no name, no
+    created, no note, and a reason."""
+    base = dict(kind=kind, id="halfwritten", name="", created="", note="", path=Path("nowhere"),
+                complete=False, reason="no manifest.json (incomplete or interrupted)",
+                dir_name="halfwritten", finished=False)
+    base.update(over)
+    return Summary(**base)
+
+
+def test_columns_for_names_all_seven_kinds_after_name_and_created():
+    """Every kind's header row, verbatim (design §3.2's table), and the set of kinds is CLOSED against
+    KIND_DIRS: an eighth kind added to the store must gain a column list here or fail this, rather
+    than reaching the browser as a KeyError at the click. "Name" and "Created" lead every kind and
+    "Note" ends every kind; what differs in between is what only that kind has."""
+    import pytest
+
+    assert set(at._EXTRA_COLUMNS) == set(KIND_DIRS), "a kind has no column list (or has a stale one)"
+    assert columns_for("prior") == ("Name", "Created", "Note")
+    assert columns_for("simulation") == ("Name", "Created", "Progress", "Finished", "Note")
+    assert columns_for("posterior") == ("Name", "Created", "Mode", "Width", "Amortized", "Note")
+    assert columns_for("observation") == ("Name", "Created", "Mode", "Width", "Note")
+    assert columns_for("calibration") == ("Name", "Created", "Note")
+    assert columns_for("inference") == ("Name", "Created", "Note")
+    assert columns_for("diagnostic") == ("Name", "Created", "Variant", "Note")
+    for kind in KIND_DIRS:
+        cols = columns_for(kind)
+        assert cols[:2] == ("Name", "Created") and cols[-1] == "Note", kind
+    with pytest.raises(KeyError):
+        columns_for("plot")             # loud: the kind comes from the screen's own KIND_DIRS selector
+
+
+def test_cells_for_renders_each_kind_from_the_summary_alone():
+    """One cell per column, every one a string, and the same length as the header. The values come off
+    the Summary and nothing else -- no store, no manifest, no disk (B2)."""
+    for kind in KIND_DIRS:
+        s = _row(kind)
+        cells = cells_for(kind, s)
+        assert len(cells) == len(columns_for(kind)), kind
+        assert all(isinstance(c, str) for c in cells), (kind, cells)
+        assert cells[0] == "run-a" and cells[1] == "2026-09-14T10:22:31", kind
+        assert cells[-1] == "a note", kind
+    assert cells_for("prior", _row("prior")) == ("run-a", "2026-09-14T10:22:31", "a note")
+    assert cells_for("calibration", _row("calibration", note="")) == (
+        "run-a", "2026-09-14T10:22:31", "")
+    assert cells_for("observation", _row("observation", mode="chi", width=18)) == (
+        "run-a", "2026-09-14T10:22:31", "chi", "18", "a note")
+    assert cells_for("diagnostic", _row("diagnostic", variant="laplace")) == (
+        "run-a", "2026-09-14T10:22:31", "laplace", "a note")
+    # ablation records variant=None deliberately (core/diagnostics/ablation.py:206): blank, not "None"
+    assert cells_for("diagnostic", _row("diagnostic", variant=None))[2] == ""
+    # an observation carries no amortization, so it gets no such column at all
+    assert "Amortized" not in columns_for("observation")
+
+
+def test_a_caches_progress_and_whether_it_finished_come_apart():
+    """B3. ``complete`` means "has a valid manifest" and a cache is manifested from its first batch on,
+    so a row must say BOTH: the progress, and whether the run finished. Both halves of the fraction
+    are on the Summary -- ``batches_done`` and ``batches_planned``, the latter lifted from
+    ``body["identity"]["n_runs"]`` by the store task -- so the cell reads "3/4 batches" and an
+    operator can see how far a running cache has to go. The rows-per-batch list is different: it is
+    written only by ``mark_complete`` (core/SBI/training_checkpoint.py:346), so a running cache has no
+    row count and the cell adds one only once it exists."""
+    running = _row("simulation", name="", batches_done=3, batches_planned=4, rows=None, finished=False)
+    done = _row("simulation", name="", batches_done=4, batches_planned=4, rows=(24, 24, 24, 24),
+                finished=True)
+    assert cells_for("simulation", running)[2:4] == ("3/4 batches", "no")
+    assert cells_for("simulation", done)[2:4] == ("4/4 batches · 96 rows", "yes")
+    assert cells_for("simulation", _row("simulation", batches_done=1, batches_planned=4))[2] == \
+        "1/4 batches"
+    # a manifest that records no planned count (nothing writes one today, but a hand-edited or an
+    # older manifest can) drops to the count alone rather than showing "1/None"
+    assert cells_for("simulation", _row("simulation", batches_done=1, batches_planned=None))[2] == \
+        "1 batch"
+    assert cells_for("simulation", _row("simulation", batches_done=3, batches_planned=None))[2] == \
+        "3 batches"
+    # nothing to say at all: no batch count, so no cell -- not "0 batches", which would claim a fact
+    assert cells_for("simulation", _row("simulation", batches_done=None))[2] == ""
+    # both are complete-with-a-manifest; only `finished` tells them apart
+    assert running.complete and done.complete
+    # a kind with no progress to report leaves the cell out entirely
+    assert "Progress" not in columns_for("prior")
+
+
+def test_a_posteriors_amortization_is_spelled_out_and_the_norm_is_named_too():
+    """The column, unlike the picker's item text (§6.3, which suffixes the exception only), names both
+    states: a table column that is blank for the common case reads as missing data."""
+    assert cells_for("posterior", _row("posterior", mode="chi", width=18, amortized=True)) == (
+        "run-a", "2026-09-14T10:22:31", "chi", "18", "amortized", "a note")
+    assert cells_for("posterior", _row("posterior", amortized=False))[4] == "narrowed (TSNPE)"
+    assert cells_for("posterior", _row("posterior", amortized=None))[4] == ""
+    assert cells_for("posterior", _row("posterior", mode=None, width=None))[2:4] == ("", "")
+
+
+def test_an_unnamed_artifact_shows_its_label():
+    """``Summary.label`` is ``(unnamed <id>)``, which is what the pickers show, so the table and the
+    dropdowns name the same artifact the same way. Every simulation cache is unnamed by construction
+    (``write_simulation_manifest`` always writes ``name=""``)."""
+    s = _row("prior", name="")
+    assert s.label == "(unnamed 20260914T102231)"
+    assert cells_for("prior", s)[0] == "(unnamed 20260914T102231)"
+
+
+def test_an_incomplete_row_shows_its_directory_name_and_its_reason():
+    """A directory with no usable manifest has no id, no name, no created and no note -- six blank
+    cells would read as an artifact with nothing in it. It is identified by its ``dir_name`` (the
+    handle ``remove_incomplete`` takes) and carries its reason in the third column, in place of the
+    kind's own columns."""
+    for kind in KIND_DIRS:
+        cells = cells_for(kind, _bad_row(kind))
+        assert len(cells) == len(columns_for(kind)), kind
+        assert cells[0] == "halfwritten", kind
+        assert cells[1] == "", kind
+        assert cells[2] == "no manifest.json (incomplete or interrupted)", kind
+        assert all(c == "" for c in cells[3:]), (kind, cells)
+    assert cells_for("simulation", _bad_row("simulation", reason=None))[2] == ""
+
+
+def test_the_table_is_flat_read_only_and_selects_whole_rows():
+    """A QTreeWidget used FLAT, not a hand-built grid of QLabels: the chi probe table's and
+    SettingsScreen.refresh_models' row-building idiom neither sorts nor scales, and the store can hold
+    hundreds of rows. No expander column in front of "Name", no in-place editing (a note is edited in
+    its own box, so a double-click must not turn a cell into a line edit), one row at a time because
+    delete is one artifact at a time (B6)."""
+    from PySide6.QtWidgets import QAbstractItemView
+
+    qt_app()
+    table = ArtifactTable()
+    assert table.rootIsDecorated() is False
+    assert table.isSortingEnabled() is True
+    assert table.selectionBehavior() == QAbstractItemView.SelectRows
+    assert table.selectionMode() == QAbstractItemView.SingleSelection
+    assert table.editTriggers() == QAbstractItemView.NoEditTriggers
+    assert table.current_summary() is None, "an empty table has no selection"
+
+
+def test_set_rows_fills_the_header_and_hands_back_the_selected_summary():
+    """The table holds the Summary objects it was given and returns the selected one, so a caller
+    never parses a cell back into a fact -- the detail pane, Note, Delete and Sweep all need the id,
+    the kind and the dir_name, none of which is on screen in full."""
+    qt_app()
+    table = ArtifactTable()
+    rows = [_row("posterior", name="beta", created="2026-09-14T10:22:31", amortized=False, width=18,
+                 mode="chi"),
+            _row("posterior", name="alpha", created="2026-09-10T08:00:00", id="20260910T080000")]
+    table.set_rows("posterior", rows)
+
+    assert table.topLevelItemCount() == 2
+    header = table.headerItem()
+    assert [header.text(c) for c in range(table.columnCount())] == list(columns_for("posterior"))
+    first = table.topLevelItem(0)
+    assert [first.text(c) for c in range(table.columnCount())] == list(
+        cells_for("posterior", rows[0])), "the default sort must put the newest first"
+
+    table.setCurrentItem(first)
+    got = table.current_summary()
+    assert got is rows[0] and got.id == "20260914T102231"
+    table.clearSelection()
+    assert table.current_summary() is None
+
+
+def test_the_default_sort_is_newest_first_with_the_incomplete_rows_last():
+    """ArtifactStore.list already returns that order (newest first, incomplete last) and the table
+    must not undo it. A QTreeWidget with sorting enabled sorts by column 0 ascending unless told
+    otherwise, which would put an alphabetical Name order in front of an operator looking for the run
+    they just made -- so the default is "Created" descending. That the incomplete row also lands last
+    is _Row's doing and not this constant's; the next test is the one that pins it."""
+    qt_app()
+    table = ArtifactTable()
+    rows = [_row("prior", name="newer", created="2026-09-14T10:22:31"),
+            _row("prior", name="older", created="2026-09-10T08:00:00", id="20260910T080000"),
+            _bad_row("prior")]
+    table.set_rows("prior", rows)
+    assert at.DEFAULT_SORT == (1, 1)
+    assert table.sort_state() == (1, 1)
+    assert [table.topLevelItem(i).text(0) for i in range(3)] == ["newer", "older", "halfwritten"]
+
+
+def test_an_incomplete_row_sorts_last_under_every_column_and_either_order():
+    """Incomplete rows sort last is a PROPERTY of the table (design §3.2), not a side effect of an
+    incomplete row's blank `created`. Three of the four sorts below break the accident: sorted by
+    Name, "halfwritten" lands BETWEEN "alpha" and "newer" in either direction, and sorted by Created
+    ASCENDING its blank cell floats to the very top -- only the default, Created descending, is right
+    on its own. So _Row.__lt__ ranks on completeness before the column's own value, and flips that
+    rank for a descending sort because Qt inverts the whole comparison; the leftover directories then
+    stay at the bottom under every column and in both directions, out of the way of the newest real
+    artifact, which is where a selection-driven Delete wants them."""
+    qt_app()
+    table = ArtifactTable()
+    rows = [_row("prior", name="newer", created="2026-09-14T10:22:31"),
+            _row("prior", name="alpha", created="2026-09-10T08:00:00", id="20260910T080000"),
+            _bad_row("prior")]
+    table.set_rows("prior", rows)
+
+    def names():
+        return [table.topLevelItem(i).text(0) for i in range(table.topLevelItemCount())]
+
+    table.apply_sort_state(0, 0)                    # Name, ascending: "alpha" < "halfwritten"
+    assert names() == ["alpha", "newer", "halfwritten"]
+    table.apply_sort_state(0, 1)                    # Name, descending
+    assert names() == ["newer", "alpha", "halfwritten"]
+    table.apply_sort_state(1, 0)                    # Created, ascending: the blank one does NOT lead
+    assert names() == ["alpha", "newer", "halfwritten"]
+    table.apply_sort_state(1, 1)                    # Created, descending (the default)
+    assert names() == ["newer", "alpha", "halfwritten"]
+
+    # the rows keep their Summaries through every reorder: the item carries its INDEX, not its cells
+    table.setCurrentItem(table.topLevelItem(2))
+    assert table.current_summary() is rows[2] and not table.current_summary().complete
+
+
+def test_the_sort_state_round_trips_and_a_narrower_kind_falls_back():
+    """What the screen remembers is the kind and the sort (§3.5) -- two PLAIN ints, because QSettings
+    stores ints and a Qt enum does not survive the round trip. Plain both ways, and not as a
+    convenience: `int(Qt.SortOrder)` raises `TypeError` in PySide6 6.9.3, so the order is read as
+    `header().sortIndicatorOrder().value` inside the widget and no caller ever holds a Qt enum. The
+    kinds have different widths, so a sort on the posterior's "Amortized" column cannot survive a
+    switch to the prior kind: it falls back to the default rather than to column 0, which would
+    quietly re-sort by Name -- neither the order the store hands back nor one the user asked for."""
+    qt_app()
+    table = ArtifactTable()
+    posteriors = [_row("posterior", name="beta", amortized=True),
+                  _row("posterior", name="alpha", amortized=False, id="20260910T080000",
+                       created="2026-09-10T08:00:00")]
+    table.set_rows("posterior", posteriors)
+    assert [type(v) for v in table.sort_state()] == [int, int], \
+        "a Qt enum crossed the seam; int(Qt.SortOrder) raises TypeError on this PySide6"
+
+    table.apply_sort_state(0, 0)                       # by Name, ascending
+    assert table.sort_state() == (0, 0)
+    assert [table.topLevelItem(i).text(0) for i in range(2)] == ["alpha", "beta"]
+    table.apply_sort_state(0, 1)
+    assert table.sort_state() == (0, 1)
+    assert [table.topLevelItem(i).text(0) for i in range(2)] == ["beta", "alpha"]
+
+    table.apply_sort_state("1", "0")                   # what a QSettings round trip hands back
+    assert table.sort_state() == (1, 0)
+
+    table.apply_sort_state(4, 0)                       # by Amortized: posterior-only, column 4
+    assert table.sort_state() == (4, 0)
+    table.set_rows("posterior", posteriors)
+    assert table.sort_state() == (4, 0), "a refill must keep the sort the user chose"
+
+    table.set_rows("prior", [_row("prior", name="p")])  # three columns: 4 is gone
+    assert table.columnCount() == 3
+    assert table.sort_state() == at.DEFAULT_SORT
+
+    table.apply_sort_state(9, 0)                       # out of range: ignored, never clamped to 0
+    assert table.sort_state() == at.DEFAULT_SORT
+
+
+def test_selection_changed_fires_on_a_selection_and_a_refresh_drops_it():
+    """One signal, so the detail pane, the Note box and the two buttons are driven from one place. A
+    refresh clears the table, so the selection goes with it and the pane must tolerate a None -- the
+    alternative, remembering an id across a refresh, is exactly the dangling state §3.4 protects the
+    pickers from."""
+    qt_app()
+    table = ArtifactTable()
+    fired = []
+    table.selection_changed.connect(lambda: fired.append(1))
+    rows = [_row("prior", name="p"), _row("prior", name="q", id="20260910T080000",
+                                          created="2026-09-10T08:00:00")]
+    table.set_rows("prior", rows)
+    assert fired == [], "filling an empty table selects nothing"
+
+    table.setCurrentItem(table.topLevelItem(0))
+    assert fired, "selecting a row must emit selection_changed"
+    assert table.current_summary() is not None
+
+    fired.clear()
+    table.set_rows("prior", rows)
+    assert table.current_summary() is None, "a refresh must drop the stale selection"
+    assert fired, "clearing the selection must emit selection_changed too"
+
+
+def test_the_stylesheet_paints_the_item_view_in_both_themes():
+    """core/gui/design.py styled NO item view before this piece: its one QAbstractItemView rule is the
+    combo popup's (design.py:237). So a QTreeWidget would have rendered in the Fusion default -- a
+    white grid in dark mode under a header matching nothing else. The rules go in design.py, in the
+    same token vocabulary as the rest, so a theme flip recolours them for free (theming.Appearance
+    re-applies build_qss on every change).
+
+    The substitution is the real regression risk: _QSS is a string.Template, so one $name that is not
+    a key of _qss_vars raises KeyError inside substitute() and takes the WHOLE stylesheet down, not
+    just the new block. Both themes and an accent override are built here for that reason."""
+    from core.gui import design
+
+    for dark in (False, True):
+        qss = design.build_qss(dark)
+        for selector in ("QTreeView {", "QTreeView::item", "QHeaderView::section"):
+            assert selector in qss, (dark, selector)
+        t = design.tokens(dark)
+        assert f"alternate-background-color: {t['alt_base']}" in qss, dark
+        assert f"background: {t['alt_base']}; color: {t['text_2nd']}" in qss, (dark, "header section")
+        assert "$" not in qss, "an unsubstituted token escaped"
+    assert "QTreeView" in design.build_qss(True, "#AA3366")

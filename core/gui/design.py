@@ -240,6 +240,26 @@ QComboBox QAbstractItemView {
     selection-background-color: $accent; selection-color: $on_accent; outline: 0;
 }
 
+/* ---- item views: the artifact browser's table, a QTreeWidget used flat. The app's only item view
+   besides the combo popup above, so these are all of it. Selection colour comes from $accent, which
+   is also QPalette.Highlight, so a custom-painted row would match. ---- */
+QTreeView {
+    border: 1px solid $mid; border-radius: ${radius_sm}px;
+    background: $base; alternate-background-color: $alt_base; color: $text;
+    selection-background-color: $accent; selection-color: $on_accent; outline: 0;
+}
+QTreeView::item { padding: 4px 6px; border: none; }
+QTreeView::item:hover { background: $button_hover; }
+QTreeView::item:selected { background: $accent; color: $on_accent; }
+QHeaderView { background: transparent; border: none; }
+QHeaderView::section {
+    background: $alt_base; color: $text_2nd;
+    padding: 4px 6px; border: none;
+    border-right: 1px solid $mid; border-bottom: 1px solid $mid; font-weight: 600;
+}
+QHeaderView::section:hover { color: $text; }
+QHeaderView::section:last, QHeaderView::section:only-one { border-right: none; }
+
 /* ---- group box as a Fluent card ---- */
 QGroupBox {
     background: $base; border: 1px solid $mid; border-radius: ${radius_md}px;
