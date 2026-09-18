@@ -12,11 +12,19 @@ The store is reached through ``_resolved_store()`` -- ``store or the process def
 Remembered (V5, §3.5): the kind last viewed, and the sort column and order. NOT the selected
 artifact: a remembered id that has since been deleted is exactly the dangling selection §3.4 removes
 from the pickers.
-"""
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import (QComboBox, QHBoxLayout, QLabel, QPushButton, QSplitter, QVBoxLayout,
-                               QWidget)
 
+The detail pane is TEXT ONLY (B4): no figure rendering, no open-the-folder button, no "use this" jump
+into a stage tab. All three were considered and declined on 2026-09-17 (§1.3) and are additive on top
+of ``_detail_text`` if they are ever wanted.
+"""
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontDatabase
+from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLabel, QPlainTextEdit,
+                               QPushButton, QSplitter, QVBoxLayout, QWidget)
+
+from core.artifacts import render_manifest
 from core.artifacts.store import KIND_DIRS
 
 from .. import settings
@@ -33,6 +41,35 @@ KIND_LABELS = {
     "inference": "Inferences",
     "diagnostic": "Diagnostics",
 }
+
+# The tail of a run's records the pane shows (§3.3). A ceiling, not a budget: a training run's log is
+# unbounded and the pane is a text box.
+LOG_MAX_BYTES = 1 << 20
+
+# read_log answers None (no file at all) and "" (a run that said nothing) differently, deliberately
+# (§2.2), and the pane states BOTH: piece 3's invariant is that silence is a record too, and a blank
+# pane under a Records heading reads as a bug rather than as an answer. None has two causes, and the
+# cache's is its own -- it has no writer, so no log.txt is ever written beside it.
+_CACHE_NO_LOG = ("a training cache keeps no log: it is written batch by batch across resumes and "
+                 "shared by every posterior that names it")
+_NO_RUN_LOG = "written outside a run"
+_EMPTY_LOG = "the run recorded nothing"
+_RECORDS_HEADER = "── the run's records (log.txt) ──"
+
+
+def _stale_folder_note(actual: str, expected: str) -> str:
+    """Said when Summary.dir_name disagrees with the manifest's own dir_name (§3.3).
+
+    ArtifactStore.rename writes the manifest FIRST and moves the directory SECOND, and tolerates a
+    PermissionError on the move (store.py:430-441) because the manifest is what resolves an artifact.
+    Nothing is lost when that happens and nothing has ever said it happened.
+
+    Never said for the simulation kind -- ``_detail_text`` guards the call, and the reason is there.
+    """
+    return (f"This artifact's folder is called {actual!r}, but its own manifest says {expected!r}. A "
+            f"rename writes the manifest first and moves the directory second, and the move can be "
+            f"refused (a handle held open on Windows). The manifest is what resolves an artifact, so "
+            f"nothing is lost -- only the folder name is out of date.")
 
 
 class ArtifactScreen(QWidget):
@@ -77,6 +114,35 @@ class ArtifactScreen(QWidget):
         self.split.setChildrenCollapsible(False)
         self.split.addWidget(self.table)
 
+        # Read-only, text only (B4): the manifest rendered, then the run's records. A fixed-pitch
+        # face, because the manifest is rendered in aligned columns and the records carry HH:MM:SS
+        # stamps -- both ragged out in a proportional font. No wrapping, for the same reason.
+        self.detail = QPlainTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.detail.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
+
+        self.btn_save = QPushButton("Save…")
+        self.btn_save.setToolTip("Write what is shown here to a text file")
+        self.btn_save.setEnabled(False)
+        self.btn_save.clicked.connect(self._save_shown)
+
+        # The pane's button row, kept as an attribute rather than a local: Task 12's "Lineage
+        # report…" button mounts into THIS layout, beside Save, because both write a file about the
+        # selected artifact.
+        self.detail_actions = QHBoxLayout()
+        self.detail_actions.addStretch(1)
+        self.detail_actions.addWidget(self.btn_save)
+
+        detail_side = QWidget()
+        detail_layout = QVBoxLayout(detail_side)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.addWidget(self.detail, 1)
+        detail_layout.addLayout(self.detail_actions)
+        self.split.addWidget(detail_side)
+        self.split.setStretchFactor(1, 1)
+        self.table.selection_changed.connect(self._on_selection_changed)
+
         self.status = QLabel("")
         self.status.setWordWrap(True)
 
@@ -107,12 +173,12 @@ class ArtifactScreen(QWidget):
     def refresh(self) -> None:
         """Re-list the selected kind. Idempotent, and the only place the store is read for the table."""
         kind = self.kind()
-        if self.table.topLevelItemCount():
+        if self.table.columnCount():
             # The user's own header click, kept across the rebuild -- but only off a table that HAS
-            # rows. A table that has never been filled reports DEFAULT_SORT (or a sort it is HOLDING
-            # for its first fill), never the one restore_settings just read out of QSettings, so an
-            # unguarded capture here would overwrite that before _apply_sort below could use it and
-            # "the sort survives a relaunch" would be quietly false.
+            # rows. An empty one still reports DEFAULT_SORT (never anything negative), so an
+            # unguarded capture here would overwrite the sort restore_settings just read out of
+            # QSettings before _apply_sort below could use it, and "the sort survives a relaunch"
+            # would be quietly false.
             self._sort = self.table.sort_state()
         try:
             rows = self._resolved_store().list(kind)
@@ -121,11 +187,15 @@ class ArtifactScreen(QWidget):
             # here" and "I could not look" identical. The browser must tell them apart (§3.2), so the
             # error and its class go on the status line and the table is emptied.
             self.table.set_rows(kind, [])
+            self._on_selection_changed()
             self._set_status(f"Could not read the {kind} artifacts: {type(e).__name__}: {e}",
                              error=True)
             return
         self.table.set_rows(kind, rows)
         self._apply_sort(kind)
+        # Explicitly, not off the signal: set_rows leaves nothing selected, and a table that was
+        # already empty emits no change -- so a stale pane would outlive the rows it described.
+        self._on_selection_changed()
         if not rows:
             self._set_status("Nothing here yet.")
             return
@@ -139,6 +209,86 @@ class ArtifactScreen(QWidget):
         col, order = self._sort
         if 0 <= col < len(columns_for(kind)):
             self.table.apply_sort_state(col, order)
+
+    # ── the detail view (§3.3, B4) ────────────────────────────────────────────
+    def _on_selection_changed(self) -> None:
+        """Re-render the pane for whatever is selected now (nothing -> an empty pane)."""
+        s = self.table.current_summary()
+        try:
+            self.detail.setPlainText(self._detail_text(s))
+        except Exception as e:                 # noqa: BLE001 -- reported, never swallowed
+            # The row was listed and the artifact has gone since, or its manifest stopped parsing
+            # (another process, a half-finished copy). Say which rather than show a blank pane.
+            self.detail.setPlainText("")
+            self._set_status(f"Could not read the selected artifact: {type(e).__name__}: {e}",
+                             error=True)
+        self.btn_save.setEnabled(bool(self.detail.toPlainText()))
+
+    def _detail_text(self, s) -> str:
+        """Everything the pane shows for one row, as one string -- which is what Save writes (B10).
+
+        Text only (B4): the manifest rendered by the ONE renderer both front ends use
+        (core/artifacts/report.py), the stale-folder note when there is one, then the run's records
+        verbatim with their HH:MM:SS level stamps -- or, when there are none, WHICH kind of none it
+        is (§3.3). Two store reads and no other side effect.
+        """
+        if s is None:
+            return ""
+        if not s.complete:
+            # Nothing can load this directory, so there is no manifest to render: what there is to
+            # say is why it was not read, where it is, and what it is called.
+            return "\n".join((f"{s.kind} — an incomplete directory, which nothing can load.",
+                              f"folder:  {s.dir_name}",
+                              f"path:    {s.path}",
+                              f"reason:  {s.reason}"))
+        store = self._resolved_store()
+        m = store.get(s.kind, s.id)
+        parts = [render_manifest(m)]
+        # NOT for the simulation kind: Manifest.dir_name is the bare digest for a cache
+        # (manifest.py:73-77) and write_simulation_manifest writes into whatever directory it is
+        # handed, so a cache folder named anything else is legitimate -- the note would fire on every
+        # hand-placed cache and report a half-failed rename that never happened.
+        if s.kind != "simulation" and s.dir_name != m.dir_name:
+            parts += ["", _stale_folder_note(s.dir_name, m.dir_name)]
+        text, truncated = store.read_log(s.kind, s.id, max_bytes=LOG_MAX_BYTES)
+        parts += ["", _RECORDS_HEADER]
+        if text is None:
+            parts.append(_CACHE_NO_LOG if s.kind == "simulation" else _NO_RUN_LOG)
+        elif truncated:
+            parts.append(f"(only the last {LOG_MAX_BYTES} bytes are shown; the file is longer)")
+            parts.append(text)
+        elif not text:
+            # read_log says "" for a run that said nothing and None for no file at all (§2.2).
+            # Silence is a record too, so the pane says so rather than leave the heading bare.
+            parts.append(_EMPTY_LOG)
+        else:
+            parts.append(text)
+        return "\n".join(parts)
+
+    def _save_shown(self) -> None:
+        """B10's first half: what is on screen, to a file the operator picks.
+
+        A FILE, never an eighth store kind -- a report DESCRIBES the store and must not be mistaken
+        for something the store holds. The dialog is QFileDialog.getSaveFileName, the same call
+        simulate_panel._save_video and figure_window use; cancelling returns "" and writes nothing.
+        """
+        text = self.detail.toPlainText()
+        if not text:
+            return                     # the button is disabled with nothing selected; belt and braces
+        s = self.table.current_summary()
+        suggested = f"{s.kind}_{(s.name or s.id) if s.complete else s.dir_name}.txt"
+        path, _ = QFileDialog.getSaveFileName(self, "Save what is shown", suggested,
+                                              "Text file (*.txt)")
+        if not path:
+            return
+        if not path.lower().endswith(".txt"):
+            path += ".txt"
+        try:
+            Path(path).write_text(text, encoding="utf-8", newline="\n")
+        except OSError as e:
+            self._set_status(f"Could not write {path}: {e}", error=True)
+            return
+        self._set_status(f"Saved what is shown to {Path(path).name}.")
 
     def _set_status(self, text: str, error: bool = False) -> None:
         """One line, with a ⚠ prefix when it is trouble -- ModelBuilderScreen._set_status's pattern."""

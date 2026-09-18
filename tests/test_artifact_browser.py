@@ -206,6 +206,15 @@ def test_a_sort_clicked_on_a_kind_with_no_artifacts_is_still_saved(tmp_path):
     assert (st.get_int(qs, "artifacts/sort_col", -1), st.get_int(qs, "artifacts/sort_order", -1)) \
         == (2, 1), "the sort clicked on an empty kind was discarded in favour of the stale one"
 
+    # And it must survive switching kinds, not just quitting: refresh()'s own capture guard reads
+    # columnCount() rather than topLevelItemCount(), so leaving an empty kind still hands the sort
+    # forward instead of letting _apply_sort clobber it with a stale self._sort. "calibration" is
+    # also empty in this store and shares the 3-column width, so column 2 stays valid throughout.
+    _show(screen, "calibration")
+    assert screen.table.sort_state() == (2, 1), "the sort was lost switching off an empty kind"
+    _show(screen, "prior")
+    assert screen.table.sort_state() == (2, 1), "the sort was lost switching back to an empty kind"
+
 
 def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
     """B8. MainWindow connects the screen's store_changed to _refresh_store_pickers, the twin of
@@ -229,3 +238,153 @@ def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
     w.artifact_screen.store_changed.emit()
     assert [id(p) for p in seen] == [id(p) for p in pickers], \
         f"refreshed {[p.kind for p in seen]}, but the window holds {[p.kind for p in pickers]}"
+
+
+def test_the_detail_pane_shows_the_manifest_and_the_run_records(tmp_path):
+    """B4 / §3.3. The manifest as Task 6 renders it, then the run's records verbatim with their
+    HH:MM:SS level stamps -- one string, which is also exactly what Save writes (B10)."""
+    from core.artifacts import render_manifest
+    from core.artifacts.store import LOG_FILE
+
+    ids = build_browse_store(tmp_path)
+    store = ArtifactStore(tmp_path)
+    # A run's records, where ArtifactWriter._commit would have written them.
+    (store.path("calibration", ids["calibration"]) / LOG_FILE).write_text(
+        "12:00:00 info building the calibration\n12:00:04 warning 1 dataset diverged\n",
+        encoding="utf-8")
+
+    screen = artifact_screen(store)
+    _show(screen, "calibration")
+    s = _select(screen, 0)
+    text = screen.detail.toPlainText()
+    assert render_manifest(store.get("calibration", s.id)) in text, text[:400]
+    assert "12:00:04 warning 1 dataset diverged" in text, "the records are verbatim, stamps and all"
+    assert screen.detail.isReadOnly()
+    assert screen.btn_save.isEnabled()
+
+
+def test_the_detail_pane_states_the_gaps_a_blank_pane_would_hide(tmp_path, monkeypatch):
+    """§3.3's four sentences about the records, plus the stale-folder note. A training cache keeps no
+    log BY DESIGN, an artifact written outside any run has none either, a tail announces itself, a run
+    that said nothing says so -- read_log answers "" there and None for no file at all (§2.2), and
+    piece 3's invariant is that silence is a record too -- and a folder whose name disagrees with its
+    own manifest says so, the state ArtifactStore.rename leaves when the directory move is refused
+    (store.py:430-441), which nothing has ever shown."""
+    from core.artifacts.store import LOG_FILE
+    from core.gui.screens import artifact_screen as mod
+
+    ids = build_browse_store(tmp_path)
+    store = ArtifactStore(tmp_path)
+    screen = artifact_screen(store)
+
+    # (a) the cache: no log, for its own reason
+    _show(screen, "simulation")
+    _select(screen, 0)
+    assert "a training cache keeps no log" in screen.detail.toPlainText()
+
+    # (b) an artifact whose run never existed
+    _show(screen, "inference")
+    _select(screen, 0)
+    assert "written outside a run" in screen.detail.toPlainText()
+
+    # (c) a tail says it is a tail. 1 MiB is the real ceiling; the test moves it rather than write one.
+    assert mod.LOG_MAX_BYTES == 1 << 20
+    monkeypatch.setattr(mod, "LOG_MAX_BYTES", 64)
+    (store.path("inference", ids["inference"]) / LOG_FILE).write_text("x" * 500, encoding="utf-8")
+    screen.refresh()
+    _select(screen, 0)
+    assert "only the last 64 bytes" in screen.detail.toPlainText()
+
+    # (d) a run that said nothing: read_log answers "" here, not None, and the pane must not be blank
+    #     under the Records heading. _show switches the kind, which re-lists.
+    (store.path("diagnostic", ids["diagnostic"]) / LOG_FILE).write_text("", encoding="utf-8")
+    _show(screen, "diagnostic")
+    _select(screen, 0)
+    assert store.read_log("diagnostic", ids["diagnostic"]) == ("", False)
+    assert "the run recorded nothing" in screen.detail.toPlainText()
+
+    # (e) the stale folder: move the directory and leave the manifest naming the old one
+    sub = store.path("prior", ids["prior"])
+    sub.rename(sub.with_name("was_moved__" + ids["prior"]))
+    _show(screen, "prior")
+    s = _select(screen, 0)
+    assert s.complete and s.dir_name == "was_moved__" + ids["prior"]
+    text = screen.detail.toPlainText()
+    assert "was_moved__" in text and "browse_prior__" in text, text[:400]
+    assert "manifest is what resolves" in text, text[:400]
+
+
+def test_a_caches_folder_name_is_never_called_stale(tmp_path):
+    """§3.3, the one exception to the stale-folder note: it is SUPPRESSED for the simulation kind.
+
+    Manifest.dir_name is the bare digest for a cache (manifest.py:73-77) and
+    write_simulation_manifest writes wherever it is handed (store.py:778-815), so a cache directory
+    whose name is not its id is legitimate -- the note would fire on any hand-placed cache and tell
+    the operator that a rename half-failed when nothing of the sort happened. The cache's own
+    sentence about its missing log is still there, so this is a suppression and not a blank pane.
+    """
+    from core.artifacts import write_simulation_manifest
+    from core.SBI.training_checkpoint import identity_digest
+
+    store = ArtifactStore(tmp_path)
+    identity = {"format": "training-rows/2", "prior_fingerprint": "a" * 16, "n_runs": 2,
+                "truncation": None}
+    m = write_simulation_manifest(store.kind_dir("simulation") / "hand_placed_cache", identity,
+                                  batches_done=1, complete=False)
+    assert m.dir_name == identity_digest(identity) != "hand_placed_cache"
+
+    screen = artifact_screen(store)
+    _show(screen, "simulation")
+    s = _select(screen, 0)
+    assert s.dir_name == "hand_placed_cache" and s.id == m.id
+    text = screen.detail.toPlainText()
+    assert "manifest is what resolves" not in text, text[:400]
+    assert "only the folder name is out of date" not in text, text[:400]
+    assert "a training cache keeps no log" in text, text[:400]
+
+
+def test_an_incomplete_directorys_pane_shows_its_reason_its_path_and_its_folder(tmp_path):
+    """§3.3's last line. There is no manifest to render, so what there is to say is why it was not
+    read, where it is and what it is called."""
+    ids = build_browse_store(tmp_path)
+    store = ArtifactStore(tmp_path)
+    screen = artifact_screen(store)          # opens on priors, where the three leftovers are
+
+    seen = {}
+    for i in range(screen.table.topLevelItemCount()):
+        s = _select(screen, i)
+        if not s.complete:
+            seen[s.dir_name] = screen.detail.toPlainText()
+    assert set(seen) == set(ids["bad"]), sorted(seen)
+    for dir_name, text in seen.items():
+        assert dir_name in text
+        assert str(store.kind_dir("prior") / dir_name) in text
+        assert any(r in text for r in ("no manifest.json", "unreadable manifest", "declares kind")), \
+            text
+
+
+def test_save_writes_exactly_what_the_pane_shows(tmp_path, monkeypatch):
+    """B10: a FILE, chosen through QFileDialog the way simulate_panel._save_video chooses one, holding
+    byte-for-byte what is on screen. Cancelling writes nothing and says nothing."""
+    from PySide6.QtWidgets import QFileDialog
+
+    build_browse_store(tmp_path)
+    store = ArtifactStore(tmp_path)
+    screen = artifact_screen(store)
+    _select(screen, 0)
+    shown = screen.detail.toPlainText()
+    assert shown
+
+    out = tmp_path / "report"                      # no suffix: Save adds .txt
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    screen.btn_save.click()
+    assert out.with_suffix(".txt").read_text(encoding="utf-8") == shown
+    assert "report.txt" in screen.status.text(), screen.status.text()
+
+    calls = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName",
+                        lambda *a, **k: calls.append(1) or ("", ""))
+    screen._set_status("")
+    screen.btn_save.click()
+    assert calls == [1] and screen.status.text() == ""
+    assert sorted(p.name for p in tmp_path.glob("report*")) == ["report.txt"]
