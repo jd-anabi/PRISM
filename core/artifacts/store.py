@@ -67,13 +67,23 @@ class Summary:
     path: Path
     # "has a valid manifest", i.e. the directory describes a real artifact -- NOT "the run finished".
     # For the simulation kind those differ: a cache is manifested from its first batch on, and
-    # ``body["complete"]`` is the field that says whether its rows are all there.
+    # ``body["complete"]`` is the field that says whether its rows are all there. ``finished`` below
+    # is that honest question, asked the same way for every kind -- ask it, not this one, when what
+    # you mean is "did the run get to the end" (piece 4, B3).
     complete: bool
     reason: "str | None"
     mode: "str | None" = None
     width: "int | None" = None
     amortized: "bool | None" = None
     parents: dict = field(default_factory=dict)
+    # Piece 4 (B2): everything else a browser row shows, off the ONE manifest read ``list`` already
+    # did. Keyword with defaults, so no positional construction anywhere breaks.
+    dir_name: str = ""                      # the directory's own name, ALWAYS; remove_incomplete's handle
+    finished: bool = False                  # did the RUN finish; not ``complete`` for a cache
+    batches_done: "int | None" = None       # simulation only
+    batches_planned: "int | None" = None    # simulation only: body["identity"]["n_runs"], the PLANNED total
+    rows: "tuple[int, ...] | None" = None   # simulation only: rows per batch, written at completion ONLY
+    variant: "str | None" = None            # diagnostic only: body["variant"]
 
     @property
     def label(self) -> str:
@@ -336,18 +346,38 @@ class ArtifactStore:
         return out
 
     def list(self, kind: str) -> list:
-        rows = []
+        """Every directory under ``kind`` as a ``Summary``: complete rows first, newest first.
+
+        Reads each manifest ONCE and KEEPS what it read, so a browser row needs no second read
+        (piece 4, B2). ``complete`` and ``finished`` are different questions -- see ``Summary``.
+        """
+        out = []
         for sub, m, reason in self._entries(kind):
             if m is None:
-                rows.append(Summary(kind, sub.name, "", "", "", sub, False, reason))
+                out.append(Summary(kind, sub.name, "", "", "", sub, False, reason, dir_name=sub.name))
                 continue
             body = m.body
-            rows.append(Summary(kind, m.id, m.name, m.created, m.note, sub, True, None,
-                                mode=body.get("mode"), width=(body.get("conditioning") or {}).get("width"),
-                                amortized=body.get("amortized"), parents=dict(m.parents)))
-        rows.sort(key=lambda s: s.created, reverse=True)      # newest first ...
-        rows.sort(key=lambda s: not s.complete)               # ... complete first (stable)
-        return rows
+            # A committed artifact is finished BY CONSTRUCTION: _commit writes the manifest LAST, so
+            # one exists only for a run that reached the end. The cache is the exception -- it is
+            # manifested from its first batch on and says so in its own body (piece 4, B3).
+            finished = bool(body.get("complete")) if kind == "simulation" else True
+            per_batch = body.get("rows")
+            # The PLANNED batch count lives only in the cache's identity -- the dict the naming digest
+            # is taken over -- and a row that did not carry it could not render "3/4 batches" without
+            # reading this manifest again (piece 4, B2).
+            ident = (body.get("identity") or {}) if kind == "simulation" else {}
+            planned = ident.get("n_runs")
+            out.append(Summary(kind, m.id, m.name, m.created, m.note, sub, True, None,
+                               mode=body.get("mode"), width=(body.get("conditioning") or {}).get("width"),
+                               amortized=body.get("amortized"), parents=dict(m.parents),
+                               dir_name=sub.name, finished=finished,
+                               batches_done=body.get("batches_done"),
+                               batches_planned=None if planned is None else int(planned),
+                               rows=None if per_batch is None else tuple(int(r) for r in per_batch),
+                               variant=body.get("variant")))
+        out.sort(key=lambda s: s.created, reverse=True)       # newest first ...
+        out.sort(key=lambda s: not s.complete)                # ... complete first (stable)
+        return out
 
     def _find(self, kind: str, ref: str):
         for sub, m, _ in self._entries(kind):

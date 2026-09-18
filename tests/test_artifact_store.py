@@ -148,6 +148,28 @@ def _cal_body(n=10):
     return {"results": {"n_cal": n}}
 
 
+def _bodies():
+    """One valid body per WRITER kind -- the six ``store.create`` accepts. A FRESH dict per call, so a
+    test that hands one to the writer cannot leave a mutation behind for the next.
+
+    The simulation kind is deliberately absent: its manifest has no writer at all (``store.create``
+    refuses it outright) and ``write_simulation_manifest`` builds its body itself.
+    """
+    return {
+        "prior": {"gmm": {"n_components": 2, "param_keys": ["a"],
+                          "box": {"nd_lows": [0.0], "nd_highs": [1.0], "log_mask": [False]}},
+                  "sweep": {}, "stability": {"accepted_sets": None, "iterations": 1}},
+        "posterior": {"mode": "chi", "conditioning": {"width": 50}, "transform": {}, "amortized": True,
+                      "truncation": None, "training": {}},
+        "observation": {"mode": "chi", "conditioning": {"width": 50}, "x_obs_digest": "0" * 16,
+                        "T_obs_cell": 1.0, "n_obs": 10, "forcing_vals": {}, "chi_obs_freqs": None,
+                        "source": {"kind": "simulated"}},
+        "calibration": _cal_body(), "inference": {"results": {"n_samples": 5}},
+        "diagnostic": {"diagnostic": "sbc", "variant": None, "settings": {"repeats": 2},
+                       "results": {"n_valid": 8}},
+    }
+
+
 def _make(store, kind="calibration", name="", body=None, parents=None, note=""):
     with store.create(kind, None, name=name, note=note) as w:
         w.body = body if body is not None else _cal_body()
@@ -158,17 +180,7 @@ def _make(store, kind="calibration", name="", body=None, parents=None, note=""):
 
 
 def test_create_list_get_round_trip_per_kind(store):
-    bodies = {
-        "prior": {"gmm": {"n_components": 2, "param_keys": ["a"], "box": {"nd_lows": [0.0], "nd_highs": [1.0], "log_mask": [False]}},
-                  "sweep": {}, "stability": {"accepted_sets": None, "iterations": 1}},
-        "posterior": {"mode": "chi", "conditioning": {"width": 50}, "transform": {}, "amortized": True,
-                      "truncation": None, "training": {}},
-        "observation": {"mode": "chi", "conditioning": {"width": 50}, "x_obs_digest": "0" * 16, "T_obs_cell": 1.0,
-                        "n_obs": 10, "forcing_vals": {}, "chi_obs_freqs": None, "source": {"kind": "simulated"}},
-        "calibration": _cal_body(), "inference": {"results": {"n_samples": 5}},
-        "diagnostic": {"diagnostic": "sbc", "variant": None, "settings": {"repeats": 2},
-                       "results": {"n_valid": 8}},
-    }
+    bodies = _bodies()
     for kind, body in bodies.items():
         w = _make(store, kind, name=f"n_{kind}", body=body)
         rows = store.list(kind)
@@ -3259,3 +3271,122 @@ def test_the_orchestrator_says_everything_through_its_logger():
     assert orchestrator.log.level == logging.NOTSET, "the module must not set a level of its own"
     assert orchestrator.log.getEffectiveLevel() == logging.INFO
     assert "setLevel" not in src
+
+
+def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
+    """B3 (spec §2.1, §2.6). ``complete`` means "has a valid manifest"; ``finished`` means "the run
+    finished". For six of the seven kinds they are the same fact -- ``ArtifactWriter._commit`` writes
+    the manifest LAST, so a manifest exists only for a run that reached the end. For the simulation
+    cache they differ: ``training_checkpoint.create`` manifests it BEFORE the first batch is
+    simulated, and ``body["complete"]`` is the field that says whether its rows are all there.
+
+    ``complete`` is NOT redefined: StorePicker.refresh skips rows without it, ``list``'s secondary
+    sort puts them last, and this suite asserts on it. The honest question goes beside it instead.
+    """
+    from core import artifacts
+    from core.SBI.training_checkpoint import identity_digest
+    assert artifacts.KIND_DIRS is st.KIND_DIRS, \
+        "re-exported from the package, so nothing outside the store imports the submodule for it"
+
+    for kind, body in _bodies().items():
+        w = _make(store, kind, name=f"n_{kind}", body=body)
+        row = store.list(kind)[0]
+        assert (row.id, row.complete, row.finished) == (w.id, True, True), kind
+        assert (row.batches_done, row.batches_planned, row.rows) == (None, None, None), kind
+
+    ident = {"format": "training-rows/2", "model": "X", "n_runs": 3, "prior_fingerprint": "c" * 16,
+             "truncation": None}
+    digest = identity_digest(ident)
+    st.write_simulation_manifest(store.kind_dir("simulation") / digest, ident, batches_done=1)
+    cache = store.list("simulation")[0]
+    assert (cache.id, cache.complete) == (digest, True), "a cache is manifested from its first batch on"
+    assert cache.finished is False, "... and it is not FINISHED until its rows are all there"
+    assert (cache.batches_done, cache.batches_planned, cache.rows) == (1, 3, None), \
+        "1 of the 3 batches the identity PLANS; the row counts land only at mark_complete"
+
+    (store.kind_dir("inference") / "leftover__20260101T000000").mkdir(parents=True)
+    leftover = [r for r in store.list("inference") if not r.complete]
+    assert len(leftover) == 1 and leftover[0].finished is False, "no manifest, no finished run"
+
+
+def test_a_cache_row_carries_its_progress_until_mark_complete_flips_it(store):
+    """§2.6's second pin, over a real checkpoint's whole life: ``create`` manifests it at zero batches,
+    ``save`` refreshes ``batches_done``, and ``mark_complete`` is the only thing that makes it
+    finished. The rows-per-batch come back as a TUPLE, so a front-end formatter can sum them without
+    caring that the manifest stores a JSON list.
+
+    ``batches_planned`` comes off the identity and never moves, so the progress cell reads
+    ``0/3``, ``2/3``, ``3/3`` over this run's life -- and the row count is None for the first two,
+    because ``save`` passes no rows (P2)."""
+    from core.SBI import training_checkpoint as tc
+    ident = {"format": "training-rows/2", "model": "X", "n_runs": 3, "run_size": 4,
+             "prior_fingerprint": "d" * 16, "truncation": None}
+    d = tc.resolve_dir(ident)                      # the ``store`` fixture is the process default
+    tc.create(d, ident, schedule_t_scales=torch.ones(3), schedule_Ts=torch.ones(3),
+              inits=torch.zeros(1, 2), V=None, probe=torch.zeros(7, 2, dtype=torch.float64),
+              run_size=4, n_runs=3, hw=config.cpu_device())
+    fresh = store.list("simulation")[0]
+    assert (fresh.complete, fresh.finished, fresh.batches_done, fresh.batches_planned,
+            fresh.rows) == (True, False, 0, 3, None)
+    tc.save(d, from_batch=0, batch_k=2, rng=None, x_buf=torch.zeros(12, 5), th_buf=torch.zeros(12, 2),
+            run_size=4)
+    mid = store.list("simulation")[0]
+    assert (mid.complete, mid.finished, mid.batches_done, mid.batches_planned,
+            mid.rows) == (True, False, 2, 3, None), "2 of 3, and no row count from a save"
+    tc.mark_complete(d, 3, rows=(12, 5))
+    done = store.list("simulation")[0]
+    assert (done.complete, done.finished, done.batches_done, done.batches_planned) == (True, True, 3, 3)
+    assert done.rows == (12, 5) and isinstance(done.rows, tuple), done.rows
+    assert done.dir_name == d.name == done.id, "the cache's folder IS its identity digest"
+
+
+def test_every_row_carries_its_own_directory_name(store, monkeypatch):
+    """``dir_name`` is the folder, ALWAYS -- the handle ``remove_incomplete`` takes (§2.3). ``id``
+    keeps exactly today's meaning: the manifest id for a complete row, the directory name for an
+    incomplete one, because ``get()``'s refusal already lists incomplete directory names and
+    ``StorePicker`` keys on ``id``.
+
+    The two disagree on a COMPLETE row too, and the listing is the first place it shows: ``rename``
+    writes the new name into the manifest FIRST and moves the directory second, tolerating a
+    PermissionError on the move because the manifest is what resolves. A held handle therefore leaves
+    a row whose manifest says ``renamed__<id>`` in a folder still called ``p__<id>``.
+    """
+    w = _make(store, "calibration", name="p")
+    row = store.list("calibration")[0]
+    assert row.dir_name == w.dir.name == f"p__{w.id}" and row.id == w.id
+
+    (store.kind_dir("calibration") / "half_written__20260101T000000").mkdir(parents=True)
+    incomplete = [r for r in store.list("calibration") if not r.complete][0]
+    assert incomplete.dir_name == "half_written__20260101T000000" == incomplete.id
+
+    def _held(self, target):
+        raise PermissionError("a preview window holds the folder open")
+
+    monkeypatch.setattr(Path, "rename", _held)     # _atomic_write uses os.replace, so the manifest still lands
+    store.rename("calibration", w.id, "renamed")
+    monkeypatch.undo()
+    assert store.get("calibration", w.id).dir_name == f"renamed__{w.id}", "the manifest took the name"
+    moved = [r for r in store.list("calibration") if r.complete][0]
+    assert (moved.name, moved.id) == ("renamed", w.id)
+    assert moved.dir_name == f"p__{w.id}", "the folder did not move, and the listing says so"
+
+
+def test_a_diagnostics_row_carries_its_variant_and_no_observation_mode(store):
+    """A diagnostic records its mode under ``variant``, never under ``mode``. The reason is in
+    ``core/artifacts/manifest.py``'s BODY_KEYS comment: ``Summary.mode`` is the OBSERVATION mode, so a
+    listing that showed "jacobian" in that column would be reporting a conditioning geometry that does
+    not exist. §2.1 surfaces ``variant`` beside it rather than changing that."""
+    _make(store, "diagnostic", name="ident",
+          body={"diagnostic": "identifiability", "variant": "jacobian", "settings": {}, "results": {}})
+    row = store.list("diagnostic")[0]
+    assert row.variant == "jacobian" and row.mode is None
+
+    _make(store, "calibration", name="cal", body=_cal_body())
+    assert store.list("calibration")[0].variant is None, "only a diagnostic has one"
+
+    post = _make(store, "posterior", name="post", body=_bodies()["posterior"])
+    prow = store.list("posterior")[0]
+    assert prow.id == post.id and (prow.mode, prow.width, prow.amortized) == ("chi", 50, True)
+    assert prow.variant is None
+    assert (prow.batches_done, prow.batches_planned, prow.rows) == (None, None, None), \
+        "progress is the simulation cache's alone"
