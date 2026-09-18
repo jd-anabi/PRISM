@@ -104,10 +104,10 @@ class MainWindow(QMainWindow):
         self.simulate_screen = SectionScreen(
             "Simulate", [("Live simulation", SimulatePanel())])
 
-        home = HomeScreen(
+        self.home_screen = HomeScreen(
             live_sections={"Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate",
                            "Artifacts"})
-        self.nav.add_screen(home)                                    # index 0 -- Home
+        self.nav.add_screen(self.home_screen)                        # index 0 -- Home
         idx_red = self.nav.add_screen(self.reduction_screen)
         idx_fdt = self.nav.add_screen(self.fdt_screen)
         idx_inf = self.nav.add_screen(self.inference_screen)
@@ -146,7 +146,7 @@ class MainWindow(QMainWindow):
                                "Parameter Inference": idx_inf, "Simulate": idx_sim,
                                "Artifacts": idx_artifacts,
                                "Settings": idx_settings, "Model builder": idx_builder}
-        home.navigate.connect(lambda name: self.nav.go_to(self._section_index[name]))
+        self.home_screen.navigate.connect(lambda name: self.nav.go_to(self._section_index[name]))
 
         # Where each panel LIVES. A BasePanel carries no title of its own, so this is what lets the
         # header's run slot say "Posterior" and jump there. Built ONCE, off the screens' own tab
@@ -357,6 +357,7 @@ class MainWindow(QMainWindow):
         The title is looked up ONCE per run, not per tick.
         """
         self._running_panel = panel
+        self._mark_running_section(panel)
         if panel is None:
             self._run_timer.stop()
             self.nav.set_running(None)
@@ -386,6 +387,24 @@ class MainWindow(QMainWindow):
         tabs = getattr(self.nav.stack.widget(screen_index), "tabs", None)
         if tabs is not None:
             tabs.setCurrentIndex(tab_index)
+
+    def _mark_running_section(self, panel) -> None:
+        """Put the running marker on the running section's Home tile and its tab, and clear every
+        other one. ``panel`` None -- or a panel with no known home -- clears the lot, so a marker can
+        never outlive the run that set it.
+
+        Every screen is rewritten on every change rather than remembering what was marked: four
+        screens is nothing, and the bookkeeping version is what leaves a stale marker behind when a
+        run ends on a window that was navigated in between. Nothing is DISABLED here: the app-wide
+        control lock (BasePanel._set_busy) already stands and navigation stays free -- you must be
+        able to look at another tab while a twenty-minute train runs (spec §6.1, B11).
+        """
+        where = self._panel_home.get(panel)
+        name = where[0] if where is not None else None
+        tab_index = where[3] if where is not None else None
+        self.home_screen.set_running_section(name)
+        for section, screen in self._tab_screens:
+            screen.set_running_tab(tab_index if section == name else None)
 
     def panel(self, cls):
         """The first panel of type ``cls`` across all screens (convenience for callers + tests)."""

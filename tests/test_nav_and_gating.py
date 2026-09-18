@@ -2826,3 +2826,75 @@ def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_n
         assert w.nav.stack.currentIndex() == start, "an unknown panel must not navigate anywhere"
     finally:
         orphan._set_busy(False)
+
+
+def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled():
+    """B11's markers. The running section's Home tile takes a suffix and the running tab a leading
+    mark, both cleared the moment the run ends -- and both rewritten from the labels the screens were
+    BUILT with, so marking is idempotent and a cleared label is byte-identical to the original (the
+    tab titles are read back verbatim by test_every_field_key_has_a_window_control..., which asserts
+    ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]).
+
+    And nothing is disabled: the app-wide controls lock stands on its own, the Home tiles stay live,
+    every tab stays selectable, and the marker survives refresh_gates -- which rewrites tab tooltips
+    and enabled states after every stage, and would be running while a marked run is live. You must
+    be able to look at another tab while a twenty-minute train runs (spec §6.1)."""
+    from core.gui.main_window import MainWindow
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.screens.nav_shell import RUNNING_MARK
+    from tests._fixtures import qt_app
+
+    qt_app()
+    w = MainWindow()
+    fdt, inf = w.fdt_screen.tabs, w.inference_screen.tabs
+    assert [fdt.tabText(i) for i in range(fdt.count())] == \
+        ["FDT analysis", "Sweep study cross-validation"]
+    assert w.home_screen.tiles["FDT Analysis"].text() == "FDT Analysis"
+
+    panel = w.panel(CrossValPanel)
+    panel._set_busy(True)
+    try:
+        assert fdt.tabText(1) == f"{RUNNING_MARK} Sweep study cross-validation"
+        assert fdt.tabText(0) == "FDT analysis", "only the running tab is marked"
+        assert w.home_screen.tiles["FDT Analysis"].text() == f"FDT Analysis  {RUNNING_MARK}"
+        assert w.home_screen.tiles["Simulate"].text() == "Simulate"
+        assert [inf.tabText(i) for i in range(inf.count())] == \
+            ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]
+        # nothing is disabled and navigation stays free
+        assert fdt.isTabEnabled(0) and w.home_screen.tiles["Simulate"].isEnabled()
+        w.nav.go_to(w._section_index["Simulate"])
+        assert w.nav.stack.currentIndex() == w._section_index["Simulate"]
+        fdt.setCurrentIndex(0)
+        assert fdt.currentIndex() == 0, "a marked section's other tab must stay selectable"
+    finally:
+        panel._set_busy(False)
+    assert fdt.tabText(1) == "Sweep study cross-validation"
+    assert w.home_screen.tiles["FDT Analysis"].text() == "FDT Analysis"
+
+    # an inference tab, and the marker survives the gate refresh that follows every stage
+    post = w.inference_screen.posterior_panel
+    post._set_busy(True)
+    try:
+        assert inf.tabText(2) == f"{RUNNING_MARK} Posterior"
+        assert w.home_screen.tiles["Parameter Inference"].text() == \
+            f"Parameter Inference  {RUNNING_MARK}"
+        assert fdt.tabText(1) == "Sweep study cross-validation", "another section keeps no mark"
+        w.inference_screen.refresh_gates()
+        assert inf.tabText(2) == f"{RUNNING_MARK} Posterior", "refresh_gates wiped the marker"
+    finally:
+        post._set_busy(False)
+    assert [inf.tabText(i) for i in range(inf.count())] == \
+        ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]
+
+    # a panel with no known home marks nothing, and clears whatever was marked
+    class P(BasePanel):
+        pass
+
+    orphan = P()
+    orphan._set_busy(True)
+    try:
+        assert all(btn.text() == name for name, btn in w.home_screen.tiles.items())
+        assert fdt.tabText(1) == "Sweep study cross-validation"
+    finally:
+        orphan._set_busy(False)

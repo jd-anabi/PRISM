@@ -14,6 +14,13 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QStackedWidget, QToolButton, 
 from .. import icons
 from ..widgets.anim import slide_screens, snapshot
 
+# The app-wide "a run is live" marker. A PLAIN CHARACTER, not an icons.NAMES entry: the bundled icon
+# font defines U+E000..U+E004 only and tests/test_user_models.py pins NAMES against its cmap, so a
+# sixth name renders an empty box until the .ttf is regenerated; icons.glyph returns the codepoint
+# whenever the FONT loaded, not whenever the glyph exists; and apply_icon sets the WIDGET's font
+# family, which a QTabBar cannot do for one tab. LogPane._PREFIX marks its lines the same way.
+RUNNING_MARK = "●"
+
 
 def running_banner(panel_title: str, seconds: int) -> str:
     """"Running: Posterior — 4:07": what is running, and for how long.
@@ -29,6 +36,21 @@ def running_banner(panel_title: str, seconds: int) -> str:
     minutes, sec = divmod(rest, 60)
     clock = f"{hours}:{minutes:02d}:{sec:02d}" if hours else f"{minutes}:{sec:02d}"
     return f"Running: {panel_title.strip() or 'a task'} — {clock}"
+
+
+def mark_tabs(tabs, labels, running) -> None:
+    """Rewrite every tab's text from ``labels``, prefixing RUNNING_MARK on index ``running``; None
+    clears every mark.
+
+    Rewritten from the stored labels rather than edited in place, so marking is IDEMPOTENT and a
+    cleared tab is byte-identical to the label it was built with -- the tab titles are read back
+    verbatim by tests/test_nav_and_gating.py's control-table pin. Shared by the two screen kinds that
+    host tabs (SectionScreen, InferenceScreen), which have no common base but QWidget.
+    """
+    for index, base in enumerate(labels):
+        text = f"{RUNNING_MARK} {base}" if index == running else base
+        if tabs.tabText(index) != text:
+            tabs.setTabText(index, text)
 
 
 class NavShell(QWidget):

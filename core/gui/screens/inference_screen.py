@@ -17,6 +17,7 @@ from ..panels.inference_tabs import (ConfigPanel, InferPanel, PosteriorPanel, Pr
                                      TSNPEPanel, ValidatePanel)
 from ..session import SbiSession
 from ..widgets.anim import crossfade_tab
+from .nav_shell import mark_tabs
 
 
 class InferenceScreen(QWidget):
@@ -48,10 +49,12 @@ class InferenceScreen(QWidget):
         # TSNPE sits AFTER Infer, and the order is the workflow: a round needs an observation, and
         # the Infer tab is what records one (an amortized posterior has none at save time).
         self.tsnpe_panel = TSNPEPanel(self)
+        self._tab_labels: list = []        # the labels as built; mark_tabs rewrites from these
         for label, panel in (("Config", self.config_panel), ("Prior", self.prior_panel),
                              ("Posterior", self.posterior_panel), ("Validate", self.validate_panel),
                              ("Infer", self.infer_panel), ("TSNPE", self.tsnpe_panel)):
             self.tabs.addTab(panel, label)
+            self._tab_labels.append(label)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -85,6 +88,12 @@ class InferenceScreen(QWidget):
     def panels(self):
         return [self.config_panel, self.prior_panel, self.posterior_panel,
                 self.validate_panel, self.infer_panel, self.tsnpe_panel]
+
+    def set_running_tab(self, index: "int | None") -> None:
+        """Mark the tab at ``index`` as the one with a live run; None clears every mark (B11). Tab
+        TEXT only: refresh_gates owns each tab's enabled state and tooltip and runs after every
+        stage, so a marker written there would be wiped seconds later."""
+        mark_tabs(self.tabs, self._tab_labels, index)
 
     def new_draft(self, draft):
         """Config applied: replace the WHOLE session (a different model or unit system invalidates every

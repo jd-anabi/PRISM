@@ -7,6 +7,7 @@ Parameter Inference section needs cross-tab gating over a shared session, so it 
 from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from ..widgets.anim import crossfade_tab
+from .nav_shell import mark_tabs
 
 
 class SectionScreen(QWidget):
@@ -22,8 +23,10 @@ class SectionScreen(QWidget):
         heading.setProperty("type", "heading")     # Fluent type ramp (global QSS)
 
         self.tabs = QTabWidget()
+        self._tab_labels: list = []        # the labels as built; mark_tabs rewrites from these
         for label, panel in tabs:
             self.tabs.addTab(panel, label)
+            self._tab_labels.append(label)
         # Track the outgoing page + connect AFTER the loop (the first addTab already emitted
         # currentChanged(0) mid-construction, and the handler dereferences _prev_tab).
         self._prev_tab = self.tabs.currentWidget()
@@ -41,3 +44,7 @@ class SectionScreen(QWidget):
     def panels(self):
         """The section's panels (for MainWindow persistence + tests)."""
         return [self.tabs.widget(i) for i in range(self.tabs.count())]
+
+    def set_running_tab(self, index: "int | None") -> None:
+        """Mark the tab at ``index`` as the one with a live run; None clears every mark (B11)."""
+        mark_tabs(self.tabs, self._tab_labels, index)
