@@ -1,8 +1,9 @@
 """The run boundary of the core (piece 3, V1 and V4): torch-free, imported by every public entry
 point and by both front ends.
 
-Two jobs, one decorator. `public_entry` wraps every public function that takes a SimConfig and may
-write to it or to an artifact (spec §2.2 lists the fifteen):
+Three jobs. The first two are one decorator, `public_entry`, which wraps every public function that
+takes a SimConfig and may write to it or to an artifact (spec §2.2 lists the fifteen); the third is a
+context manager the front ends' cancel checkpoints consult:
 
 - THE PRIVATE COPY (V1). The window builds ONE SimConfig at Build/Load prior, and every later run
   used to write onto that same object -- the observation length, the loaded cell's truth, a

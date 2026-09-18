@@ -48,8 +48,9 @@ cache.
 Do not ``print()`` or log between steps 1 and 3 under the GUI: every write funnels through
 ``gui.streams._SignalStream.write`` and every record through ``gui.streams._PumpLogHandler.emit``,
 both of which call ``CancelToken.check()`` and would raise mid-commit. Since piece 4 (B15) ``save``
-runs steps 1-3 inside ``core.runs.cancel_deferred()``, so both checkpoints carry such a line instead
-of raising on it -- the rule is still the rule, and the section is what enforces it.
+runs steps 1-3 -- and the manifest refresh after them -- inside ``core.runs.cancel_deferred()``, so
+both checkpoints carry such a line instead of raising on it -- the rule is still the rule, and the
+section is what enforces it.
 """
 import hashlib
 import json
@@ -336,10 +337,14 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
     path = Path(path)
     (path / _SHARDS).mkdir(parents=True, exist_ok=True)
     lo, hi = from_batch * run_size, batch_k * run_size
-    # Steps 1-3, inside the deferred-cancel section (piece 4, B15): a GUI cancel landing between the
-    # shard fsync and the state replace would commit a batches_done that points at data still in the
-    # page cache. _refresh_manifest stays OUTSIDE it -- the manifest is the store's view of the cache,
-    # never its commit point, and it is best-effort already.
+    # The WHOLE save is one deferred-cancel section (piece 4, B15), so a cancel cannot fire anywhere
+    # inside it. Steps 1-3 because a GUI cancel landing between the shard fsync and the state replace
+    # would commit a batches_done that points at data still in the page cache. _refresh_manifest too,
+    # although the manifest is never the commit point: WorkerCancelled is a BaseException, so its
+    # `except Exception` would not stop a cancel raised by anything it reaches, and that raise would
+    # escape save() AFTER state.pt moved to batch_k but BEFORE the caller advanced its own counter --
+    # the next save would re-commit a range overlapping the shard already written, and load_rows
+    # would refuse the whole cache.
     with cancel_deferred():
         if hi > lo:
             atomic_torch_save(x_buf[lo:hi].clone(), _shard(path, "x", from_batch, batch_k))
@@ -348,7 +353,7 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
         if prev.exists():
             shutil.copyfile(prev, path / _STATE_PREV)
         atomic_torch_save({"batches_done": int(batch_k), "complete": False, "rng": rng}, prev)
-    _refresh_manifest(path, batches_done=batch_k)
+        _refresh_manifest(path, batches_done=batch_k)
 
 
 def mark_complete(path, batch_k: int, rows=None) -> None:

@@ -1174,20 +1174,133 @@ def test_the_checkpoint_commit_runs_inside_the_deferred_cancel_section(tmp_path,
     (tests/test_user_sbi.py::test_nothing_prints_or_logs_inside_a_checkpoint_commit): the section is
     the guard, that test is the proof the guard is where it is claimed to be.
 
-    ``_refresh_manifest`` is deliberately OUTSIDE the section: it is the store's view of the cache,
-    never its commit point, and it is best-effort already."""
+    The WHOLE save is ONE section, the manifest refresh included (the test below says why that one is
+    inside): every step is recorded with the entry number of the section open around it, so a commit
+    split into two sections with a gap between them fails here as surely as a step left outside. Two
+    saves, because only the second finds a state.pt to copy to state.prev.pt."""
+    import contextlib
+    from pathlib import Path
+
     from core import runs
     from core.SBI import training_checkpoint as tc
 
-    seen = []
-    real = tc.atomic_torch_save
+    entries, open_now, steps = [], [], []
+    real_section = tc.cancel_deferred
+
+    @contextlib.contextmanager
+    def counted_section():
+        entries.append(len(entries))
+        open_now.append(entries[-1])
+        try:
+            with real_section():
+                yield
+        finally:
+            open_now.pop()
+
+    def recorded(fn, name):
+        def wrapped(*args, **kwargs):
+            steps.append((name(*args), open_now[0] if open_now else None, runs.cancel_is_deferred()))
+            return fn(*args, **kwargs)
+        return wrapped
+
+    monkeypatch.setattr(tc, "cancel_deferred", counted_section)
     monkeypatch.setattr(tc, "atomic_torch_save",
-                        lambda obj, dest: seen.append(runs.cancel_is_deferred()) or real(obj, dest))
-    tc.save(tmp_path / "commit", from_batch=0, batch_k=1, rng={},
-            x_buf=torch.zeros(2, 3), th_buf=torch.zeros(2, 2), run_size=2)
-    assert seen == [True, True, True], \
-        f"the two shard writes and the state replace must all be inside the section: {seen}"
-    assert runs.cancel_is_deferred() is False, "the section leaked past the commit"
+                        recorded(tc.atomic_torch_save, lambda obj, dest: f"write {Path(dest).name}"))
+    monkeypatch.setattr(tc.shutil, "copyfile",
+                        recorded(tc.shutil.copyfile, lambda src, dst: f"copy {Path(src).name}"))
+    monkeypatch.setattr(tc, "_refresh_manifest", recorded(tc._refresh_manifest, lambda path: "manifest"))
+
+    d = tmp_path / "commit"
+    x, th = torch.arange(12.).reshape(4, 3), torch.arange(8.).reshape(4, 2)
+    expected = {0: ["write x_000000_000001.pt", "write th_000000_000001.pt", "write state.pt",
+                    "manifest"],
+                1: ["write x_000001_000002.pt", "write th_000001_000002.pt", "copy state.pt",
+                    "write state.pt", "manifest"]}
+    for from_batch in (0, 1):
+        del steps[:]
+        before = len(entries)
+        tc.save(d, from_batch=from_batch, batch_k=from_batch + 1, rng={},
+                x_buf=x, th_buf=th, run_size=2)
+        assert len(entries) == before + 1, \
+            f"save {from_batch}: the commit must be ONE section, not {len(entries) - before}"
+        assert [name for name, _, _ in steps] == expected[from_batch], steps
+        assert all(entry == before and deferred for _, entry, deferred in steps), \
+            f"save {from_batch}: every step must run inside that one section: {steps}"
+        assert runs.cancel_is_deferred() is False, "the section leaked past the commit"
+
+
+def test_a_cancel_raised_by_anything_the_manifest_refresh_reaches_is_carried_through_the_save(
+        tmp_path, monkeypatch):
+    """The manifest refresh is inside the section although it is not the commit point, because a
+    cancel raised there is NOT harmless. WorkerCancelled is a BaseException, so the refresh's
+    ``except Exception`` does not catch it: it escapes save() AFTER state.pt says batches_done = k but
+    BEFORE the pipeline advances its own counter, so the next save re-commits a range overlapping the
+    shard already on disk -- and load_rows then refuses the whole cache ("commits N batches but only
+    M are present on disk").
+
+    Nothing the refresh reaches logs or prints today, and the source-reading silence test only reads
+    ``_refresh_manifest``'s OWN body, so this pins it the way the fault would arrive: the store's
+    manifest writer, which the refresh calls, learns to log. A Cancel is pressed before the second
+    save; both saves must complete, batches_done must advance, the cache must still load -- and the
+    cancel must still be taken at the first record OUTSIDE the section."""
+    import logging
+
+    import pytest
+
+    from core.artifacts import store
+    from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler
+    from core.SBI import training_checkpoint as tc
+
+    class _FakePump:
+        def __init__(self):
+            self.logs = []
+
+        def sink(self, kind, payload):
+            self.logs.append((kind, payload))
+
+    real_writer = store.write_simulation_manifest
+
+    def a_writer_that_speaks(path, identity, **kwargs):
+        logging.getLogger("core.artifacts.store").info("refreshing the simulation manifest")
+        return real_writer(path, identity, **kwargs)
+
+    monkeypatch.setattr(store, "write_simulation_manifest", a_writer_that_speaks)
+
+    run_size, n_runs = 2, 4
+    d = tmp_path / "ck"
+    x = torch.arange(float(n_runs * run_size * 3)).reshape(n_runs * run_size, 3)
+    th = torch.arange(float(n_runs * run_size * 2)).reshape(n_runs * run_size, 2)
+    token = CancelToken()
+    token.arm()                                # this thread plays the worker
+    fake = _FakePump()
+    handler = _PumpLogHandler(fake, token)
+    core_logger = logging.getLogger("core")
+    core_logger.addHandler(handler)
+    try:
+        tc.create(d, {"model": "task21-probe", "run_size": run_size, "n_runs": n_runs},
+                  schedule_t_scales=torch.ones(n_runs), schedule_Ts=torch.ones(n_runs),
+                  inits=torch.zeros(run_size, 3), V=None, probe=torch.zeros(0, dtype=torch.float64),
+                  run_size=run_size, n_runs=n_runs)
+        tc.save(d, from_batch=0, batch_k=1, rng={}, x_buf=x, th_buf=th, run_size=run_size)
+
+        token.requested.set()                  # Cancel pressed, latch not yet fired
+        try:
+            tc.save(d, from_batch=1, batch_k=2, rng={}, x_buf=x, th_buf=th, run_size=run_size)
+        except WorkerCancelled:
+            pytest.fail("a record from inside the manifest refresh raised the cancel out of save(): "
+                        "the refresh is outside the deferred-cancel section")
+        assert token.fired is False and token.requested.is_set(), "the cancel was taken mid-save"
+        assert tc.peek(d)["batches_done"] == 2, tc.peek(d)
+        xr, thr = tc.load_rows(d, tc.peek(d)["batches_done"], run_size)
+        assert torch.equal(xr, x[:4]) and torch.equal(thr, th[:4]), "the cache no longer reads back"
+        assert sum(p == ("refreshing the simulation manifest", "info")
+                   for k, p in fake.logs if k == "log") == 3, fake.logs   # create + both saves
+
+        with pytest.raises(WorkerCancelled):   # deferred, never discarded
+            logging.getLogger("core.probe").info("the first record after the save")
+        assert token.fired is True
+    finally:
+        core_logger.removeHandler(handler)
 
 
 def test_cancel_deferred_applies_only_to_the_thread_that_entered_it():
