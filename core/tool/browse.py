@@ -69,6 +69,14 @@ COLUMNS = {
 # end bounds its own surface -- a terminal and a text box are not the same screenful.
 LOG_TAIL_BYTES = 1 << 20
 
+# The one dependent that names nothing (fix round 1, IMPORTANT 1). A SECOND literal on purpose, the
+# same shape as COLUMNS above: core/gui/screens/artifact_screen.py's own _FINGERPRINT_DEPENDENT,
+# restated here because this module imports NOTHING from core/gui. A cache's directory is keyed on
+# the prior's GMM, so ArtifactStore.dependents reports it whether or not the manifest records the
+# parent link, and a bare id gives an operator no way to tell that one from a child that named it.
+_FINGERPRINT_DEPENDENT = ("a training cache was generated against this prior and its rows are "
+                          "meaningless without it")
+
 EPILOG = """\
 Reads PRISM_ARTIFACTS (the artifacts root, default <repo>/Artifacts) -- the same root as every
 subcommand but `smoke`. There is no --store-root, and there are no configuration flags: a listing
@@ -216,6 +224,54 @@ def _show(args, store) -> int:
     return 0
 
 
+def _leftover_hint(store, kind: str, ref: str) -> str:
+    """``""`` ordinarily, or a suffix naming ``sweep`` when ``ref`` is exactly the ``dir_name`` of
+    one of ``kind``'s own incomplete directories (fix round 1, IMPORTANT 3).
+
+    ``note`` and ``rm`` resolve through ``_find``, which never returns a manifest-less entry, so a
+    ref copied straight off ``list``'s own "incomplete ..." row cannot resolve there -- and the
+    store's "no complete artifact" refusal says nothing about why, or what removes it. ``show``
+    already tells this story (the honest-gaps sentences); this closes the same gap for the two modes
+    that write.
+
+    A read failure here is swallowed: an unrelated problem listing the kind is not this ref's
+    business, and the plain refusal -- itself still correct -- is left to stand."""
+    try:
+        rows = store.list(kind)
+    except Exception:                              # noqa: BLE001 -- the hint is a courtesy, not a check
+        return ""
+    if any(not s.complete and s.dir_name == ref for s in rows):
+        return (f" {ref!r} is one of the leftovers `sweep` removes, not an artifact with a note or "
+                f"a delete of its own; run `python -m core artifacts sweep {kind}` to clear it.")
+    return ""
+
+
+def _rm_refusal(store, kind: str, m, deps) -> "Refusal":
+    """The reworded dependents refusal (fix round 1, IMPORTANT 1): the store's own sentence ends
+    "pass force=True to orphan them", a step nothing in either front end offers (B6), so its raw
+    wording must never reach an operator. Same shape as the window's own reword
+    (core/gui/screens/artifact_screen.py's ``_dependents_refusal``, which exists for the WORDING
+    alone) -- every dependent, WITH WHY, then what to do -- flattened to this tool's one-line
+    convention rather than the window's multi-line box."""
+    from core.refusals import Refusal
+    parents = {}
+    for k in sorted({k for k, _, _ in deps}):
+        for row in store.list(k):
+            parents[(k, row.id)] = row.parents
+    clauses = []
+    for dep_kind, dep_id, dep_name in deps:
+        held = parents.get((dep_kind, dep_id)) or {}
+        # dependents()'s first pass matches parents[<kind key>] == id; its second adds simulation
+        # caches by fingerprint alone -- the same distinction the window's reword draws.
+        fingerprint_only = (kind == "prior" and dep_kind == "simulation"
+                            and held.get("prior") != m.id)
+        why = _FINGERPRINT_DEPENDENT if fingerprint_only else f"it names this {kind} as a parent"
+        clauses.append(f"{dep_kind} {dep_name or '(unnamed)'} [{dep_id}] -- {why}")
+    return Refusal(
+        f"refusing to delete {kind} {m.name or m.id} [{m.id}]: {len(deps)} artifact(s) depend on "
+        f"it: " + "; ".join(clauses) + ". Delete those first.", field="artifact")
+
+
 def _note(args, store) -> int:
     """``note <kind> <ref> --note TEXT``. B5's rule runs BEFORE the store is touched, so a bad note
     rewrites no manifest; ``""`` clears the note, which is why ``--note`` is required rather than
@@ -224,10 +280,17 @@ def _note(args, store) -> int:
     Two refusals, two field keys, both from elsewhere: ``require_note``'s (the over-long note, the
     newline) carries field="note", so the ladder prints ``(--note)``, while ``set_note``'s "no
     complete artifact" carries field="artifact", whose entry in core/tool/fields.py is None -- the
-    tool names the artifact positionally -- so that line simply ends at the message."""
-    from core.refusals import require_note
+    tool names the artifact positionally -- so that line simply ends at the message. When the ref
+    names a leftover directory, ``_leftover_hint`` appends the missing next step (IMPORTANT 3)."""
+    from core.refusals import Refusal, require_note
     text = require_note("note", args.note)
-    m = store.set_note(args.kind, args.ref, text)
+    try:
+        m = store.set_note(args.kind, args.ref, text)
+    except Refusal as exc:
+        hint = _leftover_hint(store, args.kind, args.ref)
+        if hint:
+            raise Refusal(exc.message + hint, field=exc.field) from None
+        raise
     label = m.name or m.id
     if m.note:
         print(f"[prism] {args.kind} {label}: note = {m.note!r}")
@@ -237,10 +300,23 @@ def _note(args, store) -> int:
 
 
 def _rm(args, store) -> int:
-    """``rm <kind> <ref>``. NO ``--force`` (B6): the store refuses anything with dependents, naming
-    each, and that refusal is the last word -- there is no flag here that can orphan a child. The
-    path is read before the delete so the line can say what went."""
-    sub = store.path(args.kind, args.ref)        # a missing ref: StoreError -> the ladder's exit 1
+    """``rm <kind> <ref>``. NO ``--force`` (B6): dependents are read BEFORE anything is deleted and
+    refused in this tool's own words, never the store's raw "pass force=True to orphan them" (fix
+    round 1, IMPORTANT 1 -- no front end offers that). A missing ref that names a leftover directory
+    gets ``sweep`` as its next step (IMPORTANT 3). ``delete`` still reads dependents again and stays
+    the last word for a race between the two reads -- the window's own precedent."""
+    from core.refusals import Refusal
+    try:
+        m = store.get(args.kind, args.ref)
+    except Refusal as exc:                        # a missing ref: StoreError -> the ladder's exit 1
+        hint = _leftover_hint(store, args.kind, args.ref)
+        if hint:
+            raise Refusal(exc.message + hint, field=exc.field) from None
+        raise
+    sub = store.path(args.kind, args.ref)
+    deps = store.dependents(args.kind, m.id)
+    if deps:
+        raise _rm_refusal(store, args.kind, m, deps)
     store.delete(args.kind, args.ref)
     print(f"[prism] removed {args.kind} {args.ref}: {sub}")
     return 0
@@ -249,10 +325,28 @@ def _rm(args, store) -> int:
 def _sweep(args, store) -> int:
     """``sweep [<kind>]``: remove every directory of a kind (or of all seven) with no usable
     manifest. §4.3: nothing to remove is 0; a directory that would not delete is 1, naming each. A
-    failure never stops the sweep -- ``sweep_incomplete`` finishes the rest and reports it."""
+    failure never stops the sweep -- ``sweep_incomplete`` finishes the rest and reports it.
+
+    ``sweep_incomplete``'s own return carries no reason (fix round 1, RULED IN 5): the reasons are
+    read off ``list`` BEFORE the removal -- the same rows the table calls incomplete -- and matched
+    back by ``(kind, dir_name)`` once the removal is done, so a removed line says WHY without a
+    second manifest read. The window reads them the same way, earlier, for its confirmation; there is
+    no confirmation here, so this prints the reason AFTER. A kind ``list`` cannot read (an unknown
+    kind, a permissions problem) is not fatal here either: ``sweep_incomplete`` is the authority on
+    what gets removed and raises its own refusal for a bad kind regardless."""
+    reasons = {}
+    for kind in ((args.kind,) if args.kind else KINDS):
+        try:
+            rows = store.list(kind)
+        except Exception:                          # noqa: BLE001 -- sweep_incomplete is the authority
+            continue
+        for row in rows:
+            if not row.complete:
+                reasons[(kind, row.dir_name)] = row.reason
     removed, failed = store.sweep_incomplete(args.kind)
     for kind, dir_name in removed:
-        print(f"[prism] removed {kind} leftover {dir_name}")
+        why = reasons.get((kind, dir_name))
+        print(f"[prism] removed {kind} leftover {dir_name}" + (f" -- {why}" if why else ""))
     for kind, dir_name, reason in failed:
         print(f"prism artifacts: could not remove {kind} leftover {dir_name}: {reason}",
               file=sys.stderr)
@@ -269,11 +363,20 @@ def _summary(args, store) -> int:
     newline="\\n" explicitly (P23): write_text's default newline=None translates every "\\n" to
     "\\r\\n" on Windows, and the browser's own Lineage report button writes the same text with
     newline="\\n" -- so without it §5's "the same bytes whichever front end made it" is quietly
-    false."""
+    false.
+
+    ``--out`` naming a directory, or a read-only file, is an ``OSError`` the window's identical write
+    (``artifact_screen._lineage_report``) catches and reports -- an operator's typo must not escape
+    as an unhandled traceback here either (fix round 1, IMPORTANT 2)."""
     from core.artifacts import render_lineage
+    from core.refusals import Refusal
     text = render_lineage(store, args.kind, args.ref)
     if args.out:
-        Path(args.out).write_text(text, encoding="utf-8", newline="\n")
+        try:
+            Path(args.out).write_text(text, encoding="utf-8", newline="\n")
+        except OSError as e:
+            raise Refusal(f"could not write the lineage report to {args.out!r}: "
+                          f"{type(e).__name__}: {e}") from e
         print(f"[prism] lineage report: {args.out}")
     else:
         print(text, end="" if text.endswith("\n") else "\n")

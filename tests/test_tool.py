@@ -2073,10 +2073,13 @@ def test_artifacts_rm_offers_no_force_and_deletes_one_artifact(browse_store, cap
 
 def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys):
     """The other half of B6: because no force is offered, an artifact anything depends on cannot be
-    deleted AT ALL, and the refusal names every dependent. ``tool_run``'s ``tp`` has both kinds: the
-    posterior ``tpost`` names it as a parent, and the training cache ``--checkpoint-every 1`` wrote
-    holds it only by FINGERPRINT, with no recorded parent link -- the case the browser has to state in
-    its own words and the tool gets from the store's message."""
+    deleted AT ALL, and the refusal names every dependent -- in the TOOL's OWN WORDS (fix round 1,
+    IMPORTANT 1), never the store's raw sentence, which ends "pass force=True to orphan them": a step
+    nothing in either front end offers, so it must never reach an operator. ``tool_run``'s ``tp`` has
+    both kinds: the posterior ``tpost`` names it as a parent, and the real pipeline's
+    ``--checkpoint-every 1`` cache records the same parent link (only a synthetic, hand-built
+    manifest omits it -- the fingerprint-only case ``_FINGERPRINT_DEPENDENT`` states in its own
+    words, which the GUI's own dependents test exercises)."""
     from core.artifacts import ArtifactStore
     bounds, cell, root = tool_run
     s = ArtifactStore(root)
@@ -2087,8 +2090,13 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
     err = capsys.readouterr().err
     lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
     assert len(lines) == 1, err
-    assert "refusing to delete" in lines[0] and "name it as a parent" in lines[0], lines[0]
-    assert "posterior" in lines[0] and "simulation" in lines[0], lines[0]
+    line = lines[0]
+    assert "refusing to delete prior tp" in line, line
+    assert "2 artifact(s) depend on it" in line, line
+    assert "posterior tpost" in line and "it names this prior as a parent" in line, line
+    assert "simulation (unnamed)" in line, line
+    assert "Delete those first." in line, line
+    assert "force" not in line.lower(), line
     assert s.get("prior", "tp").id == before, "a refusal removed something"
 
 
@@ -2120,6 +2128,12 @@ def test_artifacts_sweep_removes_only_the_unusable_directories(browse_store, cap
         assert not (root / "priors" / name).exists()
     assert not leftover.exists()
     assert all(p.exists() for p in kept), "sweep removed an artifact with a usable manifest"
+    # RULED IN 5 (fix round 1): sweep_incomplete's own return has no reason, so the tool reads it off
+    # `list` before removing and prints it after (the window reads the same rows earlier, for its
+    # confirmation) -- an operator must be able to tell "no manifest" from "a manifest of another
+    # kind" after the fact, not just which directory went.
+    assert "no manifest.json" in out, out
+    assert "manifest declares kind" in out, out
 
     capsys.readouterr()
     assert main(["artifacts", "sweep", "prior"]) == 0
@@ -2208,3 +2222,86 @@ def test_the_artifacts_family_has_all_six_modes_and_still_no_configuration_flags
             assert flag not in parser._option_string_actions, (name, flag)
     assert "--note" in modes["note"]._option_string_actions
     assert "--out" in modes["summary"]._option_string_actions
+
+
+# ── fix round 1 (post-implementation review) ─────────────────────────────────────────────────────
+
+
+def test_artifacts_summary_write_failure_is_refused_not_a_crash(browse_store, tmp_path, capsys):
+    """IMPORTANT 2 (fix round 1): the window wraps the identical write and reports it
+    (``artifact_screen._lineage_report``'s own ``except OSError``); an operator's ``--out`` typo -- a
+    directory, a read-only file -- must not escape ``write_text`` as an unhandled traceback and a
+    failure banner. Writing to a DIRECTORY is the OSError every platform raises for free, no fixture
+    needed."""
+    root, ids = browse_store
+    a_directory = str(tmp_path)                   # tmp_path exists and is a directory, not a file
+
+    capsys.readouterr()
+    assert main(["artifacts", "summary", "posterior", ids["posterior"], "--out", a_directory]) == 1
+    out = capsys.readouterr()
+    err = out.err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+    assert len(lines) == 1, err
+    # repr(args.out) is what the message quotes, so backslashes come back doubled on Windows; the
+    # directory's own NAME is what actually identifies it either way.
+    assert Path(a_directory).name in lines[0], lines[0]
+    assert "PermissionError" in lines[0] or "IsADirectoryError" in lines[0], lines[0]
+    assert "Traceback" not in err and "raised at" not in err, err
+    assert "lineage report" not in out.out, "a failed write prints no success line"
+
+
+def test_note_and_rm_on_a_leftover_name_sweep_as_the_next_step(browse_store, capsys):
+    """IMPORTANT 3 (fix round 1): a ref copied straight off ``list``'s own "incomplete ..." row
+    cannot resolve through ``_find`` (which never returns a manifest-less entry), and the store's
+    "no complete artifact" refusal said nothing about why, or what removes it -- unlike ``show``,
+    which already states both honest gaps. ``note`` and ``rm`` now name ``sweep``, but ONLY for a ref
+    that actually names one of THIS kind's leftovers; an ordinary typo still gets the plain refusal,
+    with nothing invented about it."""
+    root, ids = browse_store
+    leftover_name = ids["bad"][0]                  # "leftover_no_manifest" -- build_browse_store's
+    assert (root / "priors" / leftover_name).is_dir(), "build_browse_store seeds this one"
+
+    for argv in (["artifacts", "note", "prior", leftover_name, "--note", "x"],
+                ["artifacts", "rm", "prior", leftover_name]):
+        capsys.readouterr()
+        assert main(argv) == 1, argv
+        err = capsys.readouterr().err
+        lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+        assert len(lines) == 1, err
+        assert "sweep" in lines[0] and leftover_name in lines[0], lines[0]
+        assert "python -m core artifacts sweep prior" in lines[0], lines[0]
+
+    # An ordinary typo is not a leftover: no artifact by that name or id, and no directory by that
+    # name either, so nothing invents a next step that is not true.
+    capsys.readouterr()
+    assert main(["artifacts", "rm", "prior", "nosuchref"]) == 1
+    err = capsys.readouterr().err
+    assert "sweep" not in err, err
+
+    capsys.readouterr()
+    assert main(["artifacts", "note", "prior", "nosuchref", "--note", "x"]) == 1
+    err = capsys.readouterr().err
+    assert "sweep" not in err, err
+
+
+def test_the_shows_two_honest_gaps_are_word_for_word_the_browsers_own_constants(browse_store, capsys):
+    """RULED IN 5 (fix round 1): the comment above ``_show``'s ``print`` claims its two "no log"
+    sentences are the browser's OWN CONSTANTS, word for word -- and that claim drifted once already
+    (this task's own first round silently fixed a stale copy, with no test to catch it). Pinned the
+    way the column table already is
+    (``test_the_artifacts_listing_shows_the_browsers_own_columns``): import both front ends and
+    compare the actual strings, not eyeball the source a third time."""
+    from core.artifacts import ArtifactStore
+    from core.artifacts.store import LOG_FILE
+    from core.gui.screens import artifact_screen as ascreen
+    root, ids = browse_store
+    s = ArtifactStore(root)
+
+    capsys.readouterr()
+    assert main(["artifacts", "show", "simulation", ids["simulation"]]) == 0
+    assert ascreen._CACHE_NO_LOG in capsys.readouterr().out
+
+    (s.path("observation", ids["observation"]) / LOG_FILE).unlink(missing_ok=True)
+    capsys.readouterr()
+    assert main(["artifacts", "show", "observation", ids["observation"]]) == 0
+    assert ascreen._NO_RUN_LOG in capsys.readouterr().out

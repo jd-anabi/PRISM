@@ -611,9 +611,12 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
 
 def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, monkeypatch):
     """B7: one action per kind and one for all seven, behind a confirmation that lists exactly the
-    rows the table calls incomplete. A directory that holds a manifest is never touched, a directory
-    that will not delete is reported and the rest still go, and nothing to do says so without
-    asking."""
+    rows the table calls incomplete. A directory whose manifest is USABLE AND DECLARES THIS KIND is
+    never touched -- fix round 1, RULED IN 4: the box used to promise this for "a directory that
+    holds a manifest", full stop, which is false -- a directory whose manifest declares a DIFFERENT
+    kind holds one too, and is a leftover the sweep removes (task-14-report.md's own probe removed
+    exactly one). A directory that will not delete is reported and the rest still go, and nothing to
+    do says so without asking."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -629,6 +632,8 @@ def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, m
     assert box.button(QMessageBox.No) is box.defaultButton()
     assert leftover.name in box.informativeText(), box.informativeText()
     assert "no manifest.json" in box.informativeText(), box.informativeText()
+    assert ("A directory whose manifest is usable and declares this kind is never touched by this."
+            in box.informativeText()), box.informativeText()
     assert leftover.is_dir() and "Nothing was removed." in scr.status.text()
     _answer(monkeypatch, QMessageBox.Yes)                # Yes -> the leftover goes, the artifact stays
     scr._sweep(all_kinds=False)

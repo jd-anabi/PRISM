@@ -704,7 +704,8 @@ class ArtifactScreen(QWidget):
         box.setText(f"Remove {len(cands)} director{'y' if len(cands) == 1 else 'ies'} with no "
                     f"usable manifest?")
         box.setInformativeText("\n".join(f"{k}/{d} — {why}" for k, d, why in cands)
-                               + "\n\nA directory that holds a manifest is never touched by this.")
+                               + "\n\nA directory whose manifest is usable and declares this kind is "
+                                 "never touched by this.")
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         box.setDefaultButton(QMessageBox.No)
         if box.exec() != QMessageBox.Yes:
