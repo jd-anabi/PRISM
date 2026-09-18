@@ -169,6 +169,10 @@ class ArtifactTable(QTreeWidget):
         super().__init__(parent)
         self._kind = ""
         self._rows: list = []
+        # A sort asked for before there is a header to sort: held here and spent by the next
+        # set_rows, so the screen may restore its remembered sort before or after its first fill and
+        # get the same result either way. None once spent -- see apply_sort_state.
+        self._pending_sort: "tuple[int, int] | None" = None
         # A fresh QTreeWidget carries ONE column and reports sortColumn() == 0 for it, which
         # ``sort_state`` would hand back as a remembered "sort by Name ascending" on the very first
         # fill -- the one order the default exists to avoid. Emptying the header makes "before the
@@ -198,10 +202,17 @@ class ArtifactTable(QTreeWidget):
         item being added. The sort is then re-applied, falling back to ``DEFAULT_SORT`` when the
         remembered column is not in this kind's header -- the kinds have different widths.
 
+        WHICH sort is re-applied: a sort ``apply_sort_state`` was given before there was a header to
+        apply it to is spent HERE, on the first fill, and cleared; after that it is whatever sort is
+        in effect. So a screen that restores its remembered sort (§3.5) before its first fill and one
+        that restores it after get the same table, and a spent value cannot resurrect over a sort the
+        user has since chosen.
+
         The items are ``_Row``s, which is what keeps an incomplete row at the bottom whatever the
         sort, and each one carries its index into ``self._rows``.
         """
-        col, order = self.sort_state()
+        pending, self._pending_sort = self._pending_sort, None
+        col, order = pending if pending is not None else self.sort_state()
         self.setSortingEnabled(False)
         self.clear()
         self._kind, self._rows = kind, list(rows)
@@ -235,11 +246,13 @@ class ArtifactTable(QTreeWidget):
         ``TypeError`` in PySide6 6.9.3 -- the pinned version -- so no caller and nothing here ever
         converts a Qt enum.
 
-        ``DEFAULT_SORT`` before the first fill, where there is no header to read a sort off, and
-        likewise when Qt reports no sorted column (-1).
+        Before the first fill there is no header to read a sort off, so what comes back is the sort
+        ``apply_sort_state`` was given and is holding for that fill, or ``DEFAULT_SORT`` when it was
+        given none -- what you applied is what you read back, whichever side of the first fill you
+        are on. ``DEFAULT_SORT`` likewise when Qt reports no sorted column (-1).
         """
         if self.columnCount() == 0:
-            return DEFAULT_SORT
+            return DEFAULT_SORT if self._pending_sort is None else self._pending_sort
         col = self.sortColumn()
         if not 0 <= col < self.columnCount():
             return DEFAULT_SORT
@@ -252,11 +265,22 @@ class ArtifactTable(QTreeWidget):
         string) and never builds a ``Qt.SortOrder`` of its own; ``sort_state`` is the same seam in
         reverse.
 
+        BEFORE THE FIRST FILL there is no header, so the sort is HELD and the next ``set_rows``
+        applies it in place of ``DEFAULT_SORT``, then clears it. That is not a nicety: the screen
+        restores its remembered sort from settings (§3.5) and must not have to know whether it does
+        so before or after its first refresh -- a remembered sort that silently does nothing is the
+        failure this removes. A held sort naming a column that kind turns out not to have falls back
+        to ``DEFAULT_SORT`` at that fill, like any other, and is spent either way.
+
         A column outside the current header is IGNORED rather than clamped to 0: a remembered sort
         may name a column this kind does not have, and quietly re-sorting by "Name" is not what the
         user chose. ``set_rows`` is where that case is handled, by substituting ``DEFAULT_SORT``.
         """
         col, order = int(col), int(order)
+        if self.columnCount() == 0:
+            if col >= 0:
+                self._pending_sort = (col, order)
+            return
         if not 0 <= col < self.columnCount():
             return
         indicator = Qt.DescendingOrder if order else Qt.AscendingOrder

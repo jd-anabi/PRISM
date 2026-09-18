@@ -757,8 +757,11 @@ def test_a_caches_progress_and_whether_it_finished_come_apart():
         "3 batches"
     # nothing to say at all: no batch count, so no cell -- not "0 batches", which would claim a fact
     assert cells_for("simulation", _row("simulation", batches_done=None))[2] == ""
-    # both are complete-with-a-manifest; only `finished` tells them apart
-    assert running.complete and done.complete
+    # both are complete-with-a-manifest, so `complete` cannot be what the cell is wired to: flip
+    # ONLY `finished` and the answer flips with it
+    assert columns_for("simulation")[3] == "Finished"
+    assert cells_for("simulation", _row("simulation", finished=False))[3] == "no"
+    assert cells_for("simulation", _row("simulation", finished=True))[3] == "yes"
     # a kind with no progress to report leaves the cell out entirely
     assert "Progress" not in columns_for("prior")
 
@@ -974,4 +977,52 @@ def test_the_stylesheet_paints_the_item_view_in_both_themes():
         assert f"alternate-background-color: {t['alt_base']}" in qss, dark
         assert f"background: {t['alt_base']}; color: {t['text_2nd']}" in qss, (dark, "header section")
         assert "$" not in qss, "an unsubstituted token escaped"
-    assert "QTreeView" in design.build_qss(True, "#AA3366")
+    # an accent override is the substitution most likely to break, and "QTreeView" is a literal of
+    # the template, so its presence proves nothing: what is pinned is that the table's own rule
+    # RESOLVED -- the override reached its selection colour, and no placeholder survived anywhere.
+    accented = design.build_qss(True, "#AA3366")
+    assert "$" not in accented, "an unsubstituted token escaped under an accent override"
+    block = accented.split("QTreeView {", 1)[1].split("}", 1)[0]
+    assert "selection-background-color: #AA3366" in block, block
+
+
+def test_a_sort_applied_before_the_first_fill_is_held_and_not_lost():
+    """The screen restores its remembered sort from settings (§3.5), and nothing says it must do so
+    AFTER its first refresh. Before a fill there is no header, so the sort cannot be applied then and
+    there -- it is held and spent by the next set_rows, which makes "the sort survives a relaunch"
+    true whichever order the screen calls the two in, rather than a sequencing rule the next task has
+    to read a docstring to obey. Held, not stored: once spent it cannot come back over a sort the
+    user has since chosen."""
+    qt_app()
+    rows = [_row("prior", name="newer", created="2026-09-14T10:22:31"),
+            _row("prior", name="alpha", created="2026-09-10T08:00:00", id="20260910T080000")]
+
+    # (a) restored BEFORE the first fill: the fill must honour it, not DEFAULT_SORT
+    table = ArtifactTable()
+    table.apply_sort_state(0, 0)                        # by Name, ascending
+    assert table.sort_state() == (0, 0), "what was applied must read back, even before a header"
+    table.set_rows("prior", rows)
+    assert table.sort_state() == (0, 0) != at.DEFAULT_SORT
+    assert [table.topLevelItem(i).text(0) for i in range(2)] == ["alpha", "newer"]
+
+    # (b) a SECOND fill keeps the sort chosen since; the spent value does not resurrect
+    table.apply_sort_state(1, 1)
+    table.set_rows("prior", rows)
+    assert table.sort_state() == (1, 1)
+    assert [table.topLevelItem(i).text(0) for i in range(2)] == ["newer", "alpha"]
+
+    # (c) after a fill, apply_sort_state is exactly what it was: immediate, out of range ignored
+    table.apply_sort_state(0, 1)
+    assert table.sort_state() == (0, 1)
+    assert [table.topLevelItem(i).text(0) for i in range(2)] == ["newer", "alpha"]
+    table.apply_sort_state(9, 0)
+    assert table.sort_state() == (0, 1), "an out-of-range column is ignored, not held for later"
+
+    # a held sort naming a column the first kind lacks falls back -- and is spent, not carried to a
+    # later kind that happens to be wide enough for it
+    other = ArtifactTable()
+    other.apply_sort_state(4, 0)                        # the posterior's "Amortized": not a prior's
+    other.set_rows("prior", rows)
+    assert other.sort_state() == at.DEFAULT_SORT
+    other.set_rows("posterior", [_row("posterior", name="p")])
+    assert other.sort_state() == at.DEFAULT_SORT, "a spent sort came back on a wider kind"
