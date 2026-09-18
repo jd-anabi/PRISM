@@ -1711,3 +1711,283 @@ def test_no_print_call_remains_in_the_converted_modules():
         left += [f"{f.relative_to(root).as_posix()}:{n.lineno}" for n in ast.walk(tree)
                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "print"]
     assert left == [], f"print() calls left in the converted modules: {sorted(left)}"
+
+
+# ── the artifacts family (piece 4, B9; design §4) ────────────────────────────────────────────────
+
+
+@pytest.fixture
+def browse_store(tmp_path, monkeypatch):
+    """A store holding one artifact of each of the seven kinds plus three unusable directories, with
+    PRISM_ARTIFACTS pointing at it.
+
+    ``config.artifacts_root()`` reads the variable on EVERY call (core/config.py:185-189) and ``main``
+    opens its store on it, so ``main(["artifacts", ...])`` reads exactly this root -- the same redirect
+    test_the_sbc_subcommand_forwards_every_knob_as_a_keyword uses. Yields ``(root, ids)``, where
+    ``ids`` is ``{kind: id}`` from tests/_fixtures.py::build_browse_store (Task 9's builder: the real
+    writer at minimum size, seconds not minutes -- it must never reach for ``tiny_run``)."""
+    from tests._fixtures import build_browse_store
+    root = tmp_path / "A"
+    ids = build_browse_store(root)
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
+    return root, ids
+
+
+def test_the_artifacts_listing_shows_the_browsers_own_columns():
+    """ONE FORMATTER PER FACT (design §1.2), kept honest across two front ends that cannot share code.
+    The browser's ``cells_for``/``columns_for`` live in a Qt module, and importing it from
+    ``core/tool/browse.py`` would pull PySide6 into ``python -m core --help`` -- so the tool keeps its
+    own column list and the two COLUMN SETS are pinned against each other HERE rather than trusted to
+    agree by eye. THIS TEST imports both front ends; the tool imports neither. A column added to the
+    table without one added to the tool fails right here.
+
+    The seven kinds are restated in the tool as a literal for the same reason (reading KIND_DIRS at
+    parser-build time would import torch), so their order is pinned too -- the same shape as
+    test_crossval_preset_choices_match_sweep_presets, which pins --preset's hard-coded choices against
+    cli.SWEEP_PRESETS."""
+    from core.artifacts.store import KIND_DIRS
+    from core.gui.widgets.artifact_table import columns_for
+    from core.tool import browse
+
+    assert browse.KINDS == tuple(KIND_DIRS), "the seven kinds, in KIND_DIRS order"
+    assert set(browse.COLUMNS) == set(browse.KINDS), "every kind has a column set, and no other"
+    for kind in browse.KINDS:
+        # The tool's literal is the GUI's own spelling, lower-cased (P11): one canonical column list,
+        # Title-case in the window and lower-case in a terminal where the output may be piped.
+        assert browse.COLUMNS[kind] == tuple(c.lower() for c in columns_for(kind)), kind
+
+
+def test_artifacts_list_prints_one_line_per_artifact_with_its_kinds_facts(browse_store, capsys):
+    """design §3.2's table, per kind: a posterior's mode, width and amortization; a cache's progress
+    as a FRACTION (``batches_done``/``batches_planned``) and -- separately -- whether it FINISHED (B3:
+    ``complete`` means "has a valid manifest", which is true of a cache from its first batch on). Read
+    off the store's own rows rather than off literal names, so the assertions hold whatever
+    build_browse_store names its artifacts."""
+    from core.artifacts import ArtifactStore
+    root, ids = browse_store
+    s = ArtifactStore(root)
+
+    capsys.readouterr()
+    assert main(["artifacts", "list", "posterior"]) == 0
+    out = capsys.readouterr().out
+    assert "== posterior ==" in out, out
+    post = next(r for r in s.list("posterior") if r.complete)
+    line = next(ln for ln in out.splitlines() if post.label in ln)
+    assert post.created in line, line
+    assert str(post.width) in line and (post.mode or "") in line, line
+    assert ("amortized" if post.amortized else "narrowed (TSNPE)") in line, line
+
+    capsys.readouterr()
+    assert main(["artifacts", "list", "simulation"]) == 0
+    out = capsys.readouterr().out
+    sim = next(r for r in s.list("simulation") if r.complete)
+    line = next(ln for ln in out.splitlines() if sim.label in ln)
+    assert f"{sim.batches_done}/{sim.batches_planned} batches" in line, line
+    if sim.finished:
+        assert f", {sum(sim.rows)} rows" in line, line
+    else:
+        assert "rows" not in line, "``save`` passes no rows, so a cache mid-run has none to show"
+    assert ("yes" if sim.finished else "no") in line, line
+
+
+def test_the_artifacts_listing_progress_cell_is_a_fraction_and_shows_rows_only_once_finished():
+    """Both halves of the progress cell, on stand-in summaries: ``build_browse_store``'s cache is an
+    unfinished one, so the FINISHED half has no fixture to come from: ``batches_planned`` (the body's
+    ``identity["n_runs"]``, spec §12 row 2) makes the cell a FRACTION, and ``rows`` is written only by
+    ``mark_complete`` -- ``save`` passes none -- so a cache mid-run shows its batches and no row
+    count. A comma and plain ASCII, never the browser's middle dot: this is text a script may read."""
+    from core.artifacts.store import Summary
+    from core.tool import browse
+
+    def summary(**kw):
+        return Summary(kind="simulation", id="s", name="", created="2026-01-01 00:00:00", note="",
+                       path=Path("."), complete=True, reason=None, **kw)
+
+    assert browse._progress(summary(batches_done=3, batches_planned=4, rows=None)) == "3/4 batches"
+    assert browse._progress(summary(batches_done=4, batches_planned=4, finished=True,
+                                    rows=(48, 48))) == "4/4 batches, 96 rows"
+    assert browse._progress(summary()) == "?/? batches", "a body with neither count still renders"
+
+
+def test_artifacts_list_with_no_kind_covers_every_kind_under_a_heading(browse_store, capsys):
+    root, ids = browse_store
+    capsys.readouterr()
+    assert main(["artifacts", "list"]) == 0
+    out = capsys.readouterr().out
+    for kind in ("prior", "simulation", "posterior", "observation", "calibration", "inference",
+                 "diagnostic"):
+        assert f"== {kind} ==" in out, kind
+    assert "nothing in:" not in out, "build_browse_store writes one artifact of every kind"
+
+
+def test_an_empty_artifacts_listing_exits_0_and_a_bad_kind_exits_1(tmp_path, monkeypatch, capsys):
+    """§4.3: an empty listing is 0, with a line saying there is nothing there. A script must be able to
+    tell "nothing on disk" from "you asked for something wrong", and exiting 1 on an empty store would
+    make the two indistinguishable. A kind that does not exist IS the second case: the store's own
+    refusal, through the ladder's ``refused:`` rung at exit 1.
+
+    The empty root need not exist beforehand -- ``main`` mkdirs the store root before any handler runs
+    (core/tool/__init__.py:103)."""
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "empty"))
+
+    capsys.readouterr()
+    assert main(["artifacts", "list"]) == 0
+    out = capsys.readouterr().out
+    named_empty = out.split("nothing in:")[1]
+    for kind in ("prior", "simulation", "posterior", "observation", "calibration", "inference",
+                 "diagnostic"):
+        assert kind in named_empty, kind
+    assert "holds no artifacts yet" in out, out
+
+    capsys.readouterr()
+    assert main(["artifacts", "list", "prior"]) == 0
+    out = capsys.readouterr().out
+    assert "== prior ==" in out and "nothing here yet" in out, out
+
+    capsys.readouterr()
+    assert main(["artifacts", "list", "nosuchkind"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+    assert len(lines) == 1 and "unknown artifact kind" in lines[0], err
+    assert "Traceback" not in err, err
+
+
+def test_artifacts_list_puts_an_unusable_directory_last_with_its_reason(browse_store, capsys):
+    """A leftover directory is the first thing an operator can act on that no front end has ever shown:
+    ``get``/``path`` and the GUI picker all skip it. ``list`` already sorts incomplete rows last, and
+    the row carries the ``dir_name`` because that is the only handle ``sweep`` can take (B7).
+
+    NOTE on ordering among several leftovers: ``browse_store`` (build_browse_store) already seeds three
+    ``leftover_*`` directories under ``priors/`` for the store shapes it covers, so this test's own
+    leftover joins a total of four incomplete rows. ``ArtifactStore._entries`` sorts leftovers by plain
+    directory name (test_artifact_store.py::test_remove_incomplete_is_not_defeated_by_a_degenerate_
+    inode_volume relies on exactly this to put "aaa_leftover" before a real artifact), so "_unnamed__..."
+    (an underscore, ASCII 95) sorts BEFORE "leftover_..." (ASCII 108) -- it is not guaranteed to be the
+    last of several incomplete rows. What IS guaranteed, and what this asserts, is the property the
+    store and ``_print_kind`` actually promise: every incomplete row comes after every complete one."""
+    root, ids = browse_store
+    leftover = root / "priors" / "_unnamed__20260101T000000"
+    leftover.mkdir(parents=True, exist_ok=True)
+
+    capsys.readouterr()
+    assert main(["artifacts", "list", "prior"]) == 0
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+    hits = [i for i, ln in enumerate(lines) if "_unnamed__20260101T000000" in ln]
+    assert len(hits) == 1, lines
+    assert "no manifest.json" in lines[hits[0]], lines[hits[0]]
+    assert lines[hits[0]].strip().startswith("incomplete"), lines[hits[0]]
+    good_line = next(i for i, ln in enumerate(lines) if "browse_prior" in ln)
+    assert hits[0] > good_line, f"an incomplete directory is listed after every complete row: {lines}"
+
+
+def test_artifacts_show_prints_the_manifest_then_the_runs_records(browse_store, capsys, monkeypatch):
+    """The manifest through the ONE renderer both front ends use (design §5), then the records with
+    their ``HH:MM:SS level`` stamps, then a truncation notice when the tail was cut. Asserting the
+    renderer's own output is IN the printed text is what keeps a second, drifting renderer from being
+    written here."""
+    from core.artifacts import ArtifactStore, render_manifest
+    from core.artifacts.store import LOG_FILE
+    from core.tool import browse
+    root, ids = browse_store
+    s = ArtifactStore(root)
+    (s.path("prior", ids["prior"]) / LOG_FILE).write_text("10:00:00 info the sweep began\n",
+                                                          encoding="utf-8")
+
+    capsys.readouterr()
+    assert main(["artifacts", "show", "prior", ids["prior"]]) == 0
+    out = capsys.readouterr().out
+    assert render_manifest(s.get("prior", ids["prior"])) in out, "the one renderer, not a second one"
+    assert "== records ==" in out and "10:00:00 info the sweep began" in out, out
+
+    # the tail, and the notice that says it is one. The cap is monkeypatched rather than met with a
+    # megabyte of log: what is under test is the notice, not the byte count.
+    monkeypatch.setattr(browse, "LOG_TAIL_BYTES", 40)
+    (s.path("prior", ids["prior"]) / LOG_FILE).write_text("A" * 200 + "\n10:00:01 info the last line\n",
+                                                          encoding="utf-8")
+    capsys.readouterr()
+    assert main(["artifacts", "show", "prior", ids["prior"]]) == 0
+    out = capsys.readouterr().out
+    assert "the log is longer" in out and "10:00:01 info the last line" in out, out
+
+
+def test_artifacts_show_states_the_two_honest_gaps(browse_store, capsys):
+    """design §3.3's two sentences, WORD FOR WORD the browser's, because one operator reads both. A
+    cache has no log by design (it is written batch by batch across resumes and shared by every
+    posterior that names it), and an artifact written with no run active has none either -- and
+    ``read_log`` answers ``(None, False)`` for both, so the KIND is what tells them apart."""
+    from core.artifacts import ArtifactStore
+    from core.artifacts.store import LOG_FILE
+    root, ids = browse_store
+    s = ArtifactStore(root)
+
+    capsys.readouterr()
+    assert main(["artifacts", "show", "simulation", ids["simulation"]]) == 0
+    out = capsys.readouterr().out
+    assert "a training cache keeps no log" in out and "across resumes" in out, out
+
+    (s.path("observation", ids["observation"]) / LOG_FILE).unlink(missing_ok=True)
+    capsys.readouterr()
+    assert main(["artifacts", "show", "observation", ids["observation"]]) == 0
+    assert "written outside a run" in capsys.readouterr().out
+
+
+def test_artifacts_show_names_a_directory_the_manifest_disagrees_with(browse_store, capsys):
+    """``rename`` writes the manifest first and tolerates a refused directory move (the manifest is
+    what resolves an artifact), which leaves a folder whose name disagrees with ``Manifest.dir_name``.
+    ``show`` is the first place that is visible (design §3.3, §2.6)."""
+    from core.artifacts import ArtifactStore
+    root, ids = browse_store
+    sub = ArtifactStore(root).path("calibration", ids["calibration"])
+    sub.rename(sub.with_name("stale__" + sub.name.rsplit("__", 1)[-1]))
+
+    capsys.readouterr()
+    assert main(["artifacts", "show", "calibration", ids["calibration"]]) == 0
+    out = capsys.readouterr().out
+    assert "stale__" in out and "while its manifest says" in out, out
+
+
+def test_artifacts_show_on_a_missing_ref_exits_1_through_the_refused_rung(browse_store, capsys):
+    """§4.3: a missing or ambiguous ref is 1, through the existing ``refused:`` rung. The message
+    already quotes the ref, which is exactly why core/tool/fields.py maps the ``artifact`` key to
+    None -- the tool names the artifact positionally, so there is no option string to print, and
+    fix_sentence owns the parentheses, so the line simply ends at the message."""
+    root, ids = browse_store
+    capsys.readouterr()
+    assert main(["artifacts", "show", "prior", "nosuch"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism artifacts: refused:")]
+    assert len(lines) == 1, err
+    assert "nosuch" in lines[0] and "no complete prior artifact" in lines[0], lines[0]
+    assert not lines[0].endswith("()"), lines[0]
+    assert "Traceback" not in err and "raised at" not in err, err
+
+
+def test_the_artifacts_family_takes_no_configuration_flags_and_its_help_costs_no_torch():
+    """B9's two halves, pinned. (1) No configuration flags anywhere in the family: a listing must not
+    be able to fail on a bounds file it does not need, and --store-root in particular is absent
+    because ``main`` keys smoke's temp-root behaviour, its empty-root cleanup and its Ctrl-C advice on
+    ``hasattr(args, "store_root")`` (core/tool/__init__.py:95-98, 121-122, 156-157). (2) ``--help``
+    for the family imports no torch -- checked in a FRESH interpreter, because in this process torch
+    is long since imported by the session fixtures, so a sys.modules check here would pass
+    vacuously (the pattern of test_every_field_key_has_a_flag_..., leg (d))."""
+    import argparse
+    import subprocess
+    import sys
+
+    p = build_parser().subcommands["artifacts"]
+    modes = {name: sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
+             for name, sub in a.choices.items()}
+    assert set(modes) >= {"list", "show"}, sorted(modes)
+    for name, parser in [("artifacts", p), *sorted(modes.items())]:
+        for flag in ("--bounds", "--model", "--chi", "--chi-k", "--device", "--store-root",
+                     "--accept-truncated"):
+            assert flag not in parser._option_string_actions, (name, flag)
+
+    probe = ("import sys\n"
+             "from core.tool import main\n"
+             "rc = main(['artifacts', '--help'])\n"
+             "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.'))\n"
+             "sys.exit(0 if rc == 0 and not bad else repr((rc, bad[:3])))\n")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(config.REPO_ROOT),
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
