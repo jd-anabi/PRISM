@@ -3421,3 +3421,79 @@ def test_a_malformed_simulation_body_degrades_that_field_not_the_whole_row(store
         (digest, digest, True, False, 2), "everything the corrupt fields don't touch stays intact"
     assert row.batches_planned is None, "non-numeric n_runs degrades to None, not a raise"
     assert row.rows is None, "one non-numeric element spoils the tuple, not a partial conversion"
+
+
+def test_read_log_tells_a_committed_run_from_a_silent_one_and_from_no_file_at_all(store):
+    """B4's four answers (spec §2.2, §2.6). The browser has to say something honest in each case, and
+    one place works it out so the two front ends cannot disagree:
+
+      * a committed artifact's records, verbatim, stamped ``HH:MM:SS level`` -- the format
+        test_each_artifact_gets_the_log_of_the_entry_that_wrote_it pins BECAUSE this reader shows it;
+      * ``("", False)``: the run said nothing, and silence is a record too;
+      * ``(None, False)``: there is NO file. The simulation cache never gets one (no writer, a
+        manifest refreshed batch by batch across resumes, one cache shared by every posterior that
+        names it), and neither does an artifact written outside any run.
+    """
+    import logging
+    import re
+
+    from core import runs
+    from core.SBI.training_checkpoint import identity_digest
+
+    with runs.capture_run():
+        logging.getLogger("core.orchestrator").info("said something")
+        spoke = _make(store, "calibration", name="spoke")
+    text, truncated = store.read_log("calibration", spoke.id)
+    assert truncated is False
+    assert re.fullmatch(r"\d\d:\d\d:\d\d info said something\n", text), repr(text)
+    assert store.read_log("calibration", "spoke")[0] == text, "a name resolves like an id"
+
+    with runs.capture_run() as run:
+        quiet = _make(store, "calibration", name="quiet")
+        assert run.lines == [], run.lines            # non-vacuous: nothing was said before the commit
+    assert store.read_log("calibration", quiet.id) == ("", False)
+
+    outside = _make(store, "calibration", name="outside")
+    assert store.read_log("calibration", outside.id) == (None, False), "no run, no file"
+
+    ident = {"format": "training-rows/2", "model": "X", "n_runs": 3, "truncation": None}
+    digest = identity_digest(ident)
+    st.write_simulation_manifest(store.kind_dir("simulation") / digest, ident, batches_done=1)
+    assert store.read_log("simulation", digest) == (None, False), "the cache never carries one"
+
+    # Both refusals are ITS OWN and carry field="artifact" (P1): routing through ``path()`` would
+    # inherit a field-less refusal, and neither front end could then name the way out of it.
+    with pytest.raises(st.StoreError, match="no complete calibration") as e:
+        store.read_log("calibration", "nothing_by_that_name")
+    assert e.value.field == "artifact"
+    with pytest.raises(st.StoreError, match="unknown artifact kind") as e:
+        store.read_log("priors", "spoke")
+    assert e.value.field == "artifact"
+
+
+def test_read_log_returns_the_tail_over_max_bytes(store):
+    """The detail pane reads at most 1 MiB and a run of days writes more than that, so the TAIL is
+    what matters -- the crash is at the end -- and ``truncated`` is how the pane knows to say so.
+    At or above the file's own size nothing is cut and ``truncated`` stays False."""
+    from core import runs
+    with runs.capture_run():
+        w = _make(store, "calibration", name="long")
+    body = "head\n" + "x" * 40 + "\ntail\n"
+    # newline="\n" so the byte offsets below are the ones this test means: write_text's default
+    # newline=None would put CRLF on disk and every max_bytes leg would be cutting different bytes.
+    (w.dir / st.LOG_FILE).write_text(body, encoding="utf-8", newline="\n")
+    size = (w.dir / st.LOG_FILE).stat().st_size
+    assert store.read_log("calibration", w.id) == (body, False)
+    assert store.read_log("calibration", w.id, max_bytes=size) == (body, False)
+    assert store.read_log("calibration", w.id, max_bytes=size + 10) == (body, False)
+    assert store.read_log("calibration", w.id, max_bytes=5) == ("tail\n", True)
+    # 0 asks for nothing and must GET nothing: ``data[-max_bytes:]`` would return the WHOLE file here
+    assert store.read_log("calibration", w.id, max_bytes=0) == ("", True)
+    # A tail cut through a multi-byte character is replaced, never raised: the pane must still render
+    (w.dir / st.LOG_FILE).write_bytes("a\u00b5".encode("utf-8"))        # b'a\xc2\xb5'
+    assert store.read_log("calibration", w.id, max_bytes=1) == ("\ufffd", True)
+    # A file an older build wrote is CRLF on disk (write_text's default newline=None on Windows).
+    # It reads back as LF, so one newline convention reaches the pane, the report and both front
+    # ends whoever wrote the file.
+    (w.dir / st.LOG_FILE).write_bytes(b"head\r\nmid\r\ntail\r\n")
+    assert store.read_log("calibration", w.id) == ("head\nmid\ntail\n", False)

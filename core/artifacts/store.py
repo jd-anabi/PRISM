@@ -309,7 +309,10 @@ class ArtifactWriter:
         # simulation cache (which has no writer) carries the file. Outside any entry, no file.
         run_log = runs.current_run_log()
         if run_log is not None:
-            (self.dir / LOG_FILE).write_text(run_log.text(), encoding="utf-8")
+            # newline="\n" explicitly: write_text's default would make every record CRLF on Windows,
+            # and this file is read back by read_log, shown in the browser's detail pane and saved
+            # verbatim to a report whose bytes spec §5 says both front ends must agree on.
+            (self.dir / LOG_FILE).write_text(run_log.text(), encoding="utf-8", newline="\n")
         _write_manifest(self.dir, self.manifest)
 
 
@@ -419,6 +422,50 @@ class ArtifactStore:
         if m is None:
             raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}")
         return sub
+
+    def read_log(self, kind: str, ref: str, *, max_bytes: "int | None" = None) -> "tuple[str | None, bool]":
+        """``(text, truncated)`` of the artifact's ``log.txt``; ``(None, False)`` when there is no file.
+
+        None and "" are DIFFERENT answers, deliberately. The simulation cache never gets a log: it has
+        no writer (``create`` refuses the kind), its manifest is refreshed batch by batch across
+        resumes, and one cache is shared by every posterior that names it -- so no single commit holds
+        one entry's records. An artifact written outside any public entry gets none either. But a run
+        that said NOTHING writes an EMPTY one: silence is a record too (piece 3, V4).
+
+        With ``max_bytes`` the TAIL is returned and ``truncated`` is True -- the end is where the
+        failure is -- and its first line may be a partial one.
+
+        Newlines come back as LF. ``_commit`` writes the file with ``newline="\\n"``, but a log.txt an
+        OLDER build wrote went through ``write_text``'s default ``newline=None`` and is CRLF on
+        Windows; normalising here means one convention reaches the pane, the saved report and both
+        front ends whoever wrote the file.
+
+        THE one place that joins ``LOG_FILE``, so "is there a log, and what does it say" is answered
+        once and the cache's absence is explained here rather than in each front end (piece 4, B4).
+
+        Resolves with ``_find`` rather than through ``path()`` so that both refusals can carry
+        ``field="artifact"``: ``path()``'s is field-less, and an inherited field-less refusal leaves
+        each front end with no control to name.
+        """
+        if kind not in KIND_DIRS:
+            raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
+        sub, m = self._find(kind, ref)
+        if m is None:
+            raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}", field="artifact")
+        f = sub / LOG_FILE
+        try:
+            data = f.read_bytes()
+        except (FileNotFoundError, NotADirectoryError):
+            return None, False
+        truncated = max_bytes is not None and len(data) > max_bytes
+        if truncated:
+            # len(data) - max_bytes, NOT -max_bytes: ``data[-0:]`` is the whole file, so a caller
+            # asking for nothing would be handed everything.
+            data = data[len(data) - max_bytes:]
+        # errors="replace" is the identity over a whole, valid file; it matters only for a tail cut
+        # in the middle of a multi-byte character, which must render rather than raise.
+        text = data.decode("utf-8", errors="replace")
+        return text.replace("\r\n", "\n"), truncated
 
     # ── create / rename / delete ─────────────────────────────────────────────────────────────────
     def _new_id(self, kind: str) -> str:
