@@ -14,36 +14,94 @@ The trigger is not hypothetical. sbi's ``accept_reject_sample`` calls ``logging.
 sbi/samplers/rejection/rejection.py:336 and :359 when fewer than ``warn_acceptance=0.01`` of its
 proposals are accepted, and that function is on the path of EVERY posterior draw PRISM makes.
 
-WHAT THIS DOES. ``install(sink)`` puts ONE handler on the root logger:
-  * it exists from start-up, which is why ``basicConfig`` never fires and no second copy of a
-    ``core`` record can ever appear;
-  * a record from the ``core`` tree is DROPPED here -- it already has the front end's own handler and
-    the artifact's log.txt, both of which read off the ``core`` logger -- and every other logger's
-    record is handed to ``sink`` exactly once.
+WHAT THIS DOES. ``install(sink)`` puts ONE handler on the root logger. It exists from start-up,
+which is why ``basicConfig`` never fires. It hands ``sink`` a record ONLY IF NO LOGGER BETWEEN THE
+RECORD'S OWN AND THE ROOT (the root excluded) HAS A HANDLER THAT ALREADY EMITTED IT -- the walk goes
+up ``parent`` and stops where ``propagate`` is False, exactly as ``Logger.callHandlers`` does. That
+one rule covers every case, where a rule by logger NAME lost records:
+  * a ``core`` record DURING A RUN (the window's pump handler, the tool's console handlers, the
+    artifact's log.txt -- all on the ``core`` logger) is already out, so the sink stays silent and
+    no second copy can appear;
+  * a ``core`` record with NO ``core`` handler attached -- the window between runs, or a run whose
+    console redirect was declined -- reaches the sink instead of vanishing; ``render`` gives it the
+    tool's own shape (bare for information, ``warning: `` and so on above), never ``library:``;
+  * a library that installed a handler of its OWN (pytensor does, at import, when no handler is
+    found above its logger -- which is before the window is built) has already printed its record,
+    so the sink does not print it a second time;
+  * a ``logging.NullHandler`` does not count: it emits nothing. Python's logging HOWTO tells a
+    library to add one so it stays quiet UNTIL the application configures logging; this root
+    handler is that configuration, so such a library's warning (pint's, pint/util.py) is shown once.
+The handler level test is ``Logger.callHandlers``'s own (``record.levelno >= handler.level``). A
+handler's own filters are not consulted: calling another handler's filter a second time could have
+side effects, and none of the handlers in play filters.
 
-The drop is a ``logging.Filter`` ON THE HANDLER, never a change to ``core.propagate``: ``caplog``
-reads off root and tests/test_refusals.py pins that propagation, and ``RunLog`` and both front-end
-handlers sit on the ``core`` logger itself, so a filter leaves all three untouched.
+The decision is a ``logging.Filter`` ON THE HANDLER, never a change to ``core.propagate``:
+``caplog`` reads off root and tests/test_refusals.py pins that propagation, and ``RunLog`` and both
+front-end handlers sit on the ``core`` logger itself, so a filter leaves all three untouched.
 
-``sink`` is handed the LogRecord, not a formatted line, so each front end splits by level and
-resolves its own streams AT EMIT TIME -- the rule core/tool/logging_console.py already states, and
-the one ``basicConfig``'s handler broke.
+``sink`` is handed the LogRecord, not a formatted line, so each front end picks its stream AT EMIT
+TIME -- the rule core/tool/logging_console.py already states, and the one ``basicConfig``'s handler
+broke. ``render(record)`` is the one text both front ends write: a ``logging.Formatter``, so a
+``log.exception`` traceback and a ``stack_info`` are included, with the prefix on the FIRST line.
 
 Standard library only (so ``python -m core --help`` stays torch-free), and no logger's level is
 touched anywhere in this module: core/runs.py owns the ``core`` logger's level, once, at import.
 """
 import logging
 
+_FORMATTER = logging.Formatter("%(message)s")
 
-class _DropCore(logging.Filter):
-    """False for a record from the ``core`` logger or any of its children: it has its own handlers."""
+
+def is_prism(record: logging.LogRecord) -> bool:
+    """True for a record from the ``core`` logger or any of its children: PRISM's own voice."""
+    return record.name == "core" or record.name.startswith("core.")
+
+
+def render(record: logging.LogRecord) -> str:
+    """The text for one record, traceback and stack included, with no trailing newline.
+
+    A library record reads ``library: <who>: <message>``, named by its logger EXCEPT for ``root``:
+    the trigger this handler exists for is ``logging.warning``, the module-level function, whose
+    logger is the root logger, so ``record.name`` would read ``root`` and name nothing. For that one
+    name the prefix falls back to ``record.module``, the basename of the file that logged -- sbi's
+    leakage warning reads ``library: rejection:`` (sbi/samplers/rejection/rejection.py), which is what
+    walkthrough row D15 expects.
+
+    A ``core`` record reaches a sink only when no ``core`` handler was attached, and it is PRISM's own
+    voice, so it takes the tool's own console shape (core/tool/logging_console.py): the bare message
+    below WARNING, ``<level name lower-cased>: `` at WARNING and above -- never ``library:``.
+    """
+    text = _FORMATTER.format(record)
+    if is_prism(record):
+        return text if record.levelno < logging.WARNING else f"{record.levelname.lower()}: {text}"
+    who = record.name if record.name != "root" else record.module
+    return f"library: {who}: {text}"
+
+
+def _already_emitted(record: logging.LogRecord) -> bool:
+    """True if a logger between the record's own and the root (the root excluded) has a handler that
+    ``Logger.callHandlers`` gave it to -- a ``NullHandler`` excepted, since it emits nothing."""
+    root = logging.getLogger()
+    logger = logging.getLogger(record.name)          # the root itself for ``logging.warning``
+    while logger is not None and logger is not root:
+        for handler in logger.handlers:
+            if not isinstance(handler, logging.NullHandler) and record.levelno >= handler.level:
+                return True
+        if not logger.propagate:
+            break
+        logger = logger.parent
+    return False
+
+
+class _NotYetEmitted(logging.Filter):
+    """False for a record some handler below the root already emitted (the module docstring's rule)."""
 
     def filter(self, record: logging.LogRecord) -> bool:
-        return not (record.name == "core" or record.name.startswith("core."))
+        return not _already_emitted(record)
 
 
 class _SinkHandler(logging.Handler):
-    """Hands every record that survives ``_DropCore`` to ``sink(record)``.
+    """Hands every record that survives ``_NotYetEmitted`` to ``sink(record)``.
 
     No level of its own (NOTSET): whether a library emits a record at all is that library's logger's
     business, and the root logger's own WARNING level already gates ``logging.warning``.
@@ -52,7 +110,7 @@ class _SinkHandler(logging.Handler):
     def __init__(self, sink):
         super().__init__()
         self._sink = sink
-        self.addFilter(_DropCore())
+        self.addFilter(_NotYetEmitted())
 
     def emit(self, record: logging.LogRecord) -> None:
         # ``except Exception``, deliberately not BaseException: under the window a library record is

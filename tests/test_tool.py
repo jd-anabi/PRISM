@@ -2330,9 +2330,15 @@ def test_main_installs_the_root_handler_for_the_run_and_leaves_nothing_behind(to
 
     Two more things are pinned here, both of which only a repeated-call test can see: the handler is
     installed FOR the handler call and removed in a finally (``main`` runs dozens of times in one
-    process under this suite), and a ``core`` record still appears exactly once, on stdout, through
-    ``console_handlers`` alone -- the doubling this handler exists to prevent would show up as the
-    same line on stderr as well."""
+    process under this suite, and the root's handler list must read the same after every call), and a
+    ``core`` record still appears exactly once, on stdout -- ``console_handlers`` on the ``core``
+    logger already emitted it, so the root sink's filter keeps it out (were the filter to let it
+    through, the sink would write it to stdout a second time and the count of one would fail).
+
+    What this test can NOT see is the basicConfig doubling itself: pytest keeps a handler of its own
+    on the root for every test phase, so ``logging.warning`` never meets a handler-less root here
+    and the ``[budget]``-not-on-stderr line cannot catch it. That precondition and its prevention
+    are pinned in tests/test_refusals.py, with pytest's root handlers taken off."""
     import logging
 
     from core import logging_root, orchestrator
@@ -2367,3 +2373,33 @@ def test_main_installs_the_root_handler_for_the_run_and_leaves_nothing_behind(to
     finally:
         logging_root.remove()
         lib.setLevel(logging.NOTSET)
+
+
+def test_the_tools_root_sink_routes_a_core_record_as_the_console_handlers_would(capsys):
+    """Fix round 1. A ``core`` record reaches the tool's root sink only when the console handlers are
+    not attached (``main`` attaches them for the handler call alone), and it is PRISM's own voice, so
+    it is written as those handlers would write it -- information bare on stdout, warning and above on
+    stderr with the level as a prefix -- never ``library:``, and never lost. A library record goes to
+    stderr whatever its level, its ``log.exception`` traceback included."""
+    import logging
+    import sys
+
+    import core.tool as tool
+
+    def _record(name, level, msg, exc_info=None):
+        return logging.LogRecord(name, level, __file__, 1, msg, None, exc_info)
+
+    capsys.readouterr()
+    tool._library_record_sink(_record("core.probe", logging.INFO, "an information record"))
+    tool._library_record_sink(_record("core.probe", logging.WARNING, "a warning"))
+    tool._library_record_sink(_record("a_library", logging.INFO, "a library's note"))
+    try:
+        raise ValueError("the library's own failure")
+    except ValueError:
+        tool._library_record_sink(_record("a_library", logging.ERROR, "it failed", sys.exc_info()))
+    cap = capsys.readouterr()
+    assert cap.out == "an information record\n", cap.out
+    assert cap.err.startswith("warning: a warning\nlibrary: a_library: a library's note\n"
+                              "library: a_library: it failed\nTraceback (most recent call last):\n"), \
+        cap.err
+    assert cap.err.endswith("ValueError: the library's own failure\n"), cap.err

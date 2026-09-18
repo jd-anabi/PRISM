@@ -1048,11 +1048,17 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
     leakage warnings at sbi/samplers/rejection/rejection.py:336,359 are that call -- and its logger
     name is ``root``, which names nothing. So for that ONE name the prefix falls back to
     ``record.module``, the basename of the file that logged: ``library: rejection:`` under sbi, and
-    this test file's own stem here. Walkthrough row D15 expects that module name.
+    this test file's own stem here. Walkthrough row D15 expects that module name. A library's
+    ``log.exception`` keeps its traceback, with the prefix on the first line only.
+
+    Fix round 1 -- PRISM's own records. BETWEEN RUNS no handler sits on ``core``, so a ``core``
+    warning reaches this sink rather than vanishing, and it is written in the tool's own shape
+    (``warning: ...``), never ``library:``. DURING A RUN the pump's handler on ``core`` has already
+    emitted it, so it lands in the pane exactly once, at its own level, and the sink stays silent.
     """
     import logging
 
-    from core import logging_root
+    from core import logging_root, runs
     from core.gui.app import _library_record_sink
     from tests._fixtures import pump, qt_app
 
@@ -1069,10 +1075,23 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
         assert cap.out == "library: a_library: an information record\n", cap.out
         assert cap.err == f"library: {here}: Only 0.5% proposal samples are accepted.\n", cap.err
 
+        try:
+            raise ValueError("the library's own failure")
+        except ValueError:
+            lib.exception("it failed")
+        err = capsys.readouterr().err
+        assert err.startswith("library: a_library: it failed\nTraceback (most recent call last):\n"), err
+        assert err.endswith("ValueError: the library's own failure\n"), err
+        assert sum(ln.startswith("library:") for ln in err.splitlines()) == 1, err
+
+        # between runs: no core handler, so the record reaches the sink -- as PRISM's own voice
+        assert runs.LOGGER.handlers == [], runs.LOGGER.handlers
         capsys.readouterr()
-        logging.getLogger("core.probe").warning("the pipeline's own voice")
+        logging.getLogger("core.probe").warning("the pipeline's own voice, between runs")
+        logging.getLogger("core.probe").info("and its information record")
         cap = capsys.readouterr()
-        assert (cap.out, cap.err) == ("", ""), cap
+        assert cap.err == "warning: the pipeline's own voice, between runs\n", cap.err
+        assert cap.out == "and its information record\n", cap.out
 
         signals = WorkerSignals()
         lines = []
@@ -1081,9 +1100,13 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
         with redirect_streams(signals):
             lib.warning("a leaky posterior")
             lib.info("and a quiet note")
+            logging.getLogger("core.probe").warning("the pipeline's own voice, during a run")
         pump(app)
         assert ("library: a_library: a leaky posterior", "warning") in lines, lines
         assert ("library: a_library: and a quiet note", "info") in lines, lines
+        # during a run: the pump's own handler emitted it -- once, at its level, and nothing else did
+        mine = [ln for ln in lines if "the pipeline's own voice, during a run" in ln[0]]
+        assert mine == [("the pipeline's own voice, during a run", "warning")], lines
     finally:
         logging_root.remove()
         lib.setLevel(logging.NOTSET)

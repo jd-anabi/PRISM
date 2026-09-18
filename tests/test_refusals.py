@@ -824,12 +824,13 @@ def test_the_root_handler_exists_from_startup_so_basicconfig_never_fires():
     ``len(root.handlers) == 0`` is never true during a test and ``basicConfig`` cannot fire. This test
     therefore takes pytest's root handlers off, asserts the defect's PRECONDITION -- a handler-less
     root logger makes ``logging.warning`` install a StreamHandler of its own -- asserts that
-    ``logging_root.install`` prevents exactly that, and puts them back in a finally.
+    ``logging_root.install`` prevents exactly that, and puts them back in a finally -- WHOLESALE
+    (``root.handlers[:] = ...``), so a failed assertion between the deliberate trigger and its manual
+    cleanup cannot leave basicConfig's StreamHandler on the root for the rest of the process.
 
-    Then the two halves of the filter: a record from the ``core`` tree reaches its OWN handler once
-    and the root sink NOT AT ALL (it already has the front end's handler and the artifact's log.txt),
-    while every other logger's record is handed to the sink once, with its level and its logger's
-    name intact.
+    Then the filter's rule, during a run: a record from the ``core`` tree reaches its OWN handler once
+    and the root sink NOT AT ALL (that handler already emitted it), while a library's record is
+    handed to the sink once, with its level and its logger's name intact.
     """
     import logging
 
@@ -875,20 +876,28 @@ def test_the_root_handler_exists_from_startup_so_basicconfig_never_fires():
     finally:
         logging_root.remove()
         runs.LOGGER.removeHandler(own)
-        for h in pytest_handlers:
-            root.addHandler(h)
+        root.handlers[:] = pytest_handlers
 
 
 def test_caplog_still_sees_core_records_while_the_root_handler_is_installed(caplog):
     """The drop is a ``logging.Filter`` ON THE HANDLER, never ``core.propagate = False``: ``caplog``
     reads off the root logger and the propagation is pinned by
     test_the_core_logger_is_at_info_by_import above, and ``RunLog`` plus both front-end handlers sit
-    on the ``core`` logger itself, so a filter leaves all three untouched."""
+    on the ``core`` logger itself, so a filter leaves all three untouched.
+
+    A stand-in handler sits on ``core`` here, as a run's would: with none attached the rule hands a
+    ``core`` record to the sink as well (the between-runs case, pinned in the test below)."""
     import logging
 
-    from core import logging_root
+    from core import logging_root, runs
+
+    class _RunsHandler(logging.Handler):
+        def emit(self, record):
+            pass
 
     seen = []
+    stand_in = _RunsHandler()
+    runs.LOGGER.addHandler(stand_in)
     logging_root.install(seen.append)
     try:
         with caplog.at_level(logging.INFO, logger="core"):
@@ -896,8 +905,94 @@ def test_caplog_still_sees_core_records_while_the_root_handler_is_installed(capl
             logging.getLogger("a_library").warning("and one the sink may have")
     finally:
         logging_root.remove()
+        runs.LOGGER.removeHandler(stand_in)
     assert "a record caplog must still see" in caplog.text
     assert [r.getMessage() for r in seen] == ["and one the sink may have"], seen
+
+
+def test_the_root_sink_takes_exactly_what_no_handler_below_the_root_has_emitted():
+    """Fix round 1: the filter's rule is "no logger between the record's own and the root (the root
+    excluded) has a handler that already emitted it", replacing a rule by logger NAME that lost three
+    kinds of record. Run as a plain script would run it -- pytest's root handlers off, put back
+    WHOLESALE in the finally -- because what is under test is what reaches the root.
+
+    (a) a ``core`` WARNING with NO ``core`` handler attached (the window between runs) reaches the
+        sink instead of vanishing, and renders in the tool's own shape: ``warning: ...``, never
+        ``library:``; an information record renders bare;
+    (b) the same record with a ``core`` handler attached (a run) does NOT reach the sink;
+    (c) a library with a handler of its OWN (pytensor adds one at import) is emitted once, by that
+        handler, and not a second time by the sink -- while a ``NullHandler``, which emits nothing,
+        does not count, so a library that added only that (pint does) still reaches the sink once;
+    (d) a library's ``log.exception`` carries its traceback, with ``library:`` on the first line only.
+    """
+    import logging
+
+    from core import logging_root, runs
+
+    root = logging.getLogger()
+    pytest_handlers = root.handlers[:]
+    seen = []
+    own_seen = []
+
+    class _Own(logging.Handler):
+        def emit(self, record):
+            own_seen.append(record.getMessage())
+
+    chatty = logging.getLogger("a_chatty_library")          # installs its own, as pytensor does
+    polite = logging.getLogger("a_polite_library")          # installs a NullHandler, as pint does
+    lib = logging.getLogger("a_library")
+    chatty_own, polite_null = _Own(), logging.NullHandler()
+    core_own = _Own()
+    try:
+        root.handlers[:] = []
+        chatty.addHandler(chatty_own)
+        polite.addHandler(polite_null)
+        logging_root.install(seen.append)
+        assert runs.LOGGER.handlers == [], \
+            f"a core handler is attached before the between-runs case: {runs.LOGGER.handlers}"
+
+        # (a) no core handler: the record reaches the sink, in PRISM's own shape
+        logging.getLogger("core.probe").warning("the pipeline's own voice, between runs")
+        logging.getLogger("core.probe").info("and its information record")
+        assert [logging_root.render(r) for r in seen] == [
+            "warning: the pipeline's own voice, between runs", "and its information record"], seen
+
+        # (b) a core handler attached: it emitted the record, so the sink stays silent
+        seen.clear()
+        runs.LOGGER.addHandler(core_own)
+        logging.getLogger("core.probe").warning("the pipeline's own voice, during a run")
+        runs.LOGGER.removeHandler(core_own)
+        assert seen == [], [r.getMessage() for r in seen]
+        assert own_seen == ["the pipeline's own voice, during a run"], own_seen
+
+        # (c) a library's own handler emitted it; a NullHandler emitted nothing
+        seen.clear()
+        own_seen.clear()
+        chatty.warning("printed by its own handler")
+        polite.warning("printed by nobody but the sink")
+        assert own_seen == ["printed by its own handler"], own_seen
+        assert [logging_root.render(r) for r in seen] == \
+            ["library: a_polite_library: printed by nobody but the sink"], seen
+
+        # (d) a traceback survives, prefixed on its first line only
+        seen.clear()
+        try:
+            raise ValueError("the library's own failure")
+        except ValueError:
+            lib.exception("it failed")
+        assert len(seen) == 1, seen
+        text = logging_root.render(seen[0])
+        lines = text.splitlines()
+        assert lines[0] == "library: a_library: it failed", lines
+        assert lines[1] == "Traceback (most recent call last):", lines
+        assert lines[-1] == "ValueError: the library's own failure", lines
+        assert [ln for ln in lines if ln.startswith("library:")] == lines[:1], text
+    finally:
+        logging_root.remove()
+        runs.LOGGER.removeHandler(core_own)
+        chatty.removeHandler(chatty_own)
+        polite.removeHandler(polite_null)
+        root.handlers[:] = pytest_handlers
 
 
 def test_logging_root_imports_only_the_standard_librarys_logging():

@@ -35,7 +35,9 @@ def _install_excepthook(parent_getter):
 
 
 def _library_record_sink(record) -> None:
-    """One record from a logger OUTSIDE the ``core`` tree, on the console, named by its logger (B14).
+    """One record no handler below the root has emitted, on the console, as ``logging_root.render``
+    writes it (B14): a library's named by its logger, a ``core`` record -- which reaches here only
+    when no ``core`` handler is attached, i.e. between runs -- in the tool's own console shape.
 
     The stream is resolved AT EMIT TIME, never at construction, and that is the fix rather than the
     bug: what broke was ``logging.basicConfig``'s handler binding ``sys.stderr`` at construction and
@@ -50,17 +52,9 @@ def _library_record_sink(record) -> None:
 
     The level split exists because ``_SignalStream`` on err is hard-wired to the pane's ``warning``
     level: routing an information record through stderr would put a warning triangle on it.
-
-    Named by its logger, EXCEPT for ``root``. The trigger this handler exists for is
-    ``logging.warning`` -- the module-level function, whose logger is the root logger -- so
-    ``record.name`` would read ``root`` and name nothing. For that one name the prefix falls back to
-    ``record.module``, the basename of the file that logged, and sbi's leakage warning therefore reads
-    ``library: rejection:`` (sbi/samplers/rejection/rejection.py). Walkthrough row D15 expects that
-    module name.
     """
-    who = record.name if record.name != "root" else record.module
     stream = sys.stderr if record.levelno >= logging.WARNING else sys.stdout
-    stream.write(f"library: {who}: {record.getMessage()}\n")
+    stream.write(logging_root.render(record) + "\n")
     stream.flush()
 
 

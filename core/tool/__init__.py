@@ -8,6 +8,7 @@ the four PRISM does read are named in the epilog below and nowhere else.
 to catch a handler that swaps the process default store and never puts it back.
 """
 import argparse
+import logging
 import sys
 import tempfile
 import traceback
@@ -79,22 +80,20 @@ def _remove_if_still_empty(root: Path) -> None:
 
 
 def _library_record_sink(record) -> None:
-    """One record from a logger OUTSIDE the ``core`` tree, on STDERR, named by its logger (B14).
+    """One record no handler below the root has emitted, as ``logging_root.render`` writes it (B14).
 
-    Everything, whatever its level, and never stdout: this tool's stdout carries results a script
-    reads, so a library's chatter may not land there. Resolved AT EMIT TIME for the reason
-    logging_console.py gives -- capsys swaps the streams per test, and a handler holding the stream it
-    was built with writes into a buffer that is nobody's.
-
-    Named by its logger, EXCEPT for ``root``: the trigger this handler exists for is
-    ``logging.warning``, the module-level function, whose logger is the root logger, so
-    ``record.name`` would read ``root`` and name nothing. There the prefix falls back to
-    ``record.module``, the basename of the file that logged -- ``library: rejection:`` under sbi
-    (sbi/samplers/rejection/rejection.py), which is what walkthrough row D15 expects.
+    A LIBRARY's record goes to STDERR, whatever its level, and never stdout: this tool's stdout
+    carries results a script reads, so a library's chatter may not land there. A ``core`` record
+    reaches here only when the console handlers are not attached (``main`` attaches them for the
+    handler call alone) and is routed exactly as they would route it: information to stdout,
+    warning and above to stderr. Resolved AT EMIT TIME for the reason logging_console.py gives --
+    capsys swaps the streams per test, and a handler holding the stream it was built with writes
+    into a buffer that is nobody's.
     """
-    who = record.name if record.name != "root" else record.module
-    sys.stderr.write(f"library: {who}: {record.getMessage()}\n")
-    sys.stderr.flush()
+    to_err = record.levelno >= logging.WARNING or not logging_root.is_prism(record)
+    stream = sys.stderr if to_err else sys.stdout
+    stream.write(logging_root.render(record) + "\n")
+    stream.flush()
 
 
 def main(argv=None) -> int:
