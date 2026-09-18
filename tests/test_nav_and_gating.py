@@ -2898,3 +2898,59 @@ def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled
         assert fdt.tabText(1) == "Sweep study cross-validation"
     finally:
         orphan._set_busy(False)
+
+
+def test_the_config_tab_says_what_the_session_holds():
+    """B12's first half (spec §6.2). ONE describer, ``InferenceScreen.session_contents()``, answers
+    "what would a new draft throw away" -- in pipeline order, in plain phrases with no code
+    identifiers in them -- and the Config tab shows it as a permanent read-only line refreshed from
+    ``refresh_local_gates``, which ``refresh_gates`` already calls on every panel after every stage.
+
+    THE DRAFT IS NOT IN THE LIST, deliberately: ``new_draft`` replaces it and replacing it is the
+    whole point of pressing Apply, so naming it would question every model change made on purpose.
+    What Apply discards that nobody asked it to is the work DOWNSTREAM of the draft.
+
+    The last leg is the one that keeps the line safe: the gate tests put a bare ``object()`` on
+    ``cfg``, ``inf_prior`` and ``posterior``, and a derived status line must never be able to raise
+    into ``refresh_gates()`` and take the tab down with it (the rule ``_sync_budget`` states).
+    """
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    cfgp = inf.config_panel
+
+    # (a) nothing held, and a DRAFT ALONE is still nothing held
+    assert inf.session_contents() == []
+    inf.session = SbiSession(draft=object())
+    inf.refresh_gates()
+    assert inf.session_contents() == [], "replacing a draft is what Apply is for; it is not a loss"
+    assert "nothing yet" in cfgp.session_line.text(), cfgp.session_line.text()
+
+    # (b) one phrase per stage, in pipeline order, named the way the panels' own log lines name them
+    inf.session = SbiSession(draft=object(), cfg=_spont_cfg(),
+                             inf_prior=_prior_stub(id_="20260914T100000", name="p_master"),
+                             posterior=_posterior_stub(id_="20260915T090000"))
+    inf.session.observation = type("Obs", (), {"id": "20260916T120000", "name": "obs1"})()
+    held = inf.session_contents()
+    assert held == ["the built config for NADROWSKI, spontaneous observations",
+                    "the prior 'p_master'",
+                    "the posterior (unnamed, id 20260915T090000)",
+                    "the observation 'obs1'"], held
+
+    # (c) the line names every phrase and says the artifacts survive on disk
+    inf.refresh_gates()
+    line = cfgp.session_line.text()
+    for phrase in held:
+        assert phrase in line, (phrase, line)
+    assert "stays on disk" in line, line
+
+    # (d) a stand-in carrying neither a name nor an id: described, never raised
+    inf.session = SbiSession(cfg=object(), inf_prior=object(), posterior=object())
+    inf.refresh_gates()
+    assert inf.session_contents() == ["the built config for an unnamed model",
+                                      "the prior (unidentified)",
+                                      "the posterior (unidentified)"], inf.session_contents()
+    assert "(unidentified)" in cfgp.session_line.text(), cfgp.session_line.text()

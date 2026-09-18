@@ -20,6 +20,22 @@ from ..widgets.anim import crossfade_tab
 from .nav_shell import mark_tabs
 
 
+def _held_ref(wrapper) -> str:
+    """How ``session_contents`` names one held artifact: its name in quotes, or ``(unnamed, id
+    <id>)`` -- the wording the Prior, Posterior and Infer tabs' own "ready" lines already use, so the
+    log and the line agree.
+
+    ``(unidentified)`` for a stand-in carrying neither. That branch is not defensive padding: the
+    gate tests put a bare ``object()`` on every session field, and everything this function feeds is
+    a derived status line, which may never raise.
+    """
+    name = getattr(wrapper, "name", "") or ""
+    if name:
+        return f"'{name}'"
+    ref = getattr(wrapper, "id", "") or ""
+    return f"(unnamed, id {ref})" if ref else "(unidentified)"
+
+
 class InferenceScreen(QWidget):
     """The Parameter Inference section: six stage tabs over one shared SbiSession.
 
@@ -88,6 +104,40 @@ class InferenceScreen(QWidget):
     def panels(self):
         return [self.config_panel, self.prior_panel, self.posterior_panel,
                 self.validate_panel, self.infer_panel, self.tsnpe_panel]
+
+    def session_contents(self) -> list[str]:
+        """Plain phrases for what the session holds -- the config, the prior, the posterior and the
+        observation -- in pipeline order; empty when a ``new_draft`` would lose nothing.
+
+        THE DRAFT IS DELIBERATELY NOT IN THE LIST. ``new_draft`` replaces the draft, and replacing it
+        is the entire point of pressing Apply: a list that named it would make every deliberate model
+        change look like a loss, and the guard built on this list (B12) would then interrupt every
+        one of them. What Apply discards that nobody asked it to discard is the work DOWNSTREAM of
+        the draft -- the built config, the prior, the posterior and the recorded observation -- which
+        is exactly ``SbiSession.reset_downstream``'s subject and exactly this list.
+
+        NOTHING HERE MAY RAISE. Every field is read through ``getattr``: the gate tests put a bare
+        ``object()`` on ``cfg``, ``inf_prior`` and ``posterior``, and this feeds a derived status line
+        on the Config tab, which must never be able to take a tab down through ``refresh_gates()``
+        (the rule ``_TrainingBudgetMixin._sync_budget`` states for its own three lines).
+
+        The phrases carry no code identifiers and name no control: the Config tab's line and the
+        confirmation both quote them verbatim, and each front end says where to look for itself.
+        """
+        s = self.session
+        held: list[str] = []
+        if s.cfg is not None:
+            model = getattr(s.cfg, "model", "") or "an unnamed model"
+            mode = getattr(s.cfg, "observation_mode", "") or ""
+            held.append(f"the built config for {model}"
+                        + (f", {mode} observations" if mode else ""))
+        if s.inf_prior is not None:
+            held.append(f"the prior {_held_ref(s.inf_prior)}")
+        if s.posterior is not None:
+            held.append(f"the posterior {_held_ref(s.posterior)}")
+        if s.observation is not None:
+            held.append(f"the observation {_held_ref(s.observation)}")
+        return held
 
     def set_running_tab(self, index: "int | None") -> None:
         """Mark the tab at ``index`` as the one with a live run; None clears every mark (B11). Tab

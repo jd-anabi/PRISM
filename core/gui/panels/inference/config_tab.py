@@ -88,6 +88,14 @@ class ConfigPanel(_StagePanel):
         form.addRow(with_badge(self.rot_check, HELP["reparam_rotate"]))
 
         form.addRow(self.btn_config)
+        # WHAT APPLY WOULD REPLACE, stated permanently and not only in the dialog (B12). The
+        # confirmation Apply raises is answered and gone; this line is what lets someone see, before
+        # they reach for the button, that this session is holding a prior and a posterior. Same
+        # word-wrapped PlainText label as every other derived line in this section, for the same
+        # reason: it carries a generated string that can be long, and an unwrapped label widens the
+        # whole controls column.
+        self.session_line = _TrainingBudgetMixin._derived_label()
+        form.addRow("", self.session_line)
         self.controls_layout.addWidget(box)
 
         # -- hardware: not a science knob. It changes how a batch is PLANNED, never what is trained,
@@ -110,6 +118,10 @@ class ConfigPanel(_StagePanel):
 
         self.restore_settings(settings.settings())
         self._sync_chi_enabled()
+        # LAST: refresh_gates draws this on every stage afterwards, but the first paint happens
+        # before InferenceScreen.__init__ reaches its own refresh_gates() call, and an empty label
+        # on launch reads as a missing feature rather than an empty session.
+        self._sync_session_line()
 
     def _apply_vram_ceiling(self):
         """Push the field into ``config.SIM_VRAM_CEILING_GIB`` and say what will ACTUALLY take effect.
@@ -294,6 +306,39 @@ class ConfigPanel(_StagePanel):
                 "Note: user-model inference runs the full pipeline (spontaneous dynamics only), but "
                 "calibration is NOT pre-tuned — check the Validate tab's SBC/TARP results for this model.",
                 "warning")
+
+    def _sync_session_line(self) -> None:
+        """The one derived line on this tab, and the only one about the SESSION rather than a box.
+
+        Refreshed from ``refresh_local_gates``, which ``InferenceScreen.refresh_gates`` calls on every
+        panel after every stage, so the line can never be behind the session it describes.
+
+        WRAPPED, like every derived line in this section: a status line must never be able to raise
+        into ``refresh_gates()``. Two real ways it could. This panel is constructed with
+        ``screen=None`` by tests/test_settings_persistence.py, so there is no session to read at all;
+        and ``BasePanel._instances`` is a process-wide WeakSet, so ``set_controls_enabled`` can reach
+        a panel whose screen's C++ object has already gone.
+        """
+        screen = self._screen
+        try:
+            held = [] if screen is None else screen.session_contents()
+        except Exception as e:                  # noqa: BLE001 -- never break the tab over a label
+            self.session_line.setText(f"Session summary unavailable: {type(e).__name__}: {e}")
+            return
+        if not held:
+            self.session_line.setText(
+                "This session holds nothing yet, so applying a model discards nothing.")
+            return
+        self.session_line.setText(
+            "This session holds " + "; ".join(held)
+            + ".\nApplying a model starts a new session and releases them. Each one stays on disk "
+              "and can be selected again in the pickers.")
+
+    def refresh_local_gates(self):
+        """This tab's derived line. The other five tabs gate BUTTONS here; Apply is gated by the
+        model combo instead (``_on_model_changed`` disables it for an SBI-ineligible user model), so
+        the session line is the only thing left to re-derive."""
+        self._sync_session_line()
 
     def save_settings(self, qs):
         """The SELECTIONS only (V5). The chi probe count, slots and lock-in ceiling are science knobs
