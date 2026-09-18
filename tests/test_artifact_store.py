@@ -3788,3 +3788,138 @@ def test_sweep_incomplete_reports_a_directory_the_removal_never_actually_touched
     assert sorted(removed) == [("prior", names[0]), ("prior", names[2])]
     assert failed == [("prior", names[1], f"OSError: {survivor} was not removed")]
     assert survivor.is_dir(), "the one the fake rmtree never actually touched is still there"
+
+
+# ── The report renderers (piece 4, §5 / B10) ─────────────────────────────────────────────────────
+
+
+def _chain(store, cfg) -> dict:
+    """prior -> simulation cache -> posterior -> observation -> inference, wired through ``parents``.
+
+    The cheapest thing the REAL writers accept: one 2-component GMM for the prior (so one step has
+    input files, hashes, a payload digest and a fingerprint), and `_make`'s minimal bodies for the
+    rest. Nothing here simulates, trains or infers -- the renderers are pure functions of manifests,
+    so a chain built by hand exercises every branch a five-hour pipeline would.
+    """
+    from core.SBI.training_checkpoint import identity_digest
+    # ``store``'s real clock has one-second resolution and ``_new_id`` only dedupes WITHIN a kind
+    # (test_same_second_ids_get_a_suffix), so four artifacts of four DIFFERENT kinds created back to
+    # back -- as this helper does, on purpose, to stay fast -- can land on the identical id string
+    # by pure timing. That collision is invisible to the store (each kind is its own directory) but
+    # would make this test's own "the prior appears once" check count an unrelated sibling that
+    # happens to share the prior's stamp. Pin the clock and step it a full second between artifacts
+    # so the four ids this chain hands out are always distinct, the same way
+    # ``test_unnamed_artifacts_group_and_age_out`` pins it above. 2030, not 2026-01-01, so it cannot
+    # collide with the orphan test's hardcoded missing-parent id "20260101T000000" right below.
+    real_clock = store._clock
+    tick = {"now": datetime(2030, 1, 1, tzinfo=timezone.utc)}
+    store._clock = lambda: tick["now"]
+    try:
+        p = _prior_artifact(store, cfg, name="chain_prior")
+        fp = store.get("prior", p.id).fingerprints["gmm"]
+        ident = {"format": "training-rows/2", "model": cfg.model, "prior_fingerprint": fp,
+                 "n_runs": 2, "run_size": 4, "truncation": None}
+        sim = st.write_simulation_manifest(store.kind_dir("simulation") / identity_digest(ident), ident,
+                                           parents={"prior": p.id}, batches_done=1, rows=[4])
+        tick["now"] += timedelta(seconds=1)
+        post = _make(store, "posterior", name="chain_post",
+                     body={"mode": "chi", "conditioning": {"width": 50}, "transform": {}, "amortized": True,
+                           "truncation": None, "training": {}},
+                     parents={"prior": p.id, "simulation": sim.id})
+        tick["now"] += timedelta(seconds=1)
+        obs = _make(store, "observation", name="chain_obs",
+                    body={"mode": "chi", "conditioning": {"width": 50}, "x_obs_digest": "0" * 16,
+                          "T_obs_cell": 1.0, "n_obs": 10, "forcing_vals": {}, "chi_obs_freqs": None,
+                          "source": {"kind": "simulated"}})
+        tick["now"] += timedelta(seconds=1)
+        inf = _make(store, "inference", name="chain_inf",
+                    body={"results": {"n_samples": 5, "accepted": ["other_observation"]}},
+                    parents={"posterior": post.id, "observation": obs.id})
+    finally:
+        store._clock = real_clock
+    return {"prior": p.id, "simulation": sim.id, "posterior": post.id, "observation": obs.id,
+            "inference": inf.id}
+
+
+def test_render_manifest_names_every_fact_the_manifest_holds(store):
+    """§5 / B10: the manifest as text -- schema, id, name, created, note, the git revision and the
+    environment, the input files WITH their hashes, the parents, the payloads with their digests, the
+    figures and the body's knobs -- laid out deterministically, so the window's Save and the tool's
+    ``artifacts show`` print the same bytes.
+
+    Sorted where order is not meaning: ``to_json_text`` writes the file with ``sort_keys=True``, so a
+    manifest read back from disk is already in that order, and sorting here is what makes a manifest
+    built in memory print identically to the same manifest read back.
+    """
+    from core.artifacts import render_manifest
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="rep_prior")
+    m = store.get("prior", p.id)
+    text = render_manifest(m)
+    assert text.startswith(f"prior rep_prior  [{p.id}]\n"), text[:200]
+    assert text.endswith("\n"), "a saved report ends with a newline"
+    for line in (f"id:      {p.id}", "name:    rep_prior", f"created: {m.created}", "note:    (none)"):
+        assert f"\n{line}\n" in text, line
+    # the input files WITH their hashes, relative to Resources/ exactly as file_ref records them
+    assert f"\n  bounds: Bounds/nadrowski/master.txt  sha256 {m.inputs['bounds']['sha256']}\n" in text
+    assert "\n  cell: (none)\n" in text, "a bounds-built config has no cell, and the report says so"
+    # the payload with its digest, and the GMM fingerprint
+    assert f"\n  prior.pt  sha256 {m.payloads['prior.pt']}\n" in text
+    assert f"\n  gmm: {m.fingerprints['gmm']}\n" in text
+    assert "\nFigures\n  (none)\n" in text, "a prior written without a figure sink has none"
+    assert "\nParents\n  (none)\n" in text
+    # the knobs, and the body rendered as a sorted tree
+    assert text.count("model: NADROWSKI") == 2, "once under Inputs, once under Knobs"
+    assert "\n  gmm:\n    box:\n      log_mask: [" in text, text
+    assert "\n    n_components: 2\n" in text and "\n  sweep: {}\n" in text
+    # a long sequence is summarised, never inlined: a 13x13 rotation would bury every knob, and its
+    # digest is printed two sections above
+    from core.artifacts.report import _fmt_list
+    assert _fmt_list([[0.0] * 13] * 13) == "[13 x 13 numbers]"
+    assert _fmt_list(list(range(20))) == "[0, 1, 2, ... (20 entries)]"
+    assert _fmt_list([]) == "[]" and _fmt_list([True, None]) == "[true, (none)]"
+    assert render_manifest(m) == render_manifest(store.get("prior", p.id)), \
+        "two calls, identical bytes -- and an in-memory manifest prints as a re-read one"
+
+
+def test_render_lineage_walks_the_chain_and_prints_a_missing_parent(store):
+    """§5: the artifact, then its parents transitively through ``_PARENT_KEYS``, each artifact before
+    its own parents so the chain reads newest first and oldest last. Each step names the kind, the
+    name, the id, the creation time, the input files with their hashes, the knobs that decided it and
+    any Accept it recorded.
+
+    A parent a manifest names but the store does not hold prints as MISSING with its id and with who
+    named it: dropping it would make a broken chain read as a complete one, which is the one thing a
+    provenance report must never do.
+    """
+    from core.artifacts import render_lineage
+    cfg = _nad_cfg()
+    ids = _chain(store, cfg)
+    text = render_lineage(store, "inference", ids["inference"])
+    assert text.startswith(f"Lineage of inference chain_inf [{ids['inference']}]\n")
+    steps = [ln for ln in text.splitlines() if ln[:1].isdigit()]
+    assert [ln.split(". ", 1)[1].split(" ", 1)[0] for ln in steps] == [
+        "inference", "observation", "posterior", "prior", "simulation"], steps
+    # the prior is named by BOTH the posterior and the cache and appears ONCE (the visited set)
+    assert text.count(f"[{ids['prior']}]  created ") == 1
+    assert f"parents: prior={ids['prior']}, simulation={ids['simulation']}" in text
+    # the step's own facts: its inputs with their hashes, its knobs, its Accept
+    assert "    bounds: Bounds/nadrowski/master.txt  sha256 " in text
+    assert "model=NADROWSKI" in text, "the knobs the prior ran under"
+    assert "\n  accepted: other_observation\n" in text, "the escape hatch the inference recorded"
+    assert "\n  knobs:\n    (none)\n" in text, "a manifest written with no config says so"
+    assert text.endswith("\n") and render_lineage(store, "inference", ids["inference"]) == text
+
+    # a parent nothing holds: MISSING, with its id and who named it
+    orphan = _make(store, "posterior", name="orphan",
+                   body={"mode": "chi", "conditioning": {"width": 50}, "transform": {}, "amortized": True,
+                         "truncation": None, "training": {}},
+                   parents={"prior": "20260101T000000"})
+    text = render_lineage(store, "posterior", orphan.id)
+    assert "2. MISSING prior [20260101T000000]" in text, text
+    assert "named by posterior 'orphan' as 'prior'" in text
+    assert str(store.kind_dir("prior")) in text
+
+    # an unknown ref is the store's own refusal, unchanged
+    with pytest.raises(st.StoreError, match="no complete posterior"):
+        render_lineage(store, "posterior", "nope")
