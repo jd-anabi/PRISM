@@ -1026,3 +1026,79 @@ def test_a_typed_note_survives_a_re_list_that_lands_on_the_same_artifact(store):
     scr._set_note()
     assert store.get("prior", a.id).note == "trimmed on the way in"
     assert scr.note_edit.text() == "trimmed on the way in", scr.note_edit.text()
+
+
+def test_the_lineage_report_writes_exactly_what_render_lineage_returns(store, monkeypatch, tmp_path):
+    """B10 + §5: ONE renderer, and the GUI adds nothing to it -- no header, no banner, no trailing
+    newline. Asserted against render_lineage itself rather than against the tool's `artifacts
+    summary`, so the two front ends cannot drift: whichever wrote the file, a reviewer gets the same
+    bytes. UTF-8 with LF endings, so 'the same bytes' is true on this platform too."""
+    from PySide6.QtWidgets import QFileDialog
+    from core.artifacts import render_lineage
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    ancestor = _prior_artifact(store, cfg, name="ancestor")
+    with store.create("inference", cfg, name="descendant") as w:
+        w.parents = {"prior": ancestor.id}
+        w.body = {"results": {"n_samples": 8}}
+    scr = artifact_screen(store)
+    _show_kind(scr, "inference")
+    _select_ref(scr.table, w.id)
+    out = tmp_path / "lineage.txt"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(out), ""))
+    scr._lineage_report()
+    assert out.read_bytes() == render_lineage(store, "inference", w.id).encode("utf-8")
+    text = out.read_text(encoding="utf-8")
+    assert "ancestor" in text and ancestor.id in text, "the chain must reach the parent"
+    assert SHOWN == [], "writing a report asks nothing"
+    assert str(out) in scr.status.text(), scr.status.text()
+    # It is a FILE and never an eighth kind: the store's seven directories gained nothing.
+    assert [s.id for s in store.list("inference")] == [w.id]
+    assert not (store.root / "reports").exists()
+
+
+def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatch, tmp_path):
+    """Three legs of one rule. A report is a READ, so a live run does not refuse it (B6) -- unlike
+    Task 11's note, delete and sweep. A leftover directory has no manifest and so no lineage. And a
+    name the operator typed without an extension gets .txt rather than a file nothing opens."""
+    from PySide6.QtWidgets import QFileDialog
+    from core.artifacts import render_lineage
+    from core.gui.panels.base_panel import BasePanel
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="ancestor")
+    leftover = store.kind_dir("prior") / "_unnamed__20260917T090000"
+    leftover.mkdir(parents=True, exist_ok=True)
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _select_ref(scr.table, p.id)
+    # A directory of its own: tmp_path also holds this test's prism.ini (_isolated_settings) and the
+    # store fixture's Artifacts/, so it is not a place to count files in.
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    bare = out_dir / "chain"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(bare), ""))
+    BasePanel._running = True
+    try:
+        scr._lineage_report()
+    finally:
+        BasePanel._running = False
+    written = bare.with_suffix(".txt")
+    assert written.read_bytes() == render_lineage(store, "prior", p.id).encode("utf-8")
+    assert not bare.exists(), "an extension-less name must gain .txt, not be written as given"
+    # a leftover directory: no manifest, no lineage, and no file
+    scr._set_status("")
+    _select_ref(scr.table, leftover.name)
+    scr._lineage_report()
+    assert "no usable manifest" in scr.status.text(), scr.status.text()
+    assert "lineage" in scr.status.text(), scr.status.text()
+    # nothing selected at all: the fielded refusal, and still no file
+    scr.table.clearSelection()
+    scr.table.setCurrentItem(None)
+    scr._lineage_report()
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs"
+    assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
+    assert sorted(q.name for q in out_dir.iterdir()) == ["chain.txt"]

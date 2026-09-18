@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QGroupBox, QHBoxLayout, Q
                                QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QVBoxLayout,
                                QWidget)
 
-from core.artifacts import render_manifest
+from core.artifacts import render_lineage, render_manifest
 from core.artifacts.store import KIND_DIRS
 from core.refusals import NOTE_MAX_CHARS, Refusal, require_note
 
@@ -168,6 +168,12 @@ class ArtifactScreen(QWidget):
         self.detail_actions = QHBoxLayout()
         self.detail_actions.addStretch(1)
         self.detail_actions.addWidget(self.btn_save)
+
+        self.btn_lineage = QPushButton("Lineage report…")
+        self.btn_lineage.setToolTip("Write this artifact and its parents, back through the chain, "
+                                    "to a text file")
+        self.btn_lineage.clicked.connect(self._lineage_report)
+        self.detail_actions.addWidget(self.btn_lineage)
 
         detail_side = QWidget()
         detail_layout = QVBoxLayout(detail_side)
@@ -352,6 +358,47 @@ class ArtifactScreen(QWidget):
             self._set_status(f"Could not write {path}: {e}", error=True)
             return
         self._set_status(f"Saved what is shown to {Path(path).name}.")
+
+    def _lineage_report(self) -> None:
+        """B10: write the selected artifact's lineage to a file the operator names.
+
+        A report DESCRIBES the store and is never an eighth kind in it (§5): nothing here writes
+        into the artifact root -- ``render_lineage`` reads manifests and this writes its text
+        wherever the operator says. UTF-8 with LF endings, which is byte for byte what
+        ``python -m core artifacts summary --out`` writes, so the document cannot say which front end
+        made it.
+
+        NOT guarded by ``BasePanel._running``: this is a read, and reading is never refused (B6).
+        """
+        s = self.table.current_summary()
+        if s is None:
+            show_refusal(self, Refusal("No artifact is selected.", field="artifact"))
+            return
+        if not s.complete:
+            # A leftover directory has no manifest, so there is no chain to walk -- and unlike the
+            # note and the delete, this is not a rule anybody broke, so it goes on the status line.
+            self._set_status(f"{s.dir_name} has no usable manifest ({s.reason}), so it has no "
+                             f"lineage to report.", error=True)
+            return
+        try:
+            text = render_lineage(self._resolved_store(), s.kind, s.id)
+        except Refusal as exc:               # a parent that cannot be read at all
+            show_refusal(self, exc)
+            self._set_status(exc.message, error=True)
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Save lineage report",
+                                              f"{s.kind}-{s.name or s.id}-lineage.txt",
+                                              "Text file (*.txt)")
+        if not path:
+            return
+        if not path.lower().endswith(".txt"):
+            path += ".txt"                   # the courtesy simulate_panel._save_video does for .mp4
+        try:
+            Path(path).write_text(text, encoding="utf-8", newline="\n")
+        except OSError as e:
+            self._set_status(f"Could not write the lineage report: {e}", error=True)
+            return
+        self._set_status(f"Wrote the lineage report for {s.kind} {s.label} to {path}.")
 
     # ── the actions (§3.4; B5, B6, B7, B8) ────────────────────────────────────
     def _build_actions(self) -> QWidget:
