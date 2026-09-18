@@ -589,3 +589,67 @@ def test_list_dir_returns_and_the_picker_no_longer_swaps_stdout(tmp_path, capsys
     assert marker.getvalue() == ""
     src = code_only(ArtifactPicker.refresh)
     assert "redirect_stdout" not in src and "StringIO" not in src
+
+
+def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
+    """One yellow box, two callers. BasePanel._refusal keeps its signature and its log-pane line, but
+    the box itself is core/gui/widgets/refusal_box.show_refusal(parent, exc) -- so the Artifacts
+    screen, which is a plain QWidget and NOT a BasePanel on purpose (piece 4, B1: a BasePanel enrols
+    in _instances, and a run in any panel would then grey out the browser while you were reading a
+    log), shows the same title, icon, text, fix sentence and single OK button instead of a lookalike
+    that drifts from this one.
+
+    Two legs, because "the same box" and "the same code" are different claims. The first compares the
+    two boxes field by field off the conftest's SHOWN record. The second pins the DELEGATION: a
+    copy-pasted twin in base_panel.py would pass the first leg today and rot the first time either
+    copy is edited."""
+    from PySide6.QtWidgets import QMessageBox, QWidget
+    from core.gui.panels import base_panel as bp
+    from core.gui.widgets.refusal_box import show_refusal
+    from core.refusals import Refusal
+    from tests._fixtures import SHOWN, PaneCapture, qt_app
+
+    qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    pane = PaneCapture(panel)
+    holder = QWidget()                      # a parent that is NOT a panel; kept bound for its lifetime
+    fix = "Set it in the 'T_obs (s)' box on the Infer tab."
+    exc = Refusal("The observation length, in seconds, is blank (default none: it must be given).",
+                  field="t_obs")
+
+    SHOWN.clear()
+    panel._refusal(exc)
+    show_refusal(holder, exc)
+    assert len(SHOWN) == 2, [b.text() for b in SHOWN]
+    for who, box in (("panel", SHOWN[0]), ("widget", SHOWN[1])):
+        assert isinstance(box, QMessageBox), who
+        assert box.windowTitle() == "Check your inputs", who
+        assert box.icon() == QMessageBox.Warning, who
+        assert box.text() == exc.message, who
+        assert box.informativeText() == fix, who
+        assert box.detailedText() == "", f"{who}: a refusal carries no traceback"
+        assert box.standardButtons() == QMessageBox.Ok, who
+        assert box.buttonRole(box.defaultButton()) == QMessageBox.AcceptRole, f"{who}: OK is default"
+    assert pane.lines[-1] == ("warning", f"{exc.message} {fix}")
+
+    # field=None through both callers: no fix sentence, so no informative line at all
+    SHOWN.clear()
+    bare = Refusal("resume='require' but there is no resumable cache at x.")
+    panel._refusal(bare)
+    show_refusal(holder, bare)
+    assert [b.informativeText() for b in SHOWN] == ["", ""]
+    assert [b.text() for b in SHOWN] == [bare.message, bare.message]
+
+    # the delegation itself: the panel must CALL the shared helper and keep no box of its own
+    calls = []
+    monkeypatch.setattr(bp, "show_refusal", lambda parent, e: calls.append((parent, e)))
+    SHOWN.clear()
+    panel._refusal(exc)
+    assert calls == [(panel, exc)], "BasePanel._refusal no longer routes through refusal_box"
+    assert SHOWN == [], "the panel built a box of its own instead of delegating"
+    assert pane.lines[-1] == ("warning", f"{exc.message} {fix}"), \
+        "the log-pane line is the panel's own (a plain QWidget has no pane) and must stay"

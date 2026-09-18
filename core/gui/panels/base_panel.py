@@ -17,6 +17,7 @@ from ..streams import CancelToken
 from ..widgets.figure_stack import FigureStack
 from ..widgets.log_pane import LogPane
 from ..widgets.progress_pane import ProgressPane
+from ..widgets.refusal_box import show_refusal
 from ..worker import Worker
 
 
@@ -393,18 +394,15 @@ class BasePanel(QWidget):
         here is a crash, and a traceback would only say so louder. A bug keeps the red box
         (_on_error). The same sentence goes to the log pane at warning, so it outlives the click that
         dismisses the box.
+
+        THE BOX ITSELF lives in ../widgets/refusal_box.py, shared with the Artifacts screen (piece 4,
+        design §3.1), which shows the same refusals and is deliberately not a BasePanel. What stays
+        here is the log-pane line, because only a panel has a pane -- the browser records the sentence
+        on its own status line instead.
         """
         fix = gui_fields.fix_sentence(exc.field)
         self.log_pane.append_line(f"{exc.message} {fix}".rstrip(), "warning")
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Check your inputs")
-        box.setText(exc.message)
-        if fix:
-            box.setInformativeText(fix)
-        box.setStandardButtons(QMessageBox.Ok)
-        box.setDefaultButton(QMessageBox.Ok)          # one button, so the safe default is it
-        box.exec()
+        show_refusal(self, exc)
 
     def _on_error(self, exc_or_message, tb: str) -> None:
         """Show a failure. A Refusal goes to the yellow box (_refusal); anything else is a bug and
