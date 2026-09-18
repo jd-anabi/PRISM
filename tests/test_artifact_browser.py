@@ -1102,3 +1102,40 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
     assert box.windowTitle() == "Check your inputs"
     assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
     assert sorted(q.name for q in out_dir.iterdir()) == ["chain.txt"]
+
+
+def test_the_lineage_button_is_disabled_without_a_complete_row(store):
+    """Fix round 1: btn_lineage must track the same condition its own handler guards on, so the
+    button and the guard cannot disagree -- unlike btn_save, which is enabled off the pane's TEXT
+    (something an incomplete row also has, its reason and its path), a lineage walk needs a
+    resolvable artifact to start from. So this follows btn_delete/note_edit's rule (`live`) rather
+    than btn_save's: disabled with nothing selected, disabled on a leftover, enabled on a complete
+    row."""
+    from tests._fixtures import artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="ancestor")
+    leftover = store.kind_dir("prior") / "_unnamed__20260917T090000"
+    leftover.mkdir(parents=True, exist_ok=True)
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+
+    # (a) nothing selected -- a refresh leaves no selection (§3.5), so this is the launch state
+    assert scr.table.current_summary() is None
+    assert not scr.btn_lineage.isEnabled()
+
+    # (b) a complete row -- the button can act
+    _select_ref(scr.table, p.id)
+    assert scr.btn_lineage.isEnabled()
+
+    # (c) a leftover -- the pane still has text (its reason, its path), so Save stays enabled, but
+    # there is no artifact to walk, so lineage is disabled -- matching _lineage_report's own "has no
+    # usable manifest" branch rather than Save's rule.
+    _select_ref(scr.table, leftover.name)
+    assert scr.detail.toPlainText(), "an incomplete row still has pane text"
+    assert scr.btn_save.isEnabled(), "Save's own rule is unaffected by this fix"
+    assert not scr.btn_lineage.isEnabled()
+
+    # back to the complete row re-enables it
+    _select_ref(scr.table, p.id)
+    assert scr.btn_lineage.isEnabled()

@@ -369,6 +369,12 @@ class ArtifactScreen(QWidget):
         made it.
 
         NOT guarded by ``BasePanel._running``: this is a read, and reading is never refused (B6).
+
+        The two checks below duplicate what keeps ``btn_lineage`` disabled in ``_sync_actions``
+        (nothing selected, or a leftover with no manifest) -- deliberately: a disabled button is a
+        courtesy that stops a click before it starts, but this method is also reachable directly (a
+        test calls it, and a future caller might), and the guard is the actual rule. Do not delete
+        these as "unreachable through the button" -- the button merely tries not to make them fire.
         """
         s = self.table.current_summary()
         if s is None:
@@ -442,7 +448,12 @@ class ArtifactScreen(QWidget):
         An incomplete directory has no manifest, so there is no note to rewrite and nothing for
         ``delete`` to resolve (it goes through ``_find``, which only ever returns manifest-bearing
         entries): the sweep is what removes those, which is also why the sweep is the one action that
-        needs no selection at all.
+        needs no selection at all. The lineage report is in the same boat as delete, not as Save --
+        Save is enabled off the pane's TEXT, which an incomplete row also has (its reason, its path),
+        but a lineage walk needs a resolvable artifact to start from, so it follows ``live`` exactly
+        the way ``_lineage_report``'s own guard does: disabled with nothing selected, disabled on a
+        leftover, enabled only on a complete row. The button and the guard read the same condition, so
+        they cannot disagree.
 
         The note box is repopulated only when the selected ARTIFACT changed. Two reasons, and the
         second is the one that bites: a re-list clears the table's selection before the user picks a
@@ -460,6 +471,7 @@ class ArtifactScreen(QWidget):
         self.note_edit.setEnabled(live)
         self.btn_note.setEnabled(live)
         self.btn_delete.setEnabled(live)
+        self.btn_lineage.setEnabled(live)
         if s is None:
             return                  # the transient state a re-list passes through: keep the draft
         ref = (s.kind, s.id) if live else None
