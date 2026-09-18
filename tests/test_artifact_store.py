@@ -3390,3 +3390,34 @@ def test_a_diagnostics_row_carries_its_variant_and_no_observation_mode(store):
     assert prow.variant is None
     assert (prow.batches_done, prow.batches_planned, prow.rows) == (None, None, None), \
         "progress is the simulation cache's alone"
+
+
+def test_a_malformed_simulation_body_degrades_that_field_not_the_whole_row(store):
+    """Review finding (task 3, fix round 1): ``manifest.validate`` checks the body's KEY-SET and
+    top-level types only -- ``_check_finite`` rejects a non-finite FLOAT, nothing else -- so a
+    hand-edited or partially-written manifest can hold a non-numeric ``identity["n_runs"]`` or a
+    non-numeric element of ``rows`` and still pass validation. ``list()`` must not raise on that: one
+    corrupt cache directory would otherwise empty StorePicker.refresh's whole listing (it wraps
+    ``list()`` in a bare ``except Exception: rows = []``). The malformed field degrades to None; every
+    other field on the row -- including ``complete``, which still means "has a valid manifest" -- stays
+    intact."""
+    from core.SBI.training_checkpoint import identity_digest
+    ident = {"format": "training-rows/2", "model": "X", "n_runs": 3, "prior_fingerprint": "e" * 16,
+             "truncation": None}
+    digest = identity_digest(ident)
+    d = store.kind_dir("simulation") / digest
+    st.write_simulation_manifest(d, ident, batches_done=2)
+
+    mpath = d / "manifest.json"
+    doc = json.loads(mpath.read_text(encoding="utf-8"))
+    doc["body"]["identity"]["n_runs"] = "not-a-number"     # corrupt the PLANNED total
+    doc["body"]["rows"] = [10, "bad", 5]                   # one bad element spoils the whole tuple
+    mpath.write_text(json.dumps(doc), encoding="utf-8")
+
+    rows = store.list("simulation")                        # must not raise
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row.id, row.dir_name, row.complete, row.finished, row.batches_done) == \
+        (digest, digest, True, False, 2), "everything the corrupt fields don't touch stays intact"
+    assert row.batches_planned is None, "non-numeric n_runs degrades to None, not a raise"
+    assert row.rows is None, "one non-numeric element spoils the tuple, not a partial conversion"

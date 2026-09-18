@@ -11,6 +11,7 @@ survive an interrupted run, which a writer's remove-on-exception would delete.
 from __future__ import annotations
 
 import contextlib
+import math
 import re
 import shutil
 import time
@@ -312,6 +313,18 @@ class ArtifactWriter:
         _write_manifest(self.dir, self.manifest)
 
 
+def _as_int(v) -> "int | None":
+    """``manifest.validate`` checks body key-sets and top-level types only, never what is INSIDE a
+    count -- so a hand-edited or partially-written manifest can hold a non-numeric value where
+    ``list`` expects one. Coerce leniently and answer None rather than raise, so one corrupt
+    directory degrades a single field instead of taking the whole listing down with it."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return int(f) if math.isfinite(f) else None
+
+
 class ArtifactStore:
     def __init__(self, root, *, clock=None):
         self.root = Path(root)
@@ -361,19 +374,27 @@ class ArtifactStore:
             # one exists only for a run that reached the end. The cache is the exception -- it is
             # manifested from its first batch on and says so in its own body (piece 4, B3).
             finished = bool(body.get("complete")) if kind == "simulation" else True
+            # A manifest body is not type-validated below its key set (manifest.validate checks
+            # key-sets and top-level types only), so a hand-edited or partially-written body can hold
+            # a non-numeric count here. Coerce leniently -- a malformed FIELD degrades to None, never
+            # a raise that would take the whole listing down with it.
             per_batch = body.get("rows")
+            try:
+                row_ints = None if per_batch is None else [_as_int(r) for r in per_batch]
+            except TypeError:
+                row_ints = None
+            coerced_rows = None if row_ints is None or any(r is None for r in row_ints) else tuple(row_ints)
             # The PLANNED batch count lives only in the cache's identity -- the dict the naming digest
             # is taken over -- and a row that did not carry it could not render "3/4 batches" without
             # reading this manifest again (piece 4, B2).
             ident = (body.get("identity") or {}) if kind == "simulation" else {}
-            planned = ident.get("n_runs")
             out.append(Summary(kind, m.id, m.name, m.created, m.note, sub, True, None,
                                mode=body.get("mode"), width=(body.get("conditioning") or {}).get("width"),
                                amortized=body.get("amortized"), parents=dict(m.parents),
                                dir_name=sub.name, finished=finished,
-                               batches_done=body.get("batches_done"),
-                               batches_planned=None if planned is None else int(planned),
-                               rows=None if per_batch is None else tuple(int(r) for r in per_batch),
+                               batches_done=_as_int(body.get("batches_done")),
+                               batches_planned=_as_int(ident.get("n_runs")),
+                               rows=coerced_rows,
                                variant=body.get("variant")))
         out.sort(key=lambda s: s.created, reverse=True)       # newest first ...
         out.sort(key=lambda s: not s.complete)                # ... complete first (stable)
