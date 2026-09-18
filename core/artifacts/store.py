@@ -585,14 +585,86 @@ class ArtifactStore:
     def delete(self, kind: str, ref: str, *, force: bool = False) -> None:
         sub, m = self._find(kind, ref)
         if m is None:
-            raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}")
+            raise StoreError(f"no complete {kind} artifact named or id'd {ref!r}", field="artifact")
         deps = self.dependents(kind, m.id)
         if deps and not force:
             listed = "; ".join(f"{k} {n or '(unnamed)'} [{i}]" for k, i, n in deps)
+            # The wording does not move, ``force=True`` included: core/refusals.py's own rule is that
+            # a message names no box, tab, flag or button but MAY name a Python keyword -- "it is the
+            # core API's own word". No front end offers force (B6); the log's reader still needs the
+            # escape hatch's name. Both refusals take field="artifact": either is answered by picking
+            # a different artifact in the list (piece 4, P1/P20).
             raise StoreError(
                 f"refusing to delete {kind} {m.name or m.id}: {len(deps)} artifact(s) name it as a "
-                f"parent -- {listed}. Delete those first, or pass force=True to orphan them.")
+                f"parent -- {listed}. Delete those first, or pass force=True to orphan them.",
+                field="artifact")
         _rmtree_retry(sub)
+
+    def remove_incomplete(self, kind: str, dir_name: str) -> Path:
+        """Remove one directory under ``kind`` that has no usable manifest. Returns the path removed.
+
+        THE COMPLEMENT OF ``delete``. That one resolves through ``_find``, which only ever returns
+        manifest-bearing entries, so it can only remove a real artifact -- and therefore always runs
+        the dependency check. This one asks ``_entries`` (the same classifier ``list`` shows) and
+        removes only what came back WITHOUT a manifest. Neither call can do the other's job, which is
+        the safety property: nothing can reach a leftover folder by accident, and nothing can reach a
+        real artifact without the dependency check (piece 4, B7).
+
+        Refuses, as a StoreError with ``field="artifact"``: an unknown kind; a ``dir_name`` that is
+        not a direct child (any separator, ``..``, an absolute path); a name that is no directory; and
+        -- the one that matters -- a directory ``_entries`` classifies as COMPLETE.
+        """
+        if kind not in KIND_DIRS:
+            # Not kind_dir()'s own refusal, which carries no field key: every refusal on this path
+            # names the artifact, so a front end can say where to pick another one.
+            raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
+        d = self.kind_dir(kind)
+        if (not dir_name or dir_name in (".", "..") or "/" in dir_name or "\\" in dir_name
+                or dir_name != Path(dir_name).name):
+            # The separator checks are not redundant with the Path comparison: on POSIX a backslash
+            # is an ordinary character, so "sub\\x" would pass it.
+            raise StoreError(f"{dir_name!r} is not the name of a directory directly under {d}; a "
+                             f"leftover is removed by its own folder name, never by a path",
+                             field="artifact")
+        sub = d / dir_name
+        if not sub.is_dir():
+            raise StoreError(f"no directory named {dir_name!r} under {d}", field="artifact")
+        m = next((mm for s, mm, _ in self._entries(kind) if s.name == dir_name), None)
+        if m is not None:
+            raise StoreError(
+                f"{dir_name!r} holds a valid {kind} manifest, so it is a real artifact and not a "
+                f"leftover; remove it with delete(), which refuses it while anything depends on it",
+                field="artifact")
+        _rmtree_retry(sub)
+        return sub
+
+    def sweep_incomplete(self, kind: "str | None" = None) -> "tuple[list, list]":
+        """``(removed, failed)`` over one kind or all seven: ``removed`` is ``[(kind, dir_name)]`` and
+        ``failed`` is ``[(kind, dir_name, reason)]``.
+
+        A directory that will not delete is REPORTED, never fatal -- the sweep finishes the rest. On
+        Windows a held handle (an Explorer preview, a virus scanner, a file this process still has
+        open) makes ``shutil.rmtree`` raise PermissionError; ``_rmtree_retry`` waits 0.1 s and then
+        0.2 s and then gives up, and one such directory must not cost the operator the other six.
+
+        Walks ``_entries`` rather than calling ``remove_incomplete`` per directory: the same
+        classifier, one scan per kind instead of one per directory, and no StoreError to catch that
+        could have meant "it was complete after all".
+        """
+        if kind is not None and kind not in KIND_DIRS:
+            raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
+        removed, failed = [], []
+        for k in (KIND_DIRS if kind is None else (kind,)):
+            for sub, m, _ in self._entries(k):
+                if m is not None:
+                    continue
+                try:
+                    _rmtree_retry(sub)
+                except OSError as e:           # noqa: BLE001 -- one held handle must not stop the sweep
+                    failed.append((k, sub.name, f"{type(e).__name__}: {e}"))
+                else:
+                    removed.append((k, sub.name))
+        return removed, failed
 
     def unnamed(self, kind: str, *, older_than: "timedelta | None" = None) -> list:
         now = self._clock()

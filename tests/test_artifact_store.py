@@ -3497,3 +3497,148 @@ def test_read_log_returns_the_tail_over_max_bytes(store):
     # ends whoever wrote the file.
     (w.dir / st.LOG_FILE).write_bytes(b"head\r\nmid\r\ntail\r\n")
     assert store.read_log("calibration", w.id) == ("head\nmid\ntail\n", False)
+
+
+def _leftovers(store, kind="prior"):
+    """The three shapes ``_entries`` classifies as incomplete, written into one kind: no manifest at
+    all, a manifest that will not parse, and a manifest that parses but declares another kind. Also
+    writes the real calibration whose manifest the third one copies. Returns the three names, sorted
+    the way ``_entries`` walks them."""
+    d = store.kind_dir(kind)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "no_manifest__20260101T000001").mkdir()
+    torn = d / "unreadable__20260101T000002"
+    torn.mkdir()
+    (torn / st.MANIFEST).write_text("{not json", encoding="utf-8")
+    wrong = d / "wrong_kind__20260101T000003"
+    wrong.mkdir()
+    other = _make(store, "calibration", name="elsewhere", body=_cal_body())
+    (wrong / st.MANIFEST).write_bytes((other.dir / st.MANIFEST).read_bytes())
+    return ["no_manifest__20260101T000001", "unreadable__20260101T000002",
+            "wrong_kind__20260101T000003"]
+
+
+def test_remove_incomplete_refuses_everything_that_is_not_a_leftover(store, tmp_path):
+    """B7 (spec §2.3, §2.6). It is the COMPLEMENT of ``delete``: that one resolves through ``_find``,
+    which returns only manifest-bearing entries, so it can only ever remove a real artifact and
+    always runs the dependency check; this one asks ``_entries`` and removes only what came back
+    WITHOUT a manifest. Neither can do the other's job, which is the safety property worth keeping.
+
+    Four refusal classes, each a StoreError carrying ``field="artifact"`` so both front ends can name
+    the way out of it from their own table."""
+    real = _make(store, "calibration", name="keepme", body=_cal_body())
+    (store.kind_dir("calibration") / "leftover__20260101T000000").mkdir(parents=True)
+    (store.kind_dir("calibration") / "notadir.txt").write_text("x", encoding="utf-8")
+    nested = store.kind_dir("calibration") / "sub" / "leftover__20260101T000000"
+    nested.mkdir(parents=True)
+
+    for kind, name, why in (
+            ("priors", "leftover__20260101T000000", "unknown artifact kind"),   # not a kind at all
+            ("calibration", "sub/leftover__20260101T000000", "not the name of a directory"),
+            ("calibration", "sub\\leftover__20260101T000000", "not the name of a directory"),
+            ("calibration", "..", "not the name of a directory"),
+            ("calibration", "", "not the name of a directory"),
+            ("calibration", str(tmp_path), "not the name of a directory"),      # an absolute path
+            ("calibration", "/etc", "not the name of a directory"),             # ... posix-spelled
+            ("calibration", "notadir.txt", "no directory named"),               # a plain file
+            ("calibration", "never_existed", "no directory named"),
+            ("calibration", real.dir.name, "holds a valid calibration manifest")):   # a REAL artifact
+        with pytest.raises(st.StoreError, match=why) as e:
+            store.remove_incomplete(kind, name)
+        assert e.value.field == "artifact", (kind, name, e.value.field)
+
+    assert real.dir.is_dir() and store.get("calibration", real.id).name == "keepme"
+    assert (store.kind_dir("calibration") / "notadir.txt").is_file()
+    assert nested.is_dir(), "a path was refused, not followed"
+    assert (store.kind_dir("calibration") / "leftover__20260101T000000").is_dir(), \
+        "none of the refusals removed anything"
+
+    target = store.kind_dir("calibration") / "leftover__20260101T000000"
+    assert store.remove_incomplete("calibration", "leftover__20260101T000000") == target
+    assert not target.exists()
+
+
+def test_remove_incomplete_removes_all_three_shapes_entries_calls_incomplete(store):
+    """The three shapes are what a leftover actually looks like on disk: a crash before the manifest
+    was written, a torn write, and a hand-moved folder. All three are removable, and the ``reason``
+    ``list`` shows for each is the one ``_entries`` gave it."""
+    names = _leftovers(store, "prior")
+    reasons = {r.dir_name: r.reason for r in store.list("prior")}
+    assert set(reasons) == set(names), reasons
+    assert "no manifest.json" in reasons[names[0]]
+    assert "unreadable manifest" in reasons[names[1]]
+    assert "declares kind 'calibration'" in reasons[names[2]]
+    for name in names:
+        removed = store.remove_incomplete("prior", name)
+        assert removed.name == name and not removed.exists()
+    assert store.list("prior") == []
+    assert store.get("calibration", "elsewhere").name == "elsewhere", \
+        "the real artifact whose manifest the wrong-kind folder copied is untouched"
+
+
+def test_sweep_incomplete_finishes_the_rest_when_one_directory_will_not_delete(store, monkeypatch):
+    """B7's one action per kind, and per store. A directory that will not delete is REPORTED, never
+    fatal: on Windows a held handle -- an Explorer preview, a virus scanner, a file this process still
+    has open -- makes ``shutil.rmtree`` raise PermissionError, and ``_rmtree_retry`` waits 0.1 s and
+    then 0.2 s before giving up. One such folder must not cost the operator the other six.
+
+    The failure is INJECTED rather than provoked with a real handle, so the pin holds on any
+    filesystem and costs no sleep."""
+    names = _leftovers(store, "prior")
+    (store.kind_dir("inference") / "orphan__20260101T000009").mkdir(parents=True)
+    real = _make(store, "calibration", name="keepme", body=_cal_body())
+
+    assert store.sweep_incomplete("posterior") == ([], []), \
+        "a kind with nothing in it removes nothing and fails nothing"
+
+    stuck = store.kind_dir("prior") / names[1]
+    real_rmtree = st._rmtree_retry
+
+    def _one_held(path, **kw):
+        if Path(path) == stuck:
+            raise PermissionError("another process holds this folder open")
+        return real_rmtree(path, **kw)
+
+    monkeypatch.setattr(st, "_rmtree_retry", _one_held)
+    removed, failed = store.sweep_incomplete("prior")
+    monkeypatch.undo()
+    assert sorted(removed) == [("prior", names[0]), ("prior", names[2])]
+    assert failed == [("prior", names[1], "PermissionError: another process holds this folder open")]
+    assert stuck.is_dir(), "the one it could not remove is still there"
+    assert [r.dir_name for r in store.list("prior")] == [names[1]]
+
+    removed_all, failed_all = store.sweep_incomplete()
+    assert failed_all == []
+    assert sorted(removed_all) == sorted([("prior", names[1]),
+                                          ("inference", "orphan__20260101T000009")])
+    assert store.list("prior") == [] and store.list("inference") == []
+    assert store.get("calibration", real.id).name == "keepme", "a real artifact is never swept"
+
+    with pytest.raises(st.StoreError, match="unknown artifact kind") as e:
+        store.sweep_incomplete("priors")
+    assert e.value.field == "artifact"
+
+
+def test_delete_refuses_with_the_artifact_field_and_says_force_true(store):
+    """``delete``'s own two refusals carry ``field="artifact"`` too (P1, P20), because the fix for
+    either is the same: pick a different artifact in the list. The WORDING is untouched --
+    test_delete_refuses_naming_dependents_and_force_deletes (``:278-287``) already pins the message and
+    the force path -- and this test pins only the key, plus the fact that the dependents message still
+    names ``force=True``. Naming a Python keyword argument is not naming a control: no front end offers
+    it (B6), and whoever reads that line in ``log.txt`` needs to know what the escape hatch is called.
+    """
+    parent = _make(store, "posterior", name="mother", body=_bodies()["posterior"])
+    child = _make(store, "inference", name="child", body={"results": {"n_samples": 5}},
+                  parents={"posterior": parent.id})
+    with pytest.raises(st.StoreError, match="refusing to delete") as e:
+        store.delete("posterior", parent.id)
+    assert e.value.field == "artifact" and "force=True" in str(e.value)
+    assert parent.dir.is_dir() and child.dir.is_dir(), "a refusal removed nothing"
+
+    with pytest.raises(st.StoreError, match="no complete calibration") as e:
+        store.delete("calibration", "never_existed")
+    assert e.value.field == "artifact"
+
+    store.delete("inference", child.id)
+    store.delete("posterior", parent.id)           # the dependent is gone; no force needed
+    assert store.list("posterior") == [] and store.list("inference") == []
