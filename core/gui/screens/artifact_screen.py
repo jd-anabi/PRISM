@@ -123,6 +123,9 @@ class ArtifactScreen(QWidget):
         # has no sort to honour, so a screen that started anywhere else would silently re-sort every
         # first listing by Name and "newest first" would never be what a launch shows.
         self._sort = DEFAULT_SORT
+        # True while refresh() is rebuilding the table, so _sync_actions ignores the selection
+        # changes that rebuild produces. Set here, not in _build_actions: showEvent can refresh.
+        self._relisting = False
 
         heading = QLabel("Artifacts")
         heading.setProperty("type", "heading")     # Fluent type ramp (global QSS)
@@ -207,8 +210,30 @@ class ArtifactScreen(QWidget):
         super().showEvent(event)
         self.refresh()
 
-    def refresh(self) -> None:
-        """Re-list the selected kind. Idempotent, and the only place the store is read for the table."""
+    def refresh(self) -> bool:
+        """Re-list the selected kind. Idempotent, and the only place the store is read for the table.
+
+        Returns whether the store could be READ -- which is what ``_after_change`` needs in order to
+        know whose sentence belongs on the status line. A caller that only re-lists may ignore it;
+        the two signals wired to this method do.
+
+        The rebuild is MARKED while it runs, because a ``QTreeWidget``'s ``clear()`` does not go
+        straight from "this row is selected" to "nothing is selected": removing the selected row
+        makes Qt move the selection to an ADJACENT row first, so the screen sees a spurious change
+        to a DIFFERENT artifact halfway through. Acting on that rewrote the note box out of the
+        neighbour's manifest and threw away a note typed and not yet applied. ``_sync_actions``
+        ignores selection changes while the mark is set, and is called once by hand when the rebuild
+        is over -- the same reason this method has always called ``_on_selection_changed`` itself.
+        """
+        self._relisting = True
+        try:
+            return self._relist()
+        finally:
+            self._relisting = False
+            self._sync_actions()
+
+    def _relist(self) -> bool:
+        """``refresh``'s body, run under its rebuild mark. Nothing else calls this."""
         kind = self.kind()
         if self.table.columnCount():
             # The user's own header click, kept across the rebuild -- but only off a table that HAS
@@ -227,7 +252,7 @@ class ArtifactScreen(QWidget):
             self._on_selection_changed()
             self._set_status(f"Could not read the {kind} artifacts: {type(e).__name__}: {e}",
                              error=True)
-            return
+            return False
         self.table.set_rows(kind, rows)
         self._apply_sort(kind)
         # Explicitly, not off the signal: set_rows leaves nothing selected, and a table that was
@@ -235,9 +260,10 @@ class ArtifactScreen(QWidget):
         self._on_selection_changed()
         if not rows:
             self._set_status("Nothing here yet.")
-            return
+            return True
         bad = sum(1 for s in rows if not s.complete)
         self._set_status(f"{len(rows)} row(s): {len(rows) - bad} complete, {bad} incomplete.")
+        return True
 
     def _apply_sort(self, kind: str) -> None:
         """Re-apply the remembered sort after a rebuild, clamped to THIS kind's column count: the
@@ -336,6 +362,9 @@ class ArtifactScreen(QWidget):
         """
         box = QGroupBox("Actions")
         row = QHBoxLayout(box)
+        # The (kind, id) whose note is in the box, so _sync_actions can tell a real change of
+        # artifact from a re-list that lands back on the same one. None = no artifact's note.
+        self._noted = None
         self.note_edit = QLineEdit()
         self.note_edit.setPlaceholderText(
             f"one line, at most {NOTE_MAX_CHARS} characters; empty clears it")
@@ -367,26 +396,54 @@ class ArtifactScreen(QWidget):
         ``delete`` to resolve (it goes through ``_find``, which only ever returns manifest-bearing
         entries): the sweep is what removes those, which is also why the sweep is the one action that
         needs no selection at all.
+
+        The note box is repopulated only when the selected ARTIFACT changed. Two reasons, and the
+        second is the one that bites: a re-list clears the table's selection before the user picks a
+        row again, so an unconditional rewrite discarded a note typed and not yet applied even when
+        the selection came back to the same artifact. The transient no-selection state therefore
+        leaves the box (and ``_noted``) alone -- it is disabled meanwhile -- while a selection that
+        lands on a DIFFERENT artifact, or on a leftover that has no note at all, does rewrite it.
         """
+        if self._relisting:
+            # A rebuild's intermediate selections are Qt's bookkeeping, not the user's choice;
+            # refresh() calls this once itself when the rebuild is done. See refresh's docstring.
+            return
         s = self.table.current_summary()
         live = s is not None and s.complete
         self.note_edit.setEnabled(live)
         self.btn_note.setEnabled(live)
         self.btn_delete.setEnabled(live)
-        self.note_edit.setText(s.note if live else "")
+        if s is None:
+            return                  # the transient state a re-list passes through: keep the draft
+        ref = (s.kind, s.id) if live else None
+        if ref != self._noted:
+            self.note_edit.setText(s.note if live else "")
+            self._noted = ref
 
-    def _after_change(self) -> None:
-        """Re-list the kind and announce the change (B8). The three StorePickers are the WINDOW's to
-        refresh: it is the one party that knows all of them, exactly as for the model combos.
+    def _after_change(self, said: str, error: bool = False) -> None:
+        """Re-list the kind, tell the rest of the app (B8), and THEN say what the action did.
 
-        Its CALLERS set their own status line AFTER calling this, never before: ``refresh`` ends by
-        reporting the kind's row counts (or, when the kind cannot be read, the error), so a sentence
-        written first would be overwritten by the re-list it triggered and the operator would be
-        told the row count in answer to a Delete.
+        The action hands its sentence here instead of writing the status line itself, which is what
+        makes the wrong order unrepresentable. Two ways to get it wrong, both closed here:
+
+        * A sentence written BEFORE the re-list is lost: ``refresh`` ends by reporting the kind's row
+          counts, so the operator would be told a row count in answer to a Delete.
+        * A sentence written AFTER the re-list UNCONDITIONALLY hides a read failure. When the re-list
+          cannot read the store, ``refresh`` has already put ``Could not read the <kind> artifacts:
+          ...`` on the line, and THAT message wins. The action did succeed -- the store is the record
+          of that -- but "there is nothing here" and "I could not look" are the one distinction this
+          screen exists to keep apart (§3.2), and a cheerful "Deleted ..." over an emptied table
+          would erase it.
+
+        So: the success sentence is set only when the re-list could read the store. The three
+        StorePickers are told either way -- the change happened, whether or not the re-list saw it --
+        and they are the WINDOW's to refresh, the one party that knows all of them.
         """
-        self.refresh()
+        read_ok = self.refresh()
         self._sync_actions()
         self.store_changed.emit()
+        if read_ok:
+            self._set_status(said, error=error)
 
     def _refuse_while_running(self, doing: str) -> bool:
         """True when a run is live: the status line says so and the caller returns (B6).
@@ -421,8 +478,9 @@ class ArtifactScreen(QWidget):
     def _set_note(self) -> None:
         """B5: one trimmed line, at most NOTE_MAX_CHARS; blank clears it.
 
-        The rule runs at the click, in ``core.refusals``, so ``python -m core artifacts note``
-        refuses the same note with the same sentence; the front end only adds where to fix it.
+        The rule is ``core.refusals.require_note`` and it runs at the click, so the command-line
+        tool's own note flag (the ``"note"`` row of ``core/tool/fields.py``) refuses the same note
+        with the same sentence; this front end only adds where to fix it.
         """
         if self._refuse_while_running("setting a note"):
             return
@@ -436,9 +494,18 @@ class ArtifactScreen(QWidget):
             show_refusal(self, exc)  # and since Task 2 that refusal carries field="note" too
             self._set_status(exc.message, error=True)
             return
-        self._after_change()        # before the sentence, never after: see _after_change
-        self._set_status(f"Set the note on {s.kind} {s.label}." if note
-                         else f"Cleared the note on {s.kind} {s.label}.")
+        except Exception as e:      # noqa: BLE001 -- reported, never raised out of a click
+            # The convention every other entry point here follows (refresh, _on_selection_changed):
+            # a disk that will not take the manifest goes on the status line, not out of a slot into
+            # the application's last-resort red box.
+            self._set_status(f"Could not write the note on {s.kind} {s.label}: "
+                             f"{type(e).__name__}: {e}", error=True)
+            return
+        # What was STORED, i.e. the TRIMMED text -- not what was typed. This box is the one place the
+        # note is shown, so leaving an untrimmed draft in it would misreport the manifest.
+        self.note_edit.setText(note)
+        self._after_change(f"Set the note on {s.kind} {s.label}." if note
+                           else f"Cleared the note on {s.kind} {s.label}.")
 
     def _dependents_refusal(self, store, s, deps) -> Refusal:
         """The sentence for a delete that nothing can perform: the artifact, then every artifact
@@ -485,9 +552,19 @@ class ArtifactScreen(QWidget):
         if s is None:
             return
         store = self._resolved_store()
-        deps = store.dependents(s.kind, s.id)
-        if deps:
-            show_refusal(self, self._dependents_refusal(store, s, deps))
+        # Both directory scans -- dependents() here and the list() _dependents_refusal does to say
+        # WHY each dependent depends -- under one broad guard, the convention refresh() and
+        # _on_selection_changed already follow: an unreadable root must report on the status line,
+        # not turn a Delete click into an unhandled slot exception and the app's red box.
+        try:
+            deps = store.dependents(s.kind, s.id)
+            refusal = self._dependents_refusal(store, s, deps) if deps else None
+        except Exception as e:                      # noqa: BLE001 -- reported, never swallowed
+            self._set_status(f"Could not read what depends on {s.kind} {s.label}, so nothing was "
+                             f"deleted: {type(e).__name__}: {e}", error=True)
+            return
+        if refusal is not None:
+            show_refusal(self, refusal)
             self._set_status(f"{s.kind} {s.label} has {len(deps)} dependent(s) and was not deleted.",
                              error=True)
             return
@@ -510,21 +587,33 @@ class ArtifactScreen(QWidget):
             show_refusal(self, exc)
             self._set_status(exc.message, error=True)
             return
-        self._after_change()        # before the sentence, never after: see _after_change
-        self._set_status(f"Deleted {s.kind} {s.label}.")
+        except Exception as e:                      # noqa: BLE001 -- reported, never raised
+            # A held handle can leave the directory half removed, so the table and the pickers are
+            # re-read rather than left describing a tree that has moved under them.
+            self._after_change(f"Could not delete {s.kind} {s.label}: {type(e).__name__}: {e}",
+                               error=True)
+            return
+        self._after_change(f"Deleted {s.kind} {s.label}.")
 
     def _incomplete(self, store, kind) -> tuple:
         """``([(kind, dir_name, reason)], [str])``: what a sweep would remove, and any kind that
         could not be read at all -- an unreadable directory is not an empty one (§3.2).
 
         Read off ``list``, so the confirmation shows exactly the rows the table calls incomplete.
+
+        ``kind is None`` means all seven, EXPLICITLY -- never "whatever a falsy kind means". A
+        truthiness test here is how a one-kind sweep could have widened to every kind.
         """
         out, problems = [], []
-        for k in ([kind] if kind else list(KIND_DIRS)):     # Task 9's import; the seven, in order
+        for k in (list(KIND_DIRS) if kind is None else [kind]):   # Task 9's import; in order
             try:
                 rows = store.list(k)
             except Exception as e:      # noqa: BLE001 -- an unreadable kind is reported, not fatal
-                problems.append(f"The {k} directory could not be read: {e}")
+                # With a next step, like every other sentence on this screen: an unreadable kind is
+                # not an empty one (§3.2), and the operator can act on it.
+                problems.append(f"The {k} directory could not be read ({type(e).__name__}: {e}), so "
+                                f"no {k} leftover can be swept; check that folder's permissions on "
+                                f"disk and sweep again.")
                 continue
             out += [(k, row.dir_name, row.reason) for row in rows if not row.complete]
         return out, problems
@@ -539,7 +628,10 @@ class ArtifactScreen(QWidget):
         if self._refuse_while_running("removing leftover directories"):
             return
         store = self._resolved_store()
-        kind = None if all_kinds else self.kind_combo.currentData()
+        # self.kind(), the one accessor everything else on this screen reads, and None ONLY for the
+        # all-kinds button: reading currentData() here gave a second answer that disagreed with
+        # kind() whenever it was falsy, and a falsy kind means "all seven" downstream.
+        kind = None if all_kinds else self.kind()
         cands, problems = self._incomplete(store, kind)
         tail = (" " + " ".join(problems)) if problems else ""
         if not cands:
@@ -564,8 +656,7 @@ class ArtifactScreen(QWidget):
                f"{'y' if len(cands) == 1 else 'ies'}."
         for k, d, why in failed:
             said += f" {k}/{d} could not be removed: {why}."
-        self._after_change()        # before the sentence, never after: see _after_change
-        self._set_status(said + tail, error=bool(failed or problems))
+        self._after_change(said + tail, error=bool(failed or problems))
 
     def _set_status(self, text: str, error: bool = False) -> None:
         """One line, with a ⚠ prefix when it is trouble -- ModelBuilderScreen._set_status's pattern."""

@@ -58,8 +58,9 @@ def _select_ref(table, ident):
 
 
 def _answer(monkeypatch, button):
-    """Layer a chosen answer over tests/conftest.py::_no_modal_dialogs, the pattern at
-    tests/test_nav_and_gating.py:1179-1186. The session guard records every box and returns 0, which
+    """Layer a chosen answer over tests/conftest.py::_no_modal_dialogs, the pattern
+    tests/test_nav_and_gating.py::test_the_d7_and_d8_dialogs_default_to_cancel uses (a NAME, because
+    the line it sits on moves). The session guard records every box and returns 0, which
     every confirmation here reads as No; these dialogs use STANDARD buttons, so the answer is the
     returned enum rather than a click on an added button."""
     from PySide6.QtWidgets import QMessageBox
@@ -475,10 +476,10 @@ def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
 
 
 def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
-    """B6. No front end offers force=True, so store.delete (store.py:478-488) refuses anything with
-    dependents -- a confirmation could only ever be followed by a failure. dependents() is therefore
-    read FIRST, and the yellow box names every dependent, including the training cache that holds
-    the prior only by fingerprint and names it nowhere (store.py:468-476)."""
+    """B6. No front end offers force=True, so ArtifactStore.delete refuses anything with dependents
+    -- a confirmation could only ever be followed by a failure. dependents() is therefore read
+    FIRST, and the yellow box names every dependent, including the training cache that holds the
+    prior only by fingerprint and names it nowhere (ArtifactStore.dependents' second pass)."""
     from core.artifacts import store as st
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, artifact_screen, qt_app
@@ -560,7 +561,7 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
 
     The stub is a proxy over the real store, patched onto the SCREEN's _resolved_store, and not
     monkeypatch.setattr(store, "dependents", ...): ArtifactStore.delete calls self.dependents
-    itself (store.py:482), so patching the store would blind the store too -- the delete would
+    itself, so patching the store would blind the store too -- the delete would
     SUCCEED, the prior would be destroyed and every assertion below would be asserting the opposite
     of what it says (Q6). The proxy lies to the screen only."""
     from PySide6.QtWidgets import QMessageBox
@@ -728,8 +729,9 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
 
 def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatch):
     """The window's last three boxes are INSTANCE dialogs, so every box the GUI shows lands in
-    SHOWN. main_window.py showed these three with the C++ statics (QMessageBox.warning at :215 and
-    :236, QMessageBox.information at :221), which escape tests/conftest.py::_no_modal_dialogs -- it
+    SHOWN. main_window.py showed these three with the C++ statics (QMessageBox.warning in
+    _edit_user_model and after a failed delete_user_model, QMessageBox.information in
+    _delete_user_model's run guard), which escape tests/conftest.py::_no_modal_dialogs -- it
     patches QMessageBox.exec, the instance method. Offscreen a static spins a nested event loop
     nothing ever closes, so a test that reached one STALLED instead of failing, which is why these
     three sites had no test at all. The statics are patched here as a tripwire rather than left
@@ -753,15 +755,15 @@ def test_the_windows_three_model_dialogs_go_through_the_session_guard(monkeypatc
     try:
         SHOWN.clear()                       # this test is about the three sites, not construction
         monkeypatch.setattr(w.model_builder_screen, "load_existing", boom)
-        w._edit_user_model("BROKEN")        # :215 -- a definition that will not load
+        w._edit_user_model("BROKEN")        # site 1 -- a definition that will not load
         monkeypatch.setattr(model_store, "delete_user_model", boom)
         BasePanel._running = True
         try:
-            w._delete_user_model("BROKEN")  # :221 -- refused while a run is live, nothing asked
+            w._delete_user_model("BROKEN")  # site 2 -- refused while a run is live, nothing asked
         finally:
             BasePanel._running = False
         _answer(monkeypatch, QMessageBox.Yes)
-        w._delete_user_model("BROKEN")      # the confirmation, then :236 -- the delete itself fails
+        w._delete_user_model("BROKEN")      # the confirmation, then site 3 -- the delete fails
     finally:
         w.close()
     assert statics == [], f"the window still shows a box with a C++ static: {statics}"
@@ -816,3 +818,211 @@ def test_a_leftover_row_is_nothing_to_act_on_and_no_row_at_all_is_a_refusal(stor
         assert leftover.name in said and f"nothing to {doing}" in said, said
         assert "no manifest.json" in said and "a sweep removes" in said, said
     assert leftover.is_dir(), "neither action may touch it"
+
+
+class _Proxy:
+    """Everything the screen asks of a store, delegated to a real one. Subclasses override the one
+    method they want to lie about, which keeps each test's lie to a single visible line."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_a_read_failure_after_a_change_beats_the_actions_own_sentence(store, monkeypatch):
+    """The re-list has the last word on the status line.
+
+    A delete that SUCCEEDS followed by a re-list that CANNOT READ the store must not report
+    "Deleted ...": the table empties, and "there is nothing here" against "I could not look" is the
+    one distinction this screen exists to keep apart (§3.2) -- the same distinction Task 9 built
+    refresh()'s error branch for. A success sentence painted over it would erase it.
+
+    _after_change owns that order: the action hands it a sentence, and it sets it only when
+    refresh() could read the store. Which also makes the wrong order unrepresentable -- no caller
+    can write the status line before the re-list any more, because none of them writes it at all.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="lonely")
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _select_ref(scr.table, p.id)
+
+    class _ReadsFailOnceTheDeleteLands(_Proxy):
+        """The real store until the delete goes through, and unreadable from then on -- a root that
+        loses its permissions in the instant between the removal and the re-list."""
+
+        deleted = False
+
+        def delete(self, *a, **k):
+            out = self._real.delete(*a, **k)
+            self.deleted = True
+            return out
+
+        def list(self, kind):
+            if self.deleted:
+                raise PermissionError("Access is denied")
+            return self._real.list(kind)
+
+    proxy = _ReadsFailOnceTheDeleteLands(store)
+    monkeypatch.setattr(scr, "_resolved_store", lambda: proxy)
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._delete()
+    assert proxy.deleted, "the delete itself must have happened; this is about what is SAID"
+    said = scr.status.text()
+    assert "Could not read the prior artifacts" in said and "PermissionError" in said, said
+    assert "Deleted" not in said, f"the success sentence hid the read failure: {said}"
+    assert said.startswith("⚠ ") and scr.table.topLevelItemCount() == 0, said
+
+    # (b) the same sentence DOES land when the re-list can read the store: the success message is
+    #     withheld only by a failed read, never by the reordering itself.
+    q = _prior_artifact(store, cfg, name="second", seed=5)
+    monkeypatch.setattr(scr, "_resolved_store", lambda: store)
+    scr.refresh()
+    _select_ref(scr.table, q.id)
+    changed = []
+    scr.store_changed.connect(lambda: changed.append(True))
+    scr._delete()
+    assert scr.status.text() == "Deleted prior second.", scr.status.text()
+    assert changed, "the pickers are told either way"
+
+
+def test_an_unreadable_root_reports_on_the_status_line_instead_of_crashing_a_click(store, monkeypatch):
+    """Every store read behind a button follows refresh()'s convention: reported, with its class, on
+    the status line. Unguarded, an unreadable root turned a Delete click into an unhandled slot
+    exception and the application's last-resort red box -- a crash report for a disk problem.
+
+    Three reads are covered: dependents(), the list() _dependents_refusal does to say WHY each
+    dependent depends, and the one _incomplete does for the sweep -- whose sentence now carries a
+    next step, the one operator-facing line on this screen that had none.
+    """
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="ancestor")
+    with store.create("inference", cfg, name="child") as w:
+        w.parents = {"prior": p.id}
+        w.body = {"results": {}}
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _select_ref(scr.table, p.id)
+
+    # (a) dependents() itself cannot be read
+    class _NoDependentScan(_Proxy):
+        def dependents(self, kind, id_):
+            raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(scr, "_resolved_store", lambda: _NoDependentScan(store))
+    SHOWN.clear()
+    scr._delete()
+    said = scr.status.text()
+    assert "Could not read what depends on prior ancestor" in said, said
+    assert "PermissionError" in said and "nothing was deleted" in said, said
+    assert SHOWN == [], "a disk problem is not a refusal and asks nothing"
+    assert store.get("prior", p.id).name == "ancestor"
+
+    # (b) the dependents are known but the list() that explains WHY cannot be read. Unguarded this
+    #     raised from inside _dependents_refusal, i.e. after the refusal was already unavoidable.
+    class _NoListForTheWhy(_Proxy):
+        def list(self, kind):
+            if kind == "inference":
+                raise PermissionError("Access is denied")
+            return self._real.list(kind)
+
+    monkeypatch.setattr(scr, "_resolved_store", lambda: _NoListForTheWhy(store))
+    SHOWN.clear()
+    scr._delete()
+    assert "Could not read what depends on prior ancestor" in scr.status.text(), scr.status.text()
+    assert SHOWN == [] and store.get("prior", p.id).name == "ancestor"
+
+    # (c) the sweep's own read, and its next step
+    class _NoListAtAll(_Proxy):
+        def list(self, kind):
+            raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(scr, "_resolved_store", lambda: _NoListAtAll(store))
+    SHOWN.clear()
+    scr._sweep(all_kinds=False)
+    said = scr.status.text()
+    assert SHOWN == [], "there is nothing to confirm when the candidates could not be read"
+    assert "The prior directory could not be read" in said and "PermissionError" in said, said
+    assert "sweep again" in said, f"the one sentence with no next step: {said}"
+    assert said.startswith("⚠ "), said
+    assert "posterior" not in said, "a one-kind sweep must not have gone looking at every kind"
+
+
+def test_sweeping_one_kind_leaves_another_kinds_leftover_alone(store, monkeypatch):
+    """Minor 2, behaviourally: "sweep this kind" reads self.kind(), the accessor everything else on
+    this screen reads, and only the all-kinds button passes None. While the kind travelled as a
+    falsy value, "all seven" was what a falsy kind meant downstream, so a one-kind sweep could
+    widen to every directory in the store."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import artifact_screen, qt_app
+    qt_app()
+    mine = store.kind_dir("prior") / "junk_prior"
+    theirs = store.kind_dir("diagnostic") / "junk_diagnostic"
+    for d in (mine, theirs):
+        d.mkdir(parents=True, exist_ok=True)
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._sweep(all_kinds=False)
+    assert not mine.exists(), "this kind's leftover should have gone"
+    assert theirs.is_dir(), "a one-kind sweep reached into another kind"
+    assert "Removed 1 of 1" in scr.status.text(), scr.status.text()
+    # ... and the all-kinds button does reach it.
+    scr._sweep(all_kinds=True)
+    assert not theirs.exists() and "Removed 1 of 1" in scr.status.text(), scr.status.text()
+
+
+def test_a_typed_note_survives_a_re_list_that_lands_on_the_same_artifact(store):
+    """Minor 3. A re-list clears the table's selection before a row is chosen again, so rewriting the
+    box on every selection change threw away a note typed and not yet applied even when the same
+    artifact came back. Only a change of ARTIFACT repopulates it; a leftover, which has no note at
+    all, clears it.
+
+    ``a`` is deliberately the ONLY complete prior while the draft is being typed. ``_select_ref``
+    walks the rows in order, and passing over a neighbour on the way is a real change of artifact --
+    with a second one present, the helper rather than the re-list would be what cleared the box.
+    Rows are newest-first, so every selection below is the single change one click makes.
+    """
+    from tests._fixtures import artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    a = _prior_artifact(store, cfg, name="alpha")
+    leftover = store.kind_dir("prior") / "junk__20260917T090000"
+    leftover.mkdir(parents=True, exist_ok=True)
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+
+    assert _select_ref(scr.table, a.id).id == a.id
+    scr.note_edit.setText("half-typed, not applied")
+    scr.refresh()                                   # selection cleared; the draft must survive it
+    assert scr.table.current_summary() is None and not scr.note_edit.isEnabled()
+    assert scr.note_edit.text() == "half-typed, not applied", scr.note_edit.text()
+    _select_ref(scr.table, a.id)                    # back to the SAME artifact
+    assert scr.note_edit.text() == "half-typed, not applied", \
+        "the draft was discarded by a re-list that came back to the same artifact"
+    assert scr.note_edit.isEnabled()
+
+    # A different artifact DOES repopulate, from its own manifest. Written now, so it is the newest
+    # and therefore the first row -- one selection change from here.
+    b = _prior_artifact(store, cfg, name="beta", seed=7)
+    store.set_note("prior", b.id, "beta's own note")
+    scr.refresh()
+    _select_ref(scr.table, b.id)
+    assert scr.note_edit.text() == "beta's own note", scr.note_edit.text()
+    # And a leftover, which has no note to show, clears it.
+    _select_ref(scr.table, leftover.name)
+    assert scr.note_edit.text() == "" and not scr.note_edit.isEnabled()
+
+    # A note that was WRITTEN shows what was stored, trimmed -- not the untrimmed draft.
+    _select_ref(scr.table, a.id)
+    scr.note_edit.setText("   trimmed on the way in   ")
+    scr._set_note()
+    assert store.get("prior", a.id).note == "trimmed on the way in"
+    assert scr.note_edit.text() == "trimmed on the way in", scr.note_edit.text()

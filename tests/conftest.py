@@ -173,8 +173,8 @@ def _no_modal_dialogs():
     installed), not a failure. For the whole session the box is appended to tests/_fixtures.SHOWN and
     exec returns 0 -- no clicked button, which the consent dialogs read as Cancel and
     MainWindow._delete_user_model's confirmation as the safe branch. A test that wants its own fake
-    layers it on top with monkeypatch, as test_the_two_dialogs_default_to_cancel does; the undo puts
-    this guard back, because on a class MonkeyPatch records the class __dict__ entry, which is this
+    layers it on top with monkeypatch, as test_the_d7_and_d8_dialogs_default_to_cancel does; the
+    undo puts this guard back, because a MonkeyPatch on a class records the __dict__ entry, this
     lambda. Same MonkeyPatch shape as _checkpointing_off_unless_asked. Nothing under core/ calls the
     statics any more: main_window.py's last three went through MainWindow._tell in piece 4, so this
     guard covers every box the GUI shows and a test reads one off SHOWN."""
