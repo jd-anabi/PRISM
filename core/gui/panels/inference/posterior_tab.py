@@ -40,6 +40,13 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.post_picker = StorePicker("posterior", allow_new=True)
         self.post_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_train_button())
         add_help_row(form, label("posterior"), self.post_picker, HELP["posterior"])
+        # AMORTIZATION SPELLED OUT, under the one picker where it decides what the artifact is good
+        # for (B13). The item text marks a narrowed posterior; this line says so in words, next to
+        # the mode, the conditioning width and when it was trained.
+        self.post_line = self._derived_label()
+        form.addRow("", self.post_line)
+        self.post_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_post_line())
+        self._sync_post_line()
         v.addLayout(form)
         self.btn_post = QPushButton("Train / Load posterior")
         self.btn_post.setProperty("accent", True)         # primary CTA (Fluent accent)
@@ -309,6 +316,11 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.post_picker.restore_key(lp.id)
         self.log_pane.append_line(f"Posterior named '{name}'.")
 
+    def _sync_post_line(self) -> None:
+        """The read-only line under the posterior picker (B13). See PriorPanel._sync_prior_line for
+        why ``currentIndexChanged`` also covers ``refresh()``."""
+        self.post_line.setText(self.post_picker.selection_summary())
+
     def _sync_train_button(self):
         """Disable the Train button when the "(from scratch)" option is selected but no prior exists --
         loading an existing posterior is always allowed; training a new one needs a prior."""
@@ -320,6 +332,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
     def refresh_local_gates(self):
         self._sync_train_button()
         self.btn_save_post.setEnabled(self.session.posterior is not None)
+        self._sync_post_line()
         # A config or a prior arriving changes every derived line, and the checkpoint line cannot be
         # computed without both.
         self._sync_budget()

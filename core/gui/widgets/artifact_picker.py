@@ -100,6 +100,42 @@ class ArtifactPicker(QWidget):
             self.restore_key(restore_key)
 
 
+# The visible item text marks the EXCEPTION, never the norm (piece 4, B13). Nearly every posterior is
+# amortized, so an "amortized" suffix on almost every row would carry no information at all and would
+# push the name itself out of a combo that AdjustToContentsOnFirstShow sized to its first listing. A
+# TSNPE round's result is the rare row -- valid near ONE observation, and the one you must not pick by
+# accident -- so it is the one that gets a suffix. Plain text, no icon: see ArtifactPicker.NEW_LABEL
+# for why a combo ITEM cannot carry the bundled icon font.
+NARROWED_SUFFIX = "  —  narrowed (TSNPE)"
+
+
+def _summary_line(s) -> str:
+    """One line describing a store row -- mode, conditioning width, amortization, creation time, in
+    that order -- with the parts the kind does not carry left out. ``""`` for a row with none of them.
+
+    THE ONE FORMATTER BEHIND THE LINE UNDER EVERY PICKER, so the three tabs cannot word the same
+    facts three ways -- and the tooltip now words amortization the same way this does, "narrowed
+    (TSNPE)", which is also what the item text's suffix says: one fact, one wording, wherever it is
+    shown. The per-item TOOLTIP is still not BUILT from this function: it leads with the id and keeps
+    every fact it carried (B13), while the line needs no id, because the picker's own text already
+    says which item it is describing.
+
+    ``getattr`` throughout, because this is handed ``Summary`` in production and a row stub in the
+    suites, and a formatter feeding a read-only label must not raise over a missing attribute.
+    """
+    parts = []
+    if getattr(s, "mode", None):
+        parts.append(str(s.mode))
+    if getattr(s, "width", None):
+        parts.append(f"width {s.width}")
+    amortized = getattr(s, "amortized", None)
+    if amortized is not None:
+        parts.append("amortized" if amortized else "narrowed (TSNPE)")
+    if getattr(s, "created", None):
+        parts.append(str(s.created))
+    return " · ".join(parts)
+
+
 class StorePicker(QWidget):
     """A combo over one KIND of the artifact store -- the generated-kind twin of ArtifactPicker,
     which stays for the input pickers (cells, bounds). Items are complete artifacts only, labelled by
@@ -110,6 +146,9 @@ class StorePicker(QWidget):
     def __init__(self, kind: str, allow_new: bool = False, store=None, parent=None):
         super().__init__(parent)
         self.kind, self._allow_new, self._store = kind, allow_new, store
+        # id -> the line selection_summary() returns, recorded by refresh(). BEFORE refresh() below,
+        # which fills it.
+        self._summaries: dict = {}
         self.combo = QComboBox()
         refresh = QPushButton()
         refresh.setObjectName("iconButton")
@@ -130,6 +169,7 @@ class StorePicker(QWidget):
     def refresh(self):
         current = self.key()
         self.combo.clear()
+        self._summaries = {}                     # rebuilt here, so a deleted artifact's line goes too
         if self._allow_new:
             self.combo.addItem(self.NEW_LABEL, userData=None)
         try:
@@ -139,14 +179,23 @@ class StorePicker(QWidget):
         for s in rows:
             if not s.complete:
                 continue
-            self.combo.addItem(s.label, userData=s.id)
+            # The suffix is appended to the DISPLAY only. key(), restore_key(), selected() and
+            # has_entries() all go through userData, which is still the bare id, so nothing that
+            # persists or resolves a selection can be broken by a change of wording here.
+            self.combo.addItem(s.label + (NARROWED_SUFFIX if s.amortized is False else ""),
+                               userData=s.id)
+            self._summaries[str(s.id)] = _summary_line(s)
             tip = f"{s.id} · {s.created}"
             if s.mode:
                 tip += f" · {s.mode}"
             if s.width:
                 tip += f" · width {s.width}"
             if s.amortized is not None:
-                tip += " · amortized" if s.amortized else " · NON-AMORTIZED (TSNPE)"
+                # ONE WORDING FOR ONE FACT (B13): the same "narrowed (TSNPE)" the item
+                # suffix and the line under the picker use, so nobody has to learn that a
+                # shouted "NON-AMORTIZED" here and a quiet "narrowed" there are the same
+                # thing. The tooltip keeps everything else it carried.
+                tip += " · amortized" if s.amortized else " · narrowed (TSNPE)"
             self.combo.setItemData(self.combo.count() - 1, tip, _TOOLTIP_ROLE)
         self.restore_key(current)
 
@@ -161,6 +210,18 @@ class StorePicker(QWidget):
     def key(self) -> str:
         data = self.combo.currentData()
         return "" if data is None else str(data)
+
+    def selection_summary(self) -> str:
+        """The current item spelled out -- "chi · width 18 · amortized · 2026-09-14T10:22:31" -- and
+        "" when nothing is selected or the '(from scratch)' sentinel is (a sentinel is not an
+        artifact and has nothing to describe).
+
+        Read off what the last ``refresh()`` recorded, never off the store: this is called from a
+        ``currentIndexChanged`` slot, and re-listing a kind's directory on every index change is how
+        a combo becomes a disk scan.
+        """
+        data = self.combo.currentData()
+        return "" if data is None else self._summaries.get(str(data), "")
 
     def restore_key(self, key: str) -> None:
         if not key:

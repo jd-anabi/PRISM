@@ -57,6 +57,14 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         form = make_form()
         self.obs_picker = StorePicker("observation")
         add_help_row(form, label("observation"), self.obs_picker, HELP["tsnpe_obs"])
+        # The observation's own mode and conditioning width, beneath the combo (B13). This is the one
+        # picker whose selection is loaded on the GUI thread and checked against the session's config
+        # (_round), so seeing the geometry before the click is what turns that refusal into a
+        # non-event.
+        self.obs_line = self._derived_label()
+        form.addRow("", self.obs_line)
+        self.obs_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_obs_line())
+        self._sync_obs_line()
         self.hpd = FloatField(str(_tr.DEFAULT_HPD))
         self.n_dirs = IntField(str(_tr.DEFAULT_N_DIRECTIONS))
         add_help_row(form, label("hpd_level"), self.hpd, HELP["tsnpe_hpd"])
@@ -188,9 +196,15 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
                 "'Start a new simulation even if a cache one setting away exists' is ticked; anything "
                 "else simulates the full budget from zero.")
 
+    def _sync_obs_line(self) -> None:
+        """The read-only line under the observation picker (B13). See PriorPanel._sync_prior_line for
+        why ``currentIndexChanged`` also covers ``refresh()``."""
+        self.obs_line.setText(self.obs_picker.selection_summary())
+
     def refresh_local_gates(self):
         s = self.session
         self.obs_picker.refresh()
+        self._sync_obs_line()
         self.btn_round.setEnabled(s.posterior is not None and s.inf_prior is not None
                                   and bool(self.obs_picker.key()))
         self._sync_budget()

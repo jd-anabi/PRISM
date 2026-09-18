@@ -3031,3 +3031,96 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
     assert inf.session.inf_prior is None and inf.session.cfg is None, inf.session
     assert len(applied()) == 2, applied()
     assert inf.session_contents() == [] and "nothing yet" in cfgp.session_line.text()
+
+
+def test_the_store_pickers_say_what_they_hold(monkeypatch):
+    """B13 (spec §6.3), and the FIRST test of any kind on what a picker renders.
+
+    Three things. The visible item text marks the EXCEPTION only -- a posterior with
+    ``amortized is False`` reads "<label>  —  narrowed (TSNPE)", and amortized, being the norm,
+    gets no suffix (a suffix on almost every row carries no information and pushes the name out of a
+    combo sized to its first show). The per-item TOOLTIP keeps every fact it carried, and words the
+    one fact it shares with the item text the SAME way: "narrowed (TSNPE)", in place of the old
+    "NON-AMORTIZED (TSNPE)" -- one wording for one fact, in the item, the tooltip and the line. No
+    test in the repository pinned either string before this one (spec §6.3). And each of
+    the three tabs that owns a StorePicker carries a read-only line beneath it, spelling the current
+    selection out through ``selection_summary()`` -- refreshed on ``currentIndexChanged`` AND on
+    ``refresh()``, because a stage that writes the store rescans the picker without anyone clicking.
+
+    The store is stubbed at the picker's one seam, ``_resolved_store``, the way
+    tests/test_settings_persistence.py:1070 already stubs it; each row carries exactly the
+    ``Summary`` fields refresh() reads and no more, so the test cannot pass on a field the real
+    listing does not fill.
+    """
+    import types
+    from PySide6.QtCore import Qt
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.widgets.artifact_picker import NARROWED_SUFFIX, StorePicker
+    from tests._fixtures import qt_app
+
+    qt_app()
+
+    def row(label, id_, created, *, mode=None, width=None, amortized=None, complete=True):
+        return types.SimpleNamespace(complete=complete, label=label, id=id_, created=created,
+                                     mode=mode, width=width, amortized=amortized)
+
+    rows = {
+        "prior": [row("p_master", "20260914T100000", "2026-09-14T10:00:00")],
+        "posterior": [
+            row("amort", "20260914T102231", "2026-09-14T10:22:31", mode="chi", width=18,
+                amortized=True),
+            row("round2", "20260915T090000", "2026-09-15T09:00:00", mode="chi", width=18,
+                amortized=False),
+            row("(unnamed leftover)", "leftover", "", complete=False),
+        ],
+        "observation": [row("obs1", "20260916T120000", "2026-09-16T12:00:00", mode="spontaneous",
+                            width=50)],
+    }
+    store = types.SimpleNamespace(list=lambda kind: list(rows.get(kind, [])))
+    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
+
+    inf = InferenceScreen()
+    pp = inf.posterior_panel
+    combo = pp.post_picker.combo
+
+    # (a) the item text: the exception is marked, the norm is not, the incomplete row is absent
+    texts = [combo.itemText(i) for i in range(combo.count())]
+    assert texts == [StorePicker.NEW_LABEL, "amort", "round2" + NARROWED_SUFFIX], texts
+    assert NARROWED_SUFFIX.strip().startswith("—"), NARROWED_SUFFIX
+    assert "narrowed (TSNPE)" in NARROWED_SUFFIX, NARROWED_SUFFIX
+
+    # (b) the tooltip keeps every fact and its id-first order, and words amortization the one way
+    tips = [combo.itemData(i, Qt.ToolTipRole) for i in range(combo.count())]
+    assert tips[1] == "20260914T102231 · 2026-09-14T10:22:31 · chi · width 18 · amortized", tips[1]
+    assert tips[2] == ("20260915T090000 · 2026-09-15T09:00:00 · chi · width 18 · "
+                       "narrowed (TSNPE)"), tips[2]
+    assert "NON-AMORTIZED" not in tips[2], tips[2]
+
+    # (c) selection_summary + the line under the combo, for the posterior's two shapes and for none
+    combo.setCurrentIndex(1)
+    assert pp.post_picker.selection_summary() == "chi · width 18 · amortized · 2026-09-14T10:22:31"
+    assert pp.post_line.text() == pp.post_picker.selection_summary(), pp.post_line.text()
+    combo.setCurrentIndex(2)
+    assert pp.post_picker.selection_summary() == \
+        "chi · width 18 · narrowed (TSNPE) · 2026-09-15T09:00:00"
+    assert pp.post_line.text() == pp.post_picker.selection_summary(), pp.post_line.text()
+    combo.setCurrentIndex(0)                       # the "(from scratch)" sentinel is not an artifact
+    assert pp.post_picker.selection_summary() == ""
+    assert pp.post_line.text() == ""
+
+    # (d) the other two kinds: a prior carries only its creation time, an observation its geometry
+    prior_picker = inf.prior_panel.prior_picker
+    prior_picker.combo.setCurrentIndex(1)          # index 0 is "(from scratch)"
+    assert prior_picker.selection_summary() == "2026-09-14T10:00:00"
+    assert inf.prior_panel.prior_line.text() == "2026-09-14T10:00:00"
+    obs_picker = inf.tsnpe_panel.obs_picker        # allow_new=False: index 0 IS the observation
+    assert obs_picker.selection_summary() == "spontaneous · width 50 · 2026-09-16T12:00:00"
+    assert inf.tsnpe_panel.obs_line.text() == "spontaneous · width 50 · 2026-09-16T12:00:00"
+
+    # (e) the line follows a refresh(), not only a click: drop the narrowed posterior and rescan
+    combo.setCurrentIndex(1)
+    rows["posterior"] = rows["posterior"][:1]
+    pp.post_picker.refresh()
+    assert [combo.itemText(i) for i in range(combo.count())] == [StorePicker.NEW_LABEL, "amort"]
+    assert pp.post_line.text() == "chi · width 18 · amortized · 2026-09-14T10:22:31", \
+        pp.post_line.text()

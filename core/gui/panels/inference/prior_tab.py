@@ -74,6 +74,14 @@ class PriorPanel(_StagePanel):
         add_help_row(form, label("bounds"), self.bounds_source, HELP["bounds_source"])
         self.prior_picker = StorePicker("prior", allow_new=True)
         add_help_row(form, label("prior"), self.prior_picker, HELP["prior"])
+        # What the picked prior actually IS, directly beneath the combo (B13): the closed combo shows
+        # a name and nothing else, and a name is not enough to tell two priors apart. Created before
+        # the connect below, because restore_settings at the end of __init__ re-selects a saved id
+        # and that fires currentIndexChanged into this slot.
+        self.prior_line = _TrainingBudgetMixin._derived_label()
+        form.addRow("", self.prior_line)
+        self.prior_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_prior_line())
+        self._sync_prior_line()
         v.addLayout(form)
         self.btn_prior = QPushButton("Build / Load prior")
         self.btn_prior.setProperty("accent", True)        # primary CTA (Fluent accent)
@@ -325,9 +333,21 @@ class PriorPanel(_StagePanel):
         self.prior_picker.restore_key(lp.id)
         self.log_pane.append_line(f"Prior named '{name}'.")
 
+    def _sync_prior_line(self) -> None:
+        """The read-only line under the prior picker (B13).
+
+        Driven by ``currentIndexChanged``, which ``StorePicker.refresh`` also fires -- it clears the
+        combo and repopulates it, and its final ``restore_key`` is the last signal of the batch, so
+        the line ends up describing the item that ends up current. Re-driven from
+        ``refresh_local_gates`` as well, because a stage that writes the store can change what a
+        refresh finds without anyone touching the combo.
+        """
+        self.prior_line.setText(self.prior_picker.selection_summary())
+
     def refresh_local_gates(self):
         self.btn_prior.setEnabled(self.session.draft is not None)
         self.btn_save_prior.setEnabled(self.session.inf_prior is not None)
+        self._sync_prior_line()
 
     def save_settings(self, qs):
         """The two SELECTIONS only (V5): the prior and the bounds file. The seven sweep and clustering
