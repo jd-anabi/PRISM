@@ -639,10 +639,11 @@ def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency
     session that already happened. Rebuilding the config (to fix a bounds file, say) must not discard
     them, unlike the forcing rows, which ARE derivable from the config.
 
-    BLANK FREQUENCY: FloatField.value() returns 0.0 on unparseable text, so an empty box is
-    indistinguishable from a deliberate zero -- and 0 Hz is a genuine DC probe the lock-in would
-    happily attempt. It has to be caught before the run, not after, and an emptied box is said to be
-    blank rather than "got 0".
+    BLANK FREQUENCY: a SEEDED row is blank (piece 4, B16) and is said to be blank. It used to arrive
+    holding "0.0" -- FloatField's own default -- and be refused as "must be a positive number (got
+    0)", a sentence about a value nobody entered, while 0 Hz is a genuine DC probe the lock-in would
+    happily attempt. A TYPED zero keeps that sentence, because a zero somebody typed is a different
+    state from a box nobody filled.
     """
     from core.gui.screens.inference_screen import InferenceScreen
 
@@ -658,18 +659,21 @@ def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency
     assert panel._chi_forced_fields[0].pair() == ("/tmp/keep.csv", 2.5), \
         "a rebuild destroyed hand-entered probe data"
 
-    # Row 2 still holds its seeded zero, which is refused as a zero, naming the row.
-    probs = [p for i, r in enumerate(panel._chi_forced_fields) for p in r.problems(i)]
-    assert any("probe 2" in p and "positive" in p and "got 0" in p for p in probs), probs
-    assert not any("probe 1" in p for p in probs), probs
-    # A box the user EMPTIED is reported as blank (V2: "a blank box is a refusal, never a zero") --
-    # never "must be a positive number (got 0)" about a zero nobody typed.
-    panel._chi_forced_fields[1].freq.setText("")
+    # Row 2 was SEEDED and never typed into: its box is empty and it is reported as blank.
+    assert panel._chi_forced_fields[1].freq.text() == "", panel._chi_forced_fields[1].freq.text()
     probs = [p for i, r in enumerate(panel._chi_forced_fields) for p in r.problems(i)]
     assert "probe 2: drive frequency is blank" in probs, probs
     assert not any("got 0" in p for p in probs), probs
+    assert not any("probe 1" in p for p in probs), probs
 
-    # ...and at the click, the yellow box's sentence is the same one
+    # A zero the user TYPED is a different state, and keeps its own sentence.
+    panel._chi_forced_fields[1].freq.setText("0")
+    probs = [p for i, r in enumerate(panel._chi_forced_fields) for p in r.problems(i)]
+    assert any("probe 2" in p and "positive" in p and "got 0" in p for p in probs), probs
+    assert not any("is blank" in p for p in probs), probs
+
+    # ...and at the click, the yellow box's sentence is the blank one again
+    panel._chi_forced_fields[1].freq.setText("")
     inf.session.posterior = _posterior_stub()
     refused, sent = [], {}
     panel._refusal = lambda exc: refused.append(exc)
@@ -686,6 +690,68 @@ def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency
     assert sent == {} and len(refused) == 1 and refused[-1].field == "recording_probe", (sent, refused)
     assert "probe 2: drive frequency is blank" in refused[-1].message, refused[-1].message
     assert "got 0" not in refused[-1].message, refused[-1].message
+
+
+def test_a_new_probe_row_starts_blank_and_floatfield_accepts_none():
+    """``FloatField(None)`` is an EMPTY box; every other default still shows its number, including the
+    several call sites that hand it a pre-formatted string. Nothing persists a probe row
+    (infer_tab.save_settings says so), so this touches only the in-session seed -- and a seed the user
+    has to fill is the point: the frequency is entered, never derived (see _ChiProbeRow's docstring),
+    because the frequencies a bench achieves are not exactly mult_k * Omega_0."""
+    from core.gui.panels.inference.rows import _ChiProbeRow
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.widgets.labeled_inputs import FloatField
+    from tests._fixtures import qt_app
+
+    qt_app()
+    assert FloatField(None).text() == ""
+    assert FloatField(None).value_or_none() is None
+    assert FloatField(None).value() == 0.0, "value() keeps its 0.0 fallback: value_or_none() is the rule"
+    assert FloatField(0.0).text() == "0.0" and FloatField(2.5).text() == "2.5"
+    assert FloatField("0.33").text() == "0.33", "the string call sites (config/prior/posterior tabs) stand"
+
+    assert _ChiProbeRow(lambda _row: None).freq.text() == ""
+    assert _ChiProbeRow(lambda _row: None, 7.5).freq.text() == "7.5", "an explicit seed still seeds"
+
+    inf = InferenceScreen()
+    inf.install_config(_chi_cfg(k=3))
+    panel = inf.infer_panel
+    assert len(panel._chi_forced_fields) == 3
+    assert [r.freq.text() for r in panel._chi_forced_fields] == ["", "", ""]
+    row = panel._add_chi_probe()
+    assert row is not None and row.freq.text() == "" and row.freq.value_or_none() is None
+    assert panel._add_chi_probe(12.25).freq.text() == "12.25"
+
+
+def test_the_planner_and_the_probe_row_give_a_blank_frequency_one_sentence():
+    """B16's second half. One state had two wordings a user could meet minutes apart: the tab's
+    ``probe N: drive frequency is blank`` at the click, and "Plan probes…"'s ``no frequency entered``.
+    The tab's is the one, which also makes the planner's own "Filled N blank frequency box(es)" line
+    literally true. The TYPED-ZERO sentences are deliberately untouched at both layers -- the tab's
+    "(got 0)" and chi.probe_verdict's "must be finite and positive, got 0.0 Hz".
+
+    Pinned on the row's real output and on the planner's PARSED source (code_only, so the comments in
+    that region cannot answer for the code). The planner's branch is defensive: the nominal-grid fill
+    a few lines above it covers every blank box, so nothing reaches it unless the grid comes back
+    shorter than the list of blanks."""
+    from core.gui.panels.inference.infer_tab import InferPanel
+    from core.gui.panels.inference.rows import _ChiProbeRow
+    from core.SBI import chi as chi_mod
+    from tests._fixtures import code_only, qt_app
+
+    qt_app()
+    blank = _ChiProbeRow(lambda _row: None).problems(0)
+    assert blank == ["probe 1: no recording selected", "probe 1: drive frequency is blank"], blank
+
+    src = code_only(InferPanel._plan_chi_probes)
+    assert "drive frequency is blank" in src, "the planner still has a wording of its own for a blank"
+    assert "no frequency entered" not in src, "the planner's old wording is still there"
+    assert "Filled" in src and "blank frequency box" in src
+
+    # the typed-zero sentences, both layers, unchanged
+    typed = _ChiProbeRow(lambda _row: None, 0.0).problems(0)
+    assert "probe 1: drive frequency must be a positive number (got 0)" in typed, typed
+    assert "must be finite and positive, got" in code_only(chi_mod.probe_verdict)
 
 def test_config_units_control_declares_units_and_validates_them():
     """Units DECLARE what the numbers in the files mean (never converting them). Typed units must reach

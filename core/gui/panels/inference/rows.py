@@ -34,7 +34,7 @@ class _ChiProbeRow(QWidget):
     orchestrator.build_experiment_obs_chi, which stopped guessing them for the same reason.
     """
 
-    def __init__(self, on_remove, freq_hz: float = 0.0, parent=None):
+    def __init__(self, on_remove, freq_hz: "float | None" = None, parent=None):
         super().__init__(parent)
         self.path = PathField()
         self.freq = FloatField(freq_hz)
@@ -62,10 +62,11 @@ class _ChiProbeRow(QWidget):
         out = []
         if not self.path.value():
             out.append(f"probe {index + 1}: no recording selected")
-        # FloatField.value() returns 0.0 on unparseable text, so a BLANK box is indistinguishable from
-        # a deliberate zero unless it is checked here -- and 0 Hz is a genuine DC probe the lock-in
-        # would happily attempt. This is the check that stops a typo becoming a measurement. Read
-        # through value_or_none() (V2): a blank box is said to be blank, never "got 0".
+        # A row the table SEEDED has an empty box (piece 4, B16, FloatField(None)) -- and 0 Hz is a
+        # genuine DC probe the lock-in would happily attempt, so the two states must not share a
+        # sentence. Read through value_or_none() (V2): a blank box is said to be blank, and only a
+        # zero somebody typed is reported as "got 0". This is the check that stops a typo becoming a
+        # measurement.
         f = self.freq.value_or_none()
         if f is None:
             out.append(f"probe {index + 1}: drive frequency is blank")

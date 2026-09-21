@@ -11,8 +11,11 @@ from ..design import FIELD_MIN_W, PATH_FIELD_MIN_W
 
 
 class FloatField(QLineEdit):
-    def __init__(self, default: float = 0.0, parent=None):
-        super().__init__(str(default), parent)
+    def __init__(self, default: "float | None" = 0.0, parent=None):
+        # None is an EMPTY box, not the text "None": a seeded value nobody typed is a different state
+        # from a blank one, and value_or_none() is what tells them apart (piece 4, B16). Several
+        # callers hand this a pre-formatted string instead of a float, which str() leaves alone.
+        super().__init__("" if default is None else str(default), parent)
         self.setValidator(QDoubleValidator())
         self.setMinimumWidth(FIELD_MIN_W)
 

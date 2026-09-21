@@ -211,8 +211,11 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         mode = cfg.observation_mode if cfg is not None else "forced"
         self.infer_stack.setCurrentIndex(2 if mode == "chi" else 1)
 
-    def _add_chi_probe(self, freq_hz: float = 0.0):
-        """Append one probe row, up to the posterior's slot capacity."""
+    def _add_chi_probe(self, freq_hz: "float | None" = None):
+        """Append one probe row, up to the posterior's slot capacity. The frequency box starts BLANK
+        (piece 4, B16): the frequency is entered, never derived, so a seeded number would be a claim
+        about the bench that nobody made. "Plan probes…" fills the blanks with a nominal in-band grid
+        on request, and says they are suggestions."""
         cfg = self.session.cfg
         cap = cfg.chi_k_pad if cfg is not None and cfg.chi_mode else config.CHI_K_PAD
         if len(self._chi_forced_fields) >= cap:
@@ -323,7 +326,9 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         for i, row in enumerate(self._chi_forced_fields):
             f = _probe_frequency(row)
             if f is None:
-                self.log_pane.append_line(f"  probe {i + 1}: no frequency entered.", "warning")
+                # The TAB's sentence, verbatim (piece 4, B16): the same state the click refuses with
+                # ``probe N: drive frequency is blank`` must not be described differently here.
+                self.log_pane.append_line(f"  probe {i + 1}: drive frequency is blank.", "warning")
                 continue
             v = _chi.probe_verdict(cfg, f_peak, f, n_samp)
             if v.action == "use":
