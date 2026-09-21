@@ -4350,25 +4350,21 @@ def test_training_creates_no_sbi_logs_directory(tmp_path, monkeypatch):
     assert not logs.exists(), f"an explicit writer must be used instead of sbi's default: {logs}"
 
 
-def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_original(monkeypatch):
-    """THE collision no gate can provoke (piece 4, B15). The run crashes with the cancel token
-    REQUESTED AND NOT YET FIRED -- Cancel pressed in the moment before the failure -- and the rescue
-    block's own announcement is then the next cancel checkpoint. Before B15 that announcement raised
-    WorkerCancelled from inside the ``except BaseException`` handler: ``_tc.save`` was skipped, the
-    re-raise at the end of the block was never reached, and every batch since the last cadence write
-    was lost while the window reported a clean cancellation.
+def _crash_batch_3_with_a_cancel_pending(monkeypatch, crash):
+    """Run a checkpointed chi generation that crashes in batch 3 with a cancel REQUESTED AND NOT YET
+    FIRED, and assert what every such crash owes: the ORIGINAL exception escapes, the latch is never
+    consumed, the rescue write commits batch 2, and the cancel is deferred rather than discarded --
+    the first record afterwards still raises it. Returns the lines the window's handler carried, as
+    ``(text, level)``, for the caller's own assertions.
 
-    Both halves of the repair are pinned here: the rows are committed, AND the original exception is
-    what escapes. The second half is what lets the window report the crash through its ordinary crash
-    path with no special case in ``Worker.run``
-    (tests/test_worker_dispatch.py::test_a_cancel_never_reports_a_failure_as_a_clean_stop, leg (a)).
+    ``crash(token)`` runs at the first ``gen_stats`` call of batch 3 and must raise ``_KillRun``.
 
     Driven through the window's THIRD channel rather than a stream swap: ``_PumpLogHandler`` is the
     handler the window puts on the ``core`` logger for a run, and it checks the same token the streams
     do, so installing it alone makes the pipeline's records the ONLY cancel checkpoint in the process
     -- which is what makes this deterministic. ``sys.stdout``/``sys.stderr`` are untouched, so no tqdm
-    teardown write can consume the latch on the way out; the assertion on ``token.fired`` below is
-    what keeps that true, and a future seam change fails loudly instead of quietly measuring nothing.
+    teardown write can consume the latch on the way out; the assertion on ``token.fired`` is what
+    keeps that true, and a future seam change fails loudly instead of quietly measuring nothing.
 
     Cadence 2 over 4 batches: [0,2) is committed at the end of batch 1, batch 2 completes uncommitted,
     and batch 3 crashes -- so the rescue write owes exactly batch 2 and ``batches_done`` must be 3.
@@ -4396,24 +4392,24 @@ def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_origi
     real = pipeline_mod.gen_stats
     seen = {"n": -1, "last": None}
 
-    def _cancel_then_crash(x_spont, *a, **k):
+    def _crash_in_batch_3(x_spont, *a, **k):
         if seen["last"] is not pipeline_mod._BATCH_TAG:
             seen["last"] = pipeline_mod._BATCH_TAG
             seen["n"] += 1
         if seen["n"] >= 3:
-            token.requested.set()              # Cancel pressed; the latch has NOT fired
-            raise _KillRun("the batch failed")
+            crash(token)
+            raise AssertionError("crash() must raise _KillRun")
         return real(x_spont, *a, **k)
 
-    monkeypatch.setattr(pipeline_mod, "gen_stats", _cancel_then_crash)
+    monkeypatch.setattr(pipeline_mod, "gen_stats", _crash_in_batch_3)
     core_logger.addHandler(handler)
     try:
         with pytest.raises(_KillRun):
             _gen_td("chi", seed=11, n_runs=4, run_size=2, checkpoint=_ck(tmp, resume="never"))
 
         assert token.requested.is_set() and token.fired is False, (
-            "the rescue block's own record was NOT the next cancel checkpoint -- something else "
-            "consumed the latch on the way out, so this test is measuring nothing")
+            "a cancel checkpoint fired on the way out -- the crash was replaced by a cancel, or "
+            "something else consumed the latch and this test is measuring nothing")
         st = tc.peek(tmp)
         assert st and st["batches_done"] == 3, (
             f"the rescue write did not run: {st}. The cadence write covered [0,2); batch 2 completed "
@@ -4421,9 +4417,59 @@ def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_origi
         assert any("[checkpoint] stopping: saving 1 completed batches" in text
                    for text, _level in fake.logs), fake.logs
 
-        # DEFERRED, never discarded: the first record after the section still raises.
+        # DEFERRED, never discarded: the first record in normal flow still raises.
         with pytest.raises(WorkerCancelled):
             logging.getLogger("core.probe").info("the first record after the rescue write")
         assert token.fired is True
+        return list(fake.logs)
     finally:
         core_logger.removeHandler(handler)
+
+
+def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_original(monkeypatch):
+    """THE collision no gate can provoke (piece 4, B15). The run crashes with the cancel token
+    REQUESTED AND NOT YET FIRED -- Cancel pressed in the moment before the failure -- and the rescue
+    block's own announcement is then the next cancel checkpoint. Before B15 that announcement raised
+    WorkerCancelled from inside the ``except BaseException`` handler: ``_tc.save`` was skipped, the
+    re-raise at the end of the block was never reached, and every batch since the last cadence write
+    was lost while the window reported a clean cancellation.
+
+    Both halves of the repair are pinned here: the rows are committed, AND the original exception is
+    what escapes. The second half is what lets the window report the crash through its ordinary crash
+    path (tests/test_worker_dispatch.py::test_a_cancel_never_reports_a_failure_as_a_clean_stop, leg
+    (a)). Two rules now cover the block, deliberately: its explicit ``cancel_deferred()`` section (pinned
+    in source by test_a_failed_snapshot_never_writes_a_stale_restore_point) and the raise-time
+    deferral, since the block is an ``except`` clause and a checkpoint reached while an exception is
+    being handled does not fire."""
+    def crash(token):
+        token.requested.set()                  # Cancel pressed; the latch has NOT fired
+        raise _KillRun("the batch failed")
+
+    _crash_batch_3_with_a_cancel_pending(monkeypatch, crash)
+
+
+def test_a_crash_unwinding_through_a_finally_that_speaks_still_saves_and_raises_the_original(monkeypatch):
+    """THE RACE THE FIRST B15 DESIGN CALLED RESIDUAL, and it is not rare (piece 4, B15 fix round 1).
+    ``sdeint.euler_compiled`` wraps the graphed CUDA solver -- the likeliest place for a GPU run to
+    crash -- in ``try ... finally: bar.close()``, and the bar's closing write is a cancel checkpoint
+    reached while the crash unwinds. With a cancel requested and not yet fired, that checkpoint used to
+    raise: WorkerCancelled REPLACED the crash (chained to it as ``__context__``), the rescue block saved
+    the rows and re-raised the cancel, and the window said "Run cancelled." about a run that had
+    crashed, with the crash only in the log pane.
+
+    The raise-time deferral (``core.runs.cancel_is_deferred``: no checkpoint fires while this thread is
+    handling an exception) keeps the crash the crash: the ``finally``'s record is carried, the ORIGINAL
+    exception reaches the rescue block, the rows are committed, the original escapes -- and the cancel
+    is still taken at the first record in normal flow. The shape is the solver's: a record in a
+    ``finally`` the crash passes through, inside the batch."""
+    import logging
+
+    def crash(token):
+        token.requested.set()
+        try:
+            raise _KillRun("the graphed solver failed")
+        finally:
+            logging.getLogger("core.Solvers.sdeint").info("closing the solver's bar")
+
+    said = _crash_batch_3_with_a_cancel_pending(monkeypatch, crash)
+    assert ("closing the solver's bar", "info") in said, said

@@ -197,8 +197,10 @@ class _SignalStream:
         # through here, so this is the pipeline's cancellation checkpoint, reaching even inside sbi's
         # fit loop (it prints an epoch counter every epoch).
         # ...except inside a runs.cancel_deferred() section (piece 4, B15), where raising would land
-        # between two writes that must both happen. The token is NOT cleared there: it stays requested
-        # and the next write outside the section raises.
+        # between two writes that must both happen, OR while this thread is handling an exception
+        # (piece 4, B15 fix round 1: runs.cancel_is_deferred() also reads sys.exc_info()), where
+        # raising would REPLACE whatever is unwinding with a false "Run cancelled.". The token is NOT
+        # cleared either way: it stays requested and the next write in normal flow raises.
         if self._cancel is not None and not runs.cancel_is_deferred():
             self._cancel.check()
         if self._broken:                      # degraded: dumb line split, but never lose output
@@ -233,7 +235,12 @@ class _PumpLogHandler(logging.Handler):
     well. That is why training_checkpoint's ordering rule reads "do not print() or log between steps
     1 and 3". Since piece 4 (B15) that rule is also a MECHANISM: the commit runs inside
     runs.cancel_deferred(), and both checkpoints consult it before raising, so a record emitted
-    between a shard's fsync and the state replace is carried rather than fatal.
+    between a shard's fsync and the state replace is carried rather than fatal. Since B15 fix round 1,
+    a record reached while this thread is handling an exception (any ``except``, any ``finally`` or
+    ``__exit__`` an exception entered, any generator teardown) is carried the same way, with no
+    section needed -- see runs.cancel_is_deferred -- so a crash unwinding through a record-emitting
+    ``finally`` (core/Solvers/sdeint.py's bar teardown, notably) reaches Worker.run as the crash it is
+    rather than being replaced by a cancel.
     """
 
     def __init__(self, pump, cancel: "CancelToken | None"):

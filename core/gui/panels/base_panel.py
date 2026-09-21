@@ -20,6 +20,12 @@ from ..widgets.progress_pane import ProgressPane
 from ..widgets.refusal_box import show_refusal
 from ..worker import Worker
 
+# "The cancel noted" (piece 4, B15 fix round 1): shown alongside an ordinary crash report when the
+# cancel token had already been REQUESTED at the moment the failure was caught. It never claims the
+# cancel caused the failure (the two are independent: the run crashed, and separately someone had
+# clicked Cancel) -- only that both are true, which the person who clicked Cancel is owed.
+CANCEL_NOTED_TEXT = "A cancel was requested before the run failed."
+
 
 def _png_fig_sink(figure_signal):
     """Return a ``(title, fig) -> None`` sink that renders a matplotlib Figure to PNG bytes ON THE
@@ -429,13 +435,22 @@ class BasePanel(QWidget):
         self.log_pane.append_line(f"{exc.message} {fix}".rstrip(), "warning")
         show_refusal(self, exc)
 
-    def _on_error(self, exc_or_message, tb: str) -> None:
+    def _on_error(self, exc_or_message, tb: str, cancel_noted: bool = False) -> None:
         """Show a failure. A Refusal goes to the yellow box (_refusal); anything else is a bug and
         gets the red one, with the traceback in a collapsible Details panel rather than pasted whole
         into the body (which produced an unscrollable, un-copyable wall of text stretched to the
         widest stack frame). Connected to WorkerSignals.error, which carries the exception object;
-        a click handler that catches on the GUI thread passes what it caught the same way. A plain
-        string is still accepted and is still a bug."""
+        a click handler that catches on the GUI thread passes what it caught the same way (omitting
+        ``cancel_noted``, which defaults to False -- a GUI-thread click has no worker cancel token to
+        ask). A plain string is still accepted and is still a bug.
+
+        ``cancel_noted`` (piece 4, B15 fix round 1): true when the cancel token had already been
+        REQUESTED at the moment ``Worker.run`` caught this failure -- a coincidence, never a cause
+        (the crash is reported as a crash regardless; see core/gui/worker.py). Shown as an extra line
+        in both places a crash is reported, appended AFTER the crash itself: the box's informative
+        text (below the one-line summary, above Details) and the pane, at warning, after the error
+        line. Never shown for a Refusal -- that box is about fixing an input, not about a run.
+        """
         if isinstance(exc_or_message, Refusal):
             return self._refusal(exc_or_message)
         message = str(exc_or_message)
@@ -446,4 +461,7 @@ class BasePanel(QWidget):
         box.setText(message)
         if tb:
             box.setDetailedText(tb)
+        if cancel_noted:
+            box.setInformativeText(CANCEL_NOTED_TEXT)
+            self.log_pane.append_line(CANCEL_NOTED_TEXT, "warning")
         box.exec()

@@ -19,11 +19,15 @@ context manager the front ends' cancel checkpoints consult:
   (PreflightWarning judgements included); ArtifactWriter._commit writes the buffer so far to
   `log.txt` in every artifact the entry commits. A composition and the stages it calls share one
   buffer: `capture_run` pushes only when none is active on this thread.
-- THE DEFERRED CANCEL (piece 4, B15). `cancel_deferred()` is the named critical section inside which
-  the window's cancel checkpoints do not fire, so a Cancel that would otherwise land where a raise
-  skips a write that must happen -- inside the checkpoint commit and the completion write, and in
-  the training rescue save a crashing run makes on its way out -- is deferred rather than taken. The
-  token stays requested and the next check outside the section raises as usual.
+- THE DEFERRED CANCEL (piece 4, B15; the raise-time half is B15 fix round 1). `cancel_is_deferred()`
+  is true in TWO cases, either sufficient on its own: inside the named critical section
+  `cancel_deferred()` opens (COUNTED, explicit -- the checkpoint commit and the completion write, and
+  the training rescue save's own section), OR while THIS thread is handling an exception
+  (`sys.exc_info()[1] is not None` -- inside every `except`, every `finally` a propagating exception
+  entered, every `__exit__` leaving by one, and every generator teardown). A Cancel that would
+  otherwise land where a raise skips a write that must happen, or REPLACES a crash that is still
+  unwinding with a clean "Run cancelled.", is deferred rather than taken either way. The token stays
+  requested and the next check outside both is what raises.
 
 The `core` logger's level is set to INFO here, ONCE, at import. Python's root logger sits at
 WARNING, so without this the window's handler and the artifact file would drop every information
@@ -34,6 +38,7 @@ import datetime
 import functools
 import logging
 import os
+import sys
 import threading
 import warnings
 from contextlib import contextmanager
@@ -155,10 +160,34 @@ _deferred = threading.local()                  # _deferred.depth: how many secti
 
 
 def cancel_is_deferred() -> bool:
-    """True inside a ``cancel_deferred()`` block ON THIS THREAD. Read by the window's two cancel
-    checkpoints (``gui.streams._SignalStream.write`` and ``_PumpLogHandler.emit``) before they call
-    ``CancelToken.check()``."""
-    return getattr(_deferred, "depth", 0) > 0
+    """True inside a ``cancel_deferred()`` block ON THIS THREAD, OR while this thread is handling an
+    exception (piece 4, B15 fix round 1). Read by the window's two cancel checkpoints
+    (``gui.streams._SignalStream.write`` and ``_PumpLogHandler.emit``) before they call
+    ``CancelToken.check()``.
+
+    THE SECOND HALF: ``sys.exc_info()[1] is not None`` is true inside every ``except`` clause, every
+    ``finally`` a propagating exception entered (even before any ``except`` has matched it), every
+    ``__exit__`` leaving a ``with`` block by one, and every generator's teardown (a ``finally`` run by
+    ``GeneratorExit``, e.g. tqdm's ``__iter__``: ``finally: self.close()``) -- and it is None again the
+    moment such a block exits normally (an ``except`` that RECOVERED and fell off the end, in
+    particular), so normal flow is untouched. Verified against CPython's actual behaviour, per shape,
+    in tests/test_worker_dispatch.py.
+
+    A checkpoint reached this way used to fire mid-unwind and REPLACE whatever was propagating with a
+    clean "Run cancelled." -- the residual race the first B15 design left open, and not a rare one:
+    core/Solvers/sdeint.py's ``try ... finally: bar.close()`` sits on the graphed CUDA solver, the
+    likeliest GPU crash site. This rule defers there too, so the ORIGINAL failure reaches
+    ``Worker.run``'s generic handler and is reported as the crash it is, with the cancel noted rather
+    than substituted.
+
+    Only a raise is deferred, never discarded: nothing here silences a record or a print, and the
+    token stays REQUESTED -- the first check once every handler on the stack has exited (normal flow
+    again) is what raises. THE FIRST HALF (the explicit section) still matters on its own: a checkpoint
+    commit and a completion write are NOT exception handlers -- they run in normal flow -- so this
+    second rule does not reach them, and `cancel_deferred()` is what protects a write that must not be
+    interrupted mid-sequence.
+    """
+    return getattr(_deferred, "depth", 0) > 0 or sys.exc_info()[1] is not None
 
 
 @contextmanager
@@ -166,10 +195,17 @@ def cancel_deferred():
     """Inside this block a front end's cancel checkpoint does not fire: records still flow, the token
     stays REQUESTED, and the next check outside the block raises as usual.
 
-    It exists for the unwind path (the training rescue save), the checkpoint commit and the
-    completion write -- the places where a raise would skip a write that must happen: the rescue
-    save that commits a crashed run's completed batches, the state replace after the shards' fsync,
-    the manifest refresh after state.pt moves. It defers a cancel; it never discards one.
+    It exists for the checkpoint commit and the completion write, and (belt and suspenders, alongside
+    the raise-time rule below) the training rescue save's own section -- the places where a raise
+    would skip a write that must happen: the state replace after the shards' fsync, the manifest
+    refresh after state.pt moves, the rescue save that commits a crashed run's completed batches. It
+    defers a cancel; it never discards one.
+
+    SINCE PIECE 4'S B15 FIX ROUND 1, ``cancel_is_deferred()`` also defers whenever THIS thread is
+    handling an exception (``sys.exc_info()[1] is not None``), with no section needed -- see that
+    function's docstring. The checkpoint commit and the completion write still need THIS explicit
+    section: they are normal-flow writes, not exception handlers, so the raise-time rule does not
+    reach them.
 
     PER THREAD and COUNTED. Per thread, because the token only ever raises on the armed (worker)
     thread and a GUI-thread print must not be silenced by a worker's section. Counted, because the

@@ -1427,49 +1427,28 @@ def test_cancel_deferred_applies_only_to_the_thread_that_entered_it():
     assert token.fired is True
 
 
-def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
-    """Three shapes, one branch (piece 4, B15).
+# ── piece 4, B15 fix round 1: a cancel waits out an exception handler; a crash stays a crash ──────
+def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow():
+    """The raise-time deferral at the unit level (``core.runs.cancel_is_deferred``), on both cancel
+    checkpoints -- ``_SignalStream.write`` (every print and tqdm redraw) and ``_PumpLogHandler.emit``
+    (every ``core`` record).
 
-    (a) THE COLLISION -- Cancel pressed in the moment before a crash. The pipeline's rescue write now
-    runs inside ``runs.cancel_deferred()`` (Step 3), so the checkpoint it crosses does not fire, the
-    rows are committed, and the ORIGINAL exception keeps propagating. It reaches ``Worker.run``'s
-    generic handler and is reported like any other crash: the red box, its traceback in Details, the
-    message in the pane, and NO cancellation. The window needs no special case for this, and this leg
-    is the pin that keeps that true. The fn below is the rescue block's SHAPE, not the pipeline: a
-    token requested-and-not-yet-fired, a record and a print inside the section, then a bare ``raise``.
-    The section is per thread and the fn runs on the worker thread, so the token is armed there too.
-    No tqdm bar is live, deliberately (P35): a bar's teardown write would consume the latch on the way
-    out, and the ``fired is False`` assertion is what stops this leg from measuring nothing.
+    (c) THE KEY REGRESSION: in NORMAL flow a requested cancel is taken at the very next check, and it
+    raises BEFORE the line is sunk, as it always has. Checked plain and right after the three things a
+    sticky or over-broad rule would leak out of: an ``except`` that recovered, a ``finally`` reached
+    normally, a ``with`` that exited normally.
 
-    (b) THE RESIDUAL RACE, and why the chain is not the verdict. A cancel raised inside a RECOVERED
-    ``except`` block -- which is exactly where the OOM ladders log -- carries the handled exception as
-    its ``__context__``. Reporting the first non-cancel link as THE failure would therefore open a red
-    box for an OOM the run survived. So this stays a CANCEL: no error signal, no dialog. Nothing is
-    discarded either -- what was in flight goes to the pane at ERROR, whole traceback, under a warning
-    line saying a failure was in flight.
-
-    (c) A CLEAN cancel -- nothing chained -- is exactly what it was: one ``Run cancelled.`` line.
-
-    Whether the run was reported as a cancel is read off the PANE, not off a signal this test
-    connects: ``BasePanel.dispatch`` connects ``cancelled`` to the pane's ``Run cancelled.`` line
-    before the worker starts, so there is no window in which a fast worker could emit before the test
-    is listening.
-    """
+    (d) DELAYED, NEVER LOST: inside each of the four ways a thread can be handling an exception -- an
+    ``except``, a ``finally`` reached by one, an ``__exit__`` leaving by one, a generator's teardown
+    (tqdm's ``finally: self.close()``) -- both checkpoints carry their line instead of raising, the
+    token stays REQUESTED with its latch unfired, and the first check after the handler has exited
+    raises."""
     import logging
 
-    from PySide6.QtWidgets import QMessageBox
+    import pytest
 
     from core import runs
     from core.gui.streams import CancelToken, WorkerCancelled, _PumpLogHandler, _SignalStream
-    from tests._fixtures import SHOWN, PaneCapture, pump, qt_app
-
-    app = qt_app()
-
-    class P(BasePanel):
-        pass
-
-    panel = P()
-    pane = PaneCapture(panel)
 
     class _FakePump:
         def __init__(self):
@@ -1478,70 +1457,313 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
         def sink(self, kind, payload):
             self.logs.append((kind, payload))
 
-    token, fake = CancelToken(), _FakePump()
-    rescue = logging.LogRecord("core.SBI.pipeline", logging.INFO, __file__, 1,
-                               "[checkpoint] stopping: saving 1 completed batches", (), None)
+    def rigged():
+        token, fake = CancelToken(), _FakePump()
+        token.arm()                            # this thread plays the worker
+        token.requested.set()                  # Cancel pressed, latch not yet fired
+        return token, fake, _SignalStream(fake, "out", "info", token), _PumpLogHandler(fake, token)
+
+    def record(text):
+        return logging.LogRecord("core.probe", logging.INFO, __file__, 1, text, (), None)
+
+    # (c) normal flow
+    def nothing_before():
+        pass
+
+    def after_a_recovered_except():
+        try:
+            raise RuntimeError("recovered")
+        except RuntimeError:
+            pass
+
+    def after_a_finally_reached_normally():
+        try:
+            pass
+        finally:
+            pass
+
+    def after_a_with_that_exited_normally():
+        with contextlib.nullcontext():
+            pass
+
+    for before in (nothing_before, after_a_recovered_except, after_a_finally_reached_normally,
+                   after_a_with_that_exited_normally):
+        for channel in ("record", "print"):
+            token, fake, stream, handler = rigged()
+            before()
+            assert runs.cancel_is_deferred() is False, (before.__name__, channel)
+            with pytest.raises(WorkerCancelled):
+                if channel == "record":
+                    handler.emit(record("the very next record"))
+                else:
+                    stream.write("the very next print\n")
+            assert token.fired is True and fake.logs == [], (before.__name__, channel, fake.logs)
+
+    # (d) inside a handler: carried; after it: taken
+    class _Swallow:
+        def __init__(self, speak):
+            self.speak = speak
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self.speak()
+            return True
+
+    def in_an_except(speak):
+        try:
+            raise RuntimeError("x")
+        except RuntimeError:
+            speak()
+
+    def in_a_finally_reached_by_one(speak):
+        try:
+            try:
+                raise RuntimeError("x")
+            finally:
+                speak()
+        except RuntimeError:
+            pass
+
+    def in_an_exit_leaving_by_one(speak):
+        with _Swallow(speak):
+            raise RuntimeError("x")
+
+    def in_a_generator_teardown(speak):
+        def bar():
+            try:
+                yield 1
+            finally:                           # tqdm.__iter__'s `finally: self.close()`
+                speak()
+        it = bar()
+        next(it)
+        it.close()
+
+    for shape in (in_an_except, in_a_finally_reached_by_one, in_an_exit_leaving_by_one,
+                  in_a_generator_teardown):
+        token, fake, stream, handler = rigged()
+        inside = {}
+
+        def speak():
+            inside["deferred"] = runs.cancel_is_deferred()
+            handler.emit(record("a record inside the handler"))
+            stream.write("a print inside the handler\n")
+
+        shape(speak)
+        assert inside["deferred"] is True, shape.__name__
+        assert token.fired is False and token.requested.is_set(), \
+            f"{shape.__name__}: the cancel fired inside the handler"
+        said = [payload[0] for kind, payload in fake.logs if kind == "log"]
+        assert "a record inside the handler" in said, (shape.__name__, fake.logs)
+        assert any("a print inside the handler" in t for t in said), (shape.__name__, fake.logs)
+        assert runs.cancel_is_deferred() is False, f"{shape.__name__}: the deferral outlived the handler"
+        with pytest.raises(WorkerCancelled):
+            handler.emit(record("the first record after the handler"))
+        assert token.fired is True, f"{shape.__name__}: the deferred cancel was lost"
+
+
+_STOP = ("warning", "Run cancelled.")
+_NOTED = "A cancel was requested before the run failed"
+
+
+def _run_leg(app, panel, pane, fn, wait_for_dialog):
+    """Dispatch ``fn`` on ``panel`` and drive the event loop until the run has settled: the panel is
+    idle and, when a dialog is expected, the box has been shown. Each leg reads only its own pane
+    lines and its own dialogs."""
+    from tests._fixtures import SHOWN
+
+    SHOWN.clear()
+    del pane.lines[:]
+    panel.dispatch(fn)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and (panel._busy or (wait_for_dialog and not SHOWN)):
+        app.processEvents()
+        time.sleep(0.01)
+    pump(app, 0.2)
+    assert not panel._busy, "the panel stayed busy"
+
+
+def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
+    """Every leg runs through the WINDOW'S OWN channels -- a real ``print`` and a real ``core`` record
+    under the ``redirect_streams`` the dispatch installs -- and requests the PANEL'S OWN token
+    (``panel._cancel``, which ``Worker.run`` holds as ``self.cancel``), so a Worker.run that decides
+    anything from its token is exercised for real.
+
+    The rule under test is the raise-time deferral (``core.runs.cancel_is_deferred``): no cancel
+    checkpoint fires while THIS thread is handling an exception -- inside an ``except``, a ``finally``
+    reached by one, an ``__exit__`` leaving by one, a generator's teardown -- or inside an explicit
+    ``cancel_deferred()`` section. Normal flow is untouched (leg (c), and the unit test above).
+
+    (a) THE COLLISION -- Cancel pressed in the moment before a crash, in the rescue block's shape: a
+    record and a print inside the section, then a bare ``raise``. The ORIGINAL exception reaches
+    Worker.run's generic handler: the red box, its traceback in Details, the message in the pane --
+    and, because the token had been requested, the cancel NOTED in the pane and in the box.
+
+    (a2) THE RACE THE FIRST DESIGN CALLED RESIDUAL, and it is not rare: ``sdeint.euler_compiled``'s
+    ``try ... finally: bar.close()`` sits on the graphed CUDA solver, the likeliest GPU crash site,
+    and the bar's closing write is a checkpoint reached while the crash unwinds. It used to raise
+    WorkerCancelled chained to the crash, and the crash was told as "Run cancelled.". Now it is a
+    crash, reported as one, with the cancel noted.
+
+    (b) A RECOVERED GUARD. The three best-effort guards in core/SBI/pipeline.py --
+    ``_release_device_memory``'s ``_try``, ``_try_rng_snapshot`` and ``_try_rng_restore`` -- log from
+    INSIDE their ``except`` and carry on. (The OOM ladders do not: they bind a note inside the
+    handler and log after it has closed.) A cancel taken inside such a guard would carry the handled
+    exception as its ``__context__``. Deferred, it is taken at the first check AFTER the guard, in
+    normal flow, with nothing chained: a plain cancel, no dialog, no in-flight line -- and the guard's
+    own warning still reaches the pane.
+
+    (c) A CANCEL IN NORMAL FLOW is taken at the very next check: the print it lands on never reaches
+    the pane and the line after it never runs.
+
+    (f) THE FALLBACK. A WorkerCancelled raised EXPLICITLY inside a handler -- no checkpoint does that
+    any more -- still carries a context. It stays a cancel, and what it carried is kept in the pane at
+    ERROR under a HEDGED line, because the chain cannot say whether that exception was still in flight
+    or had already been recovered from.
+
+    The live-bar collision, leg (e), is the next test.
+    """
+    import logging
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from core import runs
+    from core.gui.streams import WorkerCancelled
+    from tests._fixtures import SHOWN, PaneCapture
+
+    app = qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    pane = PaneCapture(panel)
+    log = logging.getLogger("core.SBI.pipeline")
+    reached = []
 
     def crash_behind_the_section():
-        token.arm()                            # the fn runs on the worker thread, and so must the
-        token.requested.set()                  # section: Cancel pressed just before the failure
+        panel._cancel.requested.set()          # Cancel pressed just before the failure
         try:
             raise RuntimeError("the batch failed")
         except RuntimeError:
-            with runs.cancel_deferred():       # what pipeline.py's rescue block now opens
-                _PumpLogHandler(fake, token).emit(rescue)
-                _SignalStream(fake, "out", "info", token).write("a print beside the rescue write\n")
+            with runs.cancel_deferred():       # what pipeline.py's rescue block opens
+                log.info("[checkpoint] stopping: saving 1 completed batches")
+                print("a print beside the rescue write")
             raise                              # the ORIGINAL exception, unconditionally
 
-    def cancel_inside_a_recovered_handler():
+    def crash_through_a_finally_that_speaks():
+        panel._cancel.requested.set()
         try:
-            raise RuntimeError("the OOM the ladder survived")
+            raise RuntimeError("the graphed solver failed")
+        finally:                               # sdeint.euler_compiled: `finally: bar.close()`
+            print("the bar's last frame")
+            logging.getLogger("core.Solvers.sdeint").info("closing the solver's bar")
+
+    def recovered_guard_then_normal_flow():
+        panel._cancel.requested.set()
+        try:
+            raise RuntimeError("empty_cache() on a starved card")
         except RuntimeError:
-            # The ladder logs from HERE and carries on, and that log is a cancel checkpoint -- so the
-            # cancel it raises carries the handled, already-dealt-with exception as its __context__.
+            log.warning("empty_cache() failed during recovery and was ignored")
+        reached.append("after the guard")
+        log.info("the first record in normal flow")    # the deferred cancel is taken HERE
+        reached.append("past the first check")
+
+    def cancel_in_normal_flow():
+        panel._cancel.requested.set()
+        print("the first print after Cancel")          # taken at this very write
+        reached.append("past the first check")
+
+    def cancel_raised_inside_a_handler():
+        try:
+            raise RuntimeError("an error the run may already have dealt with")
+        except RuntimeError:
             raise WorkerCancelled()
 
-    def clean_cancel():
-        raise WorkerCancelled()
+    def reported_as_a_crash(message):
+        assert _STOP not in pane.lines, ("a run that CRASHED was reported as a cancellation", pane.lines)
+        box = SHOWN[-1]
+        assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
+        assert box.text() == message, box.text()
+        assert f"RuntimeError: {message}" in box.detailedText(), box.detailedText()
+        assert _NOTED in box.informativeText(), ("the box does not note the cancel", box.informativeText())
+        assert pane.lines[-2] == ("error", message), pane.lines
+        assert pane.lines[-1][0] == "warning" and _NOTED in pane.lines[-1][1], \
+            ("the pane does not note the cancel", pane.lines)
 
-    def _run(fn, wait_for_dialog):
-        SHOWN.clear()
-        del pane.lines[:]                      # each leg reads only its own lines
-        panel.dispatch(fn)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and (panel._busy or (wait_for_dialog and not SHOWN)):
-            app.processEvents()
-            time.sleep(0.01)
-        pump(app, 0.2)
-        assert not panel._busy, "the panel stayed busy"
+    # (a) the collision: a crash, reported as a crash, with the cancel noted
+    _run_leg(app, panel, pane, crash_behind_the_section, True)
+    reported_as_a_crash("the batch failed")
+    assert ("info", "[checkpoint] stopping: saving 1 completed batches") in pane.lines, pane.lines
+    assert ("info", "a print beside the rescue write") in pane.lines, pane.lines
 
-    stop = ("warning", "Run cancelled.")
+    # (a2) the crash unwinding through a finally that speaks: a crash too
+    _run_leg(app, panel, pane, crash_through_a_finally_that_speaks, True)
+    reported_as_a_crash("the graphed solver failed")
+    assert ("info", "the bar's last frame") in pane.lines, pane.lines
+    assert ("info", "closing the solver's bar") in pane.lines, pane.lines
 
-    # (a) the collision: a crash, reported as a crash
-    _run(crash_behind_the_section, True)
-    assert stop not in pane.lines, "a run that CRASHED was reported as a cancellation"
-    assert token.requested.is_set() and token.fired is False, (
-        "the section did not defer the cancel -- something else consumed the latch, so this leg is "
-        "measuring nothing")
-    said = [payload for kind, payload in fake.logs if kind == "log"]
-    assert ("[checkpoint] stopping: saving 1 completed batches", "info") in said, fake.logs
-    assert any("a print beside the rescue write" in text for text, _lv in said), fake.logs
-    box = SHOWN[-1]
-    assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical
-    assert box.text() == "the batch failed", box.text()
-    assert "RuntimeError: the batch failed" in box.detailedText(), box.detailedText()
-    assert pane.lines == [("error", "the batch failed")], \
-        "a crash is reported by the ordinary crash path and by nothing else"
+    # (b) a recovered guard, then normal flow: a plain cancel, taken at the first check after it
+    del reached[:]
+    _run_leg(app, panel, pane, recovered_guard_then_normal_flow, False)
+    assert SHOWN == [], "a recovered exception behind a cancel opened a dialog"
+    assert pane.lines == [("warning", "empty_cache() failed during recovery and was ignored"), _STOP], \
+        pane.lines
+    assert reached == ["after the guard"], reached
 
-    # (b) the residual race: a cancel, with what was in flight kept
-    _run(cancel_inside_a_recovered_handler, False)
-    assert pane.lines.count(stop) == 1, ("a cancel must still be reported as a cancel", pane.lines)
-    assert SHOWN == [], "a recovered exception behind a cancel opened an error dialog"
-    assert any(lv == "warning" and "failure was in flight" in t for lv, t in pane.lines), pane.lines
-    assert any(lv == "error" and "RuntimeError: the OOM the ladder survived" in t
+    # (c) normal flow: the very next check
+    del reached[:]
+    _run_leg(app, panel, pane, cancel_in_normal_flow, False)
+    assert pane.lines == [_STOP] and SHOWN == [] and reached == [], (pane.lines, SHOWN, reached)
+
+    # (f) the fallback: a cancel that still carries a context stays a cancel; the context is kept
+    _run_leg(app, panel, pane, cancel_raised_inside_a_handler, False)
+    assert SHOWN == [], "an exception behind a cancel opened a dialog"
+    assert pane.lines.count(_STOP) == 1 and pane.lines[-1] == _STOP, pane.lines
+    assert any(lv == "warning" and "may be a failure that was still in flight" in t
                for lv, t in pane.lines), pane.lines
-    assert pane.lines[-1] == stop, pane.lines
+    assert any(lv == "error" and "RuntimeError: an error the run may already have dealt with" in t
+               for lv, t in pane.lines), pane.lines
 
-    # (c) a clean cancel: unchanged
-    _run(clean_cancel, False)
-    assert pane.lines == [stop] and SHOWN == [], (pane.lines, SHOWN)
+
+def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(monkeypatch):
+    """(e) THE COLLISION WITH A LIVE BAR. A crash inside ``for ... in tqdm(...)`` finalizes the bar's
+    generator while the crash unwinds, and tqdm's ``finally: self.close()`` writes the bar's last frame
+    -- a cancel checkpoint. Before the raise-time deferral that write raised WorkerCancelled INSIDE a
+    generator finalizer, where Python cannot propagate it: a ~20-line "Exception ignored in:
+    <generator object tqdm.__iter__>" block landed in the pane, and the latch was consumed by a raise
+    nobody could see. Now the teardown runs while GeneratorExit is being handled, so the write is
+    carried: the crash is reported as a crash with the cancel noted, the latch is never consumed, and
+    nothing is ignored.
+
+    ``sys.unraisablehook`` is put back to Python's own for the run. pytest installs a collecting hook,
+    which would keep the "Exception ignored" block out of the pane and make the last assertion
+    vacuous; Python's own writes it to ``sys.stderr``, which under the run is the window's stream."""
+    from tests._fixtures import SHOWN, PaneCapture
+
+    monkeypatch.setattr(sys, "unraisablehook", sys.__unraisablehook__)
+    app = qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    pane = PaneCapture(panel)
+    tokens = []
+
+    def crash_under_a_live_bar():
+        tokens.append(panel._cancel)           # the panel drops its token when the run finishes
+        for i in tqdm(range(1000), desc="a live bar"):
+            if i == 3:
+                panel._cancel.requested.set()
+                raise RuntimeError("the batch failed under a live bar")
+
+    _run_leg(app, panel, pane, crash_under_a_live_bar, True)
+    assert _STOP not in pane.lines, ("a run that CRASHED was reported as a cancellation", pane.lines)
+    box = SHOWN[-1]
+    assert box.text() == "the batch failed under a live bar", box.text()
+    assert _NOTED in box.informativeText(), box.informativeText()
+    assert tokens and tokens[0].requested.is_set() and tokens[0].fired is False, \
+        "the bar's teardown consumed the cancel latch"
+    assert not any("Exception ignored" in t for _lv, t in pane.lines), pane.lines
