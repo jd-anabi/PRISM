@@ -753,6 +753,44 @@ def test_the_planner_and_the_probe_row_give_a_blank_frequency_one_sentence():
     assert "probe 1: drive frequency must be a positive number (got 0)" in typed, typed
     assert "must be finite and positive, got" in code_only(chi_mod.probe_verdict)
 
+
+def test_the_planner_fills_a_blank_frequency_box_and_never_a_typed_zero():
+    """R9 (whole-piece review). B16 says a typed zero is a DIFFERENT STATE from a box nobody filled,
+    and the row's own ``problems()`` keeps them apart -- but the planner's auto-fill selected the
+    rows to overwrite with ``_probe_frequency(row) is None``, which maps a NON-POSITIVE box to None
+    too. So "Plan probes…" silently replaced a typed ``0`` with a suggested grid frequency and
+    counted it among the "blank boxes filled", while the comment directly above it reads "a typed
+    frequency is a record of what the bench actually did".
+
+    That was invisible while every seeded row held ``0``; making the seed blank (B16) is what turned
+    it into a user-visible divergence -- the two layers now disagreed about the same box. The
+    predicate asks the blank-aware accessor instead, so a typed zero is left alone and refused as a
+    zero, which is the decision B16 made.
+
+    Tested on the predicate rather than through ``_plan_chi_probes``, which needs a built config and
+    a measured Ω₀ from a real recording: what changed is which rows are SELECTED."""
+    from core.gui.panels.inference.infer_tab import _blank_frequency
+    from core.gui.panels.inference.rows import _ChiProbeRow
+    from tests._fixtures import qt_app
+
+    qt_app()
+    blank = _ChiProbeRow(lambda _row: None)                     # B16's seed: an empty box
+    typed_zero = _ChiProbeRow(lambda _row: None, 0.0)           # a DC probe, or a typo for 10
+    real = _ChiProbeRow(lambda _row: None, 42.0)
+    half_typed = _ChiProbeRow(lambda _row: None)
+    half_typed.freq.setText("-")                                # mid-typing: parses as nothing
+
+    assert _blank_frequency(blank) is True
+    assert _blank_frequency(half_typed) is True, "a box that parses as nothing is still unfilled"
+    assert _blank_frequency(typed_zero) is False, \
+        "a typed zero is a record of what the bench did and must not be overwritten"
+    assert _blank_frequency(real) is False
+    assert typed_zero.freq.value_or_none() == 0.0, "the box still holds what was typed"
+
+    # ... and the row still REFUSES that zero, which is what B16 asks for instead of a silent fill.
+    assert "probe 1: drive frequency must be a positive number (got 0)" in typed_zero.problems(0)
+
+
 def test_config_units_control_declares_units_and_validates_them():
     """Units DECLARE what the numbers in the files mean (never converting them). Typed units must reach
     the built config, and unusable tokens must be rejected when the model is applied -- not mid-run."""

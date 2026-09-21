@@ -45,6 +45,17 @@ def _probe_frequency(row) -> "float | None":
     return f if f is not None and math.isfinite(f) and f > 0 else None
 
 
+def _blank_frequency(row) -> bool:
+    """True only for a box NOBODY FILLED: empty, or holding something that parses as no number.
+
+    Not ``_probe_frequency(row) is None`` (R9): that also answers None for a typed ``0``, so the
+    planner's auto-fill overwrote a zero somebody typed with a suggested grid frequency and counted
+    it among the "blank boxes filled" -- while the row's own ``problems()`` kept the two states
+    apart, which is exactly the disagreement B16 exists to remove. A typed zero is a record of what
+    the bench did (or a typo for 10): it is left alone here and refused as a zero there."""
+    return row.freq.value_or_none() is None
+
+
 # ── 5. Infer ──────────────────────────────────────────────────────────────────
 class InferPanel(_StagePanel, _CellPreviewMixin):
     """Tab 5. Infers on a simulated observation (from a cell's ground truth) or on real recordings.
@@ -312,8 +323,9 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             f"{cfg.chi_max_cycles / hi_hz:.3g} s the high edge is truncated to the "
             f"{cfg.chi_max_cycles:g}-cycle ceiling (which is fine — only the tail is dropped).")
         # Fill blank frequency boxes with the nominal in-band grid so the table is usable immediately.
-        # Only BLANK ones: a typed frequency is a record of what the bench actually did.
-        blanks = [r for r in self._chi_forced_fields if _probe_frequency(r) is None]
+        # Only BLANK ones: a typed frequency is a record of what the bench actually did -- a typed
+        # ZERO included, which is why the predicate is _blank_frequency and not _probe_frequency (R9).
+        blanks = [r for r in self._chi_forced_fields if _blank_frequency(r)]
         if blanks:
             grid = _chi.chi_multipliers(n_freqs=len(blanks), bounds=cfg.chi_freq_bounds).tolist()
             for row, mult in zip(blanks, grid):
