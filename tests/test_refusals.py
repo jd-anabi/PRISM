@@ -685,6 +685,77 @@ def _field_key_literals(tree) -> list:
     return out
 
 
+# The five QMessageBox class methods that open a box WITHOUT an instance. They are C++ statics, so
+# patching the instance method ``exec`` (tests/conftest.py::_no_modal_dialogs) does not reach them.
+_STATIC_BOXES = ("warning", "information", "question", "critical", "about")
+
+
+def _static_message_box_calls(tree) -> list:
+    """``(lineno, spelling)`` for every ``QMessageBox.<static>(...)`` call in a parsed module,
+    however the class was imported (``QMessageBox.warning``, ``QtWidgets.QMessageBox.warning``).
+
+    An INSTANCE call -- ``box = QMessageBox(self)`` then ``box.exec()`` -- is not one of these: the
+    receiver has to be the class name itself."""
+    import ast
+    out = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+            continue
+        if node.func.attr not in _STATIC_BOXES:
+            continue
+        owner = node.func.value
+        name = owner.attr if isinstance(owner, ast.Attribute) else getattr(owner, "id", None)
+        if name == "QMessageBox":
+            out.append((node.lineno, f"QMessageBox.{node.func.attr}"))
+    return out
+
+
+def test_no_static_message_box_is_called_anywhere_under_core():
+    """The guard tests/conftest.py ASSERTS AS FACT, finally asserted (whole-piece review, R8).
+
+    ``_no_modal_dialogs`` patches the INSTANCE method ``QMessageBox.exec``. The five statics are C++
+    class methods and escape it, and offscreen each spins a nested event loop nothing ever closes --
+    so a static added anywhere under ``core/`` STALLS the suite past the ten-minute tool-call limit
+    instead of failing it. No timeout plugin is installed; the failure a reviewer would have to
+    diagnose is a stack dump of a stuck process.
+
+    Piece 4 converted ``main_window.py``'s last three statics and then wrote "Nothing under core/
+    calls the statics any more ... so this guard covers every box the GUI shows" into that fixture's
+    docstring -- with nothing checking it. The repository has four scans of this shape already
+    (the literal-path scan, the code-directory closure, the checkpoint-commit print scan and the
+    field-key registry scan); this is the fifth, over the same ``CODE_ROOTS + CODE_FILES``.
+
+    The scanner is checked on a SNIPPET first: with no static left in the tree, the tree walk alone
+    passes vacuously and would go on passing if the walk stopped working."""
+    import ast
+    from pathlib import Path
+
+    from tests._fixtures import CODE_FILES, CODE_ROOTS
+
+    snippet = ast.parse(
+        'QMessageBox.warning(self, "t", "m")\n'              # 1: the bare import spelling
+        'QtWidgets.QMessageBox.question(self, "t", "m")\n'   # 2: through the module
+        'box = QMessageBox(self)\n'                          # 3: an instance is what is wanted
+        'box.setText("m")\n'
+        'box.exec()\n'
+        'logging.warning("not a dialog at all")\n'           # 4: the same attribute name elsewhere
+        'self.log_pane.information("nor this")\n')
+    assert [s for _ln, s in _static_message_box_calls(snippet)] == [
+        "QMessageBox.warning", "QMessageBox.question"], _static_message_box_calls(snippet)
+
+    root = Path(__file__).resolve().parents[1]
+    files = [py for sub in CODE_ROOTS for py in sorted((root / sub).rglob("*.py"))]
+    files += [root / name for name in CODE_FILES]
+    assert len(files) >= 20, f"the scan walked only {len(files)} files -- CODE_ROOTS is {CODE_ROOTS}"
+    found = []
+    for py in files:
+        for ln, spelling in _static_message_box_calls(ast.parse(py.read_text(encoding="utf-8"))):
+            found.append(f"{py.relative_to(root)}:{ln}: {spelling}")
+    assert not found, ("a static QMessageBox call escapes tests/conftest.py's dialog guard and HANGS "
+                       "the offscreen suite instead of failing it. Build the box as an instance and "
+                       "show it with .exec():\n" + "\n".join(found))
+
+
 def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered():
     """V3's tool half, and the closure of the registry. A Refusal names its field by a key and says
     nothing about flags; the tool turns the key into a flag with ONE table, so:

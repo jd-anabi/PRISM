@@ -177,7 +177,10 @@ def _no_modal_dialogs():
     undo puts this guard back, because a MonkeyPatch on a class records the __dict__ entry, this
     lambda. Same MonkeyPatch shape as _checkpointing_off_unless_asked. Nothing under core/ calls the
     statics any more: main_window.py's last three went through MainWindow._tell in piece 4, so this
-    guard covers every box the GUI shows and a test reads one off SHOWN."""
+    guard covers every box the GUI shows and a test reads one off SHOWN -- and that is a FACT WITH A
+    PIN since the whole-piece review's R8, not a claim: tests/test_refusals.py::
+    test_no_static_message_box_is_called_anywhere_under_core scans CODE_ROOTS + CODE_FILES for one,
+    because a static added here would HANG this suite rather than fail it."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN
     mp = pytest.MonkeyPatch()
