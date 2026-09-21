@@ -160,12 +160,15 @@ what is on disk, the last gate). Update it at the end of every session.
   Piece 2 is `2026-09-12-one-flow`, piece 3 `2026-09-16-validation-and-logging`. Untracked, so no
   git command finds them.
 - `docs/checklists/display-walkthrough.md` — GUI features never exercised on a real screen.
-- `tests/` — the seventeen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
+- `tests/` — the eighteen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
   command-line tool's, `test_diagnostics.py` the five diagnostics', `test_refusals.py` the
-  torch-free rules', tables' and run-buffer's; `_fixtures.py` holds the shared stand-ins, the tiny
-  real prior+posterior, and `CODE_ROOTS` plus `CODE_FILES`, the directories and top-level files the
-  source scans walk); `core/Reduction/tests/` — the reduction map's (out of scope).
+  torch-free rules', tables' and run-buffer's, `test_artifact_browser.py` the artifact browser's;
+  `_fixtures.py` holds the shared stand-ins, the tiny real prior+posterior, and `CODE_ROOTS` plus
+  `CODE_FILES`, the directories and top-level files the source scans walk); `core/Reduction/tests/`
+  — the reduction map's (out of scope).
 - `core/tool/` — the command-line tool: `python -m core --help` lists every subcommand (the stages
   `prior train tsnpe validate infer`, the diagnostics `sbc identifiability ablation`, plus `smoke`,
-  `fdt` and `crossval`). `scripts/` is gone: six of its scripts became `smoke` and the diagnostics
-  (git history keeps them), and six more joined the gitignored `archive/scripts/`.
+  `fdt`, `crossval` and `artifacts` (list/show/note/rm/sweep/summary)). `scripts/` is gone: six of
+  its scripts became `smoke` and the diagnostics (git history keeps them), and six more joined the
+  gitignored `archive/scripts/`. The Artifacts screen (piece 4) is the store's GUI front end, over
+  the same `core/artifacts/` engine the tool's `artifacts` family reads.

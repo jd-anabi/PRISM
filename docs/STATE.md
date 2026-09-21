@@ -1,27 +1,49 @@
 # PRISM — state
 
-**Last updated:** 2026-09-17. **Piece 3, "validation, logging and the private copy", is DONE**:
-commits `3db271e`..`9e2f7ef` (37) plus the two documents commits that record it, on the local `main`
-branch, NOT YET PUSHED (the user pushes) — `main` is 42 commits ahead of `origin/main`
-(`83545b8`): `ca583f8`, `a8bcec2` and `53c27b2` (the spec, the plan and the interim state), the 37
-of `3db271e`..`9e2f7ef`, `dcd73da` (this file and the spec's deviation rows) and the 2026-09-17
-document audit's commit (every document and memory file re-checked against the code; 49 findings
-applied, the two `core/gui` docstrings that described the retired print-only channel among them). Its design is
-`docs/superpowers/specs/2026-09-15-validation-and-logging-design.md` (`ca583f8`, decisions V1–V9,
-§11 the deviations) and its plan `docs/superpowers/plans/2026-09-16-validation-and-logging.md`
-(`a8bcec2`, 24 tasks). No public stage writes the caller's config any more. Every pre-spend refusal
-is a `Refusal` with a field key that each front end turns into its own control or flag. Stage
-messages are `logging` records at three levels, with a `log.txt` in every committed artifact. The
-inference tabs remember selections — the pickers, the mode and the boxes that describe the
-recording — plus the training budget; every inference science knob opens at `config.py` on every
-launch, and the Simulate, FDT and CrossVal panels still remember their own numeric fields (piece
-5's). A whole-piece review by four independent readers found two must-fix defects and thirteen
-cheap fixes; they landed in `87a0e06`..`9e2f7ef` with a scoped re-review. The final fast gate, the
-slow set and the GPU gate of record are in the table below. **Rows C1–C11 of
-`docs/checklists/display-walkthrough.md` were run by the user on the real screen on 2026-09-17:
-all eleven pass.** Piece 3 owes nothing further.
-**Next: piece 4 ∥ piece 5** ("Owed" item 7). Piece 2 (`0016dae`..`d34997c`) was pushed on
-2026-09-15 and its rows B1–B8 all pass.
+**Last updated:** 2026-09-21. **Piece 4, "GUI usability and the artifact browser", is DONE**:
+commits `5902259`..`80be144` (47), on the local `main` branch, NOT YET PUSHED (the owner pushes) —
+`main` is 49 commits ahead of `origin/main` (`cfe261b`): `691a233` (piece 3's C1–C11 rows recorded),
+the 47 of `5902259`..`80be144` (`5902259` the design, `6fc399f` the plan, `644dcdb` the pre-flight
+fixes, then the 26 tasks, then the whole-piece review's fix wave `e9318ff`, `114711b`, `5e4543b`,
+`ee2dd33`, `80be144`), and this documents commit. Its design is
+`docs/superpowers/specs/2026-09-17-gui-usability-and-artifact-browser-design.md` (`5902259`,
+decisions B1–B17 in §1.1, §12 the deviations) and its plan
+`docs/superpowers/plans/2026-09-17-gui-usability-and-artifact-browser.md` (`6fc399f`, 26 tasks). What
+landed: the artifact browser — a fifth Home tile, not a `BasePanel` — lists all seven store kinds in
+a real sortable table, a text-only detail pane (the manifest, then the run's `log.txt` records), a
+one-line note, one-artifact-at-a-time delete refused by any dependent (with no `force=True` in
+either front end), a sweep that removes only a directory carrying no manifest at all — bound to the
+list the confirmation showed, going through the single-directory `remove_incomplete` call, and
+refusing a directory written in the last few minutes — a Save of what is on screen, and a lineage
+report walking the parent chain; any change it makes refreshes the three `StorePicker`s (B1–B10).
+Its command-line twin, `python -m core artifacts` (`list/show/note/rm/sweep/summary`), takes no
+configuration flags, prints the same facts with a comma where the window prints "·", and sweeps as a
+dry run unless `--yes` is passed (B9). Three behaviours: a live run is visible app-wide — a clickable
+shell-header line naming what is running, where and for how long, plus a marker on the running
+section's Home tile and its tab (B11); Apply shows a permanent line naming what the session holds and
+confirms, defaulting to No, before discarding a non-empty one (B12); the three inference pickers
+spell out mode, width and amortization on the line beneath them, and a narrowed posterior reads
+"narrowed (TSNPE)" in the closed dropdown and its tooltip, replacing "NON-AMORTIZED" there (B13). Four
+handed-on defects closed: a front-end root-logger handler stops a library's own module-level warning
+from doubling a `core` record or silently dropping one between runs, by a mechanism that differs from
+what the design named (B14; spec §12 row 15); the training rescue save runs inside a deferred-cancel
+critical section, and — after the whole-piece review replaced a catch-time judgement with a
+raise-time one — the worker reports the real crash with the cancel noted for the direct collision
+**and** the residual unwind race alike, restoring the original choice in full (B15; spec §12 row 3);
+a newly added chi probe row's frequency box starts blank, never a typed-looking `0.0`, with one
+wording for "blank" across the tab and the planner (B16); `PaneCapture` wraps both pane channels into
+one ordered list so a test sees what a user sees (B17). A whole-piece review by four independent
+readers (correctness, spec compliance, tests, the hazards no CPU suite reaches) found 0 Critical, 12
+Important and 38 Minor findings; the fix wave landed in `e9318ff`, `114711b`, `5e4543b`, `ee2dd33`,
+`80be144` with a scoped re-review — ten of the twelve Importants addressed there, the other two being
+this piece's own spec-document corrections, made by this documents task. The final fast gate, the
+slow set and the GPU smoke gate of record are in the table below; the diagnostic card was judged
+unnecessary (no line under `core/diagnostics` moves a tensor) and that judgement held. **Rows D1–D17
+of `docs/checklists/display-walkthrough.md` are owed by the OWNER, on a real screen — no task may
+fill them in.**
+**Next: piece 5** ("Owed" item 7); piece 6 follows. Piece 3 (`3db271e`..`9e2f7ef`) is DONE and
+pushed, and its rows C1–C11 all pass; piece 2 (`0016dae`..`d34997c`) is also pushed, and its rows
+B1–B8 all pass.
 
 ## Where things stand
 
@@ -179,22 +201,32 @@ all eleven pass.** Piece 3 owes nothing further.
      - ~~Rows C1–C11 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done
        2026-09-17 by the USER: **all eleven pass**, recorded in that file's last two columns and in
        the gate table below.
-   - **Piece 4.** The artifact browser, including a listing of diagnostics and each artifact's
-     `log.txt`; annotate (`set_note` has no GUI caller); cleanup of incomplete directories;
-     `Summary.complete` for simulations means only "has a manifest"; the observation width guard in
-     `load_observation` has no isolated test. Handed on by piece 3's final review:
-     - Once any library calls a module-level `logging.warning` (sbi's `pairplot` does for a sample
-       holding NaN), Python's `basicConfig` installs a root handler, and every later `core` record
-       is shown twice: in the window's pane as `INFO:core.…`, on the tool's stderr. Spec §4.6's
-       claim that such warnings go through `lastResort` is wrong (spec §11). The fix installs a
-       front-end root handler that drops `core` records. No trigger was found on today's paths.
-     - A Cancel clicked just before a crash in training makes the rescue save's own announcement
-       raise the cancel, so the save never runs and up to one checkpoint interval is lost
-       (`pipeline.py` rescue block; this predates piece 3).
-     - A newly added chi probe row starts at a visible `0.0`, so a click reports "got 0" for a row
-       nobody touched; seeding the box empty would make it read "blank".
-     - The shared test helper `PaneCapture` does not see lines a worker sends to the pane; wrap
-       `append_lines` when a test first needs them.
+   - **Piece 4** — DONE 2026-09-17/21 (`5902259`..`80be144`). Every item piece 3's final review
+     handed into it is closed:
+     - ~~The artifact browser, including a listing of diagnostics and each artifact's `log.txt`~~ —
+       landed as the Artifacts screen, a fifth Home tile and not a `BasePanel`: all seven kinds in a
+       sortable table, a text-only detail pane (the manifest, then the log) — T9, T10.
+     - ~~Annotate (`set_note` has no GUI caller)~~ — landed as the Note box: one line, trimmed,
+       refused over 200 characters or with a newline — T2, T10.
+     - ~~Cleanup of incomplete directories~~ — landed as Sweep, narrowed at the whole-piece review to
+       remove only a directory with no manifest at all, bound to the list the confirmation showed,
+       and refusing a directory written in the last five minutes — T5, T11; spec §12 row 16.
+     - ~~`Summary.complete` for simulations means only "has a manifest"~~ — a separate `finished`
+       field now answers "did the run finish", with `batches_done`/`batches_planned`/`rows` carrying
+       a cache's progress — B3, T3.
+     - ~~The observation width guard in `load_observation` has no isolated test~~ — both payload
+       guards (the digest and the width) now have their own tests, each shown to trip empirically —
+       T24.
+     - ~~The front-end root handler for a library's module-level warning~~ — landed (B14), by a
+       mechanism that differs from piece 3's own proposal: the sink drops a record when a handler
+       below the root already emitted it, not by a name-based rule — T20; spec §12 row 15.
+     - ~~The rescue-save cancel collision~~ — landed: the rescue save runs inside a deferred-cancel
+       critical section, and the worker reports the real crash with the cancel noted, for the direct
+       collision and the residual unwind race alike — B15, T21–T22; spec §12 row 3.
+     - ~~The blank probe row~~ — landed: a newly added row's frequency box is empty, never a
+       typed-looking `0.0` — B16, T23.
+     - ~~`PaneCapture` does not see lines a worker sends to the pane~~ — landed: it wraps both pane
+       channels into one ordered list — B17, T1.
    - **Piece 5.** FDT/CrossVal hardening and wrapping them in the store (their outputs still go to
      `artifacts_root()/fdt` and `/crossval`). Two test gaps: the cell-folder branch of the `fdt`
      unsupported-model hint is untested (`core/tool/fdt.py`), and only `plot_psd` of the four
@@ -233,6 +265,29 @@ all eleven pass.** Piece 3 owes nothing further.
        legitimately takes one probe, never re-runs that check (spec §11).
      - *Provenance (from piece 3, spec §1.3).* A resumed training run records its Fisher settings as
        "not run" (V7): the checkpoint header carries `V` but not the parent's `m`, `dz` and `points`.
+     - *From piece 4.* The Posterior tab's D8 load dialog (piece 2's consent that fires on loading a
+       round's posterior) still says "NON-AMORTIZED" where the three pickers now say "narrowed
+       (TSNPE)" (B13) — one fact, two wordings. Changing D8's text touches walkthrough row B1's
+       expected string, so Task 19 left it for a deliberate decision rather than a drive-by fix, and
+       the whole-piece review confirmed the item stands, owed rather than fixed.
+     - *From piece 4.* A sweep re-reads every candidate's manifest one at a time, so it costs O(n²) at
+       a large leftover count — correct and irrelevant at today's scale, the same judgement spec §1.3
+       makes about the listing generally; no index is built.
+     - *From piece 4.* The new source scan that forbids a static `QMessageBox` call under `core/`
+       (design spec §12 row 21) would miss an aliased import spelling (e.g. `QMessageBox as MsgBox`).
+     - *From piece 4.* The slow set's chi full-pipeline test ran 1610 s at the piece's final
+       measurement against 1181 s recorded for piece 3, on code this piece's diff does not reach on
+       that test's path (the root handler and the cancel deferral are consulted only by the two front
+       ends, never by a bare `core` pipeline run). It passed both times; worth watching at the
+       retrain, where the same test runs for real.
+     - *From piece 4, declined by the owner or left unsound (design spec §1.3).* Figures in the
+       browser, an open-the-folder button and "use this" jumps into a stage tab — considered and
+       declined 2026-09-17. A session summary at quit — declined in favour of Apply's session line
+       (B12) and the Save/lineage-report pair (B10). `rename` from the browser — Save-as-rename stays
+       on the Prior and Posterior tabs; renaming a simulation cache is additionally unsound today (it
+       writes a name into the manifest and moves nothing, because a cache's directory name is always
+       its digest), and the browser never calls it. `unnamed()` stays uncalled — every simulation
+       cache has `name=""`, so a caller built on it would offer to delete committed training rows.
    - Piece 3 did not take the optional tidy-up of `decorrelate.py`'s `or` fallbacks and `prior.py`'s
      clamps (spec §1.3 "the plan, if cheap; else none"); it stays unowned.
    - Piece 3's other open minors, each judged not worth a change now: the decorator scan matches only
@@ -324,6 +379,11 @@ all eleven pass.** Piece 3 owes nothing further.
 | slow set, `pytest -m slow -q --durations=5` (piece 3) | 2026-09-16/17 at `e78cc8d`, run during the read-only whole-piece review: **2 passed**, 595 deselected, 104 warnings, **23 min 13 s**, exit 0. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1181 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size` 208 s. No "More than 20 figures" line; `git status` clean and no `sbi-logs/` afterwards. The warnings are piece 2's classes; the count moved from 96 because each chi probe-masking notice carries its masked count in its text, so the de-duplicated total follows the random draws. It stands for the piece: the fix wave `87a0e06`..`9e2f7ef` reaches the two slow tests' paths only through happy-path checks, which the final fast gate covers |
 | **GPU gate of record, piece 3** (`python -m core smoke`, the four command lines of `CLAUDE.md` with the same arguments, run from a bash script that kept each run's stdout, stderr and exit code apart, at `9e2f7ef`) | 2026-09-17, alone on the card: **run 1** chi `master_spont`: prior 92 s, posterior 196 s, validate 22 s, infer 84 s, exit 0 (piece 2 at `0d96d2f`: 92/198/22/85); **run 2** `--resume require`: "Reusing the Fisher rotation stored with the training checkpoint (4/4 batches — COMPLETE, so generation will be skipped)", `[checkpoint] resuming at batch 4/4`, exit 0 in 8 s; **run 2b** `--num-runs 2`: **exit 1** in 6 s, the refusal on stderr reads "differs only in n_runs: this run 2, that cache 4" and ends `(--new-run)`, no `[fisher]` line, `simulations/` still only `4d8022b100db`; **run 3** forced `master_weak` (own store): prior 92 s, posterior 60 s, validate 13 s, infer 18 s, exit 0 (piece 2: 92/61/14/20). No OOM line, no Traceback and no `warning: ` record line in any run. Run 1's training masked probes 79/224, 15/96, 108/192, 58/192 = 260/704 (36.9 %), the same as piece 2. **New this piece:** `smoke_posterior/log.txt` holds stamped lines (`01:14:03 info [budget] 4 batches x 32 rows = 128 training rows`, the two `[fisher]` lines, the masking notices at `warning`); every committed artifact in both stores has a `log.txt`, and neither `simulations/<digest>/` has one; the ground-truth `PreflightWarning` is reported at `core/tool/smoke.py:235`, the caller, not at `core/runs.py`. The diagnostic card was not run: piece 3 changed guards, messages and logging under `core/diagnostics`, but no changed line there creates or moves a tensor (checked by grep over the piece's diff), and the tool's new `--device cuda` choice resolves to `config.detect_device()`, the same device configuration `auto` picks on this machine. Scratch stores deleted |
 | display walkthrough, piece-3 rows C1–C11 (`docs/checklists/display-walkthrough.md`) | 2026-09-17, the user on the real screen at `9e2f7ef`: **rows C1–C11 all pass** — the Config tab's read-only χ drive and band, the blank `T_obs` refusal in the yellow box on both Infer pages, the 0-directions refusal, what a TSNPE relaunch restores (picker and Batches yes; HPD and Directions back at `config.py`), D12 in the yellow box, the Posterior tab's science knobs opening at `config.py`, the budget group's three lines through train/3/2/blank, the bench-then-simulated probe count (4 recorded, the table's 2 rows kept), the log pane's triangles and the posterior's `log.txt` with no `log.txt` under `simulations/`, the FDT consents not remembered, and the Config tab's K, slots and lock-in ceiling opening at `config.py` while the model, units and χ tick stay. Rows 1–20, A1–A9 and B1–B8 stand |
+| `pytest --collect-only -q` after piece 4 | 2026-09-21 at `80be144`: **732** collected (the fast gate's 729 passed and 1 skipped, plus the 2 slow tests), 129 more than the 603 at `691a233` (piece 3 closed), inside design spec §9.4's stated band of 130 ± 30 added. `tests/test_*.py` holds eighteen suites (the new one is `tests/test_artifact_browser.py`) |
+| **final fast gate, piece 4**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-21 at `80be144`, after the whole-piece review's fix wave: **729 passed, 1 skipped** (the display-marked class-icon test, offscreen), 2 deselected, **181 warnings**, **13 min 57 s** (inside design spec §10's 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing. The warning baseline moved from piece 3's 175 to 181: all six new warnings come from the two tests Task 22 added that run a real short training and emit its per-batch notices — no pre-existing test started warning and no new warning class appeared. Every task had its own one-process gate, recorded in the execution ledger; the gate briefly touched 16:07 and 16:12 at Tasks 22–23 before the fix wave brought it back under target |
+| slow set of record, `pytest -m slow -q --durations=5` (piece 4) | 2026-09-21 at `80be144`: **2 passed**, 730 deselected, 93 warnings, **30 min 43 s**, exit 0. No "More than 20 figures" line, no `sbi-logs/`, tree clean. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1610 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size` 229 s (back near piece 3's recorded 208 s, so an earlier 428 s reading was transient). The chi figure is 13 % above piece 3's recorded 1181 s on code this piece's diff does not reach on that test's path; it passed at every measurement and is recorded as a thing to watch at the retrain, not chased further ("Owed" item 7) |
+| **GPU smoke gate, piece 4** (`python -m core smoke`, the four command lines of `CLAUDE.md`, at `d1f0b98` — no line on the training path changed after it except the fix wave's sweep/delete/logging work, which that path does not reach) | 2026-09-21, alone on the card: **run 1** chi `master_spont`: prior 92.3 s, posterior 198.5 s, validate 22.3 s, infer 85.9 s, exit 0 (piece 3: 92/196/22/84); **run 2** `--resume require`: "Reusing the Fisher rotation stored with the training checkpoint (4/4 batches — COMPLETE …)", `[checkpoint] resuming at batch 4/4`, exit 0; **run 2b** `--num-runs 2`: **exit 1**, the refusal reads "differs only in n_runs: this run 2, that cache 4" and ends `(--new-run)`, no `[fisher]` line, `simulations/` still only `4d8022b100db`; **run 3** forced `master_weak`: 100.4 / 63.9 / 15.0 / 19.3 s, exit 0 (piece 3: 92/60/13/18). No OOM line, no Traceback and no `warning: ` line in any run. Run 1's masked probes 79/224, 15/96, 108/192, 58/192 = 260/704 = 36.9 %, identical to pieces 2 and 3. The diagnostic card was not required and was not run: the piece's diff touches no file under `core/diagnostics` that creates or moves a tensor (design spec §10); that judgement held. Scratch stores deleted |
+| display walkthrough, piece-4 rows D1–D17 (`docs/checklists/display-walkthrough.md`) | **Not yet run.** Owed by the owner, on a real screen |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the two copies identical. Run it from the repository root, with `$S` set to
