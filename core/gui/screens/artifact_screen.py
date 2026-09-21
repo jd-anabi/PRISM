@@ -732,7 +732,11 @@ class ArtifactScreen(QWidget):
                     f"manifest at all?")
         box.setInformativeText("\n".join(f"{k}/{d} — {why}" for k, d, why in cands)
                                + "\n\nA directory that carries a manifest.json of any kind is never "
-                                 "touched by this.")
+                                 "touched by this. Nor is one that is still being written: an "
+                                 "artifact's manifest is written last, so a run in flight — in "
+                                 "another window or at a terminal — looks exactly like a leftover "
+                                 "until it commits, and a recently written directory is refused "
+                                 "rather than removed.")
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         box.setDefaultButton(QMessageBox.No)
         if box.exec() != QMessageBox.Yes:

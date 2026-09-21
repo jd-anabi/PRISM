@@ -380,6 +380,12 @@ def _sweep(args, store) -> int:
             print(f"[prism] would remove {kind} leftover {dir_name} -- {why}")
         print(f"[prism] dry run: nothing was removed. Re-run with --yes to remove "
               f"{len(cands)} director{'y' if len(cands) == 1 else 'ies'}.")
+        # The listing cannot tell a run in flight from a leftover -- the manifest is written LAST --
+        # so a preview taken beside a live training names that training's own directory. The removal
+        # refuses it; say so here, where the operator is deciding whether to pass --yes.
+        print("[prism] a directory that is still being written is refused at removal, not swept: an "
+              "artifact's manifest is written last, so a run in flight looks exactly like a "
+              "leftover until it commits.")
         return 1 if problems else 0
     removed, failed = store.sweep_incomplete([(k, d) for k, d, _ in cands])
     for kind, dir_name in removed:

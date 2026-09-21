@@ -2160,6 +2160,9 @@ def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_d
     out = capsys.readouterr().out
     assert "would remove" in out and leftover.name in out and manifest_less.name in out, out
     assert "--yes" in out, "the dry run must name the flag that performs it"
+    assert "still being written" in out, \
+        ("a preview run beside a live training would otherwise offer that training's own directory "
+         "with no warning: the listing cannot tell a run in flight from a leftover (R3)")
     assert leftover.is_dir() and manifest_less.is_dir(), "a dry run removed something"
 
     # (b) --yes performs it, and only the manifest-less directories go

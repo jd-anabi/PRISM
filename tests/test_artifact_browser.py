@@ -735,9 +735,11 @@ def test_a_directory_something_may_still_be_writing_is_reported_not_removed(stor
     cache lost its committed shards. The window's ``BasePanel._running`` guard is same-process only.
 
     The candidate is still LISTED (the table cannot know how old it is either), so what has to hold
-    is that the removal refuses it and the status line says why."""
+    is that the removal refuses it and the status line says why -- and that the confirmation says so
+    BEFORE it is answered, because otherwise the one dialog an operator sees while a training runs
+    offers to remove that training's directory with no warning at all."""
     from PySide6.QtWidgets import QMessageBox
-    from tests._fixtures import artifact_screen, qt_app
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
     live = store.kind_dir("prior") / "inflight__20260917T090000"
     live.mkdir(parents=True, exist_ok=True)
@@ -746,6 +748,7 @@ def test_a_directory_something_may_still_be_writing_is_reported_not_removed(stor
     _show_kind(scr, "prior")
     _answer(monkeypatch, QMessageBox.Yes)
     scr._sweep(all_kinds=False)
+    assert "still being written" in SHOWN[-1].informativeText(), SHOWN[-1].informativeText()
     said = scr.status.text()
     assert live.is_dir() and (live / "prior.pt").is_file(), "a live run's directory was removed"
     assert "Removed 0 of 1" in said, said
