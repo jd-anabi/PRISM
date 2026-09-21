@@ -12,7 +12,7 @@ from ...widgets.artifact_picker import ArtifactPicker
 
 
 class _StagePanel(BasePanel):
-    """Common base for the five inference tabs: holds a back-reference to the owning InferenceScreen and
+    """Common base for the six inference tabs: holds a back-reference to the owning InferenceScreen and
     reads/writes the shared session through it (never caching the session object, which Config replaces
     wholesale on each build)."""
 

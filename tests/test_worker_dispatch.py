@@ -338,11 +338,11 @@ def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
     did not fake itself was a STALL past the ten-minute tool-call limit (no timeout plugin is
     installed), not a failure anyone could read. The session guard (tests/conftest.py::
     _no_modal_dialogs) turns it into a record -- the box lands in tests/_fixtures.SHOWN and exec
-    returns 0 with no button clicked, which the consent dialogs read as Cancel and main_window.py:243
-    as the safe branch -- and _clear_shown empties the list before every test, so SHOWN[-1] is always
-    the box the code under test just tried to show. A test's own fake, layered with monkeypatch the
-    way test_the_two_dialogs_default_to_cancel does, wins while it is installed, and the guard is
-    back the moment it is undone."""
+    returns 0 with no button clicked, which the consent dialogs read as Cancel and MainWindow.closeEvent
+    reads as its ignore branch -- and _clear_shown empties the list before every test, so SHOWN[-1] is
+    always the box the code under test just tried to show. A test's own fake, layered with monkeypatch
+    the way test_the_d7_and_d8_dialogs_default_to_cancel does, wins while it is installed, and the
+    guard is back the moment it is undone."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, qt_app
 

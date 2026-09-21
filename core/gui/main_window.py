@@ -75,9 +75,12 @@ def _centre_on_primary(widget) -> None:
 class MainWindow(QMainWindow):
     """The application shell: a NavShell over Home plus the five section screens.
 
-    Always opens on Home -- the last screen is deliberately not restored. Owns the only QSettings
-    WRITE site (``_save_state``, reached from closeEvent), so panel selections and layouts persist
-    from here; appearance settings are written eagerly instead, as they are applied immediately.
+    Always opens on Home -- the last screen is deliberately not restored. Owns the QSettings write
+    that runs at quit (``_save_state``, reached from closeEvent): panel selections, and the Artifacts
+    screen's own (piece 4, B1, which is called by name because _all_panels() is panel-typed). Two
+    other write sites exist on purpose: BasePanel._persist_layout writes a splitter position on a
+    1500 ms debounce (save-on-clean-quit lost the drag -- see base_panel.py), and appearance settings
+    are written eagerly, as they are applied immediately.
     """
     def __init__(self, appearance=None):
         super().__init__()

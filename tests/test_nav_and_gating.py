@@ -3190,3 +3190,51 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     assert [combo.itemText(i) for i in range(combo.count())] == [StorePicker.NEW_LABEL, "amort"]
     assert pp.post_line.text() == "chi · width 18 · amortized · 2026-09-14T10:22:31", \
         pp.post_line.text()
+
+
+# ── piece 6: the panel/tab counts, stale since the TSNPE tab arrived ─────────────────────────────
+def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
+    """Four sentences in base_panel.py and one in inference/base.py counted nine panels and five
+    inference tabs, both stale from before the TSNPE tab: there are TEN BasePanel subclasses (the four
+    section panels plus six inference tabs) and NINE save_settings overrides (ValidatePanel is the one
+    subclass that does not override it). The Artifacts screen is not a panel at all -- it is a plain
+    QWidget, so a run elsewhere cannot grey it out (piece 4, B1).
+
+    Phrases, not a subclass count: the suites own throwaway BasePanel subclasses persist for the life
+    of the process, so counting __subclasses__() would assert on test order (ledger P37).
+
+    The source is whitespace-NORMALISED before every check. Two of these phrases are wrapped across a
+    newline in the file ("there are nine independent / splitters"), so against raw source the literal
+    would never appear, the assertion would pass before AND after the edit, and the stale sentence
+    would survive behind a green test -- which is the one failure this test exists to prevent (Q16).
+    """
+    import core.gui.panels.base_panel as bp
+    from core.gui.panels.inference import base as inf_base
+
+    bp_src = " ".join(inspect.getsource(bp).split())
+    inf_src = " ".join(inspect.getsource(inf_base).split())
+    for phrase in ("Nine of these", "8 of the 9", "all nine differ", "nine independent splitters"):
+        assert phrase not in bp_src, f"base_panel.py still says {phrase!r}"
+    assert "the five inference tabs" not in inf_src
+    assert "the five inference tabs" not in bp_src
+
+    assert "Ten of these exist" in bp_src
+    assert "9 of the 10" in bp_src
+    assert "all ten differ" in bp_src
+    assert "the six inference tabs" in inf_src
+
+
+def test_main_window_stops_claiming_it_owns_the_only_settings_write():
+    """The class docstring said _save_state is "the only QSettings WRITE site ... so panel selections
+    and layouts persist from here". Layouts do not: BasePanel._persist_layout writes and sync()s the
+    splitter state on a 1500 ms debounce off splitterMoved, deliberately, because save-on-clean-quit
+    lost the drag (base_panel.py own comment says so). Appearance is the third write site.
+
+    Whitespace-NORMALISED, for the same reason as the test above: the claim is wrapped as "the only
+    QSettings / WRITE site" in the file, so against raw source this first assertion could never fail
+    and would pass before and after the rewrite (Q16)."""
+    from core.gui import main_window as mw
+
+    src = " ".join(inspect.getsource(mw.MainWindow).split())
+    assert "the only QSettings WRITE site" not in src
+    assert "_persist_layout" in src and "1500" in src

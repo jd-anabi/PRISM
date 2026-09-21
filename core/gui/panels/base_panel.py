@@ -87,14 +87,16 @@ class BasePanel(QWidget):
     """Shared scaffolding for every run-a-thing panel: a controls column, a results column, and
     ``dispatch()`` to run work on a background thread with its output wired to both.
 
-    Nine of these exist (Reduction, FDT, CrossVal, Simulate + the five inference tabs). Three class
-    attributes carry app-wide state and are class-level ON PURPOSE -- see their comments: ``_running``
-    (only one panel may run at a time, because stream redirection is process-wide), ``_active_cancel``
-    and ``_instances``.
+    Ten of these exist (Reduction, FDT, CrossVal, Simulate + the six inference tabs: Config, Prior,
+    Posterior, Validate, Infer, TSNPE). The Artifacts screen is NOT one -- it is a plain QWidget on
+    purpose, because a BasePanel enrols in _instances and every run anywhere would grey it out (piece
+    4, B1). Three class attributes carry app-wide state and are class-level ON PURPOSE -- see their
+    comments: ``_running`` (only one panel may run at a time, because stream redirection is
+    process-wide), ``_active_cancel`` and ``_instances``.
 
     Persists: nothing here. Subclasses override ``save_settings``/``restore_settings`` for their own
     selections; the splitter geometry goes through the separate ``save_layout``/``restore_layout``
-    pair, because 8 of the 9 subclasses override save_settings without calling super().
+    pair, because 9 of the 10 subclasses override save_settings without calling super().
     """
     # Class-level, deliberately: redirect_streams swaps sys.stdout/stderr PROCESS-WIDE (see
     # core/gui/streams.py), so only ONE panel may run at a time -- a per-panel guard would let the FDT
@@ -344,14 +346,14 @@ class BasePanel(QWidget):
 
     # ── layout persistence ───────────────────────────────────────────────────
     # DELIBERATELY SEPARATE from save_settings/restore_settings. Two reasons, and the first is fatal:
-    #   1. save_settings is overridden by 8 of the 9 panels WITHOUT calling super(), so anything
+    #   1. save_settings is overridden by 9 of the 10 panels WITHOUT calling super(), so anything
     #      hooked there would silently never run for them. This pair is driven from BasePanel itself
     #      (restore) and MainWindow._save_state (save), so a subclass cannot break it by forgetting.
     #   2. Layout is not a user *selection*. A panel that resets its pickers should not lose the
     #      column widths the user set.
     def layout_key(self) -> str:
-        """Settings key for this panel's layout. Distinct per panel -- there are nine independent
-        splitters. Subclasses that share a class name would override this; today all nine differ."""
+        """Settings key for this panel's layout. Distinct per panel -- there are ten independent
+        splitters. Subclasses that share a class name would override this; today all ten differ."""
         return type(self).__name__
 
     def save_layout(self, qs) -> None:
