@@ -239,13 +239,17 @@ def _leftover_hint(store, kind: str, ref: str) -> str:
     that write.
 
     A read failure here is swallowed: an unrelated problem listing the kind is not this ref's
-    business, and the plain refusal -- itself still correct -- is left to stand."""
+    business, and the plain refusal -- itself still correct -- is left to stand.
+
+    It opens with a FULL STOP because it is appended to a refusal that has already ended a sentence
+    -- and one that ends with this very ref, so without the break the operator read
+    ``...named or id'd 'x' 'x' is one of the leftovers...`` (probed by three reviewers)."""
     try:
         rows = store.list(kind)
     except Exception:                              # noqa: BLE001 -- the hint is a courtesy, not a check
         return ""
     if any(not s.complete and s.dir_name == ref for s in rows):
-        return (f" {ref!r} is one of the leftovers `sweep` removes, not an artifact with a note or "
+        return (f". {ref!r} is one of the leftovers `sweep` removes, not an artifact with a note or "
                 f"a delete of its own; run `python -m core artifacts sweep {kind}` to clear it.")
     return ""
 

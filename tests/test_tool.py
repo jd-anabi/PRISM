@@ -1746,6 +1746,7 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
     test_crossval_preset_choices_match_sweep_presets, which pins --preset's hard-coded choices against
     cli.SWEEP_PRESETS."""
     from core.artifacts.store import KIND_DIRS
+    from core.gui.screens import artifact_screen as ascreen
     from core.gui.widgets.artifact_table import columns_for
     from core.tool import browse
 
@@ -1755,6 +1756,11 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
         # The tool's literal is the GUI's own spelling, lower-cased (P11): one canonical column list,
         # Title-case in the window and lower-case in a terminal where the output may be piped.
         assert browse.COLUMNS[kind] == tuple(c.lower() for c in columns_for(kind)), kind
+    # The THIRD deliberate duplication, and the only one that had no pin (tests lens, I2): the
+    # sentence that tells an operator a training cache blocks a prior's delete because it was
+    # GENERATED against it, rather than because it named it. Its own comment cites COLUMNS above as
+    # the precedent for restating it -- so it is pinned the same way.
+    assert browse._FINGERPRINT_DEPENDENT == ascreen._FINGERPRINT_DEPENDENT
 
 
 def test_artifacts_list_prints_one_line_per_artifact_with_its_kinds_facts(browse_store, capsys):
@@ -2083,8 +2089,16 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
     it (``test_validate_and_simulated_infer``'s ``tcal`` among them). A hard-coded "2 artifact(s)"
     was true only when this test happened to run first, or alone -- so the expected COUNT and the
     expected IDS are read off ``s.dependents`` itself, which is the one ground truth that holds no
-    matter what the rest of the module has built by the time this runs."""
+    matter what the rest of the module has built by the time this runs.
+
+    Whole-piece review (tests lens, I2): that round-2 narrowing dropped the assertion on the REASON
+    clause altogether -- only the ids were checked, so deleting ``-- {why}`` from the f-string would
+    leave the suite green and the operator without the one sentence that says WHY a training cache
+    blocks a prior's delete. Re-pinned here order-independently: every dependent's id is followed by
+    a reason clause, and the reasons are the two the front ends agree on, COUNTED rather than
+    sequenced (which dependent gets which is ``dependents()``'s business, not this test's)."""
     from core.artifacts import ArtifactStore
+    from core.tool import browse
     bounds, cell, root = tool_run
     s = ArtifactStore(root)
     before = s.get("prior", "tp").id
@@ -2101,6 +2115,11 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
     assert f"{len(deps)} artifact(s) depend on it" in line, line
     for dep_kind, dep_id, _dep_name in deps:
         assert f"[{dep_id}]" in line, (dep_kind, dep_id, line)
+        after = line.split(f"[{dep_id}]", 1)[1].lstrip()
+        assert after.startswith("-- "), (dep_id, after[:120])
+    reasons = (browse._FINGERPRINT_DEPENDENT, "it names this prior as a parent")
+    assert sum(line.count(r) for r in reasons) == len(deps), (reasons, line)
+    assert line.count(" -- ") == len(deps), line
     assert "Delete those first." in line, line
     assert "force" not in line.lower(), line
     assert s.get("prior", "tp").id == before, "a refusal removed something"
@@ -2293,7 +2312,13 @@ def test_note_and_rm_on_a_leftover_name_sweep_as_the_next_step(browse_store, cap
     "no complete artifact" refusal said nothing about why, or what removes it -- unlike ``show``,
     which already states both honest gaps. ``note`` and ``rm`` now name ``sweep``, but ONLY for a ref
     that actually names one of THIS kind's leftovers; an ordinary typo still gets the plain refusal,
-    with nothing invented about it."""
+    with nothing invented about it.
+
+    Whole-piece review (three lenses): the sentence is built as ``exc.message + hint``, and the
+    store's message ENDS with the ref while the hint BEGAN with it -- so the ref printed twice, back
+    to back, with no sentence break, in the one exit-1 line an operator sees after copying a ``list``
+    row's "incomplete" name into ``note``. The substring assertions below could not see it; the
+    count can."""
     root, ids = browse_store
     leftover_name = ids["bad"][0]                  # "leftover_no_manifest" -- build_browse_store's
     assert (root / "priors" / leftover_name).is_dir(), "build_browse_store seeds this one"
@@ -2307,6 +2332,8 @@ def test_note_and_rm_on_a_leftover_name_sweep_as_the_next_step(browse_store, cap
         assert len(lines) == 1, err
         assert "sweep" in lines[0] and leftover_name in lines[0], lines[0]
         assert "python -m core artifacts sweep prior" in lines[0], lines[0]
+        assert f". {leftover_name!r} is one of the leftovers" in lines[0], lines[0]
+        assert f"{leftover_name!r} {leftover_name!r}" not in lines[0], lines[0]
 
     # An ordinary typo is not a leftover: no artifact by that name or id, and no directory by that
     # name either, so nothing invents a next step that is not true.

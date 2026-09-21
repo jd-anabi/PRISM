@@ -1727,6 +1727,69 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
                for lv, t in pane.lines), pane.lines
 
 
+def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_success():
+    """R6 (whole-piece review). ``cancel_is_deferred()`` defers a checkpoint while this thread is
+    handling an exception, and the token stays REQUESTED so "the next check outside raises" -- which
+    is true only if there IS a next check. ``Worker.run`` asked the token nothing on the SUCCESS
+    path, so a Cancel that arrived inside a deferral window nothing re-checked (a stage whose last
+    write happens in a ``finally`` an exception entered -- ``core/Solvers/sdeint.py``'s bar teardown
+    is on the graphed solver path) left the run reported as a clean, completed success. The person
+    who pressed Cancel was told nothing at all.
+
+    The run really DID finish, so it must not be reported as cancelled: nothing on disk is wrong and
+    the payload is correct. It is reported as a SUCCESS with the fact said out loud -- the missing
+    counterpart of the failure path's "A cancel was requested before the run failed." (B15's fix
+    round 1), which the window has had since.
+
+    A run that finishes with NO cancel pending says nothing extra: the sentence has to be the answer
+    to a question somebody asked."""
+    from core.gui.worker import CANCEL_TOO_LATE_TEXT
+    from tests._fixtures import SHOWN, PaneCapture
+
+    app = qt_app()
+
+    class P(BasePanel):
+        pass
+
+    panel = P()
+    pane = PaneCapture(panel)
+    results = []
+
+    def _drive(fn):
+        SHOWN.clear()
+        del pane.lines[:]
+        del results[:]
+        panel.dispatch(fn, on_result=results.append)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and panel._busy:
+            app.processEvents()
+            time.sleep(0.01)
+        pump(app, 0.2)
+        assert not panel._busy, "the panel stayed busy"
+
+    def finishes_with_a_cancel_pending():
+        try:
+            raise RuntimeError("something the run recovered from")
+        except RuntimeError:
+            panel._cancel.requested.set()          # Cancel, inside a deferral window
+            print("the last thing the run writes")  # deferred: no checkpoint fires here
+        return "the payload"                        # ... and nothing checks the token again
+
+    _drive(finishes_with_a_cancel_pending)
+    assert results == ["the payload"], "the run's result was not delivered"
+    assert SHOWN == [], "a completed run opened a dialog"
+    assert ("warning", "Run cancelled.") not in pane.lines, \
+        ("a run that FINISHED was reported as a cancellation", pane.lines)
+    assert any(lv == "warning" and CANCEL_TOO_LATE_TEXT in text for lv, text in pane.lines), \
+        ("the person who pressed Cancel was told nothing", pane.lines)
+    assert ("info", "the last thing the run writes") in pane.lines, pane.lines
+
+    _drive(lambda: "a quiet payload")
+    assert results == ["a quiet payload"], results
+    assert not any("cancel" in text.lower() for _lv, text in pane.lines), \
+        ("a run nobody cancelled was told about a cancel", pane.lines)
+
+
 def test_a_crash_under_a_live_bar_is_a_crash_and_leaves_no_ignored_exception(monkeypatch):
     """(e) THE COLLISION WITH A LIVE BAR. A crash inside ``for ... in tqdm(...)`` finalizes the bar's
     generator while the crash unwinds, and tqdm's ``finally: self.close()`` writes the bar's last frame

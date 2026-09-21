@@ -63,7 +63,16 @@ def _stamp() -> str:
 class _RunLogHandler(logging.Handler):
     """Appends every record the `core` logger passes at INFO and above to one RunLog -- but only when
     it arrives on the THREAD that attached this handler (RunLog.attach records it); a record from any
-    other thread is dropped from this buffer, never appended anywhere else."""
+    other thread is dropped from this buffer, never appended anywhere else.
+
+    `emits_nowhere` is read by `core.logging_root._already_emitted`, which drops a record some
+    handler below the root has already shown somebody. This one shows nobody anything: it fills an
+    artifact's log.txt. Without the marker, attaching a run log silenced the root sink for every
+    `core` record of that run -- right while the pane or the console also had a handler, wrong when
+    neither did (a declined console redirect showed nothing live, and an off-thread record, which
+    `emit` below drops, reached nothing at all)."""
+
+    emits_nowhere = True
 
     def __init__(self, log: "RunLog"):
         super().__init__(level=logging.INFO)

@@ -7,6 +7,13 @@ from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
 from .streams import WorkerCancelled, redirect_streams
 
+# Said, at warning, when a run RETURNS with the cancel token requested but never fired (R6). The
+# counterpart of ``base_panel.CANCEL_NOTED_TEXT``, which the failure path carries: there the run
+# crashed, here it finished. Kept here rather than in base_panel because this module must not import
+# a panel, and it is the worker that knows the token's final state.
+CANCEL_TOO_LATE_TEXT = ("The run finished before the cancel could take effect; nothing was stopped, "
+                        "and its result is complete.")
+
 
 def _drop_tracebacks(exc: BaseException) -> None:
     """Set ``__traceback__`` to None on ``exc`` and on every exception along its ``__cause__`` /
@@ -183,6 +190,16 @@ class Worker(QRunnable):
                     self.signals.log.emit(in_flight, "error")
                 self.signals.cancelled.emit()
             elif failure is None:
+                # THE CANCEL THAT ARRIVED TOO LATE (piece 4 whole-piece review, R6). A cancel taken
+                # inside a deferral window is deferred, not discarded -- "the next check outside
+                # raises" -- and that is true only if there IS a next check. A stage whose last write
+                # happens while an exception is unwinding (core/Solvers/sdeint.py's bar teardown is
+                # on the graphed solver path) can finish with the token requested and never fired.
+                # The run really did finish, so it is NOT reported as cancelled: the payload is
+                # correct and nothing on disk is wrong. It is reported as the success it is, with the
+                # fact said -- the counterpart of cancel_noted on the failure path above.
+                if self.cancel is not None and self.cancel.requested.is_set():
+                    self.signals.log.emit(CANCEL_TOO_LATE_TEXT, "warning")
                 self.signals.result.emit(payload)
             else:
                 self.signals.error.emit(failure[0], failure[1], cancel_noted)

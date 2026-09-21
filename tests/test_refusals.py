@@ -995,6 +995,72 @@ def test_the_root_sink_takes_exactly_what_no_handler_below_the_root_has_emitted(
         root.handlers[:] = pytest_handlers
 
 
+def test_the_run_log_handler_does_not_count_as_having_emitted_a_record():
+    """Task 20's deferred item, and the off-thread case a reviewer's probe found beside it.
+
+    ``runs._RunLogHandler`` appends to a LIST. It emits to nobody, which is exactly the standing a
+    ``NullHandler`` already had in ``_already_emitted`` -- and it did not have it. So while ANY run
+    was active the sink stayed silent for every ``core`` record, and two things followed:
+
+      * a run whose console redirect was DECLINED showed the operator nothing live, although the
+        record still survived into log.txt -- the case the module docstring claimed worked;
+      * a ``core`` record raised from a thread OTHER than the run's owner reached NOTHING AT ALL:
+        ``_RunLogHandler.emit`` drops it (that buffer holds this run's own lines, by thread) and the
+        root sink suppressed it as already emitted.
+
+    A handler that DOES emit still suppresses the duplicate -- that is the whole point of the walk --
+    so the third leg attaches one beside the run log and the sink goes quiet again.
+    """
+    import logging
+    import threading
+
+    from core import logging_root, runs
+
+    root = logging.getLogger()
+    pytest_handlers = root.handlers[:]
+    seen = []
+    log = runs.RunLog()
+    emitted = []
+
+    class _Emits(logging.Handler):
+        def emit(self, record):
+            emitted.append(record.getMessage())
+
+    pump_like = _Emits()
+    try:
+        root.handlers[:] = []
+        logging_root.install(seen.append)
+        assert runs.LOGGER.handlers == [], \
+            f"a core handler is attached before this test attaches one: {runs.LOGGER.handlers}"
+        log.attach()
+
+        logging.getLogger("core.probe").warning("a record whose console redirect was declined")
+        assert [logging_root.render(r) for r in seen] == \
+            ["warning: a record whose console redirect was declined"], seen
+        assert any("a record whose console redirect was declined" in ln for ln in log.lines), \
+            log.lines
+
+        seen.clear()
+        threads_say = threading.Thread(
+            target=lambda: logging.getLogger("core.probe").warning("from another thread"))
+        threads_say.start()
+        threads_say.join()
+        assert [logging_root.render(r) for r in seen] == ["warning: from another thread"], seen
+        assert not any("from another thread" in ln for ln in log.lines), \
+            ("the run log is per thread; this record has nowhere else to go", log.lines)
+
+        seen.clear()
+        runs.LOGGER.addHandler(pump_like)
+        logging.getLogger("core.probe").warning("a record the pane already showed")
+        assert seen == [], [r.getMessage() for r in seen]
+        assert emitted == ["a record the pane already showed"], emitted
+    finally:
+        runs.LOGGER.removeHandler(pump_like)
+        log.detach()
+        logging_root.remove()
+        root.handlers[:] = pytest_handlers
+
+
 def test_logging_root_imports_only_the_standard_librarys_logging():
     """``python -m core --help`` must stay torch-free and the tool imports this module at its top, so
     the same pin the refusals module carries applies here: the import statements name ``logging`` and

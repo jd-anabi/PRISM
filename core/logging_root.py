@@ -22,15 +22,22 @@ one rule covers every case, where a rule by logger NAME lost records:
   * a ``core`` record DURING A RUN (the window's pump handler, the tool's console handlers, the
     artifact's log.txt -- all on the ``core`` logger) is already out, so the sink stays silent and
     no second copy can appear;
-  * a ``core`` record with NO ``core`` handler attached -- the window between runs, or a run whose
-    console redirect was declined -- reaches the sink instead of vanishing; ``render`` gives it the
-    tool's own shape (bare for information, ``warning: `` and so on above), never ``library:``;
+  * a ``core`` record that no handler below the root would SHOW -- the window between runs, a run
+    whose console redirect was declined (its ``RunLog`` handler only fills a buffer), a record from
+    a thread other than the run's owner (that buffer is per thread and drops it) -- reaches the sink
+    instead of vanishing; ``render`` gives it the tool's own shape (bare for information,
+    ``warning: `` and so on above), never ``library:``;
   * a library that installed a handler of its OWN (pytensor does, at import, when no handler is
     found above its logger -- which is before the window is built) has already printed its record,
     so the sink does not print it a second time;
-  * a ``logging.NullHandler`` does not count: it emits nothing. Python's logging HOWTO tells a
-    library to add one so it stays quiet UNTIL the application configures logging; this root
-    handler is that configuration, so such a library's warning (pint's, pint/util.py) is shown once.
+  * a handler that EMITS NOWHERE does not count. A ``logging.NullHandler`` is the standard case:
+    Python's logging HOWTO tells a library to add one so it stays quiet UNTIL the application
+    configures logging; this root handler is that configuration, so such a library's warning
+    (pint's, pint/util.py) is shown once. ``core.runs._RunLogHandler`` is the other: it appends to
+    an artifact's ``log.txt`` buffer and shows nobody anything, so it carries ``emits_nowhere`` and
+    is skipped by the same rule. Without that, EVERY ``core`` record during any run was suppressed
+    here because a run log was attached -- which is right when the pane or the console also has a
+    handler (they do the showing) and wrong when neither does, the two cases named above.
 The handler level test is ``Logger.callHandlers``'s own (``record.levelno >= handler.level``). A
 handler's own filters are not consulted: calling another handler's filter a second time could have
 side effects, and none of the handlers in play filters.
@@ -78,14 +85,22 @@ def render(record: logging.LogRecord) -> str:
     return f"library: {who}: {text}"
 
 
+def _emits_nowhere(handler: logging.Handler) -> bool:
+    """True for a handler that shows the record to nobody, so having "had" it is not having emitted
+    it: a ``logging.NullHandler``, and any handler that says so with ``emits_nowhere`` (PRISM's run
+    log, which only fills an artifact's log.txt buffer -- and does so per THREAD, so it can drop the
+    record outright)."""
+    return isinstance(handler, logging.NullHandler) or getattr(handler, "emits_nowhere", False)
+
+
 def _already_emitted(record: logging.LogRecord) -> bool:
     """True if a logger between the record's own and the root (the root excluded) has a handler that
-    ``Logger.callHandlers`` gave it to -- a ``NullHandler`` excepted, since it emits nothing."""
+    ``Logger.callHandlers`` gave it to -- one that emits nowhere excepted (``_emits_nowhere``)."""
     root = logging.getLogger()
     logger = logging.getLogger(record.name)          # the root itself for ``logging.warning``
     while logger is not None and logger is not root:
         for handler in logger.handlers:
-            if not isinstance(handler, logging.NullHandler) and record.levelno >= handler.level:
+            if not _emits_nowhere(handler) and record.levelno >= handler.level:
                 return True
         if not logger.propagate:
             break
