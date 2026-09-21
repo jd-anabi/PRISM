@@ -107,7 +107,7 @@ def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(
 
 
 def test_a_kind_with_nothing_in_it_is_not_a_root_that_cannot_be_read(tmp_path):
-    """§3.2. StorePicker.refresh swallows the exception and lists nothing (artifact_picker.py:135-137),
+    """§3.2. StorePicker.refresh swallows the exception and lists nothing (artifact_picker.py:175-178),
     so today an empty store and an unreadable one are the same picture. The browser is the one place
     that difference has to be visible: an absent kind directory reads "nothing here yet", and a root
     that raises puts the error, with its class, on the status line."""
@@ -302,7 +302,7 @@ def test_the_detail_pane_states_the_gaps_a_blank_pane_would_hide(tmp_path, monke
     that said nothing says so -- read_log answers "" there and None for no file at all (§2.2), and
     piece 3's invariant is that silence is a record too -- and a folder whose name disagrees with its
     own manifest says so, the state ArtifactStore.rename leaves when the directory move is refused
-    (store.py:430-441), which nothing has ever shown."""
+    (store.py:520-540), which nothing has ever shown."""
     from core.artifacts.store import LOG_FILE
     from core.gui.screens import artifact_screen as mod
 
@@ -351,7 +351,7 @@ def test_a_caches_folder_name_is_never_called_stale(tmp_path):
     """§3.3, the one exception to the stale-folder note: it is SUPPRESSED for the simulation kind.
 
     Manifest.dir_name is the bare digest for a cache (manifest.py:73-77) and
-    write_simulation_manifest writes wherever it is handed (store.py:778-815), so a cache directory
+    write_simulation_manifest writes wherever it is handed (store.py:1010-1049), so a cache directory
     whose name is not its id is legitimate -- the note would fire on any hand-placed cache and tell
     the operator that a rename half-failed when nothing of the sort happened. The cache's own
     sentence about its missing log is still there, so this is a suppression and not a blank pane.
@@ -692,7 +692,7 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
 
 def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypatch):
     """B8. Without this a picker keeps pointing at a deleted artifact: StorePicker.restore_key
-    (artifact_picker.py:165-170) silently does nothing when the saved id has vanished, leaving
+    (artifact_picker.py:226-231) silently does nothing when the saved id has vanished, leaving
     whatever item happens to be current selected -- deliberate for a picker, and a defect the moment
     a browser can delete. Mirrors _refresh_model_combos: the window walks its own panels.
 

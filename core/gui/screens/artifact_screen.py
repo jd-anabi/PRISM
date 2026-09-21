@@ -72,7 +72,7 @@ def _stale_folder_note(actual: str, expected: str) -> str:
     """Said when Summary.dir_name disagrees with the manifest's own dir_name (§3.3).
 
     ArtifactStore.rename writes the manifest FIRST and moves the directory SECOND, and tolerates a
-    PermissionError on the move (store.py:430-441) because the manifest is what resolves an artifact.
+    PermissionError on the move (store.py:520-540) because the manifest is what resolves an artifact.
     Nothing is lost when that happens and nothing has ever said it happened.
 
     Never said for the simulation kind -- ``_detail_text`` guards the call, and the reason is there.
