@@ -4,6 +4,7 @@ import json
 import math
 import os
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,7 @@ from core.refusals import Refusal
 
 from tests._fixtures import (CODE_FILES, CODE_ROOTS, _FakeDP, _gmm_in_box, _nad_cfg,
                              _posterior_artifact, _prior_artifact, _set_path, assert_cfg_unchanged,
-                             snapshot_cfg)
+                             backdate_tree, snapshot_cfg)
 
 
 def _close(title, fig):
@@ -3518,6 +3519,9 @@ def _leftovers(store, kind="prior"):
             "wrong_kind__20260101T000003"]
 
 
+_backdate = backdate_tree       # tests/_fixtures.py's; see R3 and store.RECENT_WRITE_SECONDS
+
+
 def test_remove_incomplete_refuses_everything_that_is_not_a_leftover(store, tmp_path):
     """B7 (spec §2.3, §2.6). It is the COMPLEMENT of ``delete``: that one resolves through ``_find``,
     which returns only manifest-bearing entries, so it can only ever remove a real artifact and
@@ -3554,26 +3558,114 @@ def test_remove_incomplete_refuses_everything_that_is_not_a_leftover(store, tmp_
         "none of the refusals removed anything"
 
     target = store.kind_dir("calibration") / "leftover__20260101T000000"
+    _backdate(target)
     assert store.remove_incomplete("calibration", "leftover__20260101T000000") == target
     assert not target.exists()
 
 
-def test_remove_incomplete_removes_all_three_shapes_entries_calls_incomplete(store):
-    """The three shapes are what a leftover actually looks like on disk: a crash before the manifest
-    was written, a torn write, and a hand-moved folder. All three are removable, and the ``reason``
-    ``list`` shows for each is the one ``_entries`` gave it."""
+def test_remove_incomplete_removes_only_a_directory_with_no_manifest_file_at_all(store):
+    """R1 (whole-piece review). The three shapes ``_entries`` classifies as incomplete are NOT the
+    same thing, and only the first of them is a leftover this may remove: a crash before the manifest
+    was written.
+
+    A manifest that EXISTS but this build cannot parse, and one that declares another kind, both mean
+    "something is here that I do not understand". A reviewer probed the old rule deleting a REAL
+    calibration with its payload, because a manifest that is valid under a DIFFERENT SCHEMA reads as
+    "no artifact here" -- and ``manifest.SCHEMA`` is a versioned constant that is expected to move.
+    Those two are REPORTED: they keep their row in the listing, with their reason, and that is where
+    they stay.
+    """
     names = _leftovers(store, "prior")
+    _backdate(store.kind_dir("prior"))
     reasons = {r.dir_name: r.reason for r in store.list("prior")}
     assert set(reasons) == set(names), reasons
-    assert "no manifest.json" in reasons[names[0]]
+    assert reasons[names[0]] == st.NO_MANIFEST_REASON
     assert "unreadable manifest" in reasons[names[1]]
     assert "declares kind 'calibration'" in reasons[names[2]]
-    for name in names:
-        removed = store.remove_incomplete("prior", name)
-        assert removed.name == name and not removed.exists()
-    assert store.list("prior") == []
+
+    removed = store.remove_incomplete("prior", names[0])
+    assert removed.name == names[0] and not removed.exists()
+
+    for name in names[1:]:
+        with pytest.raises(st.StoreError, match="carries a manifest.json") as e:
+            store.remove_incomplete("prior", name)
+        assert e.value.field == "artifact"
+        assert reasons[name] in str(e.value), "the refusal must carry the listing's own reason"
+        assert (store.kind_dir("prior") / name).is_dir(), f"{name} was removed"
+    assert {r.dir_name for r in store.list("prior")} == set(names[1:]), \
+        "the two that were refused must still be listed, with their reason"
     assert store.get("calibration", "elsewhere").name == "elsewhere", \
         "the real artifact whose manifest the wrong-kind folder copied is untouched"
+
+
+def test_remove_incomplete_skips_a_directory_something_may_still_be_writing(store):
+    """R3. ``ArtifactWriter`` creates the directory FIRST and writes the manifest LAST, so for the
+    whole of a run -- minutes for a prior, days for a training -- a live run's directory looks
+    exactly like a leftover. A reviewer probed a sweep from a SECOND process removing one: the run
+    died at its commit, and a running cache lost its committed shards. A cross-process lock is out of
+    scope for this piece; a directory whose TREE was touched in the last few minutes is refused
+    instead, and the refusal says how old it is.
+
+    The directory's own mtime is not the question: a long write to a file already inside it leaves
+    the folder's mtime alone, so the guard reads the newest mtime in the whole tree.
+    """
+    d = store.kind_dir("prior")
+    d.mkdir(parents=True, exist_ok=True)
+    live = d / "inflight__20260101T000001"
+    live.mkdir()
+    (live / "prior.pt").write_bytes(b"a run still writing this")
+
+    with pytest.raises(st.StoreError, match="may still be writing") as e:
+        store.remove_incomplete("prior", live.name)
+    assert e.value.field == "artifact" and live.is_dir()
+
+    old = time.time() - 3600
+    os.utime(live, (old, old))                  # the FOLDER is old; the payload inside it is not
+    with pytest.raises(st.StoreError, match="may still be writing"):
+        store.remove_incomplete("prior", live.name)
+    assert live.is_dir()
+
+    _backdate(live)
+    assert store.remove_incomplete("prior", live.name) == live and not live.exists()
+
+
+def test_sweep_incomplete_removes_exactly_the_entries_it_was_handed(store):
+    """R2: the sweep is BOUND to the list that was shown. It used to re-scan at removal time, so a
+    directory that appeared while the confirmation sat open was deleted although the operator never
+    saw it -- probed, and reported as "Removed 2 of 1 leftover directories". Now the caller computes
+    the list, shows it, and hands exactly it here, and each entry goes by name through
+    ``remove_incomplete`` -- so every refusal that call was hardened with applies, and the count in
+    the caller's sentence is true by construction.
+    """
+    names = _leftovers(store, "prior")
+    elsewhere = store.kind_dir("inference") / "orphan__20260101T000009"
+    elsewhere.mkdir(parents=True)
+    _backdate(store.root)
+
+    assert store.sweep_incomplete([]) == ([], []), "an empty list removes nothing"
+
+    appeared = store.kind_dir("prior") / "appeared_while_the_dialog_was_open"
+    appeared.mkdir()
+    _backdate(appeared)
+
+    removed, failed = store.sweep_incomplete([("prior", names[0])])
+    assert removed == [("prior", names[0])] and failed == []
+    assert appeared.is_dir(), "a directory the operator never saw was removed"
+    assert elsewhere.is_dir(), "a kind that was not handed in was swept anyway"
+
+    # Anything the list names that is NOT removable comes back in `failed`, with remove_incomplete's
+    # own refusal as the reason -- never as a raise that would cost the rest of the list.
+    real = _make(store, "calibration", name="keepme", body=_cal_body())
+    removed, failed = store.sweep_incomplete(
+        [("calibration", real.dir.name), ("priors", "nosuchkind"), ("prior", names[1]),
+         ("prior", "appeared_while_the_dialog_was_open")])
+    assert removed == [("prior", "appeared_while_the_dialog_was_open")]
+    assert [(k, d) for k, d, _ in failed] == [("calibration", real.dir.name), ("priors", "nosuchkind"),
+                                              ("prior", names[1])]
+    assert "holds a valid calibration manifest" in failed[0][2]
+    assert "unknown artifact kind" in failed[1][2]
+    assert "carries a manifest.json" in failed[2][2]
+    assert real.dir.is_dir() and store.get("calibration", real.id).name == "keepme"
 
 
 def test_sweep_incomplete_finishes_the_rest_when_one_directory_will_not_delete(store, monkeypatch):
@@ -3585,13 +3677,12 @@ def test_sweep_incomplete_finishes_the_rest_when_one_directory_will_not_delete(s
     The failure is INJECTED rather than provoked with a real handle, so the pin holds on any
     filesystem and costs no sleep."""
     names = _leftovers(store, "prior")
-    (store.kind_dir("inference") / "orphan__20260101T000009").mkdir(parents=True)
+    orphan = store.kind_dir("inference") / "orphan__20260101T000009"
+    orphan.mkdir(parents=True)
     real = _make(store, "calibration", name="keepme", body=_cal_body())
+    _backdate(store.root)
 
-    assert store.sweep_incomplete("posterior") == ([], []), \
-        "a kind with nothing in it removes nothing and fails nothing"
-
-    stuck = store.kind_dir("prior") / names[1]
+    stuck = store.kind_dir("prior") / names[0]
     real_rmtree = st._rmtree_retry
 
     def _one_held(path, **kw):
@@ -3600,23 +3691,17 @@ def test_sweep_incomplete_finishes_the_rest_when_one_directory_will_not_delete(s
         return real_rmtree(path, **kw)
 
     monkeypatch.setattr(st, "_rmtree_retry", _one_held)
-    removed, failed = store.sweep_incomplete("prior")
+    removed, failed = store.sweep_incomplete([("prior", names[0]), ("inference", orphan.name)])
     monkeypatch.undo()
-    assert sorted(removed) == [("prior", names[0]), ("prior", names[2])]
-    assert failed == [("prior", names[1], "PermissionError: another process holds this folder open")]
+    assert removed == [("inference", orphan.name)], "one held handle stopped the rest of the sweep"
+    assert len(failed) == 1 and failed[0][:2] == ("prior", names[0])
+    assert "another process holds this folder open" in failed[0][2]
     assert stuck.is_dir(), "the one it could not remove is still there"
-    assert [r.dir_name for r in store.list("prior")] == [names[1]]
+    assert not orphan.exists()
 
-    removed_all, failed_all = store.sweep_incomplete()
-    assert failed_all == []
-    assert sorted(removed_all) == sorted([("prior", names[1]),
-                                          ("inference", "orphan__20260101T000009")])
-    assert store.list("prior") == [] and store.list("inference") == []
+    removed, failed = store.sweep_incomplete([("prior", names[0])])
+    assert removed == [("prior", names[0])] and failed == []
     assert store.get("calibration", real.id).name == "keepme", "a real artifact is never swept"
-
-    with pytest.raises(st.StoreError, match="unknown artifact kind") as e:
-        store.sweep_incomplete("priors")
-    assert e.value.field == "artifact"
 
 
 def test_delete_refuses_with_the_artifact_field_and_says_force_true(store):
@@ -3710,6 +3795,7 @@ def test_remove_incomplete_wraps_an_rmtree_failure_as_a_fielded_refusal(store, m
     see an unhandled crash instead. ``remove_incomplete`` must wrap it as a fielded ``StoreError``,
     the way ``sweep_incomplete`` already handles its own per-directory failures."""
     names = _leftovers(store, "prior")
+    _backdate(store.kind_dir("prior"))
     target = store.kind_dir("prior") / names[0]
 
     def _boom(path, **kw):
@@ -3731,6 +3817,7 @@ def test_remove_incomplete_refuses_to_report_success_when_the_directory_survives
     returning it. The failure is injected (a no-op fake ``_rmtree_retry``) so the pin holds on any
     filesystem."""
     names = _leftovers(store, "prior")
+    _backdate(store.kind_dir("prior"))
     target = store.kind_dir("prior") / names[0]
     monkeypatch.setattr(st, "_rmtree_retry", lambda path, **kw: None)   # "succeeds" but removes nothing
     with pytest.raises(st.StoreError, match="was not removed") as e:
@@ -3772,10 +3859,18 @@ def test_sweep_incomplete_reports_a_directory_the_removal_never_actually_touched
     its sibling. A directory that vanishes between ``_entries``' classification and the removal
     attempt -- or a path trick that makes ``shutil.rmtree`` raise ``FileNotFoundError``, which
     ``_rmtree_retry`` treats as "already gone" and swallows -- must not be reported as removed.
-    Injected with a no-op fake ``_rmtree_retry`` so the pin holds on any filesystem."""
-    names = _leftovers(store, "prior")
+    Injected with a no-op fake ``_rmtree_retry`` so the pin holds on any filesystem.
+
+    Since R2 the sweep removes each entry BY NAME through ``remove_incomplete``, so the check is
+    inherited rather than duplicated -- and the reason the sweep reports is that call's own refusal.
+    """
+    d = store.kind_dir("prior")
+    d.mkdir(parents=True, exist_ok=True)
+    for name in ("goes__20260101T000001", "survives__20260101T000002"):
+        (d / name).mkdir()
+    _backdate(d)
     real_rmtree = st._rmtree_retry
-    survivor = store.kind_dir("prior") / names[1]
+    survivor = d / "survives__20260101T000002"
 
     def _fake(path, **kw):
         if Path(path) == survivor:
@@ -3783,11 +3878,48 @@ def test_sweep_incomplete_reports_a_directory_the_removal_never_actually_touched
         return real_rmtree(path, **kw)
 
     monkeypatch.setattr(st, "_rmtree_retry", _fake)
-    removed, failed = store.sweep_incomplete("prior")
+    removed, failed = store.sweep_incomplete([("prior", "goes__20260101T000001"),
+                                              ("prior", survivor.name)])
     monkeypatch.undo()
-    assert sorted(removed) == [("prior", names[0]), ("prior", names[2])]
-    assert failed == [("prior", names[1], f"OSError: {survivor} was not removed")]
+    assert removed == [("prior", "goes__20260101T000001")]
+    assert len(failed) == 1 and failed[0][:2] == ("prior", survivor.name)
+    assert "was not removed" in failed[0][2], failed
     assert survivor.is_dir(), "the one the fake rmtree never actually touched is still there"
+
+
+def test_delete_verifies_the_directory_is_gone_and_wraps_a_removal_failure(store, monkeypatch):
+    """R7. ``_rmtree_retry`` treats ANY ``FileNotFoundError`` as "it is already gone", including one
+    raised from INSIDE the walk after part of the tree has been removed -- so ``delete`` returned
+    normally and both front ends announced success over a half-removed artifact (probed: the
+    directory survived, the manifest did not, and the artifact then listed as a leftover). And a
+    ``PermissionError`` -- the ordinary Windows case, a handle held by a preview or a scanner --
+    escaped ``artifacts rm`` past the ladder's ``Refusal`` rung as a raw traceback, for a condition
+    that is just "try again in a moment".
+
+    Both are what ``remove_incomplete`` and ``sweep_incomplete`` were given in fix round 2. ``delete``
+    is the ONLY one of the three that removes a real artifact, and it was the least guarded.
+    """
+    real = _make(store, "calibration", name="keepme", body=_cal_body())
+
+    monkeypatch.setattr(st, "_rmtree_retry", lambda path, **kw: None)   # "succeeds", removes nothing
+    with pytest.raises(st.StoreError, match="was not removed") as e:
+        store.delete("calibration", "keepme")
+    monkeypatch.undo()
+    assert e.value.field == "artifact"
+    assert real.dir.is_dir() and store.get("calibration", "keepme").name == "keepme"
+
+    def _held(path, **kw):
+        raise PermissionError("another process holds this folder open")
+
+    monkeypatch.setattr(st, "_rmtree_retry", _held)
+    with pytest.raises(st.StoreError, match="another process holds this folder open") as e:
+        store.delete("calibration", "keepme")
+    monkeypatch.undo()
+    assert isinstance(e.value, Refusal) and e.value.field == "artifact"
+    assert real.dir.is_dir(), "a failed removal must leave the artifact where it was"
+
+    store.delete("calibration", "keepme")           # and an ordinary removal still works
+    assert not real.dir.exists()
 
 
 # ── The report renderers (piece 4, §5 / B10) ─────────────────────────────────────────────────────

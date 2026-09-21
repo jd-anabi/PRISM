@@ -2106,43 +2106,61 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
     assert s.get("prior", "tp").id == before, "a refusal removed something"
 
 
-def test_artifacts_sweep_removes_only_the_unusable_directories(browse_store, capsys):
-    """B7: one action removes every directory of a kind that has no usable manifest, through a store
-    call that CAN ONLY remove such a directory -- ``delete`` resolves through ``_find``, which never
-    returns a manifest-less entry, and ``remove_incomplete`` is its complement. §4.3: nothing to
-    remove is exit 0, and it says so rather than printing nothing.
+def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_directories(
+        browse_store, capsys):
+    """B7 with R1 and R4. One action removes every directory of a kind that has NO manifest at all,
+    through a store call that CAN ONLY remove such a directory -- ``delete`` resolves through
+    ``_find``, which never returns a manifest-less entry, and ``remove_incomplete`` is its
+    complement. §4.3: nothing to remove is exit 0, and it says so rather than printing nothing.
 
-    NOTE (repository fact the brief could not know): ``build_browse_store`` (Task 9) already seeds
-    THREE unusable directories under ``priors/`` -- ``ids["bad"]`` -- for the store shapes
-    ``_entries`` classifies (no manifest, unparseable manifest, a valid manifest of another kind).
-    All three carry no usable ``prior`` manifest, so a correct sweep removes them too, alongside this
-    test's own leftover; the property under test is that the one directory with a USABLE manifest
-    survives, not that every OTHER pre-existing directory does."""
+    R4: the window ASKS before it removes and this did not -- no preview, no confirmation, and a
+    reviewer's probe deleted two directories and printed their reasons afterwards. So the default is
+    a DRY RUN: exactly what it would remove, removing nothing, and ``--yes`` performs it. That is a
+    confirmation and not an override: B6 stands, there is still no ``--force`` and no way to reach a
+    real artifact from here.
+
+    R1: of the three shapes ``build_browse_store`` seeds under ``priors/`` (no manifest at all, a
+    manifest that will not parse, a valid manifest of another kind), only the FIRST is a leftover a
+    sweep may remove. The other two are reported and survive -- a manifest valid under a different
+    SCHEMA reads as "no artifact here" to this build, and deleting one cost a reviewer's probe a real
+    calibration with its payload."""
+    from tests._fixtures import backdate_tree
     root, ids = browse_store
     leftover = root / "priors" / "_unnamed__20260101T000000"
     leftover.mkdir(parents=True, exist_ok=True)
+    manifest_less = root / "priors" / ids["bad"][0]
+    carries_a_manifest = [root / "priors" / n for n in ids["bad"][1:]]
     bad_names = set(ids["bad"]) | {leftover.name}
     kept = [p for p in (root / "priors").iterdir() if p.name not in bad_names]
     assert kept, "build_browse_store wrote a prior"
+    backdate_tree(root / "priors")          # R3's guard is tested at the store; not the subject here
 
+    # (a) the DRY RUN: says what it would remove, removes nothing, exits 0
     capsys.readouterr()
     assert main(["artifacts", "sweep", "prior"]) == 0
     out = capsys.readouterr().out
-    assert "_unnamed__20260101T000000" in out, out
-    for name in ids["bad"]:
-        assert name in out, out
-        assert not (root / "priors" / name).exists()
-    assert not leftover.exists()
+    assert "would remove" in out and leftover.name in out and manifest_less.name in out, out
+    assert "--yes" in out, "the dry run must name the flag that performs it"
+    assert leftover.is_dir() and manifest_less.is_dir(), "a dry run removed something"
+
+    # (b) --yes performs it, and only the manifest-less directories go
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "removed" in out and leftover.name in out and manifest_less.name in out, out
+    assert not leftover.exists() and not manifest_less.exists()
+    for d in carries_a_manifest:
+        assert d.is_dir(), f"{d.name} carries a manifest.json and must never be swept"
+        assert d.name in out, out
     assert all(p.exists() for p in kept), "sweep removed an artifact with a usable manifest"
     # RULED IN 5 (fix round 1): sweep_incomplete's own return has no reason, so the tool reads it off
-    # `list` before removing and prints it after (the window reads the same rows earlier, for its
-    # confirmation) -- an operator must be able to tell "no manifest" from "a manifest of another
-    # kind" after the fact, not just which directory went.
+    # `list` before removing and prints it after -- an operator must be able to tell "no manifest"
+    # from "a manifest of another kind" after the fact, not just which directory went.
     assert "no manifest.json" in out, out
     assert "manifest declares kind" in out, out
 
     capsys.readouterr()
-    assert main(["artifacts", "sweep", "prior"]) == 0
+    assert main(["artifacts", "sweep", "prior", "--yes"]) == 0
     assert "nothing to sweep" in capsys.readouterr().out
 
 
@@ -2150,18 +2168,28 @@ def test_a_sweep_that_could_not_remove_something_exits_1_naming_it(browse_store,
     """§4.3: a sweep that removed everything is 0; one that could not remove a directory is 1, naming
     each failure. A held handle on Windows is what that stands for and it cannot be provoked on
     demand, so the two lists are injected on the store's own method -- what is under test is the
-    ladder, not the removal."""
+    ladder, not the removal.
+
+    The injection also pins the CONTRACT R2 gave that method: it is handed the list of
+    ``(kind, dir_name)`` the operator was shown, not a kind to re-scan."""
     from core.artifacts import ArtifactStore
     root, ids = browse_store
-    monkeypatch.setattr(
-        ArtifactStore, "sweep_incomplete",
-        lambda self, kind=None: ([("prior", "gone__1")],
-                                 [("posterior", "stuck__2", "PermissionError: in use")]))
+    seen = {}
+
+    def _fake(self, entries):
+        seen["entries"] = list(entries)
+        return ([("prior", "gone__1")], [("posterior", "stuck__2", "PermissionError: in use")])
+
+    monkeypatch.setattr(ArtifactStore, "sweep_incomplete", _fake)
     capsys.readouterr()
-    assert main(["artifacts", "sweep"]) == 1
+    assert main(["artifacts", "sweep", "--yes"]) == 1
     cap = capsys.readouterr()
     assert "gone__1" in cap.out, cap.out
     assert "stuck__2" in cap.err and "in use" in cap.err, cap.err
+    assert ("prior", ids["bad"][0]) in seen["entries"], seen["entries"]
+    assert all(len(e) == 2 for e in seen["entries"]), seen["entries"]
+    assert not any(d in [e[1] for e in seen["entries"]] for d in ids["bad"][1:]), \
+        "a directory that carries a manifest.json was handed to the removal"
 
 
 def test_artifacts_summary_prints_the_lineage_or_writes_it_to_out(browse_store, tmp_path, capsys):
@@ -2228,6 +2256,9 @@ def test_the_artifacts_family_has_all_six_modes_and_still_no_configuration_flags
             assert flag not in parser._option_string_actions, (name, flag)
     assert "--note" in modes["note"]._option_string_actions
     assert "--out" in modes["summary"]._option_string_actions
+    # R4: the sweep's confirmation. Only the sweep has it -- it is not a global "don't ask me", and
+    # nothing else in this family removes anything without naming one artifact.
+    assert {name for name, m in modes.items() if "--yes" in m._option_string_actions} == {"sweep"}
 
 
 # ── fix round 1 (post-implementation review) ─────────────────────────────────────────────────────

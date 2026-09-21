@@ -35,6 +35,19 @@ MANIFEST = "manifest.json"
 # The run's records, written beside the manifest by ArtifactWriter (piece 3, V4). NOT a payload: not
 # hashed, not in ``payloads``, never read by a loader. The simulation cache never gets one (§1.2).
 LOG_FILE = "log.txt"
+# The ONE reason ``_entries`` gives a directory that carries no manifest.json AT ALL, and therefore
+# the only state a sweep may remove (piece 4 whole-piece review, R1). A directory whose manifest
+# EXISTS but this build will not parse, or that declares another kind, is something nobody here
+# understands -- it is reported in the listing with its own reason and left alone. Both front ends
+# read this constant to decide what to offer, so neither restates the rule.
+NO_MANIFEST_REASON = "no manifest.json (incomplete or interrupted)"
+# How recently a directory's TREE must have been touched for a removal to refuse it as possibly
+# live (R3). ``ArtifactWriter`` creates the directory first and writes the manifest LAST, so for the
+# whole of a run a live directory looks exactly like a leftover -- and a sweep from a SECOND process
+# (`python -m core artifacts sweep` beside a training in the window) has no ``BasePanel._running`` to
+# consult. Not a cross-process lock, which is out of scope: a recency guard plus an honest report
+# cannot itself destroy anything, and it costs a just-abandoned leftover a few minutes' wait.
+RECENT_WRITE_SECONDS = 300.0
 # Which ``parents`` keys can name an artifact of a given kind.
 _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 "posterior": ("posterior", "parent_posterior"), "observation": ("observation",),
@@ -204,6 +217,25 @@ def _rmtree_retry(path, retries: int = 3, backoff_s: float = 0.1) -> None:
             time.sleep(backoff_s * (attempt + 1))
 
 
+def _newest_mtime(path) -> float:
+    """The newest modification time anywhere in ``path``'s tree, as a POSIX timestamp.
+
+    The DIRECTORY's own mtime is not the question a removal has to ask: creating or deleting an entry
+    touches it, but a long write to a file already inside it does not -- and that is precisely the
+    shape of a training that is writing shard after shard into a directory it created minutes ago.
+    An entry that cannot be stat'd (it vanished mid-walk) is skipped rather than fatal; the caller is
+    about to try to remove the tree anyway.
+    """
+    newest = 0.0
+    for root, dirs, files in os.walk(str(path)):
+        for p in (root, *(os.path.join(root, n) for n in (*dirs, *files))):
+            try:
+                newest = max(newest, os.stat(p).st_mtime)
+            except OSError:
+                continue
+    return newest
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -349,7 +381,7 @@ class ArtifactStore:
         for sub in sorted(p for p in d.iterdir() if p.is_dir()):
             mpath = sub / MANIFEST
             if not mpath.exists():
-                out.append((sub, None, "no manifest.json (incomplete or interrupted)"))
+                out.append((sub, None, NO_MANIFEST_REASON))
                 continue
             try:
                 m = mf.from_json_text(mpath.read_text(encoding="utf-8"))
@@ -599,10 +631,23 @@ class ArtifactStore:
                 f"refusing to delete {kind} {m.name or m.id}: {len(deps)} artifact(s) name it as a "
                 f"parent -- {listed}. Delete those first, or pass force=True to orphan them.",
                 field="artifact")
-        _rmtree_retry(sub)
+        # The same two guards ``remove_incomplete`` and ``sweep_incomplete`` were given in fix
+        # round 2, and this is the only one of the three that removes a REAL artifact (R7).
+        try:
+            _rmtree_retry(sub)
+        except OSError as e:
+            # A held handle (an Explorer preview, a scanner) is not a bug: without this wrapper it
+            # escapes the tool's Refusal rung as a raw traceback for "try again in a moment".
+            raise StoreError(f"could not remove {kind} {m.name or m.id} at {sub}: "
+                             f"{type(e).__name__}: {e}", field="artifact") from e
+        if sub.exists():
+            # _rmtree_retry treats ANY FileNotFoundError as "already gone" -- including one raised
+            # from inside the walk, after part of the tree has been removed. Verified, not assumed.
+            raise StoreError(f"{kind} {m.name or m.id} at {sub} was not removed", field="artifact")
 
     def remove_incomplete(self, kind: str, dir_name: str) -> Path:
-        """Remove one directory under ``kind`` that has no usable manifest. Returns the path removed.
+        """Remove one directory under ``kind`` that has NO manifest file at all. Returns the path
+        removed.
 
         THE COMPLEMENT OF ``delete``. That one resolves through ``_find``, which only ever returns
         manifest-bearing entries, so it can only remove a real artifact -- and therefore always runs
@@ -613,8 +658,10 @@ class ArtifactStore:
 
         Refuses, as a StoreError with ``field="artifact"``: an unknown kind; a ``dir_name`` that is
         not a direct child (any separator, ``..``, an absolute path); a name that resolves to no
-        directory at all; and -- the one that matters -- a directory ``_entries`` classifies as
-        COMPLETE.
+        directory at all; a directory ``_entries`` classifies as COMPLETE; a directory that carries a
+        manifest.json this build cannot use or that declares another kind (R1 -- see
+        ``NO_MANIFEST_REASON``); and one whose tree was written within ``RECENT_WRITE_SECONDS``, which
+        may be a run in flight in another process (R3).
 
         Fix round 1 (CRITICAL): the completeness check does NOT compare ``dir_name`` as a string
         against each entry's name. Windows addresses one directory through many spellings -- a case
@@ -647,11 +694,11 @@ class ArtifactStore:
         candidate = d / dir_name
         if not candidate.is_dir():
             raise StoreError(f"no directory named {dir_name!r} under {d}", field="artifact")
-        sub = m = None
-        for s, mm, _ in self._entries(kind):
+        sub = m = reason = None
+        for s, mm, why in self._entries(kind):
             try:
                 if os.path.samefile(candidate, s) and os.path.realpath(candidate) == os.path.realpath(s):
-                    sub, m = s, mm
+                    sub, m, reason = s, mm, why
                     break
             except OSError:
                 continue        # an entry that vanished mid-scan is not a match, not a crash
@@ -661,6 +708,28 @@ class ArtifactStore:
             raise StoreError(
                 f"{dir_name!r} holds a valid {kind} manifest, so it is a real artifact and not a "
                 f"leftover; remove it with delete(), which refuses it while anything depends on it",
+                field="artifact")
+        if reason != NO_MANIFEST_REASON:
+            # R1. "This build cannot parse it" is NOT "there is no artifact here": a manifest written
+            # under a different SCHEMA, or by a newer build, or read through a transient Windows
+            # failure (the very class _rmtree_retry retries for, one function away) all land here --
+            # a reviewer probed the old rule deleting a real calibration with its payload. A
+            # directory nobody understands is reported, never removed.
+            raise StoreError(
+                f"{dir_name!r} under {d} carries a manifest.json, so it is not a leftover: {reason}. "
+                f"A sweep removes only a directory with NO manifest at all; this one keeps its row "
+                f"in the listing, with that reason, and is removed by hand if it really is dead",
+                field="artifact")
+        age = time.time() - _newest_mtime(sub)
+        if age < RECENT_WRITE_SECONDS:
+            # R3. The manifest is written LAST, so a run in flight -- possibly in ANOTHER process,
+            # which no _running flag can see -- is indistinguishable from a leftover by content
+            # alone. Age is the one signal available without a cross-process lock.
+            raise StoreError(
+                f"{dir_name!r} under {d} was written {age:.0f} s ago, so something may still be "
+                f"writing it: an artifact's manifest is written last, and a run in flight looks "
+                f"exactly like a leftover until it commits. Leave it at least "
+                f"{RECENT_WRITE_SECONDS:.0f} s and sweep again",
                 field="artifact")
         try:
             _rmtree_retry(sub)
@@ -678,41 +747,38 @@ class ArtifactStore:
             raise StoreError(f"{dir_name!r} under {d} was not removed", field="artifact")
         return sub
 
-    def sweep_incomplete(self, kind: "str | None" = None) -> "tuple[list, list]":
-        """``(removed, failed)`` over one kind or all seven: ``removed`` is ``[(kind, dir_name)]`` and
-        ``failed`` is ``[(kind, dir_name, reason)]``.
+    def sweep_incomplete(self, entries) -> "tuple[list, list]":
+        """Remove EXACTLY the ``(kind, dir_name)`` pairs handed in. ``(removed, failed)``, where
+        ``removed`` is ``[(kind, dir_name)]`` and ``failed`` is ``[(kind, dir_name, reason)]``.
+
+        R2: this call no longer RE-SCANS. It used to take a kind and remove whatever was incomplete
+        at the moment it ran, which meant the confirmation the operator answered did not bind the
+        action -- a reviewer probed it removing a directory created while the dialog sat open, and
+        reporting "Removed 2 of 1 leftover directories". The caller now computes the candidates,
+        shows them, and hands that list here; anything that appeared since is simply not in it.
+
+        Each entry goes BY NAME through ``remove_incomplete``, which is the one call hardened for
+        this (a Windows name alias cannot reach a real artifact, a directory that became complete
+        since the listing is refused, a manifest this build cannot read is refused, a tree something
+        may still be writing is refused, and the removal is verified). Its refusal becomes this
+        entry's ``failed`` reason, so no removal rule lives in two places and the caller's count
+        sentence is true by construction.
 
         A directory that will not delete is REPORTED, never fatal -- the sweep finishes the rest. On
         Windows a held handle (an Explorer preview, a virus scanner, a file this process still has
         open) makes ``shutil.rmtree`` raise PermissionError; ``_rmtree_retry`` waits 0.1 s and then
         0.2 s and then gives up, and one such directory must not cost the operator the other six.
-
-        Walks ``_entries`` rather than calling ``remove_incomplete`` per directory: the same
-        classifier, one scan per kind instead of one per directory, and no StoreError to catch that
-        could have meant "it was complete after all".
-
-        Fix round 2 [Important]: a directory is only ever counted in ``removed`` once it has been
-        CONFIRMED gone. A path trick, or a directory that vanishes between classification and the
-        removal attempt, can make ``shutil.rmtree`` raise ``FileNotFoundError``, which
-        ``_rmtree_retry`` treats as "already gone" and swallows -- without this check that call
-        would report success on a directory it never touched, the same false-success class fixed in
-        ``remove_incomplete`` above.
         """
-        if kind is not None and kind not in KIND_DIRS:
-            raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
         removed, failed = [], []
-        for k in (KIND_DIRS if kind is None else (kind,)):
-            for sub, m, _ in self._entries(k):
-                if m is not None:
-                    continue
-                try:
-                    _rmtree_retry(sub)
-                    if sub.exists():
-                        raise OSError(f"{sub} was not removed")
-                except OSError as e:           # noqa: BLE001 -- one held handle must not stop the sweep
-                    failed.append((k, sub.name, f"{type(e).__name__}: {e}"))
-                else:
-                    removed.append((k, sub.name))
+        for kind, dir_name in entries:
+            try:
+                self.remove_incomplete(kind, dir_name)
+            except StoreError as e:            # every refusal on that path is one, and fielded
+                failed.append((kind, dir_name, e.message))
+            except OSError as e:               # noqa: BLE001 -- one held handle must not stop the sweep
+                failed.append((kind, dir_name, f"{type(e).__name__}: {e}"))
+            else:
+                removed.append((kind, dir_name))
         return removed, failed
 
     def unnamed(self, kind: str, *, older_than: "timedelta | None" = None) -> list:

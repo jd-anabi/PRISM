@@ -90,7 +90,11 @@ that is what LOADING it does (`python -m core validate --posterior ...`).
                         set the note: one line, at most 200 characters; '' clears it
   rm <kind> <ref>       delete one artifact. There is no --force: an artifact anything depends on
                         cannot be deleted at all, so delete its children first
-  sweep [<kind>]        remove every directory with no usable manifest; with no kind, all seven
+  sweep [<kind>] [--yes]
+                        remove every directory with NO manifest at all; with no kind, all seven. A
+                        DRY RUN without --yes: it prints what it would remove and removes nothing.
+                        A directory that carries a manifest.json -- even one this build cannot read
+                        -- is reported and never removed
   summary <kind> <ref> [--out PATH]
                         the lineage report: this artifact, then its parents, oldest last
 
@@ -323,36 +327,64 @@ def _rm(args, store) -> int:
 
 
 def _sweep(args, store) -> int:
-    """``sweep [<kind>]``: remove every directory of a kind (or of all seven) with no usable
-    manifest. §4.3: nothing to remove is 0; a directory that would not delete is 1, naming each. A
-    failure never stops the sweep -- ``sweep_incomplete`` finishes the rest and reports it.
+    """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all seven) that has NO
+    manifest at all. §4.3: nothing to remove is 0; a directory that would not delete is 1, naming
+    each. A failure never stops the sweep -- ``sweep_incomplete`` finishes the rest and reports it.
 
-    ``sweep_incomplete``'s own return carries no reason (fix round 1, RULED IN 5): the reasons are
-    read off ``list`` BEFORE the removal -- the same rows the table calls incomplete -- and matched
-    back by ``(kind, dir_name)`` once the removal is done, so a removed line says WHY without a
-    second manifest read. The window reads them the same way, earlier, for its confirmation; there is
-    no confirmation here, so this prints the reason AFTER. A kind ``list`` cannot read (an unknown
-    kind, a permissions problem) is not fatal here either: ``sweep_incomplete`` is the authority on
-    what gets removed and raises its own refusal for a bad kind regardless."""
-    reasons = {}
+    A DRY RUN BY DEFAULT (R4). The window asks before it removes and this did not: no preview, no
+    confirmation, and a reviewer's probe deleted two directories and printed their reasons
+    afterwards. So the default prints exactly what it WOULD remove and removes nothing, and ``--yes``
+    performs it. That is a confirmation, not an override -- B6 stands, there is no ``--force`` here
+    and no way to reach a real artifact from this mode -- so it needs no refusal key of its own: a
+    dry run refuses nothing.
+
+    WHAT MAY GO (R1): only a directory whose reason is ``NO_MANIFEST_REASON``. One that carries a
+    manifest.json this build cannot parse, or that declares another kind, is something nobody here
+    understands -- it is named as KEPT and left where it is, because a manifest valid under a
+    different SCHEMA reads to this build as "no artifact here", and removing one cost a reviewer's
+    probe a real calibration with its payload.
+
+    The candidates and their reasons are read off ``list`` BEFORE the removal -- the same rows the
+    table calls incomplete -- and THAT LIST is what is removed, by name (R2). An unknown kind raises
+    ``list``'s own refusal, which the ladder turns into exit 1; a kind that cannot be READ is
+    reported and does not stop the others."""
+    from core.artifacts.store import NO_MANIFEST_REASON
+    cands, kept, problems = [], [], []
     for kind in ((args.kind,) if args.kind else KINDS):
         try:
-            rows = store.list(kind)
-        except Exception:                          # noqa: BLE001 -- sweep_incomplete is the authority
+            rows = store.list(kind)                # a bad kind is a Refusal: the ladder's exit 1
+        except OSError as e:                       # a kind that cannot be read is not an empty one
+            problems.append(f"prism artifacts: the {kind} directory could not be read "
+                            f"({type(e).__name__}: {e}), so no {kind} leftover was swept")
             continue
         for row in rows:
-            if not row.complete:
-                reasons[(kind, row.dir_name)] = row.reason
-    removed, failed = store.sweep_incomplete(args.kind)
+            if row.complete:
+                continue
+            (cands if row.reason == NO_MANIFEST_REASON else kept).append(
+                (kind, row.dir_name, row.reason))
+    reasons = {(k, d): why for k, d, why in cands}
+    for kind, dir_name, why in kept:
+        print(f"[prism] kept {kind} {dir_name} -- {why}: a directory that carries a manifest.json is "
+              f"reported, never swept")
+    for line in problems:
+        print(line, file=sys.stderr)
+    if not cands:
+        print("[prism] nothing to sweep: every directory here carries a manifest.json.")
+        return 1 if problems else 0
+    if not args.yes:
+        for kind, dir_name, why in cands:
+            print(f"[prism] would remove {kind} leftover {dir_name} -- {why}")
+        print(f"[prism] dry run: nothing was removed. Re-run with --yes to remove "
+              f"{len(cands)} director{'y' if len(cands) == 1 else 'ies'}.")
+        return 1 if problems else 0
+    removed, failed = store.sweep_incomplete([(k, d) for k, d, _ in cands])
     for kind, dir_name in removed:
         why = reasons.get((kind, dir_name))
         print(f"[prism] removed {kind} leftover {dir_name}" + (f" -- {why}" if why else ""))
     for kind, dir_name, reason in failed:
         print(f"prism artifacts: could not remove {kind} leftover {dir_name}: {reason}",
               file=sys.stderr)
-    if not removed and not failed:
-        print("[prism] nothing to sweep: every directory here carries a usable manifest.")
-    return 1 if failed else 0
+    return 1 if failed or problems else 0
 
 
 def _summary(args, store) -> int:
@@ -420,9 +452,14 @@ def register(subparsers) -> dict:
     rm.add_argument("ref", metavar="<ref>", help=_REF)
     rm.set_defaults(handler=_rm)
 
-    sweep = modes.add_parser("sweep", help="remove every directory with no usable manifest")
+    sweep = modes.add_parser("sweep", help="remove every directory with no manifest at all "
+                                           "(a dry run until --yes)")
     sweep.add_argument("kind", nargs="?", default=None, metavar="<kind>",
                        help=f"{_KIND}; with no kind, all seven")
+    sweep.add_argument("--yes", action="store_true",
+                       help="actually remove them. Without it this is a DRY RUN: it prints exactly "
+                            "what it would remove and removes nothing, which is the confirmation "
+                            "the window asks for in a dialog")
     sweep.set_defaults(handler=_sweep)
 
     summary = modes.add_parser("summary", help="the lineage report: this artifact, then its parents")

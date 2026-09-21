@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QGroupBox, QHBoxLayout, Q
                                QWidget)
 
 from core.artifacts import render_lineage, render_manifest
-from core.artifacts.store import KIND_DIRS
+from core.artifacts.store import KIND_DIRS, NO_MANIFEST_REASON
 from core.refusals import NOTE_MAX_CHARS, Refusal, require_note
 
 from .. import settings
@@ -655,15 +655,21 @@ class ArtifactScreen(QWidget):
         self._after_change(f"Deleted {s.kind} {s.label}.")
 
     def _incomplete(self, store, kind) -> tuple:
-        """``([(kind, dir_name, reason)], [str])``: what a sweep would remove, and any kind that
-        could not be read at all -- an unreadable directory is not an empty one (§3.2).
+        """``(candidates, kept, problems)``: what a sweep would remove, what it will LEAVE ALONE
+        although the table calls it incomplete, and any kind that could not be read at all -- an
+        unreadable directory is not an empty one (§3.2). The first two are
+        ``[(kind, dir_name, reason)]``, the third is ``[str]``.
 
-        Read off ``list``, so the confirmation shows exactly the rows the table calls incomplete.
+        Read off ``list``, so the confirmation shows exactly the rows the table calls incomplete --
+        narrowed (R1) to the ONE reason a sweep may act on: no manifest.json at all. A manifest that
+        exists and will not parse, or that declares another kind, is something nobody here
+        understands; those rows stay in the listing and are named on the status line instead, which
+        is why they are returned rather than silently dropped.
 
         ``kind is None`` means all seven, EXPLICITLY -- never "whatever a falsy kind means". A
         truthiness test here is how a one-kind sweep could have widened to every kind.
         """
-        out, problems = [], []
+        out, kept, problems = [], [], []
         for k in (list(KIND_DIRS) if kind is None else [kind]):   # Task 9's import; in order
             try:
                 rows = store.list(k)
@@ -674,15 +680,30 @@ class ArtifactScreen(QWidget):
                                 f"no {k} leftover can be swept; check that folder's permissions on "
                                 f"disk and sweep again.")
                 continue
-            out += [(k, row.dir_name, row.reason) for row in rows if not row.complete]
-        return out, problems
+            for row in rows:
+                if row.complete:
+                    continue
+                target = out if row.reason == NO_MANIFEST_REASON else kept
+                target.append((k, row.dir_name, row.reason))
+        return out, kept, problems
 
     def _sweep(self, *, all_kinds: bool) -> None:
-        """B7: remove every directory of this kind -- or of all seven -- that has no usable manifest.
+        """B7: remove every directory of this kind -- or of all seven -- that has NO manifest at all.
 
-        The candidates are listed BEFORE anything is removed, and ``sweep_incomplete`` is what
-        removes them: a call that can only ever touch a directory ``_entries`` classifies as
-        incomplete, the complement of ``delete``, which can only ever touch a real artifact.
+        The candidates are listed BEFORE anything is removed, and THAT LIST is what is removed: each
+        entry goes by name through ``remove_incomplete``, the call that can only ever touch a
+        directory ``_entries`` classifies as manifest-less -- the complement of ``delete``, which can
+        only ever touch a real artifact.
+
+        R2: the removal used to re-scan, so the confirmation did not bind it -- a directory created
+        while the dialog sat open was removed although the operator never saw it ("Removed 2 of 1
+        leftover directories", probed). Anything that appeared since is simply not in the list, and
+        the count sentence is true by construction.
+
+        R5: the removal is GUARDED, like every other entry point on this screen. Unguarded, a kind
+        that could not be read threw out of the click after earlier kinds' leftovers were already
+        gone: the application's red box, no status line, and ``store_changed`` never emitted, so the
+        three pickers went on showing rows that had just been deleted.
         """
         if self._refuse_while_running("removing leftover directories"):
             return
@@ -691,27 +712,38 @@ class ArtifactScreen(QWidget):
         # all-kinds button: reading currentData() here gave a second answer that disagreed with
         # kind() whenever it was falsy, and a falsy kind means "all seven" downstream.
         kind = None if all_kinds else self.kind()
-        cands, problems = self._incomplete(store, kind)
+        cands, kept, problems = self._incomplete(store, kind)
         tail = (" " + " ".join(problems)) if problems else ""
+        if kept:
+            # Named, never silently dropped: the table shows these rows as incomplete, so a sweep
+            # that left them there without a word would read as a sweep that failed.
+            tail += (" Left alone, because a directory that carries a manifest.json is reported and "
+                     "never removed: "
+                     + "; ".join(f"{k}/{d} ({why})" for k, d, why in kept) + ".")
         if not cands:
             where = "any kind's" if kind is None else f"{kind}"
-            self._set_status(f"Nothing to remove: every {where} directory has a usable manifest."
+            self._set_status(f"Nothing to remove: every {where} directory carries a manifest.json."
                              + tail, error=bool(problems))
             return
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
         box.setWindowTitle("Remove leftover directories")
         box.setText(f"Remove {len(cands)} director{'y' if len(cands) == 1 else 'ies'} with no "
-                    f"usable manifest?")
+                    f"manifest at all?")
         box.setInformativeText("\n".join(f"{k}/{d} — {why}" for k, d, why in cands)
-                               + "\n\nA directory whose manifest is usable and declares this kind is "
-                                 "never touched by this.")
+                               + "\n\nA directory that carries a manifest.json of any kind is never "
+                                 "touched by this.")
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         box.setDefaultButton(QMessageBox.No)
         if box.exec() != QMessageBox.Yes:
             self._set_status("Nothing was removed." + tail, error=bool(problems))
             return
-        removed, failed = store.sweep_incomplete(kind)
+        try:
+            removed, failed = store.sweep_incomplete([(k, d) for k, d, _ in cands])
+        except Exception as e:                  # noqa: BLE001 -- reported, never raised out of a click
+            self._after_change(f"The sweep stopped part-way: {type(e).__name__}: {e}. Refresh to see "
+                               f"what is left." + tail, error=True)
+            return
         said = f"Removed {len(removed)} of {len(cands)} leftover director" \
                f"{'y' if len(cands) == 1 else 'ies'}."
         for k, d, why in failed:

@@ -12,7 +12,7 @@ import pytest                                                          # noqa: E
 from core.artifacts import ArtifactStore                               # noqa: E402
 from core.artifacts.store import KIND_DIRS                             # noqa: E402
 from tests._fixtures import (_nad_cfg, _prior_artifact, artifact_screen,  # noqa: E402
-                             build_browse_store, qt_app)
+                             backdate_tree, build_browse_store, qt_app)
 
 KINDS = list(KIND_DIRS)
 
@@ -611,12 +611,11 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
 
 def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, monkeypatch):
     """B7: one action per kind and one for all seven, behind a confirmation that lists exactly the
-    rows the table calls incomplete. A directory whose manifest is USABLE AND DECLARES THIS KIND is
-    never touched -- fix round 1, RULED IN 4: the box used to promise this for "a directory that
-    holds a manifest", full stop, which is false -- a directory whose manifest declares a DIFFERENT
-    kind holds one too, and is a leftover the sweep removes (task-14-report.md's own probe removed
-    exactly one). A directory that will not delete is reported and the rest still go, and nothing to
-    do says so without asking."""
+    rows the table calls incomplete. A directory that carries a manifest.json AT ALL is never
+    touched -- R1 narrowed this from "a usable manifest of this kind" after a reviewer probed the
+    old rule deleting a real calibration whose manifest was valid under a different schema. A
+    directory that will not delete is reported and the rest still go, and nothing to do says so
+    without asking."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -625,6 +624,7 @@ def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, m
     leftover = store.kind_dir("prior") / "_unnamed__20260917T090000"
     leftover.mkdir(parents=True, exist_ok=True)
     (leftover / "prior.pt").write_bytes(b"half a run, no manifest")
+    backdate_tree(leftover)
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
     scr._sweep(all_kinds=False)                          # No -> nothing goes
@@ -632,7 +632,7 @@ def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, m
     assert box.button(QMessageBox.No) is box.defaultButton()
     assert leftover.name in box.informativeText(), box.informativeText()
     assert "no manifest.json" in box.informativeText(), box.informativeText()
-    assert ("A directory whose manifest is usable and declares this kind is never touched by this."
+    assert ("A directory that carries a manifest.json of any kind is never touched by this."
             in box.informativeText()), box.informativeText()
     assert leftover.is_dir() and "Nothing was removed." in scr.status.text()
     _answer(monkeypatch, QMessageBox.Yes)                # Yes -> the leftover goes, the artifact stays
@@ -644,12 +644,143 @@ def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, m
     scr._sweep(all_kinds=False)
     assert SHOWN == [] and "Nothing to remove" in scr.status.text(), scr.status.text()
     # a directory that will not delete (a handle held open on Windows) is reported, never fatal
-    (store.kind_dir("prior") / "stuck__20260917T091000").mkdir()
+    stuck = store.kind_dir("prior") / "stuck__20260917T091000"
+    stuck.mkdir()
+    backdate_tree(stuck)
     monkeypatch.setattr(store, "sweep_incomplete",
-                        lambda kind=None: ([], [("prior", "stuck__20260917T091000",
-                                                 "PermissionError: held open")]))
+                        lambda entries: ([], [("prior", "stuck__20260917T091000",
+                                               "PermissionError: held open")]))
     scr._sweep(all_kinds=True)
     assert "could not be removed" in scr.status.text() and "held open" in scr.status.text()
+
+
+def test_the_sweep_removes_exactly_what_the_confirmation_listed(store, monkeypatch):
+    """R2: the confirmation BINDS the action. It used to re-scan at removal time, so a directory
+    created while the dialog sat open -- by another process, or by a run in this one -- was deleted
+    although the operator never saw it, and the status line then read "Removed 2 of 1 leftover
+    directories". The list that is shown is the list that is handed to the store, by name.
+
+    The second directory is created BY THE DIALOG ITSELF, which is exactly when the old rescan
+    picked it up.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    shown_leftover = store.kind_dir("prior") / "shown__20260917T090000"
+    shown_leftover.mkdir(parents=True, exist_ok=True)
+    backdate_tree(shown_leftover)
+    appeared = store.kind_dir("prior") / "appeared_during_the_dialog"
+
+    def _answer_and_create(self):
+        SHOWN.append(self)
+        appeared.mkdir(parents=True, exist_ok=True)
+        backdate_tree(appeared)          # even an OLD one must not go: it was never shown
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(QMessageBox, "exec", _answer_and_create)
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    scr._sweep(all_kinds=False)
+    assert shown_leftover.name in SHOWN[-1].informativeText(), SHOWN[-1].informativeText()
+    assert not shown_leftover.exists(), "the directory the operator confirmed is still there"
+    assert appeared.is_dir(), "a directory that appeared after the listing was removed"
+    assert "Removed 1 of 1" in scr.status.text(), scr.status.text()
+
+
+def test_a_directory_whose_manifest_will_not_parse_is_listed_but_never_swept(store, monkeypatch):
+    """R1. ``_entries`` calls three shapes incomplete and they are not the same thing: no manifest at
+    all is a crash before the write, but a manifest that EXISTS and will not parse -- or that
+    declares another kind -- means "something is here I do not understand". A reviewer probed the
+    old rule deleting a real calibration with its payload, because a manifest valid under a
+    DIFFERENT SCHEMA reads as "no artifact here", and ``manifest.SCHEMA`` is expected to move.
+
+    So: those rows stay in the LISTING with their reason, the confirmation never offers them, and
+    the status line says they were left alone rather than silently dropping them."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts.store import MANIFEST
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    d = store.kind_dir("prior")
+    d.mkdir(parents=True, exist_ok=True)
+    torn = d / "torn__20260917T090001"
+    torn.mkdir()
+    (torn / MANIFEST).write_text("{not json", encoding="utf-8")
+    plain = d / "no_manifest__20260917T090002"
+    plain.mkdir()
+    backdate_tree(d)
+
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    assert {_select(scr, i).dir_name for i in range(scr.table.topLevelItemCount())} == \
+        {torn.name, plain.name}, "both shapes are listed"
+
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._sweep(all_kinds=False)
+    informative = SHOWN[-1].informativeText()
+    assert plain.name in informative and torn.name not in informative, informative
+    assert not plain.exists(), "the manifest-less leftover should have gone"
+    assert torn.is_dir(), "a directory with a manifest this build cannot read was removed"
+    assert (torn / MANIFEST).is_file()
+    said = scr.status.text()
+    assert "Removed 1 of 1" in said and torn.name in said, said
+    assert "unreadable manifest" in said, said
+    assert _select_ref(scr.table, torn.name).reason.startswith("unreadable manifest"), \
+        "the row it was reported on must still be in the listing"
+
+
+def test_a_directory_something_may_still_be_writing_is_reported_not_removed(store, monkeypatch):
+    """R3, through the window. The manifest is written LAST, so a run in flight -- in this process or
+    another -- is indistinguishable from a leftover by content alone. A reviewer probed a sweep from
+    a second process removing a live writer's directory: the run died at its commit, and a running
+    cache lost its committed shards. The window's ``BasePanel._running`` guard is same-process only.
+
+    The candidate is still LISTED (the table cannot know how old it is either), so what has to hold
+    is that the removal refuses it and the status line says why."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import artifact_screen, qt_app
+    qt_app()
+    live = store.kind_dir("prior") / "inflight__20260917T090000"
+    live.mkdir(parents=True, exist_ok=True)
+    (live / "prior.pt").write_bytes(b"a run still writing this")   # NOT backdated: written just now
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._sweep(all_kinds=False)
+    said = scr.status.text()
+    assert live.is_dir() and (live / "prior.pt").is_file(), "a live run's directory was removed"
+    assert "Removed 0 of 1" in said, said
+    assert "may still be writing" in said and live.name in said, said
+    assert said.startswith("⚠ "), said
+
+
+def test_a_sweep_that_throws_is_reported_on_the_status_line_and_the_pickers_are_told(store, monkeypatch):
+    """R5: the removal call was made UNGUARDED, so a kind that could not be read threw out of the
+    click AFTER earlier kinds' leftovers were already gone -- the application's last-resort red box,
+    no status line, and ``store_changed`` never emitted, so the three pickers kept showing rows that
+    had just been deleted. Every other entry point on this screen reports on the status line."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    leftover = store.kind_dir("prior") / "leftover__20260917T090000"
+    leftover.mkdir(parents=True, exist_ok=True)
+    backdate_tree(leftover)
+
+    def _boom(entries):
+        raise PermissionError("Access is denied")
+
+    monkeypatch.setattr(store, "sweep_incomplete", _boom)
+    scr = artifact_screen(store)
+    changed = []
+    scr.store_changed.connect(lambda: changed.append(1))
+    _show_kind(scr, "prior")
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._sweep(all_kinds=True)                  # must not raise out of the click
+    said = scr.status.text()
+    assert "PermissionError" in said and "Access is denied" in said, said
+    assert said.startswith("⚠ "), said
+    assert changed, "the pickers were never told the store may have moved"
+    assert SHOWN[-1].windowTitle() == "Remove leftover directories", \
+        "the confirmation is the only box: a disk problem is not a refusal"
 
 
 def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_not(store):
@@ -972,6 +1103,7 @@ def test_sweeping_one_kind_leaves_another_kinds_leftover_alone(store, monkeypatc
     theirs = store.kind_dir("diagnostic") / "junk_diagnostic"
     for d in (mine, theirs):
         d.mkdir(parents=True, exist_ok=True)
+        backdate_tree(d)
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
     _answer(monkeypatch, QMessageBox.Yes)

@@ -18,8 +18,10 @@ time under another name, with a second, empty SHOWN that the guard never touches
 """
 import ast
 import inspect
+import os
 import textwrap
 import time
+from pathlib import Path
 
 import torch
 
@@ -38,6 +40,20 @@ CODE_ROOTS: tuple[str, ...] = ("core",)
 # The top-level repository files (outside any CODE_ROOTS directory) that hold product code, so the
 # literal-path scan walks these too, and the same guard test keeps this set closed as well.
 CODE_FILES: tuple[str, ...] = ("conftest.py",)
+
+def backdate_tree(path, seconds: float = 3600.0) -> None:
+    """Push a whole tree's modification times into the past.
+
+    ``ArtifactStore.remove_incomplete`` refuses a directory whose tree was touched within
+    ``store.RECENT_WRITE_SECONDS`` (the whole-piece review's R3: an artifact's manifest is written
+    LAST, so a run in flight -- possibly in another process -- looks exactly like a leftover). A
+    test's leftover is seconds old, so every test that means one to be REMOVED says so here rather
+    than sleeping five minutes or monkeypatching the guard away.
+    """
+    when = time.time() - seconds
+    for p in [Path(path), *Path(path).rglob("*")]:
+        os.utime(p, (when, when))
+
 
 # Every QMessageBox a test did not fake itself, in order. tests/conftest.py::_no_modal_dialogs replaces
 # QMessageBox.exec for the session with a record-and-return-0, and _clear_shown empties this list
