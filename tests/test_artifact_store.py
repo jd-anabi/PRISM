@@ -3923,3 +3923,69 @@ def test_render_lineage_walks_the_chain_and_prints_a_missing_parent(store):
     # an unknown ref is the store's own refusal, unchanged
     with pytest.raises(st.StoreError, match="no complete posterior"):
         render_lineage(store, "posterior", "nope")
+
+
+# ── load_observation's two payload guards (piece 4, §8.1) ────────────────────────────────────────
+
+
+def _obs_artifact(store, cfg, *, name, x_obs, digest=None):
+    """An observation artifact whose payload is exactly the row handed in: the real writer, the real
+    body, ``conditioning_block(cfg)`` for the geometry, and by default the row's own digest.
+
+    Cheap ON PURPOSE. ``generate_observations`` simulates a trace and plots it, and neither guard
+    below needs one: both fire after ``torch.load`` and before anything is used. ``digest`` records a
+    digest OTHER than the row's, which is the only way to reach the digest guard without editing a
+    committed manifest.
+    """
+    from core.Helpers import file_manager
+    d = mf.tensor_digest(x_obs) if digest is None else digest
+    with store.create("observation", cfg, name=name) as w:
+        file_manager.atomic_torch_save({"x_obs": x_obs, "obs_data": torch.zeros(1, 4, dtype=torch.float64),
+                                        "t_dim": torch.zeros(1, 4, dtype=torch.float64)},
+                                       w.payload("observation.pt"))
+        w.fingerprints["x_obs"] = d
+        w.body = {"mode": cfg.observation_mode, "conditioning": mf.conditioning_block(cfg),
+                  "x_obs_digest": d, "T_obs_cell": 1.0, "n_obs": 4, "forcing_vals": {},
+                  "chi_obs_freqs": None, "source": {"kind": "simulated"}}
+    return w
+
+
+def test_load_observation_refuses_a_payload_that_disagrees_with_its_manifest(store):
+    """Spec §8.1: the two guards AFTER ``torch.load``, each in isolation.
+
+    Everything above them compares the MANIFEST -- the config's model, parameter order, mode, width and
+    chi layout against what the manifest declares -- so a payload that is not the payload the manifest
+    describes is invisible to all of them. The two are ordered: the digest first (the bytes are not the
+    bytes), then the width (the shape is not the shape). Reaching the second therefore needs a row that
+    hashes to what the manifest records, which is why the narrow artifact is written with its own
+    digest rather than corrupted after the fact.
+
+    The width guard carries ``field="observation"``, matching the Refusal above it; the digest guard
+    carries none. That asymmetry is the spec's ruling, and pinning it is what makes changing it
+    deliberate.
+    """
+    cfg = _nad_cfg()                                      # master.txt declares a drive -> forced mode
+    W = int(mf.conditioning_block(cfg)["width"])
+    _obs_artifact(store, cfg, name="intact", x_obs=torch.zeros(1, W, dtype=torch.float64))
+    good = store.load_observation(cfg, "intact")
+    assert good.width == W and int(good.x_obs.shape[-1]) == W, "the control leg: an intact artifact loads"
+
+    # (1) the DIGEST guard. The manifest is untouched and the row on disk is the RIGHT width, so the
+    # width guard below cannot be what fires -- only the bytes changed.
+    payload = store.path("observation", "intact") / "observation.pt"
+    torch.save({"x_obs": torch.ones(1, W, dtype=torch.float64),
+                "obs_data": torch.zeros(1, 4, dtype=torch.float64),
+                "t_dim": torch.zeros(1, 4, dtype=torch.float64)}, str(payload))
+    with pytest.raises(st.StoreError, match="does not hash to the manifest's digest") as e:
+        store.load_observation(cfg, "intact")
+    assert "the artifact is inconsistent" in str(e.value) and "intact" in str(e.value)
+    assert e.value.field is None, "no control answers 'the bytes on disk changed'"
+
+    # (2) the WIDTH guard, reachable only once the digest agrees.
+    _obs_artifact(store, cfg, name="narrow", x_obs=torch.zeros(1, W - 1, dtype=torch.float64))
+    with pytest.raises(st.StoreError, match=f"holds a {W - 1}-wide conditioning row") as e:
+        store.load_observation(cfg, "narrow")
+    assert f"manifest declares {W}" in str(e.value)
+    assert "compared the MANIFEST, not this row" in str(e.value)
+    assert e.value.field == "observation", "the same key as the width Refusal above it"
+    assert isinstance(e.value, Refusal), "a StoreError is a Refusal: the front ends route it as one"

@@ -953,9 +953,13 @@ class ArtifactStore:
             raise StoreError(f"observation '{label}': observation.pt does not hash to the manifest's digest; "
                              f"the artifact is inconsistent")
         if int(x_obs.shape[-1]) != int(cond["width"]):
+            # field= like the width Refusal twelve lines up, and for the same reason: whichever of the
+            # two fires, the operator answers it by picking another observation, and each front end's
+            # table is what names that control (piece 4, §8.1).
             raise StoreError(f"observation '{label}': observation.pt holds a {int(x_obs.shape[-1])}-wide "
                              f"conditioning row but its manifest declares {int(cond['width'])}; the artifact "
-                             f"is inconsistent (every width guard above compared the MANIFEST, not this row)")
+                             f"is inconsistent (every width guard above compared the MANIFEST, not this row)",
+                             field="observation")
         # The digest is over the float64 bytes, so it is computed on the payload as written and the
         # cast below cannot change it. dtype only -- see the docstring for why the row stays on the CPU.
         x_obs = x_obs.to(dtype=cfg.hw.dtype)
