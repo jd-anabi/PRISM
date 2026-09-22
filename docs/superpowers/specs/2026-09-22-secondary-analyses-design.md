@@ -170,10 +170,12 @@ which a reviewer should check against.
 - **Five settings are checked but are not front-end knobs.** `freq_bounds`, `burn_in_nd`,
   `T_obs_periods`, `dt_nd` and `psd_T_obs_nd` are parameters of neither builder and are exposed by
   neither front end (`cli.py:319-321`, `core/tool/fdt.py:83-92`, `fdt_panel.py:82-86`); for the
-  sweep, three arrive from the closed `--preset` (`cli.py:404-408`). They are checked defensively
-  with `field=None` and get **no** entry in either front-end table — a refusal on one names the
-  setting and offers no fix sentence, which is honest, because there is no control and no flag to
-  name. They are **not** in §5.3's key list.
+  sweep, three arrive from the closed `--preset` (`cli.py:404-408`). They are registered in `FIELDS`
+  like any other key and carry `None` in **both** front-end tables, so `fix_sentence` returns the
+  empty string and a refusal names the setting and offers no fix — which is honest, because there
+  is no control and no flag to name. They are **not** unregistered: every `require_*` rule builds
+  its sentence through `describe(key)`, which raises a bare `KeyError` for a key `FIELDS` does not
+  hold (planning ruling **P2**, which corrects this bullet's first draft).
 - **The model builder is inside §5's set.** Piece 3 handed five surfaces by name
   (`2026-09-15-validation-and-logging-design.md:88`) and `docs/STATE.md` repeats them. The builder is
   a `QWidget`, not a `BasePanel`, so its refusal goes through
@@ -286,8 +288,11 @@ parameter name.
   reads, so the one function written to consume it has something to read. A comparison stores the
   common grid and the interpolated curves. `h5py` is already pinned (`requirements.txt:17`).
 
-**Figures:** `figures/*.png`, written through `w.fig_sink` so the window's sink still receives and
-closes them.
+**Figures:** `figures/*.png`, written through **`w.figure_path(title)`** — not `w.fig_sink`
+(**P48**). None of the four drawing functions ever yields a live `Figure`: each takes a `save_path`
+and calls `savefig` itself, so a sink would mean rewriting all four, which is in no task's mandate.
+`figure_path` delivers what this section needs — the PNG inside the record's `figures/` and its
+name in the manifest — and the window still receives the figures through its watcher.
 
 **Header blocks**, filled by the writer as for every other kind: the git revision, the versions, the
 device, and the input files — the cell, the units and **the bounds file that resolved**, each by
@@ -313,8 +318,13 @@ run time rather than in the suite, and each gains a test here.
 4. `store._PARENT_KEYS` (`store.py:52-54`) — `()`. A **missing** entry silently means the same thing,
    so the entry is added explicitly.
 5. `store.LoadedFdt` — a `Loaded` subclass carrying the record's body and the path to `data.h5`.
-6. `store.load_fdt` — verifies the payload hash and nothing else, like `load_diagnostic`
-   (`store.py:1056-1058`): this kind records a measurement, it does not constrain a later run.
+6. `store.load_fdt` — **verifies every recorded payload hash that is not null, and nothing else**
+   (**P47**). A null recorded hash means "not yet", never a mismatch: a progressive record's hashes
+   are written at the final commit only, so a loader that refused a null hash would refuse exactly
+   the records E2 keeps the folder for. Nothing else is checked — no config match, no parent walk —
+   as with `load_diagnostic` (`store.py:1056-1058`), because this kind records a measurement and
+   does not constrain a later run. (This item's first draft said both "verifies the payload hash"
+   and "like `load_diagnostic`", which verifies nothing.)
 7. `core/artifacts/__init__.py:6-9` — the package re-export, so nothing outside the store imports the
    submodule (pinned at `tests/test_artifact_store.py:3289-3290`).
 8. `store.list`'s `finished` branch (`store.py:412`) — today
@@ -451,7 +461,7 @@ In `cli.make_fdt_config`, before the settings object is built, through `core/ref
 | `burn_in_nd` | `require_at_least(…, 0)` | a zero burn-in is a well-defined setting, not a broken one; E5 forbids the over-floor |
 | `freq_bounds` | both positive, **and the lower below the upper** | the one shape no existing rule covers |
 | the cell file | `require_file` | a missing path today surfaces as `FileNotFoundError` |
-| the model | `refuse("model", reason)` on `registry.fdt_support`'s `(ok, reason)` | already gated, as a bare `ValueError`; converted to a `Refusal` carrying `field="model"`, keeping `fdt_support`'s own per-model reason (`registry.py:77-103`) and `core/tool/fdt.py:135-139`'s where-the-name-came-from hint. **Not** `require_choice`: `fdt_support` is a predicate returning a tailored diagnostic sentence, not a list of choices |
+| the model | `refuse("model", reason)` on `registry.fdt_support`'s `(ok, reason)` | already gated, as a bare `ValueError`; converted to a `Refusal` carrying `field="model"`, keeping `fdt_support`'s own per-model reason (`registry.py:77-103`). The where-the-name-came-from hint moves to `core/tool/fields.py`'s entry, because a core message may not name a flag and a source scan pins that (**P26**). **Not** `require_choice`: `fdt_support` is a predicate returning a tailored diagnostic sentence, not a list of choices |
 
 Of these, `freq_bounds`, `burn_in_nd`, `T_obs_periods`, `dt_nd` and `psd_T_obs_nd` are not
 front-end knobs (§1.2), so they are checked with `field=None` and appear in neither front-end table.
@@ -591,12 +601,20 @@ The model builder is a `QWidget`, not a `BasePanel`, so its refusal goes through
 `_config_error` is then uncalled and is removed, which is what piece 3's spec said piece 5 would do
 (`2026-09-15-validation-and-logging-design.md:322-323`).
 
-**The Reduction panel needs one more change to keep its behaviour.** §1.2 leaves
-`cli.make_reduction_config` untouched, so it raises no `Refusal`, and removing `_config_error` would
-move that panel's most plausible mistake from the yellow box to the red crash box —
-`base_panel.py:403-407` names the two by hand ("a cell with no sibling bounds file, and a cell
-missing a param the bounds file requires"). `cli.parse_cell`'s two bare `ValueError`s become
-`Refusal(field="cell")`, which also gives §6.2 its shared message builder.
+**Corrected at planning time (P4).** This section's first draft said `cli.parse_cell` raises two
+bare `ValueError`s that must be converted. It does not: `grep -n "raise ValueError" core/cli.py`
+returns nothing, and both mistakes `base_panel.py:403-407` names by hand already raise
+`Refusal(field="cell")` — piece 3 converted them. They therefore reach the yellow box the moment
+this section's routing lands, and nothing needs converting. What the conversion was there to buy
+is still owed, and is delivered directly: `core.refusals.missing_values_phrase(label, missing)`,
+the one wording §6.2 needs, placed in `core/refusals.py` because `core/sim_config.py` cannot
+import `core/cli.py`.
+
+**The Simulate panel needs the care the Reduction panel was given (P29).** Its builder raises two
+bare `ValueError`s (`simulate_runner.py:50-55`, `:68-72`) for the two most plausible cell and model
+mistakes on that screen, so removing `_config_error` without converting them moves both to the red
+crash box — the regression this section exists to prevent, on a panel it did not name. They become
+`Refusal(field="cell")` and `Refusal(field="model")`; both keys already exist.
 
 `tests/test_nav_and_gating.py:1688-1733` pins today's unconverted behaviour in a loop over all four
 panels and both exception shapes; it is rewritten rather than extended, because a half-converted
@@ -610,8 +628,12 @@ name a **place** that is either an inference tab or a screen, and `fix_sentence`
 or "on the … screen" accordingly. As today, a place may be a tuple of several — which is how
 `num_runs` and `run_size_cap` already span the Posterior and TSNPE tabs.
 
-The three inputs that collide — `cell`, `model`, `units` — list every place they appear, so a bad
-cell chosen on the measurement screen no longer sends the owner to the Infer tab. The
+The inputs that collide list every place they appear, so a bad cell chosen on the measurement
+screen no longer sends the owner to the Infer tab. **They are `cell`, `model` and `t_obs`, not
+`units` (P32, P33):** there is exactly one units control in the application, and on the four other
+screens the units file is resolved from the model with no control at all, so widening it would
+name a box that does not exist; the Simulate panel's observation length, by contrast, is the
+existing `t_obs` key and does collide. The
 sentence-shaped entry stays available, but it is no longer the only option for a non-tab surface, so
 `label(key)` keeps working for the new screens — which is what stops a box label and its hint
 sentence drifting apart.
@@ -623,7 +645,8 @@ sentence drifting apart.
 own numeric fields, and the model builder's (the parameter row's value, minimum and maximum, the
 initial condition, `x_scale`, `t_scale`, and each forcing field). Each gets a neutral description and
 a default clause in `core/refusals.py`, a place entry in `core/gui/fields.py`, and a flag entry in
-`core/tool/fields.py`. The five non-knob settings of §1.2 are deliberately **not** here.
+`core/tool/fields.py`. The five non-knob settings of §1.2 are registered here too, with `None` in
+both tables (**P2**).
 
 `tests/test_refusals.py:91` hard-codes the registry's size and `:805` asserts the None-flag set by
 **equality** against a six-key literal, so both move with this section; §8.2 replaces the equality
@@ -640,7 +663,9 @@ study.
 additions are needed, and checklist item 19 names them**:
 
 - `refresh` lists every row of the kind with no filter hook (`:179-181`), so `StorePicker` gains an
-  optional row predicate for the study filter.
+  optional row predicate for the study filter: `row_filter: Callable[[Summary], bool] | None`,
+  applied **after** the `finished` rule and placed before `parent` so existing positional calls are
+  unaffected (**P9**).
 - It filters on `Summary.complete`, which means "has a valid manifest", **not** "the run finished"
   (`store.py:76-86`). For this kind `complete` is true from a progressive record's first moment, so
   the picker must filter on `Summary.finished`, or it would silently offer half-written records as
@@ -685,7 +710,8 @@ name the box.
 `--store-root` — as `core/tool/browse.py:20-23` itself says ("``main`` keys three of smoke's
 behaviours on the FLAG's presence"):
 
-- an unset flag sends the run to a fresh `tempfile.mkdtemp` (`:116`);
+- an unset flag sends the run to a fresh `tempfile.mkdtemp` (`:116`) — replaced by an explicit
+  `args.temp_store_root`, set by `smoke.register` alone (**P10**);
 - `auto_root = has_store_root and not args.store_root` (`:115`) removes an auto-created root that is
   still empty after a failure (`:183-184`, `_remove_if_still_empty(root)`);
 - `:146` selects the Ctrl-C advice — already bypassed for these two, which set `interrupt_note`
@@ -714,9 +740,11 @@ cell file and a cell folder — and §8.2 covers the folder branch, one of the t
 names.
 
 `load_and_validate_gt`'s `Refusal(field="cell")` and the dry run's problem strings stop being two
-wordings for one rule: both go through one message builder — which §5.1's `parse_cell` conversion
-supplies — closing the item piece 3 handed on
-(`2026-09-15-validation-and-logging-design.md:732`).
+wordings for one rule: both go through `core.refusals.missing_values_phrase` (**P4**), closing the
+item piece 3 handed on (`2026-09-15-validation-and-logging-design.md:732`). **A third wording of
+the same rule, in `cli._merge_vals_bounds`, is knowingly left alone (P53)**: it carries the cell
+*path*, which the FDT builders need and the other two do not, so folding it in would either drop
+that or change the other two. It is handed on in §1.3.
 
 ### 6.3 The tidy-up command and the legacy files (E10)
 
@@ -884,10 +912,11 @@ longer holds.
 
 **The drawing functions**
 
-- the three `core/FDT/plots.py` functions that lack it gain what `plot_psd` has: the figure is
-  closed, the interactive path is not taken, and no "non-interactive" warning is emitted.
-  `docs/STATE.md` compresses this to "closing its figure"; the existing test
-  (`tests/test_tool.py:1381-1405`) asserts all three, and so do the new ones.
+- **tests only (P17).** All four functions already close a saved figure — `bb22ac4` touched all
+  four — so what is missing is three TESTS, not three behaviours; this bullet's first draft said
+  otherwise. Each new test asserts the same three properties the existing one does (the figure is
+  closed, the interactive path is not taken, no "non-interactive" warning), and the task proves its
+  tests have teeth by deleting one `plt.close(fig)`, watching the test fail, and restoring it.
 
 **The Nadrowski sanity path** (§1.2)
 
@@ -992,9 +1021,27 @@ in place with a pointer to §6.1).
 
 ## 12. Deviations (filled during execution)
 
-Every ruling made while executing this piece that differs from what is written above goes here, with
-what it costs if it is wrong — the practice pieces 2, 3 and 4 followed. Empty at approval.
+Every ruling that differs from what is written above goes here, with what it costs if it is wrong —
+the practice pieces 2, 3 and 4 followed. Rows 1–9 were ruled at PLANNING time, before any code was
+written, when ten drafters read the code for their tasks and raised 69 objections; the full texts are
+in the ledger and the rulings are **P1–P69** in the plan. Rows from 10 on are filled during execution.
+
+Ten further rulings corrected this document rather than deviating from it, and are applied inline
+above with their P-numbers: **P2** (the five non-knob settings are registered, with `None` in both
+tables), **P4** (`parse_cell` already refuses; the message builder is delivered directly), **P9** and
+**P10** (two names the document left unfixed), **P17** (the drawing functions are a tests-only item),
+**P26** (a core message may not name a flag), **P32** (`units` does not collide; `t_obs` does),
+**P47** (what `load_fdt` verifies), **P48** (`figure_path`, not `fig_sink`) and **P53** (a third
+wording is knowingly left alone).
 
 | # | where | deviation | why |
 |---|---|---|---|
-| | | | |
+| 1 | §1.2, §3.1, §4.1 (P3) | T17 and T19 each carry the bridging edits to their own call sites, in the same commit as the signature change | A required `writer` keyword with the call sites left behind reds the fast gate, which the plan forbids after any task. The bridging shape is this document's own, so nothing is undone later. *Cost: T25/T26 find the writer creation already there.* |
+| 2 | §4.1, §2.4 item 27 (P27) | `run_param_study_cli` gets §3.4's normalisation check at its top, and `_REFUSAL_FIELDS["run_param_study_cli"] = "cell"` | The `public_entry` scan's three sets are closed by equality and demand a refusal leg; this document names no pre-spend refusal for the study. The justification is §3.4's own. *Cost: one extra cheap check per study.* |
+| 3 | §4.2 (P28) | `plot_fdt_3d_vs_param` takes its destination instead of building one under `<artifacts root>/crossval` | Otherwise the sweep keeps writing into the very directory E10 offers for tidy-up, and a "legacy" directory refills itself. *Cost if wrong: a figure lands outside its record and the tidy-up offers it.* |
+| 4 | §7.1, §7.3 (P11) | The comparison facility is ONE public entry with per-mode drawers, and the whole subcommand parser lands in the first of its five tasks | Forced twice over: the tool-table pin walks the real parser, so a flag no subcommand defines fails immediately; and four entries would mean four tasks editing the scan's three equality-closed sets. *Cost: that task is larger than its neighbours.* |
+| 5 | §5.4 (P30, P31) | Both screens gain a "Record name" and a "Note" box, neither persisted; a two-record study's name is a STEM, and its records are `<stem>-s` and `<stem>-temp` | §5.4 mandates `store.create(name=…)` and Review Focus item 2 turns on `assert_name_free`, but no section gave these screens a name control. Two records cannot share one name. *Cost: two controls to remove.* |
+| 6 | §3.6 (P22) | `plot_psd` moves to just before Campaign 2 | §3.6 promises the unfinished folder holds the spontaneous spectrum; today that figure is drawn after both refusals could fire, so the promise was unreachable and the folder would hold only a time series. *Cost: one figure drawn earlier; no numbers change.* |
+| 7 | §3.1 (P55) | `run_fdt` on the `confirm_production=False` branch returns its record, finished, with `grid` and `offgrid` null | This document never said what that branch returns, and it is the cheap way to reach the sanity checks. *Cost: a record that says the sanity checks ran and nothing else did.* |
+| 8 | §7.1 (P60) | `compare repeats` does not enforce "the same cell"; it reports the cells it drew and refuses only on arity | A record's cell lives in the manifest's inputs block and nothing stops a caller passing two. *Cost if wrong: a misleading band — visible, because the drawing names the cells.* |
+| 9 | §3.5, §8.2 (P23) | `check_passive_baseline`'s bare `ValueError`, newly reachable from the low end once the off-grid fix lands, is converted only if the new Nadrowski test reds on it | Converting it needs a field-key decision §3.6 does not supply. *Cost if wrong: one test fails loudly in the piece that caused it.* |
