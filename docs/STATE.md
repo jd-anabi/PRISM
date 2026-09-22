@@ -1,6 +1,8 @@
 # PRISM — state
 
-**Last updated:** 2026-09-21. **Piece 4, "GUI usability and the artifact browser", is DONE**:
+**Last updated:** 2026-09-22. **Piece 5, "the secondary analyses", is IN PROGRESS**: brainstormed
+with the owner 2026-09-22 (decisions E1–E12), design committed `a0d85da`, implementation plan being
+written. **Piece 4, "GUI usability and the artifact browser", is DONE**:
 commits `5902259`..`80be144` (47), on the local `main` branch, NOT YET PUSHED (the owner pushes) —
 `main` is 49 commits ahead of `origin/main` (`cfe261b`): `691a233` (piece 3's C1–C11 rows recorded),
 the 47 of `5902259`..`80be144` (`5902259` the design, `6fc399f` the plan, `644dcdb` the pre-flight
@@ -41,9 +43,13 @@ slow set and the GPU smoke gate of record are in the table below; the diagnostic
 unnecessary (no line under `core/diagnostics` moves a tensor) and that judgement held. **Rows D1–D17
 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen on 2026-09-21: all
 seventeen pass** (the gate table below).
-**Next: piece 5** ("Owed" item 7); piece 6 follows. Piece 3 (`3db271e`..`9e2f7ef`) is DONE and
-pushed, and its rows C1–C11 all pass; piece 2 (`0016dae`..`d34997c`) is also pushed, and its rows
-B1–B8 all pass.
+**Piece 5 is under way** ("Owed" item 7); piece 6 follows. Its design is
+`docs/superpowers/specs/2026-09-22-secondary-analyses-design.md` (`a0d85da`; §1.1 holds decisions
+E1–E12, §1.2 the design rulings, §12 the deviations, empty at approval) and its plan is
+`docs/superpowers/plans/2026-09-22-secondary-analyses.md` (41 tasks). The owner is swapping models
+before implementation: the session that designed it stops after the plan. Piece 3
+(`3db271e`..`9e2f7ef`) is DONE and pushed, and its rows C1–C11 all pass; piece 2
+(`0016dae`..`d34997c`) is also pushed, and its rows B1–B8 all pass.
 
 ## Where things stand
 
@@ -615,3 +621,41 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     during the read-only review, and stands for the piece: the fixes reach its tests' paths only
     through happy-path checks, which the final fast gate covers. The slow set's warning count moves
     with the random draws, because each probe-masking notice carries its masked count in its text.
+
+- **2026-09-22** — **piece 5 (the secondary analyses): decisions E1–E12** (spec
+  `docs/superpowers/specs/2026-09-22-secondary-analyses-design.md` §1.1; plan
+  `docs/superpowers/plans/2026-09-22-secondary-analyses.md`), each chosen by the owner in
+  plain-language questions. E1 both analyses move into the store FULLY, with a reading side: named
+  records, provenance with file fingerprints, listing, deletion, the outputs inside the record's
+  folder, the numbers saved and not just the pictures, and a picker on each screen. E2 an interrupted
+  run KEEPS its folder, marked unfinished — the training cache's rule, adopted because these runs take
+  hours. E3 ONE new kind, `fdt`, covers both, with a `study` field telling them apart. E4 nothing
+  measurable is a refusal; some points failed completes with the count in the record and both
+  listings. E5 checks refuse what breaks; a setting too thin to trust warns and the warning is
+  recorded. E6 the fix-hint table understands SCREENS as well as the six inference tabs, and a shared
+  input lists every place it appears. E7 every run records its seed, drawing one when none is given.
+  E8 comparing covers all four modes (several cells, repeats of one cell, one run re-normalised, two
+  sweeps). E9 the off-grid range test is fixed and the band is refused before the driven campaign.
+  E10 the tidy-up command learns to see the legacy loose files; nothing is deleted on the owner's
+  behalf. E11 both subcommands gain `--store-root`, and the THREE behaviours that key off its
+  presence are reworked deliberately. E12 one piece, ordered so all the hardening lands before the
+  first line of the comparison facility.
+  - The design's own rulings (spec §1.2), the ones most likely to bite: the progressive record is a
+    MODE on `ArtifactWriter`, not a second writer; the FRONT END creates the writer and the STAGE
+    enters it (the run log is thread-local, so a writer entered on the window's thread would produce
+    no `log.txt`); `FDTConfig` gains `copy_for_run()` and not only fields, because `public_entry` is
+    duck-typed on that method and without it V1 is claimed and silently absent; a two-parameter study
+    writes TWO records; a comparison names its sources in the BODY, so deleting one is not refused and
+    `render_lineage` gains a branch that prints `MISSING`; `fdt` and `crossval` gain `--seed`,
+    deliberately widening piece 2's recorded reading; five checked settings that no front end exposes
+    carry `field=None` and get no table entry.
+  - **The spec was reviewed against the code before the owner read it** — four independent lenses
+    (anchors, completeness, consistency, standing rules) and a judge that re-checked every blocking
+    and important finding itself. Verdict `needs-rework`: 12 must-fix, 7 rejected with reasons, ~28
+    corrections. All are folded in. Three would have stopped an implementer cold: the `copy_for_run`
+    duck-typing above; a contradiction over who opens the record; and the destination flag controlling
+    THREE behaviours rather than two, the third of which would have called `rmdir` on the real
+    `Artifacts/` root after a failed run. The fourteen reports are in the gitignored ledger
+    `.superpowers/sdd/2026-09-22-secondary-analyses/` (`recon/`, `spec-review/`, `progress.md` with
+    rulings R1–R10, each carrying what it costs if it is wrong).
+
