@@ -239,6 +239,12 @@ B1–B8 all pass.
      and their builder failures still go to `BasePanel._config_error`); and `load_and_validate_gt`'s
      `Refusal(field="cell")` and the FDT dry run's problem strings are still two wordings for one
      rule.
+     Handed on by piece 4's final review (its ledger, now deleted): the artifact table's numeric
+     columns sort as text, so `Width 18` sorts before `3` and `10/12 batches` before `9/12` — a
+     small, safe follow-up the hazards reader called "worth doing in piece 5"; and
+     `tests/test_artifact_browser.py:864` asserts the window's picker kinds by EQUALITY
+     (`sorted(seen) == ["observation", "posterior", "prior"]`) where its sibling at `:252` states the
+     rule is a SUBSET, so any picker piece 5 adds turns it into a false red.
    - **Piece 6.** The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes
      false (`:49,53-54,76,190-191`), and a README reference section for the tool.
    - **Open, with no piece owning them yet** (the owner decides each, or where it goes):
