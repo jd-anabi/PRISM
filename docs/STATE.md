@@ -39,8 +39,8 @@ Important and 38 Minor findings; the fix wave landed in `e9318ff`, `114711b`, `5
 this piece's own spec-document corrections, made by this documents task. The final fast gate, the
 slow set and the GPU smoke gate of record are in the table below; the diagnostic card was judged
 unnecessary (no line under `core/diagnostics` moves a tensor) and that judgement held. **Rows D1–D17
-of `docs/checklists/display-walkthrough.md` are owed by the OWNER, on a real screen — no task may
-fill them in.**
+of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen on 2026-09-21: all
+seventeen pass** (the gate table below).
 **Next: piece 5** ("Owed" item 7); piece 6 follows. Piece 3 (`3db271e`..`9e2f7ef`) is DONE and
 pushed, and its rows C1–C11 all pass; piece 2 (`0016dae`..`d34997c`) is also pushed, and its rows
 B1–B8 all pass.
@@ -227,6 +227,9 @@ B1–B8 all pass.
        typed-looking `0.0` — B16, T23.
      - ~~`PaneCapture` does not see lines a worker sends to the pane~~ — landed: it wraps both pane
        channels into one ordered list — B17, T1.
+     - ~~Rows D1–D17 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done
+       2026-09-21 by the USER: **all seventeen pass**, recorded in that file's last two columns and in
+       the gate table below.
    - **Piece 5.** FDT/CrossVal hardening and wrapping them in the store (their outputs still go to
      `artifacts_root()/fdt` and `/crossval`). Two test gaps: the cell-folder branch of the `fdt`
      unsupported-model hint is untested (`core/tool/fdt.py`), and only `plot_psd` of the four
@@ -383,7 +386,7 @@ B1–B8 all pass.
 | **final fast gate, piece 4**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-21 at `80be144`, after the whole-piece review's fix wave: **729 passed, 1 skipped** (the display-marked class-icon test, offscreen), 2 deselected, **181 warnings**, **13 min 57 s** (inside design spec §10's 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing. The warning baseline moved from piece 3's 175 to 181: all six new warnings come from the two tests Task 22 added that run a real short training and emit its per-batch notices — no pre-existing test started warning and no new warning class appeared. Every task had its own one-process gate, recorded in the execution ledger; the gate briefly touched 16:07 and 16:12 at Tasks 22–23 before the fix wave brought it back under target |
 | slow set of record, `pytest -m slow -q --durations=5` (piece 4) | 2026-09-21 at `80be144`: **2 passed**, 730 deselected, 93 warnings, **30 min 43 s**, exit 0. No "More than 20 figures" line, no `sbi-logs/`, tree clean. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1610 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size` 229 s (back near piece 3's recorded 208 s, so an earlier 428 s reading was transient). The chi figure is 13 % above piece 3's recorded 1181 s on code this piece's diff does not reach on that test's path; it passed at every measurement and is recorded as a thing to watch at the retrain, not chased further ("Owed" item 7) |
 | **GPU smoke gate, piece 4** (`python -m core smoke`, the four command lines of `CLAUDE.md`, at `d1f0b98` — no line on the training path changed after it except the fix wave's sweep/delete/logging work, which that path does not reach) | 2026-09-21, alone on the card: **run 1** chi `master_spont`: prior 92.3 s, posterior 198.5 s, validate 22.3 s, infer 85.9 s, exit 0 (piece 3: 92/196/22/84); **run 2** `--resume require`: "Reusing the Fisher rotation stored with the training checkpoint (4/4 batches — COMPLETE …)", `[checkpoint] resuming at batch 4/4`, exit 0; **run 2b** `--num-runs 2`: **exit 1**, the refusal reads "differs only in n_runs: this run 2, that cache 4" and ends `(--new-run)`, no `[fisher]` line, `simulations/` still only `4d8022b100db`; **run 3** forced `master_weak`: 100.4 / 63.9 / 15.0 / 19.3 s, exit 0 (piece 3: 92/60/13/18). No OOM line, no Traceback and no `warning: ` line in any run. Run 1's masked probes 79/224, 15/96, 108/192, 58/192 = 260/704 = 36.9 %, identical to pieces 2 and 3. The diagnostic card was not required and was not run: the piece's diff touches no file under `core/diagnostics` that creates or moves a tensor (design spec §10); that judgement held. Scratch stores deleted |
-| display walkthrough, piece-4 rows D1–D17 (`docs/checklists/display-walkthrough.md`) | **Not yet run.** Owed by the owner, on a real screen |
+| display walkthrough, piece-4 rows D1–D17 (`docs/checklists/display-walkthrough.md`) | 2026-09-21, the user on the real screen at `44ed3ed` (piece 4 as it stands; the code is `80be144`, that commit being documents only): **rows D1–D17 all pass** — the Artifacts tile and its seven kinds, the empty kind's "Nothing here yet.", a cache's batches-against-planned row and its finished form, the detail pane's manifest-then-records and the cache's no-log sentence, the note set/cleared/refused, delete refused by a dependent (the fingerprint-only cache included), the unfinished cache's batch-count confirmation with No then Yes, the sweep of manifest-less directories only, the picker refreshed after a delete, Note/Delete/Sweep refused while a run is live with reading still working, the live-run header line with the tile and tab markers, Apply's session line and its No, "narrowed (TSNPE)" in the closed dropdown, the blank probe row reported as blank, no doubled `core` line and the `library: <logger>: ` prefix, the taskbar mark after the header's new slot (row 1 re-run), and the table's colours, sorting and column widths in Light and Dark. Rows 1–20, A1–A9, B1–B8 and C1–C11 stand |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the two copies identical. Run it from the repository root, with `$S` set to
