@@ -203,6 +203,7 @@ which a reviewer should check against.
 | The stale memory figures in the science reference (`PRISM_HANDOFF.md:2615-2616` against `:6756`, opposite status for the same two items) | A documentation defect in a file piece 6 is splitting. Recorded, not fixed here. | piece 6 |
 | A cross-process lock on a record being written | Out of scope in piece 4 and still out of scope. §2.5 says what the recency guard now means. | nobody yet |
 | Deleting the owner's legacy files | E10 is "let the owner clear them", not "clear them". | the owner |
+| The third wording of "the cell lacks what the bounds file requires", in `cli._merge_vals_bounds` (P53) | It carries the cell PATH, which the FDT builders need and the other two wordings do not, so folding it into `missing_values_phrase` would drop that or change the other two. §6.2 unifies two and knowingly leaves this one. | nobody yet |
 
 ---
 
@@ -464,7 +465,8 @@ In `cli.make_fdt_config`, before the settings object is built, through `core/ref
 | the model | `refuse("model", reason)` on `registry.fdt_support`'s `(ok, reason)` | already gated, as a bare `ValueError`; converted to a `Refusal` carrying `field="model"`, keeping `fdt_support`'s own per-model reason (`registry.py:77-103`). The where-the-name-came-from hint moves to `core/tool/fields.py`'s entry, because a core message may not name a flag and a source scan pins that (**P26**). **Not** `require_choice`: `fdt_support` is a predicate returning a tailored diagnostic sentence, not a list of choices |
 
 Of these, `freq_bounds`, `burn_in_nd`, `T_obs_periods`, `dt_nd` and `psd_T_obs_nd` are not
-front-end knobs (§1.2), so they are checked with `field=None` and appear in neither front-end table.
+front-end knobs (§1.2), so they are registered in `FIELDS` with `None` in both front-end tables, and a
+refusal on one names the setting and offers no fix (P2, P75; corrected at pre-flight, F36).
 `require_below`'s justification is §4.4's grid pair, which both front ends do expose.
 
 **One new rule** is added to `core/refusals.py`: `require_below(key, lo, hi, …)` for an ordered pair,

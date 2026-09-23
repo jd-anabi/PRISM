@@ -157,7 +157,7 @@ likely to bite first. Each line names the task whose tests pin it.
 3. **A blank box that reads as zero reaching a check that only refuses negatives.** Every window
    numeric box returns `0` for a blank, so a rule written as "reject below zero" accepts every blank
    box in the application. Each floor is asserted against a blank box, not only against a typed
-   zero. Pinned in **Task 12** and **Task 13**.
+   zero. Pinned in **Task 10** and **Task 11**. *(Corrected at pre-flight, F34: the draft named Tasks 12 and 13.)*
 4. **A cell whose bounds file resolves to the folder's master rather than a same-named sibling.**
    The two resolve differently and only one is recorded; a record that names the wrong bounds file
    is worse than one that names none. Pinned in **Task 7**.
@@ -361,6 +361,7 @@ class FDTConfig:
     sources: dict = field(default_factory=dict)   # {"cell": str, "bounds": str|None,
                                                   #  "units": str|None, "model": str}
     seed: "int | None" = None
+    preset_name: "str | None" = None              # the sweep's preset name (P72); None for a single run
 
     def copy_for_run(self) -> "FDTConfig":
         """A private deep copy. ``public_entry`` is duck-typed on this method
@@ -507,6 +508,8 @@ def interpolate_onto(grid, omegas, values) -> "np.ndarray":
   THE CLOSE
  T41 the documents, the walkthrough rows, the gates of record ── everything
 ```
+
+**Corrected edges (pre-flight F5, F8 and P81).** The graph above omits dependencies the tasks' own anchors and tests rely on. The complete set is: T3 ── T1 T2; T4 ── T1 T3; T15 ── T8 T13 T14; T17 ── T3 T7 T10 T12 T13 T15 T16; T19 ── T3 T7 T11 T12 T17; T21 ── T9 T10 T17 T19; T25 ── T9 T17 T21 T24; T26 ── T9 T19 T21 T24; T33 ── T17 T28; T34 ── T17 T18 T19 T20 T28; T36 ── T8 T9 T18 T20 T22 T23; T38 ── T36 T37; T39 ── T36 T37. **The tasks execute strictly in number order, one at a time**, so every edge above is satisfied by construction; the list documents what each task consumes.
 
 **T17 and T19 each carry the `public_entry` source scan.** `tests/test_artifact_store.py`'s scan
 walks `CODE_ROOTS = ("core",)` and asserts `found == want` by equality, with `_UNTOUCHED_LEGS` and
@@ -871,7 +874,7 @@ These are additions to the contract; every task inherits them.
 - **P39 (O7, O61)** — **T41 owns both falsified texts** that no earlier task's tests would red:
   `core/tool/fdt.py`'s two "no bounds file" sentences and `core/tool/browse.py`'s `--store-root`
   docstring. T7 and T29 do not carry them. They are steps of T41 because T41 is the only task that
-  cannot forget them.
+  cannot forget them. **Superseded in part (P76, pre-flight F50):** Task 29 corrects `core/tool/fdt.py`'s two sentences, because it already rewrites that file; Task 41 keeps `browse.py`'s docstring only.
 - **P40 (O38)** — `tests/test_tool.py`'s artifacts-family test repeats `browse.py`'s old reason
   verbatim, with line numbers already stale at `a0d85da`. Its assertions still pass after T28, so
   nothing reds and the false sentence would survive the piece. T41 corrects it, docstring only, and
@@ -1740,6 +1743,41 @@ git add core/artifacts/manifest.py core/artifacts/store.py core/artifacts/__init
 git commit -m "store: declare the fdt kind, with the three silent pins"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+From the pre-flight scan against HEAD `673868d`. No ruling in P70–P82 changes this task. P1 and P16 are already reflected in the steps above. The corrections below fix one stale test anchor and one stale docstring sentence.
+
+1. **Step 12, the third node id.** `tests/test_tool.py::test_the_tools_kinds_and_columns_match_the_browsers` does not exist. The test that holds `assert browse.KINDS == tuple(KIND_DIRS), "the seven kinds, in KIND_DIRS order"` is `test_the_artifacts_listing_shows_the_browsers_own_columns`. Run:
+
+   `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest tests/test_worker_dispatch.py::test_columns_for_names_all_seven_kinds_after_name_and_created tests/test_worker_dispatch.py::test_cells_for_renders_each_kind_from_the_summary_alone tests/test_tool.py::test_the_artifacts_listing_shows_the_browsers_own_columns -v`
+
+   In that test, change the assertion message `"the seven kinds, in KIND_DIRS order"` to `"the eight kinds, in KIND_DIRS order"`, and the docstring's `The seven kinds are restated in the tool as a literal` to `The eight kinds are restated in the tool as a literal`.
+
+2. **Step 17's placement.** Add `test_the_rendered_help_counts_the_kinds_correctly` directly after `test_the_artifacts_listing_shows_the_browsers_own_columns` in `tests/test_tool.py`.
+
+3. **Step 8, the `LoadedFdt` docstring (P1).** The interface contract was corrected to a plain dataclass, so replace the paragraph
+
+   ```
+       NOT frozen, unlike the plan's interface contract: ``Loaded`` is a plain dataclass, and Python
+       refuses ``@dataclass(frozen=True)`` on a subclass of a non-frozen one (TypeError at import).
+       Every other ``Loaded*`` in this module is a plain dataclass for the same reason.
+   ```
+
+   with
+
+   ```
+       NOT frozen (planning ruling P1): ``Loaded`` is a plain dataclass, and Python refuses
+       ``@dataclass(frozen=True)`` on a subclass of a non-frozen one (TypeError at import). Every
+       other ``Loaded*`` in this module is a plain dataclass for the same reason.
+   ```
+
+4. **Expected until Task 2 lands:** `ArtifactStore.list` does not fill `Summary.study` or `points_*` yet, so an fdt row's Study and Points cells are blank in the browser and `-` in the tool. That is Task 2's job (P16). Do not fill them here.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F28** — also add, in `tests/test_worker_dispatch.py` beside the per-kind `columns_for("<kind>") == (...)` assertions, one for the new kind: `assert columns_for("fdt") == ("Name", "Created", "Study", "Points", "Finished", "Note")` — or whatever exact tuple your `_EXTRA_COLUMNS["fdt"]` and the table's leading/trailing columns produce; read the real `_LEADING` and write the real tuple. Add the file to the Files block and the `git add` line. The spec names this assertion (checklist item 23) and it is the only pin on the GUI column titles.
+- **F29** — `load_fdt` REFUSES a payload whose recorded hash is non-null but whose file is missing, with `field="artifact"`, instead of skipping it and returning `data_path=None`. A hash the manifest recorded is a claim that can be checked; a deleted payload fails it. Only a NULL recorded hash means "not yet" (P47). Add the case to the load_fdt test: finish a record, delete its `data.h5`, assert the refusal.
+
 ---
 
 ### Task 2: `Summary` filled, the finished branch, and a numeric sort key
@@ -2037,6 +2075,24 @@ as text, it names the column in its failure — report it rather than weakening 
 git add core/artifacts/store.py core/gui/widgets/artifact_table.py tests/test_artifact_store.py tests/test_worker_dispatch.py
 git commit -m "store: fill an fdt row's study and points, and sort numeric columns by number"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+From the pre-flight scan against HEAD `673868d`. No ruling in P1–P82 overrides this task's design. Task 3 depends on this task (P81), so land this one first. One test line is wrong and is corrected here.
+
+1. **Step 5, the test body: delete one false assertion.** `cell_key("Note", "9")` is `(0.0, "9")` and `cell_key("Note", "10")` is `(0.0, "10")`. `"9" < "10"` is False as text, so the line below fails whatever the implementation does, and it contradicts the line after it. Delete exactly this line:
+
+   ```python
+       assert cell_key("Note", "9") < cell_key("Note", "10"), "a text column is unchanged: '10' < '9'?"
+   ```
+
+   Keep the next line, which is correct:
+
+   ```python
+       assert cell_key("Note", "10") < cell_key("Note", "9"), "... yes: text order, as today"
+   ```
+
+   Everything else in Steps 5–8 stands.
 
 ---
 
@@ -2594,6 +2650,37 @@ git add core/artifacts/store.py core/artifacts/__init__.py tests/test_artifact_s
 git commit -m "store: a progressive writer mode, so an interrupted fdt record keeps its folder"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+From the pre-flight scan against HEAD `673868d`.
+
+1. **Order (P81).** This task depends on Task 2 as well as Task 1: three of its assertions (`row.complete and not row.finished`, and `store.list("fdt")[0].finished` after the commit) need Task 2's `finished = (bool(body.get("complete")) if "complete" in mf.BODY_KEYS[kind] else True)`. Before starting, confirm that line is in `core/artifacts/store.py`. If it is not, Task 2 has not landed: stop and say so in the report. In **Interfaces → Consumes**, read: `manifest.BODY_KEYS["fdt"]`, `store.KIND_DIRS["fdt"]` (Task 1), and `ArtifactStore.list`'s BODY_KEYS-derived `finished` (Task 2).
+
+2. **Step 4, the fourth prediction is corrected.** Replace "the fourth at `assert text is not None` (`read_log` returns `(None, False)` — the directory was removed)" with: the fourth fails at the `store.read_log("fdt", "logged")` call, with `core.artifacts.store.StoreError: no complete fdt artifact named or id'd 'logged'`. The directory was removed, so `_find` finds no manifest and `read_log` refuses rather than returning `(None, False)`.
+
+3. **Step 7, `_inputs`: keep today's warning attribution.** The old `_commit` warned with `stacklevel=3` (`_commit` → `__exit__` → the caller's `with` line). The new call chain is `_inputs` → `_manifest_dict` → `_write` → `_commit` → `__exit__` → caller, so the same attribution needs `stacklevel=6`. In the `_inputs` you add, replace
+
+   ```python
+                   stacklevel=4)
+   ```
+
+   with
+
+   ```python
+                   # _inputs <- _manifest_dict <- _write <- _commit <- __exit__ <- the caller's ``with``:
+                   # the frame the old _commit's stacklevel=3 named, so the six ordinary kinds' warning
+                   # still points at the caller's code and not at this module.
+                   stacklevel=6)
+   ```
+
+Nothing else in P1–P82 overrides this task. P15, P47, P48 and P49 are already what Steps 5–7 build.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F7** — at the end of `test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_record`, add the store half of spec §8.2's "the leftover sweep never offers it": `backdate_tree(w.dir)` (already imported in that suite), then `with pytest.raises(st.StoreError): store.remove_incomplete("fdt", w.dir.name)`, then assert no `store.list("fdt")` row has `complete` false. The tool half is Task 30's.
+- **F30** — where a progressive record falls through to the ordinary removal (the refused-before-anything-was-written branch) and `_rmtree_retry` then fails, word the warning by mode: for a progressive record it must NOT say "it has no manifest, so the store ignores it" — it has one. Say it keeps a manifest, is listed as unfinished, and can be removed with the delete action.
+- **P81** — this task runs after Task 2, not only Task 1: its assertions on `Summary.finished` for `fdt` need T2's `store.list` branch.
+
 ---
 
 ### Task 4: loose files and legacy directories
@@ -2967,6 +3054,75 @@ git add core/artifacts/store.py core/artifacts/__init__.py tests/test_artifact_s
 git commit -m "store: see and clear loose files and a legacy directory"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+From the pre-flight scan against HEAD `673868d`. No ruling in P1–P82 overrides this task's design. The corrections below fix its dependency and three defects in its own test and code.
+
+1. **Precondition: Task 3 must have landed.** Three anchors here are Task 3's text, not Task 1's: the Step 1 placement (`test_every_ordinary_kind_still_removes_its_directory_on_a_failure`), the Step 7 anchor `PROGRESSIVE_KINDS: frozenset = frozenset({"fdt"})`, and the Step 7 `__init__.py` anchor `LoadedInference, LoadedDiagnostic, LoadedFdt, PROGRESSIVE_KINDS,` / `write_simulation_manifest,`. If `PROGRESSIVE_KINDS` is not in `core/artifacts/store.py`, stop and report that Task 3 has not landed. Do not re-derive the anchors.
+
+2. **Step 3, `loose_files`: an unknown kind carries `field="artifact"`, as this task's Interfaces promise for every refusal.** `kind_dir()`'s own refusal has no field key. In `loose_files`, replace the first line of the body
+
+   ```python
+           d = self.kind_dir(kind)
+           if not d.is_dir():
+               return []
+   ```
+
+   with
+
+   ```python
+           if kind not in KIND_DIRS:
+               # Not kind_dir()'s own refusal, which carries no field key -- remove_incomplete's rule.
+               raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
+           d = self.kind_dir(kind)
+           if not d.is_dir():
+               return []
+   ```
+
+   The Step 1 test's `match="unknown artifact kind"` still holds.
+
+3. **Step 5, the legacy-directory test.** `KIND_DIRS` is not bound in `tests/test_artifact_store.py`, which imports the module as `st`. Replace
+
+   ```python
+       assert not set(st.LEGACY_DIRS) & set(KIND_DIRS.values()), \
+   ```
+
+   with
+
+   ```python
+       assert not set(st.LEGACY_DIRS) & set(st.KIND_DIRS.values()), \
+   ```
+
+   and delete the "Note: import `KIND_DIRS` at the top of the test ..." paragraph. Add no import.
+
+   Also replace the vacuous tail
+
+   ```python
+       for bad in ("priors", "nosuch", "../etc", "", "."):
+           with pytest.raises(st.StoreError):
+               store.remove_legacy(bad)
+       assert (store.root / "priors").exists() or True, "a kind directory is never this call's to remove"
+   ```
+
+   with
+
+   ```python
+       kind_dir = store.root / st.KIND_DIRS["prior"]
+       kind_dir.mkdir(parents=True, exist_ok=True)
+       backdate_tree(kind_dir)                  # old enough that only the name rule can protect it
+       for bad in ("priors", "nosuch", "../etc", "", "."):
+           with pytest.raises(st.StoreError) as exc:
+               store.remove_legacy(bad)
+           assert exc.value.field == "artifact", bad
+       assert kind_dir.is_dir(), "a kind directory is never this call's to remove"
+   ```
+
+   (`backdate_tree` is already imported at the top of the module.)
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F8** — this task runs after Task 3: its `PROGRESSIVE_KINDS` and `__init__.py` anchors are text Task 3 produces.
+
 ---
 
 ### Task 5: `render_lineage`'s `compared` branch
@@ -3122,6 +3278,10 @@ compares bytes against `render_lineage` itself, so it follows any wording change
 git add core/artifacts/report.py tests/test_artifact_store.py
 git commit -m "report: a lineage names what a comparison drew, and what has since gone"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+None. The pre-flight scan against HEAD `673868d` found every anchor verbatim, and no ruling in P1–P82 changes this task. Its `body["compared"]` shape is the interface contract's (P5).
 
 ---
 
@@ -3306,6 +3466,10 @@ git add core/gui/screens/artifact_screen.py tests/test_artifact_browser.py
 git commit -m "browser: the delete prompt names what is half-written, for both unfinished kinds"
 ```
 ## THE SETTINGS OBJECT AND THE CHECKS (T7–T12)
+
+#### Amendments (binding — these supersede the text above)
+
+None. The pre-flight scan against HEAD `673868d` found every anchor verbatim, and no ruling in P1–P82 changes this task. Tasks 2 and 3 must have landed first, as its Interfaces already say.
 
 ---
 
@@ -3739,6 +3903,41 @@ git add core/sim_config.py core/cli.py core/artifacts/manifest.py tests/test_art
 git commit -m "fdt: the settings object gets sources, a seed and copy_for_run"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**A1 — P19: `cli.make_reduction_config` is NOT touched.** Only the two FDT builders fill `sources`.
+- **Step 11:** delete the whole middle edit, the one that begins "In `make_reduction_config`, find:" and adds `sources=cell_sources(cell_file, "NADROWSKI"),` after `hw=detect_device(),`. Leave `make_reduction_config` byte-identical.
+- **Step 3:** in the new `sources` comment, replace
+  `# {"cell": ..., "bounds": ..., "units": ..., "model": ...}. Filled by cli.cell_sources through`
+  `# the three builders; read by ...`
+  with
+  `# {"cell": ..., "bounds": ..., "units": ..., "model": ...}. Filled by cli.cell_sources in the two`
+  `# FDT builders (make_reduction_config leaves it empty, P19); read by ...`
+  and keep the rest of the comment.
+- **Step 9:** rename the test to `test_the_two_fdt_builders_fill_sources_and_the_manifest_has_an_fdt_branch`. In its docstring, replace "the three FDTConfig builders fill ``sources`` so provenance.inputs_from_cfg works with no new provenance code. make_reduction_config fills it too and is otherwise UNTOUCHED -- it is" with "the two FDT builders fill ``sources`` so provenance.inputs_from_cfg works with no new provenance code. make_reduction_config is UNTOUCHED (P19; spec §1.2, §1.3) -- it is". Replace its last line
+  ```python
+      assert Path(red.sources["cell"]).name == "master_spont.txt"
+  ```
+  with
+  ```python
+      assert red.sources == {} and red.seed is None, "make_reduction_config is left alone (P19)"
+  ```
+- **Files / Interfaces:** read "(the three builders)" as "(the two FDT builders)", and delete "`cli.make_reduction_config` fills `sources` only."
+
+**A2 — Step 2's expected failure** is `AttributeError: 'FDTConfig' object has no attribute 'sources'`, raised at `assert cfg.sources == {} and cfg.seed is None`. Ignore the struck-through alternatives in that paragraph.
+
+**A3 — Step 13's command.** `-k` also filters the explicit node id and would deselect the consistency test. Run instead:
+`pytest "tests/test_artifact_store.py::test_fdt_config_carries_sources_and_a_seed_and_copies_itself_for_a_run" "tests/test_artifact_store.py::test_the_two_fdt_builders_fill_sources_and_the_manifest_has_an_fdt_branch" tests/test_artifact_store.py::test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs tests/test_artifact_consistency.py::test_cell_sources_records_the_bounds_file_that_actually_resolved -v`. Expected: 4 passed.
+
+**A4 — P72:** `FDTConfig.preset_name` is added by Task 11, not here. Do not add it.
+
+**A5 — contract note:** keep `cell_sources(cell_file: str, model: str | None = None)` as written. The contract's `model: str` is satisfied by every caller. Say so in the task report; a finding asks the owner to confirm.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **P72** — `FDTConfig` gains THREE defaulted fields, not two: `sources`, `seed`, and `preset_name: "str | None" = None  # the preset this sweep's knobs came from; None for a single-cell run`. Task 11 fills it; Task 19 reads it.
+- **F31** — `cell_sources(cell_file, model=None)` keeps a default for `model`, mirroring `parse_cell`'s own signature, although the contract lists it as required. Say so in your report.
+
 ---
 
 ### Task 8: `require_below`, the eight new field keys, and the tool's flag table
@@ -3992,6 +4191,141 @@ Expected: PASS
 git add core/refusals.py core/tool/fields.py core/gui/fields.py tests/test_refusals.py
 git commit -m "refusals: require_below and the eight secondary-analysis field keys"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**A1 — P52: `require_below`'s message uses "; got …", not parentheses** (this also supersedes the contract's `(got <lo> and <hi>)`).
+- **Step 3:** the raise becomes
+  ```python
+      a, b = require_finite(key, lo), require_finite(key, hi)
+      if not a < b:
+          raise Refusal(f"{_what(key)} must have its lower bound below its upper bound; got {a:g} and "
+                        f"{b:g}{_default_clause(key)}.", field=key)
+      return a, b
+  ```
+  In its docstring, replace "so a blank box (which every window numeric field reads as 0) and a NaN are refused by their own sentences rather than appearing inside this one" with "so None (a blank read through value_or_none) and a NaN are refused by their own sentences; a blank that value() reads as 0 reaches the ordering test as (0, 0) and is refused there".
+- **Step 1:** the expected sentence becomes
+  ```python
+          assert _shape(e.value, "s_grid") == (
+              f"The activity sweep grid must have its lower bound below its upper bound; got {shown}.")
+  ```
+
+**A2 — P2/P75/P54: Step 5's replacement is this block** (it replaces the whole of Step 5's replacement text, the "deliberately absent" comment included):
+```python
+    # the artifact browser (piece 4): the artifact a browse action acts on, and its note
+    Field("artifact", "the artifact", None),
+    Field("note", "the note", None),
+    # the two secondary analyses (piece 5, §5.3): the knobs both front ends expose. n_freqs and
+    # ensemble_m have two effective defaults, the dataclass's and the sweep preset's (P54).
+    Field("n_freqs", "the number of drive frequencies", "60, or the preset's in a sweep"),        # FDTConfig.n_freqs
+    Field("ensemble_m", "the number of trajectories per frequency", "256, or the preset's in a sweep"),  # FDTConfig.ensemble_M
+    Field("freqs_per_batch", "the number of frequencies per simulator call", "1"),     # FDTConfig.freqs_per_batch
+    Field("f0", "the non-dimensional drive amplitude", "0.05"),                        # FDTConfig.F0
+    Field("preset", "the resolution preset", "exploratory"),                           # crossval --preset default
+    Field("s_grid", "the activity sweep grid", None),
+    Field("t_grid", "the temperature sweep grid", None),
+    Field("seed", "the random seed", "none: one is drawn and recorded"),
+    # the five FDT settings NEITHER front end exposes (§1.2, P2, P75). Registered like any other key,
+    # because every require_* rule builds its sentence through describe(key); both front-end tables
+    # map them to None, so a refusal names the setting and offers no fix -- there is nothing to name.
+    Field("freq_bounds", "the drive frequency band, in multiples of the resonance", "0.1 to 30.0"),  # FDTConfig.freq_bounds
+    Field("burn_in_nd", "the burn-in, in ND units", "100.0"),                         # FDTConfig.burn_in_nd
+    Field("t_obs_periods", "the drive window, in periods", "30"),                     # FDTConfig.T_obs_periods
+    Field("dt_nd", "the integration step, in ND units", "0.01"),                      # FDTConfig.dt_nd
+    Field("psd_t_obs_nd", "the spontaneous recording length, in ND units", "8000.0"), # FDTConfig.psd_T_obs_nd
+```
+
+**A3 — Step 7's BASE_KEYS replacement** (the new keys go ABOVE `"artifact", "note",`, so Task 22's anchor `"artifact", "note",\n)` survives):
+```python
+    "chi_max_cycles", "chi_f0", "chi_freq_bounds", "device", "model", "observation", "posterior", "prior",
+    # piece 5's secondary analyses: the eight knobs the FDT and sweep screens and their two subcommands
+    # expose, then the five FDT settings neither front end exposes -- registered all the same (P2, P75).
+    "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "preset", "s_grid", "t_grid", "seed",
+    "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
+    "artifact", "note",
+)
+```
+The count literal: do NOT write 71. Run `pytest tests/test_refusals.py::test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions -v`, read the real count off the failure (76 expected: 63 + 13), and write that number.
+
+**A4 — Step 8's FLAG replacement gains, after `"seed": "--seed",`:**
+```python
+    # the five FDT settings neither front end exposes (P2, P75): no option string answers them
+    "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
+```
+In core/tool/fields.py's module docstring, extend the sentence beginning "``None`` marks a key no option string answers:" to also name "the five FDT settings neither front end exposes (the frequency band, the burn-in, the two durations and the step)". The subset assertion Step 8 writes already accommodates the five.
+
+**A5 — Step 9: add the five window entries as a SEPARATE group, directly after Step 9's `"seed": ...` sentence line** (Task 9 replaces the sentence block and must not take these with it):
+```python
+    # the five FDT settings NEITHER front end exposes (§1.2, P2, P75): no control, so fix_sentence
+    # returns "" and the refusal names the setting and offers no fix
+    "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
+```
+In core/gui/fields.py's module docstring, extend "``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six settings the window never exposes (...)" with "and the five FDT settings neither front end exposes (P2)".
+
+**A6 — new Step 9b: the window's None-set pin.** In `tests/test_nav_and_gating.py`, `test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it`, find
+```python
+    assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
+        "checkpoint_every", "resume", "device", "n_samples", "num_posterior_samples", "max_num_epochs",
+        "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
+        "n_sweep", "chi_k_fixed"}
+```
+and replace with
+```python
+    assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
+        "checkpoint_every", "resume", "device", "n_samples", "num_posterior_samples", "max_num_epochs",
+        "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
+        "n_sweep", "chi_k_fixed",
+        # piece 5 (P2, P75): the five FDT settings neither front end exposes
+        "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd"}
+```
+In the same test's docstring, item (d) becomes "the keys with no window control are exactly the six the window never exposes, the eleven tool-only diagnostics knobs, and the five FDT settings neither front end exposes (P2)".
+
+**A7 — new Step 9c: the default pin closes over the new keys.** In `tests/test_refusals.py`, `test_every_registry_default_is_the_trees_own_default`, find
+```python
+    looked_at = set(owned_by_config) | set(owned_by_a_signature) | {"device"}
+    rest = {k: f.default for k, f in FIELDS.items() if k not in looked_at}
+    assert rest == {k: ("none: it must be given" if k == "t_obs" else None) for k in rest}, rest
+```
+and replace with
+```python
+    # piece 5 (P2, P54, P75): the FDT knobs' defaults are FDTConfig's own -- make_fdt_config's keyword
+    # defaults equal them -- and n_freqs / ensemble_m also say a sweep takes its preset's value.
+    import dataclasses
+    from core import cli
+    from core.config import FDTConfig
+    from core.tool import build_parser
+    fdt = {f.name: f.default for f in dataclasses.fields(FDTConfig)}
+    owned_by_fdt_config = {"freqs_per_batch": "freqs_per_batch", "f0": "F0", "burn_in_nd": "burn_in_nd",
+                           "t_obs_periods": "T_obs_periods", "dt_nd": "dt_nd",
+                           "psd_t_obs_nd": "psd_T_obs_nd"}
+    for key, name in owned_by_fdt_config.items():
+        assert FIELDS[key].default == str(fdt[name]), (key, name, FIELDS[key].default)
+    for key, name in (("n_freqs", "n_freqs"), ("ensemble_m", "ensemble_M")):
+        assert FIELDS[key].default == f"{fdt[name]}, or the preset's in a sweep", (key, FIELDS[key].default)
+    for name in ("n_freqs", "ensemble_M", "freqs_per_batch", "F0"):
+        assert _default(cli.make_fdt_config, name) == fdt[name], name
+    lo, hi = fdt["freq_bounds"]
+    assert FIELDS["freq_bounds"].default == f"{lo} to {hi}", FIELDS["freq_bounds"].default
+    assert (FIELDS["preset"].default == build_parser().subcommands["crossval"].get_default("preset")
+            == next(iter(cli.SWEEP_PRESETS)))
+
+    looked_at = (set(owned_by_config) | set(owned_by_a_signature) | {"device"} | set(owned_by_fdt_config)
+                 | {"n_freqs", "ensemble_m", "freq_bounds", "preset"})
+    rest = {k: f.default for k, f in FIELDS.items() if k not in looked_at}
+    no_constant = {"t_obs": "none: it must be given", "seed": "none: one is drawn and recorded"}
+    assert rest == {k: no_constant.get(k) for k in rest}, rest
+```
+
+**A8 — Step 6's expected result:** the new require_below test PASSES. Three tests FAIL: `test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions` (key set and count), `test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered` (`set(tool_fields.FLAG) == set(FIELDS)`), and `test_every_registry_default_is_the_trees_own_default` (the closing `rest` assertion). A3, A4 and A7 turn them green.
+
+**A9 — Step 10 and Step 11.** Run: `pytest tests/test_refusals.py tests/test_nav_and_gating.py::test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it tests/test_nav_and_gating.py::test_the_gui_control_table_matches_the_tabs_labels -v`. Expected: PASS. The commit adds the test file the Files block already names:
+```bash
+git add core/refusals.py core/tool/fields.py core/gui/fields.py tests/test_refusals.py tests/test_nav_and_gating.py
+```
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F32** — P54's two-defaults sentence in the `Field` default clause applies to every key whose sweep value comes from the preset, not only `n_freqs` and `ensemble_m`: also `freq_bounds`, `t_obs_periods` and `psd_t_obs_nd`. Extend the suffix to those three and their pins.
 
 ---
 
@@ -4260,6 +4594,100 @@ Expected: PASS
 
 ```bash
 git add core/gui/fields.py tests/test_nav_and_gating.py
+git commit -m "gui: a fix-hint place may be a screen, and a shared input names them all"
+```
+
+#### Amendments (binding — these supersede the text above)
+
+**A1 — P33: `t_obs` is widened HERE, to the Simulate panel's box too.**
+- **Step 5, add:** in core/gui/fields.py find `    "t_obs": ("Infer", "T_obs (s)"),` and replace with
+  ```python
+      "t_obs": (("Infer", "Live simulation"), "T_obs (s)"),   # E6/P33: the Simulate panel's box too
+  ```
+- **Step 2, add:** in the field test's block (c), find
+  `    assert gui_fields.fix_sentence("t_obs") == "Set it in the 'T_obs (s)' box on the Infer tab."`
+  and replace with
+  ```python
+      assert gui_fields.fix_sentence("t_obs") == \
+          "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
+  ```
+- **New step 5b:** in `tests/test_worker_dispatch.py`, replace each of the three occurrences of the string `"Set it in the 'T_obs (s)' box on the Infer tab."` (two `assert box.informativeText() == ...` lines and one `fix = ...` assignment) with `"Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."`.
+
+**A2 — P30: `name` and `note` name the two new tabs' boxes too** (T25/T26 build them as 'Record name' and 'Note').
+- **Step 5, add:** find `    "name": "Choose another name in the Save box.",` and replace with
+  ```python
+      "name": ("Choose another name in the Save box, or in the 'Record name' box on the FDT analysis or "
+               "Sweep study cross-validation tab."),
+  ```
+  Find `    "note": "Edit it in the Note box on the Artifacts screen.",` and replace with
+  ```python
+      "note": ("Edit it in the Note box on the Artifacts screen, or in the 'Note' box on the FDT "
+               "analysis or Sweep study cross-validation tab."),
+  ```
+- **Tests:** in tests/test_nav_and_gating.py's field test (c), set both pins to the new sentences:
+  `assert gui_fields.fix_sentence("name") == ("Choose another name in the Save box, or in the 'Record name' box on the FDT analysis or Sweep study cross-validation tab.")`
+  `assert gui_fields.fix_sentence("note") == ("Edit it in the Note box on the Artifacts screen, or in the 'Note' box on the FDT analysis or Sweep study cross-validation tab.")`.
+  In `test_a_rename_failure_reads_as_a_name_refusal`, find
+  ```python
+          assert box.informativeText() == gui_fields.fix_sentence("name") == \
+              "Choose another name in the Save box.", kind
+  ```
+  and replace the literal with the new `name` sentence. In `tests/test_artifact_browser.py`, find
+  `    assert box.informativeText() == "Edit it in the Note box on the Artifacts screen."` and replace the literal with the new `note` sentence. The comment at that file's `# The control core/gui/fields.py names ("Edit it in the Note box on the Artifacts screen.") has` may keep quoting the sentence's first half.
+
+**A3 — the read-back pin must follow the widening (it reds otherwise). New step 5c**, in `tests/test_nav_and_gating.py::test_the_gui_control_table_matches_the_tabs_labels`. Find
+```python
+    seen = {tab: shown(panel) for tab, panel in tabs.items()}
+```
+and insert immediately ABOVE it:
+```python
+    # E6 (piece 5): a place may be any section's tab or one of the two screens, so read them all back
+    # off a built window rather than the six inference tabs alone.
+    from core.gui.main_window import MainWindow
+    window = MainWindow()
+    for section in (window.reduction_screen, window.fdt_screen, window.simulate_screen):
+        for i in range(section.tabs.count()):
+            tabs[section.tabs.tabText(i)] = section.tabs.widget(i)
+    tabs["Artifacts"] = window.artifact_screen
+    tabs["Model Builder"] = window.model_builder_screen
+```
+Then find
+```python
+    missing = []
+    for key, (tab, text) in tuples.items():
+        for name in (tab if isinstance(tab, tuple) else (tab,)):   # the budget boxes name two tabs
+            assert name in seen, f"{key}: CONTROL names a tab that does not exist: {name!r}"
+            if labels.pretty_gui(text) not in seen[name]:
+                missing.append((key, name, text))
+```
+and replace with
+```python
+    # A row a CONTROL entry names before the panel that shows it is built. Each entry must be ABSENT
+    # from its tab, so the task that builds the row turns this red and deletes its own line (T25: the
+    # FDT analysis Seed row; T26: the Sweep study cross-validation one). An exemption cannot outlive
+    # its row.
+    _NOT_BUILT_YET = {("seed", "FDT analysis"), ("seed", "Sweep study cross-validation")}
+    for key, name in _NOT_BUILT_YET:
+        assert labels.pretty_gui(gui_fields.label(key)) not in seen[name], \
+            f"{key} now has its row on {name}: delete its _NOT_BUILT_YET entry"
+    missing = []
+    for key, (tab, text) in tuples.items():
+        for name in (tab if isinstance(tab, tuple) else (tab,)):   # the budget boxes name two tabs
+            assert name in seen, f"{key}: CONTROL names a place that does not exist: {name!r}"
+            if (key, name) in _NOT_BUILT_YET:
+                continue
+            if labels.pretty_gui(text) not in seen[name]:
+                missing.append((key, name, text))
+```
+Add one sentence to that test's docstring: "Since piece 5 the places are every section's tabs and the two screens (E6), read off a built MainWindow." (This is Option B of this task's open finding. If the owner rules Option A, keep `seed` as Task 8's sentence instead, and drop `_NOT_BUILT_YET`.)
+
+**A4 — Step 5's second edit:** Task 8's sentence block ends at its `"seed": "Set it in the 'Seed' box ..."` line. The five `None` entries Task 8 placed after it, under the comment `# the five FDT settings NEITHER front end exposes`, are NOT part of the block; leave them.
+
+**A5 — Step 1's docstring:** in the field test's docstring, item (b) "every tuple names a tab as InferenceScreen TITLES it" becomes "every tuple names a place: a tab title of any section, read off the built window, or one of SCREENS".
+
+**A6 — Step 8 and Step 9.** Run: `pytest tests/test_refusals.py tests/test_nav_and_gating.py tests/test_worker_dispatch.py tests/test_artifact_browser.py -m "not slow" -q`. Expected: PASS. Commit:
+```bash
+git add core/gui/fields.py tests/test_nav_and_gating.py tests/test_worker_dispatch.py tests/test_artifact_browser.py
 git commit -m "gui: a fix-hint place may be a screen, and a shared input names them all"
 ```
 
@@ -4574,6 +5002,105 @@ git add core/cli.py tests/test_fdt_user.py
 git commit -m "fdt: make_fdt_config refuses its knobs before it parses a cell"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**A1 — P75/P2: `check_fdt_settings` uses the registered keys and the ordinary rules** (Task 8 registered `freq_bounds`, `burn_in_nd`, `t_obs_periods`, `dt_nd` and `psd_t_obs_nd`, with `None` in both front-end tables). In Step 5, replace the whole `def check_fdt_settings(...)` with:
+```python
+def check_fdt_settings(cfg: FDTConfig) -> None:
+    """Refuse the five FDT settings neither front end exposes: the frequency band, the burn-in, the
+    two durations and the integration step (§1.2, §3.3).
+
+    They are parameters of neither builder -- they arrive from the dataclass defaults, from the
+    closed preset, or from ``with_overrides`` -- so a bad one is a hand-edited preset or a caller's
+    bug, not a mistyped control. They are registered in ``core.refusals.FIELDS`` like every key and
+    map to ``None`` in BOTH front-end tables (P2, P75): each refusal names the setting and offers no
+    fix, because there is no box and no flag to name.
+    """
+    require_positive("dt_nd", cfg.dt_nd)
+    require_positive("psd_t_obs_nd", cfg.psd_T_obs_nd)
+    require_positive("t_obs_periods", cfg.T_obs_periods)
+    # A zero burn-in is a well-defined setting, not a broken one: E5 forbids the over-floor. Finite
+    # first, because require_at_least coerces with int() and int(nan) is a bare ValueError.
+    require_finite("burn_in_nd", cfg.burn_in_nd)
+    require_at_least("burn_in_nd", cfg.burn_in_nd, 0)
+    lo, hi = cfg.freq_bounds
+    require_positive("freq_bounds", lo)
+    require_below("freq_bounds", lo, hi)
+```
+Do NOT add `import math` (Step 5's first edit is dropped; nothing uses it). Keep Step 5's parenthesised `from .refusals import (...)` line exactly as written: Task 11 uses `describe`, `require_choice` and `require_below` from it.
+
+**A2 — Step 3's test asserts the keys.** Replace its closing loop (from `good = cli.make_fdt_config(...)` to the end) with:
+```python
+    from core.gui import fields as gui_fields
+    from core.tool import fields as tool_fields
+
+    good = cli.make_fdt_config("NADROWSKI", True, cell, n_freqs=4, ensemble_M=8)
+    for bad, key, needle in ((dict(dt_nd=0.0), "dt_nd", "must be greater than 0"),
+                             (dict(psd_T_obs_nd=0.0), "psd_t_obs_nd", "must be greater than 0"),
+                             (dict(T_obs_periods=0), "t_obs_periods", "must be greater than 0"),
+                             (dict(burn_in_nd=-1.0), "burn_in_nd", "must be at least 0"),
+                             (dict(freq_bounds=(0.0, 30.0)), "freq_bounds", "must be greater than 0"),
+                             (dict(freq_bounds=(30.0, 0.1)), "freq_bounds",
+                              "lower bound below its upper bound")):
+        with pytest.raises(Refusal) as e:
+            cli.check_fdt_settings(good.with_overrides(**bad))
+        assert needle in str(e.value), str(e.value)
+        assert e.value.field == key, (key, e.value.field)
+        assert gui_fields.fix_sentence(key) == "" and tool_fields.fix_sentence(key) == "", \
+            "no control and no flag: the message names the setting and offers no fix (P2)"
+    assert cli.check_fdt_settings(good.with_overrides(burn_in_nd=0.0)) is None, "E5: a zero burn-in is legal"
+    assert cli.check_fdt_settings(good) is None, "the built config passes its own check"
+```
+In the same test's docstring, replace "so they are checked DEFENSIVELY and their refusals carry field=None: there is no control and no flag, and inventing a fix sentence for one would be a lie" with "so they are checked DEFENSIVELY under their own registered keys, which map to None in both front-end tables: the message names the setting and fix_sentence adds nothing, because there is no control and no flag (P2, P75)".
+
+**A3 — Step 3's user model is registered and REMOVED, in the file's own schema.** Replace
+```python
+    forced = _register_user("FDT_FORCED_CHECK", [
+        {"name": "x", "drift": "-x + F", "noise": "0.1", "forcing": "sin(t)"}])
+    assert forced is not None
+    ok_, reason = registry.fdt_support("FDT_FORCED_CHECK")
+    assert not ok_ and reason
+    with pytest.raises(Refusal) as e:
+        cli.make_fdt_config("FDT_FORCED_CHECK", False, cell)
+    assert e.value.field == "model" and str(e.value) == reason, \
+        "fdt_support's own per-model reason, kept verbatim and given a field key"
+```
+with
+```python
+    try:
+        _register_user("FDT_FORCED_CHECK", [
+            {"name": "x", "drift": "-k*x", "D": "d0", "forcing": {"kind": "sin", "params": {}}}])
+        ok_, reason = registry.fdt_support("FDT_FORCED_CHECK")
+        assert not ok_ and "forcing" in reason, reason
+        with pytest.raises(Refusal) as e:
+            cli.make_fdt_config("FDT_FORCED_CHECK", False, cell)
+        assert e.value.field == "model" and str(e.value) == reason, \
+            "fdt_support's own per-model reason, kept verbatim and given a field key"
+    finally:
+        registry.unregister("FDT_FORCED_CHECK")
+```
+
+**A4 — P54: Step 1's two expected sentences** become
+```python
+            ("n_freqs", "n_freqs",
+             "The number of drive frequencies must be at least 1; got 0 "
+             "(default 60, or the preset's in a sweep)."),
+            ("ensemble_M", "ensemble_m",
+             "The number of trajectories per frequency must be at least 1; got 0 "
+             "(default 256, or the preset's in a sweep)."),
+```
+(the freqs_per_batch and F0 sentences are unchanged).
+
+**A5 — Step 4's expected failure** is the uncaught `FileNotFoundError` from `file_manager.parse_values_file` on `nope.txt`, which `pytest.raises(Refusal)` does not catch. It is not "DID NOT RAISE".
+
+**A6 — Step 7's docstring** additionally says: "One of them also builds two numeric widgets (offscreen) to read the value a blank box really produces." Replace the file's first line phrase "Qt-free" with "Qt-free except for that one widget read".
+
+**A7 — Interfaces, "Produces":** read "with `field` set for the five exposed ones and `field=None` for the five settings neither front end exposes" as "with `field` set for every refusal: the five exposed knobs and (P75) `dt_nd`, `psd_t_obs_nd`, `t_obs_periods`, `burn_in_nd`, `freq_bounds`, whose table entries are `None`".
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F33** — for `burn_in_nd` use `require_between("burn_in_nd", value, 0.0, math.inf, open_hi=True)`, not `require_at_least(..., 0)`. `require_at_least` coerces with `int()`, so a fractional negative such as -0.5 becomes 0 and passes, and NaN raises a bare `ValueError` from `int(nan)`; `require_between` refuses NaN, any negative and infinity, and it is an existing rule, so P75's principle (ordinary rules, no hand-built sentences) holds. Read the message it renders for this key: if it reads badly with an infinite upper bound, fall back to `require_finite` followed by `require_at_least(..., 0)` and say so in your report.
+
 ---
 
 ### Task 11: `make_param_sweep_config`'s checks and its `preset_name` keyword
@@ -4841,6 +5368,58 @@ git add core/cli.py core/tool/fdt.py core/gui/panels/crossval_panel.py tests/tes
 git commit -m "crossval: the sweep builder checks its grids and keeps the preset's name"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**A1 — P72: the config carries the preset's NAME.** New Step 3a: in `core/sim_config.py` find (Task 7's text)
+```python
+    # The seed the run used, drawn when none was supplied (E7). None means "not chosen yet".
+    seed: "int | None" = None
+```
+and replace with
+```python
+    # The seed the run used, drawn when none was supplied (E7). None means "not chosen yet".
+    seed: "int | None" = None
+
+    # The sweep preset's NAME ("exploratory" | "production"), set by cli.make_param_sweep_config;
+    # None for a single-cell run and for the reduction map. The resolved dict alone does not say
+    # which preset it was, and body.settings["preset"] must (§4.4, P72). Defaulted, for §1.3.
+    preset_name: "str | None" = None
+```
+In Step 3's tail replacement, the construction ends
+```python
+        sources=cell_sources(cell_file, "NADROWSKI"),
+        seed=seed,
+        preset_name=preset_name,
+    )
+    check_fdt_settings(cfg)
+    return cfg, s_grid, temp_grid
+```
+In Step 1's test, after `assert cfg.sources["cell"] == cell`, add
+```python
+    assert cfg.preset_name == "exploratory", "body.settings['preset'] is read off the config (P72)"
+    assert cli.make_fdt_config("NADROWSKI", True, cell, n_freqs=4, ensemble_M=8).preset_name is None
+```
+
+**A2 — P79: the tool forwards the seed.** In Step 4, also find in `core/tool/fdt.py`
+```python
+        **knobs(args, "freqs_per_batch", "F0"))
+```
+and replace with
+```python
+        **knobs(args, "freqs_per_batch", "F0", "seed"))
+```
+`knobs` reads `getattr(args, n, None)`, so this is inert until Task 28 declares `--seed` on crossval, and it is not forwarded when unset. Step 6's exact-set pins therefore do NOT gain "seed".
+
+**A3 — Step 5's command** (the pins are in `test_fdt_and_crossval_flags_reach_their_builders`, which `-k forward` does not select): `pytest "tests/test_tool.py::test_fdt_and_crossval_flags_reach_their_builders" -v`. The expected failure is as written.
+
+**A4 — Step 7's command** (keep the slow tiny-size run and the unrelated `artifacts sweep` tests out): `pytest tests/test_fdt_user.py tests/test_tool.py::test_fdt_and_crossval_flags_reach_their_builders tests/test_tool.py::test_fdt_and_crossval_usage_errors tests/test_tool.py::test_crossval_preset_choices_match_sweep_presets tests/test_artifact_store.py::test_fdt_config_carries_sources_and_a_seed_and_copies_itself_for_a_run -m "not slow" -v`. Expected: PASS.
+
+**A5 — Files and commit:** add `core/sim_config.py` (A1).
+```bash
+git add core/sim_config.py core/cli.py core/tool/fdt.py core/gui/panels/crossval_panel.py tests/test_fdt_user.py tests/test_tool.py
+git commit -m "crossval: the sweep builder checks its grids and keeps the preset's name"
+```
+
 ---
 
 ### Task 12: the thin-setting notices and their thresholds
@@ -5102,6 +5681,29 @@ and the sweep rather than user models, so the pipeline's own unit tests have sib
 these tests simulates anything — every campaign seam is stubbed, exactly as that test stubs it — so
 none of them is `slow`-marked.
 
+#### Amendments (binding — these supersede the text above)
+
+**A1 — new Step 5b: the existing record test's stub must carry the two knobs step 0 reads.** `test_the_fdt_messages_are_records_with_their_own_levels` drives `run_fdt` with a stub that has only a model name, and step 0 now reads `cfg.n_freqs` and `cfg.ensemble_M` first. In `tests/test_fdt_user.py`, find
+```python
+    class _Hopf:
+        model = "HOPF"
+```
+and replace with
+```python
+    class _Hopf:
+        model = "HOPF"
+        # run_fdt judges the thin settings first (E5) and reads both knobs to do it. At these values
+        # nothing is said, so the exact record list below is unchanged.
+        n_freqs, ensemble_M = 60, 256
+```
+(Task 13 later finds `class _Hopf:\n        model = "HOPF"` together with the comment line above it and appends `params_dict` after the model line. These lines stay.)
+
+**A2 — Step 7's expected result** holds only with A1 applied: PASS. The stubbed sweep (`ensemble_M = 2`) emits one extra PreflightWarning, which `pytest.warns(UserWarning, match="1/2 operating points failed")` tolerates. The `_Hopf` run (60, 256) emits none.
+
+**A3 — scope note:** `notices` stays an unused local in both entries after this task, by design: Task 17 stores the single-cell list and Task 19 the sweep's. Do not store them here. Keep the literal call `warn_thin_settings(` in `run_fdt`'s and `run_fdt_param_sweep`'s own bodies, because this task's test pins it with `inspect.getsource`.
+
+**A4 — commit:** unchanged (A1 edits `tests/test_fdt_user.py`, already in the git add line).
+
 ---
 
 ### Task 13: the normalisation prefactor moves to the top of `run_fdt`
@@ -5358,6 +5960,58 @@ four new literals are already covered.
 git add core/FDT/campaigns.py core/FDT/fdt_pipeline.py tests/test_fdt_user.py
 git commit -m "fdt: resolve the normalisation prefactor before the campaigns"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+Rulings already folded into this task, no further change: **P18** (no dependency on T8: `cell` and `model` are registered today), **P24** (the `_Hopf` stub gains `params_dict`; the prefactor call logs nothing), **P25** (every `FDTModelError` raise site, `_make_simulator`'s included, gets a key). **P26** applies as a constraint: none of the six messages may name a flag, box or tab. They do not; keep it so.
+
+**A. T12 has landed, and `run_fdt` now reads two config fields BEFORE your prefactor.** T12 inserted this line directly above the `# 1. Model-specific ...` block your Step 5 anchors on:
+
+```python
+    notices = warn_thin_settings(cfg)
+```
+
+It reads `cfg.n_freqs` and `cfg.ensemble_M`. Your Step 5 anchor is still found, because T12's replacement ends with those three lines. Put the prefactor between T12's `# 0.` block and `# 1.` exactly as Step 5 says. Do not move T12's line. Every stub config you hand to `run_fdt` must now carry both fields, at or above T12's thresholds (`FDT_THIN_N_FREQS = 2`, `FDT_THIN_ENSEMBLE_M = 8`), so that no `PreflightWarning` is raised.
+
+*Step 1*: in the new test, the `_NoN` stub becomes (docstring unchanged):
+
+```python
+    class _NoN:
+        """A Nadrowski cell carrying k -- so the omega_0 estimate would have succeeded -- but no n,
+        which is half of the Nadrowski prefactor n*beta."""
+        model = "NADROWSKI"
+        params_dict = {"k": (1.0, None), "beta": (14.1, None)}
+        # read by the thin-setting check, which runs before the prefactor; at or above its
+        # thresholds, so that check says nothing
+        n_freqs, ensemble_M = 60, 256
+```
+
+Without these fields, Step 2 fails with `AttributeError: '_NoN' object has no attribute 'n_freqs'` instead of the predicted `RuntimeError: a campaign ran: ...`, and Step 8 fails the same way.
+
+*Step 7*: the `_Hopf` replacement becomes:
+
+```python
+    # ── the FDT run: a failed sanity verdict is a WARNING, without the hand-typed word ─────────────
+    class _Hopf:
+        model = "HOPF"
+        # run_fdt resolves the normalisation prefactor before its first record (spec §3.4), and the
+        # HOPF prefactor is 2/sigma_x^2 -- so this stub has to carry the one parameter it reads.
+        params_dict = {"sigma_x": (0.1, None)}
+        # the thin-setting check reads these two first; at or above its thresholds, so no
+        # PreflightWarning joins the records this test pins by exact equality
+        n_freqs, ensemble_M = 60, 256
+```
+
+If T12 already gave `_Hopf` `n_freqs`/`ensemble_M`, keep T12's line and add only `params_dict` and its two comment lines. If T12 rewrote the `model = "HOPF"` line so that the Step 7 anchor is not found, add `params_dict` inside the class body anyway and say so in the task report.
+
+**B. Step 8's count is stale.** "PASS (7 tests: the 5 existing, the changed logging test, the new one)" was counted before T10–T12. T10 adds two tests, T11 one and T12 one, so after this task the file holds **11** tests. Read the count off the run; every test must pass.
+
+**C. Step 9's count is stale.** Steps 3 and 4 add **six** `field="…"` literals (five in `observable_noise_prefactor`, one in `_make_simulator`), not four. Both keys are registered, so `tests/test_refusals.py` still passes.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F10** — insert `prefactor = observable_noise_prefactor(cfg)` ABOVE Task 12's `# 0. The settings too thin to trust` block, not below it: a refused run must not first print a quick-look warning. Your anchor is that comment line. Your `_NoN` stub then needs no `n_freqs`/`ensemble_M`.
+- **F34** — no blank-box test belongs in this task; the plan's Review Focus item 3 named the wrong tasks and is corrected to Tasks 10 and 11.
 
 ---
 
@@ -5658,6 +6312,45 @@ git add core/FDT/sanity.py tests/test_fdt_user.py
 git commit -m "fdt: blank probes below the spectrum's first real bin"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+Rulings already satisfied by the body, no change: **P7** (`_resolved_span` as drafted is the contract's function), **P57** (`body.offgrid` counts the Campaign-2 probe grid; this task makes that count honest at the low end).
+
+**A. P23: do not touch `check_passive_baseline`'s bare `ValueError`.** Once this task lands, the block below in `core/FDT/sanity.py` can fire from the LOW end of the band for the first time:
+
+```python
+    if covered.size == 0:
+        raise ValueError(
+            "check_passive_baseline: every probe frequency lies outside the PSD grid, so the FDT "
+            "ratio is unmeasurable here. Narrow cfg.freq_bounds or lengthen the passive run.")
+```
+
+Leave it exactly as it is. P23 assigns its conversion to T33, and only if T33 goes red on it.
+
+**B. Pin the contract's empty-grid case (P7).** At the end of `test_every_probe_outside_the_resolved_span_is_blank_and_the_covered_ones_are_exact` (Step 1), append:
+
+```python
+    from core.FDT.sanity import _resolved_span
+    assert _resolved_span(x_old) == (1.0, 4.0), "the zero bin is not the band's lower end"
+    assert _resolved_span(torch.tensor([0.0], dtype=torch.float64)) == (float("inf"), float("-inf")), \
+        "a grid with no positive bin resolves nothing: every probe is then out of range (P7)"
+```
+
+Step 2's predicted failure for this test is unchanged, because its first assertion fails before these lines run. Step 5 still expects `2 passed`.
+
+**C. Add a step between Step 5 and Step 6: run the older `_interp_log` pin too.**
+
+Run: `pytest tests/test_user_sbi.py::test_interp_log_returns_nan_off_the_psd_grid -v`
+Expected: PASS. Its grid is `torch.logspace(0, 2, 32)` and has no zero bin, so `_resolved_span` returns `(1.0, 100.0)` and the probes 0.1 and 500 are still the only blanks. Run only that node id; the file also holds a `slow` test.
+
+**D. Step 9's count is stale.** "PASS (10 tests)" was counted before T10–T12 added four tests to this file. Expect **14**, and read the count off the run.
+
+**E. An Interfaces correction, with no code change.** Drop "T17 records its two values under `body.grid`". T17's grid block (spec §2.3) has no resolved-span key. `lo_res`/`hi_res` are used only in the two sanity warnings here and in the refusal and warning text of T15 and T16.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F35/F39** — delete the Interfaces sentence saying Task 17 records the resolved span under `body.grid`. It does not, and spec §2.3's `grid` list does not include it. `_resolved_span` is consumed by Tasks 15-17 in code only.
+
 ---
 
 ### Task 15: the band refusal, before the driven campaign
@@ -5823,6 +6516,83 @@ grid, because the prefactor refuses first.
 git add core/FDT/fdt_pipeline.py tests/test_fdt_user.py
 git commit -m "fdt: refuse a band below the spectrum's resolution before the drive"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**A. P75: the band refusal carries `field="freq_bounds"`, not `field=None`.** `freq_bounds` is registered in `core.refusals.FIELDS`, and BOTH front-end tables map it to `None` (P2). `fix_sentence` therefore returns `""`, and the refusal names the setting and offers no fix, which is the intended behaviour.
+
+*Why paragraph*: "so the refusal carries `field=None` and gets no table entry (spec §1.2, ...)" is superseded. It now reads: the refusal carries `field="freq_bounds"`, a registered key that both tables map to `None`.
+
+*Interfaces, Produces*: "a `core.refusals.Refusal` with `field=None`" becomes "a `core.refusals.Refusal` with `field="freq_bounds"`". Also drop "T17 records both under `body.grid`": T17's grid block has no resolved-span key, so `lo_res`/`hi_res` feed only this refusal and T16's text.
+
+*Step 1*: in the test's docstring, replace
+
+```
+    it names the band that was asked for, the band that exists, and the spontaneous duration that
+    sets it -- and it names no box, tab or flag, because neither setting is exposed by either front
+    end (spec §1.2), so its field is None and neither table can offer a fix sentence."""
+```
+
+with
+
+```
+    it names the band that was asked for, the band that exists, and the spontaneous duration that
+    sets it -- and it names no box, tab or flag. Its field is "freq_bounds" (P75): the key is
+    registered, and both front-end tables map it to None because no control and no flag exposes the
+    band, so neither table offers a fix sentence and neither pretends to."""
+```
+
+Then replace `    assert e.value.field is None, e.value.field` with:
+
+```python
+    assert e.value.field == "freq_bounds", e.value.field
+    from core.tool.fields import fix_sentence
+    assert fix_sentence("freq_bounds") == "", "no flag exposes the band, so no fix is offered (P2, P75)"
+```
+
+*Step 4*: the replacement block becomes the following. Keep the first comment line and the `lo_res, _hi_res = ...` line **verbatim**, because T16 anchors on both.
+
+```python
+    omegas = gen_freqs_log(cfg.omega_0, cfg.n_freqs, cfg.freq_bounds,
+                            cfg.hw.device, cfg.hw.dtype)
+
+    # The band, checked the first moment it is knowable and BEFORE the driven campaign -- the
+    # expensive half of the run (spec §3.4). The grid's lowest frequency is known only now, because
+    # it is built around the resonance Campaign 1 found; the spectrum's lowest RESOLVED frequency is
+    # its first non-zero bin, which the spontaneous duration sets. A grid reaching below it comes
+    # back blank there (spec §3.5), and used to come back with a fabricated tail instead.
+    # field="freq_bounds" (P2, P75): the key is registered and BOTH front-end tables map it to None,
+    # because neither the band nor the spontaneous duration is exposed by a front end -- so no table
+    # offers a fix sentence and none pretends to.
+    lo_res, _hi_res = _resolved_span(freqs_psd)
+    omega_lo = float(omegas[0])
+    if omega_lo < lo_res:
+        raise Refusal(
+            f"The frequency band reaches below what the spontaneous spectrum resolves: the lowest "
+            f"probe frequency is {omega_lo:g} (ND) but the lowest frequency the spectrum resolves "
+            f"is {lo_res:g} (ND). Raise freq_bounds' lower multiplier above "
+            f"{lo_res / cfg.omega_0:g}, or lengthen the spontaneous recording "
+            f"(psd_T_obs_nd = {cfg.psd_T_obs_nd:g}), which is what sets the resolution.",
+            field="freq_bounds")
+
+    # 6. Campaign 2: forced chi via lock-in
+```
+
+**B. T8 must have landed WITH P75 before this task.** T8, as corrected by P75, registers `freq_bounds` (`FIELDS`, `BASE_KEYS`, `CONTROL["freq_bounds"] = None`, `FLAG["freq_bounds"] = None`). The task-order graph does not show this dependency. Before Step 1, confirm that `core/refusals.py` holds `Field("freq_bounds", ...)`. If it does not, stop and report it: a `field="freq_bounds"` literal would red `tests/test_refusals.py::test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered`.
+
+**C. T12 has landed.** `run_fdt` now calls `warn_thin_settings(cfg)` before anything else, and it reads `cfg.ensemble_M`. In Step 1's `_Cfg`, directly under `n_freqs, freq_bounds = 5, (0.1, 30.0)`, add:
+
+```python
+        ensemble_M = 8        # read first by the thin-setting check; at its threshold, so it says nothing
+```
+
+Without it, Step 2 fails with `AttributeError: '_Cfg' object has no attribute 'ensemble_M'` instead of the predicted `AssertionError: the driven campaign ran: ...`.
+
+**D. Step 6.** The count is **15** (not 11) once T10–T12 have added their four tests; read it off the run. Also run `pytest tests/test_refusals.py -v` and expect PASS: the key-literal scan must accept `"freq_bounds"`.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F35/F39** — as for Task 14: `body.grid` does not carry the resolved span; delete that Interfaces sentence.
 
 ---
 
@@ -6067,6 +6837,90 @@ git commit -m "fdt: refuse a run that measured nothing instead of drawing an emp
 > refusal landed after the grid is built, the all-blank refusal landed after the interpolation), so
 > every number quoted from that file is stale by design. Find the quoted text; if it is not there,
 > re-read the file and say so in the task report.
+
+#### Amendments (binding — these supersede the text above)
+
+Rulings already satisfied by the body, no change: **P57** (`of = G_at_omegas.numel()` is the Campaign-2 probe grid), **P73** (Step 8 is right that `tests/test_nav_and_gating.py`'s FDT test is untouched by T13–T16).
+
+**A. T12 has landed.** `run_fdt` now calls `warn_thin_settings(cfg)` before anything else, and it reads `cfg.ensemble_M`. In Step 1's `_Cfg`, directly under `n_freqs, freq_bounds = 5, (5.0, 30.0)`, add:
+
+```python
+        ensemble_M = 8        # read first by the thin-setting check; at its threshold, so it says nothing
+```
+
+Without it, Step 2 fails with `AttributeError` instead of `DID NOT RAISE`.
+
+**B. P22 (as ratified from O15, which states the move puts the figure "on disk for BOTH refusals"): the PSD figure goes above T15's band check, not below it.** Step 4's anchor (`# 6. Campaign 2`) sits BELOW T15's band refusal, so the band refusal would leave a folder with no spectrum. That contradicts the drafted comment "the two refusals that can follow -- the band above ...".
+
+*Step 4 is replaced by this.* In `core/FDT/fdt_pipeline.py`, find the first line of the comment T15 added:
+
+```python
+    # The band, checked the first moment it is knowable and BEFORE the driven campaign -- the
+```
+
+and insert directly ABOVE it, after the `omegas = gen_freqs_log(...)` statement and its blank line:
+
+```python
+    # The spectrum's own picture goes to disk BEFORE the band check and the driven campaign, because
+    # it is what diagnoses both refusals that can follow -- a band reaching below what the spectrum
+    # resolves (just below) and nothing measurable (after the drive) -- and E2 keeps the folder it is
+    # written into (spec §3.6, P22). It used to be written at the very end, where neither refusal
+    # could ever reach it.
+    psd_path = _out_dir() / f"psd_{timestamp}.png"
+    plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
+              save_path=psd_path,
+              title=f"Spontaneous PSD (Campaign 1): ND {cfg.model}",
+              omega_natural=omega_natural,
+              plot_band=(cfg.omega_0 * cfg.freq_bounds[0],
+                          cfg.omega_0 * cfg.freq_bounds[1]))
+    log.info(f"Saved spontaneous PSD plot to: {psd_path}")
+
+```
+
+Keep `psd_path = _out_dir() / f"psd_{timestamp}.png"` **verbatim**: T17 (P74) finds and replaces exactly that line. Do NOT insert anything before `# 6. Campaign 2: forced chi via lock-in`; that line and the `log.info("Campaign 2: ...")` below it stay as they are. `omega_natural` and `cfg.omega_0` are both bound by step 4 of `run_fdt`, above this point.
+
+*Interfaces, Produces*: "The spontaneous PSD figure is written **before** Campaign 2, so `psd_<stamp>.png` is on disk whenever this refusal fires" becomes: "... is written before T15's band check (and so before Campaign 2), so `psd_<stamp>.png` is on disk whenever EITHER refusal fires."
+
+**C. New Step 4b: pin the band case in T15's test.** In `tests/test_fdt_user.py`, inside `test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaign`, find:
+
+```python
+    monkeypatch.setattr(fdt_pipeline, "plot_spontaneous_trajectory", lambda *a, **kw: None)
+```
+
+and replace it with:
+
+```python
+    monkeypatch.setattr(fdt_pipeline, "plot_spontaneous_trajectory", lambda *a, **kw: None)
+    monkeypatch.setattr(fdt_pipeline, "plot_psd",
+                        lambda *a, save_path=None, **kw: save_path.write_bytes(b"png"))
+```
+
+Then find:
+
+```python
+    assert driven == [], "Campaign 2 was entered before the band was checked"
+```
+
+and append after it:
+
+```python
+    written = [p.name.rsplit("_", 2)[0] for p in tmp_path.glob("*.png")]
+    assert written == ["psd"], ("the spontaneous spectrum's picture must be on disk when the band "
+                                f"refusal fires -- it is what diagnoses it (P22): {written}")
+```
+
+(The trajectory stub in that test writes nothing, so the PSD is the only PNG.)
+
+**D. Step 7 runs both tests.** Run: `pytest "tests/test_fdt_user.py::test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind" "tests/test_fdt_user.py::test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaign" -v`. Expected: 2 passed. Before Step 4 (B) lands, the band test's new assertion fails with `written == []`.
+
+**E. The refusal's field is pending a ruling.** P75 keys T15's band refusal `"freq_bounds"` and does not name this one. Build Step 5 as drafted (`field=None`, test asserts `is None`) unless the plan owner has ruled otherwise. If the ruling is `"freq_bounds"`, add `field="freq_bounds"` as the last argument of Step 5's `raise Refusal(...)` and change the test's `assert e.value.field is None, e.value.field` to `assert e.value.field == "freq_bounds", e.value.field`.
+
+**F. Step 6 is unchanged.** The closing block still loses `psd_path` and its `plot_psd` call, and the "Saved plots to:" record still shortens to the two paths. T17's P74 anchors depend on exactly that result.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F37** — the nothing-measurable refusal carries `field="freq_bounds"`, as Task 15's band refusal does under P75: same subject (the band against the spectrum's span). Change the raise and the test's assertion to `assert e.value.field == "freq_bounds"`. The fix sentence is empty either way.
+- **F12** — confirmed as the amendment applied it: the spontaneous-spectrum figure is drawn ABOVE Task 15's band check, still before Campaign 2, so the folder holds it for BOTH refusals.
 
 ---
 
@@ -6861,6 +7715,277 @@ git add core/FDT/fdt_pipeline.py core/tool/fdt.py core/gui/panels/fdt_panel.py t
 git commit -m "fdt: run_fdt is a public entry that writes a record"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**A0 — read first.** T16 has already moved `plot_psd`; there is no `psd_path` in the closing block when you arrive (P74). When you arrive, `core/FDT/fdt_pipeline.py` also carries:
+- T12's `import warnings`, its `thin_notices`/`warn_thin_settings` above `def run_fdt`, and a `# 0.` block (`notices = warn_thin_settings(cfg)`) at the top of the body;
+- T13's `prefactor = observable_noise_prefactor(cfg)` just above `# 1.`;
+- T15's `_resolved_span`/`Refusal` imports and band refusal;
+- T16's `lo_res, hi_res`, its early `psd_path = _out_dir() / f"psd_{timestamp}.png"` + `plot_psd` block before `# 6.`, the line `blanks, of = int(torch.isnan(G_at_omegas).sum()), G_at_omegas.numel()` followed by the all-blank refusal, and a TWO-path closing block.
+
+Call `writer.payload()` / `writer.figure_path()` at the moment of writing, never at the top of the run (P49): `__exit__` keeps a record once either has been called.
+
+**A1 — Step 6, imports (the quoted anchor is not found; T12 inserted `import warnings`).** Find:
+```python
+import logging
+import math
+import warnings
+from datetime import datetime
+
+import torch
+
+from core import config
+from core.config import FDTConfig
+```
+Replace with:
+```python
+import logging
+import math
+import random
+import warnings
+
+import torch
+
+from core import config
+from core.config import FDTConfig
+from core.diagnostics.rng import seeded
+from core.runs import public_entry
+```
+`config` STAYS: T12's `thin_notices` reads `config.FDT_THIN_N_FREQS` / `config.FDT_THIN_ENSEMBLE_M` live, so dropping it is a `NameError` on every run. Only `datetime` goes. Delete the parenthetical under the block. It is false: importing `core.diagnostics.rng` runs `core/diagnostics/__init__.py`, which imports `core.orchestrator`. No cycle results. Say this in the report.
+
+**A2 — Step 6, `_settings_block` (P70).** Use this signature and tail instead of the one given:
+```python
+def _settings_block(cfg, *, skip_sanity=None, confirm_production=None) -> dict:
+    """(docstring as given, plus:) ``skip_sanity`` and ``confirm_production`` are run_fdt's ARGUMENTS,
+    not FDTConfig fields, so the caller hands them in; a sweep passes neither and records both null."""
+    return {"n_freqs": int(cfg.n_freqs), "ensemble_M": int(cfg.ensemble_M),
+            "freqs_per_batch": int(cfg.freqs_per_batch), "F0": float(cfg.F0),
+            "freq_bounds": [float(v) for v in cfg.freq_bounds],
+            "burn_in_nd": float(cfg.burn_in_nd), "T_obs_periods": int(cfg.T_obs_periods),
+            "dt_nd": float(cfg.dt_nd), "psd_T_obs_nd": float(cfg.psd_T_obs_nd),
+            "skip_sanity": None if skip_sanity is None else bool(skip_sanity),
+            "confirm_production": None if confirm_production is None else bool(confirm_production)}
+```
+Interfaces, Produces: read `_settings_block(cfg, *, skip_sanity=None, confirm_production=None) -> dict`.
+
+**A3 — Step 7, the body of the new `run_fdt` (P15, P12, P51, T12's pin).** Keep the decorator, the signature and the docstring as given. Replace everything after the docstring, down to `return writer.store.load_fdt(writer.id)`, with:
+```python
+    seed = _resolve_seed(seed, cfg)
+    cfg.seed = seed                                  # on the PRIVATE copy; recorded in the body below
+    # 0. The settings too thin to trust (T12, E5): warned now and KEPT in body.notices (P51). HERE, in
+    #    the decorated function itself: T12's pin reads inspect.getsource(fdt_pipeline.run_fdt), which
+    #    is this function's source (public_entry uses functools.wraps), not _measure's.
+    notices = warn_thin_settings(cfg)
+    # The first body is UPDATED IN PLACE, never replaced (P15): a front end may already have set the
+    # study and the notices (T25's panel does). The stage owns `settings` and the RESOLVED seed.
+    body = writer.body
+    body.setdefault("study", "single")
+    body["settings"] = _settings_block(cfg, skip_sanity=skip_sanity,
+                                       confirm_production=confirm_production)
+    body["seed"] = seed
+    body["notices"] = [*(body.get("notices") or []), *notices]
+    for key in ("grid", "points", "offgrid", "compared", "results"):
+        body.setdefault(key, None)
+    body["complete"] = False
+    with writer:
+        with seeded(seed, cfg.hw.device):
+            _measure(cfg, skip_sanity=skip_sanity, confirm_production=confirm_production,
+                     writer=writer)
+        writer.body["complete"] = True
+    return writer.store.load_fdt(writer.id)
+```
+Then, in `_measure` (the moved body), find T12's block and DELETE it:
+```python
+    # 0. The settings too thin to trust: not a refusal (E5 keeps the quick look possible), a
+    #    judgement the operator sees now and the record keeps afterwards (Task 17 stores it).
+    notices = warn_thin_settings(cfg)
+
+```
+`_measure` therefore starts with T13's prefactor comment and call. On the `confirm_production=False` branch `_measure` returns after the sanity verdict, and `run_fdt` returns the record FINISHED with `grid`, `offgrid` and `results` null (P55).
+
+**A4 — Step 8 (P74).** The timestamp, passive-plot and trajectory find/replaces stand. The three-line closing-block find/replace is replaced by these two.
+
+Find (T16's early site, just before `# 6.`):
+```python
+    psd_path = _out_dir() / f"psd_{timestamp}.png"
+```
+Replace with:
+```python
+    psd_path = writer.figure_path("Spontaneous PSD")
+```
+Find:
+```python
+    # 9. Plot + save (timestamp set at the top of run_fdt; the PSD went to disk before Campaign 2)
+    ratio_path = _out_dir() / f"fdt_ratio_{timestamp}.png"
+    chi_path = _out_dir() / f"chi_components_{timestamp}.png"
+```
+Replace with:
+```python
+    # 9. Plot + save (the PSD went to disk before Campaign 2)
+    ratio_path = writer.figure_path("Effective temperature ratio")
+    chi_path = writer.figure_path("Chi components")
+```
+Also delete the comment line `    # (timestamp set at the top of run_fdt.)` above the trajectory plot. Afterwards `grep -n "_out_dir\|timestamp" core/FDT/fdt_pipeline.py` must print nothing.
+
+**A5 — Step 9.** The `grid` insertion after the peak line stands. Do NOT add a second blank count (drop the `blanks = int(...)` / `offgrid` insertion after `G_at_omegas = ...`). Instead find T16's line:
+```python
+    blanks, of = int(torch.isnan(G_at_omegas).sum()), G_at_omegas.numel()
+```
+and add immediately after it, before `if blanks == of:`:
+```python
+    writer.body["offgrid"] = {"blanks": blanks, "of": int(of)}   # the Campaign-2 probe grid (P57)
+```
+The results anchor is the TWO-path line (P74). Find:
+```python
+    log.info(f"Saved plots to:\n  {ratio_path}\n  {chi_path}")
+```
+Replace with:
+```python
+    writer.body["results"] = _results_block(omegas, ratio, omega_natural, blanks)
+    writer.refresh()
+    log.info(f"Saved plots to:\n  {ratio_path}\n  {chi_path}")
+```
+T18 anchors on the first two lines verbatim. `_results_block` stands as given.
+
+**A6 — Step 10.**
+
+Tool (P79): `--seed` only lands in T28, so read it defensively. The replacement becomes:
+```python
+    writer = store.create("fdt", cfg)
+    rec = fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,
+                               confirm_production=not args.no_production, writer=writer,
+                               seed=getattr(args, "seed", None))
+    print(f"[prism fdt] record {rec.id} at {rec.path}")
+```
+Panel: do NOT replace `from core import cli, config, registry`. T21's and T25's anchors quote that line verbatim, and `config` may stay unused. Instead find:
+```python
+from core.FDT.fdt_pipeline import run_fdt
+```
+Replace with:
+```python
+from core.FDT.fdt_pipeline import run_fdt
+from core.artifacts import default_store
+```
+Keep the guard signature, the `run_fdt(...)` call and the dispatch block exactly as the step writes them: T25 anchors on `writer = default_store().create("fdt", cfg)` and on that dispatch (P80).
+
+**A7 — Step 11, `_LogWriter` at MODULE scope.** T19 uses `_LogWriter` in the SWEEP half of the same logging test, and that half runs before the `_Hopf` half. A class defined inside the function below that point raises UnboundLocalError there. So do not define it inside the test. In `tests/test_fdt_user.py`, add `from types import SimpleNamespace` beside `from pathlib import Path` (the module imports), and add after `class _FakeCfg`:
+```python
+class _LogWriter:
+    """Enough writer for a run whose RECORDS are the subject, not its manifest: a real directory, a
+    body, payload and figure paths inside it, and a store that hands back what it was given. A real
+    ArtifactWriter would drag a manifest (and its validation) into tests about the pipeline's logs."""
+    def __init__(self, d):
+        self.id, self.dir, self.body = "x", Path(d), {}
+        self.store = SimpleNamespace(load_fdt=lambda ref: ref)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def refresh(self):
+        pass
+
+    def payload(self, filename):
+        return self.dir / filename
+
+    def figure_path(self, title):
+        return self.dir / f"{title}.png"
+```
+The rest of Step 11's logging-test edit stands: remove the `_out_dir` patch, pass `writer=_LogWriter(tmp_path), seed=1`, widen `_Hopf`, and add `from core import config` to the test's local imports. Your `_Hopf` replacement matches the prefix of T13's version. T13's comment and `params_dict` stay below it and must not be deleted.
+
+**A8 — Step 11, the three science-fix tests (no step updated them; each goes red at T17).** `test_the_prefactor_is_refused_before_anything_is_simulated` (T13), `test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaign` (T15) and `test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind` (T16) each patch the deleted `_out_dir` (`monkeypatch.setattr` raises AttributeError) and call `run_fdt` without `writer`. In each:
+- delete `monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)`;
+- add `writer=_LogWriter(tmp_path), seed=1` to the `fdt_pipeline.run_fdt(...)` call;
+- give the stub config class (`_NoN`, `_Cfg`, `_Cfg`) whichever of these attributes it lacks, never overwriting one it already sets: `n_freqs, ensemble_M, freqs_per_batch, F0 = 2, 8, 1, 0.05`; `freq_bounds, burn_in_nd, T_obs_periods = (0.1, 30.0), 100.0, 30`; `dt_nd, psd_T_obs_nd, seed = 0.01, 8000.0, None`; `hw = config.cpu_device()` with `from core import config` in the test's imports. `_settings_block`, `warn_thin_settings` and `seeded` read these.
+
+In the T16 test, find:
+```python
+    written = sorted(p.name.rsplit("_", 2)[0] for p in tmp_path.glob("*.png"))
+    assert written == ["psd", "spontaneous_trajectory"], written
+```
+Replace with:
+```python
+    written = sorted(p.name for p in tmp_path.glob("*.png"))
+    assert written == ["Spontaneous PSD.png", "Spontaneous trajectory.png"], written
+```
+Leave every refusal, field and message assertion exactly as T13, T15 and T16 left it.
+
+**A9 — Step 11, `tests/test_tool.py`.** The recorders return the sentinel `"CFG"`, and the handler now calls `store.create("fdt", "CFG")`, which runs `mf.config_from_cfg("CFG")`. T7's FDT branch then raises AttributeError on `cfg.model`. In `test_fdt_and_crossval_flags_reach_their_builders`, after its four `monkeypatch.setattr(...)` lines, add:
+```python
+    # The builders are recorders returning the sentinel "CFG", and the handlers now open an fdt record
+    # on it; the record's config block is not this test's subject (T34's real run covers it).
+    from core.artifacts import manifest as mf
+    monkeypatch.setattr(mf, "config_from_cfg", lambda cfg: {})
+```
+In `test_fdt_ctrl_c_gets_its_own_interrupt_note`, change `def _boom(cfg, *, skip_sanity, confirm_production):` to `def _boom(cfg, *, skip_sanity, confirm_production, writer, seed=None):`, and add the same two lines after `monkeypatch.setattr(fdt_pipeline, "run_fdt", _boom)`. T29 rewrites only that test's assertions.
+
+**A10 — P73, `tests/test_nav_and_gating.py`.** In `test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins`:
+- change `def boom(cfg, *, skip_sanity, confirm_production):` and `def missing(cfg, *, skip_sanity, confirm_production):` to take `(cfg, *, skip_sanity, confirm_production, writer, seed=None)`;
+- change both `fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False)` calls to `fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False, writer=None)`.
+
+**A11 — Step 4, the new tests.**
+
+(a) `_stub_campaigns`: the spectrum must resolve the band around its peak, or T15's band refusal fires. With `linspace(0, 4, 16)` the peak is 1.067, the lowest probe 0.107 and the first real bin 0.267. Change `def _stub_campaigns(monkeypatch, n_psd=16):` to `def _stub_campaigns(monkeypatch, n_psd=1601):`, and `omegas_psd = torch.linspace(0.0, 4.0, n_psd, dtype=torch.float64)` to `omegas_psd = torch.linspace(0.0, 40.0, n_psd, dtype=torch.float64)`. That puts the peak at 1.0 with bins every 0.025 up to 40, so the 0.1..30 probe grid is fully resolved.
+
+(b) Figure names: `figure_path` uses `store.slug`, which gives underscores. Replace the expected list with `["figures/chi_components.png", "figures/effective_temperature_ratio.png", "figures/spontaneous_psd.png", "figures/spontaneous_trajectory.png"]`. In the failed-run test, use `w.dir / "figures" / "spontaneous_trajectory.png"`.
+
+(c) In the round-trip test, replace `assert rec.body["notices"] == [], "no notices is an empty list, never null (spec §2.3)"` with:
+```python
+    assert rec.body["notices"] == fdt_pipeline.thin_notices(cfg) and len(rec.body["notices"]) == 1, \
+        "ensemble_M=2 is below FDT_THIN_ENSEMBLE_M: T12's sentence is KEPT in the record (P51)"
+    assert rec.body["offgrid"]["blanks"] == 0
+    assert rec.body["settings"]["confirm_production"] is True, "P70"
+```
+
+(d) P82: add after the seed test:
+```python
+def test_the_seed_determines_the_numbers(store, monkeypatch):
+    """P82 / E7. Recording a seed is worth nothing unless the seed DETERMINES what the run draws --
+    and compare repeats (E8) reads the spread across repeats as the measurement error on exactly that
+    premise. Campaign 1 is stubbed to draw from the ambient torch generator, which is what the solver
+    draws its noise from: one seed twice draws the same, another seed draws differently."""
+    import torch
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+    stub_c1 = fdt_pipeline.run_campaign1_psd
+    drawn = []
+
+    def _c1(cfg, return_trajectory=False):
+        drawn.append(float(torch.rand(())))
+        return stub_c1(cfg, return_trajectory=return_trajectory)
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd", _c1)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    for seed in (5, 5, 6):
+        fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
+                             writer=store.create("fdt", cfg), seed=seed)
+    assert drawn[0] == drawn[1], "one seed, one draw: the seed determines the numbers"
+    assert drawn[0] != drawn[2], "a different seed draws differently"
+```
+Step 5's `-k` becomes `"record or seed or unfinished or determines"`.
+
+**A12 — Step 12 commands.** `-k` applies to every path on the line, so the first command as written deselects all of `tests/test_fdt_user.py`. Run instead:
+- `pytest tests/test_artifact_store.py -k "public_entry or callers_config" -v`
+- `pytest tests/test_fdt_user.py tests/test_conditioning_repair.py::test_the_prompt_cli_is_retired "tests/test_nav_and_gating.py::test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins" -v`
+- `pytest tests/test_tool.py -k "fdt or crossval" -v`
+
+**A13 — Files block and Step 13.** Add `tests/test_nav_and_gating.py` (P73) to the Files block. Step 13's `git add` line becomes:
+```bash
+git add core/FDT/fdt_pipeline.py core/tool/fdt.py core/gui/panels/fdt_panel.py tests/test_artifact_store.py tests/test_fdt_user.py tests/test_tool.py tests/test_nav_and_gating.py
+```
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F38** — import `seeded` LOCALLY inside the function that uses it, not at module scope. Importing `core.diagnostics.rng` runs `core/diagnostics/__init__.py`, which imports the diagnostics and through them `core.orchestrator`; Task 12 already imports orchestrator locally for the same reason.
+- **F27** — run `pytest tests/test_fdt_user.py -v` UNFILTERED as its own command. pytest keeps only the last `-k`, and a single `-k` applies to every file on the command line, so a combined command silently deselects exactly Tasks 13, 15 and 16's tests, which this task must convert.
+- **F13** — confirmed: the handler passes `seed=getattr(args, "seed", None)`; `--seed` does not exist until Task 28.
+- **F11** — confirmed: `warn_thin_settings(cfg)` is called in `run_fdt` before the first body is built, so the first manifest already carries the notices and Task 12's source pin on `run_fdt` holds.
+
 ---
 
 ### Task 18: the single-cell numbers into `data.h5`
@@ -7010,6 +8135,60 @@ Expected: PASS.
 git add core/FDT/fdt_pipeline.py tests/test_fdt_user.py
 git commit -m "fdt: the single-cell numbers go into the record's data.h5"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**A1 — Step 3, the import anchor (not found after T17).** T17 keeps T12's `import warnings` between `import random` and `import torch`. Find:
+```python
+import random
+import warnings
+
+import torch
+```
+Replace with:
+```python
+import random
+import warnings
+
+import h5py
+import numpy as np
+import torch
+```
+
+**A2 — Step 3, the dataset names (P71, P5).** The single-cell layout is the Interface contract's. In `_write_single_h5`, replace the two lines that create `"omegas"` and `"chi"`:
+```python
+        h5.create_dataset("omegas", data=_f64(omegas), compression="gzip")
+```
+```python
+        h5.create_dataset("chi", data=chis.detach().cpu().numpy().astype(np.complex128),
+                          compression="gzip")
+```
+with:
+```python
+        h5.create_dataset("omega_grid", data=_f64(omegas), compression="gzip")
+```
+```python
+        h5.create_dataset("chi_prime", data=_f64(chis.real), compression="gzip")
+        h5.create_dataset("chi_double_prime", data=_f64(chis.imag), compression="gzip")
+```
+The root attributes `study`, `omega_0` and `prefactor` stay; `model`, `omega_0_source`, `n_freqs` and `freq_bounds` are permitted extras. In the docstring, say the names are `cross_validation._fdt_measure`'s and the sweep file's own vocabulary (`omega_grid`, `T_eff_over_T`, `chi_prime`, `chi_double_prime`, `PSD_omegas`, `PSD_G`), which T36 reads. Interfaces, Produces for T36: read "root attrs `study`, `omega_0`, `prefactor` (+ `model`, `omega_0_source`, `n_freqs`, `freq_bounds`); datasets `omega_grid`, `T_eff_over_T`, `chi_prime`, `chi_double_prime`, `PSD_omegas`, `PSD_G`, all float64".
+
+**A3 — Step 1, the test.** Find:
+```python
+        assert h5["omegas"].shape == (5,) and h5["T_eff_over_T"].shape == (5,)
+        assert h5["chi"].dtype == np.complex128 and h5["chi"].shape == (5,)
+```
+Replace with:
+```python
+        assert h5["omega_grid"].shape == (5,) and h5["T_eff_over_T"].shape == (5,)
+        assert h5["chi_prime"].dtype == np.float64 and h5["chi_prime"].shape == (5,)
+        assert h5["chi_double_prime"].shape == (5,)
+        assert np.allclose(h5["chi_double_prime"][...], 1.0), "the stub's chi is 1+1j"
+        assert float(h5.attrs["omega_0"]) == rec.body["grid"]["omega_0"]
+```
+and change `assert h5["PSD_omegas"].shape != h5["omegas"].shape` to `assert h5["PSD_omegas"].shape != h5["omega_grid"].shape`. With T17's amended `_stub_campaigns` (1601 Welch bins, 5 probes), both shape assertions hold.
+
+The rest of the task stands: the file is written at the moment of writing, after both campaigns (P49), and `rec.manifest.payloads["data.h5"]` is the hash the commit writes (P47).
 
 ---
 
@@ -7748,6 +8927,188 @@ git add core/FDT/cross_validation.py core/FDT/cross_validation_plots.py core/too
 git commit -m "crossval: the study writes one record per swept parameter"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**A1 — the id collision (BLOCKING; the owner may rule otherwise, and a ruling beats this).** Two writers created back to back, before either is entered, get the SAME id, because `_new_id` only excludes ids on disk. Unnamed, the T sweep's `__enter__` then hits `FileExistsError`. Named, `load_fdt(writer.id)` returns the S record for the T sweep, and Step 4's test fails. Add `core/artifacts/store.py` to the Files block and the `git add` line.
+
+In `core/artifacts/store.py`, find:
+```python
+class ArtifactStore:
+    def __init__(self, root, *, clock=None):
+        self.root = Path(root)
+        self._clock = clock or _utc_now
+```
+Replace with:
+```python
+class ArtifactStore:
+    def __init__(self, root, *, clock=None):
+        self.root = Path(root)
+        self._clock = clock or _utc_now
+        # Ids this store has MINTED, per kind, entered or not. create() puts nothing on disk (the
+        # writer's __enter__ does), so two writers created in one second -- a sweep study's two
+        # records, created by the front end before dispatch -- would otherwise share an id.
+        self._minted: dict = {}
+```
+Find:
+```python
+        cand, n = stamp, 2
+        while cand in taken:
+            cand, n = f"{stamp}-{n}", n + 1
+        return cand
+```
+Replace with:
+```python
+        taken |= self._minted.setdefault(kind, set())
+        cand, n = stamp, 2
+        while cand in taken:
+            cand, n = f"{stamp}-{n}", n + 1
+        self._minted[kind].add(cand)
+        return cand
+```
+In `tests/test_artifact_store.py`, after `test_same_second_ids_get_a_suffix`, add:
+```python
+def test_two_writers_created_before_either_is_entered_get_different_ids(tmp_path):
+    """Piece 5, spec §4.1: the sweep study's front end creates BOTH records before it dispatches, and
+    create() puts nothing on disk -- so an id checked only against the disk would be minted twice in
+    one second, and the second record would load as the first."""
+    fixed = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    s = st.ArtifactStore(tmp_path, clock=lambda: fixed)
+    a, b = s.create("fdt", None), s.create("fdt", None)
+    assert a.id != b.id and a.dir != b.dir, (a.id, b.id)
+```
+
+**A2 — Step 5's prediction.** The first failure is `AttributeError: <module 'core.FDT.cross_validation'> has no attribute 'plot_fdt_3d_vs_param'`, raised by the test's own `monkeypatch.setattr`: the name only reaches module scope in Step 7. Record that failure instead of the TypeError.
+
+**A3 — Step 6, the `Path` import.** `Path` is NOT imported in `cross_validation_plots.py`. The return annotation is a string under `from __future__ import annotations`. In the import replacement, write:
+```python
+from __future__ import annotations
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import numpy as np
+```
+
+**A4 — Step 7, the opening of `run_fdt_param_sweep` (the quoted anchor is not found: T12 inserted two lines; P15, P72, P6, T12's notices).**
+
+Imports: replace Step 7's import block with the one below. It keeps `gen_freqs_log` because `_fdt_measure` still calls it until T20 deletes it:
+```python
+from ..config import FDTConfig
+from ..diagnostics.rng import seeded
+from ..runs import public_entry
+from .campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
+from .spectral import gen_freqs_log, eff_temp_ratio
+from .sanity import _interp_log
+from .fdt_pipeline import _estimate_omega_0, _resolve_seed, _settings_block
+from .cross_validation_plots import plot_fdt_3d_vs_param
+```
+Step 8's "add `from ..diagnostics.rng import seeded`" is thereby done.
+
+The docstring tail and body head: find the block from `    :param output_path: target .h5. Defaults to <artifacts root>/crossval/sweep_<param>_<stamp>.h5.` through `    with h5py.File(output_path, "w") as h5:`. After T12 it contains `notices = warn_thin_settings(cfg)` and, unless T12 moved it to module scope, `from .fdt_pipeline import warn_thin_settings`. Replace the whole block with:
+```python
+    :param writer: the OPEN-BUT-NOT-ENTERED ArtifactWriter for this sweep's own record. THIS function
+                   enters it, so __enter__, every refresh() and __exit__ run on the thread whose run
+                   log becomes log.txt (spec §1.2, §4.1). Its seed comes from ``cfg.seed``; nothing
+                   here writes on ``cfg``.
+    :returns: the LoadedFdt for the record just written.
+    """
+    from .fdt_pipeline import warn_thin_settings
+    notices = warn_thin_settings(cfg)          # E5: kept in this sweep's body.notices below
+    fixed_overrides = fixed_overrides or {}
+    seed = _resolve_seed(None, cfg)
+    fixed_str = ", ".join(f"{k}={v}" for k, v in fixed_overrides.items())
+    n_points = int(len(sweep_grid))
+    # The first body is UPDATED IN PLACE, never replaced (P15): the front end may already have set the
+    # study, a seed and notices (T26's panel does). The stage owns settings, points and the RESOLVED
+    # seed; the swept parameter is recorded once, in points.param (spec §2.3).
+    body = writer.body
+    body.setdefault("study", "sweep")
+    body["settings"] = {**_settings_block(cfg), "preset": cfg.preset_name,
+                        "sweep_grid": [float(v) for v in sweep_grid]}
+    body["seed"] = seed
+    body["points"] = {"param": sweep_param, "planned": n_points, "done": 0, "failed": 0}
+    body["notices"] = [*(body.get("notices") or []), *notices]
+    for key in ("grid", "offgrid", "compared", "results"):
+        body.setdefault(key, None)
+    body["complete"] = False
+    # NESTED, not combined: the HDF5 file must be CLOSED before the sweep's own plot reopens it with
+    # load_param_sweep at the end, and that plot must still be drawn inside the writer so its PNG
+    # lands in the record's figures/.
+    with writer:
+        with h5py.File(writer.payload("data.h5"), "w") as h5:
+            # The contract's root attributes (P6), on every data.h5 so a reader can check the layout
+            # before reading a dataset. omega_0 is the common grid's reference, set once it exists.
+            h5.attrs["study"] = "sweep"
+            h5.attrs["prefactor"] = float(observable_noise_prefactor(cfg))
+            h5.attrs["omega_0"] = math.nan
+```
+The former body of the `with h5py.File(...)` block (starting `h5.attrs["timestamp"] = ...`) follows, indented one level deeper. The docstring edit for `DELIBERATELY NOT an atomic write` stands. Also rewrite its two stale `output_path` sentences ("Here ``output_path`` defaults to a TIMESTAMPED name ..." and "If you ever pass an explicit ``output_path`` ...") so they speak of `writer.payload("data.h5")`, a fresh file inside a fresh record.
+
+Step 9's closing paragraph ("Add `\"preset\"` to each record's settings ... `getattr(cfg, \"preset_name\", None)` ...") is superseded by the body above: P72 reads `cfg.preset_name` directly.
+
+**A5 — the sweep's `omega_0` root attribute (P6).** In the common-grid block, find:
+```python
+        h5.attrs["omega_0_ref"] = omega_0_ref
+```
+Replace with:
+```python
+        h5.attrs["omega_0_ref"] = omega_0_ref
+        h5.attrs["omega_0"] = omega_0_ref
+```
+
+**A6 — Step 4's test.** After `assert r.data_path.exists() and r.manifest.figures, ...`, add inside the loop:
+```python
+        import h5py
+        with h5py.File(r.data_path, "r") as h5:
+            assert h5.attrs["study"] == "sweep" and "prefactor" in h5.attrs, "the contract's root attributes (P6)"
+        assert r.body["settings"]["skip_sanity"] is None, "P70: a sweep has no sanity branch"
+```
+The test depends on A1 (without it, the second record loads as the first).
+
+**A7 — Step 10, call sites (P79, P77, T21's anchor).**
+
+Tool: the replacement becomes the block below, which prints whatever comes back. T20 makes the study return only the sweeps that finished (P77).
+```python
+    writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    recs = cross_validation.run_param_study_cli(cfg, s_grid=s_grid, t_grid=temp_grid,
+                                                writers=writers, seed=getattr(args, "seed", None))
+    for rec in recs:
+        print(f"[prism crossval] sweep record {rec.id} at {rec.path}")
+```
+`getattr` because `--seed` lands in T28. The test's `"s.h5" in ...out` still holds, since the recorder's first id is "s.h5".
+
+Panel: do NOT put the new import between `from core import cli, config` and `from core.config import CELL_PATH`; T21's anchor quotes those two lines together. Find:
+```python
+from core.FDT.cross_validation import run_param_study_cli
+```
+Replace with:
+```python
+from core.FDT.cross_validation import run_param_study_cli
+from core.artifacts import default_store
+```
+The dispatch and `_on_result` replacements stand. T26 (P80) anchors on them.
+
+**A8 — Step 10, the logging test.** In the `_SweepCfg` replacement, add a line `        preset_name = None` (P72 reads `cfg.preset_name` directly). After `monkeypatch.setattr(cv, "_campaign2_ratio", _campaign2)`, add:
+```python
+    monkeypatch.setattr(cv, "observable_noise_prefactor", lambda c: 1.0)   # the "STUB" model has none
+```
+(A4's root attribute calls it.) `_LogWriter` is T17's MODULE-level class and already has `payload`; do not redefine it. `from core import config` is in this test's imports since T17.
+
+**A9 — Step 11 commands.** Run:
+- `pytest tests/test_artifact_store.py -k "public_entry or callers_config or same_second or before_either_is_entered" -v`
+- `pytest tests/test_fdt_user.py -v`
+- `pytest tests/test_tool.py -k "fdt or crossval" -v`
+
+**A10 — Step 12.**
+```bash
+git add core/artifacts/store.py core/FDT/cross_validation.py core/FDT/cross_validation_plots.py core/tool/fdt.py core/gui/panels/crossval_panel.py tests/test_artifact_store.py tests/test_fdt_user.py tests/test_tool.py
+```
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F2/F4** — confirmed as the amendment applied it: `ArtifactStore._new_id` also treats as taken every id this store object has already MINTED for the kind, so two writers created back to back before either is entered get different ids. Its pin test belongs to this task.
+- **F40** — `body.settings["sweep_grid"]` is `[min, max, N]` as spec §2.3 says — `[float(sweep_grid[0]), float(sweep_grid[-1]), int(len(sweep_grid))]` — not the whole linspace array.
+- **F6** — confirmed: this task owns the crossval leg of `test_fdt_and_crossval_flags_reach_their_builders` (the `_sweep_cfg` recorder returns a stub carrying what `config_from_cfg` reads, not the string "CFG").
+
 ---
 
 ### Task 20: the sweep's failure counts, the all-failed refusal, and two defects on the same path
@@ -8233,6 +9594,248 @@ git commit -m "crossval: both phases count failures; an empty sweep refuses"
 > These four tasks land after T9 (`core/gui/fields.py` widened to screens) and T8 (`require_below`,
 > the eight sweep/FDT field keys, the tool table). T24 additionally lands after T2 (`Summary` grows).
 > Every line number below was read off the tree at `a0d85da`; the QUOTED text is the anchor.
+
+#### Amendments (binding — these supersede the text above)
+
+**A1 — imports.** In `core/FDT/cross_validation.py`:
+- find `from .spectral import gen_freqs_log, eff_temp_ratio` and replace it with `from .spectral import eff_temp_ratio` (`_fdt_measure`, its last user, is deleted in Step 3);
+- find `from .fdt_pipeline import _estimate_omega_0, _resolve_seed, _settings_block` and replace it with `from .fdt_pipeline import _estimate_omega_0, _resolve_seed, _results_block, _settings_block` (P78);
+- Step 6's `from ..refusals import Refusal` stands.
+
+**A2 — Step 4, Phase A (the quoted anchor is not found: T19 put a 3-line comment before `with seeded(...)`; indentation is one level deeper after T19's nesting, so match whitespace aside).** Find the block from `log.info(f"--- Phase A ({sweep_param} sweep): spontaneous PSD + omega_0 detection ---")` through `grp = ops.create_group(f"{idx:03d}")`. It contains T19's lines:
+```python
+            omega_0_lin, _ = _estimate_omega_0(cfg_op)
+            # One stream per operating point, derived from the study's single seed (spec §4.1): a
+            # point is reproducible from the seed and its index, and seeding once for the whole sweep
+            # would make point k's draw depend on how many points preceded it.
+            with seeded(seed + idx, cfg.hw.device):
+                freqs_psd, G = run_campaign1_psd(cfg_op)
+            w0, res = _detect_resonance(freqs_psd, G, omega_0_lin)
+```
+Replace it with Step 4's replacement, changed in three places:
+1. `n_failed = 0` becomes `n_failed, n_done = 0, 0`.
+2. T19's three comment lines are kept, inside the `try`, directly above `with seeded(seed + idx, cfg.hw.device):`.
+3. The except branch's `_refresh_points(writer, n_points, n_failed)` becomes `_refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)`.
+
+The second Step-4 find/replace (the attrs block) stands.
+
+**A3 — `_refresh_points` counts `done`, never derives it.** Use this instead of the definition Step 4 gives:
+```python
+def _refresh_points(writer, *, planned: int, done: int, failed: int) -> None:
+    """Keep ``body.points`` current as the sweep runs, and rewrite the manifest and the log.
+
+    ``done`` counts the operating points whose Campaign 2 has LANDED and ``failed`` those that failed
+    in either phase; ``planned - done - failed`` are still to run. Deriving ``done`` as
+    ``planned - failed`` would report every not-yet-run point as done for the whole run -- the
+    browser row this refresh exists for would read "4 done of 4" after the first point.
+    """
+    writer.body["points"] = {**writer.body["points"], "planned": planned, "done": done,
+                             "failed": failed}
+    writer.refresh()
+```
+Every call site passes `planned=n_points, done=n_done, failed=n_failed`.
+
+**A4 — Step 5, net result.** Phase B's header replacement stands. It removes `n_failed = 0`, which Phase A now initialises. Directly above that header's `for` loop (inside the guard Step 6 adds), put `ok_ratios, blanks_total = [], 0` — or immediately before the guard, so both names exist on every path.
+
+The try/except becomes:
+```python
+            try:
+                with seeded(seed + n_points + idx, cfg.hw.device):
+                    chis, ratio = _campaign2_ratio(cfg_op, omegas_common, freqs_psd, G)
+                # The peak line FIRST ... (Step 5's comment)
+                log.info(f"      T_eff/T peak = {np.nanmax(ratio.cpu().numpy()):.3g}")
+                grp.attrs["omega_0_ref"] = omega_0_ref
+                ... (the five create_dataset lines, as Step 5 gives them) ...
+                grp.attrs["failed"] = False
+            except Exception as e:
+                # (Step 5's comment)
+                log.error(f"      Campaign 2 FAILED: {e}")
+                grp.attrs["error"] = str(e)
+                n_failed += 1
+                _refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)
+                h5.flush()
+                continue
+            n_done += 1
+            ok_ratios.append(ratio.detach().cpu().to(torch.float64).reshape(-1))
+            blanks_total += int(torch.isnan(ratio).sum())      # this point's blanks on the common grid (P78)
+            _refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)
+            h5.flush()
+```
+
+**A5 — Step 6, the tail.** In the refusal, the pre-raise refresh is `_refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)`. The warning T19 left above it now covers both phases. Find:
+```python
+                f"{sweep_param} sweep: {n_failed}/{n_points} operating points failed in Campaign 2 "
+                f"and carry no response data. See their 'error' attrs in {writer.dir}.", stacklevel=2)
+```
+Replace with:
+```python
+                f"{sweep_param} sweep: {n_failed}/{n_points} operating points failed (in either "
+                f"campaign) and carry no response data. See their 'error' attrs in {writer.dir}.",
+                stacklevel=2)
+```
+
+**A6 — P78, a finished sweep fills `results` and `offgrid`.** Immediately after the `if n_failed == n_points: ... raise Refusal(...)` block, and before `log.info(f"{sweep_param} sweep complete ...")`, add:
+```python
+        # A FINISHED sweep fills results and offgrid (P78; spec §2.3 "null only until the run
+        # finishes"). results: T17's _results_block over every usable point's ratio on the common grid;
+        # offgrid: the blanks those points left on it, of every planned point's slot.
+        writer.body["results"] = _results_block(
+            omegas_common.detach().cpu().to(torch.float64).repeat(len(ok_ratios)),
+            torch.cat(ok_ratios), omega_0_ref, blanks_total)
+        writer.body["offgrid"] = {"blanks": int(blanks_total),
+                                  "of": int(n_points * omegas_common.numel())}
+```
+This is reached only when at least one point landed, so `omegas_common` is not None and `ok_ratios` is not empty.
+
+**A7 — P77, an all-failed first sweep must not cost the second.** In `run_param_study_cli` (T19's version), find:
+```python
+    log.info("#" * 64)
+    log.info("# S sweep:  vary S, hold T_a/T = 1   (FDT restored as S -> 0)")
+    log.info("#" * 64)
+    s_rec = run_fdt_param_sweep(cfg, sweep_param="s", sweep_grid=s_grid,
+                                fixed_overrides={"temp": 1.0}, writer=writers["s"])
+
+    log.info("#" * 64)
+    log.info("# T sweep:  vary T_a/T, hold S = 0   (FDT restored as T_a/T -> 1)")
+    log.info("#" * 64)
+    temp_rec = run_fdt_param_sweep(cfg, sweep_param="temp", sweep_grid=t_grid,
+                                   fixed_overrides={"s": 0.0}, writer=writers["temp"])
+    return [s_rec, temp_rec]
+```
+Replace with:
+```python
+    recs, refused = [], []
+    for key, grid, fixed, banner in (
+            ("s", s_grid, {"temp": 1.0}, "# S sweep:  vary S, hold T_a/T = 1   (FDT restored as S -> 0)"),
+            ("temp", t_grid, {"s": 0.0},
+             "# T sweep:  vary T_a/T, hold S = 0   (FDT restored as T_a/T -> 1)")):
+        log.info("#" * 64)
+        log.info(banner)
+        log.info("#" * 64)
+        try:
+            recs.append(run_fdt_param_sweep(cfg, sweep_param=key, sweep_grid=grid,
+                                            fixed_overrides=fixed, writer=writers[key]))
+        except Refusal as e:
+            # P77, spec §4.3: a sweep that measured nothing costs ITSELF, never the other one. Its
+            # record stays on disk, unfinished (E2), and this line is in both records' log.txt.
+            log.error(f"The {key} sweep measured nothing; its unfinished record is kept. {e}")
+            refused.append(e)
+    if len(refused) == 2:
+        raise refused[0]            # the study measured nothing at all: the first grid's refusal
+    return recs                     # the sweeps that FINISHED, in study order
+```
+A crash or a cancel (not a `Refusal`) still propagates at once. Update the docstring's `:returns:` to read "the LoadedFdt of every sweep that finished, S first; a sweep that measured nothing is logged and left on disk unfinished, and the study refuses only when both did".
+
+**A8 — tests (P78, P77, P82).**
+
+In `test_a_sweep_counts_failures_in_both_phases`, add after the `points` assertion:
+```python
+    assert rec.body["results"] is not None and rec.body["results"]["peak_ratio"] == 2.0, "P78"
+    assert rec.body["offgrid"] == {"blanks": 0, "of": 4 * 3}, \
+        "P78: 4 planned points x the 3-point common grid (every stubbed omega_0 is 1.0)"
+```
+Then add:
+```python
+def test_an_all_failed_first_sweep_does_not_cost_the_second(store, monkeypatch):
+    """P77 and spec §4.3/§8.2. Before piece 5 an all-failed S sweep raised out of the study before the
+    T sweep had started. Now the S record stays on disk, unfinished (E2), and the T sweep runs and
+    finishes. _sweep_stubs' Campaign-2 counter is shared by both sweeps: calls 0-1 are the S grid's."""
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+
+    _sweep_stubs(monkeypatch, phase_b_fail=(0, 1))
+    cfg, s_grid, t_grid = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    writers = {"s": store.create("fdt", cfg, name="s_half"),
+               "temp": store.create("fdt", cfg, name="t_half")}
+    recs = cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=3)
+
+    assert [r.name for r in recs] == ["t_half"], "only the sweep that measured something returns"
+    rows = {s.name: s for s in store.list("fdt")}
+    assert rows["t_half"].finished, "the temperature sweep ran and finished"
+    assert rows["s_half"].complete and not rows["s_half"].finished, "the S record stays, unfinished"
+    assert rows["s_half"].points_failed == 2
+
+
+def test_a_study_whose_two_sweeps_both_measured_nothing_refuses(store, monkeypatch):
+    """P77's other half: only when BOTH sweeps measured nothing does the study refuse, and both
+    unfinished records stay on disk."""
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import Refusal
+
+    _sweep_stubs(monkeypatch, phase_b_fail=(0, 1, 2, 3))
+    cfg, s_grid, t_grid = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    writers = {"s": store.create("fdt", cfg, name="s_none"),
+               "temp": store.create("fdt", cfg, name="t_none")}
+    with pytest.raises(Refusal) as e:
+        cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=3)
+    assert e.value.field == "s_grid"
+    rows = store.list("fdt")
+    assert len(rows) == 2 and all(r.complete and not r.finished for r in rows)
+
+
+def test_a_sweep_point_is_reproducible_from_the_seed_and_its_index(store, monkeypatch):
+    """P82 / spec §4.1: point k of a sweep under `seed` draws exactly what a lone point under seed+k
+    draws (Phase A) and seed+n_points+k (Phase B) -- so a point is reproducible from the seed and its
+    index, and does not depend on how many points preceded it."""
+    import torch
+    from core import cli, config
+    from core.diagnostics.rng import seeded
+    from core.FDT import cross_validation as cv
+
+    _sweep_stubs(monkeypatch)
+    c1, c2 = cv.run_campaign1_psd, cv._campaign2_ratio
+    drawn_a, drawn_b = [], []
+
+    def _c1(cfg_op):
+        drawn_a.append(float(torch.rand(())))
+        return c1(cfg_op)
+
+    def _c2(cfg_op, omegas, freqs_psd, G):
+        drawn_b.append(float(torch.rand(())))
+        return c2(cfg_op, omegas, freqs_psd, G)
+
+    monkeypatch.setattr(cv, "run_campaign1_psd", _c1)
+    monkeypatch.setattr(cv, "_campaign2_ratio", _c2)
+    cfg, s_grid, _t = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.2, 3), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    cfg.seed = 40
+    cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=store.create("fdt", cfg))
+
+    def alone(seed):
+        with seeded(seed, torch.device("cpu")):
+            return float(torch.rand(()))
+
+    n = len(s_grid)
+    assert drawn_a == [alone(40 + k) for k in range(n)]
+    assert drawn_b == [alone(40 + n + k) for k in range(n)]
+    assert len(set(drawn_a + drawn_b)) == 2 * n
+```
+
+**A9 — Steps 2, 7 and 8.** Step 2: `test_a_sweep_with_every_point_failed_refuses_after_its_record_is_written` ERRORS with the propagating `RuntimeError: s sweep produced NO usable points ...`; it does not report "DID NOT RAISE". The three new tests fail as follows:
+- the P77 test with the same RuntimeError propagating out of the study;
+- the both-refuse test with that RuntimeError instead of a Refusal;
+- the P82 test with `RuntimeError: stub phase-A ...`? No: it fails on `drawn_b` only if the move breaks the seeding. Expect it to PASS already, since T19 landed the per-point seeding. Record that it passes and that it pins T19's P14 behaviour.
+
+Step 7: `pytest tests/test_fdt_user.py -v`.
+
+Step 8 (one `-k` per command):
+- `pytest tests/test_artifact_store.py -k "public_entry or callers_config" -v`
+- `pytest tests/test_tool.py -k "fdt or crossval" -v`
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F14/F45** — confirmed: `run_param_study_cli` returns only the FINISHED records (a list of `LoadedFdt`, never `None`); when both sweeps refuse it re-raises the activity sweep's `Refusal` (field `s_grid`) after logging both at error. State this in its docstring.
+- **F41** — the all-points-failed refusal names the cell's FILE NAME as well as the grid, as spec §4.3 says ("a calm operator line naming the grid and the cell").
 
 ---
 
@@ -8845,6 +10448,148 @@ git add core/gui/panels/base_panel.py core/gui/panels/fdt_panel.py core/gui/pane
 git commit -m "gui: the four section panels route refusals apart from bugs; _config_error is gone"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+Rulings that change this task: **P38, P53, P76**, plus anchor corrections against the files T10, T17 and T19 leave behind. Rulings that confirm what is written here: P4, P8, P29. P32: `units` is NOT widened by T9, so ignore "and `units`" in the Interfaces line; no step changes.
+
+**A. P53 — `cli._merge_vals_bounds` and `parse_cell` are NOT touched.**
+- In Step 14, DELETE the second find/replace: the block starting `missing = [name for name in bounds if name not in vals]` and its `raise Refusal(f"Cell file '{cell_file}' is " ...` replacement.
+- Also DELETE the whole paragraph "`_merge_vals_bounds`'s callers pass `label` as ... make them singular" and its `parse_cell` find/replace. `parse_cell` keeps `"ND parameters"`, `"rescale parameters"` and `"forcing parameters"`.
+- The phrase is spliced at exactly TWO sites: `cli.validate_gt_file` and `SimConfig._fill_checked`.
+- `_merge_vals_bounds` keeps its own sentence, which carries the cell path. It is a known third wording, handed on (spec §6.2).
+- The Files block ("`core/cli.py:68` and `core/sim_config.py:247-250`") is now right as written.
+
+**B. P38 — the phrase uses its label AS GIVEN and never pluralises it.**
+
+Step 13: insert this in place of the function shown there, still immediately ABOVE `def describe(key: str) -> str:`:
+```python
+def missing_values_phrase(label: str, missing) -> str:
+    """"missing ND parameters the bounds file requires: k_gs, gamma" -- the ONE wording for a cell
+    that does not supply something the bounds file declares (spec §6.2).
+
+    A fragment, deliberately: ``cli.validate_gt_file`` returns it as one of its problem strings,
+    which the Infer tab joins with "; ", while ``SimConfig._fill_checked`` puts "Cell file is " in
+    front and a period after -- so the dry run and the refusal say the same words. ``label`` is used
+    AS GIVEN (the callers pass the plural, "ND parameters") and is never pluralised here. A third
+    wording of the same rule, ``cli._merge_vals_bounds``, is knowingly left alone: it carries the
+    cell path. Here rather than in ``core/cli.py`` because ``core/sim_config.py`` cannot import
+    ``core/cli.py``.
+    """
+    return f"missing {label} the bounds file requires: {', '.join(str(n) for n in missing)}"
+```
+
+Step 14, `cli.validate_gt_file`: replace `problems.append(f"missing {label}(s) the bounds file requires: {', '.join(missing)}")` with:
+```python
+            # the phrase takes its label as given; this loop's labels are singular because the
+            # out-of-bounds line below reads "ND parameter k = ...", so the plural is spelled here
+            problems.append(missing_values_phrase(f"{label}s", missing))
+```
+
+Step 14, `SimConfig._fill_checked`: replace the `missing` block with the following, and DELETE the later `label.rstrip('s')` paragraph and its code:
+```python
+        missing = sorted(set(cfg_dict) - set(cell_vals))
+        if missing:
+            raise Refusal(f"Cell file is {missing_values_phrase(label, missing)}.", field="cell")
+```
+`inject_ground_truth`'s plural labels stay as they are, and so does the out-of-bounds message.
+
+**C. Import anchors, rewritten against the files as earlier tasks leave them.**
+- Step 14, core/cli.py: T10 has already replaced `from .refusals import Refusal, require_file` with a parenthesised list. Add `missing_values_phrase` to THAT list (after `describe`). Do not add a second import line. Expected result:
+  `from .refusals import (Refusal, describe, missing_values_phrase, refuse, require_at_least,`
+  `                       require_below, require_choice, require_file, require_finite, require_positive)`
+  If T10/T11 left a different list, add the one name to it.
+- Step 14, core/sim_config.py: the line is `from core.refusals import Refusal` (absolute, not `from .refusals`). Replace it with `from core.refusals import Refusal, missing_values_phrase`.
+- Step 3, core/gui/panels/fdt_panel.py: T17 has already changed `from core import cli, config, registry` to `from core import cli, registry` + `from core.artifacts import default_store`, so the quoted three-line block is gone. Instead:
+  (i) find `from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPushButton` and insert `import traceback` plus one blank line immediately ABOVE it;
+  (ii) find `from core.config import CELL_PATH, VALID_MODELS` and insert `from core.refusals import Refusal` immediately BELOW it.
+  The except-arm find/replace is unchanged.
+- Step 4, core/gui/panels/crossval_panel.py: do not rely on the two-line anchor, because T19 added `from core.artifacts import default_store` somewhere in that block. Instead:
+  (i) find `from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,` and insert `import traceback` plus one blank line immediately ABOVE it;
+  (ii) find the line `from core.config import CELL_PATH` and insert `from core.refusals import Refusal` immediately BELOW it.
+  Leave `from core import cli, config` exactly as T19 left it. The except-arm find/replace is unchanged.
+
+**D. Step 11: the tests, replaced (P38, P53, P76).**
+
+In `tests/test_refusals.py`, after `test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions`, add these three tests INSTEAD of the two in Step 11. `pytest` and `Refusal` are already module-level imports there.
+```python
+def test_one_phrase_says_the_cell_is_missing_what_the_bounds_file_declares():
+    """Spec §6.2. "the cell does not supply something the bounds file declares" is ONE rule, and the
+    dry run (cli.validate_gt_file) and the injection (SimConfig._fill_checked) worded it two ways. One
+    builder now produces the phrase. It is a FRAGMENT -- lower case, no trailing period -- because
+    the dry run's problems are joined with "; " (infer_tab._on_cell_changed) while the refusal puts
+    "Cell file is " in front and a period after. The label is used as given, never pluralised
+    (P38), and a list is plain comma-separated names, never a repr'd Python list."""
+    from core.refusals import missing_values_phrase
+    assert missing_values_phrase("ND parameters", ["k_gs", "gamma"]) == \
+        "missing ND parameters the bounds file requires: k_gs, gamma"
+    assert missing_values_phrase("rescale parameters", ("x_scale",)) == \
+        "missing rescale parameters the bounds file requires: x_scale"
+    assert "[" not in missing_values_phrase("forcing parameters", ["amp"])
+    phrase = missing_values_phrase("ND parameters", ["k_gs"])
+    assert phrase[0].islower() and not phrase.endswith(".")
+
+
+def test_the_two_cell_sites_both_splice_the_one_phrase():
+    """The other half of §6.2: each of the two sites builds its wording through the phrase and does
+    not re-type the sentence beside the call. Asserted on executable source, because what would
+    regress is somebody re-typing the sentence. cli._merge_vals_bounds is a known third wording,
+    left alone on purpose (P53: it carries the cell path), so it is not in this list."""
+    from core import cli, sim_config
+    from tests._fixtures import code_only
+    for obj in (cli.validate_gt_file, sim_config.SimConfig._fill_checked):
+        src = code_only(obj)
+        assert "missing_values_phrase(" in src, obj
+        assert "the bounds file requires" not in src, obj
+
+
+def test_the_dry_run_and_the_injection_word_a_missing_value_identically(monkeypatch):
+    """Spec §6.2 and §8.2 ("the cell refusal's wording is identical from load_and_validate_gt and
+    from the dry run"), P76. The refusal is exactly "Cell file is " + the dry run's problem + ".".
+    Both are reached without a bounds file: the dry run through a stand-in config carrying the three
+    dicts it reads and a stubbed values parser; the injection through the static
+    SimConfig._fill_checked, called with the label inject_ground_truth passes."""
+    import types
+    from collections import OrderedDict
+    from core import cli
+    from core.sim_config import SimConfig
+
+    monkeypatch.setattr(cli.file_manager, "parse_values_file",
+                        lambda path: ({"x": 0.0}, {}, {}, {}))
+    declared = OrderedDict(k_gs=(None, (0.0, 1.0)))
+    cfg = types.SimpleNamespace(params_dict=OrderedDict(declared), rescale_params=OrderedDict(),
+                                force_params_dict=OrderedDict())
+    problems = cli.validate_gt_file(cfg, "unused_cell.txt")
+    assert problems == ["missing ND parameters the bounds file requires: k_gs"], problems
+    with pytest.raises(Refusal) as exc:
+        SimConfig._fill_checked("ND parameters", {}, OrderedDict(declared), check_bounds=True)
+    assert exc.value.field == "cell"
+    assert exc.value.message == f"Cell file is {problems[0]}."
+```
+
+**Step 12 becomes:**
+- Run: `pytest tests/test_refusals.py -v -k "one_phrase or two_cell_sites or dry_run_and_the_injection"`
+- Expected, first test: FAIL with `ImportError: cannot import name 'missing_values_phrase' from 'core.refusals'`.
+- Expected, second test: FAIL on `assert "missing_values_phrase(" in src`.
+- Expected, third test: FAIL on `assert problems == [...]`. Today the problem reads `missing ND parameter(s) the bounds file requires: k_gs`.
+
+**E. Step 10: the run command, corrected.** `-k` applies to every path given, so the command as written deselects `test_stale_bounds_file_is_detected`. Run it as two commands:
+```
+pytest tests/test_nav_and_gating.py -v -k "secondary or config_error or rename_failure"
+pytest tests/test_simulate.py tests/test_user_models.py::test_stale_bounds_file_is_detected -v
+```
+
+**F. Step 7 docstring correction.** In `build_stream_config`'s docstring, replace `the panel catches it as a config error.` with `the panel shows it as a refusal (the yellow box).`: `_config_error` no longer exists.
+
+**G. P76 / P4.** T29 no longer consumes `missing_values_phrase` and does not re-splice these sites. T21 is the phrase's only producer and the only task that splices it. Ignore the Why's "so Task 29 has it" and the Interfaces' "the one wording Task 29's §6.2 item needs".
+
+Steps 1-9 (apart from C), 15 and 16 are unchanged. The `git add` line is unchanged: `core/cli.py` and `core/sim_config.py` are still modified.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F15** — the Reduction panel's F0 is checked at the click, panel-side, as Task 23 does for Simulate: inside the try in `ReductionPanel._run`, `F0 = require_positive("f0", self.f0.value_or_none())`, then `cli.make_reduction_config(cell, F0=F0)`. `make_reduction_config` itself stays untouched (P19). Add a blank-box case to this task's test.
+- **F42** — keep the stubbed Reduction test, and add one docstring sentence naming the real builder's two refusals (`core/cli.py`'s missing-value and time-unit refusals) and why the stub suffices.
+- **F43** — keep the new cell-site tests in `tests/test_refusals.py` and correct that module's docstring, which claims it is torch-free apart from one test; it no longer is.
+
 ---
 
 ### Task 22: the model-builder screen shows its refusals in the yellow box
@@ -9413,6 +11158,46 @@ git add core/refusals.py core/gui/fields.py core/tool/fields.py core/gui/screens
 git commit -m "model builder: field refusals in the yellow box, with keys for its own boxes"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+Rulings that change this task: **P36**, **P20** (with **P75**), and the Interface Contract's FIELDS order. Confirmed as written: T9's `SCREENS`/`_where` (consumed exactly as Step 4 and the test expect), and the instance-dialog rule (`show_refusal`).
+
+**A. P36 — the forcing key is `forcing_value`, and its window entry names the forcing rows.** Replace the key `forcing_param` with `forcing_value` everywhere in this task:
+- **Step 1 test:** `assert "'freq'" in _refused("forcing_param")` becomes `assert "'freq'" in _refused("forcing_value")`. In the final loop's tuple, `"forcing_param"` becomes `"forcing_value"`.
+- **Step 3:** the last Field line is `Field("forcing_value", "the forcing parameter", None),`.
+- **Step 4, core/gui/fields.py:** the last entry becomes:
+```python
+    # ONE key for every forcing field (P36): the forcing rows' labels are the parameter NAMES (amp,
+    # freq, tau, ...), built per kind, so there is no one label(key) to build a row from.
+    "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' "
+                      "choice, on the Model Builder screen."),
+```
+- **Step 4, core/tool/fields.py:** the line is `"x_scale": None, "t_scale": None, "forcing_value": None,`.
+- **Step 8:** `refuse("forcing_param", ...)` becomes `refuse("forcing_value", ...)`, with the same sentence.
+- **Step 12:** the BASE_KEYS line is `"param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",`.
+- **Interfaces:** Produces `FIELDS` keys `param_value`, `param_min`, `param_max`, `init`, `x_scale`, `t_scale`, `forcing_value`.
+
+**B. Contract order — Step 3's insertion point.** The contract fixes the FIELDS order as T8's keys first, then the Simulate/Reduction/model-builder keys. Do NOT insert after `Field("note", "the note", None),`: T8 has put its block there. Instead, find
+```python
+    # tool-only (the diagnostics); no window control, CONTROL[key] is None in core/gui/fields.py
+```
+and insert the whole block immediately ABOVE it. The block is the comment line `    # the model builder (piece 5, §5.3). Window-only settings: core/tool/fields.py maps each to None.` plus the seven Field lines, with `forcing_value` as in A.
+
+**C. P20 / P75 — Step 12's three anchors, as T8 left them.**
+- **BASE_KEYS:** `"artifact", "note",` is no longer followed by `)`. T8 appended its keys (and, under P75, the five non-knob keys) after it. Find the closing `)` of the `BASE_KEYS = (` tuple (the line immediately before `TOOL_ONLY_KEYS = (`) and insert immediately ABOVE it:
+```python
+    # piece 5, the model builder (spec §5.3)
+    "param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",
+```
+- **The count:** find the line beginning `    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == ` (T8 changed the number). Run `pytest tests/test_refusals.py -k registry_holds -v` once and write the number the failure reports.
+- **The None-flag equality:** T8 Step 8 has already replaced it with a subset assertion. The quoted text will not be found. Leave it alone and say so in the report.
+
+Everything else in Steps 1-14 stands as written. Also read the finding on `param_value`: if the owner rules option (a), Step 9's tuple reads `("param_value", "value", self._param_fields[p].value.value_or_none())` and Step 1 gains the blank-value case.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F16** — `param_value` is read through `self._param_fields[p].value.value_or_none()`, not `e["value"]`, so a cleared box is refused as blank instead of read as 0.0. Add the cleared-box case to the test.
+
 ---
 
 ### Task 23: the Simulate panel's two silent clamps and its unchecked observation length
@@ -9778,6 +11563,60 @@ git add core/refusals.py core/gui/fields.py core/tool/fields.py core/gui/panels/
 git commit -m "simulate: the two frame clamps and the observation length become refusals"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+Rulings that change this task: **P33**, **P36**, **P20**, and the Interface Contract's FIELDS order. Confirmed as written: T21's except pair (Step 5 quotes it verbatim), `IntField.value_or_none()` (it already exists), and Review Focus 3 (the blank-box loop).
+
+**A. P33 — `t_obs` is widened by T9, not here.** Drop Step 4's first find/replace (the `"t_obs": ("Infer", "T_obs (s)"),` edit) and all of Step 8. Instead VERIFY:
+- `core/gui/fields.py` already reads `"t_obs": (("Infer", "Live simulation"), "T_obs (s)"),`;
+- `tests/test_nav_and_gating.py`'s verbatim pin already reads `"Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."`.
+
+If both hold, change nothing there and say so in the report. If T9 left the old line (a T9 defect against P33), apply Step 4's first edit and Step 8 exactly as written above, and report it. The Interfaces line "Produces: `CONTROL["t_obs"] == ...`" is T9's product. T23 still builds its row from `gui_fields.label("t_obs")` (Step 7).
+
+**B. P36 — re-anchor on `forcing_value`** (T22 produces it).
+- **Step 4, core/gui/fields.py:** find T22's two-line entry
+```python
+    "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' "
+                      "choice, on the Model Builder screen."),
+```
+  and insert immediately BELOW it:
+```python
+    # the live simulation (piece 5, §5.6)
+    "frame_steps": ("Live simulation", "Steps / frame"),
+    "fps": ("Live simulation", "Max FPS"),
+```
+- **Step 4, core/tool/fields.py:** find `    "x_scale": None, "t_scale": None, "forcing_value": None,` and insert the two lines (comment + `"frame_steps": None, "fps": None,`) below it.
+- **Step 9:** find
+```python
+    "param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",
+)
+```
+  and replace it with the same line followed by `    # piece 5, the live simulation (spec §5.6)` / `    "frame_steps", "fps",` / `)`.
+- **Count:** read it off the failing `-k registry_holds` run, as written.
+- **None-flag subset:** T8 (not T22) made it; confirm it passes and do not edit it.
+
+**C. Contract order — Step 3's insertion point.** The Simulate keys come BEFORE the model-builder keys. Find T22's line
+```python
+    # the model builder (piece 5, §5.3). Window-only settings: core/tool/fields.py maps each to None.
+```
+and insert immediately ABOVE it:
+```python
+    # the live simulation (piece 5, §5.6). Both were SILENT CLAMPS -- max(1, ...) -- before.
+    Field("frame_steps", "the number of simulation steps per displayed frame", "2000"),
+    Field("fps", "the maximum render frame rate, in frames per second", "30"),
+```
+Delete the "If Task 22 has not landed" fallback: T22 precedes this task.
+
+**D. Correction: the test needs `pytest`.** `tests/test_simulate.py` has no `import pytest`. In Step 1's test, add `import pytest` as the first line of its local imports, above `from PySide6.QtWidgets import QMessageBox`. Without it, the `build_stream_config` stub raises NameError. T21's `except Exception` routes that to the red "Error" box, and Step 2 fails on the window title instead of the predicted `Failed: the config was built before the boxes were checked`. With the import, Step 2's prediction holds.
+
+**E. The registry-default closure test (see the BLOCKING finding).** `tests/test_refusals.py::test_every_registry_default_is_the_trees_own_default` fails on the two new defaults (`rest` must be None except `t_obs`). Apply the owner's ruling on that finding before committing. Add `tests/test_refusals.py::test_every_registry_default_is_the_trees_own_default` to Step 10's run. The gate must not be left red.
+
+Steps 5, 6, 7, 10 and 11 otherwise stand. `tests/test_nav_and_gating.py` stays in the `git add` line: harmless if A leaves it unmodified.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F3** — `frame_steps` and `fps` carry defaults, so `test_every_registry_default_is_the_trees_own_default` in `tests/test_refusals.py` must pin them against the object that owns them: just above its `looked_at = ...` line, build a `SimulatePanel` (after `qt_app()`), assert each key's `FIELDS[key].default` equals the panel's box text, and add those keys to `looked_at`. Add the test to your run command and the file to your Files block.
+
 ---
 
 ### Task 24: `StorePicker` takes a row predicate and filters on `finished`
@@ -10022,6 +11861,33 @@ enters it"), §2.2 (the progressive writer), decisions **E1**, **E2**, **E7**, *
   forwarded keyword — so `writer=` and `seed=` reach the stage untouched.
 - The panels' controls column is disabled for the whole run (`BasePanel.set_controls_enabled`), so
   no picker signal can fire from the user while a run is live.
+
+#### Amendments (binding — these supersede the text above)
+
+Rulings that change this task: **P9** (the Interface Contract's signature). Confirmed as written: P37 (Step 6), and the P61 keyword use by T25/T26.
+
+**A. P9 — `row_filter` goes BEFORE `parent`.** Step 3's replacement becomes:
+```python
+    def __init__(self, kind: str, allow_new: bool = False, store=None, row_filter=None,
+                 parent=None):
+        super().__init__(parent)
+        self.kind, self._allow_new, self._store = kind, allow_new, store
+        # ``Summary -> bool``, or None for "every row of the kind". One kind can hold several things
+        # a screen wants to offer separately: the ``fdt`` kind holds single-cell measurements, sweeps
+        # and comparisons, told apart by ``body["study"]`` (spec §2.1), and the FDT and CrossVal
+        # screens each offer one of them. Applied AFTER the finished rule. Before ``parent`` (spec
+        # §5.4, P9); no caller passes ``parent`` positionally.
+        self._row_filter = row_filter
+```
+The Interfaces "Produces" line reads `StorePicker(kind, allow_new=False, store=None, row_filter=None, parent=None)`. Keep `self._row_filter = row_filter` BEFORE the widget's `self.refresh()` call at the end of `__init__`, as the quoted anchor already places it. Otherwise the first refresh reads an attribute that does not exist yet.
+
+**B. Correction: Step 2's expected failure.** The test builds `StorePicker("fdt")` in (a) first, without `row_filter`. Today that lists the unfinished `running_single` row, which has `complete=True`. Expected:
+```
+FAIL with AssertionError at (a): ['done_single', 'running_single', 'done_sweep'] == ['done_single', 'done_sweep']
+```
+not `TypeError ... 'row_filter'`. That TypeError would only come at (b), which is never reached.
+
+Steps 1 and 4-8 stand as written.
 
 ---
 
@@ -10600,6 +12466,143 @@ git add core/gui/panels/fdt_panel.py tests/test_nav_and_gating.py tests/test_set
 git commit -m "fdt panel: a saved-run picker, a Seed box, and the record created before dispatch"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**Before you start (P3, P80).** Tasks 17 and 21 have already edited `core/gui/panels/fdt_panel.py`. **The writer creation and the guard's `writer`/`seed` keywords already exist (P3); if they do not, that is a T17 defect and goes in the report.** When you arrive the file already has:
+- `import traceback` and `from core.refusals import Refusal` (T21);
+- `from core import cli, registry` and `from core.artifacts import default_store` (T17; `config` is gone);
+- `def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production, writer, seed=None):`, whose `return run_fdt(...)` passes `writer=writer, seed=seed` (T17);
+- the builder's `except Refusal as e:` / `except Exception as e:` pair (T21);
+- below those arms, T17's `writer = default_store().create("fdt", cfg)` and a dispatch that already passes `writer=writer` and `watch_dir=writer.dir / "figures"`.
+
+Add only what is new: `name=`/`note=`, the Seed read, `seed=seed`, `on_result=self._on_record`, the first body, and the record picker.
+
+**A1 — Step 3, the row labels (P34).** Do Step 3 as written. Then, in `_build_controls`, find the rows as Step 3 leaves them:
+
+```python
+        add_help_row(form, "Model", self.model_combo, HELP["model"])
+        add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
+        add_help_row(form, "n_freqs", self.n_freqs, HELP["n_freqs"])
+        add_help_row(form, "ensemble_M", self.ensemble_m, HELP["ensemble_M"])
+        add_help_row(form, "freqs_per_batch", self.freqs_per_batch, HELP["freqs_per_batch"])
+        add_help_row(form, "F0 (ND forcing amplitude)", self.f0, HELP["f0"])
+        add_help_row(form, "Seed", self.seed, HELP["seed"])
+```
+
+Replace with:
+
+```python
+        # Row labels come from core/gui/fields.py (P34), so a row and the fix sentence a refusal prints
+        # for it cannot drift apart. "Record name", "Note" and "Saved run" stay literal: `name` and
+        # `note` are sentence entries (label() raises KeyError for them) and the saved-run picker is
+        # not a refusal field.
+        add_help_row(form, gui_fields.label("model"), self.model_combo, HELP["model"])
+        add_help_row(form, gui_fields.label("cell"), self.cell_picker, HELP["cell"])
+        add_help_row(form, gui_fields.label("n_freqs"), self.n_freqs, HELP["n_freqs"])
+        add_help_row(form, gui_fields.label("ensemble_m"), self.ensemble_m, HELP["ensemble_M"])
+        add_help_row(form, gui_fields.label("freqs_per_batch"), self.freqs_per_batch,
+                     HELP["freqs_per_batch"])
+        add_help_row(form, gui_fields.label("f0"), self.f0, HELP["f0"])
+        add_help_row(form, gui_fields.label("seed"), self.seed, HELP["seed"])
+```
+
+Then add the import. Find `from ..widgets.forms import make_form` and replace it with:
+
+```python
+from ..widgets.forms import make_form
+from .. import fields as gui_fields
+```
+
+Put the import there, NOT beside `from .. import settings`. T27 and T40 anchor on `from .base_panel import BasePanel` / `from .. import settings` / `from ..widgets.artifact_picker import …` staying adjacent.
+
+Each of the seven labels is the literal it replaces (T9's `(place, label)` entries). If `label()` raises `KeyError` when the panel is built, that key is not a tuple entry. Report it; do not fall back to the literal.
+
+Pin the conversion by appending to Step 5's test, after its assertion:
+
+```python
+    from tests._fixtures import code_only
+    src = code_only(FdtPanel._build_controls)
+    for key in ("model", "cell", "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "seed"):
+        assert f"label({key!r})" in src, f"the FDT panel must build its {key} row from label({key!r}) (P34)"
+```
+
+**A2 — Step 10, the predicted failure (P80).** After T17 the writer is already dispatched, so the test does NOT fail with `KeyError: 'writer'`. Expected: FAIL at `assert writer.kind == "fdt" and writer.name == "cell_a_first" and writer.note == "the first look"`, because T17's `default_store().create("fdt", cfg)` passes no name and no note, so `writer.name == ""`.
+
+**A3 — Step 11 (P80).**
+
+(a) The first find/replace (the `try:` / `cfg = cli.make_fdt_config(` block, gaining `seed = self.seed.value_or_none()` and `seed=seed`) stands. Its anchor is unchanged after T21.
+
+(b) The dispatch anchor Step 11 quotes (`self.dispatch(_run_fdt_guarded, cfg, watch_dir=config.artifacts_root() / "fdt",`) is NOT in the file. Find T17's block instead:
+
+```python
+        # The RECORD is created here, on the GUI thread: store.create mints the id and refuses a taken
+        # name before anything is spent, and it fills writer.dir WITHOUT creating the directory, so
+        # the watcher can be pointed at the record's figures/ before the run is dispatched. The stage
+        # enters the writer on the worker thread, where the run log lives (spec §1.2). T25 adds the
+        # Seed box, the name/note controls and the record picker on top of this.
+        writer = default_store().create("fdt", cfg)
+        self.dispatch(_run_fdt_guarded, cfg, watch_dir=writer.dir / "figures",
+                      writer=writer,
+                      skip_sanity=self.skip_sanity.isChecked(),
+                      confirm_production=self.confirm_production.isChecked(),
+                      on_finished=lambda: self.log_pane.append_line("FDT run finished."))
+```
+
+Replace it with Step 11's second replacement block, verbatim: from `# THE FRONT END CREATES, THE STAGE ENTERS (spec §1.2).` through the end of `def _on_record`. That block still creates the writer BELOW the `except` arms, now with `name=`/`note=`, so Step 14's predicted failure holds; Step 15 then moves the creation.
+
+(c) DELETE Step 11's `_run_fdt_guarded` signature edit and its `return run_fdt(...)` edit. T17 made both. Confirm the signature reads `def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production, writer, seed=None):`.
+
+(d) DELETE Step 11's import edit. `from core import cli, config, registry` is not in the file. Do not add a second `from core.artifacts import default_store`, and do not re-add `config`.
+
+**A4 — Step 15, the shape `_run` must end with.** After Step 15, `_run` from the Seed read down must read as follows. The comments are the ones Steps 11 and 15 give; the `except` arms are T21's, unchanged.
+
+```python
+        seed = self.seed.value_or_none()
+        try:
+            cfg = cli.make_fdt_config(
+                model, registry.state_dep_drift(model), cell,
+                n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
+                freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value(), seed=seed)
+            writer = default_store().create("fdt", cfg, name=self.record_name.text().strip(),
+                                            note=self.record_note.text().strip())
+        except Refusal as e:                         # a setting the user can change: the yellow box
+            self._refusal(e)
+            return
+        except Exception as e:                       # noqa: BLE001 -- a bug in the builder: the red box
+            self._on_error(e, traceback.format_exc())
+            return
+
+        writer.body = {"study": "single", "settings": None, "seed": seed, "grid": None,
+                       "points": None, "offgrid": None, "notices": [], "compared": None,
+                       "complete": False, "results": None}
+        self.dispatch(_run_fdt_guarded, cfg, writer=writer, seed=seed,
+                      watch_dir=writer.dir / "figures",
+                      skip_sanity=self.skip_sanity.isChecked(),
+                      confirm_production=self.confirm_production.isChecked(),
+                      on_result=self._on_record,
+                      on_finished=lambda: self.log_pane.append_line("FDT run finished."))
+```
+
+Exactly ONE `default_store().create(` must remain in the file.
+
+**A5 — Step 16, the run command.** Two `-k` options keep only the last one, which silently drops `test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug`. Run instead:
+
+`pytest tests/test_nav_and_gating.py tests/test_settings_persistence.py -k "fdt or secondary_panels" -v`
+
+Expected: PASS. The selection includes `test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins`, whose `boom`/`missing` stubs T17 widened to take `writer` and `seed` (P73). If it fails with a `TypeError` about `writer`, that is a T17 defect and goes in the report.
+
+**A6 — unchanged by the rulings, stated so nothing is re-derived.** These are already in the body:
+- The Seed box is read once, through `value_or_none()`, and the same integer goes to the builder and to the run (P12, P13).
+- The first body is complete, with `settings` left `None` for the stage (P15).
+- The record name and the note are not persisted (P30).
+- The picker is `self.record_picker`, built with `row_filter=lambda s: s.study == "single"` passed by keyword (P9, P61).
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F9** — Task 9 left a `_NOT_BUILT_YET` exemption in the label read-back pin for the FDT Seed row, which asserts the row is ABSENT. You build that row, so delete the FDT line from `_NOT_BUILT_YET` in the same commit; the pin then reads your row back.
+- **F24** — this is the first task that puts a `StorePicker` where `MainWindow._refresh_store_pickers` walks, so convert `tests/test_artifact_browser.py`'s picker-kinds equality `assert sorted(seen) == ["observation", "posterior", "prior"], seen` to `assert {"observation", "posterior", "prior"} <= set(seen), seen` and add `assert "fdt" in seen`. Add the file to your Files block.
+- **F44** — add the assertion spec §8.2 asks for: after a run, the panel names the record it wrote (drive `_on_record` with a record and assert its name or id reaches the log pane).
+
 ---
 
 ### Task 26: the CrossVal panel — the same, with two writers
@@ -11148,6 +13151,163 @@ git add core/gui/panels/base_panel.py core/gui/panels/crossval_panel.py tests/te
 git commit -m "crossval panel: two writers, a Seed box, and a watcher per record"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**Before you start (P3, P80).** Tasks 11, 19 and 21 have already edited `core/gui/panels/crossval_panel.py`. **The writer creation and the study's `writers`/`seed` keywords already exist (P3); if they do not, that is a T19 defect and goes in the report.** When you arrive:
+- the builder call already passes `preset_name=self.preset_combo.currentText()` (T11);
+- the `except Refusal` / `except Exception` arms and the `traceback`/`Refusal` imports exist (T21);
+- `from core.artifacts import default_store` is already imported (T19);
+- below the `except` arms, T19 creates two unnamed writers and dispatches `run_param_study_cli` by keyword;
+- `_on_result` already takes `records` (T19).
+
+**B1 — Step 1, the test must wait for the worker.** This is a correction found against the real code, not a ruling. The watcher polls every 1.2 s and reports a file only once it is 1 s old, except in the final scan that `_finished` runs when the worker's queued `finished` signal arrives. The worker leaves `redirect_streams` only after stopping a pump thread. Fifty bare `processEvents()` calls therefore end before any of that happens, and a miss leaves the class-level `BasePanel._running` True for every later test.
+
+In the test, find:
+
+```python
+    for _ in range(50):
+        app.processEvents()
+        if len(seen) == 2:
+            break
+```
+
+Replace with:
+
+```python
+    # `finished` is QUEUED to this thread; `_finished` stops BOTH watchers and each stop() does the
+    # final scan that ignores the settle delay. Wait for it as the module's other dispatch tests do,
+    # so BasePanel._running is False again before the next test dispatches anything.
+    _wait_for_run(app, panel, limit=30.0)
+```
+
+`_wait_for_run` is the module-level helper already in `tests/test_nav_and_gating.py`. Step 2's predicted failure is unchanged: the `TypeError` is raised inside `dispatch` before any waiting; Python 3.12 words it `... not 'list'`.
+
+**B2 — Step 3's prose.** After T19 the sweep figures are `writer.figure_path(f"FDT ratio vs {sweep_param}")`, so the files are `fdt_ratio_vs_s.png` and `fdt_ratio_vs_temp.png` and the tab titles are `fdt ratio vs s` and `fdt ratio vs temp`, not `fdt3d_vs_S` and `fdt3d_vs_T`. No code changes.
+
+**B3 — Step 7's imports.** Do NOT use the four-line anchor: its adjacency to `from core import cli, config` depends on where T21 put `import traceback`. Find only:
+
+```python
+from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
+                               QWidget)
+```
+
+Replace with:
+
+```python
+from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QPushButton, QWidget)
+```
+
+Do NOT add `from core.artifacts import default_store`; T19 already did. Confirm it with `grep -n "default_store" core/gui/panels/crossval_panel.py`, and if it is absent add it after `from core.config import CELL_PATH` and say so in the report. The `from ..widgets.artifact_picker import ArtifactPicker` → `ArtifactPicker, StorePicker` edit stands.
+
+**B4 — the record names are `<stem>-s` and `<stem>-temp` (P31), with a hyphen.**
+- Step 7, HELP: the `"record_name"` text reads `"A base name for the two records this study writes: '-s' and '-temp' are appended, one per swept parameter. Both names are claimed before anything is computed. Leave it blank for two unnamed records."`
+- Step 9, the test: `assert [writers[k].name for k in ("s", "temp")] == ["study_one-s", "study_one-temp"]`.
+- Step 11: `name=f"{base}-{key}" if base else ""` (see B6).
+
+**B5 — Step 7, the row labels (P34).** After Step 7's row edit, find:
+
+```python
+        add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
+```
+
+and the rows below it. Replace each keyed literal with `gui_fields.label(key)`:
+- `"Cell"` → `gui_fields.label("cell")`
+- `"Preset"` → `gui_fields.label("preset")`
+- `"S grid  (T_a/T = 1)"` → `gui_fields.label("s_grid")`
+- `"T_a/T grid  (S = 0)"` → `gui_fields.label("t_grid")`
+- `"n_freqs"` → `gui_fields.label("n_freqs")`
+- `"ensemble_M"` → `gui_fields.label("ensemble_m")`
+- `"freqs_per_batch"` → `gui_fields.label("freqs_per_batch")`
+- `"F0 (ND forcing amplitude)"` → `gui_fields.label("f0")`
+- `"Seed"` → `gui_fields.label("seed")`
+
+The `HELP[...]` arguments are unchanged. `"Cell values"`, `"Record name"`, `"Note"` and `"Saved sweep"` stay literal: `Cell values` is an output, `name` and `note` are sentence entries, and `record` is not a field key.
+
+Add `from .. import fields as gui_fields` on the line after `from ..widgets.forms import make_form`, NOT beside `from .. import settings`, so that T27's and T40's import anchors stay adjacent. If `label()` raises `KeyError` when the panel is built, T9 left that key a sentence: report it rather than restore the literal.
+
+Pin the conversion by appending to Step 5's test:
+
+```python
+    from tests._fixtures import code_only
+    src = code_only(CrossValPanel._build_controls)
+    for key in ("cell", "preset", "s_grid", "t_grid", "n_freqs", "ensemble_m", "freqs_per_batch",
+                "f0", "seed"):
+        assert f"label({key!r})" in src, f"the CrossVal panel must build its {key} row from label({key!r}) (P34)"
+```
+
+**B6 — Step 11, the first anchor (P80, after T11).** The quoted builder block is NOT in the file. Find T11's text instead:
+
+```python
+        preset = dict(cli.SWEEP_PRESETS[self.preset_combo.currentText()])
+        try:
+            cfg, s_grid, temp_grid = cli.make_param_sweep_config(
+                cell, preset=preset, preset_name=self.preset_combo.currentText(),
+                s_spec=self.s_grid.spec(), t_spec=self.t_grid.spec(),
+                n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
+                freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value())
+```
+
+Replace it with Step 11's first replacement block, with one change: the comprehension reads
+
+```python
+            writers = {key: store.create("fdt", cfg, name=f"{base}-{key}" if base else "", note=note)
+                       for key in ("s", "temp")}
+```
+
+The `except` arms directly below are T21's; keep them untouched. The creations are inside the `try`, so a taken name reaches the yellow box.
+
+**B7 — Step 11, the second anchor (P80, after T19).** The quoted `watch = config.artifacts_root() / "crossval"` block is NOT in the file. Find the post-T19 text, from the two surviving comment lines through the end of `_on_result`:
+
+```python
+        # run_param_study_cli returns the two HDF5 DATA paths, not the figures -- the plots are saved
+        # to disk (the S-sweep one at the study's midpoint, deliberately) and arrive via the watcher.
+        # Two records, created here so the watcher knows both folders before the run is dispatched;
+        # each sweep enters its own on the worker thread (spec §1.2, §4.1). The watcher takes ONE
+        # directory and does not recurse, so it follows the S sweep's figures and the T sweep's arrive
+        # with the result line. T26 gives this panel its own picker and Seed box.
+        writers = {"s": default_store().create("fdt", cfg), "temp": default_store().create("fdt", cfg)}
+        self.dispatch(run_param_study_cli, cfg, s_grid=s_grid, t_grid=temp_grid, writers=writers,
+                      watch_dir=writers["s"].dir / "figures", on_result=self._on_result)
+
+    def _on_result(self, records):
+        if not records:
+            return
+        for rec in records:
+            self.log_pane.append_line(f"Sweep record: {rec.name or rec.id} at {rec.path}")
+```
+
+Replace it with Step 11's second replacement block, from `for key, w in writers.items():` through the end of `_on_result`, with one change for P77: the first line of `_on_result`'s body becomes
+
+```python
+        records = [r for r in (records or []) if r is not None]   # P77: one sweep may have refused
+```
+
+followed by the existing `if not records: return`. After this step exactly one `store.create(` loop, and no `default_store().create(`, remains in `_run`.
+
+**B8 — Step 10, the predicted failure (P80).** After T19 the writers are already dispatched. Expected: FAIL at `assert [writers[k].name for k in ("s", "temp")] == ["study_one-s", "study_one-temp"]` with `['', '']`, not `KeyError: 'writers'`.
+
+**B9 — Step 13.** The anchor is the single line `from core import cli, config`, since B3 adds nothing under it. After T19, `grep -n "config\." core/gui/panels/crossval_panel.py` finds nothing, so replace that line with `from core import cli`. `from core.config import CELL_PATH` stays.
+
+**B10 — Step 14, the run commands.** Two `-k` options keep only the last. Run:
+- `pytest tests/test_nav_and_gating.py tests/test_settings_persistence.py -k "crossval or dispatch_watches or secondary_panels or plot_watcher" -v`
+- then `pytest tests/test_figures.py -v`
+
+Expected: PASS.
+
+**B11 — unchanged by the rulings, stated so nothing is re-derived.** These are already in the body:
+- One Seed read, through `value_or_none()`, is passed to both the builder and the run (P12, P13, P14).
+- Both first bodies are complete, with `settings` left `None` (P15).
+- The name and the note are not persisted (P30).
+- `self.record_picker` is built with `row_filter=lambda s: s.study == "sweep"` by keyword (P9, P61).
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F9** — delete the CrossVal Seed line from `_NOT_BUILT_YET` in the label read-back pin, in the same commit that builds the row.
+- **F4** — the two-writer test asserts `writers["s"].id != writers["temp"].id`, and a blank-name case asserts `writers["s"].dir != writers["temp"].dir` (Task 19's `_new_id` fix is what makes both true).
+- **F18** — one watcher per record, as the draft builds it, is the reading of P35 this piece takes: both records' figures reach the stack, and no worker-to-window "record opened" signal is needed. Say so in the report.
+- **F46** — add the assertion that the panel names the records it wrote (drive `_on_result`).
+
 ---
 
 ### Task 27: showing an earlier run on both screens
@@ -11605,6 +13765,22 @@ git commit -m "fdt and crossval panels: show an earlier run and re-open its figu
 > `core/gui/screens/artifact_screen.py` (T2, T6) — re-derive every number from the file as you read
 > it, and if a quoted anchor is not there, say so in the task report rather than guessing.
 
+#### Amendments (binding — these supersede the text above)
+
+No ruling overrides this task's body. Two things change:
+
+**C1 — Step 10, the predicted failure.** The test calls `panel._show_record()` before it reads `panel.record_line`. Expected: FAIL with `AttributeError: 'FdtPanel' object has no attribute '_show_record'`, not `... 'record_line'`.
+
+**C2 — the anchors, as the earlier tasks leave them.**
+- The rows `add_help_row(form, "Saved run", self.record_picker, HELP["record"])` (T25) and `add_help_row(form, "Saved sweep", self.record_picker, HELP["record"])` (T26) are literal. P34's label conversion in T25/T26 does not touch them, because `record` is not a field key. They are your anchors.
+- `from core.artifacts import default_store`, which `_show_record` uses, is already imported in `fdt_panel.py` (T17) and in `crossval_panel.py` (T19). Do not add it again.
+- If T25/T26 placed `from .. import fields as gui_fields` after `from ..widgets.forms import make_form`, your import anchor `from .base_panel import BasePanel\nfrom .. import settings` is still adjacent in both files. If it is not, re-read the file and say so in the report.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F47** — at launch, fill the saved-run LINE for the restored selection but do not re-open its figures (a flag on `_show_record` that skips the figure stack). Re-opening old figures on every launch is behaviour nobody asked for.
+- **F48** — `_show_record` removes only the figure tabs IT added (tracked in a list), never `clear_all()`, so a comparison figure drawn by Task 40 survives choosing the next record to append.
+
 ---
 
 ### Task 28: `fdt` and `crossval` declare `--store-root`, and the three behaviours it keyed are reworked
@@ -11901,6 +14077,184 @@ Expected: PASS
 git add core/tool/__init__.py core/tool/fdt.py core/tool/smoke.py tests/test_tool.py
 git commit -m "tool: fdt and crossval take --store-root; the temp root is smoke's own property"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**A1 — Step 2's failure prediction is corrected.** Superseded: "the first `main` call succeeds and the run fails at `assert main(["fdt", "--cell", cell, "--store-root", str(named)]) == 0` with `assert 2 == 0`". Before Step 3 the `fdt` namespace has no `store_root`. The recorder's `seen["flag"] = args.store_root` therefore raises `AttributeError`, and `main`'s last rung prints the traceback and `prism fdt: *** FAILED ***` and returns 1. **Expected: FAIL at the FIRST assertion, `assert main(["fdt", "--cell", cell]) == 0`, as `assert 1 == 0`.** Step 4's prediction stands. The Step-4 run leaves one empty `%TEMP%\prism_smoke_*` directory behind (the old dispatch's `mkdtemp`, with rc 0, so it is not removed); delete it by hand after Step 6.
+
+**A2 — P79: `fdt` and `crossval` gain `--seed`, and this task pins it.** No other task adds the argument. T8 only registered `FLAG["seed"] = "--seed"`, whose pin is green because `smoke` and the diagnostics already define that option string. Insert Steps 6a–6e between Step 6 and Step 7.
+
+- [ ] **Step 6a: Write the failing test.** In `tests/test_tool.py`, directly after `test_fdt_and_crossval_take_store_root_and_otherwise_follow_the_environment`:
+
+```python
+def test_fdt_and_crossval_take_seed_and_hand_it_to_the_builder_and_the_run(tool_env, tmp_path,
+                                                                           monkeypatch):
+    """E7's command-line half (P79). A record carries the seed its run used; without the flag that
+    supplies one, that seed can never be supplied back -- the defect E7 names. The ONE integer
+    reaches the builder (through ``knobs``, so an unset flag forwards nothing and the builder's own
+    default stands) and the run (explicitly, so None there means "draw one") -- the rule both panels
+    follow (P12).
+
+    ``ArtifactStore.create`` is replaced because the builder recorders return a placeholder, not an
+    FDTConfig, and ``store.create("fdt", cfg)`` reads the run's settings off its cfg: the dispatch is
+    the subject here, not the record."""
+    from core import cli, config
+    from core.artifacts import ArtifactStore
+    from core.FDT import cross_validation, fdt_pipeline
+
+    seen = {}
+
+    def _create(self, kind, cfg=None, *, name="", note=""):
+        return SimpleNamespace(kind=kind, id="rec", name=name, note=note, dir=tmp_path / "rec",
+                               body={})
+
+    def _fdt_cfg(model, state_dep_drift, cell_file, **kw):
+        seen["fdt_builder"] = kw
+        return "CFG"
+
+    def _run_fdt(cfg, *, skip_sanity, confirm_production, writer, seed=None):
+        seen["fdt_run"] = seed
+        return SimpleNamespace(id="rec", name="", path=writer.dir)
+
+    def _sweep_cfg(cell_file, **kw):
+        seen["sweep_builder"] = kw
+        return "CFG", "S", "T"
+
+    def _study(cfg, *, s_grid, t_grid, writers, seed=None):
+        seen["study"] = seed
+        return [SimpleNamespace(id="s", name="", path=writers["s"].dir),
+                SimpleNamespace(id="t", name="", path=writers["temp"].dir)]
+
+    monkeypatch.setattr(ArtifactStore, "create", _create)
+    monkeypatch.setattr(cli, "make_fdt_config", _fdt_cfg)
+    monkeypatch.setattr(fdt_pipeline, "run_fdt", _run_fdt)
+    monkeypatch.setattr(cli, "make_param_sweep_config", _sweep_cfg)
+    monkeypatch.setattr(cross_validation, "run_param_study_cli", _study)
+
+    cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    assert main(["fdt", "--cell", cell, "--seed", "7"]) == 0
+    assert seen["fdt_builder"].get("seed") == 7 and seen["fdt_run"] == 7, seen
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                 "--t-grid", "1", "1.1", "2", "--seed", "7"]) == 0
+    assert seen["sweep_builder"].get("seed") == 7 and seen["study"] == 7, seen
+
+    seen.clear()
+    assert main(["fdt", "--cell", cell]) == 0
+    assert "seed" not in seen["fdt_builder"], "an unset --seed forwards nothing to the builder"
+    assert seen["fdt_run"] is None, "no --seed: the run draws one and records it (E7, P12)"
+```
+
+- [ ] **Step 6b: Run it and watch it fail.** Run: `pytest tests/test_tool.py::test_fdt_and_crossval_take_seed_and_hand_it_to_the_builder_and_the_run -v`. Expected: FAIL at `assert main(["fdt", "--cell", cell, "--seed", "7"]) == 0` as `assert 2 == 0` (argparse: `unrecognized arguments: --seed 7`).
+
+- [ ] **Step 6c: Declare the flag, once, for both subcommands.** In `core/tool/fdt.py`, find:
+
+```python
+def _add_fdt_knobs(p) -> None:
+    """The four resolution knobs both subcommands share. Each defaults to None and travels only when
+    set; the dest is the builder's keyword, capital M and F0 included."""
+```
+
+Replace with:
+
+```python
+def _add_fdt_knobs(p) -> None:
+    """The four resolution knobs both subcommands share, and the seed. Each defaults to None and
+    travels only when set; the dest is the builder's keyword, capital M and F0 included. ``--seed``
+    is E7's command-line half (P79): a seed a record carries must be one the operator can supply
+    back. Unset, the run draws one from [0, 2**31) and records it (P12, P13)."""
+```
+
+Then find:
+
+```python
+    p.add_argument("--f0", dest="F0", type=float, default=None,
+                   help="ND forcing amplitude (keep it inside the linear regime)")
+```
+
+Replace with:
+
+```python
+    p.add_argument("--f0", dest="F0", type=float, default=None,
+                   help="ND forcing amplitude (keep it inside the linear regime)")
+    p.add_argument("--seed", type=int, default=None,
+                   help="the run's random seed, a whole number from 0 (default: draw one; either "
+                        "way the record carries it, so the run can be repeated)")
+```
+
+- [ ] **Step 6d: Hand the seed to the builder and to the run, in both handlers.** Under P12 the same integer goes to both. The builder gets it through `knobs`, so an unset flag forwards nothing and the EXACT keyword-set pins in `test_fdt_and_crossval_flags_reach_their_builders` stay green. The run gets it explicitly, so `None` there means "draw one".
+
+In `run_fdt_cmd`, find:
+
+```python
+                              **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0"))
+```
+
+Replace with:
+
+```python
+                              **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0", "seed"))
+```
+
+Then find (T17's call):
+
+```python
+    rec = fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,
+                               confirm_production=not args.no_production, writer=writer)
+```
+
+Replace with:
+
+```python
+    rec = fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,
+                               confirm_production=not args.no_production, writer=writer,
+                               seed=args.seed)
+```
+
+In `run_crossval`, find:
+
+```python
+        **knobs(args, "freqs_per_batch", "F0"))
+```
+
+Replace with:
+
+```python
+        **knobs(args, "freqs_per_batch", "F0", "seed"))
+```
+
+Then find (T19's call):
+
+```python
+    s_rec, t_rec = cross_validation.run_param_study_cli(cfg, s_grid=s_grid, t_grid=temp_grid,
+                                                        writers=writers)
+```
+
+Replace with:
+
+```python
+    s_rec, t_rec = cross_validation.run_param_study_cli(cfg, s_grid=s_grid, t_grid=temp_grid,
+                                                        writers=writers, seed=args.seed)
+```
+
+**If an earlier task already passes a seed** (T11, T17 or T19 applying P79 ahead of this flag, e.g. `seed=args.seed` or `seed=getattr(args, "seed", None)`), leave exactly one `seed=args.seed` on each RUN call and NO explicit `seed=` keyword on either BUILDER call. An always-forwarded `seed` adds a key that the flags test's exact-set pins do not list. If an anchor reads differently because an earlier task wrote the call another way, edit the call as it is and say so in the report.
+
+- [ ] **Step 6e: Run it and watch it pass.** Run: `pytest tests/test_tool.py::test_fdt_and_crossval_take_seed_and_hand_it_to_the_builder_and_the_run -v`. Expected: PASS.
+
+**A3 — Interfaces, Produces, gains:** `args.seed: int | None` (dest `seed`, `type=int`, default `None`) on both `fdt` and `crossval`. It is forwarded to `cli.make_fdt_config` / `cli.make_param_sweep_config` through `knobs(...)`, and to `fdt_pipeline.run_fdt` / `cross_validation.run_param_study_cli` as `seed=args.seed`. Its range is the builders' check (T10/T11), not the flag's.
+
+**A4 — Step 9's command is replaced** by `pytest tests/test_tool.py -m "not slow" -v -k "smoke or fdt or crossval"`. Without `-m "not slow"`, the `-k` selects `test_fdt_and_crossval_run_at_tiny_size`, which is slow-marked (about ten minutes) and red by design from T17 until T34 rewrites it. `test_fdt_and_crossval_flags_reach_their_builders` or `test_fdt_ctrl_c_gets_its_own_interrupt_note` may fail with an `AttributeError` raised from `config_from_cfg` on the placeholder `"CFG"`, or a `TypeError` about `_boom`'s keywords. That is the T17/T19 bridging seam (`store.create("fdt", cfg)` reads the settings off the recorder's placeholder): report it and do not fix it here. T29 repairs the ctrl-c test's stubs.
+
+**A5 — Not this task's (P39, P40).** T41 corrects `core/tool/browse.py`'s `NO ``--store-root``, EITHER.` paragraph and the docstring of `test_the_artifacts_family_takes_no_configuration_flags_and_its_help_costs_no_torch`. Leave both alone.
+
+**A6 — Step 10's commit subject becomes** `tool: fdt and crossval take --store-root and --seed; the temp root is smoke's own property`. The `git add` line is unchanged.
+
+Unchanged and confirmed: Step 5 is P10 verbatim, and it keeps `main`'s `interrupt_note` branch ahead of the advice branch, which T29 relies on.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F49** — correct, in this commit, the two texts this task makes false, text only, no assertion change: `core/tool/__init__.py`'s epilog sentence "every subcommand but `smoke` writes here, and `smoke` takes --store-root instead" (fdt and crossval now take it too), and the docstring in `tests/test_tool.py` that says the behaviour is "keyed on the --store-root FLAG (hasattr), not the subcommand name" (it is now keyed on `args.temp_store_root`). `core/tool/browse.py`'s own `--store-root` docstring stays Task 41's (P39).
+- **F19** — Tasks 17 and 19 passed `seed=getattr(args, "seed", None)`; now that `--seed` exists, normalise both to `seed=args.seed`.
 
 ---
 
@@ -12460,6 +14814,60 @@ git add core/tool/fdt.py core/refusals.py core/sim_config.py core/cli.py tests/t
 git commit -m "tool: fdt/crossval refuse with field keys, and one wording for a missing cell value"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**A1 — P76: this task produces no message builder, and its cell-wording half is deleted.** T21 already added `core.refusals.missing_values_phrase` (P4, P8), converted both sites to it, and pins the cross-site wording itself with `assert exc.value.message == f"Cell file is {problems[0]}."`. Therefore:
+- **Steps 14, 15, 16 and 17 are deleted in full.** Do not write `test_a_cell_missing_a_bounds_parameter_reads_the_same_from_the_check_and_the_dry_run`, do not create `cell_missing_message`, and do not open `core/refusals.py`, `core/sim_config.py` or `core/cli.py`. Step 16's anchors are already gone because T21 replaced them. That is expected, not a defect to report.
+- **Files:** delete `Modify: core/refusals.py:236 …`, `Modify: core/sim_config.py:247-250 …` and `Modify: core/cli.py:66-68 …`. This task modifies `core/tool/fdt.py` and `tests/test_tool.py` only.
+- **Interfaces → Produces:** delete the sentence beginning "**`core.refusals.cell_missing_message(label: str, names) -> str`**". Keep "`FDT_INTERRUPT_NOTE` and `CROSSVAL_INTERRUPT_NOTE` keep their names and their `set_defaults(interrupt_note=…)` wiring."
+- **Why:** delete its last sentence, "And the cell refusal's wording is asserted identical from `load_and_validate_gt` and from the dry run, closing the item piece 3 handed on (…:732)." T21 closes that item.
+
+**A2 — Step 18 is replaced.** Run: `pytest tests/test_tool.py tests/test_refusals.py -m "not slow" -q`. Expected: PASS. `-m "not slow"` keeps out `test_fdt_and_crossval_run_at_tiny_size`, which takes about ten minutes and is red by design until T34. This task adds no flag and no field key, so neither `len(FIELDS)` nor the FLAG-against-parser pins move. `tests/test_artifact_consistency.py` is dropped from the command because nothing it reads is touched now.
+
+**A3 — Step 19 is replaced:**
+
+```bash
+git add core/tool/fdt.py tests/test_tool.py
+git commit -m "tool: fdt/crossval refuse with field keys; the interrupt notes name the kept record"
+```
+
+**A4 — Steps 10–13 STAY.** P39 said T41 owns the two "no bounds file" sentences. P76, later and explicit, says T29 keeps them, and T41's body carries neither. Do them here as written.
+
+**A5 — Step 6: the test's stubs must survive T17's handler.** Run `pytest tests/test_tool.py::test_fdt_ctrl_c_gets_its_own_interrupt_note -v` BEFORE editing. If it passes, keep its stubs. It fails if `main` returns 1 instead of 130, from either of two causes. One is a `TypeError`: `_boom` does not take `writer`/`seed`. The other is an `AttributeError` from `config_from_cfg` on `"CFG"`: T17's `writer = store.create("fdt", cfg)` reads the run's settings off the placeholder. In that case replace the stub lines, in whatever form they have now. At HEAD they read:
+
+```python
+    def _boom(cfg, *, skip_sanity, confirm_production):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "make_fdt_config", lambda *a, **k: "CFG")
+    monkeypatch.setattr(fdt_pipeline, "run_fdt", _boom)
+```
+
+Replace them with:
+
+```python
+    def _boom(*a, **k):
+        raise KeyboardInterrupt
+
+    # The interrupt lands in the builder: main's interrupt_note branch is the subject, and the note is
+    # fixed text. A placeholder config cannot survive store.create("fdt", cfg), which reads the run's
+    # settings off it (T7, T17).
+    monkeypatch.setattr(cli, "make_fdt_config", _boom)
+```
+
+Then drop `fdt_pipeline` from that test's import line (`from core.FDT import fdt_pipeline`) if nothing else in it uses the name. Then do Step 6 as written; Step 7's prediction holds. In the report, say that this was the T17 seam.
+
+**A6 — P26, read correctly here.** "The core model refusal carries `fdt_support`'s reason and nothing else" refers to T13's `FDTModelError` in `core/FDT`. This handler lives in `core/tool`, which may name a flag, and spec §6.2 keeps both hint branches, so Step 3 stands as written. `core/tool/fields.py`'s `FLAG["model"]` stays `"--model"`: its values are pinned to be real option strings, so no sentence may be put there.
+
+**A7 — P46:** `crossval` has no bare refusal of its own to convert. Its pre-spend raises (`_grid`) are `UsageError`s, reported at exit 2 by design. Convert nothing there, and say so in the task report.
+
+**A8 — P79:** `--seed` belongs to T28, which declared, forwarded and pinned it. Add nothing about it here.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F20** — each handler prints `[prism fdt] writing record <id> at <dir>` (and the crossval twin, once per record) right after `store.create`, so the record is on screen when Ctrl-C lands; and both interrupt notes add: if the run was given `--store-root`, set `PRISM_ARTIFACTS` to that root for the `artifacts` commands, which read only the environment. The framing lines are prints, which `core/tool` is allowed.
+- **F50** — THIS task corrects `core/tool/fdt.py`'s two "no bounds file" sentences (P76 over P39's earlier clause). Task 41 does not touch them.
+
 ---
 
 ### Task 30: `artifacts sweep` learns loose files and the legacy directory
@@ -12846,6 +15254,44 @@ git add core/tool/browse.py tests/test_tool.py
 git commit -m "artifacts sweep: offer loose files, and a legacy directory in the all-kinds form"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+**A1 — Step 10's EPILOG anchor, re-derived (P45).** Superseded: "find … `  sweep [<kind>] [--yes]` and the three lines under it ending `-- is reported and never removed`. Replace that whole block with:" and the block that follows. There are FOUR lines under the header. After T1 the block reads:
+
+```
+  sweep [<kind>] [--yes]
+                        remove every directory with NO manifest at all; with no kind, all eight. A
+                        DRY RUN without --yes: it prints what it would remove and removes nothing.
+                        A directory that carries a manifest.json -- even one this build cannot read
+                        -- is reported and never removed
+```
+
+Replace those five lines with:
+
+```
+  sweep [<kind>] [--yes]
+                        remove what no artifact accounts for: every directory with NO manifest at
+                        all, and every loose FILE sitting inside a kind directory. With no kind,
+                        all eight -- and then also a LEGACY DIRECTORY beside the kind directories,
+                        which is under no kind and so has no per-kind form. A DRY RUN without
+                        --yes: it prints exactly what it would remove and removes nothing. A
+                        directory that carries a manifest.json -- even one this build cannot read
+                        -- is reported and never removed, and nothing inside a record's own folder
+                        is ever offered
+```
+
+Why this reflow: T1's `test_the_rendered_help_counts_the_kinds_correctly` scans the rendered help with `re.findall(r"\ball (\w+)", text)`, which needs a literal space after "all". The drafted text broke "all" and "eight" across a line, so that pin would silently stop checking this block's count. Keep "all eight" on one line. If the count reads differently when you arrive, keep the file's count and still keep it on one line. Run `pytest tests/test_tool.py::test_the_rendered_help_counts_the_kinds_correctly -v` in Step 11 as well; expect PASS.
+
+**A2 — Interfaces:** `LEGACY_DIRS` is a MODULE constant, `core.artifacts.store.LEGACY_DIRS` (re-exported as `core.artifacts.LEGACY_DIRS`), not an attribute of the store object. The tests already import it that way. `core/tool/browse.py` does not need it: it calls `store.legacy_dirs()`.
+
+**A3 — Not this task's (P39):** T41 corrects the module docstring's `NO ``--store-root``, EITHER.` paragraph (browse.py lines 18–24). Leave it alone.
+
+No other ruling (P1–P82) overrides this task.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F7** — the tool half: add to this task's test that `python -m core artifacts list fdt` shows an unfinished record as NOT finished (its `finished` cell reads `no`) and that `artifacts sweep fdt` never offers it.
+
 ---
 
 ### Task 31: the Artifacts screen's sweep learns the same two categories
@@ -13194,6 +15640,30 @@ of `docs/superpowers/plans/2026-09-22-secondary-analyses.md`. Two of its rules b
 a task's implementer runs **focused tests in the foreground only** and never starts a background
 gate run, and **no source file is edited while a suite is running**.
 
+#### Amendments (binding — these supersede the text above)
+
+**A1 — One existing test pins the old dialog title; update it in this task (new Step 8a, before Step 9).** Step 4 retitles the confirmation from "Remove leftover directories" to "Remove what no artifact accounts for". Step 9's claim that the existing sweep tests keep their anchors is therefore false for `test_a_sweep_that_throws_is_reported_on_the_status_line_and_the_pickers_are_told`. In `tests/test_artifact_browser.py`, find:
+
+```python
+    assert SHOWN[-1].windowTitle() == "Remove leftover directories", \
+        "the confirmation is the only box: a disk problem is not a refusal"
+```
+
+Replace with:
+
+```python
+    assert SHOWN[-1].windowTitle() == "Remove what no artifact accounts for", \
+        "the confirmation is the only box: a disk problem is not a refusal"
+```
+
+That assertion's subject is that the confirmation is the only box shown; the title is simply the one Step 4 now sets. After this, Step 9's expected PASS holds. The file is already in the Files block and on the `git add` line.
+
+No ruling (P1–P82) overrides anything else in this task. The interface contract's `loose_files` / `remove_loose` / `legacy_dirs` / `remove_legacy` / `LEGACY_DIRS` are used exactly as T4 defines them.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F51** — emit the "Removed N of M leftover director(y/ies)" line only when there were directory candidates; a sweep that removed only loose files or a legacy directory reports those alone.
+
 ---
 
 ### Task 32: the other three `core/FDT/plots.py` drawing functions get `plot_psd`'s test
@@ -13376,6 +15846,49 @@ Expected: PASS, 4 tests.
 git add tests/test_tool.py
 git commit -m "test: the other three FDT plot functions close their saved figure too"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**Rulings that bear on this task.** P17 says this is a tests-only task: step 2 predicts PASS, step 4 proves the tests have teeth and restores `core/FDT/plots.py`, and `plots.py` is never committed. The body already follows it, so no step changes. P48 confirms that no drawing function is rewritten in this piece. P22 (landed by T16) moves `plot_psd` ahead of Campaign 2, which falsifies one docstring sentence below. No other ruling touches this task. Every anchor quoted above was checked against HEAD `673868d` and found verbatim.
+
+**A1. Step 1: the `plot_eff_temp_ratio` test's docstring.** Its second paragraph overstates when the figure is drawn twice: `run_all_sanity` keeps the passive-baseline check only for NADROWSKI. Replace this paragraph:
+
+```python
+    This one matters most of the four: a real ``fdt`` run draws it once at the end AND the passive
+    sanity check draws it again (core/FDT/sanity.py, ``plot_eff_temp_ratio(... save_path=
+    save_plot_path ...)``), so a regression leaks two live figures per run for the life of the
+    process and prints "FigureCanvasAgg is non-interactive" twice at the operator.
+```
+
+with:
+
+```python
+    This one matters most of the four: a real ``fdt`` run draws it once at the end, and on a
+    NADROWSKI cell with the sanity checks on the passive-baseline check draws it again
+    (core/FDT/sanity.py, ``plot_eff_temp_ratio(... save_path=save_plot_path ...)``) -- so a
+    regression here leaks two live figures per such run for the life of the process.
+```
+
+**A2. Step 3: the `plot_spontaneous_trajectory` test's docstring.** Two claims in it are false. `plot_chi_components` has no non-finite filter either. And after P22, a run cancelled between the campaigns has also drawn the spontaneous PSD. Replace:
+
+```python
+    """The Campaign-1 diagnostic trace. The only one of the four with no non-finite filter of its
+    own, so it is the one whose save branch is reached on every input -- and the only figure a run
+    that is cancelled between the two campaigns will have drawn.
+    """
+```
+
+with:
+
+```python
+    """The Campaign-1 diagnostic trace. Like ``plot_chi_components`` it has no non-finite filter of
+    its own, so its save branch is reached on every input; and it is one of the two figures (with the
+    spontaneous PSD, which piece 5 moved ahead of Campaign 2) that a run cancelled between the two
+    campaigns has already drawn into its record.
+    """
+```
+
+Nothing else changes: the helper, the three test bodies, the step-4 break-and-restore and the commit stay as written.
 
 ---
 
@@ -13576,6 +16089,68 @@ Expected: PASS, 2 tests.
 git add tests/test_tool.py
 git commit -m "test: the Nadrowski sanity checks, selected and run end to end"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**Rulings that bear on this task:** P70, P55, P23, P56, P22/P74. P56 is already satisfied: records are addressed by `Summary.study`, and the test takes its own `--store-root`. P22/P74 leave the figure count at five. Every anchor quoted above was checked against HEAD `673868d`, or against the text the earlier tasks produce, and was found.
+
+**A0. Preconditions.** This task needs T28 (`--store-root` on `fdt`) and T17 with P70 applied (`_settings_block(cfg, *, skip_sanity=None, confirm_production=None)`, called from `run_fdt` with both arguments). The task-order line names T17 only.
+- If step 5's `main([...])` returns `2` with `unrecognized arguments: --store-root`, T28 has not landed. Stop and report.
+- If `rec.body["settings"]["skip_sanity"]` raises `KeyError`, T17 did not apply P70. Report it as a T17 defect. Do not delete the assertion.
+
+**A1. Step 4: the slow test's docstring (P55).** Replace this paragraph:
+
+```python
+    Production is NOT skipped. ``--no-production`` would be cheaper, but the value ``run_fdt``
+    returns and the state of its record on the "Aborted by user" branch are not fixed by the spec
+    (fdt_pipeline.py's early ``return`` after the sanity checks), so this test stays on the branch
+    whose contract IS fixed: a finished record.
+```
+
+with:
+
+```python
+    Production is NOT skipped. ``--no-production`` would be cheaper, and its contract is fixed too
+    (planning ruling P55: a finished record with ``grid`` and ``offgrid`` null) -- but it stops
+    before Campaign 1, so on a Nadrowski cell with the checks on, the two campaigns, the three
+    production figures and ``data.h5`` would go unexercised. This test runs the whole path and
+    records what that costs.
+```
+
+**A2. Step 5: the one failure that is converted here (P23).** Do this only if the slow test fails with the bare `ValueError` whose message begins `check_passive_baseline: every probe frequency lies outside the PSD grid`. For any other failure, follow Step 5 as written.
+
+In `core/FDT/sanity.py`, find:
+
+```python
+    if covered.size == 0:
+        raise ValueError(
+            "check_passive_baseline: every probe frequency lies outside the PSD grid, so the FDT "
+            "ratio is unmeasurable here. Narrow cfg.freq_bounds or lengthen the passive run.")
+```
+
+Replace with:
+
+```python
+    if covered.size == 0:
+        # A refusal, not a bug (planning ruling P23): reachable from the low end since the off-grid
+        # fix (E9). No field key: which setting to change is not one control's question (spec §12
+        # row 9). Refusal subclasses ValueError, so every existing `except ValueError` still catches.
+        raise Refusal(
+            "check_passive_baseline: every probe frequency lies outside the PSD grid, so the FDT "
+            "ratio is unmeasurable here. Narrow cfg.freq_bounds or lengthen the passive run.",
+            field=None)
+```
+
+Then add `from core.refusals import Refusal` beside `sanity.py`'s other `from core...` imports; `core.refusals` is torch-free. Next, add `core/FDT/sanity.py` to this task's Files block (Modify) and to Step 8's `git add`. Re-run Step 5.
+
+The test will still fail. The run now ends as the tool's one-line refusal with exit 1, and the record stays on disk unfinished. Do NOT weaken any assertion. Report the refusal line verbatim, and do not commit until the plan owner rules on the test. Spec §12 row 9 already records this deviation, so add no §12 row.
+
+**A3.** Steps 1–3 and 6–8 are unchanged.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F25** — in the same commit that adds this third slow test, update `pytest.ini`'s `slow` marker description, which names exactly two slow tests. Describe the set without counting it, or name all three.
+- **F52** — IF this test reds on `check_passive_baseline`'s bare `ValueError` (P23): convert it to `Refusal(..., field=None)` as P23 says; then, if a configuration within the tool's flags lets the check measure (do not weaken any assertion), use it; if none does, mark the test `pytest.mark.xfail(strict=True, reason=...)` naming the refusal, commit, and put it in the report as a SCIENCE question for the owner — whether a real Nadrowski cell refusing its own passive baseline is a finding or a test-size artefact. Do not stop the piece for it. This is conditional and not expected: every probe must fall below the first positive bin.
 
 ---
 
@@ -13781,6 +16356,72 @@ printed. Do not re-use 598.55, 243, 208 or 229 — those are other runs of other
 git add tests/test_tool.py
 git commit -m "test: the tiny-size fdt/crossval run asserts records, not loose files"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**Rulings that bear on this task:** P70, P71, P72, P77, P56, P57, P10/E11, P12–P14, P31. P56, P57, P10, P12–P14 and P31 are already satisfied by the body. P78 needs no assertion here. Every anchor quoted above was found verbatim at HEAD `673868d`; no earlier task edits this test.
+
+**A0. What this task also consumes.** The task-order line lists T17, T19 and T28. This test also consumes:
+- T18 (`data.h5`, with the P71 names);
+- T20 (the `points` counts);
+- T11 with P72 (`preset_name` on the config);
+- T7 (`sources`, and so `manifest.inputs`).
+
+In numeric order all of these have landed. If an assertion fails on one of them, report it as that task's defect and do not edit the assertion. In particular:
+- `KeyError: 'skip_sanity'` means T17 did not apply P70.
+- `settings["preset"] is None` means T11/T19 did not apply P72.
+
+**A1. Step 2: the single-cell record's numbers, against the contract layout (P71).** In Step 2's replacement block, immediately after:
+
+```python
+    assert "data.h5" in rec.manifest.payloads and rec.data_path.exists()
+```
+
+insert:
+
+```python
+    # The contract's single-cell layout (P5, P6, P71): the names core.FDT.compare reads back. The
+    # only other writer of this layout is a test fixture, so this is the one place a REAL run's file
+    # is checked against the names its reader expects.
+    import math
+
+    import h5py
+    with h5py.File(rec.data_path, "r") as h5:
+        assert h5.attrs["study"] == "single", dict(h5.attrs)
+        assert float(h5.attrs["omega_0"]) > 0.0, dict(h5.attrs)
+        assert math.isfinite(float(h5.attrs["prefactor"])), dict(h5.attrs)
+        for key in ("omega_grid", "T_eff_over_T", "chi_prime", "chi_double_prime"):
+            assert key in h5 and h5[key].shape == (2,), (key, list(h5))
+        assert h5["PSD_omegas"].shape == h5["PSD_G"].shape, list(h5)
+```
+
+Then, **only if `core/FDT/compare.py` already exists when you run this task** (it is created by T36, which normally comes later), add directly below the `with` block:
+
+```python
+    # P71: the reader itself, not only the names.
+    from core.FDT.compare import curve_of
+    curve = curve_of(rec)
+    assert curve.omegas.shape == (2,) and curve.ratio.shape == (2,), curve
+```
+
+If `compare.py` does not exist, do not add those lines. Say in the task report that the compare read is owed by T36 (plan-owner finding).
+
+**A2. New Step 3a: confirm the docstring's sweep sentence is true (P77).** The new docstring says `an activity sweep that failed entirely no longer costs the temperature sweep`. Before Step 4, read `run_param_study_cli` in `core/FDT/cross_validation.py` and confirm T20's P77 step landed:
+- each `run_fdt_param_sweep` call is wrapped;
+- a `Refusal` is logged at error and recorded;
+- the temperature sweep runs regardless;
+- the study refuses only when BOTH sweeps measured nothing.
+
+If it did not land, delete that one sentence from the docstring and report it as a T20 defect. Do not add a test for it here: T20 owns §8.2's test.
+
+**A3. Step 4: if the sweep leg fails only on the counts.** If it fails on `points_failed == {0}` or `points_done == {2}` with the records otherwise finished, do not relax the assertion. Report each record's `body["points"]` verbatim; this is a plan-owner finding about the tiny size.
+
+**A4.** Everything else in Steps 1–5 stands as written.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F21/F22** — assert the contract's single-cell layout BY NAME on the record the real run wrote: datasets `omega_grid`, `T_eff_over_T`, `chi_prime`, `chi_double_prime`, `PSD_omegas`, `PSD_G`; root attributes `study`, `omega_0`, `prefactor`. The `compare` read of a real record is added by Task 36, which is the first task where `compare.py` exists; do not add a conditional one here.
+- **F53** — assert every real operating point succeeded at the tiny size. If the assertion fails ONLY on `points_failed`, do not relax it: report the counts verbatim and I will rule with evidence.
 
 ---
 
@@ -14002,6 +16643,102 @@ git add docs/superpowers/specs/2026-09-22-secondary-analyses-design.md
 > only `@public_entry` these five tasks add, so the `public_entry` source scan and its two companion
 > sets are touched **once**, in Task 36, and Tasks 37-39 add plain drawing functions that register
 > themselves in `compare._DRAWERS`. Neither T37, T38 nor T39 may add a second decorator.
+
+#### Amendments (binding — these supersede the text above)
+
+**Rulings and earlier tasks that bear on this task:** P58, P59, T22 (with P36 and P20 for a key), T23. P58 and T22 change steps. T23 changes nothing: the arithmetic Step 3 mirrors survives it.
+
+**A1. Step 1: the insertion point (T22 moved it).** T22 has already replaced the old last line of `test_builder_refuses_a_log_box_with_a_non_positive_minimum` (it now reads `assert "log coordinate needs a minimum above 0" in ei.value.message, ei.value.message`). T22 also inserted `test_the_builder_shows_a_field_refusal_in_the_yellow_box` right after that test. So the text Step 1 anchors on is gone. Insert the round-trip test immediately ABOVE:
+
+```python
+def test_model_store_rejects_unusable_values_and_names():
+```
+
+That places it after T22's test. The test body is unchanged.
+
+**A2. Step 2: reading a refusal.** Since T22, a field problem in `_save()` raises `Refusal` inside `_validate`, and `_save` shows it through `ModelBuilderScreen._refusal`. So if the `startswith(f"Saved '{name}'")` assertion fails, read two things:
+- `mb.status.text()`, which carries the message and the fix sentence;
+- `tests._fixtures.SHOWN[-1].text()`.
+
+That is `_validate` refusing the form, and the refusal carries a field key.
+
+**A3. Step 3: say which half is new (P59).** In `test_a_simulate_recording_round_trips_through_the_video_export`, replace:
+
+```python
+    silently holds fewer frames than the run it claims to be -- and nothing would say so. The
+    existing gif test asks only for "at least 2".
+```
+
+with:
+
+```python
+    silently holds fewer frames than the run it claims to be -- and nothing would say so.
+
+    Half of this round trip is NOT new: test_export_animation_writes_a_readable_gif already renders a
+    series to a GIF and reads it back, asking only for "at least 2" frames. What this test adds is
+    precision: the exact count the panel promises, and that the frames advance (planning ruling P59).
+```
+
+The task report must also say that the model-builder round trip is new ground, and that the Simulate one adds precision to an existing test.
+
+**A4. Step 4: the fallback must count what the WRITER received.** The body's 'writer's own count' formula is the same arithmetic as `promised`, so it cannot separate a reader artefact from data loss. Its `>=` also fails for a reader that coalesces frames. Replace the fallback paragraph with the following.
+
+If `len(frames) != promised`, give the test a `monkeypatch` parameter and count the frames handed to the writer:
+
+```python
+    from core.gui.panels import simulate_export
+    appended = []
+    real_open = simulate_export._open_writer
+
+    class _Counting:
+        def __init__(self, w):
+            self._w = w
+
+        def append_data(self, im, *a, **k):
+            appended.append(1)
+            return self._w.append_data(im, *a, **k)
+
+        def close(self):
+            return self._w.close()
+
+    monkeypatch.setattr(simulate_export, "_open_writer", lambda p, fps: _Counting(real_open(p, fps)))
+```
+
+Install the spy before calling `export_animation`, then:
+
+```python
+    assert len(appended) == promised, (len(appended), promised)     # the data-loss question
+```
+
+How to act on the result:
+- If `len(appended) == promised`, the writer lost nothing and the difference is the GIF reader's. Keep the `len(appended)` equality. Replace the `len(frames) == promised` line with a commented bound in the observed direction (`<=` if the reader coalesced, `>=` if it padded). Record the reader behaviour per A5.
+- If `len(appended) != promised`, it is a DATA-LOSS finding. Fix it under Step 5.
+
+**A5. Steps 4, 5 and 7, and the Files block: where a handed-on finding goes (P58).** Every mention of §12 in this task is superseded: the Why quote 'anything else is recorded in §12 and handed on', the Files line naming '§12's table, whose header row is `| # | where | deviation | why |`', Step 4's 'record it as a §12 row', Step 5's 'Add a row to ... §12' and its `| 1 | §5.6, T35 | ...` template, and Step 7's reason for adding the spec file.
+
+A finding that is neither a refusal nor data loss goes into §1.3 of `docs/superpowers/specs/2026-09-22-secondary-analyses-design.md`. That table's header is `| thing | why | owner |`. Add the new row as its last row, directly after the row beginning `| Deleting the owner's legacy files |`, in this shape:
+
+```
+| <one sentence: what the round trip showed> (found by T35's round trip, §5.6) | Not a refusal or data-loss defect, so §5.6's bounded mandate hands it on (P58). Cost if it is left: <what breaks if nobody takes it> | nobody yet |
+```
+
+Name each such item in the task report too; T41 carries it into `docs/STATE.md`. If both tests passed, write nothing in the spec and say so. Step 7's conditional `git add` of the spec file stands, for a §1.3 row.
+
+**A6. Step 5: the REFUSAL bullet after T22.** A refusal fix in the model builder is a `refuse(<key>, <sentence>)` raised inside `ModelBuilderScreen._validate`, which `_save`/`_validate_clicked` already route to `self._refusal(exc)` and so to `show_refusal`. Use a key T22 registered: `param_value`, `param_min`, `param_max`, `init`, `x_scale`, `t_scale`, or T22's forcing key (P36 names it `forcing_value`; T22's draft said `forcing_param`; use the one in `core/refusals.py`).
+
+If the fix needs a key that does not exist, add it in full, as P20 requires:
+- the `Field` in `core/refusals.py` `FIELDS`;
+- a `core/gui/fields.py` `CONTROL` entry on the Model Builder screen;
+- a `None` entry in `core/tool/fields.py` `FLAG`;
+- the key in `tests/test_refusals.py`'s `BASE_KEYS`, and the `len(FIELDS)` literal read off the failing pin.
+
+Never write that count blind. Add those files to the fix's own separate commit.
+
+**A7.** Steps 6 and 7 are otherwise unchanged. Step 6's three named tests are T22's updated versions, and they must still pass.
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F54** — a round-trip defect handed on (P58) goes into the spec's §1.3 table, "Out of scope, and who owns it", as a row with its owner. Re-read the table first and append after its last row.
 
 ---
 
@@ -14793,6 +17530,81 @@ git add core/FDT/compare.py core/refusals.py core/gui/fields.py core/tool/fields
 git commit -m "compare: the comparison record, the common grid and its refusals"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+Land this task only after T1, T3, T5, T8, T9, T17, T18, T19, T22, T23, T28 and T29. It edits the three field tables and the registry pins that T8/T22/T23 already moved, and the `public_entry` scan that T17/T19 already extended. Rulings applied: P11, P20, P30, P49, P65, P71. (SC) marks a fix for a contradiction inside this task.
+
+**A1 — Step 7, `load_records` names the RECORD, not the ref (SC; Review Focus 5; spec §7.1 "refused, naming it").** The three per-record refusals quote `{ref!r}`, which is whatever the caller passed. The tests pass the ids `build_fdt_record` returns, so `"'sw'" in str(e.value)` and `"'half'" in str(e.value)` can never hold. Replace the whole `for ref in refs:` loop with:
+```python
+    for ref in refs:
+        rec = store.load_fdt(ref)
+        who = rec.name or rec.id
+        study = rec.body.get("study")
+        if study != want_study:
+            refuse("compare_records",
+                   f"The saved runs to compare must all be {want_study} runs for a {mode} "
+                   f"comparison; {who!r} is a {study} run.")
+        if not rec.body.get("complete"):
+            refuse("compare_records",
+                   f"The saved runs to compare must have finished; {who!r} did not (it was "
+                   f"interrupted, or it is still running), so the numbers it holds are partial.")
+        if rec.data_path is None or not Path(rec.data_path).is_file():
+            refuse("compare_records",
+                   f"The saved runs to compare must hold their numbers; {who!r} has no data file "
+                   f"beside its manifest, so there is nothing to draw.")
+        out.append(rec)
+```
+
+**A2 — Step 7, `compare`: P11 ("a mode with no drawer is refused, naming what this build draws").** Replace
+```python
+               f"The saved runs to compare cannot be drawn: this build has no {mode} comparison.")
+```
+with
+```python
+               f"The saved runs to compare cannot be drawn: this build has no {mode} comparison "
+               f"(it draws {', '.join(sorted(_DRAWERS)) or 'none yet'}).")
+```
+
+**A3 — Step 2, `test_a_comparison_refuses_one_record_another_study_and_an_unfinished_one` (SC).** At this task `_DRAWERS` is empty, so `compare` refuses at the no-drawer guard before `load_records` runs, and the "at least 2" / "'sw'" / "'half'" assertions fail. Change the signature to `(tmp_path, monkeypatch)` and insert immediately after `store = _store(tmp_path)`:
+```python
+    # these refusals are load_records'; a stub drawer gets past the no-drawer guard, which answers
+    # first while _DRAWERS is still empty (Tasks 37-39 fill it)
+    monkeypatch.setitem(cmp._DRAWERS, "cells", lambda w, records, *, sink: ({}, []))
+```
+
+**A4 — Step 3's expected failure (SC).** The from-import form reports the missing module as `ImportError: cannot import name 'compare' from 'core.FDT'`, not `ModuleNotFoundError`.
+
+**A5 — Step 4, `core/gui/fields.py` anchor (P30).** P30 has T9 widen `CONTROL["note"]`, so the line `"note": "Edit it in the Note box on the Artifacts screen.",` may no longer be verbatim. Find the line `    "artifact": "Select an artifact in the list on the Artifacts screen.",`. The `"note"` entry follows it, possibly now spanning several lines. Insert the `compare_records` comment and entry immediately AFTER the complete `"note"` entry. The `core/refusals.py` and `core/tool/fields.py` anchors are found as written: T8 and T22 insert below them and keep them.
+
+**A6 — Step 5, the `BASE_KEYS` anchor is NOT found, and the count (P20).** After T8, the line `"artifact", "note",` is followed by T8's comment and keys, not by `)`. Find instead:
+```python
+)
+TOOL_ONLY_KEYS = ("repeats",
+```
+That first `)` closes `BASE_KEYS`. Insert above it:
+```python
+    # piece 5: comparing saved FDT records (E8)
+    "compare_records",
+```
+Do NOT add one to the count blind. Run `pytest tests/test_refusals.py -q -k registry_holds`, read the real `len(FIELDS)` off the failure, and write it in place of the literal on the line ending `"a key is listed twice above"`. Expect 86 if T8 registered thirteen keys (P75), T22 seven and T23 two. Strike the sentence naming "Tasks 8, 12, 13, 23, 38 and 39": the keys added before this task are T8's, T22's and T23's; T12 and T13 add none; T38 and T39 come after this task.
+
+**A7 — Step 6's run command (SC).** No test is named `the_tool_table`; the flag pin is `test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered`. Run `pytest tests/test_refusals.py -q -k "registry_holds or every_field_key_has_a_flag"`.
+
+**A8 — Step 9, against the post-T17/T19 file.** The `want |= {("core/diagnostics/sbc.py", ...` anchor is found as written. Put `_leg_compare` immediately ABOVE `_UNTOUCHED_LEGS = {`: T17's `_FdtWriter`/`_leg_run_fdt` and T19's `_leg_run_param_study_cli` already sit after `_leg_channel_ablation`. Add `    "compare": _leg_compare,` immediately after `    "run_param_study_cli": _leg_run_param_study_cli,`. Add `    "compare": "compare_records",` immediately after T19's `    "run_param_study_cli": "cell", ...` line. T17 renamed the test to `test_the_public_entries_carry_public_entry_and_nothing_else_does`, with no count. Leave the name, and extend its docstring's list of decorated functions with "and the comparison facility's one entry, core/FDT/compare.py". Step 10's `-k "public_entry or untouched"` still selects both tests.
+
+**A9 — already correct; leave these unchanged.** `curve_of` reads the contract's single-cell names (`omega_grid`, `T_eff_over_T`, root attrs `omega_0`, `prefactor`; P5, P71). If T18 still writes `omegas`/`chi`, that is a T18 defect; report it, and do not rename `OMEGA_GRID`/`RATIO`. The comparison layout (`omega_common`, `curves/<NNN>` with a `label` attr) is P71's. `compare` refuses everything it can before `store.create` (P49). The leg uses a real `ArtifactStore`, not `_EntryWriter` (P65).
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F21/F22** — add to `tests/test_tool.py`'s tiny-size test (slow-marked) the read of the REAL single-cell record: `cmp.curve_of(store.load_fdt(<the single-cell record's id>))` succeeds. That is the only check that a real record, not the fixture, is readable by `compare` (P71).
+- **F55** — a comparison's `data.h5` writes root `omega_0` and `prefactor` as NaN (not applicable), and each `curves/<NNN>` dataset carries its source record's `omega_0` and `prefactor` as attributes.
+- **F56** — add a `COMPARE_INTERRUPT_NOTE` through `set_defaults(interrupt_note=...)`: the unfinished comparison record stays on disk and re-running writes a new one; there is no resume.
+- **F57** — `compare()` checks each mode's options before `open_record` (renormalise: `require_positive("prefactor", ...)`; sweeps: `require_finite("slice_at", at)` when given). Refuse before the spend; the drawers keep theirs as a backstop.
+- **F58** — `load_records` catches the store's missing-record `StoreError` and re-raises `refuse("compare_records", f"The saved runs to compare must exist; {ref!r} names no fdt record.")`, so the control that answers it is named.
+- **F59** — `MODE_RULES` carries `(study, fewest, most)`: renormalise `(1, 1)`, sweeps `(2, 2)`; more than `most` is refused with `compare_records`, never silently dropped.
+- **F60** — `build_fdt_record` writes one figure through `w.figure_path`, as spec §8.1 says.
+- **F62** — correct the docstring that says the window can offer an unfinished record: only the tool can.
+
 ---
 
 ### Task 37: compare cells, and compare repeats
@@ -15038,6 +17850,47 @@ git add core/FDT/compare.py tests/test_fdt_compare.py tests/test_tool.py
 git commit -m "compare: cells on one axis, and repeats with their spread"
 ```
 
+#### Amendments (binding — these supersede the text above)
+
+Land this task after T36 (with T36's amendments). Rulings applied: P60, and P11 through T36-A2. (SC) marks a fix for a contradiction inside this task.
+
+**A1 — Step 4, `draw_repeats` reports the cells it drew (P60).** P60 says the mode "reports the cells it drew in the drawing and in `body.notices`, and refuses only on arity". The legend already labels each curve by its cell; the notices do not name the cells yet. In `draw_repeats`, immediately after `blanks, notices = blank_notice(values)`, add:
+```python
+    # P60: "the same cell" is not enforced -- a record's cell lives in its manifest's inputs and
+    # nothing stops a caller passing two -- so the mode REPORTS which cells it drew: in the legend
+    # (each curve is labelled by its cell) and here, in the record's notices.
+    cells = sorted({c.label for c in curves})
+    notices = list(notices) + [
+        f"The repeats drawn come from {len(cells)} cell(s): {', '.join(cells)}. The band is the "
+        f"spread across these runs, and it is one cell's measurement error only when every run is "
+        f"of the same cell."]
+```
+Also add `"cells": cells,` to `draw_repeats`' `results` dict. Then append to `test_compare_repeats_draws_the_spread_across_the_runs_as_a_band`:
+```python
+    assert res["cells"] == ["rep0", "rep1", "rep2"], "no cell input on the fixture: the label is the name"
+    assert any("rep0, rep1, rep2" in n for n in rec.body["notices"]), rec.body["notices"]
+```
+
+**A2 — Step 1, `test_compare_cells_draws_every_record_on_one_axis_and_records_its_peak` (SC).** With `b`'s grid `(1.0, 2.0, 4.0, 8.0)`, the common grid is four log-spaced points on [1, 4]: [1.0, 1.587, 2.520, 4.0]. omega = 2 is not on it, and `master_weak` interpolates to [1.0, 1.667, 1.733, 1.2], so the `peak_omega`/`peak_ratio == 2.0` assertions fail. Replace `b` with:
+```python
+    b = build_fdt_record(store, name="master_weak", omegas=(1.0, 2.0, 4.0),
+                         ratio=(1.0, 2.0, 1.2))
+```
+Replace `res["n_grid"] == 4` with `res["n_grid"] == 3`. Change the comment to: "the common grid is [1, 2, 4] -- the intersection [1, 4] at the smaller point count, 3: master_spont's peak at omega=1 is on it, master_weak's at omega=2". The computed curves are master_spont [5.0, 1.3, 1.1] and master_weak [1.0, 2.0, 1.2].
+
+**A3 — Step 1, the tool test (SC).** `tool_env` yields `(bounds, cell, root)`, not a path, so `ArtifactStore(tool_env)` raises `TypeError`. Replace `store = ArtifactStore(tool_env)` with:
+```python
+    _bounds, _cell, root = tool_env
+    store = ArtifactStore(root)
+```
+`main` opens `config.artifacts_root()`, and `tool_env` points that at `root`.
+
+**A4 — Step 2's expected failure (P11, through T36-A2).** The failure now reads `core.refusals.Refusal: The saved runs to compare cannot be drawn: this build has no cells comparison (it draws none yet).`
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F61** — keep addressing the comparison record by the test's own `--name`: P56 concerns names a run chooses for itself, and this name is the thing the test pins.
+
 ---
 
 ### Task 38: compare renormalise
@@ -15215,6 +18068,18 @@ Expected: PASS.
 git add core/FDT/compare.py core/refusals.py core/gui/fields.py core/tool/fields.py tests/test_fdt_compare.py tests/test_refusals.py
 git commit -m "compare: one run renormalised against itself"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**A1 — dependency.** The drawer calls `ratio_axes` and `peak_of`, which T37 adds. The task-order line `T38 compare renormalise ── T36` is incomplete: land this task after T36 AND T37.
+
+**A2 — Step 2's expected failure (P11, through T36-A2).** The failure now reads `core.refusals.Refusal: The saved runs to compare cannot be drawn: this build has no renormalise comparison (it draws cells, repeats).`
+
+**A3 — Step 3, `tests/test_refusals.py` (P20).** Add `"prefactor",` immediately after the `"compare_records",` line that T36 put last in `BASE_KEYS`. Do not raise the count blind. Run `pytest tests/test_refusals.py -q -k registry_holds` and write the number the failure reports on the line ending `"a key is listed twice above"` (87 if T36 left 86).
+
+**A4 — Step 3, `core/gui/fields.py` (P34).** Keep the sentence entry exactly as written. T40 builds the 'Normalisation constant' box and turns this entry into `("FDT analysis", "Normalisation constant")`. The rendered sentence is byte-identical, so nothing here changes.
+
+**A5 — Step 1's test comment (SC).** A blank or non-positive constant is refused INSIDE the writer block: the record is created, then removed by the writer (T3 removes a progressive record whose `Refusal` came before any payload or figure). That is why `len(store.list("fdt")) == 2` holds. Change the comment `# a blank box and a non-positive constant are both refused, by name, before anything is created` to `# a blank box and a non-positive constant are both refused, by name, and leave no record behind`.
 
 ---
 
@@ -15484,6 +18349,62 @@ Expected: PASS.
 git add core/FDT/compare.py core/refusals.py core/gui/fields.py core/tool/fields.py tests/_fixtures.py tests/test_fdt_compare.py tests/test_refusals.py
 git commit -m "compare: two sweeps and a slice through both"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+**A1 — dependency.** Step 4 anchors on T38's `Field("prefactor", ...)` and on its `"prefactor"` entries in both front-end tables. Step 5 uses T37's `ratio_axes` and `peak_of`. The order line `── T36` is incomplete: land this task after T36, T37 AND T38.
+
+**A2 — Step 3's expected failure (P11, through T36-A2).** The failure now reads `core.refusals.Refusal: The saved runs to compare cannot be drawn: this build has no sweeps comparison (it draws cells, renormalise, repeats).`
+
+**A3 — Step 4, `tests/test_refusals.py` (P20).** Put `"slice_at",` immediately after the `"prefactor",` line in `BASE_KEYS`. Read the count off the failing `pytest tests/test_refusals.py -q -k registry_holds` run (88 if T38 left 87); do not add one blind.
+
+**A4 — Step 4, `core/gui/fields.py` (P34).** Keep the sentence entry. T40 builds the 'Slice at' box and converts this entry to `("Sweep study cross-validation", "Slice at")`, which renders the same sentence.
+
+**A5 — Step 5, `draw_sweeps`: every refusal before the first write (P49).** As drafted, the surfaces figure is saved first, and `sink` calls `figure_path`, which counts as a write. The slice's `common_grid` can still refuse after that, and such a refusal leaves an unfinished record on disk that nothing can clear. Settle the slice rows and the common grid FIRST. Replace everything from the line `    # the surfaces, side by side, each on its own axes` down to and including `    sink("Sweep slice", fig)` with the block below. Leave the lines before it (the rows, parameter, range and `at` checks) and after it (`log.info`, `per_record`, `results`, `return`) unchanged. `_stack`'s middle return is renamed `param_values`, so it no longer overwrites the slice's `values`.
+```python
+    # P49: every refusal before the first write. The slice's rows and its common grid are settled
+    # FIRST -- common_grid refuses curves that share no band -- so a refused slice leaves no record
+    # behind (the writer removes a progressive record refused before any figure or payload).
+    curves, chosen = [], []
+    for rec, rr in zip(records, rows):
+        row = min(rr, key=lambda r: abs(float(r["param_value"]) - at))
+        chosen.append(float(row["param_value"]))
+        curves.append(Curve(id=rec.id, name=rec.name,
+                            label=f"{_label_of(rec)}  ({param} = {row['param_value']:g})",
+                            omegas=np.asarray(row["omega_norm"], dtype=np.float64),
+                            ratio=np.asarray(row["T_eff_over_T"], dtype=np.float64),
+                            omega_0=1.0, prefactor=math.nan))
+    grid = common_grid(curves)
+    values = [interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
+    blanks, notices = blank_notice(values)
+
+    # the surfaces, side by side, each on its own axes
+    fig = plt.figure(figsize=(12, 5))
+    for i, (rec, rr) in enumerate(zip(records, rows)):
+        omega_norm, param_values, matrix = _stack(rr, _OMEGA_NORM_MAX)
+        ax = fig.add_subplot(1, len(records), i + 1)
+        mesh = ax.pcolormesh(*np.meshgrid(omega_norm, param_values), matrix, cmap="viridis",
+                             shading="auto", vmin=0.0, vmax=2.0)
+        ax.axvline(1.0, color="darkorange", ls=":", lw=1.2)
+        ax.axhline(at, color=plt.rcParams["axes.edgecolor"], ls="--", lw=0.8)
+        ax.set_xlabel(r"$\tilde\omega / \Omega_0$")
+        ax.set_ylabel(param)
+        ax.set_title(_label_of(rec))
+        fig.colorbar(mesh, ax=ax, label=r"$T_{\rm eff}/T$")
+    fig.tight_layout()
+    sink("Sweep surfaces", fig)
+
+    # the slice: the row of each sweep nearest `at`, on the common grid settled above
+    write_curves(w, grid, values, [c.label for c in curves])
+    fig, ax = ratio_axes(f"Sweep slice at {param} = {at:g}", blanks)
+    ax.set_xlabel(ax.get_xlabel().replace(r"$\tilde\omega$ (ND)", r"$\tilde\omega / \Omega_0$"))
+    for curve, vals in zip(curves, values):
+        ax.plot(grid, vals, marker="o", markersize=4, linewidth=1.0, label=curve.label)
+    ax.legend()
+    fig.tight_layout()
+    sink("Sweep slice", fig)
+```
+The test's `seen == ["Sweep surfaces", "Sweep slice"]` still holds.
 
 ---
 
@@ -15884,6 +18805,42 @@ Expected: PASS.
 git add core/gui/widgets/compare_list.py core/gui/panels/fdt_panel.py core/gui/panels/crossval_panel.py core/gui/widgets/artifact_picker.py tests/test_nav_and_gating.py
 git commit -m "compare: the two screens' comparison controls"
 ```
+
+#### Amendments (binding — these supersede the text above)
+
+Land this task after T24, T25, T26 and T27 (the panels as they now read) and after T37, T38 and T39. Rulings applied: P34, P61, P80. The stale anchors are re-derived against the panels as T25, T26 and T27 left them.
+
+**A1 — the pickers (P61, P80).** `FdtPanel.record_picker` and `CrossValPanel.record_picker` exist from T25/T26. If either is missing, that is a T25/T26 defect: say so in the report and do not build a second picker.
+
+**A2 — Step 3, `selection_text` is not optional.** `StorePicker` has no `selection_text` at HEAD, and no task T24–T27 adds one. Add it to `core/gui/widgets/artifact_picker.py`, immediately after the body of `selection_summary`, exactly as Step 3 gives it. Add `core/gui/widgets/artifact_picker.py` to this task's Files block (the git add line already names it).
+
+**A3 — Steps 4/5, the two rows for registered keys are labelled from the table (P34).** P34 says the FDT and CrossVal panels build their row labels from `core.gui.fields.label(key)`. T38 and T39 registered `prefactor` and `slice_at` as sentences because the boxes did not exist yet. This task creates the boxes, so convert both entries. The rendered fix sentence is byte-identical, so this is a pure refactor. In `core/gui/fields.py`, find
+```python
+    "prefactor": "Set it in the 'Normalisation constant' box on the FDT analysis tab.",
+```
+and replace it with `    "prefactor": ("FDT analysis", "Normalisation constant"),`. Then find
+```python
+    "slice_at": "Set it in the 'Slice at' box on the Sweep study cross-validation tab.",
+```
+and replace it with `    "slice_at": ("Sweep study cross-validation", "Slice at"),`. In `FdtPanel._build_compare`, replace `add_help_row(form, "Normalisation constant", self.renorm_prefactor, HELP["prefactor"])` with `add_help_row(form, label("prefactor"), self.renorm_prefactor, HELP["prefactor"])`. In `CrossValPanel._build_compare`, replace `add_help_row(form, "Slice at", self.slice_at, HELP["slice_at"])` with `add_help_row(form, label("slice_at"), self.slice_at, HELP["slice_at"])`. If a panel does not already import `label` (T25/T26 may have, under P34), add `from ..fields import label` beside its other `..` imports. The 'Runs to compare', 'Sweeps to compare' and 'Comparison' rows answer no registered key and keep their literals. Add `core/gui/fields.py` to the Files block and the git add line. In Step 6 also run `pytest tests/test_nav_and_gating.py -q -k fix_sentences_name_it`.
+
+**A4 — Step 4, the FDT panel import anchor is NOT found.** After T25 the third line reads `from ..widgets.artifact_picker import ArtifactPicker, StorePicker`, and T27 added `from . import record_view` above `from .base_panel import BasePanel`. Do NOT substring-match `from ..widgets.artifact_picker import ArtifactPicker`: the replacement would land inside T25's import line. Instead:
+- insert `from core.FDT.compare import compare` on the line immediately after `from core.FDT.fdt_pipeline import run_fdt`;
+- insert `from ..widgets.compare_list import CompareList` on the line immediately after the `from ..widgets.artifact_picker import ...` line.
+
+**A5 — Step 4, the FDT panel `HELP` anchor is NOT found.** T25 appended `"seed"`, `"record_name"`, `"record_note"` and `"record"` after `"confirm_production"`. Insert the three new entries (`"compare_list"`, `"compare_mode"`, `"prefactor"`, text exactly as in Step 4) immediately before the closing `}` of the module-level `HELP` dict, i.e. after its last entry, which is `"record"` after T25.
+
+**A6 — Step 5, the CrossVal panel import and `HELP` anchors are NOT found**, for the same two reasons (T26, T27). Instead:
+- insert `from core.FDT.compare import compare` immediately after `from core.FDT.cross_validation import run_param_study_cli`;
+- insert `from ..widgets.compare_list import CompareList` immediately after the `from ..widgets.artifact_picker import ...` line;
+- insert the two `HELP` entries (`"compare_list"`, `"slice_at"`, text as in Step 5) immediately before the dict's closing `}`, after T26's `"record"`.
+
+**A7 — anchors found as written.** Both panels' `        form.addRow(self.btn_run)` + blank line + `        self.controls_layout.addWidget(box)` anchors are still present: T25–T27 insert rows above `btn_run`, never below it.
+
+**A8 — Step 7.** `git add core/gui/widgets/compare_list.py core/gui/panels/fdt_panel.py core/gui/panels/crossval_panel.py core/gui/widgets/artifact_picker.py core/gui/fields.py tests/test_nav_and_gating.py`
+
+---
+
 ### Task 41: the documents, the walkthrough rows, and the gates of record
 
 **Why:** Four documents state things this piece makes false, and the piece's own record — the
@@ -16477,3 +19434,226 @@ Tell the owner, in the session's closing message: rows E1–E16 are written and 
 needs (a real display, `run.bat`, an `Artifacts/` window beside the app, and for E15 the two legacy
 PNGs still in `Artifacts/fdt/`), and that the piece's gate table gains its walkthrough row once they
 report. Do not fill a single result cell.
+
+#### Amendments (binding — these supersede the text above)
+
+These come from rulings P2/P75, P10, P17, P21, P39/P76, P40, P42, P43, P44, P53, P58, P62, P72 and P77 in the plan's preamble, and from checking every anchor against HEAD `673868d`. Where this block and the body disagree, this block wins. Say so in your report.
+
+**A1. Files block.** Delete the line `Modify: docs/checklists/display-walkthrough.md:23,24,72 (rows 15, 16, B8) and its end`. Replace it with `Modify: docs/checklists/display-walkthrough.md — its end only (the new E-row section); rows 15, 16 and B8 are NOT edited (P42)`. Add `Modify: CLAUDE.md:163-167 (the suite list, Step 4)`. For `docs/superpowers/specs/2026-09-22-secondary-analyses-design.md`, add the lines §1.3 (one table row), §3.3 (one sentence) and §5.6 (one sentence) beside §12. **`core/tool/fdt.py` is NOT modified by this task.** P39 gave it to T41, but P76 supersedes that ('T29 keeps ... the two "no bounds file" sentences'). Instead, before Step 13, run `grep -n "no bounds file" core/tool/fdt.py`. Expect no output. If it prints anything, do not fix it: report it as a T29 defect.
+
+**A2. Order paragraph.** Read it as: 'steps 2–12 edit documents and two docstrings; step 13 commits them; steps 14–17 are the gates of record, run by the CONTROLLER (never by the implementer, and never with a background run the implementer started) on step 13's tree; steps 18–22 write docs/STATE.md from the measured numbers.' An implementer subagent stops after Step 13 and hands Steps 14–17 to the controller.
+
+**A3. Step 2.** The anchor ends mid-line. CLAUDE.md line 139 reads `  recorded downstream). No code outside `core/config.py` builds a literal `Resources/` or`. Replace only up to `recorded downstream).` and keep ` No code outside ...` and everything after it unchanged.
+
+**A4. Step 3, first replacement (P30: name and note are not persisted either).** Use this text instead:
+
+```markdown
+  `PRISM.ini` is ignored, not restored. The Simulate, FDT and CrossVal panels remember their own
+  numeric fields and their pickers' selections; the Seed box, the record name and the note are
+  never remembered — a remembered seed would silently turn every run into a repeat of the last one,
+  and a remembered name would be refused as taken at the next launch's first run (piece-5 spec
+  §5.5, E7; plan ruling P30).
+```
+
+The second anchor (the `core/tool/` bullet) ends mid-line at `(list/show/note/rm/sweep/summary)).`. Line 171 continues ` `scripts/` is gone: six of`; keep that remainder.
+
+**A5. Step 4 (P62).** The expected count is **nineteen**: T36 created `tests/test_fdt_compare.py`. Still measure it with `ls tests/test_*.py | wc -l`. If the measurement is 19, find:
+
+```markdown
+- `tests/` — the eighteen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
+  command-line tool's, `test_diagnostics.py` the five diagnostics', `test_refusals.py` the
+  torch-free rules', tables' and run-buffer's, `test_artifact_browser.py` the artifact browser's;
+```
+
+and replace it with:
+
+```markdown
+- `tests/` — the nineteen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
+  command-line tool's, `test_diagnostics.py` the five diagnostics', `test_refusals.py` the
+  torch-free rules', tables' and run-buffer's, `test_artifact_browser.py` the artifact browser's,
+  `test_fdt_compare.py` the comparison facility's;
+```
+
+If the measurement is anything other than 19, write what you measured and name each new file.
+
+**A6. Step 5: the second paragraph must state what T28's code does (P10).** After T28, `main` checks `getattr(args, "interrupt_note", None)` first. Otherwise it prints `_smoke_interrupt_advice(args, root) if temp_store_root else` the generic advice. So smoke's Ctrl-C advice is not an `interrupt_note`. In the replacement docstring, find the sentence:
+
+```
+letting them flip (piece-5 spec §6.1, E11): the throwaway root and its cleanup are ``smoke``'s
+alone, chosen per subcommand instead of by the flag's presence, and a subcommand's Ctrl-C advice
+follows its own ``interrupt_note``. The absence here is now what it says on the face of it -- this
+family wants one root, the environment's.
+```
+
+and write instead:
+
+```
+letting them flip (piece-5 spec §6.1, E11): the throwaway root, its cleanup and smoke's Ctrl-C
+advice are now keyed on ``temp_store_root``, a property only ``smoke``'s parser sets
+(``set_defaults(temp_store_root=True)``), never on the flag's presence; ``fdt`` and ``crossval``
+print their own ``interrupt_note``, which ``main`` checks first. The absence here is now what it
+says on the face of it -- this family wants one root, the environment's.
+```
+
+Then re-read `core/tool/__init__.py`, as the body says, and adjust the text if T28 landed differently.
+
+**A7. Steps 6–7 (P40: prove that only docstrings changed).** Step 7's command becomes `& "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m pytest tests/test_tool.py -m "not slow" -k "artifacts or help" -q`. Then run `git diff -U0 core/tool/browse.py tests/test_tool.py`. Every changed line must lie inside the browse.py module docstring or inside the docstring of `test_the_artifacts_family_takes_no_configuration_flags_and_its_help_costs_no_torch`. State in the report that no assertion line changed.
+
+**A8. Step 10 is DELETED (P42).** Older walkthrough rows are never edited: rows 15, 16 and B8 keep their text exactly. The supersession is stated only in the new section's preamble.
+
+**A9. Step 11 (P42, P44).** In the appended section, replace the first paragraph ('The rows piece 5 creates; ... simply the next letter after D.') and the line 'What the three superseded rows asserted, and why they no longer describe the application:' with:
+
+```markdown
+The rows piece 5 creates; the user runs them once on a real display, the way the A-, B-, C- and
+D-rows were run. Rows 1–20, A1–A9, B1–B8, C1–C11 and D1–D17 are NOT edited — each is a dated
+record of what was seen on the code as it then was — and piece 5 re-checks only what it changes.
+Three of them no longer describe the application and are superseded HERE rather than marked in
+place (design spec §10): rows 15, 16 and B8. The row letters here are independent of the piece's
+decisions E1–E12; they are simply the next letter after D.
+
+What the three superseded rows asserted, and why they no longer describe the application:
+```
+
+Keep the three bullets that follow. Replace the E15 row with:
+
+```markdown
+| E15 | The tidy-up offers the legacy loose files and the legacy directory | Leave the owner's legacy pictures in `Artifacts/fdt/` (the two PNGs stamped `20260915_153042`). No build writes `Artifacts/crossval/` any more, so for the legacy-directory half first create an EMPTY folder `Artifacts/crossval/` by hand. Then press Sweep on the Artifacts screen, once with all kinds and once with one kind chosen; then run `python -m core artifacts sweep` and `python -m core artifacts sweep --yes`. | Both front ends offer the loose FILES as their own clearly separated category, by name, alongside the manifest-less directories; the `crossval` legacy directory is offered by the all-kinds sweep only, never by a one-kind sweep; a dry run removes nothing; nothing valid is ever offered; after a confirmed removal the files and the empty `crossval/` are gone and every real record is untouched. | | |
+```
+
+The other rows stand as drafted, and the date and result columns stay empty.
+
+**A10. Step 12: the anchor does not exist.** Spec §12 already holds a preamble and rows 1–9. There is no empty `| | | | |` row. Make four edits.
+
+(a) **P72 is a planning-time deviation** (spec §1.2 says '`FDTConfig` gains two fields and one method'). Find:
+
+```markdown
+the practice pieces 2, 3 and 4 followed. Rows 1–9 were ruled at PLANNING time, before any code was
+written, when ten drafters read the code for their tasks and raised 69 objections; the full texts are
+in the ledger and the rulings are **P1–P69** in the plan. Rows from 10 on are filled during execution.
+```
+
+Replace it with:
+
+```markdown
+the practice pieces 2, 3 and 4 followed. Rows 1–10 were ruled at PLANNING time, before any code was
+written: rows 1–9 when ten drafters read the code for their tasks and raised 69 objections (rulings
+**P1–P69** in the plan), row 10 when three lenses and a judge read the assembled plan (**P72**, one
+of P70–P82). The full texts are in the ledger. Rows from 11 on are filled during execution.
+```
+
+Then append after row 9:
+
+```markdown
+| 10 | §1.2 ("`FDTConfig` gains two fields and one method"), §4.4 (P72, planning time) | `FDTConfig` gains a third defaulted field, `preset_name: str \| None = None`; `make_param_sweep_config` passes it into the construction and the sweep reads `cfg.preset_name` for `body.settings["preset"]` | §4.4 requires the preset NAME in the record, and the builder's keyword alone carried it nowhere, so `settings["preset"]` would always have been null. A defaulted field, so §1.3's reduction-map constraint holds. *Cost if wrong: one more field on a shared dataclass.* |
+```
+
+Execution deviations from the ledger follow as rows 11, 12 and so on, in the four columns the body describes. If the ledger holds none, add one line under the table: `No execution-time deviation was ruled (<date>); rows 1–10 are all planning-time.`
+
+(b) **P58.** A defect a round trip exposed and did not fix is NOT a §12 row. It goes in §1.3's table ('Out of scope, and who owns it') as a row `| <the defect> | <why not fixed here> | nobody yet |`. In §5.6, find `anything else is recorded in §12 and handed on, so the mandate is bounded.` and replace it with `anything else is recorded in §1.3 and handed on, so the mandate is bounded (**P58**).`
+
+(c) **P53.** §6.2 says the `_merge_vals_bounds` wording 'is handed on in §1.3', but §1.3 has no such row. Append to §1.3's table:
+
+```markdown
+| A third wording of "the cell does not supply a parameter the bounds file declares", in `cli._merge_vals_bounds` (§6.2, **P53**) | It carries the cell PATH, which the FDT builders need and the other two sites do not; folding it into `missing_values_phrase` would drop that or change the other two | nobody yet |
+```
+
+(d) **P2 residue in §3.3.** Find:
+
+```markdown
+front-end knobs (§1.2), so they are checked with `field=None` and appear in neither front-end table.
+```
+
+and replace it with:
+
+```markdown
+front-end knobs (§1.2), so they are registered in `FIELDS` with `None` in both front-end tables and a
+refusal about one names the setting and offers no fix (**P2**).
+```
+
+If execution rulings corrected the spec inline, append their P-numbers or R-numbers to the existing 'Ten further rulings corrected this document' sentence.
+
+**A11. Step 18: the anchor is stale.** Find the real text:
+
+```markdown
+**Last updated:** 2026-09-22. **Piece 5, "the secondary analyses", is DESIGNED AND PLANNED, not yet
+started**: brainstormed with the owner 2026-09-22 (decisions E1–E12), design `a0d85da`, plan
+`e902256`+`5354e6b` (41 tasks, 433 steps, rulings P1–P82). The owner swaps models before
+implementation. **Piece 4, "GUI usability and the artifact browser", is DONE**:
+```
+
+Replace everything before `**Piece 4, ...` with the piece-5 DONE paragraph. In 'what landed', after 'the sweep split into one record per swept parameter with its failure counts and its all-failed refusal', add: ', and an all-failed first sweep no longer costs the second — the temperature sweep runs regardless and the study refuses only if both measured nothing (P77)'. Also add '`--seed` on both subcommands (P79)'. The 'Piece 5 is under way ... the session that designed it stops after the plan.' anchor is at STATE.md:47-53. Keep the sentence that follows it (` Piece 3 (`3db271e`..`9e2f7ef`) is DONE and pushed ...`). If `git rev-list --count origin/main..main` shows piece 4 is still unpushed, the piece-4 'NOT YET PUSHED' clause stays; otherwise correct it.
+
+**A12. Step 19 (P43).** The instruction 'Do **not** add a display-walkthrough row for E1–E16' is overruled. After the four measurement rows, add:
+
+```markdown
+| display walkthrough, piece-5 rows E1–E16 (`docs/checklists/display-walkthrough.md`) | **Not yet run.** Owed by the owner, on a real screen |
+```
+
+This matches piece 4's row at the same moment (commit `44ed3ed`). The session that records the owner's result REPLACES this row. It does not add a second.
+
+**A13. Step 20: edit the existing entry, do not append a new one.** STATE's decisions log already holds `- **2026-09-22** — **piece 5 (the secondary analyses): decisions E1–E12**` directly after the piece-3 entry, and appending would duplicate it. The drafted text also contradicts P2/P75. Instead:
+
+(a) Change that entry's date to `**2026-09-22/<the date of this step>**`, the piece-3 entry's `2026-09-15/17` style.
+
+(b) In its design-rulings bullet, find:
+
+```markdown
+    deliberately widening piece 2's recorded reading; five checked settings that no front end exposes
+    carry `field=None` and get no table entry.
+```
+
+and replace it with:
+
+```markdown
+    deliberately widening piece 2's recorded reading; five checked settings that no front end exposes
+    (`freq_bounds`, `burn_in_nd`, `t_obs_periods`, `dt_nd`, `psd_t_obs_nd`) are registered in `FIELDS`
+    like any other key, with `None` in BOTH front-end tables, so a refusal names the setting and
+    `fix_sentence` offers no fix — not unregistered, because every `require_*` rule builds its
+    sentence through `describe(key)`, which raises a bare `KeyError` for a key `FIELDS` does not hold
+    (plan rulings P2, P75). The progressive mode is opt-in per kind, and the six ordinary kinds
+    still lose their directory on any exception, pinned by a test written before the mode existed;
+    the kind directory is the legacy `fdt/` on purpose, which makes the owner's stray pictures loose
+    files INSIDE a kind directory, the only place the tidy-up can reach them.
+```
+
+Use the lower-case key spellings exactly as above: they are the registered keys.
+
+(c) After the entry's last bullet (the one ending `rulings R1–R10, each carrying what it costs if it is wrong).`), append:
+
+```markdown
+  - The plan (`e902256`+`5354e6b`) carries 82 planning rulings, P1–P82; the spec's §12 rows 1–10 are
+    the ones that depart from the spec. D11 and D12 stay standing refusals; this piece re-opened
+    neither.
+  - The execution rulings are in the spec's §12 (rows from 11) and in the gitignored ledger
+    `.superpowers/sdd/2026-09-22-secondary-analyses/progress.md`.
+```
+
+Then add the bullet of durable execution rulings from Step 1, as the body says, each with its cost.
+
+**A14. Step 21.**
+
+- Replace the strike text '— one message builder, T21 and T29.' with '— one message builder, `core.refusals.missing_values_phrase`, delivered by T21 (P4, P76); T29 produces none.'
+- To the plots strike add: '(tests only: all four functions already closed their figures since `bb22ac4`; P17)'.
+- Strike the `tests/test_artifact_browser.py:864` item only if the ledger names the task that converted `assert sorted(seen) == ["observation", "posterior", "prior"], seen` to a subset assertion, and attribute it to that task. No task in the plan as written does this conversion. If none did, leave the item live with that reason.
+- In the owed E-row item, change 'the gate table gains its walkthrough row when the owner has run them' to 'the gate table's walkthrough row, now reading "Not yet run", is filled in when the owner has run them'.
+- Check each of these hand-on candidates against the ledger. Add those still open under 'Open, with no piece owning them yet', one line each in the '*From piece 5.*' voice:
+  - the `_merge_vals_bounds` third wording (P53; spec §1.3);
+  - the tool's now-redundant call-site preset fallback in `core/tool/fdt.py` (P50: 'A later piece may delete the now-redundant one');
+  - `check_passive_baseline`'s bare `ValueError`, if T33 did not need to convert it (P23);
+  - every defect T35's round trips recorded in spec §1.3 (P58).
+
+**A15. Step 17.** In the recorded judgement, name T28's change to `core/tool/__init__.py` and `core/tool/smoke.py` explicitly. It is on `smoke`'s path, choosing the store root through `temp_store_root`, but it creates and moves no tensor, and T28's tests pin the root choice. The judgement must say this rather than leave the reader to find the change in the diff.
+
+**A16. Step 23 (P44).** Tell the owner that E15 also needs an empty `Artifacts/crossval/` created by hand before it is run. The two legacy PNGs are already in `Artifacts/fdt/` (verified at `673868d`: `fdt_ratio_passive_20260915_153042.png` and `spontaneous_trajectory_20260915_153042.png`).
+
+#### Controller rulings (pre-flight, binding — these supersede the amendments above and the task text)
+
+- **F50** — do NOT edit `core/tool/fdt.py`'s "no bounds file" sentences; Task 29 owns them.
+- **F26** — re-read the spec's §1.3 table before adding the P53 row (Task 35 may have appended rows) and append after whatever the last row is at that moment.
+- **F62/F63** — walkthrough row E12 exercises the unfinished-record refusal from the command line (`python -m core compare repeats --record <unfinished> --record <other>`), because the window's pickers offer finished records only.
+- **F64** — update `CLAUDE.md`'s Tests bullet, which names the slow set as two tests with piece-3 timings, in the second (documents) commit, from the slow set's measured numbers.
+- **F65** — the piece's first commit is `a0d85da` (the design), as piece 4's paragraph counts from its design commit; `e902256` and `5354e6b` are the plan, and the pre-flight amendments commit is the one after `673868d` whose subject names the pre-flight — take its hash from `git log`.
+- **F66** — reword the E-section preamble: "E8 replaces it for a sweep; the single-cell refusal (spec §3.6) has no row of its own and is pinned by Task 16's tests."
+- **F24** — strike the `:864` item in STATE.md only if the ledger shows a task converted it (Task 25 does), and attribute it to Task 25.
+
+---
