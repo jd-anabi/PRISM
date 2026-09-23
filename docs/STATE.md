@@ -1,8 +1,9 @@
 # PRISM — state
 
-**Last updated:** 2026-09-22. **Piece 5, "the secondary analyses", is IN PROGRESS**: brainstormed
-with the owner 2026-09-22 (decisions E1–E12), design committed `a0d85da`, implementation plan being
-written. **Piece 4, "GUI usability and the artifact browser", is DONE**:
+**Last updated:** 2026-09-22. **Piece 5, "the secondary analyses", is DESIGNED AND PLANNED, not yet
+started**: brainstormed with the owner 2026-09-22 (decisions E1–E12), design `a0d85da`, plan
+`e902256`+`5354e6b` (41 tasks, 433 steps, rulings P1–P82). The owner swaps models before
+implementation. **Piece 4, "GUI usability and the artifact browser", is DONE**:
 commits `5902259`..`80be144` (47), on the local `main` branch, NOT YET PUSHED (the owner pushes) —
 `main` is 49 commits ahead of `origin/main` (`cfe261b`): `691a233` (piece 3's C1–C11 rows recorded),
 the 47 of `5902259`..`80be144` (`5902259` the design, `6fc399f` the plan, `644dcdb` the pre-flight
@@ -45,9 +46,11 @@ of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real scre
 seventeen pass** (the gate table below).
 **Piece 5 is under way** ("Owed" item 7); piece 6 follows. Its design is
 `docs/superpowers/specs/2026-09-22-secondary-analyses-design.md` (`a0d85da`; §1.1 holds decisions
-E1–E12, §1.2 the design rulings, §12 the deviations, empty at approval) and its plan is
-`docs/superpowers/plans/2026-09-22-secondary-analyses.md` (41 tasks). The owner is swapping models
-before implementation: the session that designed it stops after the plan. Piece 3
+E1–E12, §1.2 the design rulings, §12 nine deviations ruled at planning time) and its plan is
+`docs/superpowers/plans/2026-09-22-secondary-analyses.md` (41 tasks, 433 steps). The plan holds
+**82 rulings**: 69 from ten drafters who read the code for their own tasks, and 13 from three
+lenses over the assembled plan plus a judge. Ten of them corrected the spec inline. The owner is
+swapping models before implementation: the session that designed it stops after the plan. Piece 3
 (`3db271e`..`9e2f7ef`) is DONE and pushed, and its rows C1–C11 all pass; piece 2
 (`0016dae`..`d34997c`) is also pushed, and its rows B1–B8 all pass.
 
