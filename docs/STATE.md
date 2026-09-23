@@ -1,7 +1,7 @@
 # PRISM — state
 
 **Last updated:** 2026-09-23. **Piece 5, "the secondary analyses", is IN EXECUTION**: tasks 1–3 of 41
-done (`f6a722c`, `d9afaba`, `7930e52`+`4d8a782`), task 3's gate running at the hand-off. **To
+done and gated green (`f6a722c`, `d9afaba`, `7930e52`+`4d8a782`; 747 passed, 181 warnings). **To
 continue, read the section "HANDOFF" at the end of the gitignored ledger
 `.superpowers/sdd/2026-09-22-secondary-analyses/progress.md`** — it holds the exact per-task
 procedure, the owner's execution decisions, the items carried to later tasks and the first action.
