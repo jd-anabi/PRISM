@@ -1718,7 +1718,7 @@ def test_no_print_call_remains_in_the_converted_modules():
 
 @pytest.fixture
 def browse_store(tmp_path, monkeypatch):
-    """A store holding one artifact of each of the seven kinds plus three unusable directories, with
+    """A store holding one artifact of each of the eight kinds plus three unusable directories, with
     PRISM_ARTIFACTS pointing at it.
 
     ``config.artifacts_root()`` reads the variable on EVERY call (core/config.py:185-189) and ``main``
@@ -1741,7 +1741,7 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
     agree by eye. THIS TEST imports both front ends; the tool imports neither. A column added to the
     table without one added to the tool fails right here.
 
-    The seven kinds are restated in the tool as a literal for the same reason (reading KIND_DIRS at
+    The eight kinds are restated in the tool as a literal for the same reason (reading KIND_DIRS at
     parser-build time would import torch), so their order is pinned too -- the same shape as
     test_crossval_preset_choices_match_sweep_presets, which pins --preset's hard-coded choices against
     cli.SWEEP_PRESETS."""
@@ -1750,7 +1750,7 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
     from core.gui.widgets.artifact_table import columns_for
     from core.tool import browse
 
-    assert browse.KINDS == tuple(KIND_DIRS), "the seven kinds, in KIND_DIRS order"
+    assert browse.KINDS == tuple(KIND_DIRS), "the eight kinds, in KIND_DIRS order"
     assert set(browse.COLUMNS) == set(browse.KINDS), "every kind has a column set, and no other"
     for kind in browse.KINDS:
         # The tool's literal is the GUI's own spelling, lower-cased (P11): one canonical column list,
@@ -1761,6 +1761,43 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
     # GENERATED against it, rather than because it named it. Its own comment cites COLUMNS above as
     # the precedent for restating it -- so it is pinned the same way.
     assert browse._FINGERPRINT_DEPENDENT == ascreen._FINGERPRINT_DEPENDENT
+
+
+def test_the_rendered_help_counts_the_kinds_correctly():
+    """Checklist 18, a SILENT pin. Five phrases in core/tool/browse.py hand-write how many kinds
+    there are -- two "all seven"s in EPILOG, the "<kind> is one of ..." line under them, and the
+    ``kind`` help on ``list`` and on ``sweep``. None is generated, none was pinned, and a stale one
+    prints a wrong help page to an operator with no failure anywhere.
+
+    The scan is over the RENDERED help and not over the EPILOG constant, deliberately: two of the
+    five live on argparse arguments and never appear in that string, so a test that read the
+    constant would pass while `python -m core artifacts sweep --help` lied.
+    """
+    import argparse
+    import re
+    from core.tool import browse
+
+    words = {6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+    want = words[len(browse.KINDS)]
+
+    p = build_parser().subcommands["artifacts"]
+    modes = {name: sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
+             for name, sub in a.choices.items()}
+    rendered = {"artifacts": p.format_help(),
+                **{name: sub.format_help() for name, sub in modes.items()}}
+    # Collapsed to single spaces. argparse wraps every help at the TERMINAL's width, and at some
+    # widths (74-77 and 124-129 columns among them) it breaks sweep's "all eight" across two lines:
+    # uncollapsed, this test fails in such a console for nothing, and a stale count broken the same
+    # way would slip past the scan below.
+    rendered = {name: " ".join(text.split()) for name, text in rendered.items()}
+
+    for name, text in rendered.items():
+        for found in re.findall(r"\ball (\w+)", text):
+            assert found == want, f"{name} --help says 'all {found}' for {len(browse.KINDS)} kinds"
+    assert f"all {want}" in rendered["artifacts"], "the epilog names the count at all"
+    assert f"all {want}" in rendered["sweep"], "sweep's --help names the count at all"
+    assert "<kind> is one of " + ", ".join(browse.KINDS) in rendered["artifacts"], \
+        "the epilog lists the kinds by name, in KINDS order"
 
 
 def test_artifacts_list_prints_one_line_per_artifact_with_its_kinds_facts(browse_store, capsys):
@@ -1813,6 +1850,28 @@ def test_the_artifacts_listing_progress_cell_is_a_fraction_and_shows_rows_only_o
     assert browse._progress(summary(batches_done=4, batches_planned=4, finished=True,
                                     rows=(48, 48))) == "4/4 batches, 96 rows"
     assert browse._progress(summary()) == "?/? batches", "a body with neither count still renders"
+
+
+def test_the_artifacts_listing_points_cell_is_plain_ascii_and_a_dash_when_there_are_none():
+    """The tool's twin of the browser's Points cell, on stand-in summaries: a comma and plain ASCII,
+    never the browser's middle dot, because a script may read this line; "-" where a single run or a
+    comparison has no operating points at all, as a diagnostic's missing variant already reads."""
+    from core.artifacts.store import Summary
+    from core.tool import browse
+
+    def summary(**kw):
+        return Summary(kind="fdt", id="f", name="", created="2026-01-01 00:00:00", note="",
+                       path=Path("."), complete=True, reason=None, **kw)
+
+    assert browse._fdt_points(summary(points_done=10, points_planned=12, points_failed=0)) == "10/12"
+    assert browse._fdt_points(summary(points_done=10, points_planned=12, points_failed=2)) == \
+        "10/12, 2 failed"
+    assert browse._fdt_points(summary(points_done=10)) == "10/?", "a body with no planned total"
+    assert browse._fdt_points(summary()) == "-"
+    assert browse._cells("fdt", summary(study="sweep", points_done=2, points_planned=3,
+                                        points_failed=1, finished=True)) == \
+        ("(unnamed f)", "2026-01-01 00:00:00", "sweep", "2/3, 1 failed", "yes", "")
+    assert browse._cells("fdt", summary())[2:5] == ("-", "-", "no")
 
 
 def test_artifacts_list_with_no_kind_covers_every_kind_under_a_heading(browse_store, capsys):
@@ -2215,7 +2274,7 @@ def test_a_sweep_that_could_not_remove_something_exits_1_naming_it(browse_store,
 
 
 def test_artifacts_summary_prints_the_lineage_or_writes_it_to_out(browse_store, tmp_path, capsys):
-    """B10: the lineage report is a FILE, never an eighth store kind, and it comes out of the same
+    """B10: the lineage report is a FILE, never a store kind of its own, and it comes out of the same
     renderer the browser's "Lineage report..." writes -- so the document a reviewer receives is the
     same whichever front end made it (design §5). ``--out`` writes exactly what stdout would have
     carried.

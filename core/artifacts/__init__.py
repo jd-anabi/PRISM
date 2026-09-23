@@ -5,5 +5,5 @@ from .provenance import git_info, env_info, file_ref, inputs_from_cfg  # noqa: F
 from .report import render_lineage, render_manifest  # noqa: F401
 from .store import (ArtifactStore, ArtifactWriter, Accept, Summary, StoreError, KIND_DIRS,  # noqa: F401
                     Loaded, LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
-                    LoadedInference, LoadedDiagnostic, write_simulation_manifest,
+                    LoadedInference, LoadedDiagnostic, LoadedFdt, write_simulation_manifest,
                     default_store, set_default_store, use_store, resolve_store)

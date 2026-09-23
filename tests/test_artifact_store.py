@@ -150,11 +150,13 @@ def _cal_body(n=10):
 
 
 def _bodies():
-    """One valid body per WRITER kind -- the six ``store.create`` accepts. A FRESH dict per call, so a
-    test that hands one to the writer cannot leave a mutation behind for the next.
+    """One valid body per WRITER kind -- the seven ``store.create`` accepts. A FRESH dict per call, so
+    a test that hands one to the writer cannot leave a mutation behind for the next.
 
     The simulation kind is deliberately absent: its manifest has no writer at all (``store.create``
-    refuses it outright) and ``write_simulation_manifest`` builds its body itself.
+    refuses it outright) and ``write_simulation_manifest`` builds its body itself. That absence is
+    why ``test_bodies_covers_every_writer_kind`` closes this dict against ``BODY_KEYS`` MINUS that
+    one kind rather than against ``BODY_KEYS`` itself (piece 5, checklist 22).
     """
     return {
         "prior": {"gmm": {"n_components": 2, "param_keys": ["a"],
@@ -168,7 +170,87 @@ def _bodies():
         "calibration": _cal_body(), "inference": {"results": {"n_samples": 5}},
         "diagnostic": {"diagnostic": "sbc", "variant": None, "settings": {"repeats": 2},
                        "results": {"n_valid": 8}},
+        # A finished single-cell measurement at its smallest: the five keys a run knows before it
+        # starts, the three a finished single run fills, and the two that are null for a single run
+        # (``points``) and for anything but a comparison (``compared``). ``complete`` is True
+        # because _make exits its writer cleanly, and the writer is what sets that flag (Task 3).
+        "fdt": {"study": "single", "settings": {"n_freqs": 2, "ensemble_M": 8}, "seed": 11,
+                "grid": {"omega_0": 1.0, "n_freqs": 2}, "points": None, "offgrid": {"blanks": 0,
+                "of": 2}, "notices": [], "compared": None, "complete": True,
+                "results": {"ratio_at_resonance": 1.5}},
     }
+
+
+def test_bodies_covers_every_writer_kind():
+    """Checklist 22, a SILENT pin. ``_bodies`` feeds the per-kind round trip and the finished-per-kind
+    test, and neither is closed against the schema -- so a kind added to ``BODY_KEYS`` and forgotten
+    here is simply never round-tripped, and nothing says so. The simulation kind is subtracted rather
+    than listed: it has no writer at all (``store.create`` refuses it), which is why ``_bodies``
+    omits it on purpose.
+    """
+    assert set(_bodies()) == set(mf.BODY_KEYS) - {"simulation"}, \
+        "a kind in BODY_KEYS with no body here is silently never written by any test"
+    for kind, body in _bodies().items():
+        assert set(body) == set(mf.BODY_KEYS[kind]), kind
+
+
+def test_load_fdt_verifies_the_payload_hash_and_nothing_else(store):
+    """Checklist 6. An fdt record is a MEASUREMENT of a cell, not a constraint on a later run, so
+    there is no configuration it has to match and nothing is ever trained from it -- ``load_diagnostic``
+    is the precedent (D5). What it DOES check is the one thing the manifest can be checked against:
+    the payload's own sha256, so a data.h5 edited, truncated or deleted since the commit is refused
+    rather than read as the numbers the record claims.
+
+    A NULL recorded hash is not a mismatch. A progressive record hashes its payloads at the final
+    commit only (spec §2.2), so an unfinished record lists data.h5 with a null hash and must still
+    load -- reading what an interrupted run managed to write is the whole point of E2.
+    """
+    from core.artifacts import LoadedFdt
+    # "measured" never wrote numbers: _make gives it results.json and nothing else.
+    _make(store, "fdt", name="measured", body=_bodies()["fdt"])
+    # "measured2" did. A payload is registered on the WRITER, so it is written inside the with.
+    with store.create("fdt", None, name="measured2") as w2:
+        w2.body = _bodies()["fdt"]
+        w2.payload("data.h5").write_bytes(b"\x89HDF\r\n\x1a\n" + b"0" * 64)
+
+    loaded = store.load_fdt("measured2")
+    assert isinstance(loaded, LoadedFdt) and loaded.kind == "fdt" and loaded.id == w2.id
+    assert loaded.body["study"] == "single" and loaded.body["seed"] == 11
+    assert loaded.data_path == w2.dir / "data.h5" and loaded.data_path.is_file()
+    assert loaded.manifest.payloads["data.h5"] == prov.sha256_file(w2.dir / "data.h5")
+
+    # a record that never wrote numbers: no data.h5, and the loader says so rather than pointing at
+    # a path that is not there
+    assert store.load_fdt("measured").data_path is None
+
+    # a null recorded hash (an unfinished record) loads
+    mpath = w2.dir / st.MANIFEST
+    d = json.loads(mpath.read_text(encoding="utf-8"))
+    d["payloads"]["data.h5"] = None
+    mpath.write_text(json.dumps(d), encoding="utf-8")
+    assert store.load_fdt("measured2").data_path is not None, "a null hash is 'not yet', not 'wrong'"
+
+    # a payload edited since the commit IS refused
+    d["payloads"]["data.h5"] = "0" * 64
+    mpath.write_text(json.dumps(d), encoding="utf-8")
+    with pytest.raises(st.StoreError, match="data.h5") as edited:
+        store.load_fdt("measured2")
+    assert edited.value.field == "artifact"
+
+    # ... and so is one DELETED since the commit (ruling F29). A recorded hash is a claim the loader
+    # can check, and a file that is gone fails it; skipping it and answering data_path=None would
+    # pass a finished record off as one that never wrote numbers. Only a NULL hash means "not yet".
+    with store.create("fdt", None, name="measured3") as w3:
+        w3.body = _bodies()["fdt"]
+        w3.payload("data.h5").write_bytes(b"\x89HDF\r\n\x1a\n" + b"1" * 64)
+    (w3.dir / "data.h5").unlink()
+    with pytest.raises(st.StoreError, match="data.h5") as gone:
+        store.load_fdt("measured3")
+    assert gone.value.field == "artifact"
+
+    with pytest.raises(st.StoreError, match="no complete fdt") as nosuch:
+        store.load_fdt("nosuch")
+    assert nosuch.value.field == "artifact"
 
 
 def _make(store, kind="calibration", name="", body=None, parents=None, note=""):

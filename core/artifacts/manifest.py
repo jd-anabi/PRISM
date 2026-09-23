@@ -16,7 +16,8 @@ from dataclasses import asdict, dataclass
 from core.refusals import Refusal
 
 SCHEMA = 1
-KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic")
+KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic",
+         "fdt")
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 # A UTC second, with -2/-3 on a same-second collision; or the simulation kind's 12-hex identity digest.
 ID_RE = re.compile(r"^(\d{8}T\d{6}(-\d+)?|[0-9a-f]{12})$")
@@ -41,6 +42,15 @@ BODY_KEYS = {
     # body.get("mode"), where ``mode`` means the OBSERVATION mode -- a listing that showed "laplace"
     # in that column would be reporting a conditioning geometry that does not exist.
     "diagnostic": ("diagnostic", "variant", "settings", "results"),
+    # A measurement of a CELL (not of another artifact), or a comparison of such measurements
+    # (piece 5, E3). ``study`` is "single", "sweep" or "comparison" and is what tells the three
+    # apart; there is deliberately no second kind and no registry of study names here.
+    # Written PROGRESSIVELY (store.PROGRESSIVE_KINDS): every key is present from the FIRST manifest,
+    # with the not-yet-known ones null, because ``validate`` below refuses a partial key set. So the
+    # nullable keys are the schema's way of saying "this run has not got there yet", and ``complete``
+    # -- False until the writer commits -- is the one that says whether it ever did.
+    "fdt": ("study", "settings", "seed", "grid", "points", "offgrid", "notices", "compared",
+            "complete", "results"),
 }
 
 

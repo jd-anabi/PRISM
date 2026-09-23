@@ -691,7 +691,7 @@ def _bad_row(kind, **over):
 
 def test_columns_for_names_all_seven_kinds_after_name_and_created():
     """Every kind's header row, verbatim (design §3.2's table), and the set of kinds is CLOSED against
-    KIND_DIRS: an eighth kind added to the store must gain a column list here or fail this, rather
+    KIND_DIRS: a new kind added to the store must gain a column list here or fail this, rather
     than reaching the browser as a KeyError at the click. "Name" and "Created" lead every kind and
     "Note" ends every kind; what differs in between is what only that kind has."""
     import pytest
@@ -704,6 +704,7 @@ def test_columns_for_names_all_seven_kinds_after_name_and_created():
     assert columns_for("calibration") == ("Name", "Created", "Note")
     assert columns_for("inference") == ("Name", "Created", "Note")
     assert columns_for("diagnostic") == ("Name", "Created", "Variant", "Note")
+    assert columns_for("fdt") == ("Name", "Created", "Study", "Points", "Finished", "Note")
     for kind in KIND_DIRS:
         cols = columns_for(kind)
         assert cols[:2] == ("Name", "Created") and cols[-1] == "Note", kind
@@ -764,6 +765,20 @@ def test_a_caches_progress_and_whether_it_finished_come_apart():
     assert cells_for("simulation", _row("simulation", finished=True))[3] == "yes"
     # a kind with no progress to report leaves the cell out entirely
     assert "Progress" not in columns_for("prior")
+
+
+def test_an_fdt_rows_points_are_a_sweeps_fraction_and_blank_for_anything_else():
+    """Piece 5 (E4). The Points cell is a SWEEP's operating points as a fraction, with the failures
+    named when there are any. A single run and a comparison carry no points (``body["points"]`` is
+    null, so ``points_done`` is None), and their cell is blank rather than "0/0", which would claim
+    a fact. Finished is ``finished``, never ``complete``, exactly as for a cache (E2)."""
+    sweep = _row("fdt", study="sweep", points_done=10, points_planned=12, points_failed=0)
+    assert cells_for("fdt", sweep)[2:5] == ("sweep", "10/12", "yes")
+    assert cells_for("fdt", _row("fdt", study="sweep", points_done=10, points_planned=12,
+                                 points_failed=2))[3] == "10/12 · 2 failed"
+    # a planned total the body does not carry: the count alone, not "10/None"
+    assert cells_for("fdt", _row("fdt", points_done=10, points_planned=None))[3] == "10"
+    assert cells_for("fdt", _row("fdt", study="single", finished=False))[2:5] == ("single", "", "no")
 
 
 def test_a_posteriors_amortization_is_spelled_out_and_the_norm_is_named_too():

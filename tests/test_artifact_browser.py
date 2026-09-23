@@ -69,7 +69,7 @@ def _answer(monkeypatch, button):
 
 
 def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(tmp_path):
-    """B1/B2 and §3.2. Seven kinds in KIND_DIRS order, one kind at a time, each artifact's own row
+    """B1/B2 and §3.2. Every kind in KIND_DIRS order, one kind at a time, each artifact's own row
     named by Summary.label -- and for the prior kind, the three leftover directories after the real
     one, each showing why it was not read instead of the kind's own columns.
 
@@ -104,6 +104,23 @@ def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(
         assert reason in tail, tail
     assert "1 complete" in screen.status.text() and "3 incomplete" in screen.status.text(), \
         screen.status.text()
+
+
+def test_every_kind_dir_has_a_selector_label(tmp_path):
+    """Checklist 13, a SILENT pin. ``ArtifactScreen.__init__`` does ``KIND_LABELS[kind]`` for every
+    key in ``KIND_DIRS``, so a kind added to the store without a label here is a KeyError AT WINDOW
+    LAUNCH -- not in a listing, not at a click, but before the app draws anything -- and nothing
+    pinned it. Closed both ways: a label for a kind the store does not have would put an entry in the
+    selector that resolves to no directory.
+    """
+    from core.gui.screens.artifact_screen import KIND_LABELS
+    assert set(KIND_LABELS) == set(KIND_DIRS), \
+        "a kind with no selector label is a KeyError at window launch"
+    assert list(KIND_LABELS) == list(KIND_DIRS), "the selector is built in KIND_DIRS order"
+    assert all(v and not v.startswith(" ") for v in KIND_LABELS.values())
+    # and the screen really does build from it, so the pin cannot rot into a test of a dead dict
+    screen = artifact_screen(ArtifactStore(tmp_path))
+    assert screen.kind_combo.count() == len(KIND_DIRS)
 
 
 def test_a_kind_with_nothing_in_it_is_not_a_root_that_cannot_be_read(tmp_path):
@@ -610,7 +627,7 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
 
 
 def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, monkeypatch):
-    """B7: one action per kind and one for all seven, behind a confirmation that lists exactly the
+    """B7: one action per kind and one for all kinds, behind a confirmation that lists exactly the
     rows the table calls incomplete. A directory that carries a manifest.json AT ALL is never
     touched -- R1 narrowed this from "a usable manifest of this kind" after a reviewer probed the
     old rule deleting a real calibration whose manifest was valid under a different schema. A
@@ -1193,7 +1210,7 @@ def test_the_lineage_report_writes_exactly_what_render_lineage_returns(store, mo
     assert "ancestor" in text and ancestor.id in text, "the chain must reach the parent"
     assert SHOWN == [], "writing a report asks nothing"
     assert str(out) in scr.status.text(), scr.status.text()
-    # It is a FILE and never an eighth kind: the store's seven directories gained nothing.
+    # It is a FILE and never a kind of its own: the store's directories gained nothing.
     assert [s.id for s in store.list("inference")] == [w.id]
     assert not (store.root / "reports").exists()
 

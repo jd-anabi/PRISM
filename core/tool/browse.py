@@ -42,11 +42,12 @@ from pathlib import Path
 
 from core.refusals import NOTE_MAX_CHARS
 
-# The seven kinds in KIND_DIRS order, restated as a literal: reading core.artifacts.store.KIND_DIRS
+# The eight kinds in KIND_DIRS order, restated as a literal: reading core.artifacts.store.KIND_DIRS
 # at parser-build time would import torch (core/artifacts/__init__.py imports .store, which imports
 # core.config). tests/test_tool.py pins the two in sync, both order and membership -- the same shape
 # as --preset's hard-coded choices pinned against cli.SWEEP_PRESETS.
-KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic")
+KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic",
+         "fdt")
 
 # The columns each kind shows, exactly design §3.2's table: the browser's own tuples
 # (core/gui/widgets/artifact_table.columns_for), LOWER-CASED (P11). A SECOND literal on purpose --
@@ -61,6 +62,7 @@ COLUMNS = {
     "calibration": ("name", "created", "note"),
     "inference": ("name", "created", "note"),
     "diagnostic": ("name", "created", "variant", "note"),
+    "fdt": ("name", "created", "study", "points", "finished", "note"),
 }
 
 # The tail of log.txt ``show`` prints. A DISPLAY cap, not a knob: it bounds what one screenful of
@@ -84,21 +86,21 @@ must not be able to fail on a bounds file it does not need, and --help here cost
 The consequence is that this family cannot tell you whether a posterior matches your bounds file --
 that is what LOADING it does (`python -m core validate --posterior ...`).
 
-  list [<kind>]         one line per artifact; with no kind, all seven under headings
+  list [<kind>]         one line per artifact; with no kind, all eight under headings
   show <kind> <ref>     the manifest, then the records of the run that wrote it
   note <kind> <ref> --note TEXT
                         set the note: one line, at most 200 characters; '' clears it
   rm <kind> <ref>       delete one artifact. There is no --force: an artifact anything depends on
                         cannot be deleted at all, so delete its children first
   sweep [<kind>] [--yes]
-                        remove every directory with NO manifest at all; with no kind, all seven. A
+                        remove every directory with NO manifest at all; with no kind, all eight. A
                         DRY RUN without --yes: it prints what it would remove and removes nothing.
                         A directory that carries a manifest.json -- even one this build cannot read
                         -- is reported and never removed
   summary <kind> <ref> [--out PATH]
                         the lineage report: this artifact, then its parents, oldest last
 
-<kind> is one of prior, simulation, posterior, observation, calibration, inference, diagnostic.
+<kind> is one of prior, simulation, posterior, observation, calibration, inference, diagnostic, fdt.
 <ref> is an artifact's name or its id. An empty listing exits 0: a script must be able to tell
 "nothing on disk" from "you asked for something wrong".
 """
@@ -129,6 +131,19 @@ def _progress(s) -> str:
     return text
 
 
+def _fdt_points(s) -> str:
+    """"10/12" for a sweep, "10/12, 2 failed" when some points failed, "-" for a single run or a
+    comparison, which have no operating points at all. A comma and plain ASCII, not the browser's
+    middle dot: a script may read this line -- ``_progress`` above takes the same care."""
+    if s.points_done is None:
+        return "-"
+    planned = "?" if s.points_planned is None else str(int(s.points_planned))
+    text = f"{int(s.points_done)}/{planned}"
+    if s.points_failed:
+        text += f", {int(s.points_failed)} failed"
+    return text
+
+
 def _cells(kind: str, s) -> tuple:
     """One complete row's cells, in ``COLUMNS[kind]`` order. ``label`` is the name, or
     ``(unnamed <id>)`` -- as the pickers show it, and as a simulation cache always reads, because
@@ -148,6 +163,9 @@ def _cells(kind: str, s) -> tuple:
         # A diagnostic records its kind under ``variant``, never ``mode``: the mode column would
         # otherwise report a conditioning geometry that does not exist (design §1.3).
         return head + (_flat(s.variant) or "-", _flat(s.note))
+    if kind == "fdt":
+        return head + (_flat(s.study) or "-", _fdt_points(s), "yes" if s.finished else "no",
+                       _flat(s.note))
     return head + (_flat(s.note),)
 
 
@@ -173,7 +191,7 @@ def _print_kind(kind: str, rows) -> None:
 
 def _list(args, store) -> int:
     """``list [<kind>]``. An empty listing is EXIT 0 with a line saying so (§4.3); an unknown kind is
-    the store's own refusal, through the ladder's ``refused:`` rung at exit 1. With no kind, all seven
+    the store's own refusal, through the ladder's ``refused:`` rung at exit 1. With no kind, all eight
     are walked and a kind with nothing in it is NAMED in a trailing line rather than silently
     skipped, so "I did not look" and "there is nothing" stay distinguishable."""
     kinds = [args.kind] if args.kind else list(KINDS)
@@ -331,7 +349,7 @@ def _rm(args, store) -> int:
 
 
 def _sweep(args, store) -> int:
-    """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all seven) that has NO
+    """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all eight) that has NO
     manifest at all. §4.3: nothing to remove is 0; a directory that would not delete is 1, naming
     each. A failure never stops the sweep -- ``sweep_incomplete`` finishes the rest and reports it.
 
@@ -400,7 +418,7 @@ def _sweep(args, store) -> int:
 def _summary(args, store) -> int:
     """``summary <kind> <ref> [--out PATH]``: the lineage report -- the artifact, then its parents
     transitively, a parent absent from the store printed as MISSING rather than skipped (design §5).
-    A file or stdout, never an eighth store kind (B10).
+    A file or stdout, never a store kind of its own (B10).
 
     newline="\\n" explicitly (P23): write_text's default newline=None translates every "\\n" to
     "\\r\\n" on Windows, and the browser's own Lineage report button writes the same text with
@@ -439,7 +457,7 @@ def register(subparsers) -> dict:
     modes = p.add_subparsers(dest="mode", required=True,
                              metavar="{list,show,note,rm,sweep,summary}")
 
-    ls = modes.add_parser("list", help="one line per artifact of a kind, or of all seven")
+    ls = modes.add_parser("list", help="one line per artifact of a kind, or of all eight")
     ls.add_argument("kind", nargs="?", default=None, metavar="<kind>", help=_KIND)
     ls.set_defaults(handler=_list)
 
@@ -465,7 +483,7 @@ def register(subparsers) -> dict:
     sweep = modes.add_parser("sweep", help="remove every directory with no manifest at all "
                                            "(a dry run until --yes)")
     sweep.add_argument("kind", nargs="?", default=None, metavar="<kind>",
-                       help=f"{_KIND}; with no kind, all seven")
+                       help=f"{_KIND}; with no kind, all eight")
     sweep.add_argument("--yes", action="store_true",
                        help="actually remove them. Without it this is a DRY RUN: it prints exactly "
                             "what it would remove and removes nothing, which is the confirmation "

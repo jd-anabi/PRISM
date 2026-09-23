@@ -45,6 +45,7 @@ KIND_LABELS = {
     "calibration": "Calibrations",
     "inference": "Inferences",
     "diagnostic": "Diagnostics",
+    "fdt": "FDT measurements and sweeps",
 }
 
 # The tail of a run's records the pane shows (§3.3). A ceiling, not a budget: a training run's log is
@@ -337,7 +338,7 @@ class ArtifactScreen(QWidget):
     def _save_shown(self) -> None:
         """B10's first half: what is on screen, to a file the operator picks.
 
-        A FILE, never an eighth store kind -- a report DESCRIBES the store and must not be mistaken
+        A FILE, never a store kind of its own -- a report DESCRIBES the store and must not be mistaken
         for something the store holds. The dialog is QFileDialog.getSaveFileName, the same call
         simulate_panel._save_video and figure_window use; cancelling returns "" and writes nothing.
         """
@@ -362,7 +363,7 @@ class ArtifactScreen(QWidget):
     def _lineage_report(self) -> None:
         """B10: write the selected artifact's lineage to a file the operator names.
 
-        A report DESCRIBES the store and is never an eighth kind in it (§5): nothing here writes
+        A report DESCRIBES the store and is never a kind of its own in it (§5): nothing here writes
         into the artifact root -- ``render_lineage`` reads manifests and this writes its text
         wherever the operator says. UTF-8 with LF endings, which is byte for byte what
         ``python -m core artifacts summary --out`` writes, so the document cannot say which front end
@@ -666,7 +667,7 @@ class ArtifactScreen(QWidget):
         understands; those rows stay in the listing and are named on the status line instead, which
         is why they are returned rather than silently dropped.
 
-        ``kind is None`` means all seven, EXPLICITLY -- never "whatever a falsy kind means". A
+        ``kind is None`` means all kinds, EXPLICITLY -- never "whatever a falsy kind means". A
         truthiness test here is how a one-kind sweep could have widened to every kind.
         """
         out, kept, problems = [], [], []
@@ -688,7 +689,7 @@ class ArtifactScreen(QWidget):
         return out, kept, problems
 
     def _sweep(self, *, all_kinds: bool) -> None:
-        """B7: remove every directory of this kind -- or of all seven -- that has NO manifest at all.
+        """B7: remove every directory of this kind -- or of all kinds -- that has NO manifest at all.
 
         The candidates are listed BEFORE anything is removed, and THAT LIST is what is removed: each
         entry goes by name through ``remove_incomplete``, the call that can only ever touch a
@@ -710,7 +711,7 @@ class ArtifactScreen(QWidget):
         store = self._resolved_store()
         # self.kind(), the one accessor everything else on this screen reads, and None ONLY for the
         # all-kinds button: reading currentData() here gave a second answer that disagreed with
-        # kind() whenever it was falsy, and a falsy kind means "all seven" downstream.
+        # kind() whenever it was falsy, and a falsy kind means "all kinds" downstream.
         kind = None if all_kinds else self.kind()
         cands, kept, problems = self._incomplete(store, kind)
         tail = (" " + " ".join(problems)) if problems else ""

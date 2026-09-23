@@ -383,7 +383,7 @@ def build_tiny_run(store, hw=None):
 
 
 def build_browse_store(root):
-    """One artifact of each of the SEVEN kinds plus the three bad-directory shapes, in a store at
+    """One artifact of each of the EIGHT kinds plus the three bad-directory shapes, in a store at
     ``root``. Returns ``{kind: id, ..., "bad": (dir_name, dir_name, dir_name)}``.
 
     SECONDS, not minutes -- the browser suite must not reach for ``tiny_run``, whose cost is why
@@ -431,6 +431,14 @@ def build_browse_store(root):
         "inference": {"results": {}},
         "diagnostic": {"diagnostic": "identifiability", "variant": "laplace",
                        "settings": {}, "results": {}},
+        # A FINISHED sweep, so the fdt row carries content in both of its own columns: a study name
+        # and a point fraction with a failure in it. ``complete`` True because the writer commits
+        # cleanly here; an UNFINISHED record is a different shape and the tests that need one build
+        # it themselves rather than making this fixture carry two.
+        "fdt": {"study": "sweep", "settings": {"n_freqs": 2, "preset": "fast"}, "seed": 7,
+                "grid": None, "points": {"param": "S", "planned": 3, "done": 2, "failed": 1},
+                "offgrid": {"blanks": 0, "of": 6}, "notices": [], "compared": None,
+                "complete": True, "results": {"peak_ratio": 2.0}},
     }
     ids = {}
     for kind, body in bodies.items():

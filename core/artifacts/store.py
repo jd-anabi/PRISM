@@ -30,7 +30,13 @@ from . import provenance as prov
 
 KIND_DIRS = {"prior": "priors", "simulation": "simulations", "posterior": "posteriors",
              "observation": "observations", "calibration": "calibrations", "inference": "inferences",
-             "diagnostic": "diagnostics"}
+             "diagnostic": "diagnostics",
+             # NOT "crossval": core/Reduction/plots.py already writes reduction_crossval_<stamp>.png
+             # into the reduction directory, and a second meaning for the word would collide with
+             # existing vocabulary (spec §2.1). Reusing the EXISTING ``fdt`` directory is chosen, not
+             # accidental: the owner's stray pictures then sit as loose files inside a kind
+             # directory, which is where ``loose_files`` can reach them.
+             "fdt": "fdt"}
 MANIFEST = "manifest.json"
 # The run's records, written beside the manifest by ArtifactWriter (piece 3, V4). NOT a payload: not
 # hashed, not in ``payloads``, never read by a loader. The simulation cache never gets one (§1.2).
@@ -51,7 +57,13 @@ RECENT_WRITE_SECONDS = 300.0
 # Which ``parents`` keys can name an artifact of a given kind.
 _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 "posterior": ("posterior", "parent_posterior"), "observation": ("observation",),
-                "calibration": (), "inference": (), "diagnostic": ()}
+                "calibration": (), "inference": (), "diagnostic": (),
+                # Explicit, though a MISSING entry means the same thing to ``dependents``: an fdt
+                # record measures a CELL and depends on no artifact, and nothing can depend on one.
+                # A comparison names the records it drew in its BODY, not here -- ``parents`` is a
+                # flat {key: id} map read as ``m.parents.get(pk) == id_`` (spec §1.2), so it cannot
+                # carry an arbitrary number of ids without widening the contract for every kind.
+                "fdt": ()}
 
 
 class StoreError(Refusal):
@@ -99,6 +111,13 @@ class Summary:
     batches_planned: "int | None" = None    # simulation only: body["identity"]["n_runs"], the PLANNED total
     rows: "tuple[int, ...] | None" = None   # simulation only: rows per batch, written at completion ONLY
     variant: "str | None" = None            # diagnostic only: body["variant"]
+    # Piece 5: fdt only. ``study`` is "single", "sweep" or "comparison"; the three counts are a
+    # SWEEP's operating points (body["points"]), None for a single run and for a comparison, which
+    # have none. Declared here and FILLED by ArtifactStore.list.
+    study: "str | None" = None
+    points_done: "int | None" = None
+    points_planned: "int | None" = None
+    points_failed: "int | None" = None
 
     @property
     def label(self) -> str:
@@ -195,6 +214,22 @@ class LoadedDiagnostic(Loaded):
     variant: "str | None" = None    # its mode where it has more than one ("rotation"/"laplace"/"jacobian")
     settings: dict = field(default_factory=dict)
     results: dict = field(default_factory=dict)
+
+
+@dataclass
+class LoadedFdt(Loaded):
+    """One effective-temperature measurement, one parameter sweep, or one comparison of them.
+
+    NOT frozen (planning ruling P1): ``Loaded`` is a plain dataclass, and Python refuses
+    ``@dataclass(frozen=True)`` on a subclass of a non-frozen one (TypeError at import). Every
+    other ``Loaded*`` in this module is a plain dataclass for the same reason.
+
+    ``body`` is the manifest's own body, copied; ``data_path`` is ``<dir>/data.h5`` when the run got
+    as far as writing numbers and None when it did not -- which an INTERRUPTED record (E2) very
+    often has not.
+    """
+    body: dict = field(default_factory=dict)
+    data_path: "Path | None" = None
 
 
 def slug(title: str) -> str:
@@ -1071,6 +1106,41 @@ class ArtifactStore:
         return LoadedDiagnostic("diagnostic", m.id, m.name, m, sub, diagnostic=body["diagnostic"],
                                 variant=body["variant"], settings=dict(body["settings"]),
                                 results=dict(body["results"]))
+
+    def load_fdt(self, ref: str) -> LoadedFdt:
+        """A measurement of a CELL, read back: its body and the path to its numbers.
+
+        Like ``load_diagnostic``, this constrains nothing (D5): an fdt record describes an
+        experiment that has already happened, there is no configuration it has to match, and nothing
+        is ever trained from it. The ONE thing it verifies is every payload's own sha256, because
+        that is the one claim the manifest makes about a file this call is about to hand out. A
+        recorded hash whose file is GONE fails that claim as surely as one that no longer matches
+        (controller ruling F29): skipping it would hand back ``data_path=None`` and pass a finished
+        record off as one that never wrote numbers.
+
+        A payload whose recorded hash is NULL is not verified, present or not. A progressive record
+        hashes at the final commit only (spec §2.2), so every unfinished record lists its payloads
+        unhashed -- and reading what an interrupted run did manage to write is exactly what E2 keeps
+        the folder for (P47).
+        """
+        sub, m = self._find("fdt", ref)
+        if m is None:
+            raise StoreError(f"no complete fdt artifact named or id'd {ref!r} under "
+                             f"{self.kind_dir('fdt')}", field="artifact")
+        for name, want in sorted(m.payloads.items()):
+            if want is None:
+                continue
+            p = sub / name
+            if not p.is_file():
+                raise StoreError(f"fdt {m.name or m.id}: {name} is missing, but its manifest records "
+                                 f"its sha256 {want}; the artifact is inconsistent", field="artifact")
+            got = prov.sha256_file(p)
+            if got != want:
+                raise StoreError(f"fdt {m.name or m.id}: {name} hashes to {got}, not the {want} its "
+                                 f"manifest records; the artifact is inconsistent", field="artifact")
+        data = sub / "data.h5"
+        return LoadedFdt("fdt", m.id, m.name, m, sub, body=dict(m.body),
+                         data_path=data if data.is_file() else None)
 
 
 def write_simulation_manifest(path, identity: dict, *, parents=None, inputs=None, hw=None,

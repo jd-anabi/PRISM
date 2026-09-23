@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QAbstractItemView, QTreeWidget, QTreeWidgetItem
 _LEADING = ("Name", "Created")
 
 # Per kind, the columns BETWEEN "Created" and "Note" -- what only that kind has (design §3.2's
-# table). CLOSED against store.KIND_DIRS by the tests: an eighth kind must appear here or fail there.
+# table). CLOSED against store.KIND_DIRS by the tests: a new kind must appear here or fail there.
 # A diagnostic shows `variant` and not `mode`, deliberately: it records its kind under `variant` and
 # has no conditioning geometry, so a mode column could only ever be blank for it (§1.3).
 _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
@@ -29,6 +29,10 @@ _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
     "calibration": (),
     "inference": (),
     "diagnostic": ("Variant",),
+    # An fdt record shows WHICH of the three studies it is, a sweep's operating points, and whether
+    # the run finished -- ``finished`` is a real question for this kind (E2: an interrupted record
+    # keeps its folder), which is why it has the cache's column and the other six do not.
+    "fdt": ("Study", "Points", "Finished"),
 }
 
 # "Created", descending: newest first, which is the order ArtifactStore.list already returns. Used on
@@ -86,6 +90,23 @@ def _amortization(s) -> str:
     return "amortized" if s.amortized else "narrowed (TSNPE)"
 
 
+def _points(s) -> str:
+    """A sweep's operating points: ``"10/12"``, or ``"10/12 · 2 failed"`` when some failed (E4).
+
+    Blank for a single run and for a comparison, which have no points at all -- ``points`` is null in
+    their bodies, so ``points_done`` is None and the cell says nothing rather than "0/0". A planned
+    total the manifest does not carry (a hand-edited body) falls back to the count alone rather than
+    printing "10/None", exactly as ``_progress`` does above.
+    """
+    if s.points_done is None:
+        return ""
+    head = (f"{int(s.points_done)}" if s.points_planned is None
+            else f"{int(s.points_done)}/{int(s.points_planned)}")
+    if not s.points_failed:
+        return head
+    return f"{head} · {int(s.points_failed)} failed"
+
+
 def cells_for(kind: str, s) -> tuple[str, ...]:
     """One row's cells in ``columns_for(kind)`` order, every one a string.
 
@@ -109,6 +130,8 @@ def cells_for(kind: str, s) -> tuple[str, ...]:
         middle = (s.mode or "", "" if s.width is None else str(s.width))
     elif kind == "diagnostic":
         middle = (s.variant or "",)
+    elif kind == "fdt":
+        middle = (s.study or "", _points(s), "yes" if s.finished else "no")
     return (s.label, s.created) + middle + (s.note or "",)
 
 
