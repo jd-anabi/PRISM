@@ -6,7 +6,9 @@ named -- with ``manifest.json`` written LAST, atomically, by ``ArtifactWriter``.
 READING manifests, so a hand-renamed folder still resolves and parent references (by id) survive.
 The simulation cache is the exception: its directory is the identity digest and its manifest is
 written by ``training_checkpoint`` (``write_simulation_manifest``), because a resumable cache must
-survive an interrupted run, which a writer's remove-on-exception would delete.
+survive an interrupted run, which a writer's remove-on-exception would delete. An fdt record needs
+the same survival but keeps the writer, through its progressive mode (``PROGRESSIVE_KINDS``): its
+manifest is written FIRST and refreshed as the run proceeds.
 """
 from __future__ import annotations
 
@@ -54,6 +56,21 @@ NO_MANIFEST_REASON = "no manifest.json (incomplete or interrupted)"
 # consult. Not a cross-process lock, which is out of scope: a recency guard plus an honest report
 # cannot itself destroy anything, and it costs a just-abandoned leftover a few minutes' wait.
 RECENT_WRITE_SECONDS = 300.0
+# Kinds whose record is written PROGRESSIVELY (piece 5, E2): the directory and a first manifest
+# exist from ``__enter__``, ``refresh()`` rewrites the manifest and the log as the run proceeds, and
+# an exception KEEPS the directory instead of removing it. The training cache has the same property
+# by another mechanism -- it has no writer at all -- and for the same reason: a run that takes hours
+# and is interrupted must leave behind what it measured.
+#
+# OPT-IN PER KIND, never a default: the six ordinary kinds keep today's behaviour exactly (directory
+# created at entry, manifest last, directory removed on any exception) and a test pins that they do.
+#
+# One consequence, stated where the constant is: a progressive record carries a manifest from its
+# first moment, so ``remove_incomplete`` -- which removes only a directory with NO manifest at all --
+# can never remove one, finished or not. That is the right answer (spec §2.5), and it is why
+# ``__exit__`` removes the directory for a refusal raised before anything was written: an empty
+# record nothing can ever clear would otherwise accumulate.
+PROGRESSIVE_KINDS: frozenset = frozenset({"fdt"})
 # Which ``parents`` keys can name an artifact of a given kind.
 _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 "posterior": ("posterior", "parent_posterior"), "observation": ("observation",),
@@ -93,10 +110,11 @@ class Summary:
     note: str
     path: Path
     # "has a valid manifest", i.e. the directory describes a real artifact -- NOT "the run finished".
-    # For the simulation kind those differ: a cache is manifested from its first batch on, and
-    # ``body["complete"]`` is the field that says whether its rows are all there. ``finished`` below
-    # is that honest question, asked the same way for every kind -- ask it, not this one, when what
-    # you mean is "did the run get to the end" (piece 4, B3).
+    # For the kinds whose body carries ``complete`` those differ: a cache is manifested from its first
+    # batch on, an fdt record from its first moment (piece 5, E2), and ``body["complete"]`` is the
+    # field that says whether the run got to the end. ``finished`` below is that honest question,
+    # asked the same way for every kind -- ask it, not this one, when what you mean is "did the run
+    # get to the end" (piece 4, B3).
     complete: bool
     reason: "str | None"
     mode: "str | None" = None
@@ -106,7 +124,7 @@ class Summary:
     # Piece 4 (B2): everything else a browser row shows, off the ONE manifest read ``list`` already
     # did. Keyword with defaults, so no positional construction anywhere breaks.
     dir_name: str = ""                      # the directory's own name, ALWAYS; remove_incomplete's handle
-    finished: bool = False                  # did the RUN finish; not ``complete`` for a cache
+    finished: bool = False                  # did the RUN finish; not ``complete`` for a cache or fdt record
     batches_done: "int | None" = None       # simulation only
     batches_planned: "int | None" = None    # simulation only: body["identity"]["n_runs"], the PLANNED total
     rows: "tuple[int, ...] | None" = None   # simulation only: rows per batch, written at completion ONLY
@@ -284,7 +302,14 @@ class ArtifactWriter:
     """Context manager handed out by ``ArtifactStore.create``: creates the directory, hands out
     payload and figure paths, and on a clean exit hashes the payloads, writes the run's ``log.txt``
     and writes the manifest LAST. On ANY exception (a cancel included) the directory is removed and
-    the exception re-raised, so a half-artifact never looks real."""
+    the exception re-raised, so a half-artifact never looks real.
+
+    A kind in ``PROGRESSIVE_KINDS`` is written the other way round (piece 5, E2): ``__enter__``
+    writes a first manifest carrying every body key with the unknown ones null, ``refresh()``
+    re-writes it and the log as the run proceeds, and an exception KEEPS the directory with
+    ``complete`` still False -- except a ``Refusal`` raised before the first payload or figure, which
+    is a pre-spend refusal and must not leave a permanent empty record behind.
+    """
 
     def __init__(self, store, kind, cfg, *, name, note, id, created):
         self.store, self.kind, self.cfg = store, kind, cfg
@@ -294,12 +319,23 @@ class ArtifactWriter:
         self.parents, self.fingerprints, self.body = {}, {}, {}
         self._payloads, self._figures = [], []
         self.manifest = None
+        self.progressive = kind in PROGRESSIVE_KINDS
+        # True once a payload path or a figure path has been HANDED OUT. The question ``__exit__``
+        # asks of a refusal is "was anything spent", and handing out the path is the last moment
+        # this class can observe -- what the caller then does with it is out of sight.
+        self._wrote_anything = False
+        # The header blocks, computed once and reused by every refresh. git_info runs three git
+        # subprocesses and env_info imports torch; a sweep refreshes after every operating point, and
+        # neither block can change while one run is in flight.
+        self._prism = None
+        self._env = None
 
     def payload(self, filename: str) -> Path:
         if "/" in filename or "\\" in filename:
             raise StoreError(f"a payload is a file directly inside the artifact directory: {filename!r}")
         if filename not in self._payloads:
             self._payloads.append(filename)
+        self._wrote_anything = True
         return self.dir / filename
 
     def figure_path(self, title: str) -> Path:
@@ -311,6 +347,7 @@ class ArtifactWriter:
             p = figs / f"{base}-{n}.png"
             n += 1
         self._figures.append(f"figures/{p.name}")
+        self._wrote_anything = True
         return p
 
     def fig_sink(self, forward=None):
@@ -328,48 +365,71 @@ class ArtifactWriter:
 
     def __enter__(self):
         self.dir.mkdir(parents=True, exist_ok=False)
+        if self.progressive:
+            # The FIRST manifest, before a single number is computed (spec §2.2 step 1). ``validate``
+            # refuses a partial body key set, so this carries every key: what the caller set between
+            # create() and here, and null for the rest.
+            self._write(hashed=False, complete=False)
         return self
 
     def __exit__(self, exc_type, exc, tb):
         if exc_type is not None:
+            if self.progressive and not (isinstance(exc, Refusal) and not self._wrote_anything):
+                # E2. The run was interrupted or it failed AFTER spending something: the folder stays,
+                # ``complete`` stays False, and one last refresh puts the log up to the failure on
+                # disk -- that log is the document that says why it stopped.
+                try:
+                    self._write(hashed=False, complete=False)
+                except Exception as e:        # noqa: BLE001 -- the in-flight cause must propagate
+                    warnings.warn(f"could not refresh the unfinished {self.kind} record {self.dir} "
+                                  f"({type(e).__name__}: {e}); it keeps the manifest it had.",
+                                  stacklevel=2)
+                return False
             # The cleanup must never REPLACE the exception that ended the run -- the one the operator
             # needs -- with a PermissionError about a directory the index already ignores (it has no
-            # manifest, so it is incomplete by definition and nothing will ever load it).
+            # manifest, so it is incomplete by definition and nothing will ever load it). The one
+            # exception to that parenthesis is a progressive record refused before it wrote anything,
+            # which does carry its first manifest -- hence the warning worded by mode (ruling F30).
             try:
                 _rmtree_retry(self.dir)
             except OSError as e:              # noqa: BLE001 -- the in-flight cause must propagate, not this
+                if self.progressive:
+                    # Conditional, because the removal may have got as far as the manifest before it
+                    # failed: what is left is then a manifest-less leftover, not an unfinished record.
+                    left = ("if its manifest is still there it is listed as unfinished and can be "
+                            "removed with the delete action; if not, the leftover sweep clears it")
+                else:
+                    left = "it has no manifest, so the store ignores it"
                 warnings.warn(f"could not remove the incomplete artifact directory {self.dir} "
-                              f"({type(e).__name__}: {e}); it has no manifest, so the store ignores it.",
+                              f"({type(e).__name__}: {e}); {left}.",
                               stacklevel=2)
             return False
         self._commit()
         return False
 
-    def _commit(self) -> None:
-        hw = getattr(self.cfg, "hw", None)
-        # missing_ok: this runs at the END of a run that may have taken days, and an input file moved
-        # or edited meanwhile must be recorded as unhashed rather than raise here and lose everything
-        # the run produced. Named in a warning so the gap is not silent.
-        inputs = (prov.inputs_from_cfg(self.cfg, missing_ok=True) if self.cfg is not None
-                  else {"bounds": None, "cell": None, "units": None, "model": None})
-        gone = [k for k, v in inputs.items() if isinstance(v, dict) and v.get("sha256") is None]
-        if gone:
-            warnings.warn(
-                f"{self.kind} artifact {self.id}: input file(s) "
-                + ", ".join(f"{k} ({inputs[k]['path']})" for k in gone)
-                + " could not be read at commit, so the manifest records them unhashed. The artifact "
-                  "is written anyway -- losing a finished run to a moved input file would be worse.",
-                stacklevel=3)
-        d = dict(
-            schema=mf.SCHEMA, kind=self.kind, id=self.id, name=self.name, created=self.created.isoformat(),
-            note=self.note, prism=prov.git_info(config.REPO_ROOT),
-            env=prov.env_info(hw if hw is not None else config.cpu_device()),
-            inputs=inputs,
-            config=self.config, parents=dict(self.parents), fingerprints=dict(self.fingerprints),
-            payloads={f: prov.sha256_file(self.dir / f) for f in self._payloads},
-            figures=list(self._figures), body=self.body,
-        )
-        self.manifest = mf.validate(d)
+    def refresh(self) -> None:
+        """Re-write the manifest and ``log.txt`` for a record still being written (spec §2.2 step 2).
+
+        Called by the stage at points it chooses -- after the spontaneous campaign, after each
+        operating point, after each figure -- so a browser row, a listing and the log all follow a
+        run that may take hours. The write is the same atomic one ``_commit`` performs.
+
+        Payloads are NOT hashed here: a file still being appended to would hash to a value that is
+        wrong the moment it is written, so an unfinished record lists its payloads with a null hash
+        and the real hashes land at the commit. ``load_fdt`` treats a null hash as "not yet".
+        """
+        if not self.progressive:
+            raise StoreError(f"{self.kind} artifacts are written in one step, so there is nothing to "
+                             f"refresh; only {sorted(PROGRESSIVE_KINDS)} are written progressively")
+        self._write(hashed=False, complete=False)
+
+    def _write(self, *, hashed: bool, complete: bool) -> None:
+        """Build, validate and write the manifest (and the run's log beside it)."""
+        self.manifest = mf.validate(self._manifest_dict(hashed=hashed, complete=complete))
+        self._write_log()
+        _write_manifest(self.dir, self.manifest)
+
+    def _write_log(self) -> None:
         # The run's log so far, BEFORE the manifest: every ``core`` record and every Python warning
         # since the outermost public entry began (core/runs.py). A composition's first artifact
         # therefore holds the records up to its own commit and its last one the whole run. Written
@@ -381,7 +441,55 @@ class ArtifactWriter:
             # and this file is read back by read_log, shown in the browser's detail pane and saved
             # verbatim to a report whose bytes spec §5 says both front ends must agree on.
             (self.dir / LOG_FILE).write_text(run_log.text(), encoding="utf-8", newline="\n")
-        _write_manifest(self.dir, self.manifest)
+
+    def _inputs(self, *, warn: bool) -> dict:
+        # missing_ok: this runs at the END of a run that may have taken days, and an input file moved
+        # or edited meanwhile must be recorded as unhashed rather than raise here and lose everything
+        # the run produced. Named in a warning so the gap is not silent -- ONCE, at the commit: a
+        # progressive record refreshes many times and would otherwise repeat it on every one.
+        inputs = (prov.inputs_from_cfg(self.cfg, missing_ok=True) if self.cfg is not None
+                  else {"bounds": None, "cell": None, "units": None, "model": None})
+        gone = [k for k, v in inputs.items() if isinstance(v, dict) and v.get("sha256") is None]
+        if gone and warn:
+            warnings.warn(
+                f"{self.kind} artifact {self.id}: input file(s) "
+                + ", ".join(f"{k} ({inputs[k]['path']})" for k in gone)
+                + " could not be read at commit, so the manifest records them unhashed. The artifact "
+                  "is written anyway -- losing a finished run to a moved input file would be worse.",
+                # _inputs <- _manifest_dict <- _write <- _commit <- __exit__ <- the caller's ``with``:
+                # the frame the old _commit's stacklevel=3 named, so the six ordinary kinds' warning
+                # still points at the caller's code and not at this module.
+                stacklevel=6)
+        return inputs
+
+    def _manifest_dict(self, *, hashed: bool, complete: bool) -> dict:
+        hw = getattr(self.cfg, "hw", None)
+        if self._prism is None:
+            self._prism = prov.git_info(config.REPO_ROOT)
+        if self._env is None:
+            self._env = prov.env_info(hw if hw is not None else config.cpu_device())
+        body = self.body
+        if self.progressive:
+            # ``complete`` is the WRITER's field: it is what says whether this record's run reached
+            # the end, and the writer is the only party that knows. Filling the rest with null is
+            # what lets the caller set a key when it learns it rather than up front. A COPY, so the
+            # caller's own dict never gains keys it did not set; an ordinary kind's body goes in as
+            # the very object it always did.
+            body = dict(body)
+            body["complete"] = bool(complete)
+            for k in mf.BODY_KEYS[self.kind]:
+                body.setdefault(k, None)
+        return dict(
+            schema=mf.SCHEMA, kind=self.kind, id=self.id, name=self.name, created=self.created.isoformat(),
+            note=self.note, prism=self._prism, env=self._env,
+            inputs=self._inputs(warn=hashed),
+            config=self.config, parents=dict(self.parents), fingerprints=dict(self.fingerprints),
+            payloads={f: (prov.sha256_file(self.dir / f) if hashed else None) for f in self._payloads},
+            figures=list(self._figures), body=body,
+        )
+
+    def _commit(self) -> None:
+        self._write(hashed=True, complete=True)
 
 
 def _as_int(v) -> "int | None":

@@ -287,6 +287,219 @@ def test_writer_removes_the_directory_on_exception(store):
     assert not w.dir.exists() and store.list("calibration") == []
 
 
+# The kinds ``store.create`` accepts that are NOT written progressively. Spelled out, and checked
+# against _bodies below, so the pin that follows cannot quietly shrink as kinds are added.
+ORDINARY_KINDS = ("prior", "posterior", "observation", "calibration", "inference", "diagnostic")
+
+
+def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
+    """Spec §11, risk row 2, and §8.2. The progressive mode touches ``ArtifactWriter``, which every
+    kind uses, and piece 4's review caught a delete that destroyed a finished artifact -- so the six
+    ordinary kinds' remove-on-exception is pinned HERE, before the mode exists, and this test is what
+    says the mode changed nothing for them.
+
+    Both exception shapes, because they arrive through the same ``__exit__``: a plain Exception, and
+    a BaseException (the shape of gui.streams.WorkerCancelled, which is what a Cancel click raises).
+    Each writer has written a payload first, so "nothing was written" cannot be what saves the
+    directory.
+    """
+    class _Cancel(BaseException):
+        pass
+
+    assert set(ORDINARY_KINDS) == set(_bodies()) - {"fdt"}, \
+        "a kind added to _bodies must be classified here: progressive, or removed on failure"
+
+    for kind in ORDINARY_KINDS:
+        for boom in (RuntimeError, _Cancel):
+            with pytest.raises(boom):
+                with store.create(kind, None, name=f"{kind}_{boom.__name__}") as w:
+                    w.body = _bodies()[kind]
+                    w.payload("results.json").write_text("{}", encoding="utf-8")
+                    raise boom("the run failed")
+            assert not w.dir.exists(), f"{kind} kept a half-written directory after {boom.__name__}"
+        assert store.list(kind) == [], f"{kind} left a row behind"
+
+
+def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
+    """Spec §2.2 step 1 and E2. ``validate`` refuses a PARTIAL body key set, so the first manifest
+    cannot carry only what is known -- it carries every key of BODY_KEYS["fdt"] with the unknown ones
+    null. Five are known before the run starts (study, settings, seed, notices, complete) and five
+    are not (grid, points, offgrid, compared, results), which is what makes an in-flight record
+    readable in the browser while it runs.
+
+    ``complete`` is the WRITER's field, not the stage's: it is False here because the writer wrote it
+    so, and it is the writer that sets it True at the commit. A stage that forgot to touch it cannot
+    therefore produce a record that claims to have finished.
+    """
+    w = store.create("fdt", None, name="inflight")
+    assert w.progressive is True and w._wrote_anything is False
+    assert not w.dir.exists(), "create() mints the id and the path and creates NOTHING (spec §1.2)"
+    w.body = {"study": "single", "settings": {"n_freqs": 2}, "seed": 5, "notices": []}
+    with w:
+        assert w.dir.is_dir()
+        m = mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8"))
+        assert set(m.body) == set(mf.BODY_KEYS["fdt"])
+        assert m.body["complete"] is False and m.body["study"] == "single"
+        assert [k for k in mf.BODY_KEYS["fdt"] if m.body[k] is None] == \
+            ["grid", "points", "offgrid", "compared", "results"]
+        row = store.list("fdt")[0]
+        assert row.complete and not row.finished, "listed while it runs, and honestly unfinished"
+        w.body["grid"] = {"omega_0": 1.0}
+        w.refresh()
+        assert mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8")).body["grid"] \
+            == {"omega_0": 1.0}, "refresh re-writes the manifest as the run proceeds"
+        w.payload("data.h5").write_bytes(b"numbers")
+        assert w._wrote_anything is True
+        assert mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8")) is not None
+    assert store.list("fdt")[0].finished, "the commit is what makes it finished"
+    assert store.get("fdt", w.id).body["complete"] is True
+    assert store.get("fdt", w.id).payloads["data.h5"] == prov.sha256_file(w.dir / "data.h5"), \
+        "payloads are hashed at the COMMIT, and the commit is where the hash lands"
+
+
+def test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_record(store):
+    """Review Focus 1, and E2. The record exists, nothing has been written into it, and the cancel is
+    a BaseException -- the shape ``core/gui/streams.py``'s WorkerCancelled has. The folder must
+    survive: a run that took hours and was stopped is exactly what E2 keeps a folder for, and the
+    spontaneous spectrum inside it is what diagnoses why it was stopped.
+
+    A REFUSAL at the same point must do the opposite (spec §2.2 step 3) and the two arrive through
+    the same ``__exit__``, which is why both are asserted here and not in two places.
+
+    And the store half of spec §8.2's "the leftover sweep never offers it" (controller ruling F7): the
+    kept record carries a manifest, so ``remove_incomplete`` -- the one call the sweep removes through
+    -- refuses it even once it is old enough to be past the recency guard. The tool half is Task 30's.
+    """
+    class _Cancel(BaseException):
+        pass
+
+    w = store.create("fdt", None, name="cancelled")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with pytest.raises(_Cancel):
+        with w:
+            raise _Cancel()
+    assert w.dir.is_dir(), "E2: an interrupted record keeps its folder"
+    row = [r for r in store.list("fdt") if r.id == w.id][0]
+    assert row.complete and not row.finished, "a manifest, and an honest 'did not finish'"
+    assert store.get("fdt", w.id).body["complete"] is False
+
+    # the same point, a REFUSAL, nothing written: the directory goes
+    w2 = store.create("fdt", None, name="refused")
+    w2.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with pytest.raises(Refusal):
+        with w2:
+            raise Refusal("the band reaches below what the spectrum resolves", field="freq_bounds")
+    assert not w2.dir.exists(), \
+        "a pre-spend refusal must not leave a permanent empty record: the sweep can never clear one"
+
+    # a refusal AFTER something was written is an interrupted run like any other
+    w3 = store.create("fdt", None, name="refused_late")
+    w3.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with pytest.raises(Refusal):
+        with w3:
+            w3.payload("data.h5").write_bytes(b"the spontaneous spectrum")
+            raise Refusal("every grid frequency came back blank", field=None)
+    assert w3.dir.is_dir() and (w3.dir / "data.h5").is_file(), \
+        "what the run did measure is what the message tells the reader to look at"
+
+    # F7: past the recency guard, and still never a leftover -- it carries a manifest
+    backdate_tree(w.dir)
+    with pytest.raises(st.StoreError, match="holds a valid fdt manifest"):
+        store.remove_incomplete("fdt", w.dir.name)
+    assert w.dir.is_dir()
+    assert not [r for r in store.list("fdt") if not r.complete], \
+        "an unfinished fdt record is never listed as a manifest-less leftover the sweep could offer"
+
+
+def test_a_second_run_is_refused_by_name_while_an_unfinished_record_holds_it(store):
+    """Review Focus 2. ``assert_name_free`` runs at ``create()``, before anything is spent, and a
+    progressive record occupies its name from its first moment -- so a second run under the same name
+    is refused at the click rather than colliding with a directory halfway through an hours-long
+    measurement. The refusal carries ``field="name"``, which is what lets each front end name its own
+    control.
+    """
+    w = store.create("fdt", None, name="repeat")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    w.__enter__()             # entered and NEVER exited: the record is live on disk, mid-run
+    assert (w.dir / st.MANIFEST).is_file() and not store.list("fdt")[0].finished
+
+    with pytest.raises(st.StoreError, match="already exists") as exc:
+        store.create("fdt", None, name="repeat")
+    assert exc.value.field == "name"
+
+
+def test_a_failure_inside_a_progressive_record_writes_the_log_up_to_it(store):
+    """Spec §2.2 step 3: the final refresh on the failure path is what puts the run's records on
+    disk. Without it the one document that says WHY the run stopped would exist only for runs that
+    did not stop -- which is the opposite of when it is needed. The log is written from
+    ``runs.current_run_log()``, which is thread-local, so it is written here from inside a real run.
+    """
+    import logging
+    from core import runs
+
+    def _boom():
+        w = store.create("fdt", None, name="logged")
+        w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+        with w:
+            logging.getLogger("core.test").info("the spontaneous campaign finished")
+            raise RuntimeError("the driven campaign failed")
+
+    entry = runs.public_entry(lambda: _boom())
+    with pytest.raises(RuntimeError):
+        entry()
+    text, truncated = store.read_log("fdt", "logged")
+    assert text is not None and "the spontaneous campaign finished" in text, text
+    assert not truncated
+
+
+def test_a_refused_record_that_will_not_delete_is_described_by_its_mode(store, monkeypatch):
+    """Controller ruling F30. When the removal on the failure path itself fails (a held handle on
+    Windows), the writer warns rather than let a PermissionError replace the exception that ended
+    the run. For an ordinary kind the directory left behind has no manifest, and the warning says the
+    store ignores it. A progressive record refused before it wrote anything DOES carry its first
+    manifest, so the same sentence would be false: it names what the operator can do instead.
+    """
+    def _held(path, **kw):
+        raise PermissionError("held open by a preview pane")
+    monkeypatch.setattr(st, "_rmtree_retry", _held)
+
+    w = store.create("fdt", None, name="held")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with pytest.warns(UserWarning, match="listed as unfinished") as rec:
+        with pytest.raises(Refusal, match="below what the spectrum resolves"):
+            with w:
+                raise Refusal("the band reaches below what the spectrum resolves", field="freq_bounds")
+    assert not [r for r in rec if "has no manifest" in str(r.message)], \
+        "a progressive record keeps its first manifest; the warning must not say it has none"
+
+    with pytest.warns(UserWarning, match="it has no manifest, so the store ignores it"):
+        with pytest.raises(RuntimeError, match="the run failed"):
+            with store.create("calibration", None, name="held_cal") as w2:
+                w2.payload("results.json").write_text("{}", encoding="utf-8")
+                raise RuntimeError("the run failed")
+
+
+def test_a_final_refresh_that_fails_never_replaces_the_exception_that_ended_the_run(store, monkeypatch):
+    """Spec §2.2 step 3's final refresh runs INSIDE ``__exit__``, while the run's own exception is in
+    flight. If that write fails too, the operator must still see why the RUN stopped -- a cancel, a
+    refusal, a simulator error -- and not an OSError about a manifest; the record keeps the manifest
+    it had, and a warning names the failed refresh.
+    """
+    w = store.create("fdt", None, name="stuck")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+
+    def _disk_full(**kw):
+        raise OSError("no space left on device")
+
+    with pytest.warns(UserWarning, match="could not refresh the unfinished fdt record"):
+        with pytest.raises(RuntimeError, match="the driven campaign failed"):
+            with w:
+                w.payload("data.h5").write_bytes(b"the spontaneous spectrum")
+                monkeypatch.setattr(w, "_write", _disk_full)
+                raise RuntimeError("the driven campaign failed")
+    assert w.dir.is_dir() and store.get("fdt", w.id).body["complete"] is False
+
+
 def test_an_input_file_that_vanished_during_the_run_is_recorded_unhashed_not_lost(store, tmp_path):
     """The commit runs at the END of a run that may have taken days. An input file moved or edited
     meanwhile must be recorded as unhashed (and warned about), never raise out of the writer -- losing
@@ -296,9 +509,13 @@ def test_an_input_file_that_vanished_during_the_run_is_recorded_unhashed_not_los
     gone.write_text("not a real cell", encoding="utf-8")
     cfg.sources["cell"] = str(gone)
     gone.unlink()
-    with pytest.warns(UserWarning, match="vanished_cell"):
+    with pytest.warns(UserWarning, match="vanished_cell") as rec:
         with store.create("calibration", cfg) as w:
             w.body = _cal_body()
+    # Attributed to the caller's ``with``, as it was before the commit was split into _write and its
+    # helpers (piece 5, Task 3's amendment 3): a warning that names store.py points nowhere useful.
+    assert [Path(r.filename).name for r in rec if "vanished_cell" in str(r.message)] == \
+        [Path(__file__).name]
     m = store.get("calibration", w.id)
     assert m.inputs["cell"]["sha256"] is None and "vanished_cell" in m.inputs["cell"]["path"]
     assert len(m.inputs["bounds"]["sha256"]) == 64, "the files that ARE there are still hashed"
