@@ -1,9 +1,12 @@
 # PRISM — state
 
-**Last updated:** 2026-09-22. **Piece 5, "the secondary analyses", is DESIGNED AND PLANNED, not yet
-started**: brainstormed with the owner 2026-09-22 (decisions E1–E12), design `a0d85da`, plan
-`e902256`+`5354e6b` (41 tasks, 433 steps, rulings P1–P82). The owner swaps models before
-implementation. **Piece 4, "GUI usability and the artifact browser", is DONE**:
+**Last updated:** 2026-09-23. **Piece 5, "the secondary analyses", is IN EXECUTION**: tasks 1–3 of 41
+done (`f6a722c`, `d9afaba`, `7930e52`+`4d8a782`), task 3's gate running at the hand-off. **To
+continue, read the section "HANDOFF" at the end of the gitignored ledger
+`.superpowers/sdd/2026-09-22-secondary-analyses/progress.md`** — it holds the exact per-task
+procedure, the owner's execution decisions, the items carried to later tasks and the first action.
+Brainstormed 2026-09-22 (decisions E1–E12), design `a0d85da`, plan `e902256`+`5354e6b`, pre-flight
+`cbc2187` (every ruling folded into the task it binds). **Piece 4, "GUI usability and the artifact browser", is DONE**:
 commits `5902259`..`80be144` (47), on the local `main` branch, NOT YET PUSHED (the owner pushes) —
 `main` is 49 commits ahead of `origin/main` (`cfe261b`): `691a233` (piece 3's C1–C11 rows recorded),
 the 47 of `5902259`..`80be144` (`5902259` the design, `6fc399f` the plan, `644dcdb` the pre-flight
@@ -49,8 +52,18 @@ seventeen pass** (the gate table below).
 E1–E12, §1.2 the design rulings, §12 nine deviations ruled at planning time) and its plan is
 `docs/superpowers/plans/2026-09-22-secondary-analyses.md` (41 tasks, 433 steps). The plan holds
 **82 rulings**: 69 from ten drafters who read the code for their own tasks, and 13 from three
-lenses over the assembled plan plus a judge. Ten of them corrected the spec inline. The owner is
-swapping models before implementation: the session that designed it stops after the plan. Piece 3
+lenses over the assembled plan plus a judge. Ten of them corrected the spec inline. **Execution
+(2026-09-23, Opus 5.5, subagent-driven):** a pre-flight scan by eleven readers found that the
+brief extractor never carries a plan's preamble, so none of the 82 rulings would have reached an
+implementer; it wrote a binding amendment block into every task and ruled 66 further findings
+(`cbc2187`). Tasks 1–3 are done: the `fdt` kind declared everywhere with its three silent members
+pinned, the listing filled with a numeric sort, and the progressive writer — whose review found and
+fixed a refused run leaving an empty folder and a late `refresh()` silently un-finishing a record.
+Every task has a review that drives the real API and its own one-process gate; **the owner decided
+on 2026-09-23 that each gate starts at the same moment as its task's review** (option 1), and that
+every task stays gated. Gate times swing 15–19 minutes on unchanged code because the machine is
+shared, so a count or warning change, not wall time, is the regression signal; the final gate of
+record runs on a quiet machine. Piece 3
 (`3db271e`..`9e2f7ef`) is DONE and pushed, and its rows C1–C11 all pass; piece 2
 (`0016dae`..`d34997c`) is also pushed, and its rows B1–B8 all pass.
 
