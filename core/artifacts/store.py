@@ -441,10 +441,13 @@ class ArtifactStore:
                 out.append(Summary(kind, sub.name, "", "", "", sub, False, reason, dir_name=sub.name))
                 continue
             body = m.body
-            # A committed artifact is finished BY CONSTRUCTION: _commit writes the manifest LAST, so
-            # one exists only for a run that reached the end. The cache is the exception -- it is
-            # manifested from its first batch on and says so in its own body (piece 4, B3).
-            finished = bool(body.get("complete")) if kind == "simulation" else True
+            # Derived from the SCHEMA, not from a hand-written kind name: a kind whose body carries
+            # a ``complete`` flag is one whose manifest exists before the run has finished (the
+            # cache, because it is resumable; an fdt record, because E2 keeps an interrupted one),
+            # and for every other kind a manifest IS the finish -- ``_commit`` writes it last. The
+            # old form named "simulation" alone and would have silently called every half-written
+            # fdt record finished.
+            finished = (bool(body.get("complete")) if "complete" in mf.BODY_KEYS[kind] else True)
             # A manifest body is not type-validated below its key set (manifest.validate checks
             # key-sets and top-level types only), so a hand-edited or partially-written body can hold
             # a non-numeric count here. Coerce leniently -- a malformed FIELD degrades to None, never
@@ -459,6 +462,12 @@ class ArtifactStore:
             # is taken over -- and a row that did not carry it could not render "3/4 batches" without
             # reading this manifest again (piece 4, B2).
             ident = (body.get("identity") or {}) if kind == "simulation" else {}
+            # An fdt sweep's operating points, off the SAME manifest read (B2). A single run and a
+            # comparison carry ``points: null``, so the counts stay None and the cell stays blank --
+            # "0/0" would be a claim neither ever makes. ``_as_int`` is what keeps a hand-edited or
+            # partially written body from taking the whole listing down.
+            pts = body.get("points")
+            pts = pts if isinstance(pts, dict) else {}
             out.append(Summary(kind, m.id, m.name, m.created, m.note, sub, True, None,
                                mode=body.get("mode"), width=(body.get("conditioning") or {}).get("width"),
                                amortized=body.get("amortized"), parents=dict(m.parents),
@@ -466,7 +475,11 @@ class ArtifactStore:
                                batches_done=_as_int(body.get("batches_done")),
                                batches_planned=_as_int(ident.get("n_runs")),
                                rows=coerced_rows,
-                               variant=body.get("variant")))
+                               variant=body.get("variant"),
+                               study=body.get("study"),
+                               points_done=_as_int(pts.get("done")),
+                               points_planned=_as_int(pts.get("planned")),
+                               points_failed=_as_int(pts.get("failed"))))
         out.sort(key=lambda s: s.created, reverse=True)       # newest first ...
         out.sort(key=lambda s: not s.complete)                # ... complete first (stable)
         return out

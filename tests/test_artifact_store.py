@@ -3358,10 +3358,12 @@ def test_the_orchestrator_says_everything_through_its_logger():
 
 def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
     """B3 (spec §2.1, §2.6). ``complete`` means "has a valid manifest"; ``finished`` means "the run
-    finished". For six of the seven kinds they are the same fact -- ``ArtifactWriter._commit`` writes
-    the manifest LAST, so a manifest exists only for a run that reached the end. For the simulation
-    cache they differ: ``training_checkpoint.create`` manifests it BEFORE the first batch is
-    simulated, and ``body["complete"]`` is the field that says whether its rows are all there.
+    finished". For six of the eight kinds they are the same fact -- ``ArtifactWriter._commit`` writes
+    the manifest LAST, so a manifest exists only for a run that reached the end. For the two kinds
+    whose body carries a ``complete`` flag they differ: ``training_checkpoint.create`` manifests the
+    simulation cache BEFORE the first batch is simulated, and an fdt record is written progressively
+    and keeps its folder when the run is interrupted (E2). For both, ``body["complete"]`` is the field
+    that says whether the run got to the end.
 
     ``complete`` is NOT redefined: StorePicker.refresh skips rows without it, ``list``'s secondary
     sort puts them last, and this suite asserts on it. The honest question goes beside it instead.
@@ -3390,6 +3392,42 @@ def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
     (store.kind_dir("inference") / "leftover__20260101T000000").mkdir(parents=True)
     leftover = [r for r in store.list("inference") if not r.complete]
     assert len(leftover) == 1 and leftover[0].finished is False, "no manifest, no finished run"
+
+
+def test_an_fdt_row_carries_its_study_its_points_and_whether_it_finished(store):
+    """Checklist 8 and 9. ``finished`` used to be "True unless this is the simulation kind" -- one
+    kind named by hand. Two kinds now carry a ``complete`` flag in their body, and the branch is
+    derived from BODY_KEYS rather than restated, so a third can never be forgotten.
+
+    The point counts come off ``body["points"]`` in ONE manifest read, like every other Summary
+    field (B2): a listing costs one directory scan and a browser row costs nothing. A single run and
+    a comparison have no points at all -- ``body["points"]`` is null -- and their counts stay None
+    rather than becoming a confident, false 0/0.
+    """
+    sweep = _bodies()["fdt"]
+    sweep.update(study="sweep", points={"param": "S", "planned": 12, "done": 10, "failed": 2})
+    w = _make(store, "fdt", name="a_sweep", body=sweep)
+    row = [r for r in store.list("fdt") if r.id == w.id][0]
+    assert (row.study, row.points_done, row.points_planned, row.points_failed) == ("sweep", 10, 12, 2)
+    assert row.complete and row.finished, "a committed record is finished"
+
+    single = _bodies()["fdt"]
+    w2 = _make(store, "fdt", name="a_single", body=single)
+    one = [r for r in store.list("fdt") if r.id == w2.id][0]
+    assert one.study == "single"
+    assert (one.points_done, one.points_planned, one.points_failed) == (None, None, None), \
+        "a single run has no operating points; it must not report 0 of 0"
+
+    # every other kind leaves all four alone
+    for kind in ("prior", "calibration", "diagnostic"):
+        other = _make(store, kind, name=f"o_{kind}", body=_bodies()[kind])
+        s = [r for r in store.list(kind) if r.id == other.id][0]
+        assert (s.study, s.points_done) == (None, None), kind
+        assert s.finished is True, "a kind with no ``complete`` key is finished by construction"
+
+    # the branch is DERIVED, not a hand-written pair of names
+    assert {k for k, keys in mf.BODY_KEYS.items() if "complete" in keys} == {"simulation", "fdt"}, \
+        "the two kinds whose manifest exists before the run has finished"
 
 
 def test_a_cache_row_carries_its_progress_until_mark_complete_flips_it(store):

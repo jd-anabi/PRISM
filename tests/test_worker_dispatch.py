@@ -735,6 +735,39 @@ def test_cells_for_renders_each_kind_from_the_summary_alone():
     assert "Amortized" not in columns_for("observation")
 
 
+def test_a_numeric_column_sorts_by_its_number_and_not_as_text():
+    """Spec §1.2. ``Progress`` and ``Points`` are cells like "10/12 batches" and "9/12", and a text
+    sort puts 10 before 9 -- the carry-forward docs/STATE.md recorded from piece 4, which this piece
+    would have doubled by adding a second column of exactly that shape.
+
+    The completeness rank still comes FIRST and still survives a descending sort (that is _Row's own
+    property, pinned beside this), so what is asserted here is only the order WITHIN the complete
+    rows, ascending and descending alike.
+    """
+    from core.gui.widgets.artifact_table import ArtifactTable, NUMERIC_COLUMNS, cell_key
+    from tests._fixtures import qt_app
+    qt_app()
+
+    assert cell_key("Points", "9/12") < cell_key("Points", "10/12"), "9 sorts before 10"
+    assert cell_key("Note", "10") < cell_key("Note", "9"), "... yes: text order, as today"
+    assert "Points" in NUMERIC_COLUMNS and "Progress" in NUMERIC_COLUMNS
+
+    rows = [_row("fdt", id="s9", name="nine", points_done=9, points_planned=12, study="sweep"),
+            _row("fdt", id="s10", name="ten", points_done=10, points_planned=12, study="sweep"),
+            _row("fdt", id="s2", name="two", points_done=2, points_planned=12, study="sweep")]
+    table = ArtifactTable()
+    table.set_rows("fdt", rows)
+    col = list(columns_for("fdt")).index("Points")
+
+    table.apply_sort_state(col, 0)
+    got = [table.topLevelItem(i).text(col) for i in range(table.topLevelItemCount())]
+    assert got == ["2/12", "9/12", "10/12"], got
+
+    table.apply_sort_state(col, 1)
+    got = [table.topLevelItem(i).text(col) for i in range(table.topLevelItemCount())]
+    assert got == ["10/12", "9/12", "2/12"], got
+
+
 def test_a_caches_progress_and_whether_it_finished_come_apart():
     """B3. ``complete`` means "has a valid manifest" and a cache is manifested from its first batch on,
     so a row must say BOTH: the progress, and whether the run finished. Both halves of the fraction

@@ -11,6 +11,8 @@ There was no item view anywhere in the repository before this piece and ``core/g
 none, so the QSS for ``QTreeView``/``QTreeView::item``/``QHeaderView::section`` lands there in the
 same commit as this file.
 """
+import re
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QAbstractItemView, QTreeWidget, QTreeWidgetItem
 
@@ -41,6 +43,34 @@ _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
 # every column and in both directions.) A plain int for the order, never a Qt.SortOrder: see
 # ArtifactTable.sort_state.
 DEFAULT_SORT = (1, 1)
+
+# The columns whose cell STARTS with a number and must sort by that number. Sorting them as text is
+# the defect piece 4 handed forward ("10/12 batches" above "9/12"), and this piece adds "Points", a
+# column of exactly that shape -- so the key lives here, named by column title, rather than in a
+# per-kind branch that the next numeric column would have to remember to join. "Width" is here for
+# the same reason: "100" sorts before "50" as text.
+NUMERIC_COLUMNS: frozenset = frozenset({"Progress", "Points", "Width"})
+
+_LEADING_NUMBER = re.compile(r"^\s*(-?\d+(?:\.\d+)?)")
+
+
+def cell_key(column: str, text: str) -> tuple:
+    """What one cell sorts on: ``(number, text)``.
+
+    For a column that is not numeric the number is a constant, so the text decides and the order is
+    exactly today's. For a numeric one the LEADING number decides and the text breaks ties, which is
+    what makes "10/12" follow "9/12" and "10/12 batches" follow "9/12 batches" without this function
+    having to know either cell's shape.
+
+    A numeric cell with no leading number -- a blank ``Points`` for a single run -- sorts as ``-inf``,
+    i.e. before every number ascending, which is exactly where the empty string it holds sorts today.
+    The type is the same two-tuple for every column, so a comparison can never meet a float on one
+    side and a string on the other.
+    """
+    if column not in NUMERIC_COLUMNS:
+        return (0.0, text)
+    m = _LEADING_NUMBER.match(text)
+    return ((float(m.group(1)) if m is not None else float("-inf")), text)
 
 
 def columns_for(kind: str) -> tuple[str, ...]:
@@ -156,11 +186,11 @@ class _Row(QTreeWidgetItem):
         self.setData(0, Qt.UserRole, int(index))
         self._complete = bool(complete)
 
-    def _key(self, col: int, descending: bool):
-        """``(rank, the column's own text)``. ``!= descending`` is the XOR that cancels Qt's
+    def _key(self, col: int, descending: bool, column: str = ""):
+        """``(rank, cell_key(column, text))``. ``!= descending`` is the XOR that cancels Qt's
         reversal, so the incomplete rows sit at the bottom under an ascending and a descending sort
-        alike."""
-        return ((not self._complete) != descending, self.text(col))
+        alike; ``cell_key`` is what makes a numeric column sort by its number (§1.2)."""
+        return ((not self._complete) != descending, cell_key(column, self.text(col)))
 
     def __lt__(self, other):
         tree = self.treeWidget()
@@ -169,9 +199,14 @@ class _Row(QTreeWidgetItem):
             col = 0
         if tree is None or not isinstance(other, _Row):     # neither happens; cheap to survive
             return self.text(col) < other.text(col)
+        # The column's TITLE, read off the header item, is what says whether this column is numeric.
+        # Read here rather than stored on the row: one row is shown under one kind's header at a
+        # time, and a stored title would go stale the moment set_rows re-labelled the tree.
+        head = tree.headerItem()
+        column = head.text(col) if head is not None else ""
         # .value, not int(): int(Qt.SortOrder) raises TypeError in PySide6 6.9.3.
         descending = bool(tree.header().sortIndicatorOrder().value)
-        return self._key(col, descending) < other._key(col, descending)
+        return self._key(col, descending, column) < other._key(col, descending, column)
 
 
 class ArtifactTable(QTreeWidget):
