@@ -263,7 +263,9 @@ tree written to consume this data needs no translation.
 "PSD_omegas"        # the Welch grid, its OWN axis
 "PSD_G"             # the spontaneous spectrum on that axis
 # a sweep record keeps the per-operating-point group layout load_param_sweep already reads.
-# a comparison record: "omega_grid" (the common grid) and one dataset per source record, named by id.
+# a comparison record: "omega_common" (the common grid) and a "curves" group whose members are
+#   zero-padded ordinals ("000", "001", ...), each carrying a `label` attribute. NOT per-id
+#   datasets: an id is not a name to rely on for ordering, and the drawers need the label (P71).
 ```
 
 ### `body["compared"]`'s shape (P5)
@@ -446,7 +448,7 @@ def interpolate_onto(grid, omegas, values) -> "np.ndarray":
   THE STORE
  T1  the kind's declarations + the three silent pins ───────┐
  T2  Summary grows, the two column tables, numeric sort  ── T1
- T3  the writer's progressive mode + refresh()            ── T1
+ T3  the writer's progressive mode + refresh()            ── T1 T2  (P81)
  T4  loose files and legacy directories                   ── T1
  T5  render_lineage's compared branch                     ── T1
  T6  the delete confirmation names what is half-written   ── T2 T3
@@ -514,11 +516,20 @@ in the same commit, the fast gate reds. Neither task may defer it.
 ---
 ## Rulings made at planning time
 
-Before any code was written, ten drafters read the code for their tasks and raised **69 objections**
-to the interface contract, to the spec and to the task order — 6 blocking, 31 important, 32 minor.
-Every one is ruled on below as **P1–P69**, with what it costs if the ruling is wrong. The full
-objection texts, each anchored in the real code, are in the ledger
+Before any code was written this plan was read twice over, and **eighty-two rulings** came out of it.
+
+First, ten drafters read the code for their own tasks and raised **69 objections** to the interface
+contract, to the spec and to the task order — 6 blocking, 31 important, 32 minor. Every one is ruled
+on below as **P1–P69**. Their texts, each anchored in the real code, are in the ledger
 (`.superpowers/sdd/2026-09-22-secondary-analyses/objections.md`).
+
+Then the assembled plan was read by three more lenses — spec coverage, cross-task name and type
+consistency, and "would the gate be green after every task" — and a judge that re-checked each
+finding against the real code before promoting it. Thirteen survived, and are **P70–P82** in the
+next section. They sit on the seams between the drafters' groups, which is what a parallel draft
+costs and what that pass buys back. Those reports are in the ledger's `plan-review/`.
+
+Every ruling carries what it costs if it is wrong.
 
 **If a task's text disagrees with a ruling, the ruling wins** — and say so in the task's report, so
 the plan can be corrected rather than quietly diverged from.
@@ -527,6 +538,140 @@ the plan can be corrected rather than quietly diverged from.
 P32, P47, P48 and P53. They are applied to the spec inline, each carrying its P-number, and named
 again in its §12's preamble. **Nine more extend the design beyond what the spec says** and are
 §12's rows 1–9: P3, P11, P22, P23, P27, P28, P30/P31, P55 and P60.
+
+### Corrections after the plan review (P70–P82)
+
+The assembled plan was then read by three more independent lenses — spec coverage, cross-task name
+and type consistency, and "would the gate be green after every task" — and a judge that re-checked
+every finding against the real code before promoting it. Verdict: **ready with fixes**, thirteen of
+them. All thirteen are below. They were found because ten drafters wrote in parallel, and they sit
+exactly on the seams between their groups — which is what a parallel draft costs and what this pass
+buys back.
+
+**These supersede the task bodies wherever the two disagree**, on the same rule as P1–P69.
+
+- **P70 — `body["settings"]` carries `skip_sanity` and `confirm_production`, so `_settings_block`
+  must be given them.** They are arguments of `run_fdt`, not attributes of `FDTConfig`, so the
+  config-only helper T17 writes can never produce them — while T17's own test, T33's and T34's all
+  assert them. T17 Step 6's signature becomes
+  `def _settings_block(cfg, *, skip_sanity=None, confirm_production=None) -> dict:`, appending
+  `"skip_sanity"` and `"confirm_production"` as `None`-or-`bool`. T19 calls it with neither, so a
+  sweep record records both as null. *Cost if wrong: two body keys read null on a single-cell run.*
+
+- **P71 — the single-cell payload follows the CONTRACT (`omega_grid`, `chi_prime`,
+  `chi_double_prime`), and the comparison payload follows T36 (`omega_common` + `curves/<NNN>` with
+  a `label` attribute).** T18 wrote `omegas` plus one complex `chi`, which no drawer can read; the
+  contract's names are the ones `_fdt_measure` and the sweep file already use, which is why P5
+  ratified them. The comparison layout goes the other way, because an id is not a name to rely on
+  for ordering and the drawers need the label. **The contract is corrected for the second; T18 is
+  corrected for the first.** T34's tiny-size run gains one assertion that `compare` can read the
+  record a REAL single-cell run wrote — without it the only reader is the fixture, and the fast gate
+  cannot see the mismatch at all. *Cost if wrong: every comparison of a real record refuses.*
+
+- **P72 — `FDTConfig` gains a THIRD defaulted field, `preset_name: "str | None" = None`.** T11
+  accepts `preset_name` and uses it only to validate; nothing carries it to the record, so
+  `body.settings["preset"]` — the one thing §4.4 requires — would always be null and both T19's and
+  T34's assertions would fail. T11 passes it into the construction and pins it; T19 reads
+  `cfg.preset_name` directly and drops its hedging `getattr`. A defaulted field, so §1.3's
+  reduction-map constraint holds. *Cost if wrong: one more field on a shared dataclass.*
+
+- **P73 — T17 owns `tests/test_nav_and_gating.py`'s FDT panel test.** Making `writer` a required
+  keyword of `_run_fdt_guarded` breaks the existing direct caller and its two two-keyword stubs.
+  T16's step correctly says that test stubs `run_fdt` wholesale and is untouched — true for T13–T16,
+  false for T17, which changes the GUARD. The file joins T17's Files block, its run command and its
+  `git add`, and a numbered step gives `boom` and `missing` the `writer` and `seed` keywords.
+  *Cost if wrong: the fast gate reds at T17, which the Global Constraints forbid.*
+
+- **P74 — T17's `fdt_pipeline.py` anchors are against the PRE-T16 file and must be rewritten.**
+  T16 (P22) already moved `plot_psd` before Campaign 2 and shortened the closing block to two paths.
+  T17 then deletes the `timestamp` binding while an early `psd_path = _out_dir() / f"psd_{timestamp}.png"`
+  still references it — a `NameError` on every run — and quotes a three-line closing block and a
+  three-path log line that no longer exist. T17 Step 8 gains a find/replace for the early site
+  (`psd_path = writer.figure_path("Spontaneous PSD")`), its closing-block anchor becomes the
+  two-line `ratio_path`/`chi_path` pair, and Step 9's anchor becomes the two-path record. T17's brief
+  gains: **"T16 has already moved `plot_psd`; there is no `psd_path` in the closing block when you
+  arrive."** *Cost if wrong: two anchors stall the implementer and the spontaneous spectrum lands
+  outside its record.*
+
+- **P75 — P2 STANDS, and the tasks are corrected to it.** The judge proposed withdrawing P2 on the
+  ground that its premise never arises, because the tasks as drafted build their own sentences and
+  never call a `require_*` rule with an unregistered key. That is true of the drafts and is exactly
+  why they must change: **building the sentences by hand in `core/cli.py` is the duplicated wording
+  three pieces of this programme were spent removing**, and it is what P2 overruled in the first
+  place. So: T8 registers all five (`FIELDS`, `BASE_KEYS`, `CONTROL = None`, `FLAG = None`), drops
+  its "deliberately absent" comment, and reads its count literal off the failing pin rather than
+  writing 71 blind; T10 deletes its `_positive`/`_at_least` helpers and calls
+  `require_positive("dt_nd", …)`, `require_at_least("burn_in_nd", …, 0)` and
+  `require_below("freq_bounds", lo, hi)`, asserting the keys instead of `None`; T15's band refusal
+  carries `field="freq_bounds"`; T41's `docs/STATE.md` text follows P2's wording, not its first
+  draft's. **These five are the first keys with neither a control nor a flag, and `fix_sentence`
+  returning the empty string for them is the intended behaviour** — the message names the setting
+  and offers no fix, because there is nothing to name. *Cost if wrong: five registry entries and two
+  table entries to remove, and one count literal. Nothing outside the refusal text moves. The reason
+  to accept that cost is that `freq_bounds` is the subject of E9's own refusal and is the likeliest
+  of the five to gain a control, at which point a registered key already behaves.*
+
+- **P76 — T29 does NOT produce a message builder; T21 does.** T29 as drafted introduces
+  `cell_missing_message` and rewrites the two sites T21 has already converted to
+  `missing_values_phrase`, against anchors T21 has already replaced — which would either add a
+  second builder for one rule or revert T21, and would red T21's source-scan pin. P4 already
+  overruled the name. **T29's Steps 14–17, its `cell_missing_message` interface line, and
+  `core/refusals.py`, `core/sim_config.py` and `core/cli.py` from its Files and `git add` lines are
+  deleted.** T29 keeps the model gate, the interrupt notes and the two "no bounds file" sentences.
+  The cross-site equality T29 wanted to assert is wrong in either design and is replaced, in T21, by
+  `assert exc.value.message == f"Cell file is {problems[0]}."` — the dry run's fragment is
+  deliberately lower-case and the refusal a capitalised sentence. *Cost if wrong: one rule worded
+  twice, which is the defect §6.2 exists to close.*
+
+- **P77 — an all-failed first sweep must not cost the second.** The spec says so twice and demands a
+  test, and no task delivered either: T20's all-failed `Refusal` propagates straight out of
+  `run_param_study_cli`, so the temperature sweep never starts — today's behaviour with a calmer
+  message — while T34's rewritten docstring claims the opposite, so the piece would ship a false
+  statement in a test. T20 gains a step: each `run_fdt_param_sweep` call is wrapped, a `Refusal` is
+  logged at error and recorded, the second sweep runs regardless, and only if **both** measured
+  nothing does the study refuse. Its unfinished record stays on disk (E2). T20 also gains §8.2's
+  test: fail every point of the S grid only, then assert the T record is finished and the S record is
+  on disk and unfinished. *Cost if wrong: the piece's headline sweep fix does not exist.*
+
+- **P78 — a finished sweep record fills `results` and `offgrid`.** Both are set to `None` in the
+  first body and nothing ever writes them, so §2.3's "null only until the run finishes" is false for
+  a sweep for ever. T20 gains a step at the clean end of `run_fdt_param_sweep`: aggregate the usable
+  points into `results` in T17's `_results_block` shape, and accumulate the per-point blank counts of
+  the common grid into `offgrid = {"blanks": <total>, "of": n_points * len(omegas_common)}`. Its
+  failure-count test asserts both are non-null. *Cost if wrong: a sweep record is less informative
+  than its own body table promises.*
+
+- **P79 — `fdt` and `crossval` actually gain `--seed`.** E7's command-line half had no owner: T8
+  registers the flag name, the builders and entries accept `seed=`, both panels grew a Seed box — but
+  no task adds `add_argument("--seed", …)` and no handler passes `args.seed`, and the tool-table pin
+  stays green only because `smoke` and the diagnostics already define that option string. T28's
+  `_add_fdt_knobs` gains the argument; T17's and T19's handler edits pass `seed=args.seed`; T11's
+  tool call site passes it too; and T28 or T29 pins it with a real `--seed 7` run whose recorder sees
+  7. *Cost if wrong: a recorded seed cannot be supplied back, which is the exact defect E7 names.*
+
+- **P80 — T25's and T26's panel anchors are the POST-T17 text.** P3 amended their briefs but not
+  their bodies: they still quote the pre-T17 dispatch block, guard signature and `run_fdt` call, and
+  ask for replacements byte-identical to T17's. Their anchors become
+  `writer = default_store().create("fdt", cfg)` and the `writer=writer, watch_dir=writer.dir / "figures"`
+  dispatch, and they add only what is new — `name=`/`note=`, the Seed read, `seed=seed`,
+  `on_result=self._on_record`, and the record picker. Their duplicate guard-signature and `run_fdt`
+  edits are deleted. Each brief gains: **"the writer creation and the guard's `writer`/`seed`
+  keywords already exist (P3); if they do not, that is a T17 defect and goes in the report."**
+  *Cost if wrong: three anchors stall the implementer and the new work is re-derived by hand.*
+
+- **P81 — T3 depends on T2, not on T1 alone.** T3's tests assert `Summary.finished` for the `fdt`
+  kind, which stays `True` until T2 replaces `store.list`'s `kind == "simulation"` branch; with both
+  declaring only T1, a dispatcher may run T3 first and three of its assertions fail (one of them
+  vacuously, which is worse). The task-order line is corrected above.
+
+- **P82 — the seed must be shown to DETERMINE the numbers.** Two of §8.2's four seed tests had no
+  owner: "two runs with the same seed agree; two runs with different seeds differ", and "a point is
+  reproducible from the seed and its index". Everything drafted asserts only that a seed is recorded
+  — which is not E7's claim, and is the premise `compare repeats` rests on when E8 calls the spread
+  across repeats the measurement error. T17 gains a step whose stub draws from the ambient generator,
+  runs twice at one seed and once at another, and asserts equal then unequal. T20 gains the
+  per-point version: point *k* under `seed` draws what a single point under `seed + k` draws.
+  *Cost if wrong: the piece records a seed that might mean nothing.*
 
 ### The six blocking ones
 
