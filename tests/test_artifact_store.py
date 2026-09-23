@@ -325,6 +325,111 @@ def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
         assert store.list(kind) == [], f"{kind} left a row behind"
 
 
+def test_loose_files_sees_what_no_listing_can_and_removes_one_by_name(store):
+    """E10 and spec §6.3. ``_entries`` iterates DIRECTORIES only, so a file sitting inside a kind
+    directory is invisible to every listing in both front ends -- and the owner has two of them, the
+    PNGs an older FDT run dropped into ``Artifacts/fdt``. This is the only route by which either
+    front end can see or clear one; nothing is removed on the owner's behalf.
+
+    It can never reach a directory: the candidate is matched against ``loose_files``'s own entries,
+    which are files. ``remove_incomplete`` owns the directories and refuses a non-directory, so the
+    two calls cannot do each other's job -- the same safety property piece 4 gave ``delete`` and
+    ``remove_incomplete`` (B7).
+    """
+    d = store.kind_dir("fdt")
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "fdt_ratio_20260915_153042.png").write_bytes(b"\x89PNG stray")
+    (d / "fdt_spont_20260915_153042.png").write_bytes(b"\x89PNG stray too")
+    w = _make(store, "fdt", name="real", body=_bodies()["fdt"])   # writes results.json INSIDE its dir
+
+    loose = store.loose_files("fdt")
+    assert [f.name for f in loose] == ["fdt_ratio_20260915_153042.png",
+                                       "fdt_spont_20260915_153042.png"], \
+        "a valid record's payloads are never offered: they are inside its own directory"
+    assert loose[0].size == len(b"\x89PNG stray") and loose[0].mtime > 0
+
+    with pytest.raises(st.StoreError, match="was written") as recent:
+        store.remove_loose("fdt", "fdt_ratio_20260915_153042.png")
+    assert recent.value.field == "artifact", "the recency guard, shared with remove_incomplete"
+
+    backdate_tree(d)
+    store.remove_loose("fdt", "fdt_ratio_20260915_153042.png")
+    assert [f.name for f in store.loose_files("fdt")] == ["fdt_spont_20260915_153042.png"]
+    assert store.get("fdt", w.id).id == w.id, "a real record is untouched"
+
+    # what it refuses
+    for bad in ("real__" + w.id, "sub/x.png", "..", "", "nosuch.png"):
+        with pytest.raises(st.StoreError):
+            store.remove_loose("fdt", bad)
+    assert (store.path("fdt", w.id)).is_dir(), "the record's directory is remove_incomplete's, not this call's"
+    with pytest.raises(st.StoreError, match="unknown artifact kind"):
+        store.loose_files("plot")
+    assert store.loose_files("prior") == [], "a kind directory that does not exist has no loose files"
+
+
+def test_a_legacy_directory_beside_the_kind_directories_is_seen_and_cleared(store):
+    """E10's second half. The store never walks its own ROOT, so a ``crossval/`` written by an older
+    build sits beside the kind directories and no command in either front end can see it. The list of
+    such names is a CLOSED literal: a store root is not a place to guess at, and offering to remove
+    whatever happens to be there is how a sweep destroys something nobody meant it to.
+
+    It can never reach a kind directory: a name that is one is refused even if it were listed, which
+    is the mirror of ``remove_loose`` never reaching a directory.
+    """
+    assert st.LEGACY_DIRS == ("crossval",), \
+        "the one directory an older build wrote beside the kind directories (spec §2.1)"
+    assert not set(st.LEGACY_DIRS) & set(st.KIND_DIRS.values()), \
+        "a legacy name that is also a kind directory would make this call reach a real artifact"
+
+    assert store.legacy_dirs() == [], "nothing on disk, nothing offered"
+    old = store.root / "crossval"
+    old.mkdir(parents=True)
+    (old / "sweep_S.h5").write_bytes(b"an older build's numbers")
+    assert store.legacy_dirs() == ["crossval"]
+
+    with pytest.raises(st.StoreError, match="was written"):
+        store.remove_legacy("crossval")
+    backdate_tree(old)
+    store.remove_legacy("crossval")
+    assert not old.exists() and store.legacy_dirs() == []
+
+    kind_dir = store.root / st.KIND_DIRS["prior"]
+    kind_dir.mkdir(parents=True, exist_ok=True)
+    backdate_tree(kind_dir)                  # old enough that only the name rule can protect it
+    for bad in ("priors", "nosuch", "../etc", "", "."):
+        with pytest.raises(st.StoreError) as exc:
+            store.remove_legacy(bad)
+        assert exc.value.field == "artifact", bad
+    assert kind_dir.is_dir(), "a kind directory is never this call's to remove"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="a directory junction is a Windows construct")
+def test_a_legacy_name_that_is_a_junction_is_neither_offered_nor_followed(store):
+    """``remove_legacy`` promises that a junction called ``crossval`` is never followed -- but on
+    Windows ``Path.is_symlink()`` is False for a junction, so that check alone would offer one in
+    ``legacy_dirs`` and hand it to the removal. The junction here points at a KIND directory inside
+    the root, the case the resolved-parent comparison cannot catch (its parent IS the root): without
+    the explicit junction check, only ``shutil.rmtree``'s own internals stood between the tidy-up
+    and a real kind directory.
+    """
+    import _winapi
+    kind_dir = store.root / st.KIND_DIRS["prior"]
+    kind_dir.mkdir(parents=True)
+    (kind_dir / "keep.txt").write_bytes(b"a real kind directory's contents")
+    link = store.root / "crossval"
+    _winapi.CreateJunction(str(kind_dir), str(link))
+    try:
+        backdate_tree(kind_dir)              # old enough that only the link rule can protect it
+        assert link.is_dir() and not link.is_symlink(), "the premise: is_symlink() misses a junction"
+        assert store.legacy_dirs() == [], "a junction is never offered"
+        with pytest.raises(st.StoreError, match="no legacy directory") as exc:
+            store.remove_legacy("crossval")
+        assert exc.value.field == "artifact"
+        assert (kind_dir / "keep.txt").is_file()
+    finally:
+        os.rmdir(link)                       # the junction only; its target is untouched
+
+
 def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
     """Spec §2.2 step 1 and E2. ``validate`` refuses a PARTIAL body key set, so the first manifest
     cannot carry only what is known -- it carries every key of BODY_KEYS["fdt"] with the unknown ones

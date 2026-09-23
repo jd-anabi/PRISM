@@ -71,6 +71,12 @@ RECENT_WRITE_SECONDS = 300.0
 # ``__exit__`` removes the directory for a refusal raised before anything was written: an empty
 # record nothing can ever clear would otherwise accumulate.
 PROGRESSIVE_KINDS: frozenset = frozenset({"fdt"})
+# Directories that may sit BESIDE the kind directories because an older build wrote them. A CLOSED
+# literal, never a scan: the store never walks its own root, and offering to remove whatever happens
+# to be under it is how a tidy-up destroys something nobody meant it to. ``legacy_dirs`` and
+# ``remove_legacy`` are the only way either front end can see or clear one (piece 5, E10), and
+# nothing is removed on the owner's behalf. A name here may never also be a KIND_DIRS value.
+LEGACY_DIRS: tuple = ("crossval",)
 # Which ``parents`` keys can name an artifact of a given kind.
 _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 "posterior": ("posterior", "parent_posterior"), "observation": ("observation",),
@@ -99,6 +105,19 @@ class Accept:
 
     def used(self) -> list:
         return [n for n in ("truncated", "other_observation") if getattr(self, n)]
+
+
+@dataclass(frozen=True)
+class LooseFile:
+    """A file sitting DIRECTLY inside a kind directory, where only artifact directories belong.
+
+    An older build wrote its output as bare files under ``Artifacts/fdt`` (spec §1), and no listing
+    can see one: ``_entries`` iterates directories only. Frozen, because it is a report about the
+    disk and nothing downstream may edit it into an instruction.
+    """
+    name: str            # the file's own name, never a path
+    size: int            # bytes
+    mtime: float         # POSIX seconds
 
 
 @dataclass
@@ -287,6 +306,14 @@ def _newest_mtime(path) -> float:
             except OSError:
                 continue
     return newest
+
+
+def _is_link(path: Path) -> bool:
+    """A symbolic link OR a Windows directory junction. ``Path.is_symlink()`` is False for a
+    junction, so a guard written with it alone lets one through -- and the resolved-parent check
+    beside it cannot catch a junction that points at a directory INSIDE the root, a kind directory
+    included (piece 5, E10)."""
+    return path.is_symlink() or path.is_junction()
 
 
 def _utc_now() -> datetime:
@@ -944,6 +971,89 @@ class ArtifactStore:
             raise StoreError(f"{dir_name!r} under {d} was not removed", field="artifact")
         return sub
 
+    def loose_files(self, kind: str) -> "list[LooseFile]":
+        """Every FILE sitting directly inside ``kind``'s directory, sorted by name: a kind directory
+        holds artifact directories and nothing else, so each of these breaks the store's oldest rule.
+
+        The complement of ``_entries``, which iterates directories only -- so between them the two
+        account for everything under a kind directory, and neither can see what the other owns. A
+        valid record's payloads are never here: they are inside the record's own directory.
+
+        A kind directory that does not exist has no loose files; that is not an error, because a
+        store is allowed to be empty.
+        """
+        if kind not in KIND_DIRS:
+            # Not kind_dir()'s own refusal, which carries no field key -- remove_incomplete's rule.
+            raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
+        d = self.kind_dir(kind)
+        if not d.is_dir():
+            return []
+        out = []
+        for p in sorted(d.iterdir()):
+            try:
+                if not p.is_file():
+                    continue
+                st_ = p.stat()
+            except OSError:
+                continue          # an entry that vanished mid-scan is not reported, and not a crash
+            out.append(LooseFile(p.name, int(st_.st_size), float(st_.st_mtime)))
+        return out
+
+    def remove_loose(self, kind: str, filename: str) -> None:
+        """Remove ONE loose file from ``kind``'s directory, by its own name.
+
+        The file counterpart of ``remove_incomplete``, and hardened the same way. It resolves the
+        name against ``loose_files``'s own entries with ``os.path.samefile`` AND a resolved-path
+        comparison, for the reason that call spells out at length: Windows addresses one file through
+        many spellings, and on a volume where ``st_ino`` is 0 for every entry ``samefile`` alone
+        would call every entry a match. Because those entries are FILES, this call can never reach a
+        directory -- so it can never reach an artifact, and ``remove_incomplete`` can never reach a
+        loose file. Neither can do the other's job, which is the safety property.
+
+        Refuses, as a StoreError with ``field="artifact"``: an unknown kind; a name that is not a
+        direct child (any separator, ``..``, an absolute path); a name that resolves to no file (a
+        directory included); and one written within ``RECENT_WRITE_SECONDS``, which may be a run in
+        flight in another process -- the same guard, for the same reason (R3).
+        """
+        if kind not in KIND_DIRS:
+            raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
+        d = self.kind_dir(kind)
+        if (not filename or filename in (".", "..") or "/" in filename or "\\" in filename
+                or filename != Path(filename).name):
+            raise StoreError(f"{filename!r} is not the name of a file directly under {d}; a loose "
+                             f"file is removed by its own name, never by a path", field="artifact")
+        candidate = d / filename
+        chosen = None
+        for lf in self.loose_files(kind):
+            p = d / lf.name
+            try:
+                if os.path.samefile(candidate, p) and os.path.realpath(candidate) == os.path.realpath(p):
+                    chosen = p
+                    break
+            except OSError:
+                continue
+        if chosen is None:
+            raise StoreError(f"no loose file named {filename!r} under {d}; an artifact's own "
+                             f"directory is removed by delete() or by remove_incomplete(), never here",
+                             field="artifact")
+        try:
+            age = time.time() - chosen.stat().st_mtime
+        except OSError as e:
+            raise StoreError(f"could not read {filename!r} under {d}: {type(e).__name__}: {e}",
+                             field="artifact") from e
+        if age < RECENT_WRITE_SECONDS:
+            raise StoreError(
+                f"{filename!r} under {d} was written {age:.0f} s ago, so something may still be "
+                f"writing it. Leave it at least {RECENT_WRITE_SECONDS:.0f} s and sweep again",
+                field="artifact")
+        try:
+            chosen.unlink()
+        except OSError as e:
+            raise StoreError(f"could not remove {filename!r} under {d}: {type(e).__name__}: {e}",
+                             field="artifact") from e
+        if chosen.exists():
+            raise StoreError(f"{filename!r} under {d} was not removed", field="artifact")
+
     def sweep_incomplete(self, entries) -> "tuple[list, list]":
         """Remove EXACTLY the ``(kind, dir_name)`` pairs handed in. ``(removed, failed)``, where
         ``removed`` is ``[(kind, dir_name)]`` and ``failed`` is ``[(kind, dir_name, reason)]``.
@@ -977,6 +1087,59 @@ class ArtifactStore:
             else:
                 removed.append((kind, dir_name))
         return removed, failed
+
+    def legacy_dirs(self) -> "list[str]":
+        """The names in ``LEGACY_DIRS`` that actually exist as directories under this root.
+
+        A name that is also a kind directory is skipped whatever the literal says: that is the
+        structural guarantee that this family can never reach a real artifact, rather than a promise
+        the literal is trusted to keep. A link is skipped too -- a junction included, which
+        ``is_symlink()`` does not report on Windows -- because ``remove_legacy`` refuses one, and
+        offering what the removal will refuse is a list the operator cannot act on.
+        """
+        taken = set(KIND_DIRS.values())
+        return [n for n in LEGACY_DIRS
+                if n not in taken and (self.root / n).is_dir() and not _is_link(self.root / n)]
+
+    def remove_legacy(self, name: str) -> None:
+        """Remove one legacy directory under this root, by its own name.
+
+        Refuses, as a StoreError with ``field="artifact"``: a name not in ``LEGACY_DIRS``; a name
+        that is a KIND directory (belt beside the braces in ``legacy_dirs``); a name that is not a
+        direct child; a name that is not a directory or is a link (a junction called ``crossval``
+        pointing at C:\\ must not be followed, and ``_is_link`` is what sees a junction); and a tree
+        written within ``RECENT_WRITE_SECONDS``, the same guard ``remove_incomplete`` applies, for
+        the same reason.
+
+        The resolved path's parent is compared against the resolved root, which is what a string
+        compare cannot do: it is the realpath half of ``remove_incomplete``'s hardening, applied to a
+        directory that carries no manifest to identify it by.
+        """
+        if name not in LEGACY_DIRS or name in set(KIND_DIRS.values()):
+            raise StoreError(f"{name!r} is not a legacy directory this build knows; the ones it "
+                             f"offers to clear are {list(LEGACY_DIRS)}", field="artifact")
+        if not name or name in (".", "..") or "/" in name or "\\" in name or name != Path(name).name:
+            raise StoreError(f"{name!r} is not the name of a directory directly under {self.root}",
+                             field="artifact")
+        candidate = self.root / name
+        if _is_link(candidate) or not candidate.is_dir():
+            raise StoreError(f"no legacy directory named {name!r} under {self.root}", field="artifact")
+        if os.path.dirname(os.path.realpath(candidate)) != os.path.realpath(self.root):
+            raise StoreError(f"{name!r} under {self.root} resolves outside the store root, so it is "
+                             f"not this store's to remove", field="artifact")
+        age = time.time() - _newest_mtime(candidate)
+        if age < RECENT_WRITE_SECONDS:
+            raise StoreError(
+                f"{name!r} under {self.root} was written {age:.0f} s ago, so something may still be "
+                f"writing it. Leave it at least {RECENT_WRITE_SECONDS:.0f} s and sweep again",
+                field="artifact")
+        try:
+            _rmtree_retry(candidate)
+        except OSError as e:
+            raise StoreError(f"could not remove {name!r} under {self.root}: {type(e).__name__}: {e}",
+                             field="artifact") from e
+        if candidate.exists():
+            raise StoreError(f"{name!r} under {self.root} was not removed", field="artifact")
 
     def unnamed(self, kind: str, *, older_than: "timedelta | None" = None) -> list:
         now = self._clock()
