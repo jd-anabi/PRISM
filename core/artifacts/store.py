@@ -324,6 +324,10 @@ class ArtifactWriter:
         # asks of a refusal is "was anything spent", and handing out the path is the last moment
         # this class can observe -- what the caller then does with it is out of sight.
         self._wrote_anything = False
+        # True once ``_commit`` has written the final manifest. ``refresh`` refuses from then on: a
+        # refresh writes ``complete: false`` and null payload hashes, so a late one would turn a
+        # finished record back into an unfinished one that ``load_fdt`` never verifies again.
+        self._committed = False
         # The header blocks, computed once and reused by every refresh. git_info runs three git
         # subprocesses and env_info imports torch; a sweep refreshes after every operating point, and
         # neither block can change while one run is in flight.
@@ -369,7 +373,17 @@ class ArtifactWriter:
             # The FIRST manifest, before a single number is computed (spec §2.2 step 1). ``validate``
             # refuses a partial body key set, so this carries every key: what the caller set between
             # create() and here, and null for the rest.
-            self._write(hashed=False, complete=False)
+            try:
+                self._write(hashed=False, complete=False)
+            except BaseException:
+                # ``__exit__`` never runs when ``__enter__`` raises, so this is the one place that can
+                # take the folder back (fix round 1, finding 1). A first body the manifest cannot hold
+                # -- a NaN ``validate`` refuses, or a numpy scalar that passes it and then fails in
+                # ``json.dumps`` after the log is on disk -- would otherwise leave a manifest-less
+                # folder for a run that never started, and every refused click would add one. The
+                # manifest is written last and atomically, so a failure here means it never landed.
+                self._remove_dir("it has no manifest, so the store ignores it")
+                raise
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -378,34 +392,51 @@ class ArtifactWriter:
                 # E2. The run was interrupted or it failed AFTER spending something: the folder stays,
                 # ``complete`` stays False, and one last refresh puts the log up to the failure on
                 # disk -- that log is the document that says why it stopped.
+                #
+                # The log FIRST, and in an attempt of its own (fix round 1, finding 3): a body the
+                # final manifest cannot validate -- a NaN the stage stored as it failed -- must not
+                # take the records since the last good refresh down with it. Neither attempt may
+                # REPLACE the exception that ended the run, so each failure is a warning.
                 try:
-                    self._write(hashed=False, complete=False)
+                    self._write_log()
+                except Exception as e:        # noqa: BLE001 -- the in-flight cause must propagate
+                    warnings.warn(f"could not write the log of the unfinished {self.kind} record "
+                                  f"{self.dir} ({type(e).__name__}: {e}); it keeps the log it had.",
+                                  stacklevel=2)
+                try:
+                    self._write(hashed=False, complete=False, log=False)
                 except Exception as e:        # noqa: BLE001 -- the in-flight cause must propagate
                     warnings.warn(f"could not refresh the unfinished {self.kind} record {self.dir} "
                                   f"({type(e).__name__}: {e}); it keeps the manifest it had.",
                                   stacklevel=2)
                 return False
-            # The cleanup must never REPLACE the exception that ended the run -- the one the operator
-            # needs -- with a PermissionError about a directory the index already ignores (it has no
-            # manifest, so it is incomplete by definition and nothing will ever load it). The one
-            # exception to that parenthesis is a progressive record refused before it wrote anything,
-            # which does carry its first manifest -- hence the warning worded by mode (ruling F30).
-            try:
-                _rmtree_retry(self.dir)
-            except OSError as e:              # noqa: BLE001 -- the in-flight cause must propagate, not this
-                if self.progressive:
-                    # Conditional, because the removal may have got as far as the manifest before it
-                    # failed: what is left is then a manifest-less leftover, not an unfinished record.
-                    left = ("if its manifest is still there it is listed as unfinished and can be "
-                            "removed with the delete action; if not, the leftover sweep clears it")
-                else:
-                    left = "it has no manifest, so the store ignores it"
-                warnings.warn(f"could not remove the incomplete artifact directory {self.dir} "
-                              f"({type(e).__name__}: {e}); {left}.",
-                              stacklevel=2)
+            if self.progressive:
+                # Refused before it wrote anything, so it DOES carry its first manifest (ruling F30).
+                # Conditional, because the removal may have got as far as the manifest before it
+                # failed: what is left is then a manifest-less leftover, not an unfinished record.
+                self._remove_dir("if its manifest is still there it is listed as unfinished and can be "
+                                 "removed with the delete action; if not, the leftover sweep clears it")
+            else:
+                self._remove_dir("it has no manifest, so the store ignores it")
             return False
         self._commit()
         return False
+
+    def _remove_dir(self, left: str) -> None:
+        """Remove this record's directory on a failure path; ``left`` says what remains if it will not go.
+
+        The cleanup must never REPLACE the exception that ended the run -- the one the operator needs
+        -- with a PermissionError about a directory the index already ignores (it has no manifest, so
+        it is incomplete by definition and nothing will ever load it), so a failure here is a warning.
+        Shared by ``__enter__`` and ``__exit__``: stacklevel 3 is this frame, then theirs, then the
+        caller's ``with`` line, which is the one the warning names.
+        """
+        try:
+            _rmtree_retry(self.dir)
+        except OSError as e:              # noqa: BLE001 -- the in-flight cause must propagate, not this
+            warnings.warn(f"could not remove the incomplete artifact directory {self.dir} "
+                          f"({type(e).__name__}: {e}); {left}.",
+                          stacklevel=3)
 
     def refresh(self) -> None:
         """Re-write the manifest and ``log.txt`` for a record still being written (spec §2.2 step 2).
@@ -417,16 +448,25 @@ class ArtifactWriter:
         Payloads are NOT hashed here: a file still being appended to would hash to a value that is
         wrong the moment it is written, so an unfinished record lists its payloads with a null hash
         and the real hashes land at the commit. ``load_fdt`` treats a null hash as "not yet".
+
+        Refused once the record is committed (fix round 1, finding 2): for the same reason, a refresh
+        then would write ``complete: false`` and null hashes over a finished record.
         """
         if not self.progressive:
             raise StoreError(f"{self.kind} artifacts are written in one step, so there is nothing to "
                              f"refresh; only {sorted(PROGRESSIVE_KINDS)} are written progressively")
+        if self._committed:
+            raise StoreError(f"the {self.kind} record {self.name or self.id} is already committed; a "
+                             f"refresh now would mark a finished record unfinished and drop the hashes "
+                             f"of its payloads")
         self._write(hashed=False, complete=False)
 
-    def _write(self, *, hashed: bool, complete: bool) -> None:
-        """Build, validate and write the manifest (and the run's log beside it)."""
+    def _write(self, *, hashed: bool, complete: bool, log: bool = True) -> None:
+        """Build, validate and write the manifest (and, unless ``log`` is False, the run's log beside
+        it, first). ``log=False`` is the failure path's, which has written the log on its own."""
         self.manifest = mf.validate(self._manifest_dict(hashed=hashed, complete=complete))
-        self._write_log()
+        if log:
+            self._write_log()
         _write_manifest(self.dir, self.manifest)
 
     def _write_log(self) -> None:
@@ -490,6 +530,7 @@ class ArtifactWriter:
 
     def _commit(self) -> None:
         self._write(hashed=True, complete=True)
+        self._committed = True
 
 
 def _as_int(v) -> "int | None":

@@ -298,10 +298,12 @@ def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
     ordinary kinds' remove-on-exception is pinned HERE, before the mode exists, and this test is what
     says the mode changed nothing for them.
 
-    Both exception shapes, because they arrive through the same ``__exit__``: a plain Exception, and
-    a BaseException (the shape of gui.streams.WorkerCancelled, which is what a Cancel click raises).
-    Each writer has written a payload first, so "nothing was written" cannot be what saves the
-    directory.
+    Three exception shapes, because they arrive through the same ``__exit__``: a plain Exception, a
+    BaseException (the shape of gui.streams.WorkerCancelled, which is what a Cancel click raises), and
+    a ``Refusal`` -- the one class the progressive branch singles out. Each is raised both after a
+    payload and with NOTHING written, which is exactly the condition that branch keys on (fix round 1,
+    finding 4): an ordinary kind must remove its directory whichever way that test would come out, so
+    neither "nothing was written" nor "it was a refusal" can be what decides.
     """
     class _Cancel(BaseException):
         pass
@@ -310,13 +312,16 @@ def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
         "a kind added to _bodies must be classified here: progressive, or removed on failure"
 
     for kind in ORDINARY_KINDS:
-        for boom in (RuntimeError, _Cancel):
-            with pytest.raises(boom):
-                with store.create(kind, None, name=f"{kind}_{boom.__name__}") as w:
-                    w.body = _bodies()[kind]
-                    w.payload("results.json").write_text("{}", encoding="utf-8")
-                    raise boom("the run failed")
-            assert not w.dir.exists(), f"{kind} kept a half-written directory after {boom.__name__}"
+        for boom in (RuntimeError, _Cancel, Refusal):
+            for wrote in (True, False):
+                tag = f"{boom.__name__}_{'wrote' if wrote else 'nothing'}"
+                with pytest.raises(boom):
+                    with store.create(kind, None, name=f"{kind}_{tag}") as w:
+                        w.body = _bodies()[kind]
+                        if wrote:
+                            w.payload("results.json").write_text("{}", encoding="utf-8")
+                        raise boom("the run failed")
+                assert not w.dir.exists(), f"{kind} kept a half-written directory after {tag}"
         assert store.list(kind) == [], f"{kind} left a row behind"
 
 
@@ -472,18 +477,24 @@ def test_a_refused_record_that_will_not_delete_is_described_by_its_mode(store, m
     assert not [r for r in rec if "has no manifest" in str(r.message)], \
         "a progressive record keeps its first manifest; the warning must not say it has none"
 
-    with pytest.warns(UserWarning, match="it has no manifest, so the store ignores it"):
+    with pytest.warns(UserWarning, match="it has no manifest, so the store ignores it") as rec2:
         with pytest.raises(RuntimeError, match="the run failed"):
             with store.create("calibration", None, name="held_cal") as w2:
                 w2.payload("results.json").write_text("{}", encoding="utf-8")
                 raise RuntimeError("the run failed")
+    # Both warnings name the caller's ``with`` line, not the store's own frames -- one removal helper
+    # now serves __enter__ and __exit__ alike, and its stacklevel is counted for that extra frame.
+    assert {Path(r.filename).name for r in [*rec, *rec2] if "could not remove" in str(r.message)} \
+        == {Path(__file__).name}
 
 
 def test_a_final_refresh_that_fails_never_replaces_the_exception_that_ended_the_run(store, monkeypatch):
     """Spec §2.2 step 3's final refresh runs INSIDE ``__exit__``, while the run's own exception is in
     flight. If that write fails too, the operator must still see why the RUN stopped -- a cancel, a
     refusal, a simulator error -- and not an OSError about a manifest; the record keeps the manifest
-    it had, and a warning names the failed refresh.
+    it had, and a warning names the failed refresh. The log and the manifest are written in two
+    separate attempts (fix round 1, finding 3), so each failing is its own warning and neither is the
+    exception the caller sees.
     """
     w = store.create("fdt", None, name="stuck")
     w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
@@ -491,13 +502,110 @@ def test_a_final_refresh_that_fails_never_replaces_the_exception_that_ended_the_
     def _disk_full(**kw):
         raise OSError("no space left on device")
 
-    with pytest.warns(UserWarning, match="could not refresh the unfinished fdt record"):
+    with pytest.warns(UserWarning) as rec:
         with pytest.raises(RuntimeError, match="the driven campaign failed"):
             with w:
                 w.payload("data.h5").write_bytes(b"the spontaneous spectrum")
                 monkeypatch.setattr(w, "_write", _disk_full)
+                monkeypatch.setattr(w, "_write_log", _disk_full)
                 raise RuntimeError("the driven campaign failed")
+    said = [str(r.message) for r in rec]
+    assert [s for s in said if s.startswith("could not write the log of the unfinished fdt record")], said
+    assert [s for s in said if s.startswith("could not refresh the unfinished fdt record")], said
     assert w.dir.is_dir() and store.get("fdt", w.id).body["complete"] is False
+
+
+def test_a_first_manifest_that_cannot_be_written_leaves_no_folder_behind(store):
+    """Fix round 1, finding 1. ``__exit__`` never runs when ``__enter__`` raises, so a first manifest
+    that fails would otherwise leave a manifest-less folder for a run that never started -- listed as
+    "incomplete or interrupted", and refused by the sweep for RECENT_WRITE_SECONDS -- and every
+    refused click that put a bad value in the first body would add one.
+
+    Two shapes. A NaN in the settings, which ``validate`` refuses (a ManifestError, itself a
+    Refusal). And a numpy float32, which ``_check_finite`` does not see as a float, so it passes
+    validation and fails in ``json.dumps`` AFTER the log has been written: without the cleanup that
+    folder would hold log.txt alone. Each is followed by a retry under the SAME name, which enters
+    cleanly and commits.
+    """
+    import numpy as np
+    from core import runs
+
+    def _first(settings):
+        w = store.create("fdt", None, name="first")
+        w.body = {"study": "single", "settings": settings, "seed": 1, "notices": []}
+        return w
+
+    w_nan = _first({"f0": float("nan")})
+    with pytest.raises(mf.ManifestError, match="non-finite"):
+        with w_nan:
+            pass
+    assert not w_nan.dir.exists() and store.list("fdt") == []
+
+    def _float32():
+        # inside a real run, so a run log exists and log.txt IS written before the manifest fails
+        w = _first({"f0": np.float32(0.05)})
+        with pytest.raises(TypeError, match="float32"):
+            with w:
+                pass
+        return w
+
+    w32 = runs.public_entry(_float32)()
+    assert not w32.dir.exists() and store.list("fdt") == []
+
+    with _first({"f0": 0.05}) as ok:
+        pass
+    assert store.get("fdt", "first").id == ok.id and store.list("fdt")[0].finished
+
+
+def test_a_committed_record_refuses_a_refresh(store):
+    """Fix round 1, finding 2. A refresh writes ``complete: false`` and null payload hashes, so one
+    arriving after the commit would turn a finished record back into an unfinished one -- listed as
+    not finished, and never again hash-verified by ``load_fdt``, which skips a null hash as "not yet".
+    Later tasks call ``refresh()`` from their stages; a late call must be refused, and must change
+    nothing on disk.
+    """
+    w = store.create("fdt", None, name="done")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with w:
+        w.payload("data.h5").write_bytes(b"numbers")
+    before = (w.dir / st.MANIFEST).read_bytes()
+
+    with pytest.raises(st.StoreError, match="already committed"):
+        w.refresh()
+    assert (w.dir / st.MANIFEST).read_bytes() == before
+    assert store.list("fdt")[0].finished
+    assert store.get("fdt", w.id).payloads["data.h5"] == prov.sha256_file(w.dir / "data.h5")
+
+
+def test_the_log_up_to_a_failure_reaches_disk_even_when_the_last_manifest_cannot(store):
+    """Fix round 1, finding 3; spec §2.2 step 3 ("the log up to the failure is on disk"). A stage that
+    stores a value the manifest cannot hold (here a NaN in ``results``) and then fails leaves a final
+    refresh that cannot validate. The log must not depend on it: the records since the last GOOD
+    refresh are exactly the ones that say why the run stopped. The run's own exception still wins.
+    """
+    import logging
+    from core import runs
+    log = logging.getLogger("core.test")
+
+    def _run():
+        w = store.create("fdt", None, name="unvalidatable")
+        w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+        with w:
+            log.info("X: the spontaneous campaign finished")
+            w.refresh()
+            log.info("Y: the driven campaign reached its third probe")
+            w.body["results"] = {"ratio_at_resonance": float("nan")}
+            raise RuntimeError("the driven campaign failed")
+
+    with pytest.warns(UserWarning, match="could not refresh the unfinished fdt record"):
+        with pytest.raises(RuntimeError, match="the driven campaign failed"):
+            runs.public_entry(_run)()
+    text, _ = store.read_log("fdt", "unvalidatable")
+    assert "X: the spontaneous campaign finished" in text, text
+    assert "Y: the driven campaign reached its third probe" in text, \
+        "a record emitted after the last good refresh must still reach log.txt"
+    m = store.get("fdt", "unvalidatable")
+    assert m.body["complete"] is False and m.body["results"] is None, "it keeps the manifest it had"
 
 
 def test_an_input_file_that_vanished_during_the_run_is_recorded_unhashed_not_lost(store, tmp_path):
