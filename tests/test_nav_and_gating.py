@@ -2619,53 +2619,74 @@ def test_selecting_a_saved_run_describes_it_and_re_opens_its_figures(tmp_path):
             assert "could not read" in panel.record_line.text(), panel.record_line.text()
 
 
+def _saved_fdt_record(store, name, study, seed, titles):
+    """A FINISHED ``fdt`` record of ``study`` whose ``figures/`` holds one PNG per title: what a run
+    leaves behind, written through the real writer so the manifest and the folder are the store's."""
+    w = store.create("fdt", None, name=name)
+    w.body = {"study": study, "settings": {"n_freqs": 8}, "seed": seed, "grid": None,
+              "points": None, "offgrid": None, "notices": [], "compared": None,
+              "complete": False, "results": None}
+    with w:
+        for title in titles:
+            w.figure_path(title).write_bytes(b"png")
+    return w
+
+
+def _choose(combo, row):
+    """A USER's pick of ``row``, the way QComboBox makes one from its popup: the index moves
+    (``currentIndexChanged``, only when it changes) and THEN ``activated`` is emitted. A programmatic
+    move -- a refresh, restore_key, a run's result slot -- emits only the first, and that difference
+    is what the saved-run viewer keys its figures on."""
+    combo.setCurrentIndex(row)
+    combo.activated.emit(row)
+
+
+def _tabs(panel):
+    return [panel.figure_stack.tabText(i) for i in range(panel.figure_stack.count())]
+
+
+def _settle(app):
+    """Give the event loop its turn: the viewer judges the SETTLED selection one turn after an index
+    change, so a refresh's passing states are never mistaken for a choice."""
+    for _ in range(3):
+        app.processEvents()
+
+
 @pytest.mark.parametrize("which", ["fdt", "crossval"])
 def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_tabs(tmp_path, which):
-    """Rulings F47 and F48, and the run that just finished, on both screens.
+    """Rulings F47 and F48 on both screens, and the one thing that opens figures: a USER's pick.
 
-    F47: a launch fills the saved-run LINE for the restored selection and opens NONE of its figures
-    -- re-opening an old run's pictures on every start is behaviour nobody asked for. The saved run
-    here is deliberately not the first row, so restoring it CHANGES the combo's index: a slot
-    connected before restore_settings would open its figures anyway.
+    F47: a launch fills the saved-run LINE for the restored selection and opens NONE of its figures.
+    The saved run is deliberately not the first row, so restoring it CHANGES the combo's index.
 
-    F48: choosing another record closes only the tabs the viewer itself opened. Anything else on the
-    stack -- a comparison drawn there (Task 40), a run's figures -- survives, and a tab the user
-    already closed by hand is skipped rather than touched after Qt deleted it.
+    Only a pick opens figures. Qt emits ``activated`` for the keyboard and the popup and never for
+    a programmatic index change; the keyboard leg below goes through Qt's own key handling, so the
+    wiring is proved against Qt and not only against _choose. A programmatic move that SETTLES on
+    another record closes the viewer's tabs -- they would describe a record no longer selected.
 
-    The run that just finished: its result slot moves the picker onto the new record while the run is
-    still live (the worker emits ``result`` before ``finished``), and the figures its watcher put up
-    must not be opened a second time -- neither then, nor when the record is chosen again later."""
+    F48: a pick closes only the tabs the viewer itself opened. Anything else on the stack -- a
+    comparison drawn there (Task 40), a run's figures -- survives, and a tab the user already closed
+    by hand is skipped rather than touched after Qt deleted it. A PNG another tab already shows is
+    not opened a second time when its record is picked."""
     import shiboken6
-    from PySide6.QtCore import QCoreApplication, QEvent
+    from PySide6.QtCore import QCoreApplication, QEvent, Qt
+    from PySide6.QtTest import QTest
     from core.artifacts import ArtifactStore, use_store
     from core.gui import settings as st
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel
     from tests._fixtures import qt_app
 
-    qt_app()
+    app = qt_app()
     store = ArtifactStore(tmp_path)
     cls, study = {"fdt": (FdtPanel, "single"), "crossval": (CrossValPanel, "sweep")}[which]
-
-    def _record(name, seed, titles):
-        w = store.create("fdt", None, name=name)
-        w.body = {"study": study, "settings": {"n_freqs": 8}, "seed": seed, "grid": None,
-                  "points": None, "offgrid": None, "notices": [], "compared": None,
-                  "complete": False, "results": None}
-        with w:
-            for title in titles:
-                w.figure_path(title).write_bytes(b"png")
-        return w
-
-    def tabs(panel):
-        return [panel.figure_stack.tabText(i) for i in range(panel.figure_stack.count())]
 
     with use_store(store):
         # The listing is newest first, so which record lands in which row is the store's business;
         # everything below is asserted by id, never by an assumed row.
         facts = {}
         for name, seed, titles in (("rec_a", 1, ["a one", "a two"]), ("rec_b", 2, ["b one"])):
-            facts[_record(name, seed, titles).id] = (seed, titles)
+            facts[_saved_fdt_record(store, name, study, seed, titles).id] = (seed, titles)
         combo = cls().record_picker.combo
         first, second = combo.itemData(0), combo.itemData(1)
         qs = st.settings()
@@ -2679,46 +2700,277 @@ def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_ta
         combo = panel.record_picker.combo
         assert panel.record_picker.key() == second and combo.currentIndex() == 1
         assert f"seed {facts[second][0]}" in panel.record_line.text(), panel.record_line.text()
-        assert tabs(panel) == [], f"a launch re-opened the saved run's figures: {tabs(panel)}"
+        assert _tabs(panel) == [], f"a launch re-opened the saved run's figures: {_tabs(panel)}"
 
-        # F48: a tab the viewer did not open survives every selection
-        panel.figure_stack.add_figure("comparison", b"")
+        # a PROGRAMMATIC move describes the record and opens nothing
         combo.setCurrentIndex(0)
-        assert tabs(panel) == ["comparison", *facts[first][1]], tabs(panel)
-        combo.setCurrentIndex(1)
-        assert tabs(panel) == ["comparison", *facts[second][1]], tabs(panel)
+        _settle(app)
+        assert f"seed {facts[first][0]}" in panel.record_line.text(), panel.record_line.text()
+        assert _tabs(panel) == [], f"a programmatic move opened figures: {_tabs(panel)}"
 
-        # a viewer tab the user closed by hand, deleted by Qt, is skipped on the next selection
+        # a user's pick through Qt's own key handling: Down from row 0 is row 1
+        QTest.keyClick(combo, Qt.Key_Down)
+        assert combo.currentIndex() == 1 and _tabs(panel) == facts[second][1], _tabs(panel)
+
+        # F48: a tab the viewer did not open survives every pick
+        panel.figure_stack.add_figure("comparison", b"")
+        _choose(combo, 0)
+        assert _tabs(panel) == ["comparison", *facts[first][1]], _tabs(panel)
+        _choose(combo, 1)
+        assert _tabs(panel) == ["comparison", *facts[second][1]], _tabs(panel)
+
+        # a viewer tab the user closed by hand, deleted by Qt, is skipped on the next pick
         page = panel.figure_stack.widget(1)
         panel.figure_stack.tabCloseRequested.emit(1)
         # THIS page's deleteLater only: a flush for every receiver would also delete whatever earlier
         # tests left pending, out of their order, and left an uncollectable object at shutdown.
         QCoreApplication.sendPostedEvents(page, QEvent.DeferredDelete)
         assert not shiboken6.isValid(page), "the closed tab's page was never deleted: nothing is tested"
-        combo.setCurrentIndex(0)
-        assert tabs(panel) == ["comparison", *facts[first][1]], tabs(panel)
+        _choose(combo, 0)
+        assert _tabs(panel) == ["comparison", *facts[first][1]], _tabs(panel)
 
-        # the run that just finished: its watcher put its figure up, then the result slot moved the
-        # picker onto its record while the run was still live
-        c = _record("rec_c", 3, ["c one"])
+        # a programmatic move that SETTLES elsewhere closes the viewer's tabs, and only those
+        panel.record_picker.restore_key(second)
+        _settle(app)
+        assert _tabs(panel) == ["comparison"], _tabs(panel)
+        assert f"seed {facts[second][0]}" in panel.record_line.text(), panel.record_line.text()
+
+        # no file twice: a PNG a watcher already put up is left to that tab when its record is picked
+        c = _saved_fdt_record(store, "rec_c", study, 3, ["c one"])
+        panel.record_picker.refresh()
+        _settle(app)
         panel.figure_stack.add_png("c one", str(c.dir / "figures" / "c_one.png"))
-        before = tabs(panel)
-        panel._busy = True
-        try:
-            if which == "fdt":
-                panel._on_record(store.load_fdt(c.id))
-            else:
-                panel._on_result([store.load_fdt(c.id)])
-        finally:
-            panel._busy = False
-        assert panel.record_picker.key() == c.id and "seed 3" in panel.record_line.text()
-        assert tabs(panel) == before, f"the result slot touched a live run's stack: {tabs(panel)}"
+        _choose(combo, combo.findData(c.id))
+        assert _tabs(panel) == ["comparison", "c one"], _tabs(panel)
+        assert "seed 3" in panel.record_line.text(), panel.record_line.text()
 
-        # ...and choosing it again later does not open the watcher's figure a second time
-        combo.setCurrentIndex(combo.findData(first))
-        assert tabs(panel) == ["comparison", "c one", *facts[first][1]], tabs(panel)
-        combo.setCurrentIndex(combo.findData(c.id))
-        assert tabs(panel) == ["comparison", "c one"], tabs(panel)
+
+@pytest.mark.parametrize("how", ["store_changed", "rescan"])
+def test_a_picker_refresh_reopens_no_figure_and_moves_no_tab(tmp_path, how):
+    """Fix round 1 of T27, finding 1. ``StorePicker.refresh`` -- run by MainWindow on every change the
+    Artifacts screen makes (a note, a rename, a delete, a sweep) and by the picker's own Rescan button
+    -- passes THREE index changes on its way back to the same selection: ``clear()`` to -1, the first
+    ``addItem`` to row 0, and ``restore_key`` to the record. A viewer that took each for a choice
+    opened row 0's figures (a record nobody chose), re-opened the tabs the user had closed, and moved
+    the current tab -- all for a note set on another record. None of the three is a choice, and the
+    selection settles where it was, so nothing on the figure stack may change.
+
+    Driven through the real window: ``store_changed`` reaches ``MainWindow._refresh_store_pickers``,
+    and Rescan is the picker's own button."""
+    from PySide6.QtWidgets import QPushButton
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.main_window import MainWindow
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import qt_app
+
+    app = qt_app()
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        for name, seed, titles in (("rec_a", 1, ["a one", "a two"]), ("rec_b", 2, ["b one", "b two"])):
+            _saved_fdt_record(store, name, "single", seed, titles)
+        w = MainWindow()
+        panel = w.panel(FdtPanel)
+        combo = panel.record_picker.combo
+        chosen, other = combo.itemData(1), combo.itemData(0)   # NOT the row a refresh passes first
+        _choose(combo, 1)
+        assert len(_tabs(panel)) == 2, _tabs(panel)
+        panel.figure_stack.tabCloseRequested.emit(0)           # the user closes one of them...
+        panel.figure_stack.setCurrentIndex(0)                  # ...and is looking at the other
+        before = (_tabs(panel), panel.figure_stack.currentIndex())
+        line = panel.record_line.text()
+
+        store.set_note("fdt", other, "an unrelated note")
+        if how == "store_changed":
+            w.artifact_screen.store_changed.emit()
+        else:
+            panel.record_picker.findChild(QPushButton).click()
+        _settle(app)
+
+        assert (_tabs(panel), panel.figure_stack.currentIndex()) == before, \
+            f"a {how} refresh changed the figure stack: {before} -> {_tabs(panel)}"
+        assert panel.record_picker.key() == chosen and panel.record_line.text() == line
+
+
+def test_a_relaunch_opens_no_figure_even_after_an_unrelated_note_is_set(tmp_path):
+    """Fix round 1 of T27, finding 1, the F47 half. A launch fills the saved run's LINE and opens none
+    of its figures -- and that must survive the window's own wiring: the first change anyone makes in
+    the Artifacts screen refreshes every picker, and a viewer that treated the refresh's passing
+    index changes as a choice opened the restored run's figures then, undoing F47 one note set later."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import settings as st
+    from core.gui.main_window import MainWindow
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import qt_app
+
+    app = qt_app()
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        seeds = {}
+        for name, seed in (("rec_a", 1), ("rec_b", 2)):
+            seeds[_saved_fdt_record(store, name, "single", seed, [f"{name} fig"]).id] = seed
+        combo = FdtPanel().record_picker.combo
+        first, second = combo.itemData(0), combo.itemData(1)
+        qs = st.settings()
+        qs.beginGroup("fdt")
+        qs.setValue("record", second)
+        qs.endGroup()
+        qs.sync()
+
+        w = MainWindow()
+        panel = w.panel(FdtPanel)
+        assert panel.record_picker.key() == second and _tabs(panel) == []
+        assert f"seed {seeds[second]}" in panel.record_line.text(), panel.record_line.text()
+
+        store.set_note("fdt", first, "an unrelated note")
+        w.artifact_screen.store_changed.emit()
+        _settle(app)
+        assert _tabs(panel) == [], f"a note set on another record opened figures: {_tabs(panel)}"
+        assert panel.record_picker.key() == second
+        assert f"seed {seeds[second]}" in panel.record_line.text(), panel.record_line.text()
+
+
+@pytest.mark.parametrize("which", ["fdt", "crossval"])
+def test_after_a_run_only_the_runs_own_figures_remain(tmp_path, monkeypatch, which):
+    """Fix round 1 of T27, finding 2. The user had picked an earlier record, so its figures were open;
+    then they ran the analysis. The run's watcher puts the new figures up as they land, and the result
+    slot moves the picker onto the new record -- after which the stack held BOTH records' figures,
+    under IDENTICAL titles (every run of one analysis draws the same figures), while the line
+    described only the new one. When a run finishes the viewer closes its own tabs, and the move
+    onto the new record opens nothing, because the watcher already shows its figures: what remains is
+    the run's own figures, each once.
+
+    Driven through the real dispatch, watchers and result slot; only the measurement is stood in for,
+    by stages that keep their contract (enter the writer on the worker thread, plot into the record's
+    own figures/)."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.FDT import cross_validation
+    from core.gui.panels import fdt_panel
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from tests._fixtures import qt_app
+
+    app = qt_app()
+
+    def run_fdt(cfg, *, skip_sanity, confirm_production, writer, seed=None):
+        with writer:
+            for title in ("x one", "x two"):
+                writer.figure_path(title).write_bytes(b"png")
+        return writer.store.load_fdt(writer.id)
+
+    def sweep(cfg, sweep_param, sweep_grid, fixed_overrides=None, *, writer):
+        writer.body.update(settings={}, points={"param": sweep_param, "planned": len(sweep_grid),
+                                                "done": 0, "failed": 0})
+        with writer:
+            writer.payload("data.h5").write_bytes(b"spectra")
+            writer.figure_path(f"FDT ratio vs {sweep_param}").write_bytes(b"png")
+        return writer.store.load_fdt(writer.id)
+
+    monkeypatch.setattr(fdt_panel, "run_fdt", run_fdt)
+    monkeypatch.setattr(cross_validation, "run_fdt_param_sweep", sweep)
+    cls, study, titles = {
+        "fdt": (fdt_panel.FdtPanel, "single", ["x one", "x two"]),
+        "crossval": (CrossValPanel, "sweep", ["FDT ratio vs s", "FDT ratio vs temp"])}[which]
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        earlier = _saved_fdt_record(store, "earlier", study, 1, titles)   # the run's own titles
+        panel = cls()
+        combo = panel.record_picker.combo
+        _choose(combo, combo.findData(earlier.id))
+        assert len(_tabs(panel)) == len(titles), _tabs(panel)
+        panel.seed.setText("77")
+        panel._run()
+        _wait_for_run(app, panel, limit=60.0)
+        _settle(app)
+
+        stack = panel.figure_stack
+        shown = [stack.png_path(i) for i in range(stack.count())]
+        assert not any(str(earlier.dir) in (p or "") for p in shown), \
+            f"the earlier record's tabs outlived the run: {shown}"
+        assert sorted(_tabs(panel)) == sorted(t.lower() for t in titles), _tabs(panel)
+        assert len(set(shown)) == len(shown) == len(titles), f"a figure is shown twice: {shown}"
+        assert panel.record_picker.key() != earlier.id
+        assert "seed 77" in panel.record_line.text(), panel.record_line.text()
+
+
+def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch):
+    """Fix round 1 of T27, finding 2, on the path where the picker does NOT move. A run that fails
+    hands back no record, so the selection stays on the earlier record and nothing about the picker
+    says the run happened -- yet its figures landed through the watcher under the same titles as the
+    earlier record's. The viewer's tabs close when the run finishes, whatever the outcome, so what
+    remains is the failed run's own partial figures; the line still describes the selection, which
+    is what the picker shows."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels import fdt_panel
+    from tests._fixtures import SHOWN, qt_app
+
+    app = qt_app()
+
+    def run_fdt(cfg, *, skip_sanity, confirm_production, writer, seed=None):
+        with writer:
+            writer.figure_path("x one").write_bytes(b"png")
+            raise RuntimeError("the measurement failed after its first figure")
+
+    monkeypatch.setattr(fdt_panel, "run_fdt", run_fdt)
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        earlier = _saved_fdt_record(store, "earlier", "single", 1, ["x one", "x two"])
+        panel = fdt_panel.FdtPanel()
+        combo = panel.record_picker.combo
+        _choose(combo, combo.findData(earlier.id))
+        assert _tabs(panel) == ["x one", "x two"], _tabs(panel)
+        SHOWN.clear()
+        panel._run()
+        _wait_for_run(app, panel, limit=60.0)
+        _settle(app)
+
+        assert SHOWN and "measurement failed" in SHOWN[-1].text(), "the failure reached no box"
+        stack = panel.figure_stack
+        shown = [stack.png_path(i) for i in range(stack.count())]
+        assert _tabs(panel) == ["x one"] and str(earlier.dir) not in (shown[0] or ""), shown
+        assert panel.record_picker.key() == earlier.id and "seed 1" in panel.record_line.text()
+
+
+def test_record_summary_never_prints_none():
+    """Fix round 1 of T27, finding 3. A null in a record means "not recorded" or "does not apply", and
+    the line must say nothing rather than print Python's ``None``. A real SWEEP's settings carry two
+    nulls on every record -- ``skip_sanity`` and ``confirm_production`` are run_fdt's arguments, which
+    a sweep does not take (``_settings_block``'s docstring) -- so they printed on every sweep. A body
+    written part way can hold a count that is not known yet, and a count line with a missing count
+    ("3 of None probe frequencies") is a sentence that is not true.
+
+    The settings block below is built by the REAL ``_settings_block``, the one the sweep stage calls,
+    so a change to what it records nulls for is seen here."""
+    import types
+    from core.FDT.fdt_pipeline import _settings_block
+    from core.gui.panels.record_view import record_summary
+
+    cfg = types.SimpleNamespace(n_freqs=30, ensemble_M=256, freqs_per_batch=1, F0=0.05,
+                                freq_bounds=(0.1, 10.0), burn_in_nd=50.0, T_obs_periods=40,
+                                dt_nd=0.01, psd_T_obs_nd=2000.0)
+    settings = {**_settings_block(cfg), "preset": "exploratory", "sweep_grid": [0.0, 1.0, 8]}
+    assert settings["skip_sanity"] is None and settings["confirm_production"] is None, \
+        "the premise: a sweep's settings record both null"
+
+    def _m(body):
+        return types.SimpleNamespace(
+            created="2026-09-22T12:00:00",
+            inputs={"cell": {"path": "Resources/Cells/nadrowski/x.txt", "sha256": "ab"}},
+            body={"study": "sweep", "grid": None, "compared": None, "results": None, **body})
+
+    text = record_summary(_m({"settings": settings, "seed": 7, "complete": True, "notices": [],
+                              "points": {"param": "s", "planned": 8, "done": 8, "failed": 0},
+                              "offgrid": {"blanks": 5, "of": 240}}))
+    assert "None" not in text, text
+    assert "preset=exploratory" in text and "ensemble_M=256" in text, text
+    assert "8 of 8 operating points measured (0 failed), sweeping s." in text, text
+
+    partial = record_summary(_m({"settings": {"n_freqs": 30, "F0": None}, "seed": 7,
+                                 "complete": False, "notices": [None, "A real notice."],
+                                 "points": {"param": "s", "planned": 8, "done": None,
+                                            "failed": None},
+                                 "offgrid": {"blanks": 3, "of": None}}))
+    assert "None" not in partial, partial
+    assert "n_freqs=30" in partial and "Notice: A real notice." in partial, partial
+    assert "did not finish" in partial, partial
 
 
 def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():

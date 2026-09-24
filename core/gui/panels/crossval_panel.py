@@ -90,10 +90,10 @@ class CrossValPanel(BasePanel):
         self._on_preset_changed(self.preset_combo.currentText())
         self._on_cell_changed()
         self.restore_settings(settings.settings())
-        # The saved sweep's LINE at launch, never its figures (F47), with the slot connected only after
-        # the restore -- FdtPanel.__init__ gives the reason for both halves.
-        self._show_record(figures=False)
-        self.record_picker.combo.currentIndexChanged.connect(lambda _i: self._show_record())
+        # The saved-sweep viewer, built AFTER the restore so a launch fills the line and opens no
+        # figures (F47) -- FdtPanel.__init__ gives the reason.
+        self._viewer = record_view.RecordViewer(self.record_picker, self.record_line,
+                                                self.figure_stack, busy=lambda: self._busy)
 
     def _build_controls(self):
         box = QGroupBox("FDT parameter-sweep study")
@@ -153,40 +153,17 @@ class CrossValPanel(BasePanel):
         add_help_row(form, "Record name", self.record_name, HELP["record_name"])
         add_help_row(form, "Note", self.record_note, HELP["record_note"])
         add_help_row(form, "Saved sweep", self.record_picker, HELP["record"])
-        # What the selected sweep says, under its picker (spec §5.4); _show_record fills it. The
-        # picker's slot is connected in __init__, after restore_settings (F47).
+        # What the selected sweep says, under its picker (spec §5.4). The viewer that fills it is
+        # built in __init__, after restore_settings (F47).
         self.record_line = record_view.details_label()
         form.addRow("", self.record_line)
-        # The figure tabs _show_record opened for the current selection, and only those (F48).
-        self._record_tabs: list = []
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)
 
     def _show_record(self, *, figures: bool = True) -> None:
-        """Spec §5.4, the CrossVal half: the selected sweep's cell, settings, seed, point counts and
-        notices, and its figures re-opened from its own ``figures/``; ``figures=False`` fills the line
-        alone (F47). Identical in shape and wording to FdtPanel._show_record, whose docstring gives
-        every reason -- the rendering and the tab bookkeeping are shared in ``record_view`` so the two
-        screens cannot word one record two ways -- and identically broad on the read, for the reason
-        this panel's _on_cell_changed already states: an exception raised by the launch's call from
-        __init__ escapes into build_app(), and the whole GUI fails to launch.
-        """
-        ref = self.record_picker.key()
-        record_dir = None
-        if not ref:
-            self.record_line.setText("")
-        else:
-            try:
-                store = default_store()
-                manifest, record_dir = store.get("fdt", ref), store.path("fdt", ref)
-            except Exception as e:                   # noqa: BLE001 -- see the docstring
-                self.record_line.setText(f"(could not read the record: {e})")
-            else:
-                self.record_line.setText(record_view.record_summary(manifest))
-        if figures and not self._busy:
-            self._record_tabs = record_view.reopen_figures(self.figure_stack, self._record_tabs,
-                                                           record_dir)
+        """Spec §5.4: the selected sweep's line and, with ``figures``, its figures (RecordViewer)."""
+        self._viewer.show_record(figures=figures)
 
     # ── prefill from the cell file: the values cli.make_param_sweep_config then consumes ─────────
     def _on_cell_changed(self):
@@ -277,18 +254,20 @@ class CrossValPanel(BasePanel):
         # and the plots arrive through ONE WATCHER PER RECORD (F18): the watcher globs one directory
         # and does not recurse, so both folders are handed over. A folder the T sweep never reached
         # simply lists nothing.
+        # on_finished: whatever the outcome, the viewer closes the tabs it opened for an earlier sweep,
+        # so the stack holds this study's own figures alone -- FdtPanel._on_run_finished.
         self.dispatch(run_param_study_cli, cfg, s_grid=s_grid, t_grid=temp_grid,
                       writers=writers, seed=seed,
                       watch_dir=[writers["s"].dir / "figures", writers["temp"].dir / "figures"],
-                      on_result=self._on_result)
+                      on_result=self._on_result, on_finished=self._viewer.close_figures)
 
     def _on_result(self, records):
         """The ``LoadedFdt`` records the study FINISHED, S first (E1: it used to return two loose
         HDF5 paths). A sweep that measured nothing is left out of the list -- its unfinished record
         stays on disk and the study has already logged it at error (P77, spec §4.3) -- and a None, were
         one ever handed back, is dropped rather than named. The picker is re-listed and moved onto the
-        LAST record, so the panel's selection is the one whose figures finished the run -- see
-        FdtPanel._on_record for why that matters to T27's viewer."""
+        LAST record, so the panel's selection is the one whose figures finished the run; the move is
+        programmatic, so the viewer describes it and opens nothing (FdtPanel._on_record)."""
         records = [r for r in (records or []) if r is not None]   # P77: one sweep may have refused
         if not records:
             return
