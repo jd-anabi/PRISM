@@ -49,6 +49,9 @@ BASE_KEYS = (
     "param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",
     # piece 5, the live simulation (spec §5.6)
     "frame_steps", "fps",
+    # piece 5: comparing saved FDT records (E8) -- which records, and the two mode settings the
+    # comparison checks before its record opens (F57)
+    "compare_records", "prefactor", "slice_at",
 )
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
                   "n_sweep", "chi_k_fixed")
@@ -101,7 +104,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     shows the default as the operator would type it. ``describe`` is the public reader and refuses
     an unknown key with a KeyError: a message can only be built for a field a front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 85, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 88, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key

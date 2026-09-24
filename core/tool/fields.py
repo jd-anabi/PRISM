@@ -65,6 +65,11 @@ FLAG: dict[str, str | None] = {
     # not a positional) precisely so this table can name one; the artifact itself is positional.
     "artifact": None,
     "note": "--note",                                   # add_name_flags defines it beside --name
+    # comparing saved records: `compare <mode> --record REF --record REF`, one flag per record, and
+    # the one setting each of two modes takes (renormalise's constant, sweeps' slice point)
+    "compare_records": "--record",
+    "prefactor": "--prefactor",
+    "slice_at": "--at",
     # the model builder (piece 5): a window-only screen, so no option string answers any of these
     "param_value": None, "param_min": None, "param_max": None, "init": None,
     "x_scale": None, "t_scale": None, "forcing_value": None,

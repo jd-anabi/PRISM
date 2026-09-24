@@ -3184,6 +3184,30 @@ def _leg_run_param_study_cli(case, monkeypatch, tmp_path):
                                                writers=writers, seed=5)
 
 
+def _leg_compare(case, monkeypatch, tmp_path):
+    """The comparison facility's leg. A comparison takes NO configuration -- it draws saved records --
+    so the watched config is one the entry never receives; the leg is here because the set is closed
+    against the scan, and what it still pins is real: the three endings, and that the refusal is the
+    entry's own (an arity it will not draw), carrying its field. A real store in tmp_path rather than
+    _EntryStore, because the writer's body is set BEFORE the `with`, which _EntryWriter answers by
+    raising _BodyDone outside any block that absorbs it."""
+    from core.artifacts import ArtifactStore
+    from core.FDT import compare as comparisons
+    from tests._fixtures import build_fdt_record
+    cfg = _nad_cfg()
+    store = ArtifactStore(tmp_path / "compare_leg")
+    ids = [build_fdt_record(store, name=f"leg_{i}") for i in range(2)]
+
+    def _stub(w, records, *, sink):
+        if case == "boom":
+            _raise_injected()
+        return {"n_records": len(records)}, []
+
+    monkeypatch.setitem(comparisons._DRAWERS, "cells", _stub)
+    refs = ids[:1] if case == "refusal" else ids
+    return cfg, lambda: comparisons.compare("cells", refs, store=store)
+
+
 _UNTOUCHED_LEGS = {
     "generate_observations": _leg_generate_observations,
     "build_experiment_observation": _leg_build_experiment_observation,
@@ -3202,6 +3226,7 @@ _UNTOUCHED_LEGS = {
     "channel_ablation": _leg_channel_ablation,
     "run_fdt": _leg_run_fdt,
     "run_param_study_cli": _leg_run_param_study_cli,
+    "compare": _leg_compare,
 }
 
 # The field each "refusal" leg's refusal carries, for EVERY entry. The leg used to accept any
@@ -3228,13 +3253,15 @@ _REFUSAL_FIELDS = {
     "channel_ablation": "rows",
     "run_fdt": "cell",                               # a cell with no FDT normalisation constant (§3.4)
     "run_param_study_cli": "cell",                   # the same check, before the first phase's spend
+    "compare": "compare_records",                    # one record, for a mode that draws at least two
 }
 
 
 def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     """V1 (spec §2.2). The private copy is kept by ONE decorator on exactly the functions named below:
     the ten stages and compositions of core/orchestrator.py, the five diagnostics, and -- since piece
-    5 -- core/FDT's single-cell measurement and its two-record sweep study. Read off the source
+    5 -- core/FDT's single-cell measurement, its two-record sweep study, and the comparison
+    facility's one entry, core/FDT/compare.py. Read off the source
     (every `@public_entry` in CODE_ROOTS and CODE_FILES), not off `__wrapped__`, which any
     functools.wraps decorator sets: a public stage added without it hands its body the caller's config,
     and a helper given it (`_write_observation`, `_draw_calibration_set`, `training_identity`, ...)
@@ -3263,6 +3290,10 @@ def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     # integer its two records must agree on (spec §4.1) -- and it too must land on a private copy.
     want |= {("core/FDT/fdt_pipeline.py", "run_fdt"),
              ("core/FDT/cross_validation.py", "run_param_study_cli")}
+    # The comparison takes no configuration at all, but it writes a record, so its run's log belongs
+    # in log.txt like every other entry's -- and ONE entry for all four modes (P11), so this set and
+    # its two companions name it once.
+    want |= {("core/FDT/compare.py", "compare")}
     assert found == want, f"missing {sorted(want - found)}; unexpected {sorted(found - want)}"
     assert set(_UNTOUCHED_LEGS) == {name for _, name in want}, sorted(set(_UNTOUCHED_LEGS) ^ {n for _, n in want})
 

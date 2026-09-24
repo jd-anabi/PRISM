@@ -1692,6 +1692,148 @@ def test_crossval_ctrl_c_names_each_record_and_how_to_clear_them(tool_env, monke
     assert "S sweep" in written[0] and "T_a/T sweep" in written[1], written
 
 
+def _compare_root(tmp_path, monkeypatch, n=2):
+    """A store of ``n`` finished single-cell records named ``cell_0`` ... with PRISM_ARTIFACTS pointing
+    at it -- ``compare``, like the ``artifacts`` family, has no --store-root and reads only that
+    variable. Returns ``(store, ids)``."""
+    from core.artifacts import ArtifactStore
+    from tests._fixtures import build_fdt_record
+    root = tmp_path / "A"
+    store = ArtifactStore(root)
+    ids = [build_fdt_record(store, name=f"cell_{i}") for i in range(n)]
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
+    return store, ids
+
+
+def _compare_stub(w, records, *, sink, **_options):
+    """What every real mode does before it draws: the curves on the common grid, into data.h5."""
+    from core.FDT import compare as cmp
+    curves = [cmp.curve_of(r) for r in records]
+    grid = cmp.common_grid(curves)
+    values = [cmp.interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
+    cmp.write_curves(w, grid, values, [c.label for c in curves],
+                     constants=[(c.omega_0, c.prefactor) for c in curves])
+    return {"n_records": len(curves)}, []
+
+
+def test_compare_is_a_nested_subcommand_whose_help_costs_no_torch():
+    """Spec §7.1: one subcommand, four modes, ``identifiability``'s shape -- a parser per mode, so a
+    flag that means nothing to a mode is an argparse error rather than a setting silently ignored:
+    ``--prefactor`` exists on renormalise alone (and is required there), ``--at`` on sweeps alone.
+    ``--record`` is repeatable and required on every mode. No configuration flags and no
+    ``--store-root`` (the ``artifacts`` family's reasons: the root is PRISM_ARTIFACTS), and each mode
+    carries its OWN interrupt note -- a comparison's record is kept on Ctrl-C and nothing resumes it
+    (F56), so main's generic "--resume require" advice would be wrong. ``--help`` costs no torch
+    import, checked in a FRESH interpreter because this process imported torch long ago."""
+    import argparse
+    import subprocess
+    import sys
+
+    from core.tool import fdt as tool_fdt
+
+    p = build_parser().subcommands["compare"]
+    modes = {name: sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
+             for name, sub in a.choices.items()}
+    assert sorted(modes) == ["cells", "renormalise", "repeats", "sweeps"], sorted(modes)
+    for name, mode in modes.items():
+        record = mode._option_string_actions["--record"]
+        assert record.required and isinstance(record, argparse._AppendAction), (name, record)
+        assert "--name" in mode._option_string_actions and "--note" in mode._option_string_actions
+        for flag in ("--bounds", "--cell", "--model", "--device", "--store-root", "--seed"):
+            assert flag not in mode._option_string_actions, (name, flag)
+        assert ("--prefactor" in mode._option_string_actions) == (name == "renormalise"), name
+        assert ("--at" in mode._option_string_actions) == (name == "sweeps"), name
+        assert mode.get_default("interrupt_note") == tool_fdt.COMPARE_INTERRUPT_NOTE, name
+    assert modes["renormalise"]._option_string_actions["--prefactor"].required
+    assert modes["sweeps"]._option_string_actions["--at"].default is None
+
+    probe = ("import sys\n"
+             "from core.tool import main\n"
+             "rc = [main(['--help']), main(['compare', '--help']), main(['compare', 'cells', '--help'])]\n"
+             "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.'))\n"
+             "sys.exit(0 if rc == [0, 0, 0] and not bad else repr((rc, bad[:3])))\n")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(config.REPO_ROOT),
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "compare" in r.stdout and "--record" in r.stdout, r.stdout
+
+
+def test_a_compare_ref_that_names_nothing_is_refused_naming_the_record_flag(tmp_path, monkeypatch,
+                                                                            capsys):
+    """F58. The store refuses a ref it cannot resolve under ``field="artifact"`` -- a key whose flag is
+    None, because in the ``artifacts`` family the artifact is positional -- so a mistyped ``--record``
+    used to be refused naming no flag at all. The comparison re-raises it under its own key, so the
+    one line names the flag that answers it; and like every comparison refusal it lands before the
+    record opens, leaving nothing on disk."""
+    from core.FDT import compare as cmp
+    store, ids = _compare_root(tmp_path, monkeypatch)
+    monkeypatch.setitem(cmp._DRAWERS, "cells", _compare_stub)
+    before = sorted(p.name for p in store.kind_dir("fdt").iterdir())
+    capsys.readouterr()
+    assert main(["compare", "cells", "--record", ids[0], "--record", "no_such_run"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.strip()]
+    assert len(lines) == 1 and lines[0].startswith("prism compare: refused:"), err
+    assert "'no_such_run' names no fdt record" in lines[0] and lines[0].endswith("(--record)"), err
+    assert sorted(p.name for p in store.kind_dir("fdt").iterdir()) == before, "a refusal opened a record"
+
+
+def test_compare_ctrl_c_keeps_the_record_and_says_nothing_resumes(tmp_path, monkeypatch, capsys):
+    """F56, the comparison's own interrupt note. A comparison's record is progressive, so a Ctrl-C
+    after it opened KEEPS it, marked unfinished (E2) -- the opposite of main's generic "the artifact
+    being written was removed" -- and there is no cache and no --resume. The note says where the
+    record is (the ``Writing comparison record`` line, printed the moment it opened, since fixed text
+    cannot carry the id), how to list and remove it, that re-running draws a new one, and that a
+    --name stays taken until the unfinished record is removed."""
+    from core.artifacts import ArtifactStore
+    from core.FDT import compare as cmp
+    store, ids = _compare_root(tmp_path, monkeypatch)
+
+    def _cancelled(w, records, *, sink):
+        _compare_stub(w, records, sink=sink)
+        raise KeyboardInterrupt
+
+    monkeypatch.setitem(cmp._DRAWERS, "cells", _cancelled)
+    capsys.readouterr()
+    assert main(["compare", "cells", "--record", ids[0], "--record", ids[1], "--name", "ab"]) == 130
+    captured = capsys.readouterr()
+    err = captured.err
+    assert err.startswith("prism compare: interrupted:"), err
+    assert "KEEPS" in err and "unfinished" in err and "artifacts list fdt" in err, err
+    assert "artifacts rm fdt" in err and "new record" in err and "--name" in err, err
+    assert "--resume" not in err and "was removed" not in err, err
+    kept = ArtifactStore(tmp_path / "A").load_fdt("ab")
+    assert kept.body["complete"] is False and kept.body["study"] == "comparison", kept.body
+    assert f"Writing comparison record {kept.id} at " in captured.out, captured.out
+
+
+def test_a_comparison_whose_source_was_deleted_still_lists_through_the_tool(tmp_path, monkeypatch,
+                                                                            capsys):
+    """Spec §7.3/§8.2 and design ruling R5, through the command line: ``artifacts rm`` deletes a run a
+    comparison drew without refusing (the sources are in the comparison's body, which the dependency
+    check does not read), and the comparison is still listed, finished, by ``artifacts list fdt`` --
+    while ``artifacts summary`` prints ``MISSING fdt [<id>]`` for the run that is gone."""
+    from core.FDT import compare as cmp
+    store, ids = _compare_root(tmp_path, monkeypatch)
+    monkeypatch.setitem(cmp._DRAWERS, "cells", _compare_stub)
+    assert main(["compare", "cells", "--record", "cell_0", "--record", "cell_1",
+                 "--name", "both_cells"]) == 0
+    assert main(["artifacts", "rm", "fdt", ids[0]]) == 0
+
+    capsys.readouterr()
+    assert main(["artifacts", "list", "fdt"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    header = next(ln for ln in lines if ln.split()[:1] == ["name"])
+    start, end = header.index("finished"), header.index("note")
+    row = next(ln for ln in lines if "both_cells" in ln)
+    assert row[start:end].strip() == "yes", lines
+    assert not any("cell_0" in ln for ln in lines), lines
+
+    assert main(["artifacts", "summary", "fdt", "both_cells"]) == 0
+    out = capsys.readouterr().out
+    assert f"MISSING fdt [{ids[0]}]" in out and f"fdt cell_1 [{ids[1]}]" in out, out
+
+
 def test_the_fdt_subcommands_no_longer_say_they_have_no_bounds_file():
     """Spec §3.2. Two sentences in this module claimed these analyses have no bounds file. They are
     false, and the record makes the falsehood expensive: ``cli.parse_cell`` DOES resolve one
@@ -1781,8 +1923,7 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     assert "data.h5" in rec.manifest.payloads and rec.data_path.exists()
     # The contract's single-cell layout (P5, P6, P71), BY NAME: the names core.FDT.compare reads
     # back. The only other writer of this layout is a test fixture, so this is the one place a REAL
-    # run's file is checked against the names its reader expects (rulings F21/F22; the compare read
-    # of this record is Task 36's).
+    # run's file is checked against the names its reader expects (rulings F21/F22).
     with h5py.File(rec.data_path, "r") as h5:
         assert h5.attrs["study"] == "single", dict(h5.attrs)
         assert float(h5.attrs["omega_0"]) > 0.0, dict(h5.attrs)
@@ -1791,6 +1932,13 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
             assert key in h5 and h5[key].shape == (2,), (key, list(h5))
         assert "PSD_omegas" in h5 and "PSD_G" in h5, list(h5)
         assert h5["PSD_omegas"].shape == h5["PSD_G"].shape, list(h5)
+    # ... and read back by the reader itself: the comparison's own curve_of, on the record a real run
+    # wrote rather than on the fixture's (F21/F22), labelled by the cell it measured.
+    from core.FDT import compare as cmp
+    curve = cmp.curve_of(store.load_fdt(rec.id))
+    assert curve.id == rec.id and curve.label == "master_spont", curve
+    assert curve.omegas.shape == curve.ratio.shape == (2,), curve
+    assert curve.omega_0 > 0.0 and math.isfinite(curve.prefactor), curve
     # The four figures by name: ``writer.figure_path`` names each by the slug of its title.
     assert sorted(rec.manifest.figures) == [
         "figures/chi_components.png", "figures/effective_temperature_ratio.png",

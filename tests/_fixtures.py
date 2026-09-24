@@ -464,6 +464,53 @@ def build_browse_store(root):
     return ids
 
 
+class _FdtStop(Exception):
+    """Ends a record's write block where a cancel or a crash would, so ``build_fdt_record`` can leave
+    an UNFINISHED record on disk (E2) without pretending to fail inside the store."""
+
+
+def build_fdt_record(store, *, study="single", name="", note="", finished=True,
+                     omegas=(0.5, 1.0, 2.0, 4.0), ratio=(1.0, 3.0, 1.2, 1.05),
+                     omega_0=1.0, prefactor=2.0, settings=None):
+    """One ``fdt`` record with a real manifest, a real ``data.h5`` and one figure (spec §8.1), written
+    in seconds.
+
+    ``cfg=None``, like ``build_browse_store``'s rows: nothing here reads a bounds file, builds a
+    SimConfig or simulates. The dataset names are ``cross_validation._fdt_measure``'s own vocabulary
+    (``omega_grid``, ``T_eff_over_T``), which is what the single-cell run writes (spec §2.3) and what
+    ``core.FDT.compare`` reads back. ``finished=False`` leaves the record unfinished on disk with its
+    numbers already written -- the state E2 exists to preserve, and the one a comparison refuses.
+
+    The figure is drawn on a bare ``matplotlib.figure.Figure``, never through pyplot, so a fixture
+    that writes dozens of records leaves no open figure and touches no backend.
+
+    :returns: the record's id.
+    """
+    import h5py
+    import numpy as np
+    from matplotlib.figure import Figure
+    w = store.create("fdt", None, name=name, note=note)
+    w.body = {"study": study, "settings": dict(settings or {"n_freqs": len(omegas), "F0": 0.05}),
+              "seed": 7, "grid": None, "points": None, "offgrid": None, "notices": [],
+              "compared": None, "complete": False, "results": None}
+    try:
+        with w:
+            with h5py.File(w.payload("data.h5"), "w") as h5:
+                h5.attrs["study"] = study
+                h5.attrs["omega_0"] = float(omega_0)
+                h5.attrs["prefactor"] = float(prefactor)
+                h5.create_dataset("omega_grid", data=np.asarray(omegas, dtype=np.float64))
+                h5.create_dataset("T_eff_over_T", data=np.asarray(ratio, dtype=np.float64))
+            fig = Figure(figsize=(2, 2))
+            fig.add_subplot().plot(omegas, ratio)
+            fig.savefig(w.figure_path("T_eff over T"), dpi=40)
+            if not finished:
+                raise _FdtStop("interrupted after the numbers were written")
+    except _FdtStop:
+        pass
+    return w.id
+
+
 def artifact_screen(store):
     """The Artifacts screen wired to ``store`` and refreshed once.
 

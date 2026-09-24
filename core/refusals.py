@@ -130,6 +130,13 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     # the artifact browser (piece 4): the artifact a browse action acts on, and its note
     Field("artifact", "the artifact", None),
     Field("note", "the note", None),
+    # comparing saved FDT records (piece 5, E8): which records a comparison was asked to draw, and the
+    # two settings a mode takes -- checked by the comparison BEFORE its record opens (F57), which is
+    # why they are registered with it: the normalisation constant renormalise recomputes the ratio
+    # with, and the operating point sweeps slices both records at
+    Field("compare_records", "the saved runs to compare", None),
+    Field("prefactor", "the normalisation constant", None),
+    Field("slice_at", "the operating point to slice at", None),
     # the two secondary analyses (piece 5, §5.3): the knobs both front ends expose. n_freqs and
     # ensemble_m have two effective defaults, the dataclass's and the sweep preset's (P54).
     Field("n_freqs", "the number of drive frequencies", "60, or the preset's in a sweep"),        # FDTConfig.n_freqs

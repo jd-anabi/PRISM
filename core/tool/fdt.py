@@ -13,13 +13,16 @@ model folder's master), it defines the parameter set and its order on the decoup
 record names it by path and SHA-256 like every other kind. There is no ``--device`` either -- both
 config builders force the CPU, where the sequential SDE loop at M ~ 256 is about 3.4x faster than
 on the card.
+
+``python -m core compare <mode>`` lives here too: it draws records these two wrote, into a record
+of its own, and simulates nothing -- so it takes no cell, no knobs and no ``--store-root``.
 """
 import argparse
 import math
 
 from core.refusals import Refusal
 
-from .config_args import UsageError, knobs, model_from_path
+from .config_args import UsageError, add_name_flags, knobs, model_from_path
 
 FDT_EPILOG = """\
 The model comes from the cell's parent folder (Resources/Cells/<model>/), or from --model. A model
@@ -167,7 +170,7 @@ def register(subparsers):
     _add_store_root(cv)
     _add_fdt_knobs(cv)
     cv.set_defaults(handler=run_crossval, interrupt_note=CROSSVAL_INTERRUPT_NOTE)
-    return {"fdt": fdt, "crossval": cv}
+    return {"fdt": fdt, "crossval": cv, **_register_compare(subparsers)}
 
 
 def run_fdt_cmd(args, store):
@@ -229,3 +232,83 @@ def run_crossval(args, store):
                                                 writers=writers, seed=args.seed)
     for rec in recs:
         print(f"[prism crossval] sweep record {rec.id} at {rec.path}")
+
+
+COMPARE_EPILOG = """\
+Every mode draws SAVED records from the artifact store and writes a comparison record of its own
+(kind fdt, study "comparison"): its figures are its output and its data.h5 holds the common grid and
+the interpolated curves. Nothing is simulated, and no record it draws is modified.
+
+  cells        two or more single-cell runs' ratio curves on one axis, labelled by cell
+  repeats      several runs of one cell, with the spread across them as a band
+  renormalise  one run's ratio recomputed with --prefactor, drawn against the original
+  sweeps       two sweep records together, and a slice of both at one operating point
+
+--record is repeatable and names a record by name or id; an unfinished record is refused, naming it.
+Runs land on different frequencies (each detects its own resonance), so curves are interpolated onto
+a grid log-spaced over the intersection of their spans -- and a point whose bracketing samples
+include a blank stays blank rather than being drawn through.
+"""
+
+_COMPARE_MODES = (
+    ("cells", "two or more single-cell runs' ratio curves on one axis, labelled by cell"),
+    ("repeats", "several runs of one cell, with the spread across them as a band"),
+    ("renormalise", "one run's ratio recomputed with a supplied normalisation constant"),
+    ("sweeps", "two sweep records together, and a slice of both at one operating point"),
+)
+
+# F56: main's generic Ctrl-C advice ("the artifact being written was removed ... --resume require")
+# is wrong here twice over -- a comparison's record is progressive, so an interrupt KEEPS it (E2),
+# and nothing resumes it. What survives is that one record, named by the `Writing comparison record`
+# line core.FDT.compare logs the moment it opens (a static note cannot carry the id). A comparison
+# refused before it opened, or interrupted while it was still loading, left nothing. There is no
+# --store-root here, so no advice about PRISM_ARTIFACTS is needed: the record is already in the root
+# the `artifacts` commands read.
+COMPARE_INTERRUPT_NOTE = (
+    "a comparison interrupted after it opened its record KEEPS that record, marked unfinished and "
+    "named by the `Writing comparison record` line above; `python -m core artifacts list fdt` lists "
+    "it and `python -m core artifacts rm fdt <id>` removes it. The runs it was drawing are never "
+    "modified and nothing resumes: re-running the same command draws the comparison again into a new "
+    "record (given --name, only once the unfinished record is removed, because it keeps the name).")
+
+
+def _register_compare(sub) -> dict:
+    """``python -m core compare <mode>``: one parser per mode, the
+    ``identifiability {rotation,laplace,jacobian}`` shape (core/tool/diagnostics.py), so a flag that
+    means nothing to a mode is an argparse error rather than a setting silently ignored. No
+    --store-root and no configuration flags, for core/tool/browse.py's reasons: the root is
+    PRISM_ARTIFACTS, and --help here costs no torch import."""
+    p = sub.add_parser("compare", help="compare saved FDT records (cells, repeats, renormalise, sweeps)",
+                       epilog=COMPARE_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
+    modes = p.add_subparsers(dest="variant", required=True,
+                             metavar="{cells,repeats,renormalise,sweeps}")
+    built = {}
+    for name, helptext in _COMPARE_MODES:
+        m = modes.add_parser(name, help=helptext)
+        m.add_argument("--record", action="append", required=True, metavar="REF",
+                       help="a saved fdt record, by name or id; repeat the flag once per record")
+        add_name_flags(m)
+        m.set_defaults(handler=run_compare, interrupt_note=COMPARE_INTERRUPT_NOTE)
+        built[name] = m
+    built["renormalise"].add_argument(
+        "--prefactor", type=float, required=True, metavar="VALUE",
+        help="the normalisation constant to recompute T_eff/T with")
+    built["sweeps"].add_argument(
+        "--at", type=float, default=None, metavar="VALUE",
+        help="the operating point to slice both sweeps at (default: the middle of the range they "
+             "share)")
+    return {"compare": p}
+
+
+def run_compare(args, store):
+    """One comparison, into a record of its own. Heavy imports inside the handler, per this package's
+    rule, so building the parser costs no torch import."""
+    from core.FDT import compare as comparisons
+    from .config_args import close_sink, report
+    options = {}
+    if args.variant == "renormalise":
+        options["prefactor"] = args.prefactor
+    elif args.variant == "sweeps" and args.at is not None:
+        options["at"] = args.at
+    return report(comparisons.compare(args.variant, args.record, name=args.name, note=args.note,
+                                      fig_sink=close_sink, store=store, **options))
