@@ -145,7 +145,8 @@ class CrossValPanel(BasePanel):
         preset = dict(cli.SWEEP_PRESETS[self.preset_combo.currentText()])
         try:
             cfg, s_grid, temp_grid = cli.make_param_sweep_config(
-                cell, preset=preset, s_spec=self.s_grid.spec(), t_spec=self.t_grid.spec(),
+                cell, preset=preset, preset_name=self.preset_combo.currentText(),
+                s_spec=self.s_grid.spec(), t_spec=self.t_grid.spec(),
                 n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
                 freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value())
         except Exception as e:                       # noqa: BLE001 -- see _config_error

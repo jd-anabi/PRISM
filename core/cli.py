@@ -451,14 +451,54 @@ SWEEP_PRESETS = {
 }
 
 
-def make_param_sweep_config(cell_file: str, *, preset: dict, s_spec: tuple, t_spec: tuple,
-                            n_freqs: int, ensemble_M: int, freqs_per_batch: int = 1,
-                            F0: float = 0.05, seed: "int | None" = None
-                            ) -> tuple["FDTConfig", "np.ndarray", "np.ndarray"]:
+def _check_grid(key: str, spec: tuple) -> tuple:
+    """One sweep axis, ``(min, max, N)``, as ``np.linspace`` needs it: both ends finite, ``N`` a
+    whole number of at least 2, and the minimum below the maximum (§4.4).
+
+    Checked as a WHOLE, because a blank field in the window's grid row reads as 0 -- a grid whose
+    'max' was never filled in arrives as ``(0.0, 0.0, 0)``, and neither end on its own is wrong.
+    """
+    lo, hi, n = spec
+    if n is None:
+        n = 0
+    n = int(n)
+    if n < 2:
+        what = describe(key)
+        refuse(key, f"{what[0].upper()}{what[1:]} needs at least 2 points; got {n}.")
+    lo, hi = require_below(key, lo, hi)
+    return lo, hi, n
+
+
+def make_param_sweep_config(cell_file: str, *, preset: dict, preset_name: str,
+                            s_spec: tuple, t_spec: tuple,
+                            n_freqs: int | None = None, ensemble_M: int | None = None,
+                            freqs_per_batch: int | None = None, F0: float | None = None,
+                            seed: "int | None" = None) -> tuple["FDTConfig", "np.ndarray", "np.ndarray"]:
     """Build (FDTConfig, s_grid, temp_grid) for the sweep study (no prompts). ``preset`` supplies the
     advanced resolution levers (freq_bounds / T_obs_periods / psd_T_obs_nd); ``s_spec``/``t_spec`` are
-    (min, max, n_points). Model fixed to NADROWSKI. Shared by the command-line tool (core/tool) + the GUI."""
+    (min, max, n_points). Model fixed to NADROWSKI. Shared by the command-line tool (core/tool) + the GUI.
+
+    ``preset_name`` is the name of the preset ``preset`` was resolved from. Both front ends pick the
+    preset from a closed list and then pass the resolved DICT, dropping the name -- and the record's
+    ``settings["preset"]`` has to hold the name, because the dict alone does not say which of the two
+    a reader is looking at (§4.4).
+
+    Each unset knob falls back to the preset (or to FDTConfig's own default), here rather than at
+    each call site, so the window and the tool cannot fall back differently.
+    """
     import numpy as np  # local import — keep top-of-file lean
+    require_choice("preset", preset_name, tuple(SWEEP_PRESETS))
+    n_freqs = require_at_least("n_freqs", preset["n_freqs"] if n_freqs is None else n_freqs, 1)
+    ensemble_M = require_at_least(
+        "ensemble_m", preset["ensemble_M"] if ensemble_M is None else ensemble_M, 1)
+    freqs_per_batch = require_at_least(
+        "freqs_per_batch", 1 if freqs_per_batch is None else freqs_per_batch, 1)
+    F0 = require_positive("f0", 0.05 if F0 is None else F0)
+    if seed is not None:
+        seed = require_at_least("seed", seed, 0)
+    s_spec = _check_grid("s_grid", s_spec)
+    t_spec = _check_grid("t_grid", t_spec)
+    require_file("cell", cell_file, "cell")
     (inits_dict, params_dict, rescale_params, force_params_dict,
      units_dict, _, _) = parse_cell(cell_file, model="NADROWSKI")
     s_grid = np.linspace(*s_spec)
@@ -481,5 +521,7 @@ def make_param_sweep_config(cell_file: str, *, preset: dict, s_spec: tuple, t_sp
         hw=cpu_device(),  # sweep: sequential SDE loop at M~256 is ~3.4x faster on CPU than GPU
         sources=cell_sources(cell_file, "NADROWSKI"),
         seed=seed,
+        preset_name=preset_name,
     )
+    check_fdt_settings(cfg)
     return cfg, s_grid, temp_grid

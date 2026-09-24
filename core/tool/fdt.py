@@ -150,11 +150,11 @@ def run_crossval(args, store):
     from core.FDT import cross_validation
     preset = dict(cli.SWEEP_PRESETS[args.preset])
     cfg, s_grid, temp_grid = cli.make_param_sweep_config(
-        args.cell, preset=preset,
+        args.cell, preset=preset, preset_name=args.preset,
         s_spec=_grid("--s-grid", args.s_grid), t_spec=_grid("--t-grid", args.t_grid),
         n_freqs=preset["n_freqs"] if args.n_freqs is None else args.n_freqs,
         ensemble_M=preset["ensemble_M"] if args.ensemble_M is None else args.ensemble_M,
-        **knobs(args, "freqs_per_batch", "F0"))
+        **knobs(args, "freqs_per_batch", "F0", "seed"))
     s_path, t_path = cross_validation.run_param_study_cli(cfg, s_grid, temp_grid)
     print(f"[prism crossval] S sweep: {s_path}")
     print(f"[prism crossval] T sweep: {t_path}")

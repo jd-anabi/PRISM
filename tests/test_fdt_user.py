@@ -367,3 +367,58 @@ def test_make_fdt_config_refuses_a_missing_cell_an_unsupported_model_and_a_broke
             "no control and no flag: the message names the setting and offers no fix (P2)"
     assert cli.check_fdt_settings(good.with_overrides(burn_in_nd=0.0)) is None, "E5: a zero burn-in is legal"
     assert cli.check_fdt_settings(good) is None, "the built config passes its own check"
+
+
+def test_make_param_sweep_config_refuses_a_blank_grid_and_records_the_preset_name():
+    """Spec §4.4. The window checks NOTHING about its two grids today, and _GridRow.spec() is three
+    value() calls -- so a grid whose 'max' was left empty arrives as (0.0, 0.0, 0) and np.linspace
+    produces a sweep of zero points without a word. Each grid is therefore checked as a whole: both
+    ends finite, at least 2 points, and the minimum below the maximum.
+
+    ``preset_name`` exists because the builder takes ``preset`` as an already-RESOLVED dict and both
+    call sites drop the name (core/tool/fdt.py's ``dict(cli.SWEEP_PRESETS[args.preset])``), while
+    body.settings["preset"] has to hold the name a reader can act on. It is a closed choice in both
+    front ends and is checked as one."""
+    import numpy as np
+    import pytest
+
+    from core import cli, config
+    from core.refusals import Refusal
+
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    preset = dict(cli.SWEEP_PRESETS["exploratory"])
+    ok = dict(preset=preset, preset_name="exploratory", s_spec=(0.0, 0.5, 3), t_spec=(1.0, 1.5, 3))
+
+    cfg, s_grid, t_grid = cli.make_param_sweep_config(cell, **ok)
+    assert cfg.model == "NADROWSKI" and cfg.hw.device.type == "cpu"
+    assert cfg.n_freqs == preset["n_freqs"] and cfg.ensemble_M == preset["ensemble_M"], \
+        "an unset knob falls back to the preset, in the builder rather than at each call site"
+    assert np.allclose(s_grid, np.linspace(0.0, 0.5, 3)) and len(t_grid) == 3
+    assert cfg.sources["cell"] == cell
+    assert cfg.preset_name == "exploratory", "body.settings['preset'] is read off the config (P72)"
+    assert cli.make_fdt_config("NADROWSKI", True, cell, n_freqs=4, ensemble_M=8).preset_name is None
+
+    for spec, field, needle in (
+            ((0.0, 0.0, 0), "s_grid", "at least 2 points"),
+            ((0.0, 0.5, 1), "s_grid", "at least 2 points"),
+            ((0.5, 0.1, 3), "s_grid", "lower bound below its upper bound"),
+            ((float("nan"), 0.5, 3), "s_grid", "must be a finite number")):
+        with pytest.raises(Refusal) as e:
+            cli.make_param_sweep_config(cell, **{**ok, "s_spec": spec})
+        assert e.value.field == field and needle in str(e.value), str(e.value)
+
+    with pytest.raises(Refusal) as e:
+        cli.make_param_sweep_config(cell, **{**ok, "t_spec": (1.5, 1.0, 3)})
+    assert e.value.field == "t_grid", "the refusal names the grid the user actually broke"
+
+    with pytest.raises(Refusal) as e:
+        cli.make_param_sweep_config(cell, **{**ok, "preset_name": "overnight"})
+    assert e.value.field == "preset" and str(e.value) == (
+        "The resolution preset must be one of exploratory, production; got 'overnight' "
+        "(default exploratory).")
+
+    # §3.3's four shared knobs are checked here too, with the same wording the single-cell builder
+    # uses: one rule set, two builders.
+    with pytest.raises(Refusal) as e:
+        cli.make_param_sweep_config(cell, **ok, ensemble_M=0)
+    assert e.value.field == "ensemble_m" and "at least 1" in str(e.value)

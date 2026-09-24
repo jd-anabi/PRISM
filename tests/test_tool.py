@@ -1229,7 +1229,10 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
                  "--freqs-per-batch", "4", "--f0", "0.2"]) == 0
     cell_file, kw = seen["make_param_sweep_config"]
     assert cell_file == nad
-    assert set(kw) == {"preset", "s_spec", "t_spec", "n_freqs", "ensemble_M", "freqs_per_batch", "F0"}
+    assert set(kw) == {"preset", "preset_name", "s_spec", "t_spec", "n_freqs", "ensemble_M",
+                       "freqs_per_batch", "F0"}
+    assert kw["preset_name"] == "exploratory", \
+        "the resolved dict does not say which preset it is; body.settings must hold the name (§4.4)"
     assert kw["s_spec"] == (0.0, 0.1, 2) and kw["t_spec"] == (1.0, 1.1, 3)
     assert isinstance(kw["s_spec"][2], int), "np.linspace refuses a float num"
     assert kw["n_freqs"] == 2 and kw["ensemble_M"] == 8
@@ -1242,8 +1245,9 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     assert main(["crossval", "--cell", nad, "--preset", "production",
                  "--s-grid", "0", "0.1", "2", "--t-grid", "1", "1.1", "2"]) == 0
     cell_file, kw = seen["make_param_sweep_config"]
-    assert set(kw) == {"preset", "s_spec", "t_spec", "n_freqs", "ensemble_M"}, \
+    assert set(kw) == {"preset", "preset_name", "s_spec", "t_spec", "n_freqs", "ensemble_M"}, \
         "freqs_per_batch and F0 were left unset -- they must not be forwarded"
+    assert kw["preset_name"] == "production"
     assert kw["preset"] == dict(cli.SWEEP_PRESETS["production"])
     assert kw["n_freqs"] == cli.SWEEP_PRESETS["production"]["n_freqs"]
     assert kw["ensemble_M"] == cli.SWEEP_PRESETS["production"]["ensemble_M"]
