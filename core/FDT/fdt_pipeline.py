@@ -11,6 +11,7 @@ resonance quantify FDT violation (activity of the hair bundle).
 """
 import logging
 import math
+import warnings
 from datetime import datetime
 
 import torch
@@ -59,6 +60,46 @@ def _estimate_omega_0(cfg: FDTConfig) -> tuple[float, str]:
     return 1.0, "1.0 (fallback default)"
 
 
+def thin_notices(cfg: FDTConfig) -> list:
+    """The "too thin to trust" sentences for this run's settings; ``[]`` when there are none (E5).
+
+    Pure, and shared by the single-cell run and the sweep, so both mark a quick look the same way
+    and ``body.notices`` carries the same words the operator was shown. The thresholds are
+    ``config.FDT_THIN_*`` and are read LIVE, never from-imported, so a session can move one.
+    """
+    notices = []
+    if int(cfg.n_freqs) < config.FDT_THIN_N_FREQS:
+        notices.append(
+            f"The frequency grid has {int(cfg.n_freqs)} point"
+            f"{'' if int(cfg.n_freqs) == 1 else 's'}, below the {config.FDT_THIN_N_FREQS} this "
+            f"measurement is trusted at: read the result as a quick look, not as a measurement.")
+    if int(cfg.ensemble_M) < config.FDT_THIN_ENSEMBLE_M:
+        notices.append(
+            f"The ensemble is {int(cfg.ensemble_M)} trajector"
+            f"{'y' if int(cfg.ensemble_M) == 1 else 'ies'}, below the "
+            f"{config.FDT_THIN_ENSEMBLE_M} this measurement is trusted at: read the result as a "
+            f"quick look, not as a measurement.")
+    return notices
+
+
+def warn_thin_settings(cfg: FDTConfig) -> list:
+    """Raise one ``PreflightWarning`` per thin setting and return the sentences for ``body.notices``.
+
+    The warning is what the operator sees while the run is going (the window's pane at warning
+    severity, the tool's stderr) and what the run buffer copies into ``log.txt``; the returned list
+    is what the record keeps, which a warning alone cannot do. The import is LOCAL because
+    ``core.orchestrator`` imports ``core.cli`` at module scope and this module is reached from both
+    front ends before the SBI stack is needed.
+    """
+    from core.orchestrator import PreflightWarning
+    from core.runs import RUN_BOUNDARY_FILES
+    notices = thin_notices(cfg)
+    for sentence in notices:
+        warnings.warn(sentence, PreflightWarning, stacklevel=2,
+                      skip_file_prefixes=RUN_BOUNDARY_FILES)
+    return notices
+
+
 def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> None:
     """End-to-end FDT analysis. Runs sanity checks first; gates on the caller's answer before the
     production sweep.
@@ -68,6 +109,10 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
                         thread could never answer.
     :param confirm_production: proceed to the production sweep after sanity. REQUIRED, for the same
                         reason; only consulted when the sanity checks run."""
+    # 0. The settings too thin to trust: not a refusal (E5 keeps the quick look possible), a
+    #    judgement the operator sees now and the record keeps afterwards (Task 17 stores it).
+    notices = warn_thin_settings(cfg)
+
     # 1. Model-specific natural-frequency starting estimate; the production omega_0
     #    is refined from the Campaign 1 PSD peak below.
     cfg.omega_0, omega_0_desc = _estimate_omega_0(cfg)

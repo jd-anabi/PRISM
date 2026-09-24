@@ -192,6 +192,8 @@ def run_fdt_param_sweep(
     :param output_path: target .h5. Defaults to <artifacts root>/crossval/sweep_<param>_<stamp>.h5.
     :returns: the HDF5 output path.
     """
+    from .fdt_pipeline import warn_thin_settings
+    notices = warn_thin_settings(cfg)          # E5; Task 19 stores these on the sweep's record
     fixed_overrides = fixed_overrides or {}
     if output_path is None:
         out_dir = _out_dir()

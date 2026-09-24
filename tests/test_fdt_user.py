@@ -161,6 +161,7 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
 
     from core.FDT import cross_validation as cv
     from core.FDT import fdt_pipeline, plots, sanity
+    from core.orchestrator import PreflightWarning
 
     assert logging.getLogger("core").level == logging.INFO, "core/runs.py sets it at import"
 
@@ -191,7 +192,11 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     monkeypatch.setattr(cv, "_campaign2_ratio", _campaign2)
     out_h5 = tmp_path / "s.h5"
     caplog.clear()
-    with pytest.warns(UserWarning, match="1/2 operating points failed"):
+    # The stub's two trajectories are below the thin-setting threshold (E5), so the sweep raises that
+    # notice first. It is asserted, not left to leak: pytest.warns re-emits every warning it did not
+    # match when it closes, so the inner block alone would pass and still move the gate's count.
+    with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"), \
+            pytest.warns(UserWarning, match="1/2 operating points failed"):
         cv.run_fdt_param_sweep(_SweepCfg(), "s", np.array([0.0, 0.1]), {"temp": 1.0}, output_path=out_h5)
     got = records()
     name = "core.FDT.cross_validation"
@@ -207,6 +212,9 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     # ── the FDT run: a failed sanity verdict is a WARNING, without the hand-typed word ─────────────
     class _Hopf:
         model = "HOPF"
+        # run_fdt judges the thin settings first (E5) and reads both knobs to do it. At these values
+        # nothing is said, so the exact record list below is unchanged.
+        n_freqs, ensemble_M = 60, 256
 
     monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     monkeypatch.setattr(fdt_pipeline, "run_all_sanity",
@@ -422,3 +430,60 @@ def test_make_param_sweep_config_refuses_a_blank_grid_and_records_the_preset_nam
     with pytest.raises(Refusal) as e:
         cli.make_param_sweep_config(cell, **ok, ensemble_M=0)
     assert e.value.field == "ensemble_m" and "at least 1" in str(e.value)
+
+
+def test_a_thin_setting_warns_and_hands_back_the_sentence_for_the_record():
+    """E5: checks refuse what BREAKS; a setting too thin to trust warns instead, and the warning is
+    recorded. A one-frequency grid and a two-trajectory ensemble both produce a real number -- the
+    computation is defined -- but the number is a quick look, and a record that does not say so
+    reads later as a measurement. A floor here would forbid the quick look, which E5 explicitly
+    does not.
+
+    The channel is PreflightWarning, the same one every other judgement in the tree uses
+    (core/orchestrator.py:81), so the window shows it at warning severity, the tool sends it to
+    stderr, and the run buffer copies it into the record's log.txt -- and the SENTENCES come back so
+    the stage can put them in body.notices, which is the half a warning alone cannot do.
+
+    Eight trajectories is the threshold because the existing end-to-end test runs at eight and must
+    keep passing without a notice; two frequencies because one frequency is not a spectrum."""
+    import warnings
+
+    import pytest
+
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+    from core.orchestrator import PreflightWarning
+
+    assert (config.FDT_THIN_N_FREQS, config.FDT_THIN_ENSEMBLE_M) == (2, 8)
+
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    fat = cli.make_fdt_config("NADROWSKI", True, cell, n_freqs=2, ensemble_M=8)
+    assert fdt_pipeline.thin_notices(fat) == [], "at the thresholds exactly: nothing to say"
+
+    thin = cli.make_fdt_config("NADROWSKI", True, cell, n_freqs=1, ensemble_M=2)
+    said = fdt_pipeline.thin_notices(thin)
+    assert said == [
+        "The frequency grid has 1 point, below the 2 this measurement is trusted at: read the "
+        "result as a quick look, not as a measurement.",
+        "The ensemble is 2 trajectories, below the 8 this measurement is trusted at: read the "
+        "result as a quick look, not as a measurement.",
+    ], said
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        returned = fdt_pipeline.warn_thin_settings(thin)
+    assert returned == said, "the sentences come back for body.notices, not only to the warning hook"
+    assert [str(w.message) for w in rec] == said
+    assert all(issubclass(w.category, PreflightWarning) for w in rec), [w.category for w in rec]
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        assert fdt_pipeline.warn_thin_settings(fat) == []
+    assert rec == [], "a run at the thresholds is not annotated"
+
+    # the run entries raise it themselves: a notice the operator never sees is not a notice
+    import inspect
+    for fn in (fdt_pipeline.run_fdt,):
+        assert "warn_thin_settings" in inspect.getsource(fn), fn.__name__
+    from core.FDT import cross_validation
+    assert "warn_thin_settings" in inspect.getsource(cross_validation.run_fdt_param_sweep)
