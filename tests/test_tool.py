@@ -1751,6 +1751,121 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     assert "[prism crossval] S sweep:" in capsys.readouterr().out
 
 
+def test_the_nadrowski_only_sanity_checks_are_selected_for_a_nadrowski_cell(monkeypatch, caplog):
+    """``run_all_sanity`` keeps ``passive_baseline`` and ``high_freq_fdt`` for NADROWSKI and drops
+    them for every other model (core/FDT/sanity.py: ``_runs_nadrowski_only_checks`` decides,
+    ``_NADROWSKI_ONLY`` names the two), because both reason about parameters -- the s-feedback and
+    the motor thermostat -- that only Nadrowski has. Until piece 5 the only end-to-end test of the
+    ``fdt`` subcommand ran a HOPF cell with ``--skip-sanity``, so the branch that KEEPS the two was
+    exercised nowhere and neither was the note that announces dropping them. Spec section 1's last
+    bullet.
+
+    The five check bodies are stubbed, so this asserts the SELECTION and the note, not the physics;
+    the slow test below runs them for real.
+    """
+    from core.FDT import sanity
+
+    seen = []
+
+    def _stub(name):
+        def _fn(cfg, **kw):
+            seen.append(name)
+            return True, {"stub": name}
+        return _fn
+
+    for fn_name in ("check_passive_baseline", "check_high_freq_fdt", "check_linearity",
+                    "check_ensemble_convergence", "check_psd_window"):
+        monkeypatch.setattr(sanity, fn_name, _stub(fn_name))
+
+    class _Cfg:
+        def __init__(self, model):
+            self.model = model
+
+    nadrowski = sanity.run_all_sanity(_Cfg("NADROWSKI"))
+    assert list(nadrowski) == ["passive_baseline", "high_freq_fdt", "linearity",
+                               "ensemble_convergence", "psd_window"], list(nadrowski)
+    assert seen[:2] == ["check_passive_baseline", "check_high_freq_fdt"], seen
+    # No caplog.set_level: the ``core`` logger is at INFO by import (core/runs.py).
+    assert "Nadrowski-specific and are skipped" not in caplog.text, caplog.text
+
+    seen.clear()
+    caplog.clear()
+    hopf = sanity.run_all_sanity(_Cfg("HOPF"))
+    assert list(hopf) == ["linearity", "ensemble_convergence", "psd_window"], list(hopf)
+    assert "check_passive_baseline" not in seen, seen
+    assert "Nadrowski-specific and are skipped for HOPF" in caplog.text, caplog.text
+
+
+@pytest.mark.slow
+def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, capsys):
+    """The real sanity checks on a real Nadrowski cell, and the passive-baseline figure they draw.
+
+    This is the gap spec section 1's last bullet names: the single-cell leg above runs a HOPF cell
+    with --skip-sanity, so ``check_passive_baseline`` and ``check_high_freq_fdt`` -- the two checks
+    that decide whether the whole PSD / lock-in / noise-prefactor convention is right, and the only
+    ones that draw a figure of their own -- had never executed under test. Everything is real: the
+    campaigns, the checks, the production sweep and the record.
+
+    Production is NOT skipped. ``--no-production`` would be cheaper, and its contract is fixed too
+    (planning ruling P55: a finished record with ``grid`` and ``offgrid`` null) -- but it stops
+    before Campaign 1, so on a Nadrowski cell with the checks on, the two campaigns, the three
+    production figures and ``data.h5`` would go unexercised. This test runs the whole path and
+    records what that costs.
+
+    Its own --store-root, so the record cannot be confused with the one the tiny-size test above
+    writes into the module's shared artifacts root. ``tool_env`` is still requested: it pins
+    PRISM_ARTIFACTS at a temp root, so any write that escapes the store still misses the real
+    ``Artifacts/``.
+
+    Measured 2026-09-24 on the CPU, not yet whole: the implementer's run was cut off at 540 s, by
+    which point the passive-baseline check ALONE had taken 466 s (the record was created at
+    12:41:35 and that check's figure written at 12:49:21). The whole run's --durations figure is
+    owed from the first slow-set run.
+    """
+    import warnings
+
+    from core import config
+    from core.artifacts import ArtifactStore
+    from core.tool import main
+
+    root = tmp_path / "store"
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    capsys.readouterr()
+    # A sanity check EXCLUDES a probe the spontaneous spectrum does not resolve and says so in a
+    # UserWarning (core/FDT/sanity.py); on this cell the passive check measured 18 of its 20 probes
+    # (its figure, 2026-09-24). That notice is this path's own output, so it is caught here rather
+    # than leaked into the session's warning count. It is not REQUIRED -- whether a probe falls off
+    # the grid is physics, and this test is about the path -- but any OTHER warning is a finding, and
+    # fails. The filters are inherited, not "always": what is recorded is exactly what would
+    # otherwise have reached the session's warnings summary.
+    with warnings.catch_warnings(record=True) as said:
+        rc = main(["fdt", "--cell", cell, "--n-freqs", "2", "--ensemble-m", "8",
+                   "--store-root", str(root)])
+    captured = capsys.readouterr()
+    out = captured.out
+    assert rc == 0, captured.err[-2000:]
+    others = [f"{w.category.__name__}: {w.message}" for w in said
+              if "probe frequencies fall outside the Welch PSD grid" not in str(w.message)]
+    assert not others, others
+
+    # The two Nadrowski-only checks ran, and the note that announces dropping them did not appear.
+    assert "[passive_baseline] true equilibrium (s=0): T_eff/T ~ 1" in out, out[-2000:]
+    assert "[high_freq_fdt] high omega (s != 0): T_eff/T ~ 1" in out, out[-2000:]
+    assert "Nadrowski-specific and are skipped" not in out
+    assert "[PASS] passive_baseline" in out or "[FAIL] passive_baseline" in out, out[-2000:]
+
+    rows = [s for s in ArtifactStore(root).list("fdt") if s.study == "single"]
+    assert len(rows) == 1 and rows[0].finished, rows
+    rec = ArtifactStore(root).load_fdt(rows[0].id)
+    assert rec.body["settings"]["skip_sanity"] is False, rec.body["settings"]
+    assert rec.body["complete"] is True
+    # FIVE figures, not four: the passive-baseline plot is the one --skip-sanity never draws
+    # (core/FDT/sanity.py's check_passive_baseline, ``save_plot_path``).
+    assert len(rec.manifest.figures) == 5, rec.manifest.figures
+    for fig in rec.manifest.figures:
+        assert (rec.path / fig).exists(), fig
+
+
 def test_fdt_plot_functions_close_a_saved_figure_instead_of_show(tmp_path):
     """Commit B, fix round 1: every real caller (fdt_pipeline.py, sanity.py) always passes
     ``save_path``, so the old unconditional ``plt.show()`` was pure cost under the tool's Agg
