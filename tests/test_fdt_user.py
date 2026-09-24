@@ -1927,7 +1927,9 @@ def _sweep_stubs(monkeypatch, *, phase_a_fail=(), phase_b_fail=()):
 
     The counters are per CALL, so they run on across both sweeps of a study: Campaign-2 calls 0-1 are
     a two-point S grid's and 2-3 the T grid's. The figure stub writes the file it was handed, as
-    _stub_the_study's does: a figure the manifest lists and the disk lacks is a phantom (Task 17)."""
+    _stub_the_study's does: a figure the manifest lists and the disk lacks is a phantom (Task 17).
+    The spectrum spans 0.1..40, past the common grid's 0.2..30 (every stubbed omega_0 is 1.0), so no
+    probe is off-grid -- consistent with a ratio that is finite everywhere -- unless a test says so."""
     import torch
     from core.FDT import cross_validation as cv
 
@@ -1938,7 +1940,7 @@ def _sweep_stubs(monkeypatch, *, phase_a_fail=(), phase_b_fail=()):
         seen_a["n"] += 1
         if idx in phase_a_fail:
             raise RuntimeError(f"stub phase-A failure at {idx}")
-        return (torch.linspace(0.1, 3.0, 8, dtype=torch.float64),
+        return (torch.linspace(0.1, 40.0, 8, dtype=torch.float64),
                 torch.ones(8, dtype=torch.float64))
 
     seen_b = {"n": 0}
@@ -2293,19 +2295,147 @@ def test_a_negative_seed_is_refused_before_the_sweep_opens_its_record(store, mon
     """``_point_seed`` derives every stream through numpy's SeedSequence, whose domain is the
     non-negative integers. Both builders refuse a negative seed; a sweep handed one directly is
     refused by the same rule, before its writer is entered. Inside the per-point guard it would fail
-    EVERY point and end in a false "measured nothing" refusal naming the grid -- the wrong setting."""
+    EVERY point and end in a false "measured nothing" refusal naming the grid -- the wrong setting.
+
+    The study refuses the same seed at its top, before its thin-setting notice (fix round 1, F10): a
+    refused study must not first warn about how far to trust a result it will never produce."""
+    import warnings
+
     import pytest
     from core.FDT import cross_validation as cv
     from core.refusals import Refusal
 
     _sweep_stubs(monkeypatch)
-    cfg, s_grid, _t = _thin_study_cfg()
+    cfg, s_grid, t_grid = _thin_study_cfg()
     cfg.seed = -1
     w = store.create("fdt", cfg)
     with pytest.raises(Refusal) as e:
         cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
     assert e.value.field == "seed", e.value.field
     assert not w.dir.exists() and store.list("fdt") == [], "refused before anything was spent"
+
+    writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    with warnings.catch_warnings(record=True) as said:
+        warnings.simplefilter("always")
+        with pytest.raises(Refusal) as e:
+            cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=-1)
+    assert e.value.field == "seed", e.value.field
+    assert [str(x.message) for x in said] == [], "the quick-look notice came before the refusal"
+    assert not any(x.dir.exists() for x in writers.values()) and store.list("fdt") == []
+
+
+def test_a_sweeps_offgrid_counts_only_the_probes_its_spectra_could_not_supply(store, monkeypatch):
+    """Fix round 1 (Important). ``offgrid.blanks`` counts the probe frequencies the SPONTANEOUS
+    spectrum could not supply (spec §2.3, E9) -- exactly what a single-cell record counts
+    (``torch.isnan(G_at_omegas)`` in fdt_pipeline), and the comparisons read the field from both study
+    types. Counting every NaN in a landed ratio booked a NaN chi'' from the DRIVEN campaign -- a solver
+    blow-up at one probe -- as off-grid, so it read as a band problem.
+
+    Here the spectrum stops at 3.0, so the common grid's probes above it are off-grid at both points,
+    and point 0's driven campaign also returns a NaN chi'' at one probe INSIDE the band: that probe
+    must add nothing. Neither point fails, so nothing warns."""
+    import warnings
+
+    import h5py
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+
+    _sweep_stubs(monkeypatch)
+    monkeypatch.setattr(cv, "run_campaign1_psd",
+                        lambda c: (torch.linspace(0.1, 3.0, 8, dtype=torch.float64),
+                                   torch.ones(8, dtype=torch.float64)))
+    driven = []
+
+    def _c2(cfg_op, omegas, freqs_psd, G):
+        w = omegas.to(torch.float64)
+        in_band = (w >= 0.1) & (w <= 3.0)             # blank off-grid, as the real ratio is
+        ratio = torch.where(in_band, torch.full_like(w, 2.0), torch.full_like(w, math.nan))
+        chis = torch.full(omegas.shape, 1 + 1j, dtype=torch.complex128)
+        if not driven:                                # point 0: a NaN chi'' inside the band
+            chis[1], ratio[1] = complex(1.0, math.nan), math.nan
+        driven.append(1)
+        return chis, ratio
+
+    monkeypatch.setattr(cv, "_campaign2_ratio", _c2)
+    cfg, s_grid, _t = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=6, ensemble_M=2)
+    cfg.seed = 1
+    with warnings.catch_warnings(record=True) as said:
+        warnings.simplefilter("always")
+        rec = cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
+                                     writer=store.create("fdt", cfg, name="offgrid"))
+    assert [str(x.message) for x in said] == []
+
+    with h5py.File(rec.data_path, "r") as h5:
+        grid = h5["operating_points/000/omega_grid"][...]
+    off = int(((grid < 0.1) | (grid > 3.0)).sum())
+    assert off > 0 and 0.1 <= grid[1] <= 3.0, grid
+    assert rec.body["points"]["done"] == 2
+    assert rec.body["offgrid"] == {"blanks": 2 * off, "of": 2 * grid.size}, \
+        f"{off} off-grid probe(s) at each point, none for the NaN chi'': {rec.body['offgrid']}"
+    assert rec.body["results"]["offgrid_blanks"] == 2 * off
+
+
+def test_an_all_blank_point_lands_without_a_numpy_warning(store, monkeypatch, caplog):
+    """Fix round 1. The per-point peak line took ``np.nanmax`` over the whole ratio, and on a ratio
+    with no finite value numpy warns ``RuntimeWarning: All-NaN slice encountered`` -- which reached
+    the run log and stderr as if the operator had something to act on. The peak is taken over the
+    FINITE values only: a point with none still LANDS, its line says there is no peak, and an EMPTY
+    ratio is still a counted failure (test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash)."""
+    import logging
+    import warnings
+
+    from core.FDT import cross_validation as cv
+
+    _sweep_stubs(monkeypatch)
+    monkeypatch.setattr(cv, "_campaign2_ratio",
+                        lambda c, om, f, g: (torch.full(om.shape, complex(1.0, math.nan),
+                                                        dtype=torch.complex128),
+                                             torch.full(om.shape, math.nan, dtype=torch.float64)))
+    cfg, s_grid, _t = _thin_study_cfg()
+    cfg.seed = 1
+    with caplog.at_level(logging.INFO, logger="core"):
+        with warnings.catch_warnings(record=True) as said:
+            warnings.simplefilter("always")
+            rec = cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
+                                         writer=store.create("fdt", cfg, name="blank"))
+    assert [f"{x.category.__name__}: {x.message}" for x in said] == []
+    assert rec.body["points"] == {"param": "s", "planned": 2, "done": 2, "failed": 0}
+    assert rec.body["results"]["peak_ratio"] is None, "no finite value, so no peak (and no NaN)"
+    peaks = [r.getMessage() for r in caplog.records if "T_eff/T peak" in r.getMessage()]
+    assert peaks == ["      T_eff/T peak = none (no finite value on the grid)"] * 2, peaks
+
+
+def test_a_refusal_that_is_not_measured_nothing_ends_the_study_at_once(store, monkeypatch, caplog):
+    """Task 20's departure from A7, pinned (fix round 1). ``StoreError``, ``ManifestError`` and
+    ``FDTModelError`` are all Refusals, so catching every Refusal from a sweep would log a store
+    failure as "the s sweep measured nothing; its unfinished record is kept" -- false -- and then
+    spend the whole T sweep. Only the all-failed refusal carries its grid's field; any other refusal
+    ends the study at once and the T writer is never entered."""
+    import logging
+
+    import pytest
+    from core.artifacts.store import StoreError
+    from core.FDT import cross_validation as cv
+    from core.refusals import PreflightWarning
+
+    _sweep_stubs(monkeypatch)
+    cfg, s_grid, t_grid = _thin_study_cfg()
+    writers = {"s": store.create("fdt", cfg, name="s_store"),
+               "temp": store.create("fdt", cfg, name="t_store")}
+
+    def _refresh():
+        raise StoreError("stub: the manifest could not be written", field="artifact")
+
+    writers["s"].refresh = _refresh                  # the first per-point refresh of the S sweep
+    with caplog.at_level(logging.INFO, logger="core"):
+        with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"):
+            with pytest.raises(StoreError, match="stub: the manifest"):
+                cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=1)
+    assert not [r.getMessage() for r in caplog.records if "measured nothing" in r.getMessage()]
+    assert not writers["temp"].dir.exists(), "the T sweep was entered after the S sweep's store failure"
 
 
 def test_a_finished_sweep_draws_its_real_figure_into_its_record(store, monkeypatch):

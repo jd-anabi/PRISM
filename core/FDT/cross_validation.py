@@ -148,8 +148,8 @@ def _point_seed(seed: int, sweep_param: str, phase: int, idx: int) -> int:
     Phase B depend on how many points the grid held (Task 19's review). Noise shared across the two
     records is exactly what a comparison of sweeps would read as signal.
 
-    The seed must be non-negative -- ``SeedSequence``'s domain, and the rule both FDT builders and
-    ``run_fdt_param_sweep`` apply before anything is spent.
+    The seed must be non-negative -- ``SeedSequence``'s domain, and the rule both FDT builders, the
+    study and each sweep apply before anything is spent.
     """
     return int(np.random.SeedSequence([int(seed), _SWEEP_NO[sweep_param], int(phase), int(idx)])
                .generate_state(1)[0])
@@ -166,6 +166,22 @@ def _refresh_points(writer, *, planned: int, done: int, failed: int) -> None:
     writer.body["points"] = {**writer.body["points"], "planned": planned, "done": done,
                              "failed": failed}
     writer.refresh()
+
+
+def _peak_of(ratio) -> str:
+    """The per-point progress line's peak: the largest FINITE T_eff/T, or a plain "none" when the
+    point has no finite value.
+
+    Over the finite values because ``np.nanmax`` of an all-blank ratio returns NaN with a
+    ``RuntimeWarning: All-NaN slice encountered``, which reached the run log and stderr as if the
+    operator had something to act on (fix round 1). An EMPTY ratio still raises -- there is no point
+    here at all -- and the caller counts that as the point's failure.
+    """
+    r = ratio.detach().cpu().numpy()
+    if r.size == 0:
+        raise ValueError("the driven campaign returned an empty ratio: not one probe has a value")
+    finite = r[np.isfinite(r)]
+    return f"{finite.max():.3g}" if finite.size else "none (no finite value on the grid)"
 
 
 def _check_sweep_param(sweep_param: str) -> None:
@@ -267,7 +283,10 @@ def run_fdt_param_sweep(
                    log becomes log.txt (spec §1.2, §4.1). Its seed comes from ``cfg.seed``; nothing
                    here writes on ``cfg``.
     :returns: the LoadedFdt for the record just written.
-    :raises Refusal: every operating point failed; the unfinished record stays on disk.
+    :raises Refusal: every operating point failed (field ``s_grid`` or ``t_grid``), and the unfinished
+                     record stays on disk; or, before the writer is entered so that no record is
+                     opened, a negative seed (field ``seed``) or a cell with no FDT normalisation
+                     constant (``FDTModelError``, field ``cell``).
     """
     fixed_overrides = fixed_overrides or {}
     _check_sweep_param(sweep_param)                  # a malformed call, before the writer is entered
@@ -405,11 +424,16 @@ def run_fdt_param_sweep(
                         with seeded(_point_seed(seed, sweep_param, 1, idx), cfg.hw.device):
                             chis, ratio = _campaign2_ratio(cfg_op, omegas_common, freqs_psd, G)
                         # The peak line FIRST, before anything about this point is called a success: an
-                        # EMPTY ratio raises here (numpy's nanmax has no identity for a zero-size array),
-                        # and a group already flipped to failed=False would then be counted a failure
-                        # and stored as a success at the same time. An all-blank ratio does not raise; it
-                        # lands, and its blanks are counted below.
-                        log.info(f"      T_eff/T peak = {np.nanmax(ratio.cpu().numpy()):.3g}")
+                        # EMPTY ratio raises here, and a group already flipped to failed=False would then
+                        # be counted a failure and stored as a success at the same time. An all-blank
+                        # ratio does not raise; it lands.
+                        log.info(f"      T_eff/T peak = {_peak_of(ratio)}")
+                        # The probes the SPONTANEOUS spectrum could not supply, and only those -- what
+                        # the single-cell record counts (torch.isnan(G_at_omegas) in fdt_pipeline), so
+                        # offgrid means one thing in both study types. Recomputed with the interpolation
+                        # _campaign2_ratio runs, so that seam keeps its (chis, ratio) shape. Counting the
+                        # ratio's NaNs booked a NaN chi'' from the DRIVEN campaign as a band problem.
+                        point_blanks = int(torch.isnan(_interp_log(omegas_common, freqs_psd, G)).sum())
                         grp.attrs["omega_0_ref"] = omega_0_ref
                         grp.create_dataset("omega_grid", data=omega_grid_np, compression="gzip")
                         grp.create_dataset("omega_norm", data=omega_norm_np, compression="gzip")
@@ -433,7 +457,7 @@ def run_fdt_param_sweep(
                         continue
                     n_done += 1
                     ok_ratios.append(ratio.detach().cpu().to(torch.float64).reshape(-1))
-                    blanks_total += int(torch.isnan(ratio).sum())   # its blanks on the common grid (P78)
+                    blanks_total += point_blanks    # its off-grid probes on the common grid (P78)
                     h5.flush()
                     _refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)
 
@@ -518,12 +542,15 @@ def run_param_study_cli(cfg: FDTConfig, *, s_grid: np.ndarray, t_grid: np.ndarra
     # §3.4's check, applied to the sweep for the same reason: a cell that cannot supply the
     # normalisation constant would otherwise cost the whole first phase before anything noticed.
     observable_noise_prefactor(cfg)
+    # On the PRIVATE copy; both sweeps read it. Non-negative (the builders' rule and _point_seed's
+    # domain), and checked HERE, before the notice below, for the same reason as the prefactor (F10;
+    # fix round 1). Each sweep checks it again for a direct caller.
+    cfg.seed = require_at_least("seed", _resolve_seed(seed, cfg), 0)
     # E5, ONCE for the whole study and before either sweep spends anything -- and HERE, in the public
     # entry, so stacklevel=3 names the front end's call rather than a line of this module. After the
-    # prefactor (ruling F10): a refused study must not first warn about how far to trust its result.
-    # Each sweep keeps the same sentences in its own body.notices without warning again.
+    # prefactor and the seed (ruling F10): a refused study must not first warn about how far to trust
+    # its result. Each sweep keeps the same sentences in its own body.notices without warning again.
     warn_thin_settings(cfg)
-    cfg.seed = _resolve_seed(seed, cfg)              # on the PRIVATE copy; both sweeps read it
 
     recs, refused = [], []
     for key, grid, fixed, banner in sweeps:
