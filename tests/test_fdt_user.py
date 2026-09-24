@@ -1498,7 +1498,7 @@ def test_the_single_cell_record_holds_the_numbers_not_only_the_pictures(store, m
     re-plot -- and any comparison of two cells -- meant re-running hours of simulation. The ``study``
     attribute at the root is what lets a reader check the layout before reading it: three layouts
     share this filename (spec §2.3). The dataset names are the interface contract's, the vocabulary
-    ``cross_validation._fdt_measure`` and the sweep file already use (P5, P71).
+    the sweep file already uses (P5, P71).
 
     Two trajectories is below the trust threshold, so the run warns; asserted, never leaked."""
     import h5py
@@ -1920,3 +1920,410 @@ def test_a_cell_the_sweep_cannot_normalise_opens_no_record(store, monkeypatch):
     assert not [w for w in rec if issubclass(w.category, PreflightWarning)], \
         "the refusal comes before the thin notice (F10)"
     assert not any(wr.dir.exists() for wr in writers.values()) and store.list("fdt") == []
+
+
+def _sweep_stubs(monkeypatch, *, phase_a_fail=(), phase_b_fail=()):
+    """Campaign 1 and Campaign 2 stubbed per operating point, with chosen indices made to fail.
+
+    The counters are per CALL, so they run on across both sweeps of a study: Campaign-2 calls 0-1 are
+    a two-point S grid's and 2-3 the T grid's. The figure stub writes the file it was handed, as
+    _stub_the_study's does: a figure the manifest lists and the disk lacks is a phantom (Task 17)."""
+    import torch
+    from core.FDT import cross_validation as cv
+
+    seen_a = {"n": 0}
+
+    def _c1(cfg_op):
+        idx = seen_a["n"]
+        seen_a["n"] += 1
+        if idx in phase_a_fail:
+            raise RuntimeError(f"stub phase-A failure at {idx}")
+        return (torch.linspace(0.1, 3.0, 8, dtype=torch.float64),
+                torch.ones(8, dtype=torch.float64))
+
+    seen_b = {"n": 0}
+
+    def _c2(cfg_op, omegas, freqs_psd, G):
+        idx = seen_b["n"]
+        seen_b["n"] += 1
+        if idx in phase_b_fail:
+            raise RuntimeError(f"stub phase-B failure at {idx}")
+        return (torch.ones(omegas.shape, dtype=torch.complex128),
+                torch.full(omegas.shape, 2.0, dtype=torch.float64))
+
+    monkeypatch.setattr(cv, "run_campaign1_psd", _c1)
+    monkeypatch.setattr(cv, "_detect_resonance", lambda omegas, G, w0: (1.0, True))
+    monkeypatch.setattr(cv, "_campaign2_ratio", _c2)
+    monkeypatch.setattr(cv, "plot_fdt_3d_vs_param",
+                        lambda *a, save_path=None, **k: Path(save_path).write_bytes(b"\x89PNG"))
+
+
+def test_a_sweep_counts_failures_in_both_phases(store, monkeypatch):
+    """E4: some points failed is a COMPLETED record carrying the count, and both phases count.
+
+    Phase A caught nothing before piece 5 (core/FDT/cross_validation.py's Phase A loop has no try at
+    all), so one operating point whose spontaneous campaign raised -- a transient OOM, a solver blow-up
+    at the grid's far end -- ended the whole study with a traceback and left no record of the points
+    that had already worked. The counts are what let a reader judge the answer.
+
+    The counts are kept CURRENT as the sweep runs -- a browser row watching an hours-long sweep reads
+    them from the manifest each refresh writes -- and ``done`` is COUNTED, never derived as planned
+    minus failed, which would call every not-yet-run point done from the first refresh on. A finished
+    sweep fills ``results`` and ``offgrid`` too (P78: spec §2.3 leaves them null only until the run
+    finishes)."""
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+
+    _sweep_stubs(monkeypatch, phase_a_fail=(0,), phase_b_fail=(1,))
+    cfg, s_grid, _t = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.3, 4), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    cfg.seed = 1
+    w = store.create("fdt", cfg, name="partly")
+    refreshed, refresh = [], w.refresh
+
+    def _spy():
+        refreshed.append((w.body["points"]["done"], w.body["points"]["failed"]))
+        refresh()
+
+    w.refresh = _spy
+    with pytest.warns(UserWarning, match="operating points failed"):
+        rec = cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
+
+    assert rec.body["complete"] is True, "some points failed is a completed record (E4)"
+    assert rec.body["points"] == {"param": "s", "planned": 4, "done": 2, "failed": 2}
+    assert rec.body["results"] is not None and rec.body["results"]["peak_ratio"] == 2.0, "P78"
+    assert rec.body["offgrid"] == {"blanks": 0, "of": 4 * 3}, \
+        "P78: 4 planned points x the 3-point common grid (every stubbed omega_0 is 1.0)"
+    assert refreshed == [(0, 1), (1, 1), (1, 2), (2, 2), (2, 2)], \
+        "one refresh per point as it lands or fails (A: point 0 fails; B: 1 lands, 2 fails, 3 " \
+        f"lands), then the final one: {refreshed}"
+    (summary,) = store.list("fdt")
+    assert (summary.points_done, summary.points_failed, summary.points_planned) == (2, 2, 4)
+
+
+def test_a_sweep_with_every_point_failed_refuses_after_its_record_is_written(store, monkeypatch):
+    """E4 and §4.3. A run that measured NOTHING refuses, naming the setting to change -- today it is a
+    RuntimeError the command line reports as a crash -- and the refusal is raised AFTER the final
+    refresh, so the spectra the message tells the reader to look at are already on disk. The folder
+    stays (E2): that is the whole reason the first phase's PSDs are worth keeping. The message names
+    the cell by its file name as well as the grid (F41: spec §4.3's "naming the grid and the cell").
+    The sweep's own count warning fires first, as it does for any failed point; asserted, never
+    leaked."""
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import Refusal
+
+    _sweep_stubs(monkeypatch, phase_b_fail=(0, 1))
+    cfg, s_grid, _t = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    cfg.seed = 1
+    w = store.create("fdt", cfg, name="nothing")
+    with pytest.warns(UserWarning, match="2/2 operating points failed"):
+        with pytest.raises(Refusal) as e:
+            cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
+    assert e.value.field == "s_grid"
+    assert "all 2" in str(e.value)
+    assert "master_spont.txt" in str(e.value), "F41: the refusal names the cell"
+    assert "spontaneous spectra of the 2" in str(e.value), "every first campaign landed, and it says so"
+
+    (summary,) = store.list("fdt")
+    assert summary.complete and not summary.finished, "unfinished, listed, and deletable"
+    assert summary.points_failed == 2
+    body = store.get("fdt", summary.id).body
+    assert body["points"]["failed"] == 2, "the final refresh ran BEFORE the refusal"
+    assert body["results"] is None and body["offgrid"] is None, "null until the run finishes (§2.3)"
+    assert (w.dir / "data.h5").exists(), "the message points at the PSDs; they must be there"
+
+
+def test_a_sweep_whose_first_phase_lost_every_point_refuses_without_a_common_grid(store, monkeypatch):
+    """Step 6's guard. When Phase A loses EVERY point there is no resonance to build the common grid
+    around -- ``_build_common_grid`` would raise ``ValueError: min() arg is an empty sequence`` -- so
+    Phase B is skipped and the sweep ends in the same calm refusal. The message must stay true of
+    what the record holds: not one spontaneous campaign landed, so it holds no spectra and says so."""
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import Refusal
+
+    _sweep_stubs(monkeypatch, phase_a_fail=(0, 1))
+    driven = []
+    monkeypatch.setattr(cv, "_campaign2_ratio", lambda *a: driven.append(a))
+    cfg, s_grid, _t = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    cfg.seed = 1
+    w = store.create("fdt", cfg, name="no_spectra")
+    with pytest.warns(UserWarning, match="2/2 operating points failed"):
+        with pytest.raises(Refusal) as e:
+            cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
+    assert e.value.field == "s_grid" and "all 2" in str(e.value)
+    assert "no spectra" in str(e.value) and "spectra of the" not in str(e.value), str(e.value)
+    assert driven == [], "Phase B ran with no surviving point"
+    (summary,) = store.list("fdt")
+    assert (summary.points_done, summary.points_failed) == (0, 2) and not summary.finished
+
+
+def test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash(store, monkeypatch, caplog):
+    """The nanmax defect (§4.3). ``log.info(f"... {np.nanmax(ratio.cpu().numpy()):.3g}")`` sits
+    OUTSIDE the try that guards Campaign 2, so a point whose ratio comes back EMPTY raises
+    ``ValueError: zero-size array to reduction operation fmax which has no identity`` from numpy --
+    after the first phase's whole cost has been paid, and with a traceback rather than a count. Inside
+    the try it is one logged, counted, recorded failure like any other."""
+    import logging
+    import pytest
+    import torch
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import Refusal
+
+    _sweep_stubs(monkeypatch)
+    monkeypatch.setattr(cv, "_campaign2_ratio",
+                        lambda c, om, f, g: (torch.zeros(0, dtype=torch.complex128),
+                                             torch.zeros(0, dtype=torch.float64)))
+    cfg, s_grid, _t = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    cfg.seed = 1
+    with caplog.at_level(logging.INFO, logger="core"):
+        with pytest.warns(UserWarning, match="2/2 operating points failed"):
+            with pytest.raises(Refusal) as e:
+                cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
+                                       writer=store.create("fdt", cfg, name="empty"))
+    assert e.value.field == "s_grid", "every point failed, so the ending is the all-failed refusal"
+    errors = [r.getMessage() for r in caplog.records if r.levelname == "ERROR"]
+    assert len(errors) == 2 and all("Campaign 2 FAILED" in m for m in errors), errors
+
+
+def test_the_dead_single_point_helper_is_gone():
+    """``_fdt_measure`` has no caller anywhere in the tree, and its ``cfg.omega_0 = omega_0_emp`` is
+    the only write on a caller's settings object left in this module -- exactly the V1 defect the rest
+    of the piece removes, sitting in code nothing runs. Dead code that models the wrong thing is worse
+    than dead code."""
+    from core.FDT import cross_validation as cv
+    assert not hasattr(cv, "_fdt_measure")
+
+
+def test_an_all_failed_first_sweep_does_not_cost_the_second(store, monkeypatch, caplog):
+    """P77 and spec §4.3/§8.2. Before piece 5 an all-failed S sweep raised out of the study before the
+    T sweep had started. Now the S record stays on disk, unfinished (E2), the study says so at error,
+    and the T sweep runs and finishes. _sweep_stubs' Campaign-2 counter is shared by both sweeps:
+    calls 0-1 are the S grid's. Two trajectories is below the trust threshold, so the study warns
+    once at its top; that and the S sweep's count warning are asserted, never leaked."""
+    import logging
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import PreflightWarning
+
+    _sweep_stubs(monkeypatch, phase_b_fail=(0, 1))
+    cfg, s_grid, t_grid = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    writers = {"s": store.create("fdt", cfg, name="s_half"),
+               "temp": store.create("fdt", cfg, name="t_half")}
+    with caplog.at_level(logging.INFO, logger="core"):
+        with pytest.warns(UserWarning) as said:
+            recs = cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=3)
+
+    assert sorted((w.category.__name__, " ".join(str(w.message).split()[:4])) for w in said) == [
+        ("PreflightWarning", "The ensemble is 2"),
+        ("UserWarning", "s sweep: 2/2 operating")], [str(w.message) for w in said]
+    assert [r.name for r in recs] == ["t_half"], "only the sweep that measured something returns"
+    rows = {s.name: s for s in store.list("fdt")}
+    assert rows["t_half"].finished, "the temperature sweep ran and finished"
+    assert rows["s_half"].complete and not rows["s_half"].finished, "the S record stays, unfinished"
+    assert rows["s_half"].points_failed == 2
+    errors = [r.getMessage() for r in caplog.records
+              if r.levelname == "ERROR" and "measured nothing" in r.getMessage()]
+    assert len(errors) == 1 and errors[0].startswith("The s sweep measured nothing"), errors
+
+
+def test_a_study_whose_two_sweeps_both_measured_nothing_refuses(store, monkeypatch, caplog):
+    """P77's other half: only when BOTH sweeps measured nothing does the study refuse -- with the
+    activity sweep's refusal, after logging both at error (ruling F14/F45) -- and both unfinished
+    records stay on disk."""
+    import logging
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import Refusal
+
+    _sweep_stubs(monkeypatch, phase_b_fail=(0, 1, 2, 3))
+    cfg, s_grid, t_grid = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+    writers = {"s": store.create("fdt", cfg, name="s_none"),
+               "temp": store.create("fdt", cfg, name="t_none")}
+    with caplog.at_level(logging.INFO, logger="core"):
+        with pytest.warns(UserWarning) as said:
+            with pytest.raises(Refusal) as e:
+                cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=3)
+    assert e.value.field == "s_grid"
+    assert sorted((w.category.__name__, " ".join(str(w.message).split()[:4])) for w in said) == [
+        ("PreflightWarning", "The ensemble is 2"),
+        ("UserWarning", "s sweep: 2/2 operating"),
+        ("UserWarning", "temp sweep: 2/2 operating")], [str(w.message) for w in said]
+    rows = store.list("fdt")
+    assert len(rows) == 2 and all(r.complete and not r.finished for r in rows)
+    errors = [r.getMessage() for r in caplog.records
+              if r.levelname == "ERROR" and "measured nothing" in r.getMessage()]
+    assert [m.split(";")[0] for m in errors] == ["The s sweep measured nothing",
+                                                 "The temp sweep measured nothing"], errors
+
+
+def test_a_sweep_point_is_reproducible_from_the_seed_and_its_index(store, monkeypatch):
+    """P82 / spec §4.1: every operating point draws from a stream derived from (the study's seed, the
+    sweep, the phase, the point's index) -- ``cross_validation._point_seed`` -- so a point is
+    reproducible from the seed and its index, and depends on nothing else.
+
+    What the derivation replaced (Task 19's review): ``seed + k`` for Phase A and ``seed + n + k`` for
+    Phase B. Point k of the S sweep and point k of the T sweep drew the SAME Phase-A stream -- the two
+    records' noise was correlated, which a comparison of sweeps would read as signal -- one sweep's
+    Phase B could land on the other's Phase A when the grids differ in length, and Phase B depended on
+    how many points the grid held. Each of the three is asserted here."""
+    import pytest
+    import torch
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import PreflightWarning
+    from core.rng import seeded                  # never core.diagnostics.rng: that loads the SBI stack
+
+    _sweep_stubs(monkeypatch)
+    c1, c2 = cv.run_campaign1_psd, cv._campaign2_ratio
+    drawn_a, drawn_b = [], []
+
+    def _c1(cfg_op):
+        drawn_a.append(float(torch.rand(())))
+        return c1(cfg_op)
+
+    def _c2(cfg_op, omegas, freqs_psd, G):
+        drawn_b.append(float(torch.rand(())))
+        return c2(cfg_op, omegas, freqs_psd, G)
+
+    monkeypatch.setattr(cv, "run_campaign1_psd", _c1)
+    monkeypatch.setattr(cv, "_campaign2_ratio", _c2)
+
+    def config_of(n):
+        return cli.make_param_sweep_config(
+            str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+            preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+            s_spec=(0.0, 0.1 * (n - 1), n), t_spec=(1.0, 1.0 + 0.1 * (n - 1), n), n_freqs=3,
+            ensemble_M=2)
+
+    def sweep(n):
+        drawn_a.clear(), drawn_b.clear()
+        cfg, s_grid, _t = config_of(n)
+        cfg.seed = 40
+        cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=store.create("fdt", cfg))
+        return list(drawn_a), list(drawn_b)
+
+    def alone(seed):
+        with seeded(seed, torch.device("cpu")):
+            return float(torch.rand(()))
+
+    a3, b3 = sweep(3)
+    assert a3 == [alone(cv._point_seed(40, "s", 0, k)) for k in range(3)]
+    assert b3 == [alone(cv._point_seed(40, "s", 1, k)) for k in range(3)]
+    a2, b2 = sweep(2)
+    assert (a2, b2) == (a3[:2], b3[:2]), "point k draws the same whatever the grid's length"
+
+    # One study: its S and T sweeps share the seed, and no stream of one is a stream of the other.
+    drawn_a.clear(), drawn_b.clear()
+    cfg, s_grid, t_grid = config_of(3)
+    writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"):
+        cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=40)
+    assert (drawn_a[:3], drawn_b[:3]) == (a3, b3), "the study's S sweep is the lone sweep above"
+    assert drawn_a[3:] == [alone(cv._point_seed(40, "temp", 0, k)) for k in range(3)]
+    assert drawn_b[3:] == [alone(cv._point_seed(40, "temp", 1, k)) for k in range(3)]
+    assert len(set(drawn_a + drawn_b)) == 12, "twelve streams in one study, no two alike"
+
+
+def test_a_malformed_study_call_is_refused_before_the_first_sweep_spends(store, monkeypatch):
+    """Task 19's review. A study called with the wrong writers -- one missing, one extra, one writer
+    handed in for both sweeps, or one already entered -- used to find out only when the sweep that
+    needed it reached it: the T sweep's KeyError, or its FileExistsError, arrived after the whole S
+    sweep had been paid for. So did a sweep parameter the plot tables have no label for, at the END of
+    that sweep. Each is a programming error, not an operator's (no front end can build one), so it is
+    a plain ValueError -- not a Refusal, which would tell the operator to change a setting -- raised
+    before anything is spent and before the thin-setting notice."""
+    import warnings
+
+    import pytest
+    from core.FDT import cross_validation as cv
+
+    _sweep_stubs(monkeypatch)
+    ran = []
+    monkeypatch.setattr(cv, "run_fdt_param_sweep", lambda *a, **k: ran.append(k.get("sweep_param")))
+    cfg, s_grid, t_grid = _thin_study_cfg()
+
+    def study(writers):
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            with pytest.raises(ValueError) as e:
+                cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=1)
+        assert not rec, [str(w.message) for w in rec]
+        return str(e.value)
+
+    s, t = store.create("fdt", cfg), store.create("fdt", cfg)
+    assert "missing ['temp']" in study({"s": s})
+    assert "unexpected ['k']" in study({"s": s, "temp": t, "k": store.create("fdt", cfg)})
+    assert "distinct" in study({"s": s, "temp": s})
+    entered = store.create("fdt", cfg, name="entered")
+    with entered:
+        assert "entered" in study({"s": s, "temp": entered})
+    monkeypatch.delitem(cv._PARAM_SYMBOL, "temp")
+    assert "_PARAM_SYMBOL" in study({"s": s, "temp": t})
+
+    assert ran == [], "a sweep started"
+    assert not s.dir.exists() and not t.dir.exists()
+
+
+def test_a_negative_seed_is_refused_before_the_sweep_opens_its_record(store, monkeypatch):
+    """``_point_seed`` derives every stream through numpy's SeedSequence, whose domain is the
+    non-negative integers. Both builders refuse a negative seed; a sweep handed one directly is
+    refused by the same rule, before its writer is entered. Inside the per-point guard it would fail
+    EVERY point and end in a false "measured nothing" refusal naming the grid -- the wrong setting."""
+    import pytest
+    from core.FDT import cross_validation as cv
+    from core.refusals import Refusal
+
+    _sweep_stubs(monkeypatch)
+    cfg, s_grid, _t = _thin_study_cfg()
+    cfg.seed = -1
+    w = store.create("fdt", cfg)
+    with pytest.raises(Refusal) as e:
+        cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
+    assert e.value.field == "seed", e.value.field
+    assert not w.dir.exists() and store.list("fdt") == [], "refused before anything was spent"
+
+
+def test_a_finished_sweep_draws_its_real_figure_into_its_record(store, monkeypatch):
+    """Task 19's review. Every other sweep test stubs ``plot_fdt_3d_vs_param`` with a lambda that
+    swallows any keyword, so a misspelled keyword at the sweep's one call -- or a figure path the
+    writer never handed out -- would pass them all and fail only at the end of a real sweep, hours in.
+    Here the REAL drawing function runs (Agg, the root conftest's backend) on the stubbed campaigns'
+    numbers, and the file the manifest lists is on disk and is a PNG."""
+    from core.FDT import cross_validation as cv
+
+    real = cv.plot_fdt_3d_vs_param
+    _sweep_stubs(monkeypatch)
+    monkeypatch.setattr(cv, "plot_fdt_3d_vs_param", real)
+    cfg, s_grid, _t = _thin_study_cfg()
+    cfg.seed = 1
+    rec = cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
+                                 writer=store.create("fdt", cfg, name="drawn"))
+
+    assert rec.body["complete"] is True
+    (figure,) = rec.manifest.figures
+    assert (rec.path / figure).read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", figure

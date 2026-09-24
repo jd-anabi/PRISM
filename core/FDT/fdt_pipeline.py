@@ -95,11 +95,12 @@ def _write_single_h5(path, cfg, omegas, ratio, chis, freqs_psd, G, omega_natural
 
     ``study`` sits at the ROOT so a reader can check the layout before reading a dataset: a sweep's
     file and a comparison's file carry the same name inside their own records. The dataset names are
-    ``cross_validation._fdt_measure``'s and the sweep file's own vocabulary -- ``omega_grid``,
-    ``T_eff_over_T``, ``chi_prime``, ``chi_double_prime``, ``PSD_omegas``, ``PSD_G``, all float64 --
-    so the comparison (T36, spec §7) reads one set of names whichever study wrote them (P5, P71). The
-    spontaneous spectrum keeps its OWN frequency axis -- it is a Welch grid, not the log-spaced chi
-    grid, and interpolating one onto the other is exactly the step §3.5's off-grid fix made honest.
+    the sweep file's own vocabulary (and the dead single-point helper's, deleted in piece 5) --
+    ``omega_grid``, ``T_eff_over_T``, ``chi_prime``, ``chi_double_prime``, ``PSD_omegas``, ``PSD_G``,
+    all float64 -- so the comparison (T36, spec §7) reads one set of names whichever study wrote them
+    (P5, P71). The spontaneous spectrum keeps its OWN frequency axis -- it is a Welch grid, not the
+    log-spaced chi grid, and interpolating one onto the other is exactly the step §3.5's off-grid fix
+    made honest.
     """
     def _f64(t):
         return t.detach().cpu().numpy().astype(np.float64)
