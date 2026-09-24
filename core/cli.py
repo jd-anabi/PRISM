@@ -20,8 +20,9 @@ from .config import (
     BOUNDS_PATH, UNITS_PATH,
 )
 from .Helpers import file_manager
-from .refusals import (Refusal, describe, refuse, require_at_least, require_below, require_between,
-                       require_choice, require_file, require_finite, require_positive)
+from .refusals import (Refusal, describe, missing_values_phrase, refuse, require_at_least,
+                       require_below, require_between, require_choice, require_file, require_finite,
+                       require_positive)
 
 
 class UnitParseError(Refusal):
@@ -68,7 +69,9 @@ def validate_gt_file(cfg: SimConfig, cell_path: str) -> list:
             ("forcing parameter", forcing_vals, cfg.force_params_dict, False)):
         missing = sorted(set(cfg_dict) - set(vals))
         if missing:
-            problems.append(f"missing {label}(s) the bounds file requires: {', '.join(missing)}")
+            # the phrase takes its label as given; this loop's labels are singular because the
+            # out-of-bounds line below reads "ND parameter k = ...", so the plural is spelled here
+            problems.append(missing_values_phrase(f"{label}s", missing))
             continue
         if check_bounds:
             problems += [f"{label} {n} = {vals[n]:g} is outside its bounds ({lo:g}, {hi:g})"

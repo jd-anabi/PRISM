@@ -10,6 +10,7 @@ This panel reuses BasePanel's dispatch rails verbatim; the only new machinery is
 stack. Like every panel, a run here holds the app-wide single-task guard, so all controls lock until it
 ends or is cancelled.
 """
+import traceback
 from pathlib import Path
 
 import numpy as np
@@ -104,8 +105,11 @@ class SimulatePanel(BasePanel):
         model = self.model_combo.currentText()
         try:
             cfg = build_stream_config(model, cell)
-        except Exception as e:                       # noqa: BLE001 -- see BasePanel._config_error
-            self._config_error(e)
+        except Refusal as e:                         # a cell or model problem: the yellow box
+            self._refusal(e)
+            return
+        except Exception as e:                       # noqa: BLE001 -- a bug in the builder: the red box
+            self._on_error(e, traceback.format_exc())
             return
         self.live_view.set_displacement_unit(cfg.length_unit or "nm")   # label the trace y-axis in cell units
         self.live_view.reset()

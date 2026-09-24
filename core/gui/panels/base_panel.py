@@ -395,26 +395,6 @@ class BasePanel(QWidget):
         are connected -- restore order matters (a picker restored before its model gets wiped by the
         model's refresh())."""
 
-    def _config_error(self, exc: Exception):
-        """Report a failed config build as user-input trouble, not a crash.
-
-        For the Simulate, Reduction, CrossVal and FDT panels until piece 5; the inference tabs route
-        through _refusal/_on_error. Deliberately catches broadly at the call sites: cli's builders
-        raise a bare ValueError (NOT UnitParseError) for the two most plausible user mistakes -- a
-        cell with no sibling bounds file (cli.parse_cell) and a cell missing a param the bounds file
-        requires (cli.load_and_validate_gt -> SimConfig.inject_ground_truth). A narrow
-        `except cli.UnitParseError` lets those escape the clicked slot and surface as a raw traceback
-        in app.py's last-resort excepthook, with nothing in the panel's own log.
-        """
-        msg = str(exc)
-        self.log_pane.append_line(f"Could not build the config: {msg}", "error")
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)                  # user input, not a crash
-        box.setWindowTitle("Check your inputs")
-        box.setText("The configuration could not be built.")
-        box.setInformativeText(msg)
-        box.exec()
-
     def _refusal(self, exc: Refusal) -> None:
         """Show a refusal: the yellow "Check your inputs" box, and no traceback.
 

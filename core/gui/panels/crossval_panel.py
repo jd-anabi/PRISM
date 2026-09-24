@@ -7,11 +7,14 @@ Two sweeps probe FDT restoration on the Nadrowski model (see cli.make_param_swee
 Mirrors cli.make_param_sweep_config with widgets, then runs the prompt-free
 FDT.cross_validation.run_param_study_cli on a worker. Model is fixed to NADROWSKI.
 """
+import traceback
+
 from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
                                QWidget)
 
 from core import cli, config
 from core.config import CELL_PATH
+from core.refusals import Refusal
 from core.FDT.cross_validation import run_param_study_cli
 from core.artifacts import default_store
 
@@ -150,8 +153,11 @@ class CrossValPanel(BasePanel):
                 s_spec=self.s_grid.spec(), t_spec=self.t_grid.spec(),
                 n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
                 freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value())
-        except Exception as e:                       # noqa: BLE001 -- see _config_error
-            self._config_error(e)
+        except Refusal as e:                         # a setting the user can change: the yellow box
+            self._refusal(e)
+            return
+        except Exception as e:                       # noqa: BLE001 -- a bug in the builder: the red box
+            self._on_error(e, traceback.format_exc())
             return
 
         # run_param_study_cli returns the two HDF5 DATA paths, not the figures -- the plots are saved

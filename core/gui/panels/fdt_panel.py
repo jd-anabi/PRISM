@@ -7,10 +7,13 @@ The two checkboxes are load-bearing. run_fdt's `skip_sanity` / `confirm_producti
 keyword booleans (D1 deleted the prompts they used to fall back to), and these boxes are where a user
 answers them -- a worker thread has no terminal to be asked at.
 """
+import traceback
+
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPushButton
 
-from core import cli, config, registry
+from core import cli, registry
 from core.config import CELL_PATH, VALID_MODELS
+from core.refusals import Refusal
 from core.FDT.fdt_pipeline import run_fdt
 from core.artifacts import default_store
 
@@ -125,17 +128,21 @@ class FdtPanel(BasePanel):
             self.log_pane.append_line("Select a cell file first.", "warning")
             return
         model = self.model_combo.currentText()
-        ok, reason = registry.fdt_support(model)          # backstop; the CTA is already disabled
-        if not ok:
-            self.log_pane.append_line(reason, "warning")
-            return
+        # No model check of its own. The Run button is gated on registry.fdt_support
+        # (_on_model_changed), and a model that stops qualifying under a live selection -- a user
+        # model re-saved with multiplicative noise -- is refused by cli.make_fdt_config with
+        # fdt_support's own sentence as field "model", which the Refusal arm shows in the yellow box.
+        # The "backstop" that stood here only logged that sentence and returned: a second, boxless path.
         try:
             cfg = cli.make_fdt_config(
                 model, registry.state_dep_drift(model), cell,
                 n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
                 freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value())
-        except Exception as e:                       # noqa: BLE001 -- see BasePanel._config_error
-            self._config_error(e)
+        except Refusal as e:                         # a setting the user can change: the yellow box
+            self._refusal(e)
+            return
+        except Exception as e:                       # noqa: BLE001 -- a bug in the builder: the red box
+            self._on_error(e, traceback.format_exc())
             return
 
         # The RECORD is created here, on the GUI thread: store.create mints the id and refuses a taken

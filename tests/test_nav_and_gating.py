@@ -1649,8 +1649,9 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     installed on the session and nothing is dispatched either way.
 
     And a source pin, because the routing is a rule for all five inference tabs: none of
-    core/gui/panels/inference/*.py calls _config_error any more. That method stays on BasePanel for
-    the Simulate, Reduction, CrossVal and FDT panels until piece 5 retires it."""
+    core/gui/panels/inference/*.py calls _config_error any more. Piece 5 retired that method
+    altogether once the four section panels were converted; the pin stays, because the scan is what
+    stops a new tab reintroducing the call."""
     import types
     from PySide6.QtWidgets import QMessageBox
     import core.gui.panels.inference as inference_pkg
@@ -1721,17 +1722,40 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
         assert not calls, f"{path.name} still routes a failure through _config_error"
 
 
-def test_the_secondary_panels_still_show_a_bad_cell_as_check_your_inputs(monkeypatch, tmp_path):
-    """The Simulate, Reduction, CrossVal and FDT panels are piece 5's. Until then their builder
-    failures stay on BasePanel._config_error, whose box is titled "Check your inputs" and reads "The
-    configuration could not be built." over the builder's own sentence. Pinned for BOTH shapes the
-    builders raise across piece 3 -- the bare ValueError they raise today for a cell missing a
-    parameter, and the Refusal(field="cell") they raise once cli is converted -- so the four panels
-    keep the same box whichever lands first, and nothing is dispatched. The routing change on the
-    inference tabs must not leak here."""
+def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch, tmp_path):
+    """Spec §5.1. The FDT, CrossVal, Reduction and Simulate panels used to wrap their builder in a
+    broad ``except`` ending at ``BasePanel._config_error``, whose box read "The configuration could
+    not be built." over whatever sentence it had caught -- one box for a blank number and for a bug
+    in the parser alike, and no way to tell which you were looking at. They now do what the six
+    inference tabs have done since piece 3: a ``Refusal`` opens the yellow "Check your inputs" box
+    with the CORE's own sentence as its text and this front end's "where to fix it" under it, and
+    anything else is a bug and keeps the red box with its traceback behind Details. Nothing is
+    dispatched either way.
+
+    This REPLACES test_the_secondary_panels_still_show_a_bad_cell_as_check_your_inputs, which pinned
+    the unconverted behaviour across both exception shapes on purpose: a half-converted state cannot
+    be expressed in it, so it is rewritten rather than extended (spec §5.1).
+
+    The Reduction panel's builder is stubbed like the other three, and the stub is enough: the real
+    cli.make_reduction_config refuses through cli.parse_cell -- a cell missing a value the bounds file
+    declares, and a legacy cell with no time unit -- and both are Refusal(field="cell"), so the stub's
+    Refusal takes exactly their path through the panel, whose arm is chosen by the exception's type
+    and never by its words (F42). What the stub cannot stand in for is the one check the panel makes
+    itself: its F0 box is read at the click, before the builder, because a blank box reads as 0 and
+    make_reduction_config takes F0 as given (F15). That case is asserted against a BLANK box and not
+    only a typed zero (Review Focus 3).
+
+    The source pin at the end is the point of the section: ``_config_error`` is gone from BasePanel
+    and no module under core/gui names it, so no later panel can quietly route a failure back into a
+    box that says nothing about what was wrong.
+    """
+    import ast
+    from pathlib import Path
     from PySide6.QtWidgets import QMessageBox
     from core import cli
+    from core.gui import fields as gui_fields
     from core.gui.panels import simulate_panel as sim_mod
+    from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel
     from core.gui.panels.reduction_panel import ReductionPanel
@@ -1749,24 +1773,101 @@ def test_the_secondary_panels_still_show_a_bad_cell_as_check_your_inputs(monkeyp
         p.dispatch = lambda *a, **k: pytest.fail("a panel dispatched with a config that did not build")
     clicks = {"fdt": panels["fdt"]._run, "reduction": panels["reduction"]._run,
               "crossval": panels["crossval"]._run, "simulate": panels["simulate"]._start}
-    msg = f"Cell file {cell.name!r} does not define the parameter 'k_gs'."
+    msg = f"Cell file {cell.name!r} is missing value(s) the bounds file requires: k_gs."
 
-    for make in (ValueError, lambda m: Refusal(m, field="cell")):
-        def _bad(*a, **k):
-            raise make(msg)
+    def _patch(raiser):
+        monkeypatch.setattr(cli, "make_fdt_config", raiser)
+        monkeypatch.setattr(cli, "make_reduction_config", raiser)
+        monkeypatch.setattr(cli, "make_param_sweep_config", raiser)
+        monkeypatch.setattr(sim_mod, "build_stream_config", raiser)
 
-        monkeypatch.setattr(cli, "make_fdt_config", _bad)
-        monkeypatch.setattr(cli, "make_reduction_config", _bad)
-        monkeypatch.setattr(cli, "make_param_sweep_config", _bad)
-        monkeypatch.setattr(sim_mod, "build_stream_config", _bad)
-        for name, click in clicks.items():
-            SHOWN.clear()
-            click()
-            box = SHOWN[-1]
-            assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, name
-            assert box.text() == "The configuration could not be built.", name
-            assert box.informativeText() == msg, name
-            assert box.detailedText() == "", name
+    # (a) a Refusal: the yellow box, the core's sentence, this front end's fix line, no traceback
+    def _refusing(*a, **k):
+        raise Refusal(msg, field="cell")
+
+    _patch(_refusing)
+    for name, click in clicks.items():
+        SHOWN.clear()
+        click()
+        box = SHOWN[-1]
+        assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, name
+        assert box.text() == msg, name
+        assert box.informativeText() == gui_fields.fix_sentence("cell"), name
+        assert box.detailedText() == "", name
+
+    # (b) anything else is a bug: the red box, the message, and the traceback behind Details
+    def _booming(*a, **k):
+        raise RuntimeError("the parser fell over")
+
+    _patch(_booming)
+    for name, click in clicks.items():
+        SHOWN.clear()
+        click()
+        box = SHOWN[-1]
+        assert box.windowTitle() == "Error" and box.icon() == QMessageBox.Critical, name
+        assert box.text() == "the parser fell over", name
+        assert "RuntimeError" in box.detailedText(), name
+
+    # (c) the Reduction panel's F0 box, checked at the click and before the builder (F15): a blank
+    #     box -- which value() would have read as 0 -- and a typed 0 are both the yellow box naming
+    #     the setting, and the builder is never reached
+    monkeypatch.setattr(cli, "make_reduction_config",
+                        lambda *a, **k: pytest.fail("the reduction builder ran on an F0 the panel refuses"))
+    reduction = panels["reduction"]
+    for typed, said in (
+            ("", "The non-dimensional drive amplitude is blank (default 0.05)."),
+            ("0", "The non-dimensional drive amplitude must be greater than 0; got 0 (default 0.05).")):
+        reduction.f0.setText(typed)
+        SHOWN.clear()
+        reduction._run()
+        box = SHOWN[-1]
+        assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, typed
+        assert box.text() == said, typed
+        assert box.informativeText() == gui_fields.fix_sentence("f0"), typed
+        assert "NWK → Hopf reduction map" in box.informativeText(), box.informativeText()
+
+    # (d) the generic box is gone, and nothing under core/gui reaches for it
+    assert not hasattr(BasePanel, "_config_error")
+    gui_root = Path(sim_mod.__file__).resolve().parents[1]
+    for path in sorted(gui_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        named = [n for n in ast.walk(tree)
+                 if isinstance(n, ast.Attribute) and n.attr == "_config_error"]
+        assert not named, f"{path.name} still routes a failure through _config_error"
+
+
+def test_the_fdt_panel_leaves_an_unsupported_model_to_the_builders_refusal(monkeypatch, tmp_path):
+    """The Run button is gated on registry.fdt_support when the model changes, but the registry can
+    change under a selection: a user model re-saved with multiplicative noise while this tab still
+    shows it. ``FdtPanel._run`` used to repeat the check as a "backstop" that wrote one warning line
+    to the log pane and returned -- no box -- while cli.make_fdt_config refuses the same model with
+    the same reason as Refusal(field="model"). The backstop is gone, so the builder's refusal is the
+    ONE path to the operator: the yellow box, fdt_support's own sentence, and the fix line naming the
+    Model box. Nothing is dispatched."""
+    from PySide6.QtWidgets import QMessageBox
+    from core import registry
+    from core.gui import fields as gui_fields
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    cell = tmp_path / "cell.txt"
+    cell.write_text("# never parsed: the model is refused before the cell is read\n", encoding="utf-8")
+    panel = FdtPanel()
+    panel.cell_picker.selected_path = lambda: str(cell)
+    panel.dispatch = lambda *a, **k: pytest.fail("an unsupported model was dispatched")
+    reason = "FDT can't run 'NADROWSKI': a stand-in for fdt_support's per-model sentence."
+    monkeypatch.setattr(registry, "fdt_support", lambda name: (False, reason))
+
+    SHOWN.clear()
+    panel._run()
+    assert SHOWN, "an unsupported model reached the operator as a log line, not as the refusal box"
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert box.text() == reason
+    assert box.informativeText() == gui_fields.fix_sentence("model")
+    assert "FDT analysis" in box.informativeText(), box.informativeText()
+
 
 def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
     """V5 §5.2. The χ drive amplitude and band are MEASUREMENTS (config.py:541-573), not per-run

@@ -166,6 +166,21 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
 )}
 
 
+def missing_values_phrase(label: str, missing) -> str:
+    """"missing ND parameters the bounds file requires: k_gs, gamma" -- the ONE wording for a cell
+    that does not supply something the bounds file declares (spec §6.2).
+
+    A fragment, deliberately: ``cli.validate_gt_file`` returns it as one of its problem strings,
+    which the Infer tab joins with "; ", while ``SimConfig._fill_checked`` puts "Cell file is " in
+    front and a period after -- so the dry run and the refusal say the same words. ``label`` is used
+    AS GIVEN (the callers pass the plural, "ND parameters") and is never pluralised here. A third
+    wording of the same rule, ``cli._merge_vals_bounds``, is knowingly left alone: it carries the
+    cell path. Here rather than in ``core/cli.py`` because ``core/sim_config.py`` cannot import
+    ``core/cli.py``.
+    """
+    return f"missing {label} the bounds file requires: {', '.join(str(n) for n in missing)}"
+
+
 def describe(key: str) -> str:
     """The neutral noun phrase for a field key ("the observation length, in seconds"). KeyError on
     an unregistered key: a message can only be built for a field a front end can map to a control."""

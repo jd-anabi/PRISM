@@ -7,10 +7,13 @@ the already prompt-free Reduction.sweep.run_reduction_map on a worker. The model
 This is the only mode that is purely analytical (no SDE simulation), so it is also the quickest way to
 sanity-check the whole panel -> worker -> figure path.
 """
+import traceback
+
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel, QPushButton
 
 from core import cli, config
 from core.config import CELL_PATH
+from core.refusals import Refusal, require_positive
 from core.Reduction.sweep import run_reduction_map
 
 from .base_panel import BasePanel
@@ -65,9 +68,15 @@ class ReductionPanel(BasePanel):
             self.log_pane.append_line("Select a cell file first.", "warning")
             return
         try:
-            cfg = cli.make_reduction_config(cell, F0=self.f0.value())
-        except Exception as e:                       # noqa: BLE001 -- see BasePanel._config_error
-            self._config_error(e)
+            # The box FIRST, through value_or_none: value() reads a blank box as 0 and the builder
+            # takes F0 as given, so a blank used to reach the f_max sweep as a zero drive (F15).
+            F0 = require_positive("f0", self.f0.value_or_none())
+            cfg = cli.make_reduction_config(cell, F0=F0)
+        except Refusal as e:                         # the F0 box, or a cell refusal: the yellow box
+            self._refusal(e)
+            return
+        except Exception as e:                       # noqa: BLE001 -- a bug in the builder: the red box
+            self._on_error(e, traceback.format_exc())
             return
 
         # run_reduction_map saves its sweep table and its diagnostic PNG itself and returns only the

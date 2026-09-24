@@ -1,11 +1,16 @@
 """The refusals module: one exception kind, the field registry and the rule functions (piece 3 of the
 2026-09-10 hardening programme, design §3.1).
 
-Torch-free by construction and pinned so: the window runs these rules on the GUI thread at the click
-and the tool runs them before any stage import, so ``core.refusals`` must cost nothing to import.
-The one test here that imports ``core.config`` (and with it torch) is the default pin, and it is the
-only one: the registry's defaults are literal strings, because the module cannot read ``config.py``
-without importing torch, so that test is what keeps the two from drifting.
+The MODULE is torch-free by construction and pinned so in a fresh interpreter
+(test_the_module_is_torch_free_and_imports_only_the_standard_library): the window runs these rules
+on the GUI thread at the click and the tool runs them before any stage import, so ``core.refusals``
+must cost nothing to import. This FILE is not torch-free, and no longer claims to be. The default pin
+imports ``core.config`` (and with it torch) because the registry's defaults are literal strings --
+the module cannot read ``config.py`` without importing torch -- so that test is what keeps the two
+from drifting. It is not the only one: the domain-error scan, the run buffer's warning test and the
+cell-wording tests of piece 5's §6.2 (which call ``core.cli`` and ``core.sim_config``) reach
+torch-importing modules too. Each imports them inside the test, so the file's own top-level imports
+stay the module under test and the standard library.
 """
 import ast
 import math
@@ -113,6 +118,60 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
         describe("t_obs_seconds")
     with pytest.raises(FrozenInstanceError):
         FIELDS["t_obs"].default = "1"
+
+
+def test_one_phrase_says_the_cell_is_missing_what_the_bounds_file_declares():
+    """Spec §6.2. "the cell does not supply something the bounds file declares" is ONE rule, and the
+    dry run (cli.validate_gt_file) and the injection (SimConfig._fill_checked) worded it two ways. One
+    builder now produces the phrase. It is a FRAGMENT -- lower case, no trailing period -- because
+    the dry run's problems are joined with "; " (infer_tab._on_cell_changed) while the refusal puts
+    "Cell file is " in front and a period after. The label is used as given, never pluralised
+    (P38), and a list is plain comma-separated names, never a repr'd Python list."""
+    from core.refusals import missing_values_phrase
+    assert missing_values_phrase("ND parameters", ["k_gs", "gamma"]) == \
+        "missing ND parameters the bounds file requires: k_gs, gamma"
+    assert missing_values_phrase("rescale parameters", ("x_scale",)) == \
+        "missing rescale parameters the bounds file requires: x_scale"
+    assert "[" not in missing_values_phrase("forcing parameters", ["amp"])
+    phrase = missing_values_phrase("ND parameters", ["k_gs"])
+    assert phrase[0].islower() and not phrase.endswith(".")
+
+
+def test_the_two_cell_sites_both_splice_the_one_phrase():
+    """The other half of §6.2: each of the two sites builds its wording through the phrase and does
+    not re-type the sentence beside the call. Asserted on executable source, because what would
+    regress is somebody re-typing the sentence. cli._merge_vals_bounds is a known third wording,
+    left alone on purpose (P53: it carries the cell path), so it is not in this list."""
+    from core import cli, sim_config
+    from tests._fixtures import code_only
+    for obj in (cli.validate_gt_file, sim_config.SimConfig._fill_checked):
+        src = code_only(obj)
+        assert "missing_values_phrase(" in src, obj
+        assert "the bounds file requires" not in src, obj
+
+
+def test_the_dry_run_and_the_injection_word_a_missing_value_identically(monkeypatch):
+    """Spec §6.2 and §8.2 ("the cell refusal's wording is identical from load_and_validate_gt and
+    from the dry run"), P76. The refusal is exactly "Cell file is " + the dry run's problem + ".".
+    Both are reached without a bounds file: the dry run through a stand-in config carrying the three
+    dicts it reads and a stubbed values parser; the injection through the static
+    SimConfig._fill_checked, called with the label inject_ground_truth passes."""
+    import types
+    from collections import OrderedDict
+    from core import cli
+    from core.sim_config import SimConfig
+
+    monkeypatch.setattr(cli.file_manager, "parse_values_file",
+                        lambda path: ({"x": 0.0}, {}, {}, {}))
+    declared = OrderedDict(k_gs=(None, (0.0, 1.0)))
+    cfg = types.SimpleNamespace(params_dict=OrderedDict(declared), rescale_params=OrderedDict(),
+                                force_params_dict=OrderedDict())
+    problems = cli.validate_gt_file(cfg, "unused_cell.txt")
+    assert problems == ["missing ND parameters the bounds file requires: k_gs"], problems
+    with pytest.raises(Refusal) as exc:
+        SimConfig._fill_checked("ND parameters", {}, OrderedDict(declared), check_bounds=True)
+    assert exc.value.field == "cell"
+    assert exc.value.message == f"Cell file is {problems[0]}."
 
 
 def test_a_blank_is_refused_by_every_rule_with_the_default_in_the_sentence():

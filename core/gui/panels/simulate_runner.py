@@ -25,6 +25,7 @@ import numpy as np
 import torch
 
 from core import cli, forcing, registry
+from core.refusals import Refusal
 from core.SBI import pipeline
 from core.Solvers import sdeint
 from core.config import BOUNDS_PATH, DT_EXP_S, VALID_LABELS, VALID_MODELS, cpu_device
@@ -44,15 +45,15 @@ def build_stream_config(model: str, cell_path: str):
     shared ``master.txt``), so no separate bounds pick is needed. ``make_sim_config`` defaults ``hw``
     to ``detect_device()`` (CUDA on a capable box); the batch-1 sequential Euler loop is CPU-optimal
     AND every tensor here must share one device, so force CPU right after building. Raises on an
-    unresolvable bounds file / out-of-bounds cell -- the panel catches it as a config error.
+    unresolvable bounds file / out-of-bounds cell -- the panel shows it as a refusal (the yellow box).
     """
     bounds_file = cli.resolve_bounds_for_cell(cell_path, model)
     if bounds_file is None:
-        raise ValueError(
+        raise Refusal(
             f"No bounds file governs '{Path(cell_path).name}': tried the sibling "
             f"{BOUNDS_PATH / model.lower() / Path(cell_path).name} and the shared "
             f"{BOUNDS_PATH / model.lower() / cli.MASTER_BOUNDS_NAME}. Bounds declare which "
-            f"parameters are inferred and in what order, so one is required.")
+            f"parameters are inferred and in what order, so one is required.", field="cell")
     spec = registry.get(model)
     if spec is not None and spec.is_user_model:
         labels = list(spec.labels)
@@ -66,10 +67,10 @@ def build_stream_config(model: str, cell_path: str):
         # file would otherwise mis-bind values silently (wrong physics, no error).
         expected, actual = list(spec.compiled.param_names), list(cfg.params_dict.keys())
         if actual != expected:
-            raise ValueError(
+            raise Refusal(
                 f"Model '{model}' is out of sync with its bounds file: the definition uses "
-                f"parameters {expected} but the bounds file lists {actual}. Re-save the model "
-                "from the Settings model builder to regenerate its files.")
+                f"parameters {expected} but the bounds file lists {actual}. Re-saving the model "
+                "regenerates its files.", field="model")
     cli.load_and_validate_gt(cfg, cell_path)
     cfg.hw = cpu_device()
     return cfg

@@ -18,7 +18,7 @@ import torch
 
 from core import config
 from core.config import DeviceConfig, detect_device
-from core.refusals import Refusal
+from core.refusals import Refusal, missing_values_phrase
 
 
 # The cached_property names on SimConfig -- what copy_for_run pops off its shallow copy BEFORE the
@@ -246,8 +246,7 @@ class SimConfig:
         """
         missing = sorted(set(cfg_dict) - set(cell_vals))
         if missing:
-            raise Refusal(
-                f"Cell file is missing {label} required by the bounds file: {missing}.", field="cell")
+            raise Refusal(f"Cell file is {missing_values_phrase(label, missing)}.", field="cell")
         if check_bounds:
             oob = [f"{n}={cell_vals[n]} not in ({lo}, {hi})"
                    for n, (_, (lo, hi)) in cfg_dict.items() if not (lo <= cell_vals[n] <= hi)]

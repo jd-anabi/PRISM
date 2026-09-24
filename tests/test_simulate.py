@@ -301,6 +301,44 @@ def test_simulate_panel_records_chunks_and_gates_the_save_button():
     assert not p.btn_save_video.isEnabled(), "save must disable again when the recording is cleared"
 
 
+def test_the_stream_builders_two_likeliest_mistakes_are_refusals(monkeypatch):
+    """Spec §5.1, P29. ``build_stream_config`` raised two bare ValueErrors -- a cell no bounds file
+    governs, and a user model whose definition and bounds file list different parameters -- and the
+    Simulate panel's broad ``except`` showed both in the generic "could not be built" box. With that
+    box gone a bare exception is a bug and opens the red crash box, which would have been the
+    answer to the two most plausible mistakes on this screen. Both are Refusals now, with the key
+    that names their fix -- the cell, then the model -- and both are still ValueErrors, so
+    tests/test_user_models.py's ``except ValueError`` keeps catching the second. Neither sentence
+    names a screen or a control any more: core/gui/fields.py says where to go."""
+    import types
+    from collections import OrderedDict
+    import pytest
+    from core import cli, registry
+    from core.gui.panels import simulate_runner as sr
+    from core.refusals import Refusal
+
+    monkeypatch.setattr(cli, "resolve_bounds_for_cell", lambda cell, model=None: None)
+    with pytest.raises(Refusal) as exc:
+        sr.build_stream_config("NADROWSKI", str(Path("elsewhere") / "orphan.txt"))
+    assert exc.value.field == "cell", exc.value.field
+    assert exc.value.message.startswith("No bounds file governs 'orphan.txt'"), exc.value.message
+
+    # A user model whose compiled definition discovers (a, b) over a bounds file listing (b, a).
+    spec = types.SimpleNamespace(is_user_model=True, labels=["a", "b"],
+                                 compiled=types.SimpleNamespace(param_names=["a", "b"]))
+    monkeypatch.setattr(cli, "resolve_bounds_for_cell", lambda cell, model=None: Path("bounds.txt"))
+    monkeypatch.setattr(registry, "get", lambda name: spec)
+    monkeypatch.setattr(registry, "state_dep_drift", lambda name: False)
+    monkeypatch.setattr(cli, "make_sim_config", lambda *a, **k: types.SimpleNamespace(
+        params_dict=OrderedDict(b=(None, (0.0, 1.0)), a=(None, (0.0, 1.0)))))
+    with pytest.raises(Refusal) as exc:
+        sr.build_stream_config("UMSTALE", "cell.txt")
+    assert exc.value.field == "model", exc.value.field
+    assert exc.value.message == (
+        "Model 'UMSTALE' is out of sync with its bounds file: the definition uses parameters "
+        "['a', 'b'] but the bounds file lists ['b', 'a']. Re-saving the model regenerates its files.")
+
+
 def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     """A missing ffmpeg binary is a refusal -- something the program will not do with what this
     machine has -- so it opens the yellow "Check your inputs" box with the sentence as its TEXT and
