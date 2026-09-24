@@ -84,23 +84,54 @@ def _stale_folder_note(actual: str, expected: str) -> str:
             f"nothing is lost -- only the folder name is out of date.")
 
 
+def _unfinished_note(s) -> str:
+    """The one sentence that says what deleting an UNFINISHED record of this kind destroys.
+
+    TWO kinds can be unfinished, not one (piece 5, E2): a training cache, whose manifest exists from
+    its first batch because it is resumable, and an fdt record, whose folder survives a cancel or a
+    crash so that what it measured is still readable. The old form named the cache by hand and would
+    have deleted a half-measured sweep behind a prompt that said nothing about it.
+
+    The cache names its committed BATCHES and not its rows, deliberately (P2): ``rows`` is written by
+    ``mark_complete`` alone -- ``training_checkpoint.save`` passes none -- so every real mid-run
+    cache has ``rows is None``, and a ``sum(())`` here would print a confident, false "0 rows".
+
+    The fdt record names its operating points where it has them, and says there is no resume: unlike
+    a cache, whose batches a later run continues from, this one starts again from the beginning
+    (spec §1.3).
+    """
+    if s.kind == "simulation":
+        return (f"This training cache is UNFINISHED: {s.batches_done} committed batch(es). "
+                "Deleting it throws those batches away and a later run starts from zero. "
+                "(Only the batch count is known while a cache is running: the rows are "
+                "recorded when the cache finishes.)")
+    if s.kind == "fdt":
+        if s.points_done is None:
+            measured = "it holds whatever it had written when it stopped"
+        else:
+            planned = "?" if s.points_planned is None else s.points_planned
+            measured = f"it holds {s.points_done} of {planned} operating point(s)"
+        return (f"This {s.study or 'measurement'} record is UNFINISHED: the run was interrupted or "
+                f"it failed, and {measured}, its figures and its log. There is no resume for these "
+                "runs -- deleting it means measuring again from the start.")
+    return ("This record is UNFINISHED: its folder holds only what the run had written when it "
+            "stopped.")
+
+
 def _delete_prompt(s) -> tuple:
     """``(text, informative)`` for the confirmation: what goes, and what cannot come back.
 
-    An UNFINISHED cache names its committed BATCHES: ``finished`` is not ``complete`` (B3), and those
-    batches are the only thing deleting one destroys that a later run could not simply remake.
+    An UNFINISHED artifact names what is half-written, whichever kind it is -- ``finished`` is not
+    ``complete`` (B3), and what a half-written record holds is the only thing deleting it destroys
+    that a later run could not simply remake. ``_unfinished_note`` is where each kind's sentence is.
 
-    Batches and not rows, deliberately (P2): ``rows`` is written by ``mark_complete`` alone --
-    ``training_checkpoint.save`` passes none -- so every real mid-run cache has ``rows is None``, and
-    a ``sum(())`` here would print a confident, false "0 rows". Where the row counts come from is
-    said instead.
+    ``s.complete and not s.finished`` rather than ``not s.finished`` alone: an INCOMPLETE row (a
+    directory with no usable manifest) is not an artifact at all, ``finished`` is False for it, and
+    it is removed by the sweep rather than by this button.
     """
     lines = [f"id {s.id}"]
-    if s.kind == "simulation" and not s.finished:
-        lines.append(f"This training cache is UNFINISHED: {s.batches_done} committed batch(es). "
-                     "Deleting it throws those batches away and a later run starts from zero. "
-                     "(Only the batch count is known while a cache is running: the rows are "
-                     "recorded when the cache finishes.)")
+    if s.complete and not s.finished:
+        lines.append(_unfinished_note(s))
     lines.append(f"This removes {s.path} and everything in it, and cannot be undone.")
     return f"Delete {s.kind} {s.label}?", "\n".join(lines)
 

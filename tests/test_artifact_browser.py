@@ -569,6 +569,56 @@ def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store
     assert changed, "a delete must emit store_changed"
 
 
+def test_deleting_an_unfinished_fdt_record_names_what_is_half_written(store, monkeypatch):
+    """Checklist 15. The confirmation hard-coded the ONE kind that could be unfinished, and E2 makes
+    a second one -- an fdt record whose run was cancelled or failed keeps its folder with whatever it
+    measured inside. Deleting that behind a prompt that says only "this cannot be undone" throws away
+    hours of measurement without saying so.
+
+    There is no resume for these runs (spec §1.3), so the sentence says that too: unlike a cache,
+    whose batches a later run continues from, this one starts again from the beginning.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui.screens.artifact_screen import _delete_prompt
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+
+    w = store.create("fdt", None, name="stopped")
+    w.body = {"study": "sweep", "settings": {}, "seed": 3, "notices": [],
+              "points": {"param": "S", "planned": 12, "done": 7, "failed": 1}}
+    with pytest.raises(RuntimeError):
+        with w:
+            w.payload("data.h5").write_bytes(b"seven points' worth")
+            raise RuntimeError("the eighth point failed")
+
+    scr = artifact_screen(store)
+    _show_kind(scr, "fdt")
+    s = _select_ref(scr.table, w.id)
+    assert s.complete and not s.finished and s.points_done == 7
+
+    text, detail = _delete_prompt(s)
+    assert text == f"Delete fdt {s.label}?"
+    assert "UNFINISHED" in detail, detail
+    assert "7 of 12" in detail, "what it had measured when it stopped"
+    assert "no resume" in detail or "from the start" in detail, detail
+    assert "cannot be undone" in detail
+
+    scr._delete()                                     # exec() returns 0 -> not Yes
+    box = SHOWN[-1]
+    assert box.button(QMessageBox.No) is box.defaultButton(), "No must be the default"
+    assert "UNFINISHED" in box.informativeText(), box.informativeText()
+    assert store.get("fdt", w.id).id == w.id, "No must leave it on disk"
+
+    # a FINISHED record says nothing of the sort
+    done = store.create("fdt", None, name="finished_one")
+    with done as d:
+        d.body = {"study": "single", "settings": {}, "seed": 4, "notices": []}
+    scr.refresh()
+    s2 = _select_ref(scr.table, done.id)
+    assert s2.finished
+    assert "UNFINISHED" not in _delete_prompt(s2)[1], _delete_prompt(s2)[1]
+
+
 def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch):
     """dependents() is read twice -- once here to avoid asking a question that could only fail, once
     inside delete() -- and the store's is the answer that counts. With the SCREEN's read stubbed
