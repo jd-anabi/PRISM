@@ -120,8 +120,9 @@ def register(subparsers):
 
 
 def run_fdt_cmd(args, store):
-    """``store`` is unused: FDT writes plots, not artifacts (piece 5 wraps it)."""
-    from core import cli, config, registry
+    """One ``fdt`` record per run. The record is created HERE -- ``store.create`` mints the id and runs
+    ``assert_name_free`` before anything is spent -- and ENTERED by ``run_fdt`` (spec §1.2)."""
+    from core import cli, registry
     from core.FDT import fdt_pipeline
     if args.skip_sanity and args.no_production:
         # run_fdt reads confirm_production only on the sanity branch, so this pair used to run the
@@ -139,9 +140,11 @@ def run_fdt_cmd(args, store):
         raise ValueError(f"{reason} ({hint}.)")
     cfg = cli.make_fdt_config(model, registry.state_dep_drift(model), args.cell,
                               **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0"))
-    fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,
-                         confirm_production=not args.no_production)
-    print(f"[prism fdt] plots under {config.artifacts_root() / 'fdt'}")
+    writer = store.create("fdt", cfg)
+    rec = fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,
+                               confirm_production=not args.no_production, writer=writer,
+                               seed=getattr(args, "seed", None))
+    print(f"[prism fdt] record {rec.id} at {rec.path}")
 
 
 def run_crossval(args, store):

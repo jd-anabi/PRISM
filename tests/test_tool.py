@@ -1155,6 +1155,20 @@ def test_smoke_refuses_a_bad_cell_and_an_impossible_resume_before_the_prior(tool
     assert rec.calls == [], "an impossible --resume was refused only after the prior"
 
 
+def _fdt_cfg_stub():
+    """What a recorder standing in for an FDT config builder hands back: the fields the FDT branch of
+    ``manifest.config_from_cfg`` reads (``_fdt_config_from_cfg``), plus ``sources``, and NO
+    ``observation_mode`` -- its absence is what selects that branch. The handler opens an ``fdt``
+    record on the config before it runs anything (``store.create("fdt", cfg)``), and that real store
+    path stays under test (ruling F6), so a bare placeholder string would fail there on ``cfg.model``.
+    Coupled to that branch on purpose: a field it starts reading must be added here."""
+    return SimpleNamespace(
+        model="HOPF", state_dep_drift=False, params_dict={"sigma_x": (0.1, (0.0, 1.0))},
+        rescale_params={}, n_freqs=60, freq_bounds=(0.1, 30.0), ensemble_M=256, freqs_per_batch=1,
+        F0=0.05, burn_in_nd=100.0, T_obs_periods=30, dt_nd=0.01, psd_T_obs_nd=8000.0, seed=None,
+        units_dict=("nm", "ms"), hw=config.cpu_device(), sources={})
+
+
 def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, capsys):
     """Every fdt/crossval flag arrives at the builder it belongs to, and nothing simulates.
 
@@ -1173,13 +1187,17 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     from core.tool import main
 
     seen = {}
+    fdt_cfg = _fdt_cfg_stub()
 
     def _fdt_cfg(model, state_dep_drift, cell_file, **kw):
         seen["make_fdt_config"] = (model, state_dep_drift, cell_file, kw)
-        return "CFG"
+        return fdt_cfg
 
-    def _run_fdt(cfg, *, skip_sanity, confirm_production):
+    def _run_fdt(cfg, *, skip_sanity, confirm_production, writer, seed=None):
         seen["run_fdt"] = (cfg, skip_sanity, confirm_production)
+        seen["fdt_writer_kind"] = writer.kind
+        seen["fdt_writer_entered"] = writer.dir.exists()
+        return SimpleNamespace(id="rec", path=writer.dir)
 
     def _sweep_cfg(cell_file, **kw):
         seen["make_param_sweep_config"] = (cell_file, kw)
@@ -1202,7 +1220,7 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     model, sdd, cell_file, kw = seen["make_fdt_config"]
     assert model == "HOPF" and sdd is False and cell_file == cell     # the model is the cell's folder
     assert kw == {"n_freqs": 3, "ensemble_M": 7, "freqs_per_batch": 2, "F0": 0.11}
-    assert seen["run_fdt"] == ("CFG", True, True)                     # --no-production absent
+    assert seen["run_fdt"] == (fdt_cfg, True, True)                   # --no-production absent
 
     # M4, fix round 1: NADROWSKI's state-dependent (multiplicative) drift, next to HOPF's False above.
     seen.clear()
@@ -1212,7 +1230,7 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     seen.clear()
     assert main(["fdt", "--cell", cell, "--model", "hopf", "--no-production"]) == 0
     assert seen["make_fdt_config"][3] == {}, "an unset knob must not be passed: the default is in cli"
-    assert seen["run_fdt"] == ("CFG", False, False)
+    assert seen["run_fdt"] == (fdt_cfg, False, False)
 
     # I1, fix round 1: NEITHER flag. The two cases above alone cannot catch confirm_production
     # cross-wired to skip_sanity: (skip_sanity=True, no_production=False) and (skip_sanity=False,
@@ -1220,8 +1238,12 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     # Only the both-False combination tells them apart -- it must come out (False, True).
     seen.clear()
     assert main(["fdt", "--cell", cell]) == 0
-    assert seen["run_fdt"] == ("CFG", False, True), \
+    assert seen["run_fdt"] == (fdt_cfg, False, True), \
         "neither flag: sanity runs, then production proceeds by default"
+    assert seen["fdt_writer_kind"] == "fdt", \
+        "the record is created by the front end and ENTERED by the stage (spec §1.2)"
+    assert seen["fdt_writer_entered"] is False, "the handler entered the writer the stage must enter"
+    assert "[prism fdt] record rec at " in capsys.readouterr().out
 
     seen.clear()
     assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
@@ -1331,10 +1353,10 @@ def test_fdt_ctrl_c_gets_its_own_interrupt_note(tool_env, monkeypatch, capsys):
     from core.FDT import fdt_pipeline
     from core.tool import main
 
-    def _boom(cfg, *, skip_sanity, confirm_production):
+    def _boom(cfg, *, skip_sanity, confirm_production, writer, seed=None):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(cli, "make_fdt_config", lambda *a, **k: "CFG")
+    monkeypatch.setattr(cli, "make_fdt_config", lambda *a, **k: _fdt_cfg_stub())
     monkeypatch.setattr(fdt_pipeline, "run_fdt", _boom)
     cell = str(config.CELL_PATH / "hopf" / "cell.txt")
     capsys.readouterr()

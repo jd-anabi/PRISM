@@ -1,4 +1,5 @@
-"""FDT-for-user-models unit tests (FEATURE 1 v3 + B-d), Qt-free except for that one widget read.
+"""FDT unit tests, Qt-free except for that one widget read: the user-model normalization gate
+(FEATURE 1 v3 + B-d) and, since piece 5, the records the two measurements write.
 
 Locks down the generalized effective-temperature normalization and its gate:
   * campaigns.observable_noise_prefactor computes the per-model coupling/D_x -- n*beta for NADROWSKI,
@@ -13,7 +14,10 @@ The normalisation and gate tests need no cell file and no QApplication: a tiny f
 .model / .params_dict (and, for the force-channel test, .inits_tensor / .force_params_dict), which is
 all those functions read. The FDT config-builder tests added by piece 5 DO read the real Nadrowski
 cell, because what they pin is the builder refusing a knob before it parses one. One of them also
-builds two numeric widgets (offscreen) to read the value a blank box really produces.
+builds two numeric widgets (offscreen) to read the value a blank box really produces. The record
+tests build a real HOPF config and write into the ``store`` fixture's temp store, with both campaigns
+replaced by arithmetic; the run tests that are about the pipeline's messages hand run_fdt a
+``_LogWriter`` instead, which names each figure after its title.
 
 Run:  pytest tests/test_fdt_user.py
 """
@@ -21,6 +25,7 @@ import math
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -41,6 +46,30 @@ class _FakeCfg:
         if n_vars is not None:
             self.inits_tensor = torch.zeros(1, n_vars)
         self.force_params_dict = force_params or {}
+
+
+class _LogWriter:
+    """Enough writer for a run whose RECORDS are the subject, not its manifest: a real directory, a
+    body, payload and figure paths inside it, and a store that hands back what it was given. A real
+    ArtifactWriter would drag a manifest (and its validation) into tests about the pipeline's logs."""
+    def __init__(self, d):
+        self.id, self.dir, self.body = "x", Path(d), {}
+        self.store = SimpleNamespace(load_fdt=lambda ref: ref)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def refresh(self):
+        pass
+
+    def payload(self, filename):
+        return self.dir / filename
+
+    def figure_path(self, title):
+        return self.dir / f"{title}.png"
 
 
 def _register_user(name, variables):
@@ -132,6 +161,7 @@ def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeyp
 
     import pytest
 
+    from core import config
     from core.FDT import fdt_pipeline
     from core.FDT.campaigns import FDTModelError
     from core.refusals import PreflightWarning
@@ -142,7 +172,6 @@ def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeyp
         spent.append(a)
         raise RuntimeError("a campaign ran: the prefactor must be refused before anything is spent")
 
-    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd", _never)
     monkeypatch.setattr(fdt_pipeline, "run_all_sanity", _never)
 
@@ -153,12 +182,17 @@ def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeyp
         params_dict = {"k": (1.0, None), "beta": (14.1, None)}
         # below both thin thresholds on purpose: the notice would fire if it ran before the prefactor
         n_freqs, ensemble_M = 1, 2
+        freqs_per_batch, F0 = 1, 0.05
+        freq_bounds, burn_in_nd, T_obs_periods = (0.1, 30.0), 100.0, 30
+        dt_nd, psd_T_obs_nd, seed = 0.01, 8000.0, None
+        hw = config.cpu_device()
 
     for skip_sanity in (True, False):
         with warnings.catch_warnings(record=True) as rec:
             warnings.simplefilter("always")
             with pytest.raises(FDTModelError) as e:
-                fdt_pipeline.run_fdt(_NoN(), skip_sanity=skip_sanity, confirm_production=True)
+                fdt_pipeline.run_fdt(_NoN(), skip_sanity=skip_sanity, confirm_production=True,
+                                     writer=_LogWriter(tmp_path), seed=1)
         assert "'n'" in str(e.value), str(e.value)
         assert e.value.field == "cell", f"skip_sanity={skip_sanity}: field={e.value.field!r}"
         thin = [str(w.message) for w in rec if issubclass(w.category, PreflightWarning)]
@@ -291,6 +325,7 @@ def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaig
         n_freqs, freq_bounds = 5, (0.1, 30.0)
         ensemble_M = 8        # read first by the thin-setting check; at its threshold, so it says nothing
         burn_in_nd, dt_nd, psd_T_obs_nd, omega_0 = 0.0, 0.01, 200.0, 1.0
+        freqs_per_batch, F0, T_obs_periods, seed = 1, 0.05, 30, None     # read into body.settings
 
         class hw:
             device = torch.device("cpu")
@@ -300,7 +335,6 @@ def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaig
     # probe sits a factor of five below the lowest frequency the spectrum resolves.
     freqs_psd = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
     G = torch.tensor([9.0, 1.0, 5.0, 1.0], dtype=torch.float64)
-    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
                         lambda cfg, return_trajectory=False: (
                             freqs_psd, G, torch.arange(4, dtype=torch.float64),
@@ -316,7 +350,8 @@ def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaig
     monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _no_drive)
 
     with pytest.raises(Refusal) as e:
-        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True)
+        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True,
+                             writer=_LogWriter(tmp_path), seed=1)
     msg = str(e.value)
     assert "0.2" in msg and "psd_T_obs_nd = 200" in msg, msg
     assert "Raise freq_bounds' lower multiplier above 0.5" in msg, msg
@@ -329,9 +364,10 @@ def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaig
     from core.tool.fields import fix_sentence
     assert fix_sentence("freq_bounds") == "", "no flag exposes the band, so no fix is offered (P2, P75)"
     assert driven == [], "Campaign 2 was entered before the band was checked"
-    written = [p.name.rsplit("_", 2)[0] for p in tmp_path.glob("*.png")]
-    assert written == ["psd"], ("the spontaneous spectrum's picture must be on disk when the band "
-                                f"refusal fires -- it is what diagnoses it (P22): {written}")
+    written = [p.name for p in tmp_path.glob("*.png")]
+    assert written == ["Spontaneous PSD.png"], ("the spontaneous spectrum's picture must be on disk "
+                                                f"when the band refusal fires -- it is what diagnoses "
+                                                f"it (P22): {written}")
 
 
 def test_the_band_refusal_offers_a_longer_recording_only_where_it_lowers_the_resolution(
@@ -361,6 +397,7 @@ def test_the_band_refusal_offers_a_longer_recording_only_where_it_lowers_the_res
         params_dict = {"sigma_x": (0.1, None)}
         n_freqs, freq_bounds, ensemble_M = 5, (0.1, 30.0), 8
         burn_in_nd, dt_nd, psd_T_obs_nd, omega_0 = 0.0, 0.01, 100.0, 1.0
+        freqs_per_batch, F0, T_obs_periods, seed = 1, 0.05, 30, None     # read into body.settings
 
         class hw:
             device = torch.device("cpu")
@@ -368,7 +405,6 @@ def test_the_band_refusal_offers_a_longer_recording_only_where_it_lowers_the_res
 
     freqs_psd = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
     G = torch.tensor([9.0, 1.0, 5.0, 1.0], dtype=torch.float64)
-    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
                         lambda cfg, return_trajectory=False: (
                             freqs_psd, G, torch.arange(4, dtype=torch.float64),
@@ -384,7 +420,8 @@ def test_the_band_refusal_offers_a_longer_recording_only_where_it_lowers_the_res
 
     assert round(_Cfg.psd_T_obs_nd / _Cfg.dt_nd) < WELCH_NPERSEG_CAP, "the premise of this case"
     with pytest.raises(Refusal) as e:
-        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True)
+        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True,
+                             writer=_LogWriter(tmp_path), seed=1)
     msg = str(e.value)
     assert e.value.field == "freq_bounds", e.value.field
     assert ("Raise freq_bounds' lower multiplier above 0.5, or lengthen the spontaneous recording "
@@ -477,8 +514,9 @@ def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(t
     E4's other half is asserted here too: the run leaves behind what diagnoses the failure. The
     spontaneous spectrum's picture is written BEFORE the driven campaign, so it is on disk when this
     refusal fires, while the ratio and susceptibility figures -- which would have been empty -- are
-    not. T17 turns that directory into the record's unfinished folder; the ordering is what makes the
-    promise keepable.
+    not. That directory is the record's folder, which the writer keeps unfinished (E2; the store-backed
+    case is test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_leaves_none);
+    the ordering is what makes the promise keepable.
 
     Nothing about it needs the drive: whether a probe is blank depends only on the grid and Campaign
     1's spectrum, so it is refused BEFORE Campaign 2 is spent (the review of Task 16), and Campaign 2
@@ -499,6 +537,7 @@ def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(t
         n_freqs, freq_bounds = 5, (5.0, 30.0)
         ensemble_M = 8        # read first by the thin-setting check; at its threshold, so it says nothing
         burn_in_nd, dt_nd, psd_T_obs_nd, omega_0 = 0.0, 0.01, 50.0, 1.0
+        freqs_per_batch, F0, T_obs_periods, seed = 1, 0.05, 30, None     # read into body.settings
 
         class hw:
             device = torch.device("cpu")
@@ -508,7 +547,6 @@ def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(t
     # spectrum's highest bin, so T15's low-end gate passes and every probe is blank anyway.
     freqs_psd = torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64)
     G = torch.tensor([9.0, 1.0, 5.0, 1.0], dtype=torch.float64)
-    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
                         lambda cfg, return_trajectory=False: (
                             freqs_psd, G, torch.arange(4, dtype=torch.float64),
@@ -526,14 +564,15 @@ def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(t
                             lambda *a, save_path=None, **kw: save_path.write_bytes(b"png"))
 
     with pytest.raises(Refusal) as e:
-        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True)
+        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True,
+                             writer=_LogWriter(tmp_path), seed=1)
     msg = str(e.value)
     assert "0.1..0.3" in msg and "psd_T_obs_nd = 50" in msg, msg
     assert e.value.field == "freq_bounds", e.value.field
     assert driven == [], "Campaign 2 was entered before nothing-measurable was refused"
 
-    written = sorted(p.name.rsplit("_", 2)[0] for p in tmp_path.glob("*.png"))
-    assert written == ["psd", "spontaneous_trajectory"], written
+    written = sorted(p.name for p in tmp_path.glob("*.png"))
+    assert written == ["Spontaneous PSD.png", "Spontaneous trajectory.png"], written
 
 
 class _ToneCfg:
@@ -544,6 +583,7 @@ class _ToneCfg:
     params_dict = {"sigma_x": (0.1, None)}
     force_params_dict, state_dep_drift = {}, False
     n_freqs, ensemble_M, burn_in_nd, omega_0 = 5, 8, 0.0, 1.0
+    freqs_per_batch, F0, T_obs_periods, seed = 1, 0.05, 30, None     # read into body.settings
 
     class hw:
         device = torch.device("cpu")
@@ -581,8 +621,8 @@ def _use_tone_simulator(monkeypatch, *, diverge=False):
 
 
 def _figures_in(directory) -> list:
-    """The kinds of figure a run left in ``directory``: each file name less its _<date>_<time>.png."""
-    return sorted(p.name.rsplit("_", 2)[0] for p in directory.glob("*.png"))
+    """The figures a run left in ``directory``, by file name: _LogWriter names each after its title."""
+    return sorted(p.name for p in directory.glob("*.png"))
 
 
 def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
@@ -624,7 +664,6 @@ def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
         driven.append(len(om))
         return torch.full((len(om),), 1 + 1j, dtype=torch.complex128)
 
-    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _drive)
     for name in ("plot_spontaneous_trajectory", "plot_psd", "plot_eff_temp_ratio",
                  "plot_chi_components"):
@@ -646,7 +685,8 @@ def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
     assert span(dt_nd=0.25)[1] == pytest.approx(2 * hi, rel=1e-12), "a shorter step must raise the top"
 
     with pytest.raises(Refusal) as e:
-        fdt_pipeline.run_fdt(_ToneCfg((8.0, 30.0)), skip_sanity=True, confirm_production=True)
+        fdt_pipeline.run_fdt(_ToneCfg((8.0, 30.0)), skip_sanity=True, confirm_production=True,
+                             writer=_LogWriter(tmp_path), seed=1)
     msg = str(e.value)
     assert e.value.field == "freq_bounds", e.value.field
     assert driven == [], "the driven campaign was spent before nothing-measurable was refused"
@@ -664,12 +704,14 @@ def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
 
     # copied: a lower multiplier inside the named range measures some probes, and says how many not
     caplog.clear()
-    fdt_pipeline.run_fdt(_ToneCfg((0.9 * high, 30.0)), skip_sanity=True, confirm_production=True)
+    fdt_pipeline.run_fdt(_ToneCfg((0.9 * high, 30.0)), skip_sanity=True, confirm_production=True,
+                         writer=_LogWriter(tmp_path), seed=1)
     assert warned() == [f"4/5 probe frequencies have no value in the spontaneous spectrum, whose "
                         f"resolved band is {lo:g}..{hi:g} (ND), and are blank in the ratio."], warned()
     # ...and an upper multiplier below the named bound measures all of them
     caplog.clear()
-    fdt_pipeline.run_fdt(_ToneCfg((high / 4, 0.99 * upper)), skip_sanity=True, confirm_production=True)
+    fdt_pipeline.run_fdt(_ToneCfg((high / 4, 0.99 * upper)), skip_sanity=True, confirm_production=True,
+                         writer=_LogWriter(tmp_path), seed=1)
     assert warned() == [], warned()
     assert driven == [5, 5], driven
 
@@ -778,12 +820,13 @@ def test_both_band_refusals_leave_the_real_spectrum_figure_and_never_drive(tmp_p
     for name, band, says in cases:
         out = tmp_path / name
         out.mkdir()
-        monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda out=out: out)
         with pytest.raises(Refusal) as e:
-            fdt_pipeline.run_fdt(_ToneCfg(band), skip_sanity=True, confirm_production=True)
+            fdt_pipeline.run_fdt(_ToneCfg(band), skip_sanity=True, confirm_production=True,
+                                 writer=_LogWriter(out), seed=1)
         assert says in str(e.value), (name, str(e.value))
         assert e.value.field == "freq_bounds", (name, e.value.field)
-        assert _figures_in(out) == ["psd", "spontaneous_trajectory"], (name, _figures_in(out))
+        assert _figures_in(out) == ["Spontaneous PSD.png", "Spontaneous trajectory.png"], \
+            (name, _figures_in(out))
     assert driven == [], "the driven campaign was entered before a band refusal"
 
 
@@ -825,9 +868,9 @@ def test_a_diverged_spontaneous_simulation_is_refused_as_the_cells_before_the_pe
     def refused(cfg, name):
         out = tmp_path / name
         out.mkdir()
-        monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: out)
         with pytest.raises(Refusal) as e:
-            fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True)
+            fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
+                                 writer=_LogWriter(out), seed=1)
         return e.value, _figures_in(out)
 
     # the real Campaign 1, one trajectory sent to +inf; the real figures
@@ -838,7 +881,7 @@ def test_a_diverged_spontaneous_simulation_is_refused_as_the_cells_before_the_pe
     assert msg.startswith("The spontaneous simulation diverged: its spectrum holds no finite value"), msg
     assert "freq_bounds" in msg and "psd_T_obs_nd = 2048" in msg and "dt_nd = 0.5" in msg, msg
     assert "multiplier" not in msg and "resolve" not in msg, f"a band sentence about no spectrum: {msg}"
-    assert written == ["spontaneous_trajectory"], written
+    assert written == ["Spontaneous trajectory.png"], written
 
     # a Campaign 1 whose spectrum and trajectory are NaN throughout
     freqs_psd = torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64)
@@ -852,18 +895,18 @@ def test_a_diverged_spontaneous_simulation_is_refused_as_the_cells_before_the_pe
     campaign1(nan4)
     e, written = refused(_ToneCfg((0.1, 30.0)), "all_nan")
     assert e.field == "cell" and "diverged" in str(e), (e.field, str(e))
-    assert written == ["spontaneous_trajectory"], written
+    assert written == ["Spontaneous trajectory.png"], written
     assert driven == [], "a diverged run reached the driven campaign"
 
     # the boundary, with the figures stubbed: non-finite in SOME bins is not the cell's refusal
     for name in ("plot_spontaneous_trajectory", "plot_psd", "plot_eff_temp_ratio",
                  "plot_chi_components"):
         monkeypatch.setattr(fdt_pipeline, name, lambda *a, **kw: None)
-    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     zeros4 = torch.zeros(4, dtype=torch.float64)
     campaign1(torch.tensor([9.0, 1.0, 5.0, float("nan")], dtype=torch.float64), zeros4)
     caplog.clear()
-    fdt_pipeline.run_fdt(_ToneCfg((0.5, 1.2)), skip_sanity=True, confirm_production=True)
+    fdt_pipeline.run_fdt(_ToneCfg((0.5, 1.2)), skip_sanity=True, confirm_production=True,
+                         writer=_LogWriter(tmp_path), seed=1)
     assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [
         "3/5 probe frequencies have no value in the spontaneous spectrum, whose resolved band is "
         "0.1..0.3 (ND), and are blank in the ratio."], caplog.records
@@ -932,6 +975,7 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     import numpy as np
     import pytest
 
+    from core import config
     from core.FDT import cross_validation as cv
     from core.FDT import fdt_pipeline, plots, sanity
     from core.orchestrator import PreflightWarning
@@ -993,12 +1037,17 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
         # run_fdt judges the thin settings next (E5) and reads both knobs to do it. At these values
         # nothing is said, so the exact record list below is unchanged.
         n_freqs, ensemble_M = 60, 256
+        # ...and it records every knob in body.settings and seeds on hw's device (piece 5).
+        freqs_per_batch, F0 = 1, 0.05
+        freq_bounds, burn_in_nd, T_obs_periods = (0.1, 30.0), 100.0, 30
+        dt_nd, psd_T_obs_nd, seed = 0.01, 8000.0, None
+        hw = config.cpu_device()
 
-    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     monkeypatch.setattr(fdt_pipeline, "run_all_sanity",
                         lambda cfg, passive_plot_path=None: {"linearity": (False, {"ratio": 0.5})})
     caplog.clear()
-    fdt_pipeline.run_fdt(_Hopf(), skip_sanity=False, confirm_production=False)
+    fdt_pipeline.run_fdt(_Hopf(), skip_sanity=False, confirm_production=False,
+                         writer=_LogWriter(tmp_path), seed=1)
     name = "core.FDT.fdt_pipeline"
     assert records() == [
         (name, "INFO", "Cell file natural-frequency estimate: omega_0 ~= 1.0 (ND Hopf natural frequency)"),
@@ -1277,10 +1326,11 @@ def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(
     _preflight_warn: stacklevel=3 through run boundaries). Pointing at the stage's own
     ``notices = warn_thin_settings(cfg)`` line told the operator nothing on the tool's stderr. The
     call goes through run_fdt here, because that is the frame layout the stacklevel is counted for:
-    helper, stage, caller."""
+    helper, stage, caller -- and since run_fdt became a public entry (Task 17), the @public_entry
+    wrapper's frame between the stage and its caller is the one RUN_BOUNDARY_FILES skips."""
     import pytest
 
-    from core import orchestrator, refusals
+    from core import config, orchestrator, refusals
     from core.FDT import fdt_pipeline
 
     assert orchestrator.PreflightWarning is refusals.PreflightWarning
@@ -1290,12 +1340,16 @@ def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(
         # the prefactor (2/sigma_x^2) is resolved before the thin check, so this stub carries sigma_x
         params_dict = {"sigma_x": (0.1, None)}
         n_freqs, ensemble_M = 1, 2
+        freqs_per_batch, F0 = 1, 0.05
+        freq_bounds, burn_in_nd, T_obs_periods = (0.1, 30.0), 100.0, 30
+        dt_nd, psd_T_obs_nd, seed = 0.01, 8000.0, None
+        hw = config.cpu_device()
 
-    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
     monkeypatch.setattr(fdt_pipeline, "run_all_sanity",
                         lambda cfg, passive_plot_path=None: {"linearity": (True, {"ratio": 1.0})})
     with pytest.warns(refusals.PreflightWarning) as rec:
-        fdt_pipeline.run_fdt(_ThinHopf(), skip_sanity=False, confirm_production=False)
+        fdt_pipeline.run_fdt(_ThinHopf(), skip_sanity=False, confirm_production=False,
+                             writer=_LogWriter(tmp_path), seed=1)
     said = [w for w in rec if issubclass(w.category, refusals.PreflightWarning)]
     assert [str(w.message) for w in said] == fdt_pipeline.thin_notices(_ThinHopf()), \
         [str(w.message) for w in said]
@@ -1333,3 +1387,200 @@ def test_the_thin_notice_loads_no_sbi_and_keeps_its_always_filter():
                        capture_output=True, text=True, timeout=300,
                        env={**os.environ, "MPLBACKEND": "Agg", "KMP_DUPLICATE_LIB_OK": "TRUE"})
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+def _stub_campaigns(monkeypatch, n_psd=1601):
+    """Campaign 1 and Campaign 2 replaced by arithmetic: a single-peaked spectrum on a positive grid
+    and a flat susceptibility. The record's SHAPE is what these tests are about; a real campaign is
+    slow-marked and lives in tests/test_tool.py.
+
+    The spectrum runs 0..40 with a bin every 0.025 and its peak at 1.0, so the default probe grid
+    (0.1..30 around that peak) is resolved end to end: the band refusal (spec §3.4) and the blanks
+    (spec §3.5) stay out of a test that is not about them."""
+    import torch
+    from core.FDT import fdt_pipeline
+
+    omegas_psd = torch.linspace(0.0, 40.0, n_psd, dtype=torch.float64)
+    G = torch.exp(-((omegas_psd - 1.0) ** 2) / 0.02) + 1e-6
+    t = torch.linspace(0.0, 1.0, 8, dtype=torch.float64)
+
+    def _c1(cfg, return_trajectory=False):
+        if return_trajectory:
+            return omegas_psd, G, t, torch.zeros_like(t)
+        return omegas_psd, G
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd", _c1)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi",
+                        lambda cfg, omegas: torch.full(omegas.shape, 1 + 1j, dtype=torch.complex128))
+    for name in ("plot_psd", "plot_eff_temp_ratio", "plot_chi_components",
+                 "plot_spontaneous_trajectory"):
+        monkeypatch.setattr(fdt_pipeline, name,
+                            lambda *a, save_path=None, **k: Path(save_path).write_bytes(b"\x89PNG"))
+
+
+def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monkeypatch):
+    """E1 and V1 together, which is the whole point of making this a public entry. Before piece 5 the
+    measurement returned None, wrote five timestamped PNGs into a flat <artifacts root>/fdt that no
+    command could list or delete, and wrote ``cfg.omega_0`` on the panel's own settings object twice
+    (core/FDT/fdt_pipeline.py's steps 1 and 4) -- so the frequency grid of the NEXT run started from
+    the last run's resonance. The record answers the first; copy_for_run, which public_entry is
+    duck-typed on, answers the second.
+
+    The body must carry EVERY key of BODY_KEYS["fdt"] (manifest.validate compares the key set by
+    equality), with the keys a single-cell run cannot fill left null. Two trajectories is below the
+    trust threshold, so the run warns -- asserted, never leaked -- and the record KEEPS the sentence."""
+    import pytest
+
+    from core import cli, config
+    from core.artifacts import manifest as mf
+    from core.FDT import fdt_pipeline
+    from core.refusals import PreflightWarning
+    from tests._fixtures import assert_cfg_unchanged, snapshot_cfg
+
+    _stub_campaigns(monkeypatch)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=5, ensemble_M=2)
+    snap = snapshot_cfg(cfg)
+
+    w = store.create("fdt", cfg, name="run1", note="a stubbed measurement")
+    with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"):
+        rec = fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=11)
+
+    assert rec.name == "run1" and rec.body["study"] == "single"
+    assert set(rec.body) == set(mf.BODY_KEYS["fdt"]), "validate compares the key set by equality"
+    assert rec.body["seed"] == 11 and rec.body["complete"] is True
+    assert rec.body["points"] is None and rec.body["compared"] is None
+    assert rec.body["notices"] == fdt_pipeline.thin_notices(cfg) and len(rec.body["notices"]) == 1, \
+        "ensemble_M=2 is below FDT_THIN_ENSEMBLE_M: T12's sentence is KEPT in the record (P51)"
+    assert rec.body["offgrid"]["blanks"] == 0
+    assert rec.body["settings"]["confirm_production"] is True, "P70"
+    assert rec.body["grid"]["n_freqs"] == 5 and rec.body["grid"]["omega_0"] > 0.0
+    assert rec.body["offgrid"]["of"] == 5
+    assert rec.body["settings"]["ensemble_M"] == 2 and rec.body["settings"]["skip_sanity"] is True
+    assert sorted(rec.manifest.figures) == ["figures/chi_components.png",
+                                            "figures/effective_temperature_ratio.png",
+                                            "figures/spontaneous_psd.png",
+                                            "figures/spontaneous_trajectory.png"]
+    assert (rec.path / "log.txt").read_text(encoding="utf-8").strip(), \
+        "log.txt is written from runs.current_run_log(), which only exists on the thread that " \
+        "entered the writer -- an empty file means the front end entered it instead"
+    assert_cfg_unchanged(cfg, snap)
+
+
+def test_a_failed_fdt_run_keeps_its_record_marked_unfinished(store, monkeypatch):
+    """E2: an interrupted or crashed measurement keeps its folder, plainly marked unfinished, and the
+    spontaneous spectrum it did collect is what diagnoses the failure. The six ordinary kinds still
+    delete theirs -- tests/test_artifact_store.py pins that -- so this is the one place the
+    progressive mode is visible from a stage."""
+    import pytest
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi",
+                        lambda cfg, omegas: (_ for _ in ()).throw(RuntimeError("stub out of memory")))
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    w = store.create("fdt", cfg, name="halfway")
+    with pytest.raises(RuntimeError, match="stub out of memory"):
+        fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=3)
+
+    (summary,) = store.list("fdt")
+    assert summary.name == "halfway" and summary.complete and not summary.finished
+    assert (w.dir / "figures" / "spontaneous_trajectory.png").exists(), \
+        "the figures drawn before the failure stay on disk"
+
+
+def test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_leaves_none(
+        store, monkeypatch):
+    """The two refusals a single-cell run can meet, and why they end differently (spec §2.2 step 3,
+    E2, E4). The band refusal is knowable only once the spontaneous campaign has run and its two
+    figures are on disk, so it is not a pre-spend refusal: the record is KEPT, unfinished, with the
+    spectrum that diagnoses the refusal inside it and the resonance already in its body. The
+    prefactor refusal is raised before anything is spent -- before the writer is even entered -- so
+    a cell FDT cannot normalise leaves no folder at all, and every refused click would otherwise add
+    one."""
+    import json
+
+    import pytest
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+    from core.refusals import Refusal
+
+    _stub_campaigns(monkeypatch)
+    driven = []
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", lambda cfg, omegas: driven.append(1))
+    cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    # The stub spectrum's first real bin is 0.025 and its peak 1.0: a lower multiplier of 0.01 puts
+    # the lowest probe below everything the spectrum resolves.
+    cfg = cli.make_fdt_config("HOPF", False, cell, n_freqs=5, ensemble_M=8).with_overrides(
+        freq_bounds=(0.01, 30.0))
+    w = store.create("fdt", cfg, name="band")
+    with pytest.raises(Refusal) as e:
+        fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=4)
+    assert e.value.field == "freq_bounds", e.value.field
+    assert driven == [], "the band refusal came after the driven campaign"
+
+    (summary,) = store.list("fdt")
+    assert summary.name == "band" and summary.complete and not summary.finished
+    assert sorted(p.name for p in (w.dir / "figures").glob("*.png")) == [
+        "spontaneous_psd.png", "spontaneous_trajectory.png"]
+    body = json.loads((w.dir / "manifest.json").read_text(encoding="utf-8"))["body"]
+    assert body["complete"] is False and body["grid"]["omega_0"] == pytest.approx(1.0), body["grid"]
+    assert (w.dir / "log.txt").is_file(), "the unfinished record keeps its log up to the refusal"
+
+    bad = cli.make_fdt_config("HOPF", False, cell, n_freqs=5, ensemble_M=8)
+    bad.params_dict.pop("sigma_x")
+    w2 = store.create("fdt", bad, name="nocell")
+    with pytest.raises(Refusal) as e:
+        fdt_pipeline.run_fdt(bad, skip_sanity=True, confirm_production=True, writer=w2, seed=4)
+    assert e.value.field == "cell", e.value.field
+    assert not w2.dir.exists(), "a refusal before anything was spent left a folder behind"
+    assert [s.name for s in store.list("fdt")] == ["band"]
+
+
+def test_run_fdt_draws_and_records_a_seed_when_none_is_given(store, monkeypatch):
+    """E7: every run records the seed it used, so repeats of one cell can be told apart and their
+    spread read as the measurement error. A blank Seed box and an absent --seed both mean "draw one
+    and record it" -- a run whose seed were simply unset could never be repeated."""
+    import random
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    random.seed(4242)
+    drawn = random.randrange(2 ** 31)
+    random.seed(4242)
+    rec = fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
+                               writer=store.create("fdt", cfg, name="drawn"))
+    assert rec.body["seed"] == drawn, "the drawn seed is the recorded seed"
+    assert cfg.seed is None, "the draw lands on the private copy, never on the caller's config"
+
+
+def test_the_seed_determines_the_numbers(store, monkeypatch):
+    """P82 / E7. Recording a seed is worth nothing unless the seed DETERMINES what the run draws --
+    and compare repeats (E8) reads the spread across repeats as the measurement error on exactly that
+    premise. Campaign 1 is stubbed to draw from the ambient torch generator, which is what the solver
+    draws its noise from: one seed twice draws the same, another seed draws differently."""
+    import torch
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+    stub_c1 = fdt_pipeline.run_campaign1_psd
+    drawn = []
+
+    def _c1(cfg, return_trajectory=False):
+        drawn.append(float(torch.rand(())))
+        return stub_c1(cfg, return_trajectory=return_trajectory)
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd", _c1)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    for seed in (5, 5, 6):
+        fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
+                             writer=store.create("fdt", cfg), seed=seed)
+    assert drawn[0] == drawn[1], "one seed, one draw: the seed determines the numbers"
+    assert drawn[0] != drawn[2], "a different seed draws differently"

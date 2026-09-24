@@ -3090,6 +3090,67 @@ def _leg_channel_ablation(case, monkeypatch, tmp_path):
     return cfg, lambda: ablation.channel_ablation(cfg, post, rows=rows, n_sweep=3, store=_EntryStore(case))
 
 
+class _FdtWriter:
+    """The writer surface run_fdt touches, over a real temp directory but no store.
+
+    PROGRESSIVE, like the real one (spec §2.2): __exit__ KEEPS the directory on an exception, so a leg
+    that refuses or booms leaves its folder behind exactly as E2 requires. It absorbs _BodyDone and
+    nothing else, so a leg can end the measurement at its first campaign and still take run_fdt's
+    `return writer.store.load_fdt(writer.id)` line -- a success from the caller's side, with no
+    solver, no figure and no h5py."""
+
+    def __init__(self, tmp_path):
+        self.id = "20260922T000000"
+        self.dir = Path(tmp_path) / "fdt" / f"_unnamed__{self.id}"
+        self.body, self.parents, self.fingerprints = {}, {}, {}
+        self.store = SimpleNamespace(load_fdt=lambda ref: SimpleNamespace(id=ref, body=self.body))
+        self.refreshed = 0
+
+    def __enter__(self):
+        self.dir.mkdir(parents=True, exist_ok=True)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return exc_type is not None and issubclass(exc_type, _BodyDone)
+
+    def refresh(self):
+        self.refreshed += 1
+
+    def payload(self, filename):
+        return self.dir / filename
+
+    def figure_path(self, title):
+        (self.dir / "figures").mkdir(exist_ok=True)
+        return self.dir / "figures" / f"{title}.png"
+
+
+def _fdt_cfg_for_leg(case):
+    """A real HOPF FDTConfig at the smallest size that is not "too thin to trust": n_freqs and
+    ensemble_M sit exactly AT FDT_THIN_N_FREQS / FDT_THIN_ENSEMBLE_M, so the run raises no
+    PreflightWarning that this pin would leak into the gate's count. The "refusal" case deletes the
+    parameter observable_noise_prefactor needs, which is the run's own pre-spend refusal (spec
+    §3.4)."""
+    from core import cli, config as _cfgmod
+    cfg = cli.make_fdt_config("HOPF", False, str(_cfgmod.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=_cfgmod.FDT_THIN_N_FREQS, ensemble_M=_cfgmod.FDT_THIN_ENSEMBLE_M)
+    if case == "refusal":
+        cfg.params_dict.pop("sigma_x")
+    return cfg
+
+
+def _leg_run_fdt(case, monkeypatch, tmp_path):
+    """run_fdt's three endings. Its own write on its working config is `cfg.omega_0 = ...` (step 1 of
+    its body) and `cfg.seed = ...`, both made before Campaign 1 -- so the seam that raises _Injected is
+    Campaign 1 itself, and "boom" therefore lands AFTER a write, which is what the pin is for."""
+    from core.FDT import fdt_pipeline
+    cfg = _fdt_cfg_for_leg(case)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
+                        _raise_injected if case == "boom" else _body_done)
+    w = _FdtWriter(tmp_path)
+    return cfg, lambda: fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
+                                             writer=w, seed=11)
+
+
 _UNTOUCHED_LEGS = {
     "generate_observations": _leg_generate_observations,
     "build_experiment_observation": _leg_build_experiment_observation,
@@ -3106,9 +3167,10 @@ _UNTOUCHED_LEGS = {
     "identifiability_laplace": _leg_identifiability_laplace,
     "identifiability_jacobian": _leg_identifiability_jacobian,
     "channel_ablation": _leg_channel_ablation,
+    "run_fdt": _leg_run_fdt,
 }
 
-# The field each "refusal" leg's refusal carries, for ALL fifteen. The leg used to accept any
+# The field each "refusal" leg's refusal carries, for EVERY entry. The leg used to accept any
 # ValueError, so a leg's refusal could silently regress to a different one -- or to a bug that happens
 # to raise ValueError -- and the pin would not notice. Each leg refuses ON PURPOSE, through the rule
 # its own knob or input names: build_prior's and build_posterior's legs take their build branch
@@ -3130,12 +3192,14 @@ _REFUSAL_FIELDS = {
     "identifiability_laplace": "n_points",
     "identifiability_jacobian": "m_noise",
     "channel_ablation": "rows",
+    "run_fdt": "cell",                               # a cell with no FDT normalisation constant (§3.4)
 }
 
 
-def test_the_fifteen_public_entries_carry_public_entry_and_nothing_else_does():
-    """V1 (spec §2.2). The private copy is kept by ONE decorator on exactly fifteen functions: the ten
-    stages and compositions of core/orchestrator.py and the five diagnostics. Read off the source
+def test_the_public_entries_carry_public_entry_and_nothing_else_does():
+    """V1 (spec §2.2). The private copy is kept by ONE decorator on exactly the functions named below:
+    the ten stages and compositions of core/orchestrator.py, the five diagnostics, and -- since piece
+    5 -- core/FDT's single-cell measurement. Read off the source
     (every `@public_entry` in CODE_ROOTS and CODE_FILES), not off `__wrapped__`, which any
     functools.wraps decorator sets: a public stage added without it hands its body the caller's config,
     and a helper given it (`_write_observation`, `_draw_calibration_set`, `training_identity`, ...)
@@ -3158,6 +3222,10 @@ def test_the_fifteen_public_entries_carry_public_entry_and_nothing_else_does():
     want |= {("core/diagnostics/sbc.py", "sbc_repeats"), ("core/diagnostics/ablation.py", "channel_ablation")}
     want |= {("core/diagnostics/identifiability.py", n) for n in (
         "identifiability_rotation", "identifiability_laplace", "identifiability_jacobian")}
+    # Piece 5: the FDT measurement writes a record and must not write on the caller's FDTConfig --
+    # `cfg.omega_0 = ...` twice in its own body is exactly the V1 defect, and copy_for_run (T7) is
+    # what stops it reaching the panel's settings object.
+    want |= {("core/FDT/fdt_pipeline.py", "run_fdt")}
     assert found == want, f"missing {sorted(want - found)}; unexpected {sorted(found - want)}"
     assert set(_UNTOUCHED_LEGS) == {name for _, name in want}, sorted(set(_UNTOUCHED_LEGS) ^ {n for _, n in want})
 
@@ -3177,7 +3245,7 @@ def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, mon
     stage's own write where it has one before a cheap seam (generate_observations' resolved length,
     install's context, the chi builder's context), else _leak's at the first place the stage hands its
     config on (the store, a composed stage's stub). Every leg is stubbed below its first write, so the
-    forty-five cases cost about two seconds, nearly all of it generate_observations' one real solve.
+    cases cost about two seconds, nearly all of it generate_observations' one real solve.
 
     The window-level pin (a dispatched simulated inference leaves session.cfg equal to its snapshot)
     needs the real-session fixture and lands with Task 15."""

@@ -135,22 +135,22 @@ def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins(monkeyp
     class Cfg:
         model = "HOPF"
 
-    def boom(cfg, *, skip_sanity, confirm_production):
+    def boom(cfg, *, skip_sanity, confirm_production, writer, seed=None):
         raise FDTModelError("Observable 'x' has state-dependent (multiplicative) noise; FDT supports "
                             "additive-noise observables only.")
 
-    def missing(cfg, *, skip_sanity, confirm_production):
+    def missing(cfg, *, skip_sanity, confirm_production, writer, seed=None):
         raise KeyError("k_gs")
 
     monkeypatch.setattr(fdt_panel, "run_fdt", boom)
     with pytest.raises(FDTModelError) as e:
-        fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False)
+        fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False, writer=None)
     assert isinstance(e.value, Refusal), "an FDTModelError must reach the worker as the Refusal it is"
     assert "multiplicative" in str(e.value), str(e.value)
 
     monkeypatch.setattr(fdt_panel, "run_fdt", missing)
     with pytest.raises(RuntimeError) as e:
-        fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False)
+        fdt_panel._run_fdt_guarded(Cfg(), skip_sanity=True, confirm_production=False, writer=None)
     assert "k_gs" in str(e.value) and "HOPF" in str(e.value), str(e.value)
     assert not isinstance(e.value, Refusal), "a malformed cell is translated, not promoted to a refusal"
 

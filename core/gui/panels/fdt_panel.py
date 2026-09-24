@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPus
 from core import cli, config, registry
 from core.config import CELL_PATH, VALID_MODELS
 from core.FDT.fdt_pipeline import run_fdt
+from core.artifacts import default_store
 
 from .base_panel import BasePanel
 from .. import settings
@@ -34,7 +35,7 @@ HELP = {
 }
 
 
-def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production):
+def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production, writer, seed=None):
     """Translate a malformed cell into a readable message. An FDTModelError (a missing FDT parameter,
     or a user model with multiplicative/zero observable noise) is a Refusal and passes through
     UNWRAPPED: the worker hands it to BasePanel._on_error, which opens the yellow "Check your inputs"
@@ -43,7 +44,8 @@ def _run_fdt_guarded(cfg, *, skip_sanity, confirm_production):
     no longer fire for HOPF/BP); that one is a bare KeyError nobody raised as a refusal, so it is
     still translated."""
     try:
-        return run_fdt(cfg, skip_sanity=skip_sanity, confirm_production=confirm_production)
+        return run_fdt(cfg, skip_sanity=skip_sanity, confirm_production=confirm_production,
+                       writer=writer, seed=seed)
     except KeyError as e:
         raise RuntimeError(
             f"The FDT pipeline needs the parameter {e}, which the selected {cfg.model} cell does not "
@@ -136,8 +138,14 @@ class FdtPanel(BasePanel):
             self._config_error(e)
             return
 
-        # Explicit bools, never None -- see the module docstring.
-        self.dispatch(_run_fdt_guarded, cfg, watch_dir=config.artifacts_root() / "fdt",
+        # The RECORD is created here, on the GUI thread: store.create mints the id and refuses a taken
+        # name before anything is spent, and it fills writer.dir WITHOUT creating the directory, so
+        # the watcher can be pointed at the record's figures/ before the run is dispatched. The stage
+        # enters the writer on the worker thread, where the run log lives (spec §1.2). T25 adds the
+        # Seed box, the name/note controls and the record picker on top of this.
+        writer = default_store().create("fdt", cfg)
+        self.dispatch(_run_fdt_guarded, cfg, watch_dir=writer.dir / "figures",
+                      writer=writer,
                       skip_sanity=self.skip_sanity.isChecked(),
                       confirm_production=self.confirm_production.isChecked(),
                       on_finished=lambda: self.log_pane.append_line("FDT run finished."))

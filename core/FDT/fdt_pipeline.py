@@ -11,8 +11,8 @@ resonance quantify FDT violation (activity of the hair bundle).
 """
 import logging
 import math
+import random
 import warnings
-from datetime import datetime
 
 import torch
 
@@ -28,18 +28,61 @@ from core.FDT.plots import (
 # Both torch-free and stdlib-only: the judgement channel and the run boundary cost this module nothing,
 # where core.orchestrator (which re-exports the same PreflightWarning) would load the SBI stack.
 from core.refusals import PreflightWarning, Refusal
-from core.runs import RUN_BOUNDARY_FILES
+from core.runs import RUN_BOUNDARY_FILES, public_entry
 
 # Banners and saved-plot paths are information; a failed sanity verdict is a warning (piece 3, V4).
 log = logging.getLogger(__name__)
 
 
-def _out_dir():
-    """Where FDT saves its plots: <artifacts root>/fdt, created on demand (piece 5 wraps FDT in the
-    store; until then this is a plain directory)."""
-    d = config.artifacts_root() / "fdt"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _resolve_seed(seed, cfg) -> int:
+    """The seed this run used (E7): the one given, else the one the config was built with, else one
+    DRAWN and recorded. Drawn from Python's own ``random``, which is the one global stream neither
+    the solver nor the spectrum reads -- ``torch.seed()`` would reseed every CUDA device as a side
+    effect of being asked a question (the hazard core/SBI/decorrelate.py documents)."""
+    if seed is not None:
+        return int(seed)
+    if getattr(cfg, "seed", None) is not None:
+        return int(cfg.seed)
+    return random.randrange(2 ** 31)
+
+
+def _settings_block(cfg, *, skip_sanity=None, confirm_production=None) -> dict:
+    """Every knob the run resolved, for ``body.settings`` (spec §2.3). The five that no front end
+    exposes -- freq_bounds, burn_in_nd, T_obs_periods, dt_nd, psd_T_obs_nd -- are recorded here even
+    though no control and no flag names them, because without them a number is not reproducible.
+    ``skip_sanity`` and ``confirm_production`` are run_fdt's ARGUMENTS, not FDTConfig fields, so the
+    caller hands them in; a sweep passes neither and records both null."""
+    return {"n_freqs": int(cfg.n_freqs), "ensemble_M": int(cfg.ensemble_M),
+            "freqs_per_batch": int(cfg.freqs_per_batch), "F0": float(cfg.F0),
+            "freq_bounds": [float(v) for v in cfg.freq_bounds],
+            "burn_in_nd": float(cfg.burn_in_nd), "T_obs_periods": int(cfg.T_obs_periods),
+            "dt_nd": float(cfg.dt_nd), "psd_T_obs_nd": float(cfg.psd_T_obs_nd),
+            "skip_sanity": None if skip_sanity is None else bool(skip_sanity),
+            "confirm_production": None if confirm_production is None else bool(confirm_production)}
+
+
+def _results_block(omegas, ratio, omega_natural: float, blanks: int) -> dict:
+    """The short summary the listing and the detail pane show. FINITE NUMBERS ONLY: manifest.validate
+    refuses a non-finite float anywhere in the body, and T_eff/T legitimately carries NaN wherever the
+    spectrum came back blank or chi'' crossed zero -- so a summary that would be NaN is recorded as
+    null (spec §2.3)."""
+    r = ratio.detach().cpu().to(torch.float64)
+    w = omegas.detach().cpu().to(torch.float64)
+    usable = torch.isfinite(r)
+
+    def _f(v):
+        v = float(v)
+        return v if math.isfinite(v) else None
+
+    if not bool(usable.any()):
+        return {"peak_ratio": None, "peak_omega": None, "ratio_at_resonance": None,
+                "usable_fraction": 0.0, "offgrid_blanks": int(blanks)}
+    idx = int(torch.argmax(torch.where(usable, r, torch.full_like(r, -math.inf))))
+    at_res = int(torch.argmin(torch.abs(w - float(omega_natural))))
+    return {"peak_ratio": _f(r[idx]), "peak_omega": _f(w[idx]),
+            "ratio_at_resonance": _f(r[at_res]),
+            "usable_fraction": float(usable.sum()) / float(r.numel()),
+            "offgrid_blanks": int(blanks)}
 
 
 def _estimate_omega_0(cfg: FDTConfig) -> tuple[float, str]:
@@ -138,40 +181,87 @@ def _nothing_measurable(cfg, n_probes: int, omega_lo: float, lo_res: float, hi_r
     return msg
 
 
-def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> None:
-    """End-to-end FDT analysis. Runs sanity checks first; gates on the caller's answer before the
-    production sweep.
+@public_entry
+def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool,
+            writer: "ArtifactWriter", seed: "int | None" = None) -> "LoadedFdt":
+    """End-to-end FDT analysis, written into one ``fdt`` record. Runs sanity checks first; gates on
+    the caller's answer before the production sweep.
 
     :param skip_sanity: skip the sanity checks. REQUIRED: there is no prompt to fall back to (D1
                         retired the CLI), and the old None default meant an input() that a GUI worker
                         thread could never answer.
     :param confirm_production: proceed to the production sweep after sanity. REQUIRED, for the same
-                        reason; only consulted when the sanity checks run."""
-    # The per-model normalisation prefactor FIRST, before anything is simulated. It reads the cell's
+                        reason; only consulted when the sanity checks run.
+    :param writer: the OPEN-BUT-NOT-ENTERED ArtifactWriter the front end minted with
+                        ``store.create("fdt", cfg, ...)``. THIS function enters it, and that is not a
+                        detail: ``log.txt`` is written from ``runs.current_run_log()``, which is
+                        thread-local and only populated inside ``capture_run()`` on the worker thread
+                        -- a writer entered on the window's own thread would write no log at all
+                        (spec §1.2). The front end needs ``writer.dir`` before it dispatches, to point
+                        the figure watcher at the record's ``figures/``; hence the split.
+    :param seed: the seed, or None to draw one and record it (E7).
+    :returns: the LoadedFdt for the record just written.
+
+    The decorator hands the body ``cfg.copy_for_run()``, so the two ``cfg.omega_0 = ...`` writes below
+    land on a private copy and the caller's settings object is exactly what it was, whether this
+    returned, refused or crashed (V1).
+    """
+    # F38: imported HERE, not at module scope -- importing core.diagnostics.rng runs
+    # core/diagnostics/__init__.py, which imports the diagnostics and through them core.orchestrator.
+    from core.diagnostics.rng import seeded
+
+    # The per-model normalisation prefactor FIRST, before anything is simulated -- and before the
+    # writer is entered, so a cell FDT cannot normalise opens no record at all. It reads the cell's
     # parameters and nothing else, and it used to sit at step 8 -- so a cell missing `n` or `beta`
-    # was refused only after BOTH campaigns had been spent (spec §3.4). Carried to step 8 below. It
-    # also precedes the thin-setting notices: a run that is refused must not first print a warning
-    # about how far to trust its result.
+    # was refused only after BOTH campaigns had been spent (spec §3.4). Carried to step 8 of
+    # _measure. It also precedes the thin-setting notices (ruling F10): a run that is refused must
+    # not first print a warning about how far to trust its result.
     prefactor = observable_noise_prefactor(cfg)
 
-    # 0. The settings too thin to trust: not a refusal (E5 keeps the quick look possible), a
-    #    judgement the operator sees now and the record keeps afterwards (Task 17 stores it).
+    seed = _resolve_seed(seed, cfg)
+    cfg.seed = seed                                  # on the PRIVATE copy; recorded in the body below
+    # 0. The settings too thin to trust (T12, E5): warned now and KEPT in body.notices (P51). HERE, in
+    #    the decorated function itself: T12's pin reads inspect.getsource(fdt_pipeline.run_fdt), which
+    #    is this function's source (public_entry uses functools.wraps), not _measure's.
     notices = warn_thin_settings(cfg)
+    # The first body is UPDATED IN PLACE, never replaced (P15): a front end may already have set the
+    # study and the notices (T25's panel does). The stage owns `settings` and the RESOLVED seed.
+    body = writer.body
+    body.setdefault("study", "single")
+    body["settings"] = _settings_block(cfg, skip_sanity=skip_sanity,
+                                       confirm_production=confirm_production)
+    body["seed"] = seed
+    body["notices"] = [*(body.get("notices") or []), *notices]
+    for key in ("grid", "points", "offgrid", "compared", "results"):
+        body.setdefault(key, None)
+    body["complete"] = False
+    with writer:
+        with seeded(seed, cfg.hw.device):
+            _measure(cfg, skip_sanity=skip_sanity, confirm_production=confirm_production,
+                     writer=writer, prefactor=prefactor)
+        writer.body["complete"] = True
+    return writer.store.load_fdt(writer.id)
 
+
+def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, writer,
+             prefactor: float) -> None:
+    """The measurement itself, inside the entered writer and inside one seeded context.
+
+    ``prefactor`` is the normalisation run_fdt resolved before entering the writer, first read at
+    step 8. Each figure path is asked of the writer at the moment its figure is drawn, never up
+    front (P49): once one has been handed out the writer keeps a refused record (spec §2.2 step 3),
+    so a path asked for early would turn a pre-spend refusal into a kept, empty record."""
     # 1. Model-specific natural-frequency starting estimate; the production omega_0
     #    is refined from the Campaign 1 PSD peak below.
     cfg.omega_0, omega_0_desc = _estimate_omega_0(cfg)
     log.info(f"Cell file natural-frequency estimate: omega_0 ~= {omega_0_desc}")
-
-    # Single plot dir + timestamp for all outputs from this run (incl. sanity plots).
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     # 2. Sanity checks (optional skip). Both booleans are supplied by the caller -- the FDT panel's two
     #    checkboxes, or the `fdt` subcommand's flags. Nothing here prompts.
     if skip_sanity:
         log.info("Skipping sanity checks.")
     else:
-        passive_plot_path = _out_dir() / f"fdt_ratio_passive_{timestamp}.png"
+        passive_plot_path = writer.figure_path("Passive baseline ratio")
         results = run_all_sanity(cfg, passive_plot_path=passive_plot_path)
         if not all(passed for passed, _ in results.values()):
             # The level carries the severity: the hand-typed "WARNING: " word went with the print (on
@@ -190,8 +280,7 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     freqs_psd, G, t_traj, x_mean_traj = run_campaign1_psd(cfg, return_trajectory=True)
 
     # Save the ensemble-mean unforced trajectory as a diagnostic before moving on.
-    # (timestamp set at the top of run_fdt.)
-    traj_path = _out_dir() / f"spontaneous_trajectory_{timestamp}.png"
+    traj_path = writer.figure_path("Spontaneous trajectory")
     plot_spontaneous_trajectory(
         t_traj.cpu().numpy(), x_mean_traj.cpu().numpy(),
         save_path=traj_path,
@@ -225,6 +314,12 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     omega_natural = find_spectral_peak(freqs_psd, G)
     cfg.omega_0 = omega_natural   # use data-driven value for the Campaign 2 grid
     log.info(f"Spontaneous-oscillation frequency from PSD peak: {omega_natural:.4f} (ND)")
+    writer.body["grid"] = {"omega_0": float(omega_natural), "omega_0_source": "spectrum peak",
+                           "n_freqs": int(cfg.n_freqs),
+                           "bounds": [float(v) for v in cfg.freq_bounds],
+                           "omega_min": float(cfg.freq_bounds[0] * omega_natural),
+                           "omega_max": float(cfg.freq_bounds[1] * omega_natural)}
+    writer.refresh()          # the spontaneous half is on disk before the driven campaign is spent
 
     # 5. Build production grid centered on the data-driven Omega_0.
     #    freq_bounds default (0.1, 30) gives 1 decade below + 1.5 decades above,
@@ -238,7 +333,7 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     # keeps the folder it is written into (spec §3.6, P22). It used to be written at the very end,
     # where neither refusal could ever reach it. plot_psd draws the whole spectrum with the band
     # shaded when the band holds none of it, which is exactly when those refusals fire.
-    psd_path = _out_dir() / f"psd_{timestamp}.png"
+    psd_path = writer.figure_path("Spontaneous PSD")
     plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
               save_path=psd_path,
               title=f"Spontaneous PSD (Campaign 1): ND {cfg.model}",
@@ -278,11 +373,13 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     # after spending the driven campaign, which it is refused before now. The low end is gated
     # above, so what stays reachable here is the UPPER end: the grid tops out at
     # freq_bounds[1]*omega_0 against a spectrum Nyquist of pi/dt_nd, which an active cell can exceed
-    # (spec §3.5). `blanks` and `of` are what T17 records as body.offgrid. Keyed "freq_bounds" like
+    # (spec §3.5). `blanks` and `of` are recorded as body.offgrid, which is how the record says what
+    # the blanks cost (_interp_log's docstring leaves that to its callers). Keyed "freq_bounds" like
     # the band refusal above (F37): the same subject, and no front end offers a fix sentence for it.
     # The warning says "no value", not "outside the band": a spectrum non-finite in some bins blanks
     # probes INSIDE the band too, and the sentence has to be true of those.
     blanks, of = int(torch.isnan(G_at_omegas).sum()), G_at_omegas.numel()
+    writer.body["offgrid"] = {"blanks": blanks, "of": int(of)}   # the Campaign-2 probe grid (P57)
     if blanks == of:
         raise Refusal(_nothing_measurable(cfg, of, omega_lo, lo_res, hi_res), field="freq_bounds")
     if blanks:
@@ -294,12 +391,12 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     chis = run_campaign2_chi(cfg, omegas)
 
     # 8. T_eff/T -- the per-model normalization prefactor (Nadrowski n*beta, else 1/D_x) was
-    #    resolved at the top of this function, before anything was spent.
+    #    resolved by run_fdt before the writer was entered, before anything was spent.
     ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), prefactor)
 
-    # 9. Plot + save (timestamp set at the top of run_fdt; the PSD went to disk before Campaign 2)
-    ratio_path = _out_dir() / f"fdt_ratio_{timestamp}.png"
-    chi_path = _out_dir() / f"chi_components_{timestamp}.png"
+    # 9. Plot + save (the PSD went to disk before Campaign 2)
+    ratio_path = writer.figure_path("Effective temperature ratio")
+    chi_path = writer.figure_path("Chi components")
 
     plot_eff_temp_ratio(omegas.cpu().numpy(), ratio.cpu().numpy(),
                         save_path=ratio_path,
@@ -309,4 +406,6 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
                         save_path=chi_path,
                         title=fr"Susceptibility components: ND {cfg.model}",
                         omega_natural=omega_natural)
+    writer.body["results"] = _results_block(omegas, ratio, omega_natural, blanks)
+    writer.refresh()
     log.info(f"Saved plots to:\n  {ratio_path}\n  {chi_path}")
