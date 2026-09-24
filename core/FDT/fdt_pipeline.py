@@ -14,6 +14,8 @@ import math
 import random
 import warnings
 
+import h5py
+import numpy as np
 import torch
 
 from core import config
@@ -86,6 +88,36 @@ def _results_block(omegas, ratio, omega_natural: float, blanks: int) -> dict:
             "ratio_at_resonance": _f(r[at_res]),
             "usable_fraction": float(usable.sum()) / float(r.numel()),
             "offgrid_blanks": int(blanks)}
+
+
+def _write_single_h5(path, cfg, omegas, ratio, chis, freqs_psd, G, omega_natural, prefactor) -> None:
+    """The single-cell layout of ``data.h5`` (spec §2.3, §3.8).
+
+    ``study`` sits at the ROOT so a reader can check the layout before reading a dataset: a sweep's
+    file and a comparison's file carry the same name inside their own records. The dataset names are
+    ``cross_validation._fdt_measure``'s and the sweep file's own vocabulary -- ``omega_grid``,
+    ``T_eff_over_T``, ``chi_prime``, ``chi_double_prime``, ``PSD_omegas``, ``PSD_G``, all float64 --
+    so the comparison (T36, spec §7) reads one set of names whichever study wrote them (P5, P71). The
+    spontaneous spectrum keeps its OWN frequency axis -- it is a Welch grid, not the log-spaced chi
+    grid, and interpolating one onto the other is exactly the step §3.5's off-grid fix made honest.
+    """
+    def _f64(t):
+        return t.detach().cpu().numpy().astype(np.float64)
+
+    with h5py.File(path, "w") as h5:
+        h5.attrs["study"] = "single"
+        h5.attrs["model"] = cfg.model
+        h5.attrs["omega_0"] = float(omega_natural)
+        h5.attrs["omega_0_source"] = "spectrum peak"
+        h5.attrs["prefactor"] = float(prefactor)
+        h5.attrs["n_freqs"] = int(cfg.n_freqs)
+        h5.attrs["freq_bounds"] = np.asarray(cfg.freq_bounds, dtype=np.float64)
+        h5.create_dataset("omega_grid", data=_f64(omegas), compression="gzip")
+        h5.create_dataset("T_eff_over_T", data=_f64(ratio), compression="gzip")
+        h5.create_dataset("chi_prime", data=_f64(chis.real), compression="gzip")
+        h5.create_dataset("chi_double_prime", data=_f64(chis.imag), compression="gzip")
+        h5.create_dataset("PSD_omegas", data=_f64(freqs_psd), compression="gzip")
+        h5.create_dataset("PSD_G", data=_f64(G), compression="gzip")
 
 
 def _estimate_omega_0(cfg: FDTConfig) -> tuple[float, str]:
@@ -252,9 +284,10 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     """The measurement itself, inside the entered writer and inside one seeded context.
 
     ``prefactor`` is the normalisation run_fdt resolved before entering the writer, first read at
-    step 8. Each figure path is asked of the writer at the moment its figure is drawn, never up
-    front (P49): once one has been handed out the writer keeps a refused record (spec §2.2 step 3),
-    so a path asked for early would turn a pre-spend refusal into a kept, empty record."""
+    step 8. Each figure path, and ``data.h5``'s, is asked of the writer at the moment its file is
+    written, never up front (P49): once one has been handed out the writer keeps a refused record
+    (spec §2.2 step 3), so a path asked for early would turn a pre-spend refusal into a kept, empty
+    record."""
     # 1. Model-specific natural-frequency starting estimate; the production omega_0
     #    is refined from the Campaign 1 PSD peak below.
     cfg.omega_0, omega_0_desc = _estimate_omega_0(cfg)
@@ -414,6 +447,11 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
                         save_path=chi_path,
                         title=fr"Susceptibility components: ND {cfg.model}",
                         omega_natural=omega_natural)
+    # The numbers beside the pictures (E1, spec §3.8). The payload path is asked for HERE, after both
+    # campaigns, never at the top of the run (P49): a path handed out is a payload the record lists,
+    # so a run that stops before this line leaves an unfinished record that lists no data.h5.
+    _write_single_h5(writer.payload("data.h5"), cfg, omegas, ratio, chis, freqs_psd, G,
+                     omega_natural, prefactor)
     writer.body["results"] = _results_block(omegas, ratio, omega_natural, blanks)
     writer.refresh()
     log.info(f"Saved plots to:\n  {ratio_path}\n  {chi_path}")

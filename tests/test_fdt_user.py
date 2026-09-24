@@ -1485,11 +1485,56 @@ def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monk
     assert_cfg_unchanged(cfg, snap)
 
 
+def test_the_single_cell_record_holds_the_numbers_not_only_the_pictures(store, monkeypatch):
+    """E1 / spec §3.8. Every number the four figures draw is recoverable from the record: before piece
+    5 the grid, the spectrum, the susceptibility and the ratio existed only inside the run, so a
+    re-plot -- and any comparison of two cells -- meant re-running hours of simulation. The ``study``
+    attribute at the root is what lets a reader check the layout before reading it: three layouts
+    share this filename (spec §2.3). The dataset names are the interface contract's, the vocabulary
+    ``cross_validation._fdt_measure`` and the sweep file already use (P5, P71).
+
+    Two trajectories is below the trust threshold, so the run warns; asserted, never leaked."""
+    import h5py
+    import numpy as np
+    import pytest
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+    from core.refusals import PreflightWarning
+
+    _stub_campaigns(monkeypatch)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=5, ensemble_M=2)
+    with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"):
+        rec = fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
+                                   writer=store.create("fdt", cfg, name="numbers"), seed=2)
+
+    assert rec.data_path == rec.path / "data.h5" and rec.data_path.exists()
+    assert rec.manifest.payloads["data.h5"], "a committed payload is hashed (spec §2.2)"
+    with h5py.File(rec.data_path, "r") as h5:
+        assert h5.attrs["study"] == "single"
+        assert h5.attrs["model"] == "HOPF"
+        assert float(h5.attrs["prefactor"]) == 2.0 / cfg.params_dict["sigma_x"][0] ** 2
+        assert h5["omega_grid"].shape == (5,) and h5["T_eff_over_T"].shape == (5,)
+        assert h5["chi_prime"].dtype == np.float64 and h5["chi_prime"].shape == (5,)
+        assert h5["chi_double_prime"].shape == (5,)
+        assert np.allclose(h5["chi_double_prime"][...], 1.0), "the stub's chi is 1+1j"
+        assert float(h5.attrs["omega_0"]) == rec.body["grid"]["omega_0"]
+        assert h5["PSD_omegas"].shape == h5["PSD_G"].shape, \
+            "the spontaneous spectrum carries its OWN frequency axis -- it is not on the chi grid"
+        assert h5["PSD_omegas"].shape != h5["omega_grid"].shape
+
+
 def test_a_failed_fdt_run_keeps_its_record_marked_unfinished(store, monkeypatch):
     """E2: an interrupted or crashed measurement keeps its folder, plainly marked unfinished, and the
     spontaneous spectrum it did collect is what diagnoses the failure. The six ordinary kinds still
     delete theirs -- tests/test_artifact_store.py pins that -- so this is the one place the
-    progressive mode is visible from a stage."""
+    progressive mode is visible from a stage.
+
+    The numbers file is asked for only once both campaigns are in (P49), so a run that dies in the
+    driven campaign leaves a record that neither lists ``data.h5`` nor holds one: a listed payload
+    that was never written would be a phantom, as a listed figure that was never drawn is."""
+    import json
+
     import pytest
     from core import cli, config
     from core.FDT import fdt_pipeline
@@ -1507,6 +1552,9 @@ def test_a_failed_fdt_run_keeps_its_record_marked_unfinished(store, monkeypatch)
     assert summary.name == "halfway" and summary.complete and not summary.finished
     assert (w.dir / "figures" / "spontaneous_trajectory.png").exists(), \
         "the figures drawn before the failure stay on disk"
+    payloads = json.loads((w.dir / "manifest.json").read_text(encoding="utf-8"))["payloads"]
+    assert payloads == {} and not (w.dir / "data.h5").exists(), \
+        f"the numbers file was handed out before the driven campaign: {payloads}"
 
 
 def test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_leaves_none(
