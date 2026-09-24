@@ -111,6 +111,27 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     # the artifact browser (piece 4): the artifact a browse action acts on, and its note
     Field("artifact", "the artifact", None),
     Field("note", "the note", None),
+    # the two secondary analyses (piece 5, §5.3): the knobs both front ends expose. n_freqs and
+    # ensemble_m have two effective defaults, the dataclass's and the sweep preset's (P54).
+    Field("n_freqs", "the number of drive frequencies", "60, or the preset's in a sweep"),        # FDTConfig.n_freqs
+    Field("ensemble_m", "the number of trajectories per frequency", "256, or the preset's in a sweep"),  # FDTConfig.ensemble_M
+    Field("freqs_per_batch", "the number of frequencies per simulator call", "1"),     # FDTConfig.freqs_per_batch
+    Field("f0", "the non-dimensional drive amplitude", "0.05"),                        # FDTConfig.F0
+    Field("preset", "the resolution preset", "exploratory"),                           # crossval --preset default
+    Field("s_grid", "the activity sweep grid", None),
+    Field("t_grid", "the temperature sweep grid", None),
+    Field("seed", "the random seed", "none: one is drawn and recorded"),
+    # the five FDT settings NEITHER front end exposes (§1.2, P2, P75). Registered like any other key,
+    # because every require_* rule builds its sentence through describe(key); both front-end tables
+    # map them to None, so a refusal names the setting and offers no fix -- there is nothing to name.
+    # The band and the two durations are also set by the sweep preset, so their defaults say so (F32).
+    Field("freq_bounds", "the drive frequency band, in multiples of the resonance",
+          "0.1 to 30.0, or the preset's in a sweep"),                                   # FDTConfig.freq_bounds
+    Field("burn_in_nd", "the burn-in, in ND units", "100.0"),                         # FDTConfig.burn_in_nd
+    Field("t_obs_periods", "the drive window, in periods", "30, or the preset's in a sweep"),  # FDTConfig.T_obs_periods
+    Field("dt_nd", "the integration step, in ND units", "0.01"),                      # FDTConfig.dt_nd
+    Field("psd_t_obs_nd", "the spontaneous recording length, in ND units",
+          "8000.0, or the preset's in a sweep"),                                        # FDTConfig.psd_T_obs_nd
     # tool-only (the diagnostics); no window control, CONTROL[key] is None in core/gui/fields.py
     Field("repeats", "the number of SBC repeats", "10"),                               # sbc_repeats
     Field("n_points", "the number of operating points", "6"),                          # identifiability_laplace
@@ -208,6 +229,22 @@ def require_between(key: str, value, lo, hi, *, open_lo: bool = False, open_hi: 
         raise Refusal(f"{_what(key)} must be between {lo:g} and {hi:g}{ends}; got {v:g}"
                       f"{_default_clause(key)}.", field=key)
     return v
+
+
+def require_below(key: str, lo, hi) -> tuple:
+    """A blank, a non-finite end, or ``lo >= hi`` is refused; the pair is returned as two floats.
+
+    The ordered-pair rule the other eight do not cover: ``require_between`` judges ONE value against
+    fixed bounds, and here the two ends are themselves what is being judged. Each end goes through
+    ``require_finite`` first, so None (a blank read through value_or_none) and a NaN are refused by
+    their own sentences; a blank that value() reads as 0 reaches the ordering test as (0, 0) and is
+    refused there.
+    """
+    a, b = require_finite(key, lo), require_finite(key, hi)
+    if not a < b:
+        raise Refusal(f"{_what(key)} must have its lower bound below its upper bound; got {a:g} and "
+                      f"{b:g}{_default_clause(key)}.", field=key)
+    return a, b
 
 
 def require_choice(key: str, value, choices: tuple) -> str:

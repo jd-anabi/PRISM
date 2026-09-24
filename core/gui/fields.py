@@ -19,7 +19,7 @@ Three shapes of entry:
   sentence quotes the control's own text ("Run on a different observation").
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six
   settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
-  two sample counts, the epoch ceiling).
+  two sample counts, the epoch ceiling), and the five FDT settings neither front end exposes (P2).
 
 ``num_runs`` and ``run_size_cap`` sit on both the Posterior and TSNPE tabs with the same label, so
 their tab slot is a tuple of both and the sentence names both: one tab would send a user refused on
@@ -108,6 +108,24 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "chi_max_cycles": ("Config", "χ lock-in ceiling (cycles)"),
     "chi_f0": _FIXED,
     "chi_freq_bounds": _FIXED,
+    # the two secondary analyses (piece 5, §5.3). SENTENCES for now: the tuple shape's first element
+    # must be an inference tab title, which none of these places is, and widening it to understand a
+    # screen is the next task's work. Each sentence is written exactly as the widened tuple will
+    # render it, so that conversion is a pure refactor.
+    "n_freqs": "Set it in the 'n_freqs' box on the FDT analysis or Sweep study cross-validation tab.",
+    "ensemble_m": ("Set it in the 'ensemble_M' box on the FDT analysis or Sweep study "
+                   "cross-validation tab."),
+    "freqs_per_batch": ("Set it in the 'freqs_per_batch' box on the FDT analysis or Sweep study "
+                        "cross-validation tab."),
+    "f0": ("Set it in the 'F0 (ND forcing amplitude)' box on the FDT analysis or Sweep study "
+           "cross-validation or NWK → Hopf reduction map tab."),
+    "preset": "Set it in the 'Preset' box on the Sweep study cross-validation tab.",
+    "s_grid": "Set it in the 'S grid  (T_a/T = 1)' box on the Sweep study cross-validation tab.",
+    "t_grid": "Set it in the 'T_a/T grid  (S = 0)' box on the Sweep study cross-validation tab.",
+    "seed": "Set it in the 'Seed' box on the FDT analysis or Sweep study cross-validation tab.",
+    # the five FDT settings NEITHER front end exposes (§1.2, P2, P75): no control, so fix_sentence
+    # returns "" and the refusal names the setting and offers no fix
+    "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
     # tool-only: the diagnostics' knobs; no window sentence
     "repeats": None, "n_points": None, "n_worst": None, "top_n": None, "m": None, "m_noise": None,
     "rel": None, "min_valid": None, "rows": None, "n_sweep": None, "chi_k_fixed": None,

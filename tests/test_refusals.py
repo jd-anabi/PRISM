@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 
 from core.refusals import (FIELDS, NOTE_MAX_CHARS, Field, Refusal, describe, refuse, require_at_least,
-                           require_between, require_choice, require_file, require_finite, require_given,
-                           require_note, require_positive)
+                           require_below, require_between, require_choice, require_file, require_finite,
+                           require_given, require_note, require_positive)
 
 REPO = Path(__file__).resolve().parents[1]
 
@@ -35,6 +35,10 @@ BASE_KEYS = (
     "bounds", "cell", "units", "recording_spont", "recording_forced", "recording_probe",
     "drive_amplitude", "drive_frequency", "drive_phase", "chi_f0_si", "chi_n_freqs", "chi_k_pad",
     "chi_max_cycles", "chi_f0", "chi_freq_bounds", "device", "model", "observation", "posterior", "prior",
+    # piece 5's secondary analyses: the eight knobs the FDT and sweep screens and their two subcommands
+    # expose, then the five FDT settings neither front end exposes -- registered all the same (P2, P75).
+    "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "preset", "s_grid", "t_grid", "seed",
+    "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
     "artifact", "note",
 )
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
@@ -88,7 +92,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     shows the default as the operator would type it. ``describe`` is the public reader and refuses
     an unknown key with a KeyError: a message can only be built for a field a front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 63, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 76, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -225,6 +229,31 @@ def test_require_between_honours_open_and_closed_ends_and_treats_nan_as_outside(
         require_between("chi_n_freqs", 25, 2, 24)
     assert _shape(e.value, "chi_n_freqs") == (
         "The number of chi probe frequencies must be between 2 and 24; got 25 (default 6).")
+
+
+def test_require_below_refuses_an_inverted_or_blank_pair_and_returns_two_floats():
+    """The sweep grids and the FDT frequency band are ORDERED PAIRS, and none of the existing eight
+    rules covers that shape: require_between judges one value against fixed bounds, and a pair whose
+    own two ends are the thing being judged has no bound to compare to. An inverted pair is not
+    hypothetical -- every window numeric box returns 0 for a blank (FloatField.value), so a grid
+    whose 'max' was left empty arrives as (0.0, 0.0) and np.linspace would happily produce a sweep
+    of one repeated value rather than refusing.
+
+    Both ends are refused blank and non-finite first, so the message never reads "0 and nan"; the
+    pair comes back as floats, which is what the caller binds."""
+    assert require_below("s_grid", 0.0, 1.0) == (0.0, 1.0)
+    assert all(isinstance(v, float) for v in require_below("s_grid", 0, 1))
+    for lo, hi, shown in ((1.0, 0.0, "1 and 0"), (0.0, 0.0, "0 and 0"), (2.5, 2.5, "2.5 and 2.5")):
+        with pytest.raises(Refusal) as e:
+            require_below("s_grid", lo, hi)
+        assert _shape(e.value, "s_grid") == (
+            f"The activity sweep grid must have its lower bound below its upper bound; got {shown}.")
+    with pytest.raises(Refusal) as e:
+        require_below("t_grid", None, 2.0)
+    assert _shape(e.value, "t_grid") == "The temperature sweep grid is blank."
+    with pytest.raises(Refusal) as e:
+        require_below("t_grid", 1.0, float("nan"))
+    assert _shape(e.value, "t_grid") == "The temperature sweep grid must be a finite number; got nan."
 
 
 def test_require_finite_refuses_nan_and_inf_and_returns_a_float():
@@ -367,8 +396,9 @@ def test_every_registry_default_is_the_trees_own_default():
     config.py without pulling torch into the click path, so its defaults are literal strings; this is
     what keeps them honest. Every default that config.py owns is pinned as ``str(constant)`` -- the
     same spelling the message shows -- and every other default against the object whose signature
-    owns it: the truncation defaults, the stages' keyword defaults, the diagnostics' signatures and
-    the tool's ``--device`` default. A constant retuned in config.py without this registry following
+    owns it: the truncation defaults, the stages' keyword defaults, the diagnostics' signatures, the
+    tool's ``--device`` and ``crossval --preset`` defaults, and FDTConfig's own field defaults (piece
+    5). A constant retuned in config.py without this registry following
     it fails here, not in a message that names a default nobody set. The last assertion closes the
     set: no default exists that this test did not look at."""
     import argparse
@@ -418,9 +448,38 @@ def test_every_registry_default_is_the_trees_own_default():
     config_args.add_config_flags(p)
     assert FIELDS["device"].default == p.get_default("device") == "auto"
 
-    looked_at = set(owned_by_config) | set(owned_by_a_signature) | {"device"}
+    # piece 5 (P2, P54, P75): the FDT knobs' defaults are FDTConfig's own -- make_fdt_config's keyword
+    # defaults equal them -- and every key whose sweep value comes from the preset also says a sweep
+    # takes the preset's value (F32: the band and the two durations as well as n_freqs / ensemble_m).
+    # Each preset is pinned to carry those keys, so the suffix cannot outlive the fact it states.
+    import dataclasses
+    from core import cli
+    from core.config import FDTConfig
+    from core.tool import build_parser
+    fdt = {f.name: f.default for f in dataclasses.fields(FDTConfig)}
+    owned_by_fdt_config = {"freqs_per_batch": "freqs_per_batch", "f0": "F0", "burn_in_nd": "burn_in_nd",
+                           "dt_nd": "dt_nd"}
+    for key, name in owned_by_fdt_config.items():
+        assert FIELDS[key].default == str(fdt[name]), (key, name, FIELDS[key].default)
+    set_by_the_preset = {"n_freqs": "n_freqs", "ensemble_m": "ensemble_M",
+                         "t_obs_periods": "T_obs_periods", "psd_t_obs_nd": "psd_T_obs_nd"}
+    for key, name in set_by_the_preset.items():
+        assert FIELDS[key].default == f"{fdt[name]}, or the preset's in a sweep", (key, FIELDS[key].default)
+    lo, hi = fdt["freq_bounds"]
+    assert FIELDS["freq_bounds"].default == f"{lo} to {hi}, or the preset's in a sweep", \
+        FIELDS["freq_bounds"].default
+    for preset_name, preset in cli.SWEEP_PRESETS.items():
+        assert {"freq_bounds", *set_by_the_preset.values()} <= set(preset), (preset_name, preset)
+    for name in ("n_freqs", "ensemble_M", "freqs_per_batch", "F0"):
+        assert _default(cli.make_fdt_config, name) == fdt[name], name
+    assert (FIELDS["preset"].default == build_parser().subcommands["crossval"].get_default("preset")
+            == next(iter(cli.SWEEP_PRESETS)))
+
+    looked_at = (set(owned_by_config) | set(owned_by_a_signature) | {"device"} | set(owned_by_fdt_config)
+                 | set(set_by_the_preset) | {"freq_bounds", "preset"})
     rest = {k: f.default for k, f in FIELDS.items() if k not in looked_at}
-    assert rest == {k: ("none: it must be given" if k == "t_obs" else None) for k in rest}, rest
+    no_constant = {"t_obs": "none: it must be given", "seed": "none: one is drawn and recorded"}
+    assert rest == {k: no_constant.get(k) for k in rest}, rest
 
 
 def test_core_runs_imports_without_torch():
@@ -660,7 +719,7 @@ def test_the_public_entry_decorator_passes_a_sentinel_through():
 # core/tool/config_args.py has a describe(cfg, ...) of its own: that one's first argument is a config,
 # never a string literal, so a name match cannot mistake it for the registry's describe(key).
 _RULE_CALLS = ("describe", "refuse", "require_given", "require_finite", "require_positive",
-               "require_at_least", "require_between", "require_choice", "require_file")
+               "require_at_least", "require_between", "require_below", "require_choice", "require_file")
 
 
 def _field_key_literals(tree) -> list:
@@ -802,8 +861,14 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     unreal = {k: f for k, f in tool_fields.FLAG.items() if f is not None and f not in real}
     assert not unreal, f"FLAG names an option no subcommand defines: {unreal}"
     assert all(f is None or f.startswith("--") for f in tool_fields.FLAG.values())
-    assert {k for k, f in tool_fields.FLAG.items() if f is None} == {
-        "units", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds", "artifact"}
+    # A SUBSET assertion, not an equality (spec §8.3): these six answer to no option string today
+    # and must keep doing so -- the units are declared per model, the four chi constants are
+    # config.py's, and the artifact is positional. A later key with no flag is a new fact about that
+    # key, not a regression in these six, and an equality here turns every such addition into a
+    # false red in a file that has nothing to do with it.
+    assert {"units", "chi_k_pad", "chi_max_cycles", "chi_f0", "chi_freq_bounds", "artifact"} <= \
+        {k for k, f in tool_fields.FLAG.items() if f is None}
+    assert tool_fields.FLAG["s_grid"] == "--s-grid" and tool_fields.FLAG["seed"] == "--seed"
     assert tool_fields.FLAG["num_posterior_samples"] == "--posterior-samples"    # the tree's spelling
     assert tool_fields.FLAG["hpd_level"] == "--level" and tool_fields.FLAG["n_directions"] == "--directions"
     assert tool_fields.FLAG["recording_probe"] == tool_fields.FLAG["recording_forced"] == "--forced"
@@ -842,9 +907,10 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
         'Refusal("z", field=None)\n'                                # 6: None is not a literal key
         'refuse(key, "w")\n'                                       # 7: a variable is not a literal
         'describe(cfg, cell="c")\n'                                # 8: config_args.describe's shape
-        'other(field="not_a_refusal_kw")\n')                       # 9: field= on ANY call counts
+        'other(field="not_a_refusal_kw")\n'                        # 9: field= on ANY call counts
+        'require_below("nor_this_pair", lo, hi)\n')                # 10: the ordered-pair rule (piece 5)
     assert [k for _, k in sorted(_field_key_literals(snippet))] == [
-        "t_obs", "no_such_box", "walk_step", "nor_this", "hpd_level", "not_a_refusal_kw"]
+        "t_obs", "no_such_box", "walk_step", "nor_this", "hpd_level", "not_a_refusal_kw", "nor_this_pair"]
 
     # (f) the tree: every key literal under CODE_ROOTS and CODE_FILES is a registered key
     from tests._fixtures import CODE_FILES, CODE_ROOTS

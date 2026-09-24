@@ -1458,8 +1458,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         of the three ever raises from fix_sentence, which runs while a refusal is being shown;
     (c) the sentences the walkthrough rows C2 and C3 read, and the consents, verbatim -- each
         quotes the control's own text (posterior_tab.py:195, tsnpe_tab.py:88, infer_tab.py:112);
-    (d) the keys with no window control are exactly the six the window never exposes plus the
-        eleven tool-only diagnostics knobs, so a tool-only key renders no window sentence;
+    (d) the keys with no window control are exactly the six the window never exposes, the eleven
+        tool-only diagnostics knobs, and the five FDT settings neither front end exposes (P2), so a
+        tool-only key renders no window sentence;
     (e) the three drive labels are built exactly as the Infer tab builds its rows
         (_rebuild_forcing_fields: labels.gui_forcing_label with config.FORCING_DISPLAY_UNITS, which
         cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built Infer tab (Task 15)
@@ -1535,7 +1536,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
         "checkpoint_every", "resume", "device", "n_samples", "num_posterior_samples", "max_num_epochs",
         "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
-        "n_sweep", "chi_k_fixed"}
+        "n_sweep", "chi_k_fixed",
+        # piece 5 (P2, P75): the five FDT settings neither front end exposes
+        "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd"}
 
     # (e) the drive labels, as the Infer tab builds them
     for key, name in (("drive_amplitude", "amp"), ("drive_frequency", "freq"), ("drive_phase", "phase")):

@@ -13,10 +13,12 @@ imports this module in a fresh interpreter and asserts that torch is absent afte
 
 ``None`` marks a key no option string answers: the units (the tool declares none), the four chi
 constants only ``config.py`` sets (``chi_k_pad``, ``chi_max_cycles``, ``chi_f0``,
-``chi_freq_bounds``), and ``artifact``, which the ``artifacts`` subcommand names POSITIONALLY
+``chi_freq_bounds``), ``artifact``, which the ``artifacts`` subcommand names POSITIONALLY
 (``artifacts show <kind> <ref>``) -- there is no flag to print, and the refusal's own sentence already
-quotes the ref. One repeatable flag can carry several keys: ``--forced PATH[@HZ]`` is both the
-driven recording and a chi probe's, ``--drive NAME=VALUE`` is the amplitude, frequency and phase.
+quotes the ref -- and the five FDT settings neither front end exposes (the frequency band, the
+burn-in, the two durations and the step). One repeatable flag can carry several keys:
+``--forced PATH[@HZ]`` is both the driven recording and a chi probe's, ``--drive NAME=VALUE`` is the
+amplitude, frequency and phase.
 """
 
 FLAG: dict[str, str | None] = {
@@ -61,6 +63,19 @@ FLAG: dict[str, str | None] = {
     # not a positional) precisely so this table can name one; the artifact itself is positional.
     "artifact": None,
     "note": "--note",                                   # add_name_flags defines it beside --name
+    # the two secondary analyses (piece 5): `fdt` and `crossval` share the four resolution knobs,
+    # and the grids and the preset are the sweep's alone. --seed exists on smoke and the
+    # diagnostics today; piece 5 adds it to these two as well (E7).
+    "n_freqs": "--n-freqs",
+    "ensemble_m": "--ensemble-m",
+    "freqs_per_batch": "--freqs-per-batch",
+    "f0": "--f0",
+    "preset": "--preset",
+    "s_grid": "--s-grid",
+    "t_grid": "--t-grid",
+    "seed": "--seed",
+    # the five FDT settings neither front end exposes (P2, P75): no option string answers them
+    "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
     # inputs
     "bounds": "--bounds",
     "cell": "--cell",
