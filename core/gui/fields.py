@@ -11,12 +11,14 @@ against the QLabel on the tab a tuple names.
 
 Three shapes of entry:
 
-* ``(tab, label)`` for a box or a picker: the tab title exactly as ``InferenceScreen`` shows it
-  (Config, Prior, Posterior, Validate, Infer, TSNPE) and the row label as the tab passes it to
-  ``add_help_row``.
+* ``(place, label)`` for a box or a picker: ``place`` is a tab title exactly as its section shows it
+  -- the six inference tabs (Config, Prior, Posterior, Validate, Infer, TSNPE), "FDT analysis",
+  "Sweep study cross-validation", "NWK → Hopf reduction map", "Live simulation" -- or one of
+  ``SCREENS``, and the label is the row as the panel passes it to ``add_help_row``. A tuple of
+  places is how one input names every place it appears (E6): the cell picker is on five of them.
 * one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, or a
-  control on the Artifacts screen, which is a screen of its own and not an inference tab; the
-  sentence quotes the control's own text ("Run on a different observation").
+  control on the Artifacts screen, whose list and Note box are not form rows; the sentence quotes
+  the control's own text ("Run on a different observation").
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six
   settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
   two sample counts, the epoch ceiling), and the five FDT settings neither front end exposes (P2).
@@ -28,11 +30,18 @@ are static strings built exactly as the Infer tab builds its rows (``labels.gui_
 with ``config.FORCING_DISPLAY_UNITS``); ``_rebuild_forcing_fields`` keeps deriving its rows from
 the config's forcing names, so a model with an ``amp_y`` or ``offset`` drive shows rows this table
 does not name. ``tests/test_nav_and_gating.py`` pins the key set against the registry both ways,
-the tab names against the built screen, and the sentences verbatim.
+the places against the built window, and the sentences verbatim.
 """
 from core import config
 from core.Helpers import labels
 from core.refusals import FIELDS
+
+#: Place strings that name a SCREEN rather than a tab. ``fix_sentence`` renders "on the <place>
+#: screen" for these and "on the <place> tab" for everything else. The Artifacts browser and the
+#: model builder are whole screens with no tab widget; the tab titles outside Parameter Inference --
+#: "NWK → Hopf reduction map", "FDT analysis", "Sweep study cross-validation", "Live simulation" --
+#: are ORDINARY tab entries, because those sections do host a tab widget (E6, piece 5 §5.2).
+SCREENS: frozenset = frozenset({"Artifacts", "Model Builder"})
 
 _FIXED = "Fixed by measurement: change it in config.py, deliberately."
 
@@ -44,7 +53,7 @@ def _drive(name: str) -> str:
 
 CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the observation and the training budget
-    "t_obs": ("Infer", "T_obs (s)"),
+    "t_obs": (("Infer", "Live simulation"), "T_obs (s)"),   # E6/P33: the Simulate panel's box too
     "num_runs": (("Posterior", "TSNPE"), "Batches"),
     "run_size_cap": (("Posterior", "TSNPE"), "Max rows per batch (0 = auto)"),
     "checkpoint_every": None,
@@ -80,16 +89,24 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # consents and names
     "accept_truncated": "Confirm the load in the dialog on the Posterior tab.",
     "accept_other_observation": "Tick 'Run on a different observation' on the Infer tab.",
-    "name": "Choose another name in the Save box.",
-    # the artifact browser (piece 4). Sentences, not (tab, label): the browser is a fifth Home tile,
-    # not an inference tab, and the tuple shape is pinned against InferenceScreen's tab titles.
+    "name": ("Choose another name in the Save box, or in the 'Record name' box on the FDT analysis or "
+             "Sweep study cross-validation tab."),
+    # the artifact browser (piece 4). Sentences, not (place, label), although the Artifacts screen is
+    # a place since E6: the list is not a box, and the Note box sits in the screen's action row, not
+    # in a form row the read-back pin reads.
     "artifact": "Select an artifact in the list on the Artifacts screen.",
-    "note": "Edit it in the Note box on the Artifacts screen.",
-    # inputs
+    "note": ("Edit it in the Note box on the Artifacts screen, or in the 'Note' box on the FDT "
+             "analysis or Sweep study cross-validation tab."),
+    # inputs. The cell picker and the model combo appear on several places at once and each entry
+    # names them ALL (E6): a bad cell chosen on the FDT analysis tab used to be answered with "the
+    # Infer tab". ``units`` is NOT widened -- one units control exists in the whole application (the
+    # Config tab's toggle); everywhere else the units file is resolved from the model and there is
+    # no control to name.
     "bounds": ("Prior", "Bounds"),
-    "cell": ("Infer", "Cell"),
+    "cell": (("Infer", "FDT analysis", "Sweep study cross-validation",
+              "NWK → Hopf reduction map", "Live simulation"), "Cell"),
     "units": ("Config", "Units"),
-    "model": ("Config", "Model"),
+    "model": (("Config", "FDT analysis", "Live simulation"), "Model"),
     "device": None,
     "prior": ("Prior", "Prior"),
     "posterior": ("Posterior", "Posterior"),
@@ -108,21 +125,18 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "chi_max_cycles": ("Config", "χ lock-in ceiling (cycles)"),
     "chi_f0": _FIXED,
     "chi_freq_bounds": _FIXED,
-    # the two secondary analyses (piece 5, §5.3). SENTENCES for now: the tuple shape's first element
-    # must be an inference tab title, which none of these places is, and widening it to understand a
-    # screen is the next task's work. Each sentence is written exactly as the widened tuple will
-    # render it, so that conversion is a pure refactor.
-    "n_freqs": "Set it in the 'n_freqs' box on the FDT analysis or Sweep study cross-validation tab.",
-    "ensemble_m": ("Set it in the 'ensemble_M' box on the FDT analysis or Sweep study "
-                   "cross-validation tab."),
-    "freqs_per_batch": ("Set it in the 'freqs_per_batch' box on the FDT analysis or Sweep study "
-                        "cross-validation tab."),
-    "f0": ("Set it in the 'F0 (ND forcing amplitude)' box on the FDT analysis or Sweep study "
-           "cross-validation or NWK → Hopf reduction map tab."),
-    "preset": "Set it in the 'Preset' box on the Sweep study cross-validation tab.",
-    "s_grid": "Set it in the 'S grid  (T_a/T = 1)' box on the Sweep study cross-validation tab.",
-    "t_grid": "Set it in the 'T_a/T grid  (S = 0)' box on the Sweep study cross-validation tab.",
-    "seed": "Set it in the 'Seed' box on the FDT analysis or Sweep study cross-validation tab.",
+    # the two secondary analyses (piece 5, §5.3). Ordinary tuple entries now that a place may be any
+    # section's tab title: the label is the row the panel builds, so label(key) keeps a box and its
+    # hint sentence from drifting apart. The Seed rows arrive with the panels (Tasks 25, 26).
+    "n_freqs": (("FDT analysis", "Sweep study cross-validation"), "n_freqs"),
+    "ensemble_m": (("FDT analysis", "Sweep study cross-validation"), "ensemble_M"),
+    "freqs_per_batch": (("FDT analysis", "Sweep study cross-validation"), "freqs_per_batch"),
+    "f0": (("FDT analysis", "Sweep study cross-validation", "NWK → Hopf reduction map"),
+           "F0 (ND forcing amplitude)"),
+    "preset": ("Sweep study cross-validation", "Preset"),
+    "s_grid": ("Sweep study cross-validation", "S grid  (T_a/T = 1)"),
+    "t_grid": ("Sweep study cross-validation", "T_a/T grid  (S = 0)"),
+    "seed": (("FDT analysis", "Sweep study cross-validation"), "Seed"),
     # the five FDT settings NEITHER front end exposes (§1.2, P2, P75): no control, so fix_sentence
     # returns "" and the refusal names the setting and offers no fix
     "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
@@ -146,15 +160,32 @@ def label(key: str) -> str:
     raise KeyError(f"{key!r} has no box: its window control is {entry!r}")
 
 
+def _where(place) -> str:
+    """The place phrase: ``"the Infer tab"``, ``"the Posterior or TSNPE tab"``, ``"the Artifacts
+    screen"``, and for a mixed tuple ``"the Infer tab or the Model Builder screen"``.
+
+    An all-tab or all-screen tuple shares ONE noun, which is what keeps the sentences the
+    walkthrough quotes byte-identical ("on the Posterior or TSNPE tab"); only a tuple that genuinely
+    mixes the two spells the noun out per place, because "the Infer or Model Builder tab" would be
+    a lie about one of them."""
+    names = place if isinstance(place, tuple) else (place,)
+    screens = [n in SCREENS for n in names]
+    if all(screens):
+        return f"the {' or '.join(names)} screen"
+    if not any(screens):
+        return f"the {' or '.join(names)} tab"
+    return " or ".join(f"the {n} {'screen' if n in SCREENS else 'tab'}" for n in names)
+
+
 def fix_sentence(key: str | None) -> str:
-    """What the yellow box says under the message: ``"Set it in the 'T_obs (s)' box on the Infer
-    tab."`` for a box entry, the sentence itself for a sentence entry, ``""`` for ``field=None``, a
-    None entry or an unknown key. Never raises: it runs while a refusal is being shown."""
+    """What the yellow box says under the message: ``"Set it in the 'T_obs (s)' box on the Infer or
+    Live simulation tab."`` for a box entry, the sentence itself for a sentence entry, ``""`` for
+    ``field=None``, a None entry or an unknown key. Never raises: it runs while a refusal is being
+    shown."""
     if key is None:
         return ""
     entry = CONTROL.get(key)
     if isinstance(entry, tuple):
-        tab, text = entry
-        where = " or ".join(tab) if isinstance(tab, tuple) else tab
-        return f"Set it in the '{text}' box on the {where} tab."
+        place, text = entry
+        return f"Set it in the '{text}' box on {_where(place)}."
     return entry or ""

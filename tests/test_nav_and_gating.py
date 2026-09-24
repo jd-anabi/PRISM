@@ -1452,8 +1452,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 
     (a) the table knows every registry key and no other -- an unmapped key would show a refusal
         with no way out, and an entry nobody raises is a sentence that can go stale unseen;
-    (b) every tuple names a tab as InferenceScreen TITLES it (read off the built screen, not a
-        copy of the tuple), a non-empty label, and renders the box sentence; a sentence entry is
+    (b) every tuple names a place: a tab title of any section, read off the built window, or one of
+        SCREENS, a non-empty label, and renders the box sentence; a sentence entry is
         returned verbatim and has no label; a None entry says nothing and has no label; and none
         of the three ever raises from fix_sentence, which runs while a refusal is being shown;
     (c) the sentences the walkthrough rows C2 and C3 read, and the consents, verbatim -- each
@@ -1468,7 +1468,6 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     """
     from core import config
     import core.gui.fields as gui_fields
-    from core.gui.screens.inference_screen import InferenceScreen
     from core.Helpers import labels
     from core.refusals import FIELDS
 
@@ -1477,20 +1476,32 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         f"only in CONTROL: {sorted(set(gui_fields.CONTROL) - set(FIELDS))}; "
         f"only in FIELDS: {sorted(set(FIELDS) - set(gui_fields.CONTROL))}")
 
-    # (b) the three shapes, against the screen's own tab titles
+    # (b) the three shapes, against the tab titles of EVERY section plus the two screens.
+    # Read off the built window, not off a list written here: a renamed tab must fail this, and an
+    # entry that names the FDT analysis tab is as real as one that names the Infer tab (E6).
     qt_app()
-    screen = InferenceScreen()
-    tabs = [screen.tabs.tabText(i) for i in range(screen.tabs.count())]
-    assert tabs == ["Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE"]
+    from core.gui.main_window import MainWindow
+    window = MainWindow()
+    tabs = []
+    for section in (window.reduction_screen, window.fdt_screen, window.inference_screen,
+                    window.simulate_screen):
+        tabs += [section.tabs.tabText(i) for i in range(section.tabs.count())]
+    assert tabs == ["NWK → Hopf reduction map", "FDT analysis", "Sweep study cross-validation",
+                    "Config", "Prior", "Posterior", "Validate", "Infer", "TSNPE",
+                    "Live simulation"]
+    assert gui_fields.SCREENS == frozenset({"Artifacts", "Model Builder"}), \
+        "a place is a tab title or one of these two screens, which host no tab widget"
+    places = set(tabs) | set(gui_fields.SCREENS)
     for key, entry in gui_fields.CONTROL.items():
         if isinstance(entry, tuple):
             tab, text = entry
             names = tab if isinstance(tab, tuple) else (tab,)
-            assert names and all(t in tabs for t in names), f"{key}: {tab!r} is not a tab title"
+            assert names and all(t in places for t in names), f"{key}: {tab!r} is not a place"
             assert isinstance(text, str) and text, f"{key}: empty label"
             assert gui_fields.label(key) == text
+            noun = "screen" if all(n in gui_fields.SCREENS for n in names) else "tab"
             assert gui_fields.fix_sentence(key) == \
-                f"Set it in the '{text}' box on the {' or '.join(names)} tab."
+                f"Set it in the '{text}' box on the {' or '.join(names)} {noun}."
         elif isinstance(entry, str):
             assert entry.endswith("."), f"{key}: a fix sentence ends with a period: {entry!r}"
             assert gui_fields.fix_sentence(key) == entry
@@ -1507,7 +1518,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         gui_fields.label("no_such_key")
 
     # (c) verbatim: the walkthrough sentences and the consents
-    assert gui_fields.fix_sentence("t_obs") == "Set it in the 'T_obs (s)' box on the Infer tab."
+    assert gui_fields.fix_sentence("t_obs") == \
+        "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
     assert gui_fields.fix_sentence("n_directions") == \
         "Set it in the 'Directions truncated' box on the TSNPE tab."
     assert gui_fields.fix_sentence("accept_other_observation") == \
@@ -1521,16 +1533,36 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "the 'Passive' box on the χ page).")
     assert gui_fields.fix_sentence("recording_probe") == \
         "Pick the probe's recording in the χ probe table on the Infer tab."
-    assert gui_fields.fix_sentence("name") == "Choose another name in the Save box."
+    assert gui_fields.fix_sentence("name") == (
+        "Choose another name in the Save box, or in the 'Record name' box on the FDT analysis or "
+        "Sweep study cross-validation tab.")
     assert (gui_fields.fix_sentence("chi_f0") == gui_fields.fix_sentence("chi_freq_bounds")
             == "Fixed by measurement: change it in config.py, deliberately.")
     # the budget boxes sit on two tabs, and a refusal raised on either must name the one the user is on
     assert gui_fields.CONTROL["num_runs"] == (("Posterior", "TSNPE"), "Batches")
     assert gui_fields.fix_sentence("run_size_cap") == \
         "Set it in the 'Max rows per batch (0 = auto)' box on the Posterior or TSNPE tab."
+    # E6: an input that appears in several places lists them ALL. The cell picker is on five of
+    # them, and a bad cell chosen on the measurement screen used to send the owner to the Infer tab.
+    assert gui_fields.fix_sentence("cell") == (
+        "Set it in the 'Cell' box on the Infer or FDT analysis or Sweep study cross-validation or "
+        "NWK → Hopf reduction map or Live simulation tab.")
+    assert gui_fields.fix_sentence("model") == (
+        "Set it in the 'Model' box on the Config or FDT analysis or Live simulation tab.")
+    assert gui_fields.fix_sentence("n_freqs") == (
+        "Set it in the 'n_freqs' box on the FDT analysis or Sweep study cross-validation tab.")
+    assert gui_fields.label("s_grid") == "S grid  (T_a/T = 1)", \
+        "a box on a SCREEN still has a label, so a row and its hint cannot drift apart (§5.2)"
+    # the screen noun, exercised on a place no key claims yet: Task 22's model-builder keys will.
+    assert gui_fields._where(("Model Builder",)) == "the Model Builder screen"
+    assert gui_fields._where(("Artifacts", "Model Builder")) == "the Artifacts or Model Builder screen"
+    assert gui_fields._where(("Infer", "Model Builder")) == "the Infer tab or the Model Builder screen"
+    assert gui_fields._where("Posterior") == "the Posterior tab"
     # piece 4's two, on the Artifacts screen rather than a tab (B5, design §2.5)
     assert gui_fields.fix_sentence("artifact") == "Select an artifact in the list on the Artifacts screen."
-    assert gui_fields.fix_sentence("note") == "Edit it in the Note box on the Artifacts screen."
+    assert gui_fields.fix_sentence("note") == (
+        "Edit it in the Note box on the Artifacts screen, or in the 'Note' box on the FDT analysis or "
+        "Sweep study cross-validation tab.")
 
     # (d) no window control: the six the window never exposes, and the tool-only set
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
@@ -1590,8 +1622,9 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
         box = SHOWN[-1]
         assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, kind
         assert box.text() == f"a {kind} named 'p' already exists; rename or delete it first", kind
-        assert box.informativeText() == gui_fields.fix_sentence("name") == \
-            "Choose another name in the Save box.", kind
+        assert box.informativeText() == gui_fields.fix_sentence("name") == (
+            "Choose another name in the Save box, or in the 'Record name' box on the FDT analysis or "
+            "Sweep study cross-validation tab."), kind
         assert box.detailedText() == "", kind
         assert loaded.name == "", "a refused rename must not relabel the loaded artifact"
         assert pane.lines[-1][0] == "warning" and "already exists" in pane.lines[-1][1], pane.lines
@@ -2599,13 +2632,15 @@ def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path
 
 def test_the_gui_control_table_matches_the_tabs_labels():
     """§3.2's pin. fields.CONTROL is where a refusal learns which box to name ("Set it in the
-    'T_obs (s)' box on the Infer tab."), and the tabs build their rows FROM it (label(key)), so the two
-    cannot drift -- this reads every tab's form rows back and checks that each (tab, label) entry is
-    a label that tab actually shows. The rows are read the way Qt holds them: the QLabel inside each
-    help_label holder (help_badge.py), or the plain QLabel of a row added without help text, compared
-    against labels.pretty_gui(label), which is what the holder was given. The Infer tab is read after
-    install_config with a FORCED stub config so its three drive rows exist; a chi config would build
-    none (no force_params_dict) and the drive entries would pass vacuously.
+    'T_obs (s)' box on the Infer or Live simulation tab."), and the tabs build their rows FROM it
+    (label(key)), so the two cannot drift -- this reads every tab's form rows back and checks that
+    each (tab, label) entry is a label that tab actually shows. The rows are read the way Qt holds
+    them: the QLabel inside each help_label holder (help_badge.py), or the plain QLabel of a row
+    added without help text, compared against labels.pretty_gui(label), which is what the holder was
+    given. The Infer tab is read after install_config with a FORCED stub config so its three drive
+    rows exist; a chi config would build none (no force_params_dict) and the drive entries would
+    pass vacuously. Since piece 5 the places are every section's tabs and the two screens (E6), read
+    off a built MainWindow.
 
     The second half is this task's own: the Infer tab's registered rows are built from label(key),
     not from a literal that happens to match today."""
@@ -2635,15 +2670,34 @@ def test_the_gui_control_table_matches_the_tabs_labels():
                     out.append(lab.text())
         return out
 
+    # E6 (piece 5): a place may be any section's tab or one of the two screens, so read them all back
+    # off a built window rather than the six inference tabs alone.
+    from core.gui.main_window import MainWindow
+    window = MainWindow()
+    for section in (window.reduction_screen, window.fdt_screen, window.simulate_screen):
+        for i in range(section.tabs.count()):
+            tabs[section.tabs.tabText(i)] = section.tabs.widget(i)
+    tabs["Artifacts"] = window.artifact_screen
+    tabs["Model Builder"] = window.model_builder_screen
     seen = {tab: shown(panel) for tab, panel in tabs.items()}
     tuples = {k: e for k, e in gui_fields.CONTROL.items() if isinstance(e, tuple)}
     assert tuples, "the control table has no (tab, label) entries"
     for key in ("drive_amplitude", "drive_frequency", "drive_phase"):
         assert key in tuples, f"{key} must be a (tab, label) entry so the read-back covers the drive rows"
+    # A row a CONTROL entry names before the panel that shows it is built. Each entry must be ABSENT
+    # from its tab, so the task that builds the row turns this red and deletes its own line (T25: the
+    # FDT analysis Seed row; T26: the Sweep study cross-validation one). An exemption cannot outlive
+    # its row.
+    _NOT_BUILT_YET = {("seed", "FDT analysis"), ("seed", "Sweep study cross-validation")}
+    for key, name in _NOT_BUILT_YET:
+        assert labels.pretty_gui(gui_fields.label(key)) not in seen[name], \
+            f"{key} now has its row on {name}: delete its _NOT_BUILT_YET entry"
     missing = []
     for key, (tab, text) in tuples.items():
         for name in (tab if isinstance(tab, tuple) else (tab,)):   # the budget boxes name two tabs
-            assert name in seen, f"{key}: CONTROL names a tab that does not exist: {name!r}"
+            assert name in seen, f"{key}: CONTROL names a place that does not exist: {name!r}"
+            if (key, name) in _NOT_BUILT_YET:
+                continue
             if labels.pretty_gui(text) not in seen[name]:
                 missing.append((key, name, text))
     assert not missing, f"CONTROL names labels no tab shows: {missing}\nshown: {seen}"
