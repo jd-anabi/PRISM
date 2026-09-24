@@ -218,9 +218,45 @@ def region_from_json(d: dict) -> dict:
     return out
 
 
+def _fdt_config_from_cfg(cfg) -> dict:
+    """``config_from_cfg``'s branch for an FDTConfig: the cell's parameter values and every
+    resolution knob the run was built with. Floats only and all finite -- ``validate`` refuses a
+    non-finite number anywhere in the config block (``_check_finite(d["config"], "config")``)."""
+    return {
+        "model": cfg.model,
+        "state_dep_drift": bool(cfg.state_dep_drift),
+        "param_keys": list(cfg.params_dict) + list(cfg.rescale_params),
+        "param_values": ([float(v[0]) for v in cfg.params_dict.values()]
+                         + [float(v[0]) for v in cfg.rescale_params.values()]),
+        "n_freqs": int(cfg.n_freqs),
+        "freq_bounds": [float(v) for v in cfg.freq_bounds],
+        "ensemble_M": int(cfg.ensemble_M),
+        "freqs_per_batch": int(cfg.freqs_per_batch),
+        "F0": float(cfg.F0),
+        "burn_in_nd": float(cfg.burn_in_nd),
+        "T_obs_periods": int(cfg.T_obs_periods),
+        "dt_nd": float(cfg.dt_nd),
+        "psd_T_obs_nd": float(cfg.psd_T_obs_nd),
+        "seed": None if cfg.seed is None else int(cfg.seed),
+        "units": list(cfg.units_dict) if isinstance(cfg.units_dict, (list, tuple)) else None,
+        "device": cfg.hw.device.type, "dtype": str(cfg.hw.dtype),
+    }
+
+
 def config_from_cfg(cfg) -> dict:
     """The SimConfig-derived identity vocabulary every manifest's ``config`` starts from. Stages
-    ``.update()`` their own resolved knobs on top."""
+    ``.update()`` their own resolved knobs on top.
+
+    An FDTConfig takes the second branch, chosen on the ABSENCE of ``observation_mode``: the fdt
+    kind measures a CELL rather than conditioning a network, so it has no mode, no chi geometry and
+    no training grid, and reading ``cfg.observation_mode`` on one is an AttributeError two keys into
+    the dict below (piece 5, §1.2). That branch records the settings AS GIVEN TO THE BUILDER --
+    ``omega_0`` is deliberately absent, because the writer computes this block at ``create()`` time
+    from the caller's object while the run refines the resonance on its own private copy, and the
+    refined value belongs in ``body.grid``.
+    """
+    if not hasattr(cfg, "observation_mode"):
+        return _fdt_config_from_cfg(cfg)
     from core.SBI.reparam import resolved_log_params
     from core.SBI.run_guards import _log_params_for
     return {

@@ -2666,6 +2666,90 @@ def test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs():
     assert cfg.params_dict[first][0] is None and not cfg.has_ground_truth
 
 
+def test_fdt_config_carries_sources_and_a_seed_and_copies_itself_for_a_run():
+    """``public_entry`` copies the config it is handed ONLY when that config has ``copy_for_run``
+    (core/runs.py:243-247, ``if hasattr(kwargs["cfg"], "copy_for_run")``). FDTConfig had none, so
+    decorating run_fdt would have delivered the run log and silently NOT V1's private copy -- and
+    ``cfg.omega_0 = ...`` at the top of run_fdt would have kept writing on the caller's object, which
+    is the defect spec §1 names. The copy is a plain deep copy: FDTConfig carries no cached_property,
+    so it needs none of SimConfig.copy_for_run's _CACHED popping, and this asserts that (a new cached
+    property on FDTConfig must come with the popping, as SimConfig's did).
+
+    ``sources``, ``seed`` and ``preset_name`` are DEFAULTED fields, because the reduction map shares
+    this dataclass and is outside the programme (spec §1.3): a required field would break it at every
+    construction site. Everything a run writes on -- omega_0, the four OrderedDicts, sources -- is an
+    independent equal object on the copy."""
+    from collections import OrderedDict
+    from functools import cached_property
+
+    from core.config import FDTConfig, cpu_device
+
+    assert not [n for n, v in vars(FDTConfig).items() if isinstance(v, cached_property)], \
+        "FDTConfig gained a cached_property: copy_for_run must pop it first, as SimConfig's does"
+
+    cfg = FDTConfig(model="HOPF", state_dep_drift=False, inits_dict=OrderedDict(x=0.0),
+                    params_dict=OrderedDict(sigma_x=(0.1, (0.0, 1.0))),
+                    rescale_params=OrderedDict(), force_params_dict=OrderedDict(),
+                    units_dict=("nm", "ms"), hw=cpu_device())
+    assert cfg.sources == {} and cfg.seed is None, "both default, for the reduction map's sake"
+    assert cfg.preset_name is None, "a single-cell run has no preset (P72); only the sweep sets it"
+
+    cfg.sources["cell"] = "Cells/hopf/cell.txt"
+    cfg.seed = 7
+    cfg.preset_name = "exploratory"
+    c = cfg.copy_for_run()
+    assert isinstance(c, FDTConfig) and c is not cfg
+    assert c.sources == cfg.sources and c.sources is not cfg.sources
+    assert c.params_dict == cfg.params_dict and c.params_dict is not cfg.params_dict
+    assert c.seed == 7 and c.hw is not None
+    assert c.preset_name == "exploratory", "the preset's name travels with the run's copy"
+
+    c.omega_0 = 3.5
+    c.sources["cell"] = "elsewhere.txt"
+    assert cfg.omega_0 is None, "the caller's resonance is untouched: this is what V1 buys run_fdt"
+    assert cfg.sources["cell"] == "Cells/hopf/cell.txt"
+
+
+def test_the_two_fdt_builders_fill_sources_and_the_manifest_has_an_fdt_branch():
+    """Every artifact names its inputs by path and hash, and an fdt record is no exception (spec
+    §3.2): the two FDT builders fill ``sources`` so provenance.inputs_from_cfg works with no new
+    provenance code. make_reduction_config is UNTOUCHED (P19; spec §1.2, §1.3) -- it is the
+    reduction map's builder, out of scope, and the only FDTConfig in the tree not pinned to the CPU
+    (§1.3), so this also pins that it still builds a working settings object.
+
+    config_from_cfg needed a branch or store.create("fdt", cfg, ...) would raise AttributeError on
+    cfg.observation_mode, the SECOND key it reads (manifest.py:246-284). The branch is taken on the
+    ABSENCE of observation_mode, and it records the settings AS GIVEN TO THE BUILDER: omega_0 is
+    deliberately not in it, because the writer computes this block at create() time from the
+    caller's object while the run refines the resonance on its private copy (§1.2). Every value is
+    finite, which validate() requires of the whole config block (manifest.py:168)."""
+    from core import cli, config, registry
+    from core.artifacts import manifest as mfm
+    from core.artifacts import provenance as provm
+
+    cell = str(config.CELL_PATH / "nadrowski" / "master_weak.txt")
+    cfg = cli.make_fdt_config("NADROWSKI", registry.state_dep_drift("NADROWSKI"), cell)
+    assert cfg.sources == cli.cell_sources(cell, "NADROWSKI")
+    assert cfg.hw.device.type == "cpu", "the FDT path stays pinned to the CPU"
+
+    inputs = provm.inputs_from_cfg(cfg)
+    assert inputs["model"] == "NADROWSKI"
+    assert inputs["cell"]["path"] == "Cells/nadrowski/master_weak.txt"      # relative to Resources/
+    assert inputs["bounds"]["path"] == "Bounds/nadrowski/master.txt"
+    assert len(inputs["cell"]["sha256"]) == 64 and len(inputs["bounds"]["sha256"]) == 64
+
+    block = mfm.config_from_cfg(cfg)
+    assert block["model"] == "NADROWSKI" and block["n_freqs"] == 60 and block["ensemble_M"] == 256
+    assert block["freq_bounds"] == [0.1, 30.0] and block["device"] == "cpu"
+    assert block["seed"] is None and "omega_0" not in block, \
+        "the resonance the RUN discovers belongs in body.grid, not in the config block"
+    mfm._check_finite(block, "config")          # what validate() does to it on every write
+
+    red = cli.make_reduction_config(str(config.CELL_PATH / "nadrowski" / "master_spont.txt"))
+    assert red.model == "NADROWSKI" and red.params_dict, "the reduction builder still builds"
+    assert red.sources == {} and red.seed is None, "make_reduction_config is left alone (P19)"
+
+
 # ── V1: no public entry writes on the configuration it is handed (piece 3, spec §2.2-§2.4) ──────────
 from types import SimpleNamespace
 

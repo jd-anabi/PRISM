@@ -594,6 +594,22 @@ class FDTConfig:
     # Hardware
     hw: DeviceConfig = field(default_factory=detect_device)
 
+    # The files this config was built from, as paths, plus the model NAME:
+    # {"cell": ..., "bounds": ..., "units": ..., "model": ...}. Filled by cli.cell_sources in the two
+    # FDT builders (make_reduction_config leaves it empty, P19); read by
+    # core.artifacts.provenance.inputs_from_cfg, so an fdt record names its cell, its RESOLVED
+    # bounds file and its units file by path AND content hash (piece 5, §3.2).
+    # Defaulted, like `seed`: the reduction map shares this dataclass and is out of scope (§1.3).
+    sources: dict = field(default_factory=dict)
+
+    # The seed the run used, drawn when none was supplied (E7). None means "not chosen yet".
+    seed: "int | None" = None
+
+    # The sweep preset's NAME ("exploratory" | "production"), set by cli.make_param_sweep_config;
+    # None for a single-cell run and for the reduction map. The resolved dict alone does not say
+    # which preset it was, and body.settings["preset"] must (§4.4, P72). Defaulted, for §1.3.
+    preset_name: "str | None" = None
+
     # --- Derived ---
     @property
     def inits_tensor(self) -> torch.Tensor:
@@ -634,3 +650,17 @@ class FDTConfig:
             new_params[k] = (v, bounds)
 
         return replace(self, params_dict=new_params, **top_kwargs)
+
+    def copy_for_run(self) -> "FDTConfig":
+        """A private deep copy for one run: what `core.runs.public_entry` hands a public entry in
+        place of the caller's config (V1 of piece 3).
+
+        NOT optional, and not cosmetic: `public_entry` is duck-typed on this method
+        (core/runs.py:243-247, `if hasattr(kwargs["cfg"], "copy_for_run")`), so a config class
+        without it gets the run log and silently NO copy -- and run_fdt writes `cfg.omega_0` twice.
+        A plain deep copy suffices, unlike SimConfig's: this class carries no cached_property, so
+        there is no 2.4M-point grid and no pint registry to pop off a shallow copy first (a test
+        pins that it still carries none). Everything a run writes on -- omega_0, seed, sources and
+        the four OrderedDicts through with_overrides -- is an independent equal object on the copy.
+        """
+        return copy.deepcopy(self)

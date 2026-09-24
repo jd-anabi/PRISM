@@ -120,6 +120,38 @@ def test_bounds_resolution_prefers_a_sibling_then_falls_back_to_master():
     assert cli.resolve_bounds_for_cell(str(CELL_PATH / "hopf" / "no_such_cell.txt")) is None
 
 
+def test_cell_sources_records_the_bounds_file_that_actually_resolved():
+    """Review Focus 4. Three Nadrowski cells share one box and one does not: master_spont.txt has a
+    same-named sibling in Bounds/, master_weak.txt falls back to the folder's master.txt
+    (cli.resolve_bounds_for_cell). Only one of the two is the box a result was measured under, and a
+    record that names the WRONG bounds file is worse than one that names none -- on the decoupled
+    path "the bounds file defines the param set + order" (cli.parse_cell's docstring), so the
+    parameter set itself is not recoverable without it.
+
+    The legacy inline-bounds branch has no bounds file and no units file, and cell_sources reports
+    None for both rather than a path that is not read: parse_cell takes that branch when EITHER is
+    absent, so units must follow bounds and not stand alone."""
+    nad = str(CELL_PATH / _NAD / "master_spont.txt")
+    weak = str(CELL_PATH / _NAD / "master_weak.txt")
+
+    src = cli.cell_sources(nad, "NADROWSKI")
+    assert set(src) == {"cell", "bounds", "units", "model"}
+    assert src["cell"] == nad and src["model"] == "NADROWSKI"
+    assert Path(src["bounds"]).name == "master_spont.txt", "the sibling wins where it exists"
+    assert Path(src["units"]).name == "units.txt"
+
+    assert Path(cli.cell_sources(weak, "NADROWSKI")["bounds"]).name == cli.MASTER_BOUNDS_NAME
+
+    # the model defaults to the cell's parent folder, exactly as parse_cell derives it
+    assert cli.cell_sources(weak)["model"] == "NADROWSKI"
+
+    # a cell in a folder with neither a sibling nor a master: the legacy branch, and no files
+    ghost = str(CELL_PATH / "hopf" / "no_such_cell.txt")
+    assert cli.resolve_bounds_for_cell(ghost) is None
+    assert cli.cell_sources(ghost, "HOPF") == {"cell": ghost, "bounds": None, "units": None,
+                                               "model": "HOPF"}
+
+
 # ── prior identity ────────────────────────────────────────────────────────────────────────────────
 def _write_prior(path, lows, highs, keys, model="NADROWSKI"):
     """A minimal on-disk prior file, still used by the atomic-write test below (build_prior's load

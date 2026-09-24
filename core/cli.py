@@ -148,6 +148,30 @@ def resolve_bounds_for_cell(cell_file: str, model: str | None = None) -> Path | 
     return master if master.exists() else None
 
 
+def cell_sources(cell_file: str, model: str | None = None) -> dict:
+    """The ``sources`` block for a cell: its own path, the bounds file that RESOLVES for it, the
+    units file, and the model NAME. Beside :func:`parse_cell`, which keeps its 7-tuple.
+
+    parse_cell resolves both paths and throws them away (``bounds_path`` and ``units_path`` are
+    local to it), so an FDT record had no way to say which box its parameter set came from. The two
+    candidates resolve DIFFERENTLY -- a same-named sibling, else the folder's master.txt -- and only
+    one of them governed the run.
+
+    Both come back None on the LEGACY inline-bounds branch, and the condition is parse_cell's own
+    (``bounds_path is not None and units_path.exists()``): the units file is only read when the
+    decoupled path is taken, so reporting it alone would name a file the run never opened.
+    """
+    p = Path(cell_file)
+    name = (model or p.parent.name)
+    bounds_path = resolve_bounds_for_cell(cell_file, name.lower())
+    units_path = UNITS_PATH / name.lower() / "units.txt"
+    decoupled = bounds_path is not None and units_path.exists()
+    return {"cell": str(cell_file),
+            "bounds": str(bounds_path) if decoupled else None,
+            "units": str(units_path) if decoupled else None,
+            "model": name.upper()}
+
+
 def parse_cell(cell_file: str, model: str | None = None):
     """
     Parse a cell file into the 7-tuple used by the FDT/REDUCTION/CROSSVAL config builders and the
@@ -318,7 +342,7 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
 # ── Pure config core (FDT) ───────────────────────────────────────────────────
 def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
                     n_freqs: int = 60, ensemble_M: int = 256, freqs_per_batch: int = 1,
-                    F0: float = 0.05) -> FDTConfig:
+                    F0: float = 0.05, seed: "int | None" = None) -> FDTConfig:
     """Build an FDTConfig (no prompts) from a model + cell file + FDT knobs. Shared by the command-line
     tool (core/tool) and the GUI's FDT form."""
     (inits_dict, params_dict, rescale_params, force_params_dict,
@@ -336,6 +360,8 @@ def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
         freqs_per_batch=freqs_per_batch,
         F0=F0,
         hw=cpu_device(),  # FDT: sequential SDE loop at M~256 is ~3.4x faster on CPU than GPU
+        sources=cell_sources(cell_file, model),
+        seed=seed,
     )
 
 
@@ -376,7 +402,8 @@ SWEEP_PRESETS = {
 
 def make_param_sweep_config(cell_file: str, *, preset: dict, s_spec: tuple, t_spec: tuple,
                             n_freqs: int, ensemble_M: int, freqs_per_batch: int = 1,
-                            F0: float = 0.05) -> tuple["FDTConfig", "np.ndarray", "np.ndarray"]:
+                            F0: float = 0.05, seed: "int | None" = None
+                            ) -> tuple["FDTConfig", "np.ndarray", "np.ndarray"]:
     """Build (FDTConfig, s_grid, temp_grid) for the sweep study (no prompts). ``preset`` supplies the
     advanced resolution levers (freq_bounds / T_obs_periods / psd_T_obs_nd); ``s_spec``/``t_spec`` are
     (min, max, n_points). Model fixed to NADROWSKI. Shared by the command-line tool (core/tool) + the GUI."""
@@ -401,5 +428,7 @@ def make_param_sweep_config(cell_file: str, *, preset: dict, s_spec: tuple, t_sp
         T_obs_periods=preset["T_obs_periods"],
         psd_T_obs_nd=preset["psd_T_obs_nd"],
         hw=cpu_device(),  # sweep: sequential SDE loop at M~256 is ~3.4x faster on CPU than GPU
+        sources=cell_sources(cell_file, "NADROWSKI"),
+        seed=seed,
     )
     return cfg, s_grid, temp_grid
