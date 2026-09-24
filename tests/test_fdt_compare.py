@@ -600,3 +600,155 @@ def test_two_cells_that_share_a_file_name_never_share_a_legend_entry(tmp_path, m
     assert labels_of(rec) == ["default (run_shm)", "default (run_shm_again)"]
     assert rec.body["results"]["cells"] == ["default"], rec.body["results"]
     assert any("1 cell(s): default." in n for n in rec.body["notices"]), rec.body["notices"]
+
+
+def test_compare_renormalise_rescales_one_run_and_draws_it_against_the_original(tmp_path):
+    """Spec §7.1. T_eff/T is LINEAR in the normalisation constant -- spectral.eff_temp_ratio is
+    ``prefactor * omega * G / (4 chi'')`` -- so recomputing it with another constant is an exact
+    rescaling of what the record already holds, and nothing is re-simulated. That is why the run
+    records the prefactor it used (spec §2.3): without it the stored ratio cannot be undone, and this
+    mode would have to guess. A record that carries no usable constant is refused, naming it, rather
+    than silently rescaling from a NaN."""
+    store = _store(tmp_path)
+    one = build_fdt_record(store, name="cellA", omegas=(1.0, 2.0, 4.0), ratio=(1.0, 4.0, 1.5),
+                           prefactor=2.0)
+    seen, sink = _closing()
+    rec = cmp.compare("renormalise", [one], prefactor=3.0, fig_sink=sink, store=store)
+
+    assert seen == ["FDT ratio renormalised"], seen
+    assert rec.body["settings"]["prefactor"] == 3.0
+    res = rec.body["results"]
+    assert res["prefactor"] == 3.0 and res["prefactor_recorded"] == 2.0
+    assert res["scale"] == pytest.approx(1.5)
+    with h5py.File(rec.data_path, "r") as h5:
+        labels = [h5["curves"][k].attrs["label"] for k in sorted(h5["curves"])]
+        renormalised = h5["curves"]["001"][...]
+    assert labels == ["cellA (recorded, 2)", "cellA (renormalised, 3)"], labels
+    assert renormalised == pytest.approx([1.5, 6.0, 2.25])
+
+    # a blank box and a non-positive constant are both refused, by name, before the comparison's
+    # record is created -- so they leave no record behind
+    for bad in (None, 0.0, -1.0):
+        with pytest.raises(Refusal) as e:
+            cmp.compare("renormalise", [one], prefactor=bad, store=store)
+        assert e.value.field == "prefactor", (bad, e.value.field)
+    assert len(store.list("fdt")) == 2, "a refused comparison leaves no record behind"
+
+    no_pref = build_fdt_record(store, name="cellB", prefactor=float("nan"))
+    before = _record_dirs(store)
+    with pytest.raises(Refusal) as e:
+        cmp.compare("renormalise", [no_pref], prefactor=3.0, store=store)
+    assert e.value.field == "compare_records" and "'cellB'" in str(e.value), e.value
+    # the recorded constant is judged before the comparison writes anything, so the writer removes
+    # the record it opened for the refused comparison (a progressive record refused before its first
+    # payload or figure): nothing is left behind
+    assert _record_dirs(store) == before, "a refused comparison left a record behind"
+
+    # a constant that IS recorded but is no normalisation constant (coupling / D_x is positive) is
+    # refused too, saying what the record holds: "does not record one" would be false of it, and a
+    # ratio computed with zero is zero everywhere, which no rescaling can undo
+    zero = build_fdt_record(store, name="cellC", prefactor=0.0)
+    negative = build_fdt_record(store, name="cellD", prefactor=-2.0)
+    before = _record_dirs(store)
+    for ref, who, value in ((zero, "cellC", 0.0), (negative, "cellD", -2.0)):
+        with pytest.raises(Refusal) as e:
+            cmp.compare("renormalise", [ref], prefactor=3.0, store=store)
+        msg = str(e.value)
+        assert e.value.field == "compare_records" and f"'{who}' records {value:g}" in msg, msg
+    assert _record_dirs(store) == before, "a refused comparison left a record behind"
+
+
+def _stub_measurement(monkeypatch):
+    """Both campaigns of a REAL ``run_fdt`` replaced by deterministic arithmetic, so two runs of one
+    cell measure identical spectra and susceptibilities and differ only in the constant applied.
+
+    The spectrum stops at 10 while the default probe grid (0.1..30 around the peak at 1.0) reaches
+    30, so the top probes come back blank, as a real run's do past the spectrum's Nyquist frequency
+    (spec §3.5); chi'' rises with the frequency, so the ratio is a curve and not a constant."""
+    import torch
+    from core.FDT import fdt_pipeline
+
+    omegas_psd = torch.linspace(0.0, 10.0, 401, dtype=torch.float64)
+    G = torch.exp(-((omegas_psd - 1.0) ** 2) / 0.02) + 1e-6
+    t = torch.linspace(0.0, 1.0, 8, dtype=torch.float64)
+
+    def _c1(cfg, return_trajectory=False):
+        return (omegas_psd, G, t, torch.zeros_like(t)) if return_trajectory else (omegas_psd, G)
+
+    def _c2(cfg, omegas):
+        om = omegas.to(torch.float64)
+        return torch.complex(1.0 / (1.0 + om), 0.5 + om)
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd", _c1)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _c2)
+    for name in ("plot_psd", "plot_eff_temp_ratio", "plot_chi_components",
+                 "plot_spontaneous_trajectory"):
+        monkeypatch.setattr(fdt_pipeline, name,
+                            lambda *a, save_path=None, **k: Path(save_path).write_bytes(b"\x89PNG"))
+
+
+def test_renormalising_a_real_run_equals_measuring_it_again_with_the_other_constant(store,
+                                                                                     monkeypatch):
+    """The physics behind the mode, checked against records ``run_fdt`` itself wrote rather than the
+    fixture's. A Nadrowski cell is measured twice over identical (stubbed) campaigns: once with its
+    own constant n*beta, once with that constant replaced by another. Renormalising the first record
+    to the second constant must give the second run's ratio -- that is the question the mode answers
+    ("what would this run have said with a different constant") -- and it must do so as the exact
+    product recorded * (new / recorded) wherever the run measured something, with every blank still
+    blank: a blank is a frequency the run could not measure, and no constant brings it back.
+
+    The drawn grid is the record's OWN grid, bit for bit, and each curve in the comparison's file
+    carries the constant ITS numbers were computed with (F55)."""
+    from core import cli, config, registry
+    from core.FDT import fdt_pipeline
+    from core.FDT.campaigns import observable_noise_prefactor
+
+    _stub_measurement(monkeypatch)
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    cfg = cli.make_fdt_config("NADROWSKI", registry.state_dep_drift("NADROWSKI"), cell,
+                              n_freqs=12, ensemble_M=8)
+    own = observable_noise_prefactor(cfg)
+    want = 2.5 * own
+    measured = fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
+                                    writer=store.create("fdt", cfg, name="measured"), seed=5)
+    monkeypatch.setattr(fdt_pipeline, "observable_noise_prefactor", lambda _cfg: want)
+    again = fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
+                                 writer=store.create("fdt", cfg, name="measured_again"), seed=5)
+
+    _seen, sink = _closing()
+    rec = cmp.compare("renormalise", ["measured"], prefactor=want, fig_sink=sink, store=store)
+
+    with h5py.File(measured.data_path, "r") as h5:
+        grid, recorded = h5["omega_grid"][...], h5["T_eff_over_T"][...]
+        assert float(h5.attrs["prefactor"]) == own, "the run records the constant it applied"
+        omega_0 = float(h5.attrs["omega_0"])
+    with h5py.File(again.data_path, "r") as h5:
+        remeasured = h5["T_eff_over_T"][...]
+        assert float(h5.attrs["prefactor"]) == want
+    blank = np.isnan(recorded)
+    assert blank.any() and not blank.all(), recorded.tolist()
+    assert np.array_equal(np.isnan(remeasured), blank), "one grid, one spectrum: the same blanks"
+
+    with h5py.File(rec.data_path, "r") as h5:
+        drawn_grid = h5["omega_common"][...]
+        original, renormalised = h5["curves"]["000"][...], h5["curves"]["001"][...]
+        constants = [(float(h5["curves"][k].attrs["omega_0"]),
+                      float(h5["curves"][k].attrs["prefactor"])) for k in ("000", "001")]
+        labels = [h5["curves"][k].attrs["label"] for k in ("000", "001")]
+    assert np.array_equal(drawn_grid, grid), "the record's own grid, never a regenerated copy"
+    assert np.array_equal(original, recorded, equal_nan=True), "the original is drawn as recorded"
+    assert np.array_equal(np.isnan(renormalised), blank), "blanks stay blanks, and nothing else is"
+    assert np.array_equal(renormalised[~blank], recorded[~blank] * (want / own)), "exact rescaling"
+    assert renormalised[~blank] == pytest.approx(remeasured[~blank], rel=1e-12), \
+        "the rescaled ratio is what a run with the other constant measured"
+    assert constants == [(omega_0, own), (omega_0, want)], constants
+    assert labels == [f"master_spont (recorded, {own:g})", f"master_spont (renormalised, {want:g})"]
+
+    res = rec.body["results"]
+    assert res["prefactor_recorded"] == own and res["prefactor"] == want
+    assert res["scale"] == pytest.approx(2.5) and res["blanks"] == int(blank.sum()), res
+    assert res["n_records"] == 1 and res["n_grid"] == grid.size, res
+    peak = res["per_record"][0]
+    assert peak["peak_ratio"] == pytest.approx(float(np.nanmax(renormalised)))
+    assert rec.body["notices"] and "never interpolated across" in rec.body["notices"][0]
+    assert [r["id"] for r in rec.body["compared"]["records"]] == [measured.id]

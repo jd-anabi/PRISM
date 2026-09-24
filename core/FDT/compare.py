@@ -549,5 +549,67 @@ def draw_repeats(w, records, *, sink):
     return results, notices
 
 
+def draw_renormalise(w, records, *, sink, prefactor):
+    """One record's ratio recomputed with a supplied normalisation constant, drawn against the
+    original (spec §7.1).
+
+    An exact rescaling, not a re-measurement: ``spectral.eff_temp_ratio`` is
+    ``prefactor * omega * G / (4 chi'')``, linear in the constant, so the new curve is the recorded
+    one times the ratio of the two constants and nothing is simulated. A blank stays blank (NaN
+    times any scale is NaN): no constant measures a frequency the run could not. The record's OWN
+    grid is the common grid here -- there is one record, so there is nothing to interpolate onto,
+    and interpolating a curve onto a regenerated copy of its own grid would only add float error.
+
+    The supplied constant was judged before the record opened (``_checked_options``, F57); judging
+    it again here is the backstop for a caller that reaches the drawer another way. The RECORDED
+    constant can only be judged once the record's numbers are read, and it is judged before anything
+    is written, so a refusal here still leaves no record behind (the writer removes a progressive
+    record refused before its first payload or figure). A record that holds no constant (NaN)
+    cannot be undone, and one that holds zero or less is no normalisation constant -- it is
+    ``coupling / D_x``, which is positive -- and a ratio computed with zero is zero everywhere,
+    which no scale brings back.
+    """
+    want = require_positive("prefactor", prefactor)
+    curves, _cells = labelled_curves(records)
+    curve = curves[0]
+    who = records[0].name or records[0].id
+    if math.isnan(curve.prefactor):
+        refuse("compare_records",
+               f"The saved runs to compare must record the normalisation constant they used; "
+               f"{who!r} does not, so its ratio cannot be recomputed with another one.")
+    if not (math.isfinite(curve.prefactor) and curve.prefactor > 0):
+        refuse("compare_records",
+               f"The saved runs to compare must record a finite normalisation constant greater "
+               f"than 0 to be renormalised; {who!r} records {curve.prefactor:g}, so its ratio "
+               f"cannot be recomputed with another one.")
+    scale = want / curve.prefactor
+    grid = np.asarray(curve.omegas, dtype=np.float64)
+    original = np.asarray(curve.ratio, dtype=np.float64)
+    renormalised = original * scale
+    labels = [f"{curve.label} (recorded, {curve.prefactor:g})",
+              f"{curve.label} (renormalised, {want:g})"]
+    values = [original, renormalised]
+    blanks, notices = blank_notice(values)
+    # Each curve carries the constant ITS numbers were computed with (F55): the original its
+    # record's own, the renormalised one the constant supplied -- so a reader of the file never has
+    # to know which of the two curves was rescaled to read either correctly.
+    write_curves(w, grid, values, labels,
+                 constants=[(curve.omega_0, curve.prefactor), (curve.omega_0, want)])
+    fig, ax = ratio_axes("FDT ratio renormalised", blanks)
+    for label, vals, style in zip(labels, values, ("--", "-")):
+        ax.plot(grid, vals, style, marker="o", markersize=3, linewidth=1.0, label=label)
+    ax.legend()
+    fig.tight_layout()
+    sink("FDT ratio renormalised", fig)
+    log.info(f"Renormalised {curve.label} from {curve.prefactor:g} to {want:g} "
+             f"(x{scale:g}); nothing was re-simulated")
+    results = {"n_records": 1, "n_grid": int(grid.size), "blanks": blanks,
+               "prefactor": _num(want), "prefactor_recorded": _num(curve.prefactor),
+               "scale": _num(scale),
+               "per_record": [peak_of(curve, grid, renormalised)]}
+    return results, notices
+
+
 _DRAWERS["cells"] = draw_cells
 _DRAWERS["repeats"] = draw_repeats
+_DRAWERS["renormalise"] = draw_renormalise
