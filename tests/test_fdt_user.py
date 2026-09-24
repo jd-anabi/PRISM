@@ -98,6 +98,10 @@ def test_observable_noise_prefactor_user_rejects_multiplicative_zero_negative():
                 observable_noise_prefactor(_FakeCfg(name, {"d0": d0}))
             except FDTModelError as e:
                 assert "non-positive" in str(e) or "zero" in str(e), e
+                # A CELL value is what makes D0 <= 0 here: a model whose D is identically zero is
+                # refused upstream (registry.fdt_support, as "model"), so the fix this refusal names
+                # is the cell's parameter, not the model picker.
+                assert e.field == "cell", f"D0={d0}: field={e.field!r}"
             else:
                 raise AssertionError(f"D0={d0} not refused")
     finally:
@@ -118,11 +122,19 @@ def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeyp
     The field key is the second half. An FDTModelError is a Refusal (tests/test_refusals.py's
     "every domain error is a refusal and carries a field"), but until now every FDT one carried
     field=None, so neither front-end table could name the control or the flag that answers it.
+
+    The third is the order against the thin-setting notice (ruling F10): the stub is thin on both
+    knobs, so the notice WOULD fire if it ran first, and a refused run must not first warn the
+    operator about how far to trust a result it will never produce. No PreflightWarning may precede
+    the refusal.
     """
+    import warnings
+
     import pytest
 
     from core.FDT import fdt_pipeline
     from core.FDT.campaigns import FDTModelError
+    from core.refusals import PreflightWarning
 
     spent = []
 
@@ -139,12 +151,18 @@ def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeyp
         which is half of the Nadrowski prefactor n*beta."""
         model = "NADROWSKI"
         params_dict = {"k": (1.0, None), "beta": (14.1, None)}
+        # below both thin thresholds on purpose: the notice would fire if it ran before the prefactor
+        n_freqs, ensemble_M = 1, 2
 
     for skip_sanity in (True, False):
-        with pytest.raises(FDTModelError) as e:
-            fdt_pipeline.run_fdt(_NoN(), skip_sanity=skip_sanity, confirm_production=True)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            with pytest.raises(FDTModelError) as e:
+                fdt_pipeline.run_fdt(_NoN(), skip_sanity=skip_sanity, confirm_production=True)
         assert "'n'" in str(e.value), str(e.value)
         assert e.value.field == "cell", f"skip_sanity={skip_sanity}: field={e.value.field!r}"
+        thin = [str(w.message) for w in rec if issubclass(w.category, PreflightWarning)]
+        assert thin == [], f"skip_sanity={skip_sanity}: the refused run first warned {thin}"
     assert spent == [], "the prefactor refusal arrived only after a campaign had been spent"
 
 

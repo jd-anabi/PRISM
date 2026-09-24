@@ -144,9 +144,11 @@ def observable_noise_prefactor(cfg: FDTConfig) -> float:
         raise FDTModelError(f"The {cfg.model} cell is missing parameter {e}.", field="cell") from e
     args = tuple(0.0 for _ in c.var_names) + tuple(param_vals)     # states irrelevant for additive D
     D0 = float(c.diff_fns[0](args))
+    # Keyed to the CELL: a model whose D is identically zero is refused upstream by
+    # registry.fdt_support, so what reaches this line is a cell value (e.g. d0 <= 0) making D0 <= 0.
     if not math.isfinite(D0) or D0 <= 0.0:
         raise FDTModelError(f"Observable '{c.var_names[0]}' has non-positive/zero noise (D0={D0}); "
-                            "FDT requires a stochastic observable.", field="model")
+                            "FDT requires a stochastic observable.", field="cell")
     return 1.0 / D0
 
 
