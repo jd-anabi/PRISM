@@ -4643,6 +4643,51 @@ def test_render_lineage_resolves_what_a_comparison_compared(store):
     assert "compared" not in render_lineage(store, "fdt", b.id)
 
 
+def test_render_lineage_reads_a_malformed_compared_block_without_dropping_or_faking_it(store):
+    """Task 5's review fix. Only a hand-edited manifest or a writer bug reaches these shapes, but the
+    lineage's two promises hold for them too: its one refusal is the head ref (the browser catches a
+    Refusal and nothing else, so any other exception is a crash), and a broken record never reads as
+    a complete one. So a malformed ``compared`` block yields a line saying WHAT is unreadable --
+    never silence (a comparison that reads as having drawn nothing), never an exception, and never a
+    ``MISSING fdt []`` made up from a value that was not an entry at all.
+    """
+    from core.artifacts import render_lineage
+    real = _make(store, "fdt", name="real_cell", body=_bodies()["fdt"])
+    made = iter(range(100))
+
+    def lineage_with(compared):
+        body = _bodies()["fdt"]
+        body.update(study="comparison", compared=compared)
+        w = _make(store, "fdt", name=f"malformed_{next(made)}", body=body)
+        return render_lineage(store, "fdt", w.id)
+
+    # a block that is there but is not a mapping: one line naming its type
+    for bad, type_name in ((["x"], "list"), ("cells", "str"), (5, "int")):
+        text = lineage_with(bad)
+        assert f"\n  compared: UNREADABLE ({type_name}, not a mapping of mode and records)\n" in text, text
+
+    # records that are not a list: the header and one line -- not a walk over characters or keys
+    for bad, type_name in ((5, "int"), (True, "bool"), ("abc", "str"), ({"id": real.id}, "dict"),
+                           (None, "null")):
+        text = lineage_with({"mode": "cells", "records": bad})
+        assert (f"\n  compared (cells):\n    UNREADABLE records ({type_name}, not a list of entries)\n"
+                in text), text
+        assert "MISSING" not in text, text
+    assert "    UNREADABLE records (null, not a list of entries)\n" in lineage_with({"mode": "cells"}), \
+        "no records key at all"
+
+    # an entry that is not a record prints its repr, so a bare id is not thrown away; an entry that
+    # names no id says so; the good entry beside them is unaffected
+    text = lineage_with({"mode": "cells", "records": [
+        {"kind": "fdt", "id": real.id, "name": "real_cell"}, "20260101T000000", None,
+        {"kind": "fdt", "name": "no_id_here"}]})
+    assert f"\n    fdt real_cell [{real.id}]\n" in text, text
+    assert "\n    UNREADABLE entry '20260101T000000' (not a mapping of kind, id and name)\n" in text, text
+    assert "\n    UNREADABLE entry None (not a mapping of kind, id and name)\n" in text, text
+    assert "\n    UNREADABLE entry {'kind': 'fdt', 'name': 'no_id_here'} (names no id)\n" in text, text
+    assert "MISSING" not in text, "nothing here was an id the store could have held"
+
+
 # ── load_observation's two payload guards (piece 4, §8.1) ────────────────────────────────────────
 
 

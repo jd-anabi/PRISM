@@ -201,21 +201,43 @@ def _compared_lines(store, m) -> list:
 
     Reads ``body["compared"]`` with ``.get``: every other kind's body has no such key, and a body
     that has it null is a record of this kind that is not a comparison.
+
+    Any other shape than ``{"mode": ..., "records": [{"kind", "id", "name"}, ...]}`` prints a line
+    saying WHAT is unreadable (Task 5's review fix). Only a hand-edited manifest or a writer bug gets
+    here, but both of ``render_lineage``'s promises still hold for it. Printing nothing would make the
+    comparison read as having drawn nothing. Iterating a string or a mapping would print a false
+    ``MISSING fdt []`` for every character or key. Letting a ``TypeError`` out would break "the one
+    refusal is the head ref", and the browser catches only a Refusal.
     """
     from .store import KIND_DIRS, StoreError
     comp = m.body.get("compared") if isinstance(m.body, dict) else None
-    if not isinstance(comp, dict):
+    if comp is None:
         return []
+    if not isinstance(comp, dict):
+        return [f"{INDENT}compared: UNREADABLE ({type(comp).__name__}, not a mapping of mode and records)"]
     out = [f"{INDENT}compared ({comp.get('mode') or NONE}):"]
-    for rec in comp.get("records") or []:
-        rec = rec if isinstance(rec, dict) else {}
+    records = comp.get("records")
+    if not isinstance(records, list):
+        shown = "null" if records is None else type(records).__name__
+        out.append(f"{INDENT}{INDENT}UNREADABLE records ({shown}, not a list of entries)")
+        return out
+    for rec in records:
+        if not isinstance(rec, dict):
+            # Its repr, never {}: a bare id string is still an id, and the reader should see it.
+            out.append(f"{INDENT}{INDENT}UNREADABLE entry {rec!r} (not a mapping of kind, id and name)")
+            continue
         # "fdt" is the default because a comparison of measurements is what this block exists for;
         # a kind this build does not know is named rather than skipped, like an unknown parent key.
-        ck, cid = str(rec.get("kind") or "fdt"), str(rec.get("id") or "")
+        ck = str(rec.get("kind") or "fdt")
         if ck not in KIND_DIRS:
             out.append(f"{INDENT}{INDENT}(compared entry names kind {ck!r}, which is no artifact "
                        f"kind this build knows)")
             continue
+        if rec.get("id") in (None, ""):
+            # Not "MISSING fdt []": nothing was looked up, and the entry's repr keeps the name it gave.
+            out.append(f"{INDENT}{INDENT}UNREADABLE entry {rec!r} (names no id)")
+            continue
+        cid = str(rec["id"])
         try:
             cm = store.get(ck, cid)
         except StoreError:
