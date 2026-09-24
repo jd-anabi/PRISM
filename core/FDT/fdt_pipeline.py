@@ -435,6 +435,15 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     #    resolved by run_fdt before the writer was entered, before anything was spent.
     ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), prefactor)
 
+    # The numbers (E1, spec §3.8), the moment they all exist and BEFORE the two figures below: they are
+    # hours of simulation and the figures minutes of matplotlib, so a figure that fails to draw must
+    # not cost them -- E2 keeps the folder, and this puts the numbers in it (Task 18's ruling). Still
+    # after both campaigns, never at the top of the run (P49): a path handed out is a payload the
+    # record lists, so a run that stops before this line leaves an unfinished record that lists no
+    # data.h5.
+    _write_single_h5(writer.payload("data.h5"), cfg, omegas, ratio, chis, freqs_psd, G,
+                     omega_natural, prefactor)
+
     # 9. Plot + save (the PSD went to disk before Campaign 2)
     ratio_path = writer.figure_path("Effective temperature ratio")
     chi_path = writer.figure_path("Chi components")
@@ -447,11 +456,6 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
                         save_path=chi_path,
                         title=fr"Susceptibility components: ND {cfg.model}",
                         omega_natural=omega_natural)
-    # The numbers beside the pictures (E1, spec §3.8). The payload path is asked for HERE, after both
-    # campaigns, never at the top of the run (P49): a path handed out is a payload the record lists,
-    # so a run that stops before this line leaves an unfinished record that lists no data.h5.
-    _write_single_h5(writer.payload("data.h5"), cfg, omegas, ratio, chis, freqs_psd, G,
-                     omega_natural, prefactor)
     writer.body["results"] = _results_block(omegas, ratio, omega_natural, blanks)
     writer.refresh()
     log.info(f"Saved plots to:\n  {ratio_path}\n  {chi_path}")

@@ -1557,6 +1557,42 @@ def test_a_failed_fdt_run_keeps_its_record_marked_unfinished(store, monkeypatch)
         f"the numbers file was handed out before the driven campaign: {payloads}"
 
 
+def test_a_figure_that_fails_after_the_driven_campaign_does_not_cost_the_numbers(store, monkeypatch):
+    """E2's point is that a failed run keeps what it MEASURED. Once both campaigns are in, the numbers
+    are hours of simulation and the two final figures are minutes of matplotlib, so ``data.h5`` is
+    written first: a figure that fails to draw (a matplotlib error, a full disk) leaves an unfinished
+    record whose numbers are on disk and readable, and a re-plot needs no re-run (Task 18's ruling).
+    The file is listed with a null hash, as every payload of an unfinished record is (P47)."""
+    import json
+
+    import h5py
+    import pytest
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+
+    def _boom(*a, **k):
+        raise RuntimeError("stub figure failure")
+
+    monkeypatch.setattr(fdt_pipeline, "plot_eff_temp_ratio", _boom)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    w = store.create("fdt", cfg, name="unplotted")
+    with pytest.raises(RuntimeError, match="stub figure failure"):
+        fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=3)
+
+    (summary,) = store.list("fdt")
+    assert summary.name == "unplotted" and summary.complete and not summary.finished
+    payloads = json.loads((w.dir / "manifest.json").read_text(encoding="utf-8"))["payloads"]
+    assert payloads == {"data.h5": None}, payloads
+    with h5py.File(w.dir / "data.h5", "r") as h5:
+        assert h5.attrs["study"] == "single"
+        for name in ("omega_grid", "T_eff_over_T", "chi_prime", "chi_double_prime"):
+            assert h5[name][...].shape == (3,), name
+        assert h5["PSD_omegas"][...].shape == h5["PSD_G"][...].shape
+
+
 def test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_leaves_none(
         store, monkeypatch):
     """The two refusals a single-cell run can meet, and why they end differently (spec §2.2 step 3,
