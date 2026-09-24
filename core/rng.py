@@ -6,8 +6,9 @@ the five diagnostics and through them ``core.orchestrator``, sbi's inference mod
 ``pytensor``. An FDT run
 needs none of that, and paid about two seconds and two false pytensor "g++" lines on stderr for it at
 the head of every ``python -m core fdt`` (Task 17, fix round 1). This module imports only
-``contextlib``; torch and numpy are imported when the context is entered. ``core.diagnostics.rng``
-re-exports the same object, so every diagnostics import keeps working.
+``contextlib`` and the stdlib-only ``core.refusals``; torch and numpy are imported when the context is
+entered. ``core.diagnostics.rng`` re-exports the same object, so every diagnostics import keeps
+working.
 
 Seed ONCE and let the streams run on, exactly as ``scripts/smoke_train.py`` did. Training and
 calibration both draw their initial conditions from numpy's global RNG and their Sobol (t_scale, T)
@@ -25,6 +26,33 @@ Seeded runs are NOT bitwise-reproducible on CUDA or across devices: a kernel's r
 fixed. The seed buys a repeatable EXPERIMENT on one device, not a repeatable number.
 """
 import contextlib
+
+from core.refusals import describe, refuse, require_at_least
+
+#: The largest seed ``seeded`` can take: ``torch.manual_seed``'s documented ceiling,
+#: 0xffff_ffff_ffff_ffff. One above it raises "Overflow when unpacking long long", a bare ValueError,
+#: from inside the block -- that is, after an FDT run has opened its record.
+SEED_MAX = 2 ** 64 - 1
+
+
+def require_seed(seed) -> int:
+    """The one rule for a seed an FDT run is handed: a whole number from 0 to ``SEED_MAX``, refused
+    under the field key ``seed`` before anything is spent. Both FDT builders, the sweep study and
+    each sweep apply it, so the four cannot disagree; ``--seed`` is ``type=int`` and takes any integer.
+
+    The floor is ``require_at_least``'s, sentence and all: 0 is ``SeedSequence``'s floor, and the
+    sweep derives every per-point stream through one. The ceiling is its own sentence through
+    ``refuse`` rather than ``require_between``, the one rule with an upper end, because that rule
+    compares and prints in float: it renders both ends of this range as "1.84467e+19" ("must be
+    between 0 and 1.84467e+19; got 1.84467e+19"), and ``float(2**64 - 1)`` rounds up to 2**64, so it
+    would refuse ``SEED_MAX`` itself (Task 28's ruling asked for a readable sentence).
+    """
+    seed = require_at_least("seed", seed, 0)
+    if seed > SEED_MAX:
+        what = describe("seed")
+        refuse("seed", f"{what[0].upper()}{what[1:]} must be at most {SEED_MAX}, the largest the "
+                       f"random number generator accepts; got {seed}.")
+    return seed
 
 
 @contextlib.contextmanager

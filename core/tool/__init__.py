@@ -25,8 +25,9 @@ from .fields import fix_sentence
 EPILOG = """\
 environment -- the only variables PRISM reads, and none of them is a substitute for a flag:
   PRISM_RESOURCES         inputs root: Bounds/ Cells/ Units/ Models/  (default <repo>/Resources)
-  PRISM_ARTIFACTS         artifacts root (default <repo>/Artifacts); every subcommand but `smoke`
-                          writes here, and `smoke` takes --store-root instead
+  PRISM_ARTIFACTS         artifacts root (default <repo>/Artifacts); every subcommand writes here
+                          but `smoke`, which makes a fresh temporary root per run. `smoke`, `fdt`
+                          and `crossval` also take --store-root, which names another root
   PRISM_VRAM_CEILING_GIB  core-level: GiB one simulation batch may plan to occupy (0 = auto)
   PRISM_MEM_LOG_EVERY     core-level: batches between memory log lines
 The last two are read by core/SBI/pipeline.py, never by this tool: PRISM_VRAM_CEILING_GIB live, on
@@ -109,12 +110,19 @@ def main(argv=None) -> int:
     from core.artifacts import ArtifactStore, use_store
     registry.load_user_models()                # idempotent; AFTER parsing, so --help stays torch-free
     # smoke is the one subcommand with its own root: a fresh store per run unless one is named, so
-    # two runs never share a cache by accident and a named one can be resumed. Keyed on the FLAG
-    # (only smoke defines --store-root), never on the subcommand name.
-    has_store_root = hasattr(args, "store_root")
-    auto_root = has_store_root and not args.store_root         # True only for smoke's own mkdtemp
-    if has_store_root:
-        root = Path(args.store_root or tempfile.mkdtemp(prefix="prism_smoke_"))
+    # two runs never share a cache by accident and a named one can be resumed. Keyed on smoke's OWN
+    # PROPERTY (piece 5, E11), never on the FLAG's presence and never on the subcommand name: `fdt`
+    # and `crossval` declare --store-root too since piece 5, and all three of the behaviours below
+    # are wrong for them. An unnamed root must be the operator's PRISM_ARTIFACTS; `auto_root` must
+    # stay false, or a failed run would call rmdir on that real root; and _smoke_interrupt_advice
+    # reads args.prior/args.save, which neither of them has.
+    temp_store_root = bool(getattr(args, "temp_store_root", False))   # set by smoke's parser alone
+    named_root = getattr(args, "store_root", None)
+    auto_root = temp_store_root and not named_root             # True only for smoke's own mkdtemp
+    if named_root:
+        root = Path(named_root)
+    elif temp_store_root:
+        root = Path(tempfile.mkdtemp(prefix="prism_smoke_"))
     else:
         root = config.artifacts_root()
     rc = 1
@@ -143,7 +151,7 @@ def main(argv=None) -> int:
         if note is not None:
             print(f"prism {args.cmd}: interrupted: {note}", file=sys.stderr)
         else:
-            advice = _smoke_interrupt_advice(args, root) if has_store_root else \
+            advice = _smoke_interrupt_advice(args, root) if temp_store_root else \
                 "the same command with --resume require continues them."
             print(f"prism {args.cmd}: interrupted: the artifact being written was removed. If a "
                   f"[checkpoint] line above says batches were saved, {advice}", file=sys.stderr)

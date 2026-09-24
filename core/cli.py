@@ -23,6 +23,7 @@ from .Helpers import file_manager
 from .refusals import (Refusal, describe, missing_values_phrase, refuse, require_at_least,
                        require_below, require_between, require_choice, require_file, require_finite,
                        require_positive)
+from .rng import require_seed
 
 
 class UnitParseError(Refusal):
@@ -390,7 +391,7 @@ def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
     freqs_per_batch = require_at_least("freqs_per_batch", freqs_per_batch, 1)
     F0 = require_positive("f0", F0)
     if seed is not None:
-        seed = require_at_least("seed", seed, 0)
+        seed = require_seed(seed)
     require_file("cell", cell_file, "cell")
     ok, reason = registry.fdt_support(model)
     if not ok:
@@ -501,7 +502,7 @@ def make_param_sweep_config(cell_file: str, *, preset: dict, preset_name: str,
         "freqs_per_batch", 1 if freqs_per_batch is None else freqs_per_batch, 1)
     F0 = require_positive("f0", 0.05 if F0 is None else F0)
     if seed is not None:
-        seed = require_at_least("seed", seed, 0)
+        seed = require_seed(seed)
     s_spec = _check_grid("s_grid", s_spec)
     t_spec = _check_grid("t_grid", t_spec)
     require_file("cell", cell_file, "cell")

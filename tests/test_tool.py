@@ -1087,7 +1087,8 @@ def test_smoke_ctrl_c_advice_depends_on_store_root():
 
 def test_smoke_ctrl_c_prints_store_specific_resume_advice(tool_env, tmp_path, monkeypatch, capsys):
     """K5 end to end: main()'s KeyboardInterrupt handler must pick the smoke-specific advice for
-    smoke -- keyed on the --store-root FLAG (hasattr), not the subcommand name -- and must leave
+    smoke -- keyed on smoke's own ``args.temp_store_root`` property (piece 5, E11), neither on the
+    subcommand name nor on the --store-root flag, which fdt and crossval declare too -- and must leave
     every other subcommand's generic advice untouched (test_ctrl_c_mid_simulation_keeps_the_committed_
     batches still asserts only "interrupted" is in stderr for train). Raising KeyboardInterrupt
     straight out of build_prior, rather than driving a real interrupt through a real simulation mid-
@@ -1342,6 +1343,195 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "--skip-sanity" in err and "--no-production" in err, err
     assert built == [], "the refused pair built a config"
+
+
+def test_fdt_and_crossval_take_store_root_and_otherwise_follow_the_environment(
+        tool_env, tmp_path, monkeypatch):
+    """E11, first half: both analyses write records now, so both need the flag that says WHERE --
+    and without it they must follow PRISM_ARTIFACTS like every subcommand but `smoke`, never a
+    throwaway temp root nobody would think to look in.
+
+    The handler is replaced by a recorder, so what is asserted is the root ``main`` OPENED THE STORE
+    ON rather than anything a real campaign would write: the dispatch is the subject, and a real
+    fdt run is minutes of simulation (it is `slow`-marked, in test_fdt_and_crossval_run_at_tiny_size).
+    """
+    from core import config
+    from core.tool import fdt as fdt_mod
+    from core.tool import main
+
+    _bounds, cell, root = tool_env
+    seen = {}
+
+    def _rec(args, store):
+        seen["root"] = Path(store.root).resolve()
+        seen["flag"] = args.store_root
+        return 0
+
+    monkeypatch.setattr(fdt_mod, "run_fdt_cmd", _rec)
+    monkeypatch.setattr(fdt_mod, "run_crossval", _rec)
+
+    assert main(["fdt", "--cell", cell]) == 0
+    assert seen["flag"] is None
+    assert seen["root"] == Path(config.artifacts_root()).resolve(), \
+        "with no --store-root, fdt must follow PRISM_ARTIFACTS, not a temp directory"
+    assert seen["root"] == Path(root).resolve()
+
+    named = tmp_path / "somewhere_else"
+    assert main(["fdt", "--cell", cell, "--store-root", str(named)]) == 0
+    assert seen["root"] == named.resolve() and seen["flag"] == str(named)
+
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                 "--t-grid", "1", "1.1", "2", "--store-root", str(named)]) == 0
+    assert seen["root"] == named.resolve(), "crossval takes the same flag, with the same meaning"
+
+
+def test_fdt_and_crossval_take_seed_and_hand_it_to_the_builder_and_the_run(tool_env, tmp_path,
+                                                                           monkeypatch):
+    """E7's command-line half (P79). A record carries the seed its run used; without the flag that
+    supplies one, that seed can never be supplied back -- the defect E7 names. The ONE integer
+    reaches the builder (through ``knobs``, so an unset flag forwards nothing and the builder's own
+    default stands) and the run (explicitly, so None there means "draw one") -- the rule both panels
+    follow (P12).
+
+    ``ArtifactStore.create`` is replaced because the builder recorders return a placeholder, not an
+    FDTConfig, and ``store.create("fdt", cfg)`` reads the run's settings off its cfg: the dispatch is
+    the subject here, not the record."""
+    from core import cli, config
+    from core.artifacts import ArtifactStore
+    from core.FDT import cross_validation, fdt_pipeline
+
+    seen = {}
+
+    def _create(self, kind, cfg=None, *, name="", note=""):
+        return SimpleNamespace(kind=kind, id="rec", name=name, note=note, dir=tmp_path / "rec",
+                               body={})
+
+    def _fdt_cfg(model, state_dep_drift, cell_file, **kw):
+        seen["fdt_builder"] = kw
+        return "CFG"
+
+    def _run_fdt(cfg, *, skip_sanity, confirm_production, writer, seed=None):
+        seen["fdt_run"] = seed
+        return SimpleNamespace(id="rec", name="", path=writer.dir)
+
+    def _sweep_cfg(cell_file, **kw):
+        seen["sweep_builder"] = kw
+        return "CFG", "S", "T"
+
+    def _study(cfg, *, s_grid, t_grid, writers, seed=None):
+        seen["study"] = seed
+        return [SimpleNamespace(id="s", name="", path=writers["s"].dir),
+                SimpleNamespace(id="t", name="", path=writers["temp"].dir)]
+
+    monkeypatch.setattr(ArtifactStore, "create", _create)
+    monkeypatch.setattr(cli, "make_fdt_config", _fdt_cfg)
+    monkeypatch.setattr(fdt_pipeline, "run_fdt", _run_fdt)
+    monkeypatch.setattr(cli, "make_param_sweep_config", _sweep_cfg)
+    monkeypatch.setattr(cross_validation, "run_param_study_cli", _study)
+
+    cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    assert main(["fdt", "--cell", cell, "--seed", "7"]) == 0
+    assert seen["fdt_builder"].get("seed") == 7 and seen["fdt_run"] == 7, seen
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                 "--t-grid", "1", "1.1", "2", "--seed", "7"]) == 0
+    assert seen["sweep_builder"].get("seed") == 7 and seen["study"] == 7, seen
+
+    seen.clear()
+    assert main(["fdt", "--cell", cell]) == 0
+    assert "seed" not in seen["fdt_builder"], "an unset --seed forwards nothing to the builder"
+    assert seen["fdt_run"] is None, "no --seed: the run draws one and records it (E7, P12)"
+
+
+def test_fdt_and_crossval_declare_seed_and_store_root_by_name(capsys):
+    """P79 and E11, pinned on THESE TWO parsers by name. The FLAG-table pin (tests/test_refusals.py)
+    only asks that SOME subcommand defines ``--seed``, and ``smoke`` and the diagnostics already did
+    -- so it stayed green while neither analysis took the flag its own refusals name. The ``--help``
+    each prints is what an operator reads, so it is checked too.
+
+    And the temp-root property is ``smoke``'s ALONE: every other subcommand must leave
+    ``temp_store_root`` unset, or ``main`` would hand it a throwaway root, rmdir its root after a
+    failure and print smoke's resume advice (E11)."""
+    parser = build_parser()
+    for name in ("fdt", "crossval"):
+        sub = parser.subcommands[name]
+        seed = sub._option_string_actions.get("--seed")
+        assert seed is not None, f"{name} does not accept --seed"
+        assert seed.dest == "seed" and seed.type is int and seed.default is None, (name, seed)
+        root = sub._option_string_actions.get("--store-root")
+        assert root is not None, f"{name} does not accept --store-root"
+        assert root.dest == "store_root" and root.default is None, (name, root)
+
+        capsys.readouterr()
+        assert main([name, "--help"]) == 0
+        out = capsys.readouterr().out
+        assert "--seed" in out and "--store-root" in out, out
+
+    flagged = sorted(name for name, sub in parser.subcommands.items()
+                     if sub.get_default("temp_store_root"))
+    assert flagged == ["smoke"], flagged
+
+
+def test_an_fdt_run_that_fails_leaves_the_artifacts_root_where_it_found_it(tmp_path, monkeypatch,
+                                                                          capsys):
+    """E11's second half, and the accidental flip it exists to prevent. ``main`` removes an
+    auto-created store root when the run did not succeed (``_remove_if_still_empty``) -- a safety
+    net written for ``smoke``'s own ``mkdtemp`` directory. Keyed on the FLAG's presence, declaring
+    ``--store-root`` on ``fdt`` would point that ``rmdir`` at the operator's real ``Artifacts/``
+    root. ``rmdir`` refuses a non-empty directory, so nothing would be lost TODAY -- which is
+    exactly why this needs a test rather than a reader: the hazard is invisible on any machine whose
+    store already holds an artifact.
+
+    PRISM_ARTIFACTS points at a directory that does not exist yet, so ``main`` creates it and the
+    root is empty at the moment the cleanup would run: the one state in which the wrong dispatch
+    actually deletes something.
+    """
+    from core import config
+    from core.refusals import Refusal
+    from core.tool import fdt as fdt_mod
+    from core.tool import main
+
+    root = tmp_path / "Artifacts"
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
+    assert not root.exists()
+
+    def _refuse(args, store):
+        raise Refusal("nothing here is real", field="cell")
+
+    monkeypatch.setattr(fdt_mod, "run_fdt_cmd", _refuse)
+    capsys.readouterr()
+    assert main(["fdt", "--cell", str(tmp_path / "nadrowski" / "cell.txt")]) == 1
+    assert root.is_dir(), \
+        "a failed fdt run removed the operator's artifacts root (E11: auto_root is smoke's alone)"
+    assert Path(config.artifacts_root()).resolve() == root.resolve()
+
+
+def test_a_seed_the_generator_cannot_take_is_refused_naming_the_flag(tool_env, capsys):
+    """``--seed`` is ``type=int``, so argparse takes any integer; its range is the builders' rule
+    (A3). One above 2**64 - 1 used to pass that rule, open the record and then overflow the
+    generator inside the run. Now the builder refuses it -- exit 1, one ``refused:`` line ending in
+    the flag -- before the record is created: nothing new appears under the root's ``fdt/``."""
+    _bounds, _cell, root = tool_env
+    kind_dir = Path(root) / "fdt"
+    before = sorted(kind_dir.iterdir()) if kind_dir.is_dir() else []
+
+    hopf = str(config.CELL_PATH / "hopf" / "cell.txt")
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    for cmd, argv in (("fdt", ["fdt", "--cell", hopf]),
+                      ("crossval", ["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                                    "--t-grid", "1", "1.1", "2"])):
+        capsys.readouterr()
+        assert main([*argv, "--seed", "18446744073709551616"]) == 1, cmd
+        err = capsys.readouterr().err
+        lines = [ln for ln in err.splitlines() if ln.startswith(f"prism {cmd}: refused:")]
+        assert len(lines) == 1, err
+        assert "must be at most 18446744073709551615" in lines[0], lines[0]
+        assert lines[0].endswith("(--seed)"), lines[0]
+        assert "Overflow" not in err and "Traceback" not in err, err
+
+    after = sorted(kind_dir.iterdir()) if kind_dir.is_dir() else []
+    assert after == before, "a refused seed opened a record"
 
 
 def test_crossval_preset_choices_match_sweep_presets():

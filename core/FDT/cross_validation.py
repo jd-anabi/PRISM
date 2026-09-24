@@ -32,8 +32,8 @@ from ..config import FDTConfig
 # core.rng, never core.diagnostics.rng: importing anything under core.diagnostics runs its __init__,
 # which loads the orchestrator, sbi and pytensor -- two seconds and two false "g++" lines on every
 # sweep, for a context manager that needs none of them (Task 17, fix round 1).
-from ..refusals import Refusal, require_at_least
-from ..rng import seeded
+from ..refusals import Refusal
+from ..rng import require_seed, seeded
 from ..runs import public_entry
 from .campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
 from .spectral import eff_temp_ratio
@@ -285,14 +285,15 @@ def run_fdt_param_sweep(
     :returns: the LoadedFdt for the record just written.
     :raises Refusal: every operating point failed (field ``s_grid`` or ``t_grid``), and the unfinished
                      record stays on disk; or, before the writer is entered so that no record is
-                     opened, a negative seed (field ``seed``) or a cell with no FDT normalisation
-                     constant (``FDTModelError``, field ``cell``).
+                     opened, a seed outside 0..2**64 - 1 (field ``seed``) or a cell with no FDT
+                     normalisation constant (``FDTModelError``, field ``cell``).
     """
     fixed_overrides = fixed_overrides or {}
     _check_sweep_param(sweep_param)                  # a malformed call, before the writer is entered
-    # Non-negative, the builders' own rule and _point_seed's domain, refused HERE: inside the per-point
-    # guard a negative seed would fail every point and end in a false "measured nothing".
-    seed = require_at_least("seed", _resolve_seed(None, cfg), 0)
+    # The builders' own seed rule (require_seed), refused HERE: its floor is _point_seed's domain, and
+    # inside the per-point guard a negative seed would fail every point and end in a false "measured
+    # nothing". The ceiling is the builders' too, so a direct call accepts no seed they refuse.
+    seed = require_seed(_resolve_seed(None, cfg))
     # The normalisation BEFORE the writer is entered, as run_fdt does (Task 17): a cell that cannot
     # supply it is then refused with no record opened, where resolving it after data.h5 had been
     # handed out would keep an unfinished record around an empty file. The study checks the same cell
@@ -542,10 +543,11 @@ def run_param_study_cli(cfg: FDTConfig, *, s_grid: np.ndarray, t_grid: np.ndarra
     # §3.4's check, applied to the sweep for the same reason: a cell that cannot supply the
     # normalisation constant would otherwise cost the whole first phase before anything noticed.
     observable_noise_prefactor(cfg)
-    # On the PRIVATE copy; both sweeps read it. Non-negative (the builders' rule and _point_seed's
-    # domain), and checked HERE, before the notice below, for the same reason as the prefactor (F10;
-    # fix round 1). Each sweep checks it again for a direct caller.
-    cfg.seed = require_at_least("seed", _resolve_seed(seed, cfg), 0)
+    # On the PRIVATE copy; both sweeps read it. The builders' seed rule (require_seed: 0 to 2**64 - 1,
+    # the floor being _point_seed's domain), and checked HERE, before the notice below, for the same
+    # reason as the prefactor (F10; fix round 1): the seed given here overrides the one the builder
+    # checked. Each sweep checks it again for a direct caller.
+    cfg.seed = require_seed(_resolve_seed(seed, cfg))
     # E5, ONCE for the whole study and before either sweep spends anything -- and HERE, in the public
     # entry, so stacklevel=3 names the front end's call rather than a line of this module. After the
     # prefactor and the seed (ruling F10): a refused study must not first warn about how far to trust

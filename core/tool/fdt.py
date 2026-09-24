@@ -77,9 +77,27 @@ def _grid(flag: str, triple) -> tuple:
     return float(lo), float(hi), int(n)
 
 
+def _add_store_root(p) -> None:
+    """``--store-root`` for an analysis that writes an ``fdt`` record (E11, spec §6.1).
+
+    DECLARING it changes nothing else by itself. ``main`` used to key three behaviours on whether a
+    subcommand declared this flag -- a throwaway ``mkdtemp`` root, the removal of an empty
+    auto-created root, and which Ctrl-C advice is printed -- which was ``smoke`` alone. All three are
+    wrong here: an unnamed root must be the operator's own PRISM_ARTIFACTS, a failed run must never
+    ``rmdir`` that root, and ``_smoke_interrupt_advice`` reads ``args.prior``/``args.save``, which
+    these two do not have. So ``main`` now keys them on ``args.temp_store_root``, which only
+    ``smoke`` sets.
+    """
+    p.add_argument("--store-root", dest="store_root", default=None,
+                   help="the artifact store this run writes its record into (default: the "
+                        "PRISM_ARTIFACTS root, like every subcommand but `smoke`)")
+
+
 def _add_fdt_knobs(p) -> None:
-    """The four resolution knobs both subcommands share. Each defaults to None and travels only when
-    set; the dest is the builder's keyword, capital M and F0 included."""
+    """The four resolution knobs both subcommands share, and the seed. Each defaults to None and
+    travels only when set; the dest is the builder's keyword, capital M and F0 included. ``--seed``
+    is E7's command-line half (P79): a seed a record carries must be one the operator can supply
+    back. Unset, the run draws one from [0, 2**31) and records it (P12, P13)."""
     p.add_argument("--n-freqs", dest="n_freqs", type=int, default=None,
                    help="drive frequencies in Campaign 2")
     p.add_argument("--ensemble-m", dest="ensemble_M", type=int, default=None,
@@ -88,6 +106,9 @@ def _add_fdt_knobs(p) -> None:
                    help="frequencies packed into one simulator call")
     p.add_argument("--f0", dest="F0", type=float, default=None,
                    help="ND forcing amplitude (keep it inside the linear regime)")
+    p.add_argument("--seed", type=int, default=None,
+                   help="the run's random seed, a whole number from 0 (default: draw one; either "
+                        "way the record carries it, so the run can be repeated)")
 
 
 def register(subparsers):
@@ -97,6 +118,7 @@ def register(subparsers):
     fdt.add_argument("--cell", required=True, help="the cell file to analyse")
     fdt.add_argument("--model", default=None,
                      help="model name (default: the cell's parent folder)")
+    _add_store_root(fdt)
     _add_fdt_knobs(fdt)
     fdt.add_argument("--skip-sanity", dest="skip_sanity", action="store_true",
                      help="skip the sanity checks and go straight to the production sweep")
@@ -114,6 +136,7 @@ def register(subparsers):
                     metavar=("MIN", "MAX", "N"), help="the S sweep grid")
     cv.add_argument("--t-grid", dest="t_grid", nargs=3, type=float, required=True,
                     metavar=("MIN", "MAX", "N"), help="the T_a/T sweep grid")
+    _add_store_root(cv)
     _add_fdt_knobs(cv)
     cv.set_defaults(handler=run_crossval, interrupt_note=CROSSVAL_INTERRUPT_NOTE)
     return {"fdt": fdt, "crossval": cv}
@@ -139,11 +162,11 @@ def run_fdt_cmd(args, store):
                 "the cell's parent folder set the model name; pass --model to override it")
         raise ValueError(f"{reason} ({hint}.)")
     cfg = cli.make_fdt_config(model, registry.state_dep_drift(model), args.cell,
-                              **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0"))
+                              **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0", "seed"))
     writer = store.create("fdt", cfg)
     rec = fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,
                                confirm_production=not args.no_production, writer=writer,
-                               seed=getattr(args, "seed", None))
+                               seed=args.seed)
     print(f"[prism fdt] record {rec.id} at {rec.path}")
 
 
@@ -162,6 +185,6 @@ def run_crossval(args, store):
         **knobs(args, "freqs_per_batch", "F0", "seed"))
     writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
     recs = cross_validation.run_param_study_cli(cfg, s_grid=s_grid, t_grid=temp_grid,
-                                                writers=writers, seed=getattr(args, "seed", None))
+                                                writers=writers, seed=args.seed)
     for rec in recs:
         print(f"[prism crossval] sweep record {rec.id} at {rec.path}")

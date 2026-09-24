@@ -2324,6 +2324,70 @@ def test_a_negative_seed_is_refused_before_the_sweep_opens_its_record(store, mon
     assert not any(x.dir.exists() for x in writers.values()) and store.list("fdt") == []
 
 
+def test_a_seed_above_the_generators_ceiling_is_refused_by_both_builders_and_the_study(
+        store, monkeypatch):
+    """Task 28's ruling on ``--seed``, which takes any integer. A seed above 2**64 - 1 overflows the
+    generator ``seeded`` hands it to -- "Overflow when unpacking long long", a bare ValueError raised
+    INSIDE the run, after its record is open -- so the one seed rule both builders, the study and
+    each sweep apply has a ceiling as well as its floor, refused under the same field key before
+    anything is spent.
+
+    The ceiling itself is legal and comes back EXACTLY: a rule that compared in float would round
+    2**64 - 1 up to 2**64 and refuse the largest seed the generator takes. The sentence is pinned
+    whole because the one existing rule with an upper end renders both ends of this range as
+    "1.84467e+19"."""
+    import warnings
+
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import Refusal
+    from core.rng import SEED_MAX
+
+    assert SEED_MAX == 2 ** 64 - 1
+    # refuse()'s shape: the caller's sentence with its own period, then the default clause
+    sentence = ("The random seed must be at most 18446744073709551615, the largest the random number "
+                "generator accepts; got 18446744073709551616. (default none: one is drawn and "
+                "recorded)")
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    single = dict(n_freqs=4, ensemble_M=8)
+    with pytest.raises(Refusal) as e:
+        cli.make_fdt_config("NADROWSKI", True, cell, **single, seed=SEED_MAX + 1)
+    assert e.value.field == "seed" and str(e.value) == sentence, str(e.value)
+    top = cli.make_fdt_config("NADROWSKI", True, cell, **single, seed=SEED_MAX).seed
+    assert top == SEED_MAX and isinstance(top, int), top
+
+    sweep = dict(preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+                 s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2))
+    with pytest.raises(Refusal) as e:
+        cli.make_param_sweep_config(cell, **sweep, seed=SEED_MAX + 1)
+    assert e.value.field == "seed" and str(e.value) == sentence, str(e.value)
+    top = cli.make_param_sweep_config(cell, **sweep, seed=SEED_MAX)[0].seed
+    assert top == SEED_MAX and isinstance(top, int), top
+
+    # The study, handed the seed directly (it overrides cfg.seed, P12): refused before its
+    # thin-setting notice and before either record is opened, as the negative seed is above.
+    _sweep_stubs(monkeypatch)
+    cfg, s_grid, t_grid = _thin_study_cfg()
+    writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    with warnings.catch_warnings(record=True) as said:
+        warnings.simplefilter("always")
+        with pytest.raises(Refusal) as e:
+            cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers,
+                                   seed=SEED_MAX + 1)
+    assert e.value.field == "seed" and str(e.value) == sentence, str(e.value)
+    assert [str(x.message) for x in said] == [], "the quick-look notice came before the refusal"
+    assert not any(x.dir.exists() for x in writers.values()) and store.list("fdt") == []
+
+    # ...and a sweep called on its own, which reads the seed off cfg.seed
+    cfg.seed = SEED_MAX + 1
+    w = store.create("fdt", cfg)
+    with pytest.raises(Refusal) as e:
+        cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
+    assert e.value.field == "seed" and str(e.value) == sentence, str(e.value)
+    assert not w.dir.exists() and store.list("fdt") == [], "refused before anything was spent"
+
+
 def test_a_sweeps_offgrid_counts_only_the_probes_its_spectra_could_not_supply(store, monkeypatch):
     """Fix round 1 (Important). ``offgrid.blanks`` counts the probe frequencies the SPONTANEOUS
     spectrum could not supply (spec §2.3, E9) -- exactly what a single-cell record counts

@@ -117,7 +117,11 @@ def register(subparsers):
                         "Required for a resume: the cache identity includes prior_fingerprint, and "
                         "two fits of one box differ")
     add_resume_flags(p)
-    p.set_defaults(handler=run_smoke)
+    # THE ONE subcommand that writes to a root of its own rather than to PRISM_ARTIFACTS: `main`
+    # reads this property (never `hasattr(args, "store_root")`, which `fdt` and `crossval` now
+    # satisfy too) to decide whether an unnamed --store-root means a fresh mkdtemp root, whether an
+    # empty auto-created root is removed after a failure, and which Ctrl-C advice is printed.
+    p.set_defaults(handler=run_smoke, temp_store_root=True)
     return {"smoke": p}
 
 
