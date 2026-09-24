@@ -84,6 +84,10 @@ def _stale_folder_note(actual: str, expected: str) -> str:
             f"nothing is lost -- only the folder name is out of date.")
 
 
+# An fdt body's ``study`` as ``_unfinished_note`` names it; its docstring says why a phrase.
+_STUDY_PHRASES = {"single": "single-cell measurement", "sweep": "sweep", "comparison": "comparison"}
+
+
 def _unfinished_note(s) -> str:
     """The one sentence that says what deleting an UNFINISHED record of this kind destroys.
 
@@ -96,9 +100,21 @@ def _unfinished_note(s) -> str:
     ``mark_complete`` alone -- ``training_checkpoint.save`` passes none -- so every real mid-run
     cache has ``rows is None``, and a ``sum(())`` here would print a confident, false "0 rows".
 
-    The fdt record names its operating points where it has them, and says there is no resume: unlike
-    a cache, whose batches a later run continues from, this one starts again from the beginning
-    (spec §1.3).
+    An fdt record is described by what its study holds, because one sentence for all three was false
+    for some of them:
+
+    - a MEASUREMENT (a single-cell run or a sweep) names its operating points where it has them --
+      the done count alone when the planned total is not recorded, as the table's Points cell does,
+      never "4 of ?" -- and says there is no resume: unlike a cache, whose batches a later run
+      continues from, it is measured again from the beginning (spec §1.3). Its figures and log are
+      "any it had written": a single-cell run cancelled during its spontaneous campaign has no
+      figure yet.
+    - a COMPARISON measures nothing -- it draws records already measured -- so deleting one loses no
+      measurement, and running it again redraws it (an interrupted one stays on disk and a re-run
+      writes a new one, Task 36's F56). "Measuring again from the start" would be false for it.
+
+    The study is named as a phrase, not as the body's bare word: "This single record" reads as "this
+    one record". A null or unrecognised study is a "measurement", which claims nothing it cannot back.
     """
     if s.kind == "simulation":
         return (f"This training cache is UNFINISHED: {s.batches_done} committed batch(es). "
@@ -106,14 +122,21 @@ def _unfinished_note(s) -> str:
                 "(Only the batch count is known while a cache is running: the rows are "
                 "recorded when the cache finishes.)")
     if s.kind == "fdt":
+        if s.study == "comparison":
+            return ("This comparison record is UNFINISHED: the run was interrupted or it failed, "
+                    "and it holds whatever it had drawn when it stopped. Deleting it loses nothing "
+                    "measured: running the comparison again redraws it from the records it "
+                    "compares.")
         if s.points_done is None:
-            measured = "it holds whatever it had written when it stopped"
+            held = "whatever it had measured when it stopped"
+        elif s.points_planned is None:
+            held = f"{s.points_done} operating point(s)"
         else:
-            planned = "?" if s.points_planned is None else s.points_planned
-            measured = f"it holds {s.points_done} of {planned} operating point(s)"
-        return (f"This {s.study or 'measurement'} record is UNFINISHED: the run was interrupted or "
-                f"it failed, and {measured}, its figures and its log. There is no resume for these "
-                "runs -- deleting it means measuring again from the start.")
+            held = f"{s.points_done} of {s.points_planned} operating point(s)"
+        return (f"This {_STUDY_PHRASES.get(s.study, 'measurement')} record is UNFINISHED: the run "
+                f"was interrupted or it failed, and it holds {held} and any figures and log it had "
+                "written. There is no resume for these runs -- deleting it means measuring again "
+                "from the start.")
     return ("This record is UNFINISHED: its folder holds only what the run had written when it "
             "stopped.")
 

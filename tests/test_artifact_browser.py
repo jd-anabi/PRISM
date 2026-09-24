@@ -619,6 +619,70 @@ def test_deleting_an_unfinished_fdt_record_names_what_is_half_written(store, mon
     assert "UNFINISHED" not in _delete_prompt(s2)[1], _delete_prompt(s2)[1]
 
 
+def _interrupted_fdt(store, name, body):
+    """An fdt record left the way E2 leaves one -- the real progressive writer, one payload written,
+    then an exception inside ``with w:`` -- returned as the Summary the listing gives it."""
+    w = store.create("fdt", None, name=name)
+    w.body = body
+    with pytest.raises(RuntimeError):
+        with w:
+            w.payload("data.h5").write_bytes(b"part of a run")
+            raise RuntimeError("stopped")
+    s = next(r for r in store.list("fdt") if r.id == w.id)
+    assert s.complete and not s.finished
+    return s
+
+
+def test_an_unfinished_fdt_record_is_described_by_what_its_study_holds(store):
+    """Checklist 15, by study. One sentence served every unfinished fdt record, and it was false for
+    several of the shapes one can take:
+
+    - a COMPARISON measures nothing -- it draws records already measured -- so "measuring again from
+      the start" is untrue; deleting one loses no measurement, and running it again redraws it;
+    - the bare body word read wrongly as a phrase ("This single record" is "this one record"), so the
+      study is named as a phrase, and an unknown study as a measurement;
+    - a single-cell run cancelled before its first figure has none, so its figures and log are
+      "any it had written", not "its";
+    - a sweep whose planned count is not recorded names its done count alone, as the table's Points
+      cell does, never "4 of ?".
+    """
+    from core.gui.screens.artifact_screen import _delete_prompt
+
+    base = {"settings": {}, "seed": 5, "notices": []}
+
+    cmp_ = _interrupted_fdt(store, "drawn_half", {
+        **base, "study": "comparison",
+        "compared": {"mode": "cells", "records": [{"kind": "fdt", "id": "20260101T000000",
+                                                   "name": "a"}]}})
+    detail = _delete_prompt(cmp_)[1]
+    assert "UNFINISHED" in detail and "comparison" in detail, detail
+    assert "measuring again" not in detail and "no resume" not in detail, detail
+    assert "redraws it" in detail, "running the comparison again redraws it"
+    assert "cannot be undone" in detail
+
+    single = _interrupted_fdt(store, "cancelled_early", {**base, "study": "single"})
+    assert single.points_done is None, "a single run has no operating points"
+    detail = _delete_prompt(single)[1]
+    assert "single-cell measurement" in detail, detail
+    assert "None" not in detail, detail
+    assert "any figures and log it had written" in detail, detail
+    assert "from the start" in detail, detail
+
+    unplanned = _interrupted_fdt(store, "sweep_no_plan", {
+        **base, "study": "sweep",
+        "points": {"param": "T", "planned": None, "done": 4, "failed": 0}})
+    assert unplanned.points_done == 4 and unplanned.points_planned is None
+    detail = _delete_prompt(unplanned)[1]
+    assert "4 operating point(s)" in detail, detail
+    assert "?" not in detail, detail
+    assert "sweep record is UNFINISHED" in detail, detail
+
+    unknown = _interrupted_fdt(store, "no_study", {**base, "study": None})
+    detail = _delete_prompt(unknown)[1]
+    assert "This measurement record is UNFINISHED" in detail, detail
+    assert "None" not in detail, detail
+
+
 def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch):
     """dependents() is read twice -- once here to avoid asking a question that could only fail, once
     inside delete() -- and the store's is the answer that counts. With the SCREEN's read stubbed
