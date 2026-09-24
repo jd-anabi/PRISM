@@ -1716,39 +1716,128 @@ def test_the_fdt_subcommands_no_longer_say_they_have_no_bounds_file():
 
 @pytest.mark.slow
 def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
-    """The real pipelines, at the smallest sizes the flags allow, into the temp artifacts root.
+    """The real pipelines, at the smallest sizes the flags allow, writing real ``fdt`` records.
 
     No new science: this asks only whether the two subcommands drive the campaigns end to end and
-    put their outputs where the GUI panels put theirs. ``tool_env`` is what makes "the temp artifacts
-    root" true: it sets PRISM_ARTIFACTS, and `config.artifacts_root()` -- which is what FDT and the
-    sweep study write under -- reads that variable at every call. Without it the four PNGs and the
-    two .h5 files land in the real ``Artifacts/`` and the session teardown fails.
+    leave behind what piece 5 promises -- a record per run (two for the study), its numbers in
+    ``data.h5``, its pictures under ``figures/``, and a body that says what ran. Until piece 5 it
+    globbed ``artifacts_root()/fdt`` and ``/crossval`` for loose PNGs and .h5 files, which is
+    exactly what E1 moved (spec section 8.3).
 
-    Measured 2026-09-15: 598.55 s on the CPU. fdt's own Campaign 1 (810k Euler steps) is one term,
-    but crossval's four operating points (2 S-sweep + 2 T-sweep, ~410k steps each under the
-    exploratory preset) are likely the bigger share of the total -- neither psd_T_obs_nd nor the
-    sweep step count is a flag -- so it is slow-marked; the recorder test above keeps the fast-gate
-    coverage. (Fix round 1, M7: corrected from "Campaign 1 alone", which undercounted crossval's
-    share; not re-measured, since the PNG assertions added below are cheap globs.)
+    Neither subcommand is given --store-root, deliberately: with the flag unset these two follow
+    ``config.artifacts_root()`` and NOT a throwaway temp root (spec section 6.1), and this test is
+    what keeps that true end to end. ``tool_env`` is what makes "the temp artifacts root" true --
+    it sets PRISM_ARTIFACTS, which ``artifacts_root()`` reads at every call; without it the records
+    land in the real ``Artifacts/`` and the session teardown fails.
+
+    The single-cell leg runs a shipped NADROWSKI cell. Until piece 5 it ran the shipped Hopf cell,
+    which the band check now refuses at the default band by design: its lowest probe, 0.1 x its
+    spontaneous peak of about 0.268 (ND), lies below the spectrum's first resolved bin, 0.0383. That
+    refusal is pinned in tests/test_fdt_user.py; here it would test a refusal instead of a record.
+    The shipped Nadrowski cells clear that bin with a 1.3-1.4x margin.
+
+    The study writes TWO records, one per swept parameter, carrying ONE seed (spec section 4.1): an
+    activity sweep that failed entirely no longer costs the temperature sweep.
+
+    Measured 2026-09-24: 452.03 s on the CPU. (The previous figure, 598.55 s recorded 2026-09-15,
+    was stale against every gate since -- 243, 208 and 229 s -- so it is replaced by a measurement,
+    not by a copied number.) It is longer than those gates because the single-cell leg now runs a
+    Nadrowski cell: about 173 s of the total, against 138 s and 141 s for the two sweeps (the
+    records' own timestamps).
     """
+    import math
+
+    import h5py
+
     from core import config
+    from core.artifacts import ArtifactStore
     from core.tool import main
 
-    cell = str(config.CELL_PATH / "hopf" / "cell.txt")
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    capsys.readouterr()
     assert main(["fdt", "--cell", cell, "--n-freqs", "2", "--ensemble-m", "8",
                  "--skip-sanity"]) == 0
-    out = config.artifacts_root() / "fdt"
-    for tag in ("fdt_ratio_", "chi_components_", "psd_", "spontaneous_trajectory_"):
-        assert list(out.glob(f"{tag}*.png")), tag
+    out = capsys.readouterr().out
 
-    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
-    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+    store = ArtifactStore(config.artifacts_root())
+    # ``list`` returns complete rows first, newest first, so [0] is this run even if a sibling test
+    # in this module has left an older fdt record in the shared root.
+    single = [s for s in store.list("fdt") if s.study == "single"]
+    assert single and single[0].finished, single
+    rec = store.load_fdt(single[0].id)
+    # The record the tool named before it spent anything (ruling F20) is the one it wrote.
+    assert f"[prism fdt] writing record {rec.id} at " in out, out[-2000:]
+    assert rec.body["study"] == "single" and rec.body["complete"] is True
+    assert isinstance(rec.body["seed"], int), rec.body["seed"]
+    assert rec.body["settings"]["n_freqs"] == 2 and rec.body["settings"]["ensemble_M"] == 8
+    assert rec.body["settings"]["skip_sanity"] is True
+    # 2 frequencies and 8 trajectories are the thin-setting THRESHOLDS themselves, not below them
+    # (spec section 3.3: "fewer than two grid frequencies, fewer than eight trajectories"), so this
+    # run is not marked as a quick look.
+    assert rec.body["notices"] == [], rec.body["notices"]
+    assert rec.body["offgrid"]["of"] == 2, rec.body["offgrid"]
+    assert rec.body["grid"]["n_freqs"] == 2, rec.body["grid"]
+    # The numbers, not only the pictures (E1).
+    assert "data.h5" in rec.manifest.payloads and rec.data_path.exists()
+    # The contract's single-cell layout (P5, P6, P71), BY NAME: the names core.FDT.compare reads
+    # back. The only other writer of this layout is a test fixture, so this is the one place a REAL
+    # run's file is checked against the names its reader expects (rulings F21/F22; the compare read
+    # of this record is Task 36's).
+    with h5py.File(rec.data_path, "r") as h5:
+        assert h5.attrs["study"] == "single", dict(h5.attrs)
+        assert float(h5.attrs["omega_0"]) > 0.0, dict(h5.attrs)
+        assert math.isfinite(float(h5.attrs["prefactor"])), dict(h5.attrs)
+        for key in ("omega_grid", "T_eff_over_T", "chi_prime", "chi_double_prime"):
+            assert key in h5 and h5[key].shape == (2,), (key, list(h5))
+        assert "PSD_omegas" in h5 and "PSD_G" in h5, list(h5)
+        assert h5["PSD_omegas"].shape == h5["PSD_G"].shape, list(h5)
+    # The four figures by name: ``writer.figure_path`` names each by the slug of its title.
+    assert sorted(rec.manifest.figures) == [
+        "figures/chi_components.png", "figures/effective_temperature_ratio.png",
+        "figures/spontaneous_psd.png", "figures/spontaneous_trajectory.png"], rec.manifest.figures
+    for fig in rec.manifest.figures:
+        assert (rec.path / fig).exists(), fig
+    # Provenance: the cell by path and hash, relative to Resources/ (provenance.file_ref).
+    assert rec.manifest.inputs["cell"]["path"] == "Cells/nadrowski/master_spont.txt", \
+        rec.manifest.inputs
+    assert rec.manifest.inputs["cell"]["sha256"], rec.manifest.inputs
+    assert rec.manifest.inputs["bounds"] is not None, rec.manifest.inputs
+
+    assert main(["crossval", "--cell", cell, "--s-grid", "0", "0.1", "2",
                  "--t-grid", "1", "1.1", "2", "--n-freqs", "2", "--ensemble-m", "8"]) == 0
-    cv = config.artifacts_root() / "crossval"
-    assert list(cv.glob("sweep_s_*.h5")) and list(cv.glob("sweep_temp_*.h5"))
-    for tag in ("fdt3d_vs_S_", "fdt3d_vs_T_"):
-        assert list(cv.glob(f"{tag}*.png")), tag
-    assert "[prism crossval] S sweep:" in capsys.readouterr().out
+    out = capsys.readouterr().out
+
+    sweeps = [s for s in store.list("fdt") if s.study == "sweep"]
+    assert len(sweeps) == 2, sweeps
+    assert all(s.finished for s in sweeps), sweeps
+    # Every real operating point lands at this size (ruling F53): a failed point is a finding to
+    # report, not a tolerance to allow.
+    assert {s.points_planned for s in sweeps} == {2}, sweeps
+    assert {s.points_done for s in sweeps} == {2}, sweeps
+    assert {s.points_failed for s in sweeps} == {0}, sweeps
+
+    recs = [store.load_fdt(s.id) for s in sweeps]
+    assert {r.body["points"]["param"] for r in recs} == {"s", "temp"}, \
+        [r.body["points"] for r in recs]
+    assert len({r.body["seed"] for r in recs}) == 1, \
+        "the study draws ONE seed and records it on both records (spec section 4.1)"
+    for r in recs:
+        param = r.body["points"]["param"]
+        assert r.body["complete"] is True
+        # A sweep's per-point grids live in data.h5, so the body's single grid block is null
+        # (spec section 2.3).
+        assert r.body["grid"] is None, r.body["grid"]
+        assert r.body["settings"]["preset"] == "exploratory", r.body["settings"]
+        assert "data.h5" in r.manifest.payloads and r.data_path.exists()
+        # Each sweep plots itself into its own record (spec section 4.1).
+        assert r.manifest.figures == [f"figures/fdt_ratio_vs_{param}.png"], r.manifest.figures
+        assert (r.path / r.manifest.figures[0]).exists(), r.manifest.figures
+        # The line the tool printed for this record before either sweep spent anything (F20) names
+        # the sweep the record holds -- what the interrupt note sends the operator back to.
+        line = [ln for ln in out.splitlines()
+                if ln.startswith(f"[prism crossval] writing record {r.id} at ")]
+        label = {"s": "S", "temp": "T_a/T"}[param]
+        assert len(line) == 1 and line[0].endswith(f"(the {label} sweep)"), (line, out[-2000:])
 
 
 def test_the_nadrowski_only_sanity_checks_are_selected_for_a_nadrowski_cell(monkeypatch, caplog):
@@ -1800,11 +1889,12 @@ def test_the_nadrowski_only_sanity_checks_are_selected_for_a_nadrowski_cell(monk
 def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, capsys):
     """The real sanity checks on a real Nadrowski cell, and the passive-baseline figure they draw.
 
-    This is the gap spec section 1's last bullet names: the single-cell leg above runs a HOPF cell
-    with --skip-sanity, so ``check_passive_baseline`` and ``check_high_freq_fdt`` -- the two checks
-    that decide whether the whole PSD / lock-in / noise-prefactor convention is right, and the only
-    ones that draw a figure of their own -- had never executed under test. Everything is real: the
-    campaigns, the checks, the production sweep and the record.
+    This is the gap spec section 1's last bullet names: the single-cell leg above runs with
+    --skip-sanity (on a Hopf cell until piece 5, a Nadrowski one since), so
+    ``check_passive_baseline`` and ``check_high_freq_fdt`` -- the two checks that decide whether the
+    whole PSD / lock-in / noise-prefactor convention is right, and the only ones that draw a figure
+    of their own -- had never executed under test. Everything is real: the campaigns, the checks,
+    the production sweep and the record.
 
     Production is NOT skipped. ``--no-production`` would be cheaper, and its contract is fixed too
     (planning ruling P55: a finished record with ``grid`` and ``offgrid`` null) -- but it stops
@@ -1817,10 +1907,11 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
     PRISM_ARTIFACTS at a temp root, so any write that escapes the store still misses the real
     ``Artifacts/``.
 
-    Measured 2026-09-24 on the CPU, not yet whole: the implementer's run was cut off at 540 s, by
-    which point the passive-baseline check ALONE had taken 466 s (the record was created at
-    12:41:35 and that check's figure written at 12:49:21). The whole run's --durations figure is
-    owed from the first slow-set run.
+    Measured 2026-09-24 at 6210a05, run alone: 796.34 s on the CPU (13 min 22 s for the whole
+    pytest process). Most of it is the checks: an earlier run cut off at 540 s had by then spent
+    466 s on the passive-baseline check ALONE (the record was created at 12:41:35 and that check's
+    figure written at 12:49:21). The seed was drawn in that measurement and is fixed since; the
+    step count, and so the time, does not depend on it.
     """
     import warnings
 
@@ -1830,6 +1921,9 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
 
     root = tmp_path / "store"
     cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    # A FIXED seed, so a failure thirteen minutes in can be reproduced exactly; the record carries
+    # the seed either way (E7), and it is checked below to be this one.
+    seed = 20260924
     capsys.readouterr()
     # A sanity check EXCLUDES a probe the spontaneous spectrum does not resolve and says so in a
     # UserWarning (core/FDT/sanity.py); on this cell the passive check measured 18 of its 20 probes
@@ -1840,7 +1934,7 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
     # otherwise have reached the session's warnings summary.
     with warnings.catch_warnings(record=True) as said:
         rc = main(["fdt", "--cell", cell, "--n-freqs", "2", "--ensemble-m", "8",
-                   "--store-root", str(root)])
+                   "--seed", str(seed), "--store-root", str(root)])
     captured = capsys.readouterr()
     out = captured.out
     assert rc == 0, captured.err[-2000:]
@@ -1858,10 +1952,13 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
     assert len(rows) == 1 and rows[0].finished, rows
     rec = ArtifactStore(root).load_fdt(rows[0].id)
     assert rec.body["settings"]["skip_sanity"] is False, rec.body["settings"]
+    assert rec.body["seed"] == seed, rec.body["seed"]
     assert rec.body["complete"] is True
     # FIVE figures, not four: the passive-baseline plot is the one --skip-sanity never draws
-    # (core/FDT/sanity.py's check_passive_baseline, ``save_plot_path``).
+    # (core/FDT/sanity.py's check_passive_baseline, ``save_plot_path``). Named as well as counted:
+    # the count alone would stay green if another figure took its place.
     assert len(rec.manifest.figures) == 5, rec.manifest.figures
+    assert "figures/passive_baseline_ratio.png" in rec.manifest.figures, rec.manifest.figures
     for fig in rec.manifest.figures:
         assert (rec.path / fig).exists(), fig
 
