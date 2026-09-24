@@ -2,8 +2,8 @@
 
 Piece 4, B10: "a saveable run summary" is two documents -- what the browser's detail pane shows (and
 ``python -m core artifacts show`` prints), and a lineage walk back through an artifact's parents. Both
-are FILES, never an eighth store kind, and both are pure functions of manifests the store already
-holds: nothing here writes, creates or resolves anything.
+are FILES, never a store kind of their own, and both are pure functions of manifests the store
+already holds: nothing here writes, creates or resolves anything.
 
 It lives beside the manifest code it reads and NOT in ``store.py``, because a report DESCRIBES the
 store and must never be mistaken for something the store holds. ONE renderer for both front ends, so
@@ -189,14 +189,54 @@ def _accepted(m) -> list:
     return [str(a) for a in (results.get("accepted") or [])]
 
 
+def _compared_lines(store, m) -> list:
+    """What a comparison DREW, resolved (spec §7.3).
+
+    A comparison names its sources in the body and not in ``parents``: that block is a flat
+    ``{key: id}`` map read as ``m.parents.get(pk) == id_``, so it cannot carry an arbitrary number of
+    ids without widening the store's contract for every kind. The consequence is deliberate --
+    deleting a record a comparison used is NOT refused -- and these lines are what keep the
+    comparison honest about it, printing ``MISSING <kind> [<id>]`` in the wording the parents walk
+    above already uses.
+
+    Reads ``body["compared"]`` with ``.get``: every other kind's body has no such key, and a body
+    that has it null is a record of this kind that is not a comparison.
+    """
+    from .store import KIND_DIRS, StoreError
+    comp = m.body.get("compared") if isinstance(m.body, dict) else None
+    if not isinstance(comp, dict):
+        return []
+    out = [f"{INDENT}compared ({comp.get('mode') or NONE}):"]
+    for rec in comp.get("records") or []:
+        rec = rec if isinstance(rec, dict) else {}
+        # "fdt" is the default because a comparison of measurements is what this block exists for;
+        # a kind this build does not know is named rather than skipped, like an unknown parent key.
+        ck, cid = str(rec.get("kind") or "fdt"), str(rec.get("id") or "")
+        if ck not in KIND_DIRS:
+            out.append(f"{INDENT}{INDENT}(compared entry names kind {ck!r}, which is no artifact "
+                       f"kind this build knows)")
+            continue
+        try:
+            cm = store.get(ck, cid)
+        except StoreError:
+            cm = None
+        if cm is None:
+            out.append(f"{INDENT}{INDENT}MISSING {ck} [{cid}]  -- no complete {ck} with that id "
+                       f"under {store.kind_dir(ck)}")
+        else:
+            out.append(f"{INDENT}{INDENT}{ck} {cm.name or '(unnamed)'} [{cm.id}]")
+    return out
+
+
 def render_lineage(store, kind: str, ref: str) -> str:
     """The artifact and its parents transitively, each artifact BEFORE its own parents, so every chain
     reads newest first and oldest last.
 
     Each step: the kind, the name, the id, the creation time, the input files with their hashes, the
-    knobs that decided it, and any Accept it recorded. A parent a manifest names but the store does not
-    hold prints as MISSING with its id and with who named it -- skipping it would make a broken chain
-    read as a complete one, which is the one thing a provenance report must never do.
+    knobs that decided it, any Accept it recorded, and -- for a comparison -- the records it drew
+    (``_compared_lines``), which are listed but not walked. A parent a manifest names but the store
+    does not hold prints as MISSING with its id and with who named it -- skipping it would make a
+    broken chain read as a complete one, which is the one thing a provenance report must never do.
 
     Parents are older ids by construction, so a cycle is impossible; the visited set is carried anyway,
     because the alternative to a two-line guard is an endless report out of one hand-edited manifest.
@@ -235,6 +275,7 @@ def render_lineage(store, kind: str, ref: str) -> str:
             out.append(f"{INDENT}accepted: {', '.join(acc)}")
         pairs = [(pk, m.parents[pk]) for pk in sorted(m.parents) if m.parents[pk]]
         out.append(f"{INDENT}parents: " + (", ".join(f"{pk}={pid}" for pk, pid in pairs) or NONE))
+        out += _compared_lines(store, m)
         for pk, pid in pairs:
             pkind = key_kind.get(pk)
             if pkind is None:

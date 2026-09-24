@@ -4607,6 +4607,42 @@ def test_render_lineage_walks_the_chain_and_prints_a_missing_parent(store):
         render_lineage(store, "posterior", "nope")
 
 
+def test_render_lineage_resolves_what_a_comparison_compared(store):
+    """§7.3 and checklist 12. A comparison names the runs it drew in its BODY, because ``parents`` is
+    a flat {key: id} map that cannot carry an arbitrary number of ids without widening the store's
+    contract for every kind -- so deleting a record a comparison used is NOT refused, and this branch
+    is the only thing that keeps the comparison's own provenance readable afterwards.
+
+    A record the store no longer holds prints MISSING with its kind and id, the same wording the
+    parents walk already uses: skipping it would make a broken chain read as a complete one, which is
+    the one thing a provenance report must never do.
+    """
+    from core.artifacts import render_lineage
+    a = _make(store, "fdt", name="cell_a", body=_bodies()["fdt"])
+    b = _make(store, "fdt", name="cell_b", body=_bodies()["fdt"])
+    comp_body = _bodies()["fdt"]
+    comp_body.update(study="comparison", seed=None, grid=None, offgrid=None, results=None,
+                     compared={"mode": "cells",
+                               "records": [{"kind": "fdt", "id": a.id, "name": "cell_a"},
+                                           {"kind": "fdt", "id": b.id, "name": "cell_b"}]})
+    c = _make(store, "fdt", name="two_cells", body=comp_body)
+
+    text = render_lineage(store, "fdt", c.id)
+    assert "  compared (cells):" in text, text
+    assert f"    fdt cell_a [{a.id}]" in text, text
+    assert f"    fdt cell_b [{b.id}]" in text, text
+    assert "MISSING" not in text, "both are on disk"
+
+    store.delete("fdt", a.id)
+    text = render_lineage(store, "fdt", c.id)
+    assert f"    MISSING fdt [{a.id}]" in text, text
+    assert str(store.kind_dir("fdt")) in text, "where it was looked for"
+    assert f"    fdt cell_b [{b.id}]" in text, "the one still there is unaffected"
+
+    # a record with no comparison says nothing extra
+    assert "compared" not in render_lineage(store, "fdt", b.id)
+
+
 # ── load_observation's two payload guards (piece 4, §8.1) ────────────────────────────────────────
 
 
