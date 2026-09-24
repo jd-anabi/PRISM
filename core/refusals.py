@@ -151,6 +151,14 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("dt_nd", "the integration step, in ND units", "0.01"),                      # FDTConfig.dt_nd
     Field("psd_t_obs_nd", "the spontaneous recording length, in ND units",
           "8000.0, or the preset's in a sweep"),                                        # FDTConfig.psd_T_obs_nd
+    # the model builder (piece 5, §5.3). Window-only settings: core/tool/fields.py maps each to None.
+    Field("param_value", "the parameter's value", None),
+    Field("param_min", "the parameter's lower bound", None),
+    Field("param_max", "the parameter's upper bound", None),
+    Field("init", "the initial condition", None),
+    Field("x_scale", "the length scale, in nm per non-dimensional unit", None),
+    Field("t_scale", "the time scale, in seconds per non-dimensional time unit", None),
+    Field("forcing_value", "the forcing parameter", None),
     # tool-only (the diagnostics); no window control, CONTROL[key] is None in core/gui/fields.py
     Field("repeats", "the number of SBC repeats", "10"),                               # sbc_repeats
     Field("n_points", "the number of operating points", "6"),                          # identifiability_laplace

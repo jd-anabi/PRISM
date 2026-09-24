@@ -2741,7 +2741,8 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     given. The Infer tab is read after install_config with a FORCED stub config so its three drive
     rows exist; a chi config would build none (no force_params_dict) and the drive entries would
     pass vacuously. Since piece 5 the places are every section's tabs and the two screens (E6), read
-    off a built MainWindow.
+    off a built MainWindow -- the model builder with one variable declared and its parameter
+    detected, because four of the boxes it names exist only then (Task 22).
 
     The second half is this task's own: the Infer tab's registered rows are built from label(key),
     not from a literal that happens to match today."""
@@ -2749,6 +2750,7 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     from core.gui import fields as gui_fields
     from core.gui.panels.inference.infer_tab import InferPanel
     from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.widgets.field_row import LabeledFieldRow
     from core.Helpers import labels
     from tests._fixtures import code_only, qt_app
 
@@ -2780,7 +2782,18 @@ def test_the_gui_control_table_matches_the_tabs_labels():
             tabs[section.tabs.tabText(i)] = section.tabs.widget(i)
     tabs["Artifacts"] = window.artifact_screen
     tabs["Model Builder"] = window.model_builder_screen
+    # The model builder's init row exists once per declared variable and its value/min/max boxes once
+    # per detected parameter (Task 22 names all four), so a freshly built screen shows none of them:
+    # declare one variable and detect its parameter before reading the screen back. The parameter
+    # row's boxes are captioned inside a LabeledFieldRow, not a form row, so read those captions too.
+    mb = window.model_builder_screen
+    mb.vars_edit.setText("x")
+    mb._set_variables()
+    mb._var_rows[0].drift.setText("-k*x")
+    mb._detect_params()
     seen = {tab: shown(panel) for tab, panel in tabs.items()}
+    seen["Model Builder"] += [lab.text() for row in mb.findChildren(LabeledFieldRow)
+                              for lab in row.findChildren(QLabel)]
     tuples = {k: e for k, e in gui_fields.CONTROL.items() if isinstance(e, tuple)}
     assert tuples, "the control table has no (tab, label) entries"
     for key in ("drive_amplitude", "drive_frequency", "drive_phase"):

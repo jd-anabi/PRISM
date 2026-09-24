@@ -45,6 +45,8 @@ BASE_KEYS = (
     "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "preset", "s_grid", "t_grid", "seed",
     "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
     "artifact", "note",
+    # piece 5, the model builder (spec §5.3)
+    "param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",
 )
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
                   "n_sweep", "chi_k_fixed")
@@ -97,7 +99,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     shows the default as the operator would type it. ``describe`` is the public reader and refuses
     an unknown key with a KeyError: a message can only be built for a field a front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 76, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 83, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key

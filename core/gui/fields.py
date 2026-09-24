@@ -16,9 +16,10 @@ Three shapes of entry:
   "Sweep study cross-validation", "NWK → Hopf reduction map", "Live simulation" -- or one of
   ``SCREENS``, and the label is the row as the panel passes it to ``add_help_row``. A tuple of
   places is how one input names every place it appears (E6): the cell picker is on five of them.
-* one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, or a
-  control on the Artifacts screen, whose list and Note box are not form rows; the sentence quotes
-  the control's own text ("Run on a different observation").
+* one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, a
+  control on the Artifacts screen, whose list and Note box are not form rows, or the model builder's
+  forcing fields, whose rows are labelled by parameter name; the sentence quotes the control's own
+  text ("Run on a different observation").
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six
   settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
   two sample counts, the epoch ceiling), and the five FDT settings neither front end exposes (P2).
@@ -140,6 +141,19 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the five FDT settings NEITHER front end exposes (§1.2, P2, P75): no control, so fix_sentence
     # returns "" and the refusal names the setting and offers no fix
     "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
+    # the model builder (piece 5, §5.3). A SCREEN, not an inference tab -- fix_sentence renders
+    # "on the Model Builder screen" for a place in SCREENS. The parameter rows repeat per parameter,
+    # so the label is the row's own ("value" / "min" / "max") and the message names which parameter.
+    "param_value": ("Model Builder", "value"),
+    "param_min": ("Model Builder", "min"),
+    "param_max": ("Model Builder", "max"),
+    "init": ("Model Builder", "init"),
+    "x_scale": ("Model Builder", "x_scale (nm)"),
+    "t_scale": ("Model Builder", "t_scale (s)"),
+    # ONE key for every forcing field (P36): the forcing rows' labels are the parameter NAMES (amp,
+    # freq, tau, ...), built per kind, so there is no one label(key) to build a row from.
+    "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' "
+                      "choice, on the Model Builder screen."),
     # tool-only: the diagnostics' knobs; no window sentence
     "repeats": None, "n_points": None, "n_worst": None, "top_n": None, "m": None, "m_noise": None,
     "rel": None, "min_valid": None, "rows": None, "n_sweep": None, "chi_k_fixed": None,

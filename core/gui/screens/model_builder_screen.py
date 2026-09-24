@@ -10,6 +10,8 @@ runs on the GUI thread -- no BasePanel/dispatch. Saving is refused while a task 
 app (refreshing the model combos mid-run would fight the app-wide control lock), and persistence goes
 through core/Helpers/model_store.py (the JSON + the Bounds/Cells/Units triple).
 """
+import math
+
 import torch
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QRadioButton, QScrollArea, QStackedWidget,
@@ -20,10 +22,13 @@ from core.config import DT_EXP_S
 from core.forcing import FORCING_PARAM_NAMES
 from core.Helpers import model_store
 from core.Models.user_model import ModelParseError, UserModel, parse_user_model
+from core.refusals import Refusal, refuse, require_positive
 from core.Solvers import sdeint
 
+from .. import fields as gui_fields
 from ..design import SPACE
 from ..panels.base_panel import BasePanel
+from ..widgets.refusal_box import show_refusal
 from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField
 from ..widgets.field_row import LabeledFieldRow
@@ -103,6 +108,16 @@ class _VarRow(QGroupBox):
         add_help_row(form, "init", self.init, HELP["init"])
         add_help_row(form, "forcing", self.force_kind, HELP["forcing"])
         form.addRow(self.force_stack)
+
+    def forcing_fields(self) -> dict:
+        """``{param name: FloatField}`` for the forcing kind currently selected, ``{}`` for "None".
+
+        ``values()`` reads these through ``FloatField.value()``, which returns 0.0 for a blank box --
+        so a cleared "freq" used to be saved as a real frequency of zero nobody typed. The screen
+        checks them through this accessor before assembling the document (spec §5.3).
+        """
+        kind = _FORCE_KINDS[self.force_kind.currentIndex()][0]
+        return dict(self._force_fields[kind]) if kind else {}
 
     def values(self) -> dict:
         kind = _FORCE_KINDS[self.force_kind.currentIndex()][0]
@@ -259,8 +274,8 @@ class ModelBuilderScreen(QWidget):
         sform = make_form(scales_box)
         self.x_scale = FloatField(10.0)
         self.t_scale = FloatField(0.01)
-        add_help_row(sform, "x_scale (nm)", self.x_scale, HELP["x_scale"])
-        add_help_row(sform, "t_scale (s)", self.t_scale, HELP["t_scale"])
+        add_help_row(sform, gui_fields.label("x_scale"), self.x_scale, HELP["x_scale"])
+        add_help_row(sform, gui_fields.label("t_scale"), self.t_scale, HELP["t_scale"])
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
@@ -364,7 +379,12 @@ class ModelBuilderScreen(QWidget):
         }
 
     def _validate(self):
-        """Parse + compile + a short batch-1 smoke integration. Returns the doc, or None (status set)."""
+        """Parse + compile + a short batch-1 smoke integration. Returns the doc, or None (status set).
+
+        A problem with one numeric box RAISES a ``Refusal`` keyed to that box (spec §5.1, §5.3), which
+        the two click entries route to ``_refusal``; the problems no one box answers -- a task
+        running, no variables, a bad name, a parse or integration failure -- stay status-line
+        sentences and return None."""
         if BasePanel._running:
             # The smoke integration's tqdm writes to the process-wide redirected streams while a
             # worker runs -- it would interleave into that run's progress pane. Refuse instead.
@@ -378,6 +398,21 @@ class ModelBuilderScreen(QWidget):
         except ValueError as e:
             self._set_status(str(e), error=True)
             return None
+        # Read the numeric boxes through value_or_none BEFORE assembling the document: value()
+        # returns 0.0 for a blank, so a check written against the assembled doc would judge a blank
+        # box as a typed zero (Review Focus 3).
+        require_positive("x_scale", self.x_scale.value_or_none())
+        require_positive("t_scale", self.t_scale.value_or_none())
+        for row in self._var_rows:
+            v = row.init.value_or_none()
+            if v is None or not math.isfinite(v):
+                refuse("init", f"The initial condition for '{row.var_name}' is blank or not a "
+                               f"finite number.")
+            for pname, fld in row.forcing_fields().items():
+                fv = fld.value_or_none()
+                if fv is None or not math.isfinite(fv):
+                    refuse("forcing_value", f"The forcing parameter '{pname}' of '{row.var_name}' "
+                                            f"is blank or not a finite number.")
         doc = self._assemble_doc()
         doc["name"] = name
         try:
@@ -392,30 +427,32 @@ class ModelBuilderScreen(QWidget):
             return None
         doc["params"] = {p: doc["params"][p] for p in compiled.param_names}
         t_scale = doc["rescale"]["t_scale"]
-        if doc["rescale"]["x_scale"] <= 0 or t_scale <= 0:
-            self._set_status("x_scale and t_scale must be > 0.", error=True)
-            return None
         for p, e in doc["params"].items():         # UX pre-check; model_store._check_schema re-enforces
-            # None means the field did not parse -- a blank box, or "-" mid-typing. Caught here so it
-            # is a message about THAT box rather than model_store rejecting a 0.0 the user never typed.
-            if e["lo"] is None or e["hi"] is None:
-                which = "min" if e["lo"] is None else "max"
-                self._set_status(f"Parameter '{p}': {which} is blank or not a number.", error=True)
-                return None
+            # None means the field did not parse -- a blank box, or "-" mid-typing. Refused here so
+            # it is a message about THAT parameter rather than model_store rejecting a 0.0 the user
+            # never typed. The parameter's NAME is in every sentence because these rows repeat: one
+            # key names the kind of field, the sentence names which row (spec §5.3). The value is
+            # read off its box through value_or_none, not off e["value"]: spec() reads it through
+            # value(), which turns a cleared box into a 0.0 this check could never refuse (F16).
+            for key, which, v in (("param_value", "value", self._param_fields[p].value.value_or_none()),
+                                  ("param_min", "minimum", e["lo"]),
+                                  ("param_max", "maximum", e["hi"])):
+                if v is None or not math.isfinite(v):
+                    refuse(key, f"Parameter '{p}': the {which} is blank or not a finite number.")
             if not e["lo"] < e["hi"]:
-                self._set_status(f"Parameter '{p}': min must be < max.", error=True)
-                return None
+                refuse("param_min", f"Parameter '{p}': the minimum must be below the maximum "
+                                    f"(got {e['lo']:g} and {e['hi']:g}).")
             if not e["lo"] <= e["value"] <= e["hi"]:
-                self._set_status(f"Parameter '{p}': value {e['value']} is outside its bounds "
-                                 f"[{e['lo']}, {e['hi']}].", error=True)
-                return None
-            # A log box needs a positive lower bound. reparam._log_mask would otherwise downgrade it
-            # to linear with a warnings.warn that never reaches the GUI, so the model would train in a
-            # coordinate the user did not pick, silently. model_store._check_schema re-enforces this.
+                refuse("param_value", f"Parameter '{p}': the value {e['value']:g} is outside its "
+                                      f"bounds ({e['lo']:g}, {e['hi']:g}).")
+            # A log coordinate needs a positive lower bound. reparam._log_mask would otherwise
+            # downgrade it to linear with a warnings.warn that never reaches the GUI, so the model
+            # would train in a coordinate the user did not pick, silently. model_store._check_schema
+            # re-enforces this.
             if e["box"] == "log" and e["lo"] <= 0:
-                self._set_status(f"Parameter '{p}': a log box needs min > 0 (got {e['lo']}). "
-                                 f"Raise min, or set its box to 'linear'.", error=True)
-                return None
+                refuse("param_min", f"Parameter '{p}': a log coordinate needs a minimum above 0 "
+                                    f"(got {e['lo']:g}); raise the minimum, or set this parameter "
+                                    f"back to 'linear'.")
 
         # Smoke integration at the stream's fine ND step (dt_exp over the t_scale upper bound).
         try:
@@ -437,7 +474,11 @@ class ModelBuilderScreen(QWidget):
         return doc
 
     def _validate_clicked(self):
-        doc = self._validate()
+        try:
+            doc = self._validate()
+        except Refusal as e:
+            self._refusal(e)
+            return
         if doc is not None:
             self._set_status(f"'{doc['name']}' is valid: {len(doc['variables'])} variable(s), "
                              f"{len(doc['params'])} parameter(s). Ready to save.")
@@ -446,7 +487,11 @@ class ModelBuilderScreen(QWidget):
         if BasePanel._running:
             self._set_status("A task is running -- wait for it to finish before saving.", error=True)
             return
-        doc = self._validate()
+        try:
+            doc = self._validate()
+        except Refusal as e:
+            self._refusal(e)
+            return
         if doc is None:
             return
         json_path = config.MODELS_PATH / f"{doc['name']}.json"
@@ -499,6 +544,19 @@ class ModelBuilderScreen(QWidget):
             self._params_form.removeRow(0)
         self._param_fields = {}
         self._set_status("")
+
+    def _refusal(self, exc: Refusal) -> None:
+        """Show a refusal the way every other surface does: the yellow "Check your inputs" box with
+        the core's neutral sentence and this front end's "where to fix it" under it.
+
+        Through ``refusal_box.show_refusal`` rather than ``BasePanel._refusal`` because this screen
+        is a plain QWidget (spec §1.2): a BasePanel enrols in ``BasePanel._instances``, and a run in
+        any panel would then grey out the builder's own controls. It has no log pane either, so the
+        status line is this screen's record of the sentence -- the same role the pane plays for a
+        panel and the status line plays for the Artifacts screen.
+        """
+        self._set_status(f"{exc.message} {gui_fields.fix_sentence(exc.field)}".rstrip(), error=True)
+        show_refusal(self, exc)
 
     def _set_status(self, text: str, error: bool = False) -> None:
         self.status.setText(("⚠ " if error else "") + text)

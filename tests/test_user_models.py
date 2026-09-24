@@ -522,6 +522,7 @@ def test_builder_param_row_preserves_and_defaults():
     """The builder's per-parameter row: 'auto' reproduces nd_bounds, a custom (min,max) AND the box
     coordinate survive a re-detect, and _validate refuses a value outside its bounds."""
     from core.gui.screens.model_builder_screen import ModelBuilderScreen, _ParamRow
+    from core.refusals import Refusal
     qt_app()
     r = _ParamRow(0.05)                                            # auto -> placeholder box
     assert r.auto.isChecked() and r.spec() == (0.05, *model_store.nd_bounds(0.05), "linear")
@@ -542,7 +543,10 @@ def test_builder_param_row_preserves_and_defaults():
     mb._detect_params()                                            # re-detect preserves box AND coordinate
     assert mb._param_fields["d0"].spec() == (0.05, 0.01, 0.1, "log")
     mb._param_fields["k"].set_spec(5.0, 0.0, 1.0)                  # value outside its box
-    assert mb._validate() is None and "outside its bounds" in mb.status.text()
+    # A field problem is a Refusal since piece 5 (§5.1); the click handler is what shows it.
+    with pytest.raises(Refusal) as ei:
+        mb._validate()
+    assert ei.value.field == "param_value" and "outside its bounds" in ei.value.message
 
 
 def test_builder_refuses_a_blank_bound_instead_of_reading_it_as_zero():
@@ -554,6 +558,7 @@ def test_builder_refuses_a_blank_bound_instead_of_reading_it_as_zero():
     between a valid box and one reparam._log_mask silently downgrades to linear.
     """
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
+    from core.refusals import Refusal
     qt_app()
     mb = ModelBuilderScreen()
     mb.vars_edit.setText("x")
@@ -566,8 +571,10 @@ def test_builder_refuses_a_blank_bound_instead_of_reading_it_as_zero():
     row.set_spec(1.0, 0.5, 1.5)                                    # a custom box, so the fields are live
     row.lo.setText("")                                             # ...then clear the minimum
     assert row.spec()[1] is None, row.spec()                       # not 0.0
-    assert mb._validate() is None
-    assert "min is blank" in mb.status.text(), mb.status.text()
+    with pytest.raises(Refusal) as ei:
+        mb._validate()
+    assert ei.value.field == "param_min", ei.value.field
+    assert "the minimum is blank" in ei.value.message, ei.value.message
 
 
 def test_builder_refuses_a_log_box_with_a_non_positive_minimum():
@@ -575,6 +582,7 @@ def test_builder_refuses_a_log_box_with_a_non_positive_minimum():
     to warnings.warn, which the GUI never surfaces, so the run would train in a linear coordinate
     while the form still said 'log'."""
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
+    from core.refusals import Refusal
     qt_app()
     mb = ModelBuilderScreen()
     mb.vars_edit.setText("x")
@@ -584,8 +592,90 @@ def test_builder_refuses_a_log_box_with_a_non_positive_minimum():
     mb.name_edit.setText("UMTESTLOGBAD")
     mb._detect_params()
     mb._param_fields["k"].set_spec(1.0, -1.0, 2.0, "log")
-    assert mb._validate() is None
-    assert "log box needs min > 0" in mb.status.text(), mb.status.text()
+    with pytest.raises(Refusal) as ei:
+        mb._validate()
+    assert ei.value.field == "param_min", ei.value.field
+    assert "log coordinate needs a minimum above 0" in ei.value.message, ei.value.message
+
+
+def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
+    """Spec §1.2, §5.1, §5.3. The model builder is the fifth surface of piece 5's set, and the only
+    one that is a plain QWidget rather than a BasePanel -- it has no ``_refusal`` and no log pane --
+    so its refusals go through the shared ``refusal_box.show_refusal`` and are recorded on its own
+    status line instead. Before this, every one of its input problems was a status-line sentence
+    only: a form a full screen tall could refuse to save with a message at the bottom of it, and the
+    wording was this screen's alone, so the same mistake read differently here and everywhere else.
+
+    Each of its numeric fields now carries a registry key, so the box's informative line names the
+    box on THIS screen -- "on the Model Builder screen", not "on the Infer tab", which is the collision
+    E6 widened the table for. Five are checked here, one per shape: a blank bound (FloatField.value()
+    reads a blank as 0.0, the hazard _ParamRow's own docstring warns about), a cleared value (read
+    through value_or_none for the same reason, F16), an inverted pair, a non-positive display scale,
+    and a blank forcing parameter -- which reached model_store as a real 0.0 nobody typed.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui import fields as gui_fields
+    from core.gui.screens.model_builder_screen import ModelBuilderScreen
+    from core.refusals import Refusal
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    mb = ModelBuilderScreen()
+    mb.vars_edit.setText("x")
+    mb._set_variables()
+    mb._var_rows[0].drift.setText("-k*x")
+    mb._var_rows[0].noise.setText("d0")
+    mb.name_edit.setText("UMTESTYELLOW")
+    mb._detect_params()
+    mb._param_fields["k"].set_spec(1.0, 0.5, 1.5)
+    mb._param_fields["d0"].set_spec(0.01, 0.001, 0.1)
+
+    def _refused(field):
+        SHOWN.clear()
+        mb._validate_clicked()
+        box = SHOWN[-1]
+        assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+        assert box.detailedText() == "", box.detailedText()
+        assert box.informativeText() == gui_fields.fix_sentence(field), box.informativeText()
+        assert box.text() in mb.status.text(), mb.status.text()
+        return box.text()
+
+    # (a) a blank minimum: refused as blank, never read as a bound of 0.0
+    mb._param_fields["k"].lo.setText("")
+    assert mb._param_fields["k"].spec()[1] is None
+    assert "'k'" in _refused("param_min")
+    with pytest.raises(Refusal) as ei:
+        mb._validate()
+    assert ei.value.field == "param_min"
+
+    # (a') a cleared value (F16): refused as blank, never read as a value of 0.0 -- 0.0 sits inside
+    # this row's (-1, 1) box, so value() would have let it through as a value nobody typed
+    mb._param_fields["k"].set_spec(0.5, -1.0, 1.0)
+    mb._param_fields["k"].value.setText("")
+    assert "'k'" in _refused("param_value")
+
+    # (b) an inverted pair
+    mb._param_fields["k"].set_spec(1.0, 0.5, 1.5)
+    mb._param_fields["k"].lo.setText("2.0")
+    assert "minimum must be below the maximum" in _refused("param_min")
+
+    # (c) a display scale at zero
+    mb._param_fields["k"].set_spec(1.0, 0.5, 1.5)
+    mb.x_scale.setText("0")
+    assert "must be greater than 0" in _refused("x_scale")
+    mb.x_scale.setText("10.0")
+
+    # (d) a blank forcing parameter, which used to reach model_store as a 0.0 nobody typed
+    row = mb._var_rows[0]
+    row.force_kind.setCurrentIndex(1)                      # "Sinusoidal"
+    assert set(row.forcing_fields()) == set(row._force_fields["sin"])
+    row.forcing_fields()["freq"].setText("")
+    assert "'freq'" in _refused("forcing_value")
+
+    # the screen names every one of its own boxes, and on the right surface
+    for key in ("param_value", "param_min", "param_max", "init", "x_scale", "t_scale",
+                "forcing_value"):
+        assert gui_fields.fix_sentence(key).endswith("on the Model Builder screen."), key
 
 
 def test_model_store_rejects_unusable_values_and_names():
