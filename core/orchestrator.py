@@ -34,8 +34,11 @@ from .config import (
     EYE_TEST_CYCLES,
 )
 from . import cli, config, forcing
-from .refusals import (Refusal, require_at_least, require_between, require_choice, require_file,
-                       require_positive)
+# PreflightWarning, the judgement channel, is defined in core.refusals (with its "always" filter) so
+# the FDT path can raise it without importing this module; ``orchestrator.PreflightWarning`` is that
+# same class, re-exported here for every caller and test that names it through this module.
+from .refusals import (PreflightWarning, Refusal, require_at_least, require_between, require_choice,
+                       require_file, require_positive)
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import thin_ticks as _thin_ticks
 from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
@@ -76,19 +79,6 @@ ProductPrior = _product_mod.ProductPrior
 # (info) or stderr (warning, error) -- and the run buffer copies it into the artifact's log.txt. No
 # level is set here: core/runs.py sets the ``core`` family's, once, at import.
 log = logging.getLogger(__name__)
-
-
-class PreflightWarning(UserWarning):
-    """A judgement reported before or instead of refusing: out-of-distribution truth, a truth outside a
-    non-amortized posterior's region, T_obs outside the training range, an HPD tighter than recommended,
-    cell values the bounds ignore."""
-
-
-# The GUI routes warnings.showwarning to the log pane at WARNING severity (core/gui/streams.py,
-# redirect_streams), and pytest.warns can assert one. The "always" filter defeats Python's
-# once-per-location registry: without it a second inference in the same session would stay silent about
-# a repeated out-of-distribution truth, which is exactly the case an operator needs told twice.
-warnings.filterwarnings("always", category=PreflightWarning)
 
 
 def _preflight_warn(msg: str) -> None:

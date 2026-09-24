@@ -372,10 +372,11 @@ def test_refuse_appends_the_default_clause_to_the_callers_sentence_and_binds_the
 def test_the_module_is_torch_free_and_imports_only_the_standard_library():
     """The window runs the rules on the GUI thread at the click and the tool before any stage import,
     so ``core.refusals`` must cost nothing: no torch, no ``core.config`` (which imports torch). Two
-    pins: the module's import statements name only the four standard-library modules the design
-    allows, and a fresh interpreter that imports it has neither torch nor core.config loaded. The
-    subprocess is the real pin -- in this process torch is long since imported by the session
-    fixtures, so a sys.modules check here would pass vacuously."""
+    pins: the module's import statements name only the five standard-library modules the design
+    allows (``warnings`` since piece 5's Task 12 moved PreflightWarning and its "always" filter here,
+    so the FDT path can raise one without the SBI stack), and a fresh interpreter that imports it has
+    neither torch nor core.config loaded. The subprocess is the real pin -- in this process torch is
+    long since imported by the session fixtures, so a sys.modules check here would pass vacuously."""
     src = (REPO / "core" / "refusals.py").read_text(encoding="utf-8")
     imported = set()
     for node in ast.walk(ast.parse(src)):
@@ -383,7 +384,7 @@ def test_the_module_is_torch_free_and_imports_only_the_standard_library():
             imported |= {a.name for a in node.names}
         elif isinstance(node, ast.ImportFrom):
             imported.add(node.module)
-    assert imported <= {"dataclasses", "math", "os", "typing"}, imported
+    assert imported <= {"dataclasses", "math", "os", "typing", "warnings"}, imported
     probe = ("import sys; import core.refusals; "
              "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.') or m == 'core.config'); "
              "sys.exit(repr(bad) if bad else 0)")

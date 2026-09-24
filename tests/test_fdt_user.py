@@ -195,9 +195,11 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     # The stub's two trajectories are below the thin-setting threshold (E5), so the sweep raises that
     # notice first. It is asserted, not left to leak: pytest.warns re-emits every warning it did not
     # match when it closes, so the inner block alone would pass and still move the gate's count.
-    with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"), \
+    with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories") as thin, \
             pytest.warns(UserWarning, match="1/2 operating points failed"):
         cv.run_fdt_param_sweep(_SweepCfg(), "s", np.array([0.0, 0.1]), {"temp": 1.0}, output_path=out_h5)
+    assert {Path(w.filename).resolve() for w in thin if issubclass(w.category, PreflightWarning)} \
+        == {Path(__file__).resolve()}, "the notice names the sweep's caller, not the sweep's own line"
     got = records()
     name = "core.FDT.cross_validation"
     assert (name, "INFO", "--- Phase A (s sweep): spontaneous PSD + omega_0 detection ---") in got, got
@@ -440,9 +442,10 @@ def test_a_thin_setting_warns_and_hands_back_the_sentence_for_the_record():
     does not.
 
     The channel is PreflightWarning, the same one every other judgement in the tree uses
-    (core/orchestrator.py:81), so the window shows it at warning severity, the tool sends it to
-    stderr, and the run buffer copies it into the record's log.txt -- and the SENTENCES come back so
-    the stage can put them in body.notices, which is the half a warning alone cannot do.
+    (core/refusals.py, re-exported by core.orchestrator), so the window shows it at warning
+    severity, the tool sends it to stderr, and the run buffer copies it into the record's log.txt --
+    and the SENTENCES come back so the stage can put them in body.notices, which is the half a
+    warning alone cannot do.
 
     Eight trajectories is the threshold because the existing end-to-end test runs at eight and must
     keep passing without a notice; two frequencies because one frequency is not a spectrum."""
@@ -487,3 +490,68 @@ def test_a_thin_setting_warns_and_hands_back_the_sentence_for_the_record():
         assert "warn_thin_settings" in inspect.getsource(fn), fn.__name__
     from core.FDT import cross_validation
     assert "warn_thin_settings" in inspect.getsource(cross_validation.run_fdt_param_sweep)
+
+
+def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(tmp_path, monkeypatch):
+    """Task 12, fix round 1. The class lives in the torch-free core.refusals so the FDT path can raise
+    it without importing the SBI stack, and the orchestrator re-exports the SAME object, so every
+    ``pytest.warns(orchestrator.PreflightWarning)`` in the tree still catches an FDT notice.
+
+    The warning names whoever called the STAGE, as every other judgement does (orchestrator's
+    _preflight_warn: stacklevel=3 through run boundaries). Pointing at the stage's own
+    ``notices = warn_thin_settings(cfg)`` line told the operator nothing on the tool's stderr. The
+    call goes through run_fdt here, because that is the frame layout the stacklevel is counted for:
+    helper, stage, caller."""
+    import pytest
+
+    from core import orchestrator, refusals
+    from core.FDT import fdt_pipeline
+
+    assert orchestrator.PreflightWarning is refusals.PreflightWarning
+
+    class _ThinHopf:
+        model = "HOPF"
+        n_freqs, ensemble_M = 1, 2
+
+    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
+    monkeypatch.setattr(fdt_pipeline, "run_all_sanity",
+                        lambda cfg, passive_plot_path=None: {"linearity": (True, {"ratio": 1.0})})
+    with pytest.warns(refusals.PreflightWarning) as rec:
+        fdt_pipeline.run_fdt(_ThinHopf(), skip_sanity=False, confirm_production=False)
+    said = [w for w in rec if issubclass(w.category, refusals.PreflightWarning)]
+    assert [str(w.message) for w in said] == fdt_pipeline.thin_notices(_ThinHopf()), \
+        [str(w.message) for w in said]
+    for w in said:
+        assert Path(w.filename).resolve() == Path(__file__).resolve(), (w.filename, w.lineno)
+
+
+def test_the_thin_notice_loads_no_sbi_and_keeps_its_always_filter():
+    """Task 12, fix round 1. An FDT or sweep run needs no inference machinery, and importing it cost
+    every ``fdt``/``crossval`` tool run about two seconds plus two false pytensor "g++ not
+    available" warnings at the head of its output, thin settings or not. Checked in a FRESH
+    interpreter, because this process holds the orchestrator through the session fixtures, so a
+    sys.modules check here would pass vacuously.
+
+    The same probe pins the "always" filter: it is installed when core.refusals is imported, not as a
+    side effect of a lazy orchestrator import, so a repeated notice from one call site is still shown
+    the second time (without the filter Python's once-per-location registry would drop it)."""
+    import subprocess
+
+    probe = ("import sys, warnings\n"
+             "from core.FDT import fdt_pipeline\n"
+             "class C:\n"
+             "    def __init__(self, n, m):\n"
+             "        self.n_freqs, self.ensemble_M = n, m\n"
+             "def stage(c):\n"
+             "    return fdt_pipeline.warn_thin_settings(c)\n"
+             "with warnings.catch_warnings(record=True) as rec:\n"
+             "    for _ in range(2):\n"
+             "        assert stage(C(60, 256)) == []\n"
+             "        assert len(stage(C(1, 2))) == 2\n"
+             "shown = [str(w.message)[:24] for w in rec]\n"
+             "bad = sorted(m for m in ('core.orchestrator', 'sbi', 'pytensor') if m in sys.modules)\n"
+             "sys.exit(0 if len(shown) == 4 and not bad else repr((shown, bad)))\n")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(Path(__file__).resolve().parents[1]),
+                       capture_output=True, text=True, timeout=300,
+                       env={**os.environ, "MPLBACKEND": "Agg", "KMP_DUPLICATE_LIB_OK": "TRUE"})
+    assert r.returncode == 0, r.stdout + r.stderr

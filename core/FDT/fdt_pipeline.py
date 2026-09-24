@@ -25,6 +25,10 @@ from core.FDT.plots import (
     plot_eff_temp_ratio, plot_chi_components, plot_psd,
     plot_spontaneous_trajectory,
 )
+# Both torch-free and stdlib-only: the judgement channel and the run boundary cost this module nothing,
+# where core.orchestrator (which re-exports the same PreflightWarning) would load the SBI stack.
+from core.refusals import PreflightWarning
+from core.runs import RUN_BOUNDARY_FILES
 
 # Banners and saved-plot paths are information; a failed sanity verdict is a warning (piece 3, V4).
 log = logging.getLogger(__name__)
@@ -87,15 +91,15 @@ def warn_thin_settings(cfg: FDTConfig) -> list:
 
     The warning is what the operator sees while the run is going (the window's pane at warning
     severity, the tool's stderr) and what the run buffer copies into ``log.txt``; the returned list
-    is what the record keeps, which a warning alone cannot do. The import is LOCAL because
-    ``core.orchestrator`` imports ``core.cli`` at module scope and this module is reached from both
-    front ends before the SBI stack is needed.
+    is what the record keeps, which a warning alone cannot do. ``stacklevel=3`` names whoever called
+    the STAGE, as the orchestrator's ``_preflight_warn`` does: frame 1 is this helper, frame 2 the
+    stage (``run_fdt`` or ``run_fdt_param_sweep``), frame 3 its caller, with a ``@public_entry``
+    wrapper skipped when counting (``RUN_BOUNDARY_FILES``). The stage's own call line would tell the
+    operator nothing.
     """
-    from core.orchestrator import PreflightWarning
-    from core.runs import RUN_BOUNDARY_FILES
     notices = thin_notices(cfg)
     for sentence in notices:
-        warnings.warn(sentence, PreflightWarning, stacklevel=2,
+        warnings.warn(sentence, PreflightWarning, stacklevel=3,
                       skip_file_prefixes=RUN_BOUNDARY_FILES)
     return notices
 

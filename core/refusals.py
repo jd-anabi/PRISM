@@ -26,6 +26,7 @@ literal strings, pinned against ``core.config``'s constants by tests/test_refusa
 """
 import math
 import os
+import warnings
 from dataclasses import dataclass
 from typing import NoReturn
 
@@ -42,6 +43,24 @@ class Refusal(ValueError):
         super().__init__(message)
         self.message = message
         self.field = field
+
+
+# The refusal's counterpart: what is judged rather than refused. It lives HERE, beside Refusal, and not
+# in core.orchestrator (which re-exports this same class), because the FDT path raises it too and
+# must not pay for the SBI stack to do so: importing the orchestrator for one class cost every
+# fdt/crossval tool run about two seconds and two false pytensor warnings (piece 5, Task 12).
+class PreflightWarning(UserWarning):
+    """A judgement reported before or instead of refusing: out-of-distribution truth, a truth outside a
+    non-amortized posterior's region, T_obs outside the training range, an HPD tighter than recommended,
+    cell values the bounds ignore, an FDT setting too thin to trust."""
+
+
+# The GUI routes warnings.showwarning to the log pane at WARNING severity (core/gui/streams.py,
+# redirect_streams), and pytest.warns can assert one. The "always" filter defeats Python's
+# once-per-location registry: without it a second inference in the same session would stay silent about
+# a repeated out-of-distribution truth, which is exactly the case an operator needs told twice. It is
+# installed with the class, so every module that can raise one has it in force.
+warnings.filterwarnings("always", category=PreflightWarning)
 
 
 @dataclass(frozen=True)
