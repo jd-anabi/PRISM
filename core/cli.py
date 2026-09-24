@@ -6,19 +6,22 @@ left is pure: cell / bounds / units parsing, the unit conversion factors, and th
 builders that the GUI (``core/gui``) and the command-line tool (``core/tool``) each call with values
 they obtained their own way. The module keeps the name ``core.cli``.
 """
+import math
 from collections import OrderedDict
 from pathlib import Path
 
 import pint
 
 from core import config          # live-read config.CHI_MODE / CHI_N_FREQS (avoid import-time snapshot)
+from core import registry        # fdt_support, the FDT model gate; imports only config and torch
 from .config import (
     SimConfig, FDTConfig, detect_device, cpu_device,
     DT_EXP_S, T_MIN_EXP_S, T_MAX_EXP_S,
     BOUNDS_PATH, UNITS_PATH,
 )
 from .Helpers import file_manager
-from .refusals import Refusal, require_file
+from .refusals import (Refusal, describe, refuse, require_at_least, require_below, require_between,
+                       require_choice, require_file, require_finite, require_positive)
 
 
 class UnitParseError(Refusal):
@@ -340,14 +343,60 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
 
 
 # ── Pure config core (FDT) ───────────────────────────────────────────────────
+def check_fdt_settings(cfg: FDTConfig) -> None:
+    """Refuse the five FDT settings neither front end exposes: the frequency band, the burn-in, the
+    two durations and the integration step (§1.2, §3.3).
+
+    They are parameters of neither builder -- they arrive from the dataclass defaults, from the
+    closed preset, or from ``with_overrides`` -- so a bad one is a hand-edited preset or a caller's
+    bug, not a mistyped control. They are registered in ``core.refusals.FIELDS`` like every key and
+    map to ``None`` in BOTH front-end tables (P2, P75): each refusal names the setting and offers no
+    fix, because there is no box and no flag to name.
+    """
+    require_positive("dt_nd", cfg.dt_nd)
+    require_positive("psd_t_obs_nd", cfg.psd_T_obs_nd)
+    require_positive("t_obs_periods", cfg.T_obs_periods)
+    # A zero burn-in is a well-defined setting, not a broken one: E5 forbids the over-floor. Not the
+    # count rule, require_at_least: it coerces with int(), so -0.5 would pass as 0 and NaN would raise
+    # a bare ValueError (F33). Finite first, so NaN and an infinity get that rule's own sentence; then
+    # the CLOSED half-line, which keeps 0 legal and reports a negative as it was given. Closed, not
+    # F33's open_hi=True: require_between marks any open end "(exclusive)" without saying which, and
+    # beside a legal 0 that reads as though 0 were excluded.
+    require_between("burn_in_nd", require_finite("burn_in_nd", cfg.burn_in_nd), 0.0, math.inf)
+    lo, hi = cfg.freq_bounds
+    require_positive("freq_bounds", lo)
+    require_below("freq_bounds", lo, hi)
+
+
 def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
                     n_freqs: int = 60, ensemble_M: int = 256, freqs_per_batch: int = 1,
                     F0: float = 0.05, seed: "int | None" = None) -> FDTConfig:
     """Build an FDTConfig (no prompts) from a model + cell file + FDT knobs. Shared by the command-line
-    tool (core/tool) and the GUI's FDT form."""
+    tool (core/tool) and the GUI's FDT form.
+
+    The checks live HERE and not on FDTConfig and not in the screens (§1.2), so both front ends
+    inherit one wording. The knobs, the cell and the model are checked before ``parse_cell``: every
+    one of those checks is free, and the four knobs are what a blank field turns into a zero -- 0
+    frequencies is an empty figure and exit 0, 0 trajectories is a ZeroDivisionError, 0 frequencies
+    per call is an unbounded loop that looks like a hang, and F0 = 0 divides by zero in the lock-in.
+    The five settings no front end exposes are not arguments here, so they are checked on the built
+    object, by :func:`check_fdt_settings`.
+    """
+    n_freqs = require_at_least("n_freqs", n_freqs, 1)
+    ensemble_M = require_at_least("ensemble_m", ensemble_M, 1)
+    freqs_per_batch = require_at_least("freqs_per_batch", freqs_per_batch, 1)
+    F0 = require_positive("f0", F0)
+    if seed is not None:
+        seed = require_at_least("seed", seed, 0)
+    require_file("cell", cell_file, "cell")
+    ok, reason = registry.fdt_support(model)
+    if not ok:
+        # NOT require_choice: fdt_support is a predicate returning a tailored diagnostic sentence
+        # per model, not a list of choices, and that sentence is the useful half of the refusal.
+        refuse("model", reason)
     (inits_dict, params_dict, rescale_params, force_params_dict,
      units_dict, _, _) = parse_cell(cell_file, model=model)
-    return FDTConfig(
+    cfg = FDTConfig(
         model=model,
         state_dep_drift=state_dep_drift,
         inits_dict=inits_dict,
@@ -363,6 +412,8 @@ def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
         sources=cell_sources(cell_file, model),
         seed=seed,
     )
+    check_fdt_settings(cfg)
+    return cfg
 
 
 def make_reduction_config(cell_file: str, *, F0: float = 0.05) -> FDTConfig:

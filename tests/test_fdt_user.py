@@ -1,4 +1,4 @@
-"""FDT-for-user-models unit tests (FEATURE 1 v3 + B-d), Qt-free.
+"""FDT-for-user-models unit tests (FEATURE 1 v3 + B-d), Qt-free except for that one widget read.
 
 Locks down the generalized effective-temperature normalization and its gate:
   * campaigns.observable_noise_prefactor computes the per-model coupling/D_x -- n*beta for NADROWSKI,
@@ -9,8 +9,11 @@ Locks down the generalized effective-temperature normalization and its gate:
     with multiplicative / zero observable noise or intrinsic forcing.
   * campaigns._n_force_channels returns one channel per state variable for a user model.
 
-No cell files / QApplication needed: a tiny fake cfg supplies only .model / .params_dict (and, for the
-force-channel test, .inits_tensor / .force_params_dict), which is all these functions read.
+The normalisation and gate tests need no cell file and no QApplication: a tiny fake cfg supplies only
+.model / .params_dict (and, for the force-channel test, .inits_tensor / .force_params_dict), which is
+all those functions read. The FDT config-builder tests added by piece 5 DO read the real Nadrowski
+cell, because what they pin is the builder refusing a knob before it parses one. One of them also
+builds two numeric widgets (offscreen) to read the value a blank box really produces.
 
 Run:  pytest tests/test_fdt_user.py
 """
@@ -243,3 +246,124 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     ], records()
 
     assert capsys.readouterr().out == ""
+
+
+def test_make_fdt_config_refuses_every_zero_knob_a_blank_box_produces():
+    """Review Focus 3, and spec §3.3's table. Nothing on this path was checked: freqs_per_batch=0
+    makes campaigns._plan_adaptive_batches append (start, 0) for ever -- the application LOOKS HUNG
+    rather than failed -- ensemble_M=0 raises ZeroDivisionError inside _pick_n_segs
+    (FDT_MAX_ELEMENTS_PER_SEG // batch_size), F0=0 divides by zero in spectral.lock_in_chi
+    (2.0 / (F0 * T_obs)), and n_freqs=0 produces an empty grid, an empty figure and exit 0.
+
+    Each floor is asserted against the value a BLANK BOX produces and not only against a typed zero,
+    because IntField.value() and FloatField.value() both return 0 for an empty field: a rule written
+    as "reject below zero" would accept every blank field in the application. The refusals are
+    raised BEFORE parse_cell, so a bad knob costs no file parsing, and each carries the field key
+    its front-end table maps to a control or a flag."""
+    import pytest
+
+    from core import cli, config
+    from core.refusals import Refusal
+
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    ok = dict(n_freqs=4, ensemble_M=8, freqs_per_batch=1, F0=0.05)
+
+    assert cli.make_fdt_config("NADROWSKI", True, cell, **ok).n_freqs == 4
+
+    for knob, field, sentence in (
+            ("n_freqs", "n_freqs",
+             "The number of drive frequencies must be at least 1; got 0 "
+             "(default 60, or the preset's in a sweep)."),
+            ("ensemble_M", "ensemble_m",
+             "The number of trajectories per frequency must be at least 1; got 0 "
+             "(default 256, or the preset's in a sweep)."),
+            ("freqs_per_batch", "freqs_per_batch",
+             "The number of frequencies per simulator call must be at least 1; got 0 (default 1)."),
+            ("F0", "f0",
+             "The non-dimensional drive amplitude must be greater than 0; got 0 (default 0.05).")):
+        with pytest.raises(Refusal) as e:
+            cli.make_fdt_config("NADROWSKI", True, cell, **{**ok, knob: 0})
+        assert e.value.field == field and str(e.value) == sentence, str(e.value)
+    # a seed is optional (None draws one), but a given one is a non-negative integer
+    with pytest.raises(Refusal) as e:
+        cli.make_fdt_config("NADROWSKI", True, cell, **ok, seed=-1)
+    assert e.value.field == "seed" and "must be at least 0; got -1" in str(e.value), str(e.value)
+
+    # ...and the value a blank box really produces, read off the widgets themselves
+    from core.gui.widgets.labeled_inputs import FloatField, IntField
+    from tests._fixtures import qt_app
+    qt_app()
+    blank_int, blank_float = IntField(60), FloatField(0.05)
+    blank_int.setText("")
+    blank_float.setText("")
+    assert blank_int.value() == 0 and blank_float.value() == 0.0, "the premise of this test"
+    with pytest.raises(Refusal, match="at least 1"):
+        cli.make_fdt_config("NADROWSKI", True, cell, **{**ok, "n_freqs": blank_int.value()})
+    with pytest.raises(Refusal, match="greater than 0"):
+        cli.make_fdt_config("NADROWSKI", True, cell, **{**ok, "F0": blank_float.value()})
+
+
+def test_make_fdt_config_refuses_a_missing_cell_an_unsupported_model_and_a_broken_band():
+    """The rest of spec §3.3's table. A missing cell surfaced as FileNotFoundError from the parser;
+    it is now refused by its input kind first, with field="cell", exactly as make_sim_config refuses
+    a missing bounds file. The model row is NOT require_choice: registry.fdt_support is a predicate
+    that returns a TAILORED diagnostic sentence per model (intrinsic forcing, multiplicative noise,
+    a deterministic observable), not a list of choices, so the rule is refuse("model", reason) and
+    fdt_support's own words are kept verbatim.
+
+    The frequency band, the burn-in, the two durations and the step are parameters of neither
+    builder and are exposed by neither front end (§1.2), so they are checked DEFENSIVELY under their
+    own registered keys, which map to None in both front-end tables: the message names the setting
+    and fix_sentence adds nothing, because there is no control and no flag (P2, P75). They are
+    reached through with_overrides, which is how a hand-edited preset or a caller can produce one.
+
+    The burn-in floor is 0 and 0 itself is legal (E5). A fractional negative and a NaN are refused
+    too (F33): the count rule would have read -0.5 through int() as 0 and passed it, and raised a
+    bare ValueError on a NaN."""
+    import pytest
+
+    from core import cli, config, registry
+    from core.gui import fields as gui_fields
+    from core.refusals import Refusal
+    from core.tool import fields as tool_fields
+
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+
+    with pytest.raises(Refusal) as e:
+        cli.make_fdt_config("NADROWSKI", True, str(config.CELL_PATH / "nadrowski" / "nope.txt"))
+    assert e.value.field == "cell" and "was not found" in str(e.value)
+    with pytest.raises(Refusal) as e:
+        cli.make_fdt_config("NADROWSKI", True, "")
+    assert e.value.field == "cell" and "is blank" in str(e.value)
+
+    try:
+        _register_user("FDT_FORCED_CHECK", [
+            {"name": "x", "drift": "-k*x", "D": "d0", "forcing": {"kind": "sin", "params": {}}}])
+        ok_, reason = registry.fdt_support("FDT_FORCED_CHECK")
+        assert not ok_ and "forcing" in reason, reason
+        with pytest.raises(Refusal) as e:
+            cli.make_fdt_config("FDT_FORCED_CHECK", False, cell)
+        assert e.value.field == "model" and str(e.value) == reason, \
+            "fdt_support's own per-model reason, kept verbatim and given a field key"
+    finally:
+        registry.unregister("FDT_FORCED_CHECK")
+
+    good = cli.make_fdt_config("NADROWSKI", True, cell, n_freqs=4, ensemble_M=8)
+    for bad, key, needle in ((dict(dt_nd=0.0), "dt_nd", "must be greater than 0"),
+                             (dict(psd_T_obs_nd=0.0), "psd_t_obs_nd", "must be greater than 0"),
+                             (dict(T_obs_periods=0), "t_obs_periods", "must be greater than 0"),
+                             (dict(burn_in_nd=-1.0), "burn_in_nd", "must be between 0 and inf; got -1 "),
+                             (dict(burn_in_nd=-0.5), "burn_in_nd", "must be between 0 and inf; got -0.5 "),
+                             (dict(burn_in_nd=math.nan), "burn_in_nd", "must be a finite number; got nan"),
+                             (dict(burn_in_nd=math.inf), "burn_in_nd", "must be a finite number; got inf"),
+                             (dict(freq_bounds=(0.0, 30.0)), "freq_bounds", "must be greater than 0"),
+                             (dict(freq_bounds=(30.0, 0.1)), "freq_bounds",
+                              "lower bound below its upper bound")):
+        with pytest.raises(Refusal) as e:
+            cli.check_fdt_settings(good.with_overrides(**bad))
+        assert needle in str(e.value), str(e.value)
+        assert e.value.field == key, (key, e.value.field)
+        assert gui_fields.fix_sentence(key) == "" and tool_fields.fix_sentence(key) == "", \
+            "no control and no flag: the message names the setting and offers no fix (P2)"
+    assert cli.check_fdt_settings(good.with_overrides(burn_in_nd=0.0)) is None, "E5: a zero burn-in is legal"
+    assert cli.check_fdt_settings(good) is None, "the built config passes its own check"
