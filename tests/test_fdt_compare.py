@@ -173,8 +173,8 @@ def test_a_comparison_refuses_one_record_another_study_and_an_unfinished_one(tmp
     finished records only). Each refusal names what it got and carries the field both front ends map
     to their own control."""
     store = _store(tmp_path)
-    # these refusals are load_records'; a stub drawer gets past the no-drawer guard, which answers
-    # first while _DRAWERS is still empty (Tasks 37-39 fill it)
+    # these refusals are load_records', and every one lands before a drawer runs: a stub stands in for
+    # the real drawer so the test pins the refusals and not the picture
     monkeypatch.setitem(cmp._DRAWERS, "cells", lambda w, records, *, sink: ({}, []))
     one = build_fdt_record(store, name="a")
     sweep = build_fdt_record(store, name="sw", study="sweep")
@@ -438,3 +438,165 @@ def test_the_compare_path_loads_no_inference_machinery(tmp_path):
                                          "PRISM_ARTIFACTS": str(root)})
     assert r.returncode == 0, r.stdout + r.stderr
     assert "pytensor" not in r.stderr, r.stderr
+
+
+def test_compare_cells_draws_every_record_on_one_axis_and_records_its_peak(tmp_path):
+    """Spec §7.1: several cells' ratio curves on ONE axis, labelled by cell. The labels matter as much
+    as the curves -- a picture of four unlabelled traces answers nothing -- and the peak of each is in
+    the record, so the comparison can be read back without re-opening the figure. The two records here
+    measure different bands on purpose: the drawn grid is their intersection (§7.2), not either one's
+    own."""
+    store = _store(tmp_path)
+    a = build_fdt_record(store, name="master_spont", omegas=(0.5, 1.0, 2.0, 4.0),
+                         ratio=(1.0, 5.0, 1.3, 1.1))
+    b = build_fdt_record(store, name="master_weak", omegas=(1.0, 2.0, 4.0),
+                         ratio=(1.0, 2.0, 1.2))
+    seen, sink = _closing()
+    rec = cmp.compare("cells", [a, b], name="two_cells", fig_sink=sink, store=store)
+
+    assert seen == ["FDT ratio by cell"], seen
+    assert rec.manifest.figures == ["figures/fdt_ratio_by_cell.png"]
+    res = rec.body["results"]
+    assert res["n_records"] == 2 and res["n_grid"] == 3 and res["blanks"] == 0
+    assert [p["label"] for p in res["per_record"]] == ["master_spont", "master_weak"]
+    # the common grid is [1, 2, 4] -- the intersection [1, 4] at the smaller point count, 3:
+    # master_spont's peak at omega=1 is on it, master_weak's at omega=2
+    assert res["per_record"][0]["peak_omega"] == pytest.approx(1.0)
+    assert res["per_record"][1]["peak_omega"] == pytest.approx(2.0)
+    assert res["per_record"][1]["peak_ratio"] == pytest.approx(2.0)
+    with h5py.File(rec.data_path, "r") as h5:
+        assert [h5["curves"][k].attrs["label"] for k in sorted(h5["curves"])] == \
+            ["master_spont", "master_weak"]
+
+
+def test_compare_cells_keeps_a_blank_blank_and_says_so_in_the_record(tmp_path):
+    """E9 carried through a comparison. A run that could not measure a frequency reports a blank, and
+    the comparison must not blend it away: the blank stays blank, the count is in the record's
+    notices, and the notices are what the walkthrough row reads. A silently interpolated gap is the
+    fabricated tail the off-grid fix removed, put back one layer up."""
+    store = _store(tmp_path)
+    a = build_fdt_record(store, name="a", omegas=(1.0, 2.0, 4.0, 8.0),
+                         ratio=(1.0, float("nan"), 1.3, 1.1))
+    b = build_fdt_record(store, name="b", omegas=(1.0, 2.0, 4.0, 8.0), ratio=(1.0, 2.0, 1.2, 1.05))
+    _seen, sink = _closing()
+    rec = cmp.compare("cells", [a, b], fig_sink=sink, store=store)
+    assert rec.body["results"]["blanks"] == 1, rec.body["results"]
+    assert rec.body["notices"] and "never interpolated across" in rec.body["notices"][0]
+    with h5py.File(rec.data_path, "r") as h5:
+        drawn = h5["curves"]["000"][...]
+    assert math.isnan(drawn[1]) and not np.isnan(drawn[[0, 2, 3]]).any(), drawn
+
+
+def test_compare_repeats_draws_the_spread_across_the_runs_as_a_band(tmp_path):
+    """Spec §7.1 and E7: repeats of one cell run at different seeds, and the spread across them IS the
+    measurement error -- the number that says whether a difference between two cells means anything.
+    The band is the envelope across the repeats at each frequency, so a point blank in ANY repeat is
+    blank in the band: an envelope silently narrowed by a missing run would understate exactly the
+    error it exists to show."""
+    store = _store(tmp_path)
+    ids = [build_fdt_record(store, name=f"rep{i}", omegas=(1.0, 2.0, 4.0), ratio=r)
+           for i, r in enumerate([(1.0, 3.0, 1.0), (1.2, 5.0, 1.1), (0.8, 4.0, 0.9)])]
+    seen, sink = _closing()
+    rec = cmp.compare("repeats", ids, fig_sink=sink, store=store)
+
+    assert seen == ["FDT ratio across repeats"], seen
+    res = rec.body["results"]
+    assert res["n_records"] == 3
+    # at omega = 2 the three repeats give 3, 5 and 4: the band spans 3 to 5 and the mean is 4
+    assert res["band"]["lo"][1] == pytest.approx(3.0)
+    assert res["band"]["hi"][1] == pytest.approx(5.0)
+    assert res["band"]["mean"][1] == pytest.approx(4.0)
+    assert res["widest"] == pytest.approx(2.0), "the widest spread over the grid"
+    with h5py.File(rec.data_path, "r") as h5:
+        assert sorted(h5["curves"]) == ["000", "001", "002"]
+        assert list(h5["band"]) == ["hi", "lo", "mean"]
+    assert res["cells"] == ["rep0", "rep1", "rep2"], "no cell input on the fixture: the label is the name"
+    assert any("rep0, rep1, rep2" in n for n in rec.body["notices"]), rec.body["notices"]
+
+
+def test_a_point_blank_in_any_repeat_is_blank_in_the_band(tmp_path):
+    """The band's own promise, driven: one repeat that could not measure omega = 2 blanks the band
+    there -- lo, hi and mean alike -- rather than narrowing it to the two runs that did, which would
+    report a smaller measurement error than the runs have. The record holds null where the band is
+    blank (a manifest refuses NaN), the file holds NaN, the widest spread is taken over the points the
+    band does have, and the blank is counted in the notices like any other."""
+    store = _store(tmp_path)
+    ids = [build_fdt_record(store, name=f"rep{i}", omegas=(1.0, 2.0, 4.0), ratio=r)
+           for i, r in enumerate([(1.0, 3.0, 1.0), (1.2, float("nan"), 1.6), (0.8, 4.0, 0.9)])]
+    _seen, sink = _closing()
+    rec = cmp.compare("repeats", ids, fig_sink=sink, store=store)
+
+    band = rec.body["results"]["band"]
+    assert band["lo"][1] is None and band["hi"][1] is None and band["mean"][1] is None, band
+    assert band["lo"][2] == pytest.approx(0.9) and band["hi"][2] == pytest.approx(1.6), band
+    assert rec.body["results"]["widest"] == pytest.approx(0.7), "taken over the points it has"
+    assert rec.body["results"]["blanks"] == 1
+    assert "never interpolated across" in rec.body["notices"][0], rec.body["notices"]
+    with h5py.File(rec.data_path, "r") as h5:
+        assert all(math.isnan(h5["band"][k][1]) for k in ("lo", "hi", "mean"))
+
+
+def _record_of_cell(store, monkeypatch, cell_path: str, **kwargs) -> str:
+    """A ``build_fdt_record`` whose manifest names a cell file, the way a real run's does.
+
+    The fixture writes with no configuration, so its manifests name no cell and a comparison labels
+    each curve by the record's name. A real run's ``inputs.cell`` is ``{"path", "sha256"}`` with the
+    path relative to ``Resources/`` (``provenance.file_ref``); the writer's inputs are replaced with
+    exactly that for this one record, rather than building a full FDT configuration from a real cell
+    just to have its path recorded."""
+    from core.artifacts.store import ArtifactWriter
+    inputs = {"bounds": None, "units": None, "model": None,
+              "cell": {"path": cell_path, "sha256": "ab" * 32}}
+    with monkeypatch.context() as m:
+        m.setattr(ArtifactWriter, "_inputs", lambda self, *, warn: dict(inputs))
+        return build_fdt_record(store, **kwargs)
+
+
+def test_two_cells_that_share_a_file_name_never_share_a_legend_entry(tmp_path, monkeypatch):
+    """A curve is labelled by its cell's file stem, and stems are not unique: ``Cells/shm/default.txt``
+    and ``Cells/shm2/default.txt`` are two different cells, both called "default". A legend that
+    showed "default" twice would put two cells' curves under one name -- the picture would claim the
+    same cell measured twice. So colliding names grow the folder they sit in ("shm/default"), a stem
+    no other cell shares stays short, and two runs of the SAME cell (which share its name honestly)
+    are told apart by the run. ``repeats`` names the cells it drew (P60) by the same rule, so its
+    notice counts two cells here, not one "default"."""
+    store = _store(tmp_path)
+    shm = _record_of_cell(store, monkeypatch, "Cells/shm/default.txt", name="run_shm")
+    again = _record_of_cell(store, monkeypatch, "Cells/shm/default.txt", name="run_shm_again")
+    shm2 = _record_of_cell(store, monkeypatch, "Cells/shm2/default.txt", name="run_shm2")
+    other = _record_of_cell(store, monkeypatch, "Cells/nadrowski/master_spont.txt", name="run_ms")
+    assert store.load_fdt(shm).manifest.inputs["cell"]["path"] == "Cells/shm/default.txt"
+
+    legends = {}
+
+    def _sink(title, fig):
+        from matplotlib import pyplot as plt
+        legends[title] = [t.get_text() for t in fig.axes[0].get_legend().get_texts()]
+        plt.close(fig)
+
+    def labels_of(rec):
+        with h5py.File(rec.data_path, "r") as h5:
+            drawn = [h5["curves"][k].attrs["label"] for k in sorted(h5["curves"])]
+        assert drawn == [p["label"] for p in rec.body["results"]["per_record"]], drawn
+        return drawn
+
+    rec = cmp.compare("cells", [shm, shm2, other], fig_sink=_sink, store=store)
+    assert labels_of(rec) == ["shm/default", "shm2/default", "master_spont"]
+    drawn = legends["FDT ratio by cell"]
+    assert len(set(drawn)) == len(drawn), drawn
+    assert {"shm/default", "shm2/default", "master_spont"} <= set(drawn), drawn
+
+    # two runs of one cell beside a different cell of the same file name
+    rec = cmp.compare("repeats", [shm, again, shm2], fig_sink=_sink, store=store)
+    assert labels_of(rec) == ["shm/default (run_shm)", "shm/default (run_shm_again)", "shm2/default"]
+    assert rec.body["results"]["cells"] == ["shm/default", "shm2/default"], rec.body["results"]
+    assert any("2 cell(s): shm/default, shm2/default" in n for n in rec.body["notices"]), \
+        rec.body["notices"]
+    drawn = legends["FDT ratio across repeats"]
+    assert len(set(drawn)) == len(drawn), drawn
+
+    # repeats of one cell and nothing else: one cell, by its short name, and each run told apart
+    rec = cmp.compare("repeats", [shm, again], fig_sink=_sink, store=store)
+    assert labels_of(rec) == ["default (run_shm)", "default (run_shm_again)"]
+    assert rec.body["results"]["cells"] == ["default"], rec.body["results"]
+    assert any("1 cell(s): default." in n for n in rec.body["notices"]), rec.body["notices"]

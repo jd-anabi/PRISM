@@ -1854,6 +1854,30 @@ def test_a_comparison_whose_source_was_deleted_still_lists_through_the_tool(tmp_
     assert f"MISSING fdt [{ids[0]}]" in out and f"fdt cell_1 [{ids[1]}]" in out, out
 
 
+def test_compare_cells_from_the_command_line_writes_a_record_and_names_it(tool_env, capsys):
+    """``python -m core compare cells --record A --record B``: the tool's half of E8. The subcommand
+    mirrors identifiability's shape -- a parser per mode -- reads PRISM_ARTIFACTS like every
+    subcommand but smoke, and prints the one [prism] line per artifact written that every other
+    write path prints. One record is a refusal, not a traceback: it exits 1 and names --record."""
+    from core.artifacts import ArtifactStore
+    from core.tool import main
+    from tests._fixtures import build_fdt_record
+    _bounds, _cell, root = tool_env
+    store = ArtifactStore(root)
+    a = build_fdt_record(store, name="cell_a")
+    b = build_fdt_record(store, name="cell_b")
+
+    assert main(["compare", "cells", "--record", a, "--record", b, "--name", "ab"]) == 0
+    out = capsys.readouterr().out
+    assert "[prism] fdt ab__" in out, out
+    rec = store.load_fdt("ab")
+    assert rec.body["study"] == "comparison" and rec.body["compared"]["mode"] == "cells"
+
+    assert main(["compare", "cells", "--record", a]) == 1
+    err = capsys.readouterr().err
+    assert "refused:" in err and "at least 2" in err and "(--record)" in err, err
+
+
 def test_the_fdt_subcommands_no_longer_say_they_have_no_bounds_file():
     """Spec §3.2. Two sentences in this module claimed these analyses have no bounds file. They are
     false, and the record makes the falsehood expensive: ``cli.parse_cell`` DOES resolve one

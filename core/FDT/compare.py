@@ -34,7 +34,8 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import h5py
@@ -115,6 +116,34 @@ def _label_of(rec) -> str:
     if isinstance(cell, dict) and cell.get("path"):
         return Path(str(cell["path"])).stem
     return rec.name or rec.id
+
+
+def _cell_key(rec) -> tuple:
+    """The cell a record measured, as the components of the path its manifest records with the
+    file's stem last -- ``Cells/shm/default.txt`` is ``("Cells", "shm", "default")`` -- or, for a
+    record that names no cell, its name (or id) alone, the same fallback ``_label_of`` takes. Split
+    on either separator: a cell outside ``Resources/`` is recorded as an absolute path, which on
+    Windows is written with backslashes."""
+    cell = (rec.manifest.inputs or {}).get("cell")
+    if isinstance(cell, dict) and cell.get("path"):
+        parts = [p for p in re.split(r"[\\/]", str(cell["path"])) if p]
+        if parts:
+            return (*parts[:-1], Path(parts[-1]).stem)
+    return (rec.name or rec.id,)
+
+
+def _shortest_names(keys: list) -> dict:
+    """Each of the DISTINCT ``keys``' shortest tail that no other key ends in, joined with "/":
+    ``default`` while no other cell is called that, ``shm/default`` beside ``shm2/default``. A key
+    that is wholly the tail of another -- a run's bare name, or a path that ends a longer one --
+    keeps all of itself and the longer key grows past it, so no two keys come out with one name."""
+    names = {}
+    for key in keys:
+        others = [k for k in keys if k != key]
+        depth = next((d for d in range(1, len(key) + 1) if all(k[-d:] != key[-d:] for k in others)),
+                     len(key))
+        names[key] = "/".join(key[-depth:])
+    return names
 
 
 def _checked_options(mode: str, options: dict) -> dict:
@@ -217,6 +246,26 @@ def curve_of(rec) -> Curve:
         prefactor = float(h5.attrs.get("prefactor", math.nan))
     return Curve(id=rec.id, name=rec.name, label=_label_of(rec), omegas=omegas, ratio=ratio,
                  omega_0=omega_0, prefactor=prefactor)
+
+
+def labelled_curves(records: list) -> tuple:
+    """``(curves, cells)``: each record's curve, labelled so that no two curves in one picture share a
+    legend entry, and each record's cell under the name its label uses.
+
+    A cell is named by its file's stem, as ``_label_of`` names it, until two DIFFERENT cells share
+    one -- ``Cells/shm/default.txt`` and ``Cells/shm2/default.txt`` are both "default" -- and then by
+    as much of its path as tells them apart ("shm/default"): a legend showing one name twice would
+    say one cell was measured twice. Two runs of the SAME cell share its name honestly, so their
+    labels add the run ("default (run_a)") and each curve can still be found. ``cells`` is what a
+    mode reports as the cells it drew (P60), so it follows the same rule and counts cells, not runs.
+    """
+    keys = [_cell_key(r) for r in records]
+    names = _shortest_names(list(dict.fromkeys(keys)))
+    cells = [names[k] for k in keys]
+    curves = [replace(curve_of(rec), label=cell if keys.count(key) == 1
+                      else f"{cell} ({rec.name or rec.id})")
+              for rec, key, cell in zip(records, keys, cells)]
+    return curves, cells
 
 
 def common_grid(curves: list) -> np.ndarray:
@@ -395,3 +444,110 @@ def compare(mode: str, refs, *, name: str = "", note: str = "", fig_sink=None, s
             log.warning(sentence)
         finish_record(w, results=results, notices=notices)
     return store.load_fdt(w.id)
+
+
+def peak_of(curve: Curve, grid, values) -> dict:
+    """One record's line in ``body.results.per_record``: where its ratio peaked on the common grid,
+    and how high. Every float goes through ``_num``, so an all-blank curve records nulls rather than
+    reaching the manifest writer, which refuses a non-finite number outright."""
+    vals = np.asarray(values, dtype=np.float64)
+    if not np.isfinite(vals).any():
+        return {"id": curve.id, "label": curve.label, "peak_ratio": None, "peak_omega": None}
+    i = int(np.nanargmax(vals))
+    return {"id": curve.id, "label": curve.label,
+            "peak_ratio": _num(vals[i]), "peak_omega": _num(np.asarray(grid)[i])}
+
+
+def ratio_axes(title: str, blanks: int):
+    """A figure and axes for T_eff/T against frequency, drawn the way ``plots.plot_eff_temp_ratio``
+    draws its own: log x, symlog y so the chi''=0 crossing is visible on both sides of zero, and the
+    two reference lines in ``axes.edgecolor`` -- figure CHROME follows the theme, which is why it is
+    not a hardcoded gray (core/FDT/plots.py says why at length)."""
+    from matplotlib import pyplot as plt
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.set_xscale("log")
+    ax.set_yscale("symlog", linthresh=1.0)
+    ax.axhline(1.0, color=plt.rcParams["axes.edgecolor"], linestyle="--", linewidth=0.8,
+               label=r"$T_{\rm eff}/T = 1$ (equilibrium)")
+    ax.axhline(0.0, color=plt.rcParams["axes.edgecolor"], linestyle=":", linewidth=0.6)
+    xlabel = r"$\tilde\omega$ (ND), log scale"
+    if blanks:
+        xlabel += f"  --  {BLANK_AXIS_NOTE}"
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(r"$T_{\rm eff}(\tilde\omega) / T$, symlog scale")
+    ax.set_title(title)
+    ax.grid(False)
+    return fig, ax
+
+
+def draw_cells(w, records, *, sink):
+    """Several single-cell records' ratio curves on one axis, labelled by cell (spec §7.1)."""
+    curves, _cells = labelled_curves(records)
+    grid = common_grid(curves)
+    values = [interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
+    blanks, notices = blank_notice(values)
+    write_curves(w, grid, values, [c.label for c in curves],
+                 constants=[(c.omega_0, c.prefactor) for c in curves])
+    fig, ax = ratio_axes("FDT ratio by cell", blanks)
+    for curve, vals in zip(curves, values):
+        ax.plot(grid, vals, marker="o", markersize=4, linewidth=1.0, label=curve.label)
+    ax.legend()
+    fig.tight_layout()
+    sink("FDT ratio by cell", fig)
+    results = {"n_records": len(curves), "n_grid": int(grid.size), "blanks": blanks,
+               "per_record": [peak_of(c, grid, v) for c, v in zip(curves, values)]}
+    log.info(f"Common grid: {grid.size} pts spanning [{grid[0]:.4f}, {grid[-1]:.4f}]; "
+             f"{blanks} blank point(s)")
+    return results, notices
+
+
+def draw_repeats(w, records, *, sink):
+    """Repeats of one cell, with the spread ACROSS them as a band (spec §7.1, E7).
+
+    The band is the envelope -- the lowest and the highest repeat at each frequency -- and not a
+    standard deviation: with the two or three repeats this is written for, an SD is a number computed
+    from too little to mean what its name promises, while the envelope is exactly "what the runs
+    disagreed by". Plain ``min``/``max`` over the stack, so a point blank in ANY repeat is blank in
+    the band: an envelope narrowed by a missing run would understate the error it exists to show.
+    """
+    curves, cell_of = labelled_curves(records)
+    grid = common_grid(curves)
+    values = [interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
+    blanks, notices = blank_notice(values)
+    # P60: "the same cell" is not enforced -- a record's cell lives in its manifest's inputs and
+    # nothing stops a caller passing two -- so the mode REPORTS which cells it drew: in the legend
+    # (each curve is labelled by its cell) and here, in the record's notices. Named by
+    # ``labelled_curves``' rule, so two different cells that share a file name count as two.
+    cells = sorted(set(cell_of))
+    notices = list(notices) + [
+        f"The repeats drawn come from {len(cells)} cell(s): {', '.join(cells)}. The band is the "
+        f"spread across these runs, and it is one cell's measurement error only when every run is "
+        f"of the same cell."]
+    stack = np.stack(values, axis=0)
+    lo, hi, mean = stack.min(axis=0), stack.max(axis=0), stack.mean(axis=0)
+    write_curves(w, grid, values, [c.label for c in curves],
+                 constants=[(c.omega_0, c.prefactor) for c in curves])
+    with h5py.File(w.payload("data.h5"), "a") as h5:
+        band = h5.create_group("band")
+        for key, arr in (("lo", lo), ("hi", hi), ("mean", mean)):
+            band.create_dataset(key, data=np.asarray(arr, dtype=np.float64))
+    fig, ax = ratio_axes("FDT ratio across repeats", blanks)
+    ax.fill_between(grid, lo, hi, alpha=0.25, color="steelblue", label="spread across the repeats")
+    ax.plot(grid, mean, color="steelblue", linewidth=1.4, label="mean of the repeats")
+    for curve, vals in zip(curves, values):
+        ax.plot(grid, vals, linewidth=0.6, alpha=0.7, label=curve.label)
+    ax.legend()
+    fig.tight_layout()
+    sink("FDT ratio across repeats", fig)
+    widest = hi - lo
+    results = {"n_records": len(curves), "n_grid": int(grid.size), "blanks": blanks,
+               "cells": cells,
+               "widest": _num(np.nanmax(widest)) if np.isfinite(widest).any() else None,
+               "band": {"lo": [_num(v) for v in lo], "hi": [_num(v) for v in hi],
+                        "mean": [_num(v) for v in mean]},
+               "per_record": [peak_of(c, grid, v) for c, v in zip(curves, values)]}
+    return results, notices
+
+
+_DRAWERS["cells"] = draw_cells
+_DRAWERS["repeats"] = draw_repeats
