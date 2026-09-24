@@ -480,10 +480,14 @@ def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(t
     not. T17 turns that directory into the record's unfinished folder; the ordering is what makes the
     promise keepable.
 
+    Nothing about it needs the drive: whether a probe is blank depends only on the grid and Campaign
+    1's spectrum, so it is refused BEFORE Campaign 2 is spent (the review of Task 16), and Campaign 2
+    here is a recorder that must never be entered.
+
     The low end is gated by T15, so the reachable case is the UPPER end (spec §3.5): here the probe
     grid runs 1.0..6.0 against a spectrum that resolves 0.1..0.3. The four plot helpers are replaced
     by recorders that write their save_path, so the test asserts WHICH figures a run leaves without
-    paying for matplotlib."""
+    paying for matplotlib (the real figures are the next tests')."""
     import pytest
 
     from core.FDT import fdt_pipeline
@@ -509,8 +513,13 @@ def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(t
                         lambda cfg, return_trajectory=False: (
                             freqs_psd, G, torch.arange(4, dtype=torch.float64),
                             torch.zeros(4, dtype=torch.float64)))
-    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi",
-                        lambda cfg, om, **kw: torch.full((len(om),), 1 + 1j, dtype=torch.complex128))
+    driven = []
+
+    def _no_drive(*a, **kw):
+        driven.append(a)
+        raise AssertionError("the driven campaign ran: nothing-measurable must be refused first")
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _no_drive)
     for name in ("plot_spontaneous_trajectory", "plot_psd", "plot_eff_temp_ratio",
                  "plot_chi_components"):
         monkeypatch.setattr(fdt_pipeline, name,
@@ -521,9 +530,59 @@ def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(t
     msg = str(e.value)
     assert "0.1..0.3" in msg and "psd_T_obs_nd = 50" in msg, msg
     assert e.value.field == "freq_bounds", e.value.field
+    assert driven == [], "Campaign 2 was entered before nothing-measurable was refused"
 
     written = sorted(p.name.rsplit("_", 2)[0] for p in tmp_path.glob("*.png"))
     assert written == ["psd", "spontaneous_trajectory"], written
+
+
+class _ToneCfg:
+    """The subset of FDTConfig run_fdt and the REAL Campaign 1 read, at a size that takes no time:
+    2048 ND at dt_nd = 0.5 is 4096 samples, one Welch segment, well inside the cap. Paired with
+    _use_tone_simulator, which replaces the simulator and nothing else."""
+    model = "HOPF"
+    params_dict = {"sigma_x": (0.1, None)}
+    force_params_dict, state_dep_drift = {}, False
+    n_freqs, ensemble_M, burn_in_nd, omega_0 = 5, 8, 0.0, 1.0
+
+    class hw:
+        device = torch.device("cpu")
+        dtype = torch.float64
+
+    def __init__(self, freq_bounds, dt_nd=0.5, psd_T_obs_nd=2048.0):
+        self.freq_bounds, self.dt_nd, self.psd_T_obs_nd = freq_bounds, dt_nd, psd_T_obs_nd
+
+    def inits_for_M(self, M):
+        return None
+
+    def params_for_M(self, M):
+        return None
+
+
+def _use_tone_simulator(monkeypatch, *, diverge=False):
+    """Replace Campaign 1's simulator -- only it -- by a noiseless sin(t) in every trajectory, so the
+    Welch segment, the grid, the peak (near 1 ND) and the top are what the campaign's own code
+    computes. ``diverge=True`` sends one trajectory to +inf halfway through: a spontaneous simulation
+    that diverged."""
+    from core.FDT import campaigns
+
+    class _Tone:
+        def __init__(self, t, M):
+            self.t, self.M = t, M
+
+        def simulate(self, state_dep_drift=False):
+            x = torch.sin(self.t).expand(self.M, -1).clone()
+            if diverge:
+                x[self.M // 2, self.t.numel() // 2:] = float("inf")
+            return x.reshape(1, 1, self.M, -1)
+
+    monkeypatch.setattr(campaigns, "_make_simulator",
+                        lambda cfg, params, force, inits, t, **kw: _Tone(t, kw["batch_size"]))
+
+
+def _figures_in(directory) -> list:
+    """The kinds of figure a run left in ``directory``: each file name less its _<date>_<time>.png."""
+    return sorted(p.name.rsplit("_", 2)[0] for p in directory.glob("*.png"))
 
 
 def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
@@ -545,11 +604,8 @@ def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
     The grid lies wholly above the top here (lower multiplier 8, top 2*pi at dt_nd = 0.5), which is
     the one way every probe can blank once the band check has gated the low end: the resonance is a
     bin of the spectrum, so a lower multiplier of 1 or less keeps the lowest probe resolved. Lowering
-    the UPPER multiplier alone therefore cannot help, and the refusal does not say it would.
-
-    Last, a spectrum with no finite value at all -- a spontaneous campaign that diverged -- is refused
-    too, but without the Nyquist sentence: its probes lie inside the resolved band, where that
-    sentence would be false."""
+    the UPPER multiplier alone therefore cannot help, and the refusal does not say it would. Campaign
+    2 is a recorder: the refusal leaves it untouched, and only the two copied runs drive it."""
     import logging
     import math
     import re
@@ -561,55 +617,27 @@ def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
     from core.FDT.spectral import find_spectral_peak
     from core.refusals import Refusal
 
-    finite = [True]
+    _use_tone_simulator(monkeypatch)
+    driven = []
 
-    class _Tone:
-        """The simulator, replaced: every trajectory is sin(t) -- or, for the last case, blank."""
-        def __init__(self, t, M):
-            self.t, self.M = t, M
+    def _drive(cfg, om, **kw):
+        driven.append(len(om))
+        return torch.full((len(om),), 1 + 1j, dtype=torch.complex128)
 
-        def simulate(self, state_dep_drift=False):
-            x = torch.sin(self.t) if finite[0] else torch.full_like(self.t, float("nan"))
-            return x.expand(self.M, -1).reshape(1, 1, self.M, -1)
-
-    class _Cfg:
-        """The subset of FDTConfig run_fdt and the real Campaign 1 read. 2048 ND at dt_nd = 0.5 is
-        4096 samples: one Welch segment, well inside the cap."""
-        model = "HOPF"
-        params_dict = {"sigma_x": (0.1, None)}
-        force_params_dict, state_dep_drift = {}, False
-        n_freqs, ensemble_M, burn_in_nd, omega_0 = 5, 8, 0.0, 1.0
-
-        class hw:
-            device = torch.device("cpu")
-            dtype = torch.float64
-
-        def __init__(self, freq_bounds, dt_nd=0.5, psd_T_obs_nd=2048.0):
-            self.freq_bounds, self.dt_nd, self.psd_T_obs_nd = freq_bounds, dt_nd, psd_T_obs_nd
-
-        def inits_for_M(self, M):
-            return None
-
-        def params_for_M(self, M):
-            return None
-
-    monkeypatch.setattr(campaigns, "_make_simulator",
-                        lambda cfg, params, force, inits, t, **kw: _Tone(t, kw["batch_size"]))
     monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
-    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi",
-                        lambda cfg, om, **kw: torch.full((len(om),), 1 + 1j, dtype=torch.complex128))
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _drive)
     for name in ("plot_spontaneous_trajectory", "plot_psd", "plot_eff_temp_ratio",
                  "plot_chi_components"):
         monkeypatch.setattr(fdt_pipeline, name, lambda *a, **kw: None)
 
     def span(**kw):
-        return _resolved_span(campaigns.run_campaign1_psd(_Cfg((8.0, 30.0), **kw))[0])
+        return _resolved_span(campaigns.run_campaign1_psd(_ToneCfg((8.0, 30.0), **kw))[0])
 
     def warned():
         return [r.getMessage() for r in caplog.records
                 if r.name == "core.FDT.fdt_pipeline" and r.levelno == logging.WARNING]
 
-    freqs, G = campaigns.run_campaign1_psd(_Cfg((8.0, 30.0)))
+    freqs, G = campaigns.run_campaign1_psd(_ToneCfg((8.0, 30.0)))
     lo, hi = _resolved_span(freqs)
     w0 = find_spectral_peak(freqs, G)
     assert hi == pytest.approx(math.pi / 0.5, rel=1e-12), "the spectrum's top is not pi/dt_nd"
@@ -618,9 +646,10 @@ def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
     assert span(dt_nd=0.25)[1] == pytest.approx(2 * hi, rel=1e-12), "a shorter step must raise the top"
 
     with pytest.raises(Refusal) as e:
-        fdt_pipeline.run_fdt(_Cfg((8.0, 30.0)), skip_sanity=True, confirm_production=True)
+        fdt_pipeline.run_fdt(_ToneCfg((8.0, 30.0)), skip_sanity=True, confirm_production=True)
     msg = str(e.value)
     assert e.value.field == "freq_bounds", e.value.field
+    assert driven == [], "the driven campaign was spent before nothing-measurable was refused"
     assert f"the band it resolves is {lo:g}..{hi:g} (ND)" in msg, msg
     assert f"The lowest probe frequency, {8.0 * w0:g} (ND), is above that band's top" in msg, msg
     assert "Nyquist frequency pi/dt_nd (dt_nd = 0.5): only a shorter integration step raises it" in msg, msg
@@ -635,22 +664,217 @@ def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
 
     # copied: a lower multiplier inside the named range measures some probes, and says how many not
     caplog.clear()
-    fdt_pipeline.run_fdt(_Cfg((0.9 * high, 30.0)), skip_sanity=True, confirm_production=True)
-    assert warned() == [f"4/5 probe frequencies fall outside the band the spontaneous spectrum resolves "
-                        f"({lo:g}..{hi:g} ND) and are blank in the ratio."], warned()
+    fdt_pipeline.run_fdt(_ToneCfg((0.9 * high, 30.0)), skip_sanity=True, confirm_production=True)
+    assert warned() == [f"4/5 probe frequencies have no value in the spontaneous spectrum, whose "
+                        f"resolved band is {lo:g}..{hi:g} (ND), and are blank in the ratio."], warned()
     # ...and an upper multiplier below the named bound measures all of them
     caplog.clear()
-    fdt_pipeline.run_fdt(_Cfg((high / 4, 0.99 * upper)), skip_sanity=True, confirm_production=True)
+    fdt_pipeline.run_fdt(_ToneCfg((high / 4, 0.99 * upper)), skip_sanity=True, confirm_production=True)
     assert warned() == [], warned()
+    assert driven == [5, 5], driven
 
-    # a diverged spontaneous campaign: nothing is finite, the probes sit INSIDE the resolved band
-    finite[0] = False
-    with pytest.raises(Refusal) as e:
-        fdt_pipeline.run_fdt(_Cfg((2.0, 4.0)), skip_sanity=True, confirm_production=True)
-    msg = str(e.value)
-    assert e.value.field == "freq_bounds", e.value.field
-    assert "has no value at any of the 5 probe frequencies" in msg, msg
+
+def test_the_spectrum_figure_draws_what_the_spectrum_holds_whatever_the_band(
+        tmp_path, monkeypatch, caplog):
+    """The review of Task 16 (Critical), at the figure. The spontaneous-spectrum figure is drawn BEFORE
+    the two band refusals, as the picture that diagnoses them -- and plot_psd clipped the spectrum to
+    the probe band and log-scaled both axes, so a band holding no spectrum point (wholly above the
+    Nyquist top or wholly below the first bin: exactly the cases those refusals exist for) raised "Data
+    has no positive values" from tight_layout, and so did a spectrum with no finite value. Every run
+    test stubbed plot_psd, which is why none saw it. The REAL function is driven here; the figure it
+    saves is caught at savefig and read back:
+
+    * a band that holds points: the ordinary figure, unchanged -- log/log, the in-band points only,
+      the resonance line, nothing added;
+    * a band above the top, and one below the first bin: the WHOLE finite spectrum, with the band
+      shaded on the same axis -- a figure clipped to an empty band would show nothing, and the
+      distance between the band and the spectrum is what diagnoses the refusal;
+    * no finite value at all: an annotated figure on linear axes, beside the existing warning record."""
+    import logging
+
+    import numpy as np
+
+    from core.FDT import plots
+
+    figures = []
+    real_savefig = plots.plt.savefig
+
+    def _keep(*a, **kw):
+        figures.append(plots.plt.gcf())
+        return real_savefig(*a, **kw)
+
+    monkeypatch.setattr(plots.plt, "savefig", _keep)
+
+    omegas = np.linspace(0.0, 2 * np.pi, 9)             # a Welch-shaped grid: the DC bin, then 8 bins
+    G = 1.0 / (1.0 + (omegas - np.pi) ** 2)             # positive everywhere, peaked at pi
+    w0 = np.pi
+
+    def draw(name, spectrum=G, band=None):
+        plots.plot_psd(omegas, spectrum, save_path=tmp_path / f"{name}.png", omega_natural=w0,
+                       plot_band=band)
+        assert (tmp_path / f"{name}.png").is_file(), name
+        return figures[-1].axes[0]
+
+    def legend_of(ax):
+        return [t.get_text() for t in ax.get_legend().get_texts()]
+
+    caplog.clear()
+    ax = draw("ordinary", band=(1.0, 5.0))
+    inside = (omegas >= 1.0) & (omegas <= 5.0)
+    assert (ax.get_xscale(), ax.get_yscale()) == ("log", "log")
+    data, resonance = ax.get_lines()
+    assert np.array_equal(data.get_xdata(), omegas[inside] / w0), data.get_xdata()
+    assert np.array_equal(data.get_ydata(), G[inside]), data.get_ydata()
+    assert list(resonance.get_xdata()) == [1.0, 1.0]
+    assert len(ax.patches) == 0 and len(ax.texts) == 0, "the ordinary figure gained an artist"
+    assert len(legend_of(ax)) == 1 and "Omega_0" in legend_of(ax)[0], legend_of(ax)
+
+    for name, band in (("above_the_top", (8.0, 30.0)), ("below_the_first_bin", (1e-4, 1e-3))):
+        ax = draw(name, band=band)
+        assert (ax.get_xscale(), ax.get_yscale()) == ("log", "log"), name
+        data = ax.get_lines()[0]
+        assert np.array_equal(data.get_xdata(), omegas[1:] / w0), (name, data.get_xdata())
+        (shade,) = ax.patches
+        x_lo, x_hi = ax.get_xlim()
+        assert x_lo <= band[0] / w0 and band[1] / w0 <= x_hi, (name, ax.get_xlim(), "the band is off the axis")
+        assert any("probe band" in t for t in legend_of(ax)), (name, legend_of(ax))
+    assert [r for r in caplog.records if r.name == "core.FDT.plots"] == [], "a figure with points warned"
+
+    ax = draw("nothing_finite", spectrum=np.full_like(G, np.nan), band=(1.0, 5.0))
+    assert (ax.get_xscale(), ax.get_yscale()) == ("linear", "linear")
+    assert len(ax.get_lines()) == 0 and len(ax.texts) == 1, list(ax.texts)
+    assert "no finite" in ax.texts[0].get_text(), ax.texts[0].get_text()
+    assert [(r.levelno, r.getMessage()) for r in caplog.records if r.name == "core.FDT.plots"] == \
+        [(logging.WARNING, "plot_psd: dropping 8/8 non-finite PSD points.")]
+
+
+def test_both_band_refusals_leave_the_real_spectrum_figure_and_never_drive(tmp_path, monkeypatch):
+    """The same finding end to end. With the real plot_psd the run died of a plotting ValueError
+    before either band refusal was reached: a band wholly above the spectrum's top (nothing
+    measurable), and a band wholly below its first bin -- which Task 15 had refused cleanly before
+    the figure moved above its check, so that one was a regression.
+
+    Nothing is stubbed here but the simulator and Campaign 2: the real Campaign 1 (a noiseless tone),
+    the real plot_spontaneous_trajectory and plot_psd. Each band ends in its own refusal, keyed
+    "freq_bounds", with both pictures on disk, and the driven campaign is never entered -- both
+    refusals are knowable from the grid and Campaign 1 alone (the review's order finding)."""
+    import pytest
+
+    from core.FDT import fdt_pipeline
+    from core.refusals import Refusal
+
+    _use_tone_simulator(monkeypatch)
+    driven = []
+
+    def _no_drive(*a, **kw):
+        driven.append(a)
+        raise AssertionError("the driven campaign ran: a band refusal must come first")
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _no_drive)
+
+    cases = (("above_the_top", (8.0, 30.0), "has no value at any of the 5 probe frequencies"),
+             ("below_the_first_bin", (1e-4, 1e-3),
+              "The frequency band reaches below what the spontaneous spectrum resolves"))
+    for name, band, says in cases:
+        out = tmp_path / name
+        out.mkdir()
+        monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda out=out: out)
+        with pytest.raises(Refusal) as e:
+            fdt_pipeline.run_fdt(_ToneCfg(band), skip_sanity=True, confirm_production=True)
+        assert says in str(e.value), (name, str(e.value))
+        assert e.value.field == "freq_bounds", (name, e.value.field)
+        assert _figures_in(out) == ["psd", "spontaneous_trajectory"], (name, _figures_in(out))
+    assert driven == [], "the driven campaign was entered before a band refusal"
+
+
+def test_a_diverged_spontaneous_simulation_is_refused_as_the_cells_before_the_peak_search(
+        tmp_path, monkeypatch, caplog):
+    """The review of Task 16 (Important 2). A spontaneous simulation that diverged leaves a spectrum
+    with no finite value, and find_spectral_peak then returns the FIRST bin as the resonance (argmax
+    takes NaN for the largest value) -- so the band check told the operator to raise freq_bounds'
+    lower multiplier, and, followed, the nothing-measurable refusal named a resolved band: both false,
+    and the real diagnosis never said. It is refused now as what it is, right after Campaign 1 and
+    BEFORE the peak search, keyed "cell": no band and no recording length makes a diverged
+    simulation measurable.
+
+    The folder keeps the picture that shows the divergence -- the spontaneous trajectory, drawn by
+    the REAL plot_spontaneous_trajectory, which draws NaN and inf without raising -- and nothing the
+    refusal precedes. Two ways in: the real Campaign 1 with one of eight trajectories sent to +inf,
+    which the real psd_welch turns into NaN at EVERY bin (one non-finite sample in a Welch segment
+    reaches every frequency), and a Campaign 1 stub whose spectrum and trajectory are all NaN.
+
+    The boundary: a spectrum non-finite in only SOME bins is not this refusal. It takes the
+    some-blank path -- the run completes and says how many probes are blank, in words true of blanks
+    INSIDE the resolved band too -- or, when every probe is blank inside that band, the
+    nothing-measurable refusal without the Nyquist sentence, which would be false there."""
+    import logging
+
+    import pytest
+
+    from core.FDT import fdt_pipeline
+    from core.refusals import Refusal
+
+    driven = []
+
+    def _drive(cfg, om, **kw):
+        driven.append(len(om))
+        return torch.full((len(om),), 1 + 1j, dtype=torch.complex128)
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _drive)
+
+    def refused(cfg, name):
+        out = tmp_path / name
+        out.mkdir()
+        monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: out)
+        with pytest.raises(Refusal) as e:
+            fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True)
+        return e.value, _figures_in(out)
+
+    # the real Campaign 1, one trajectory sent to +inf; the real figures
+    _use_tone_simulator(monkeypatch, diverge=True)
+    e, written = refused(_ToneCfg((0.1, 30.0)), "one_member_inf")
+    msg = str(e)
+    assert e.field == "cell", e.field
+    assert msg.startswith("The spontaneous simulation diverged: its spectrum holds no finite value"), msg
+    assert "freq_bounds" in msg and "psd_T_obs_nd = 2048" in msg and "dt_nd = 0.5" in msg, msg
+    assert "multiplier" not in msg and "resolve" not in msg, f"a band sentence about no spectrum: {msg}"
+    assert written == ["spontaneous_trajectory"], written
+
+    # a Campaign 1 whose spectrum and trajectory are NaN throughout
+    freqs_psd = torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64)
+    nan4 = torch.full((4,), float("nan"), dtype=torch.float64)
+
+    def campaign1(G, x=nan4):
+        monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
+                            lambda cfg, return_trajectory=False: (
+                                freqs_psd, G, torch.arange(4, dtype=torch.float64), x))
+
+    campaign1(nan4)
+    e, written = refused(_ToneCfg((0.1, 30.0)), "all_nan")
+    assert e.field == "cell" and "diverged" in str(e), (e.field, str(e))
+    assert written == ["spontaneous_trajectory"], written
+    assert driven == [], "a diverged run reached the driven campaign"
+
+    # the boundary, with the figures stubbed: non-finite in SOME bins is not the cell's refusal
+    for name in ("plot_spontaneous_trajectory", "plot_psd", "plot_eff_temp_ratio",
+                 "plot_chi_components"):
+        monkeypatch.setattr(fdt_pipeline, name, lambda *a, **kw: None)
+    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
+    zeros4 = torch.zeros(4, dtype=torch.float64)
+    campaign1(torch.tensor([9.0, 1.0, 5.0, float("nan")], dtype=torch.float64), zeros4)
+    caplog.clear()
+    fdt_pipeline.run_fdt(_ToneCfg((0.5, 1.2)), skip_sanity=True, confirm_production=True)
+    assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [
+        "3/5 probe frequencies have no value in the spontaneous spectrum, whose resolved band is "
+        "0.1..0.3 (ND), and are blank in the ratio."], caplog.records
+    assert driven == [5], driven
+
+    campaign1(torch.tensor([9.0, 1.0, float("nan"), float("nan")], dtype=torch.float64), zeros4)
+    e, _ = refused(_ToneCfg((1.0, 1.4)), "inside_the_band")
+    msg = str(e)
+    assert e.field == "freq_bounds" and "has no value at any of the 5 probe frequencies" in msg, msg
     assert "Nyquist" not in msg and "multiplier" not in msg, f"a false sentence about the top: {msg}"
+    assert driven == [5], "every probe was blank, yet the driven campaign ran"
 
 
 def test_fdt_support_gate():

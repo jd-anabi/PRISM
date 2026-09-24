@@ -119,10 +119,10 @@ def _nothing_measurable(cfg, n_probes: int, omega_lo: float, lo_res: float, hi_r
     a longer recording can lower is the BOTTOM, which is not what failed here (``_low_end_advice``
     words that case).
 
-    The explanation is conditional on the lowest probe really lying above the top. The only other way
-    to get here is a spectrum with no finite value at all -- a spontaneous campaign that diverged --
-    whose probes sit INSIDE the resolved band, and there the Nyquist sentence would be false; the
-    first sentence alone is true in both cases.
+    The explanation is conditional on the lowest probe really lying above the top. A spectrum with no
+    finite value at all never gets here -- run_fdt refuses it earlier, as a diverged simulation -- but
+    one non-finite in the bins around every probe does, with its probes INSIDE the resolved band,
+    and there the Nyquist sentence would be false; the first sentence alone is true in both cases.
     """
     what = "the one probe frequency" if n_probes == 1 else f"any of the {n_probes} probe frequencies"
     msg = (f"The spontaneous spectrum has no value at {what}, so the effective-temperature ratio is "
@@ -200,6 +200,25 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     )
     log.info(f"Saved spontaneous trajectory plot to: {traj_path}")
 
+    # A spontaneous simulation that diverged leaves a spectrum with no finite value at any positive
+    # frequency, and there is nothing to measure against it. Refused HERE, before the peak search:
+    # argmax takes NaN for the largest value, so the search would return the first bin as the
+    # resonance, and the band check and the nothing-measurable refusal below would then describe a
+    # band that does not exist -- advice that is false and a diagnosis never said (the review of Task
+    # 16). After the trajectory figure, which is the picture that shows the divergence, and which the
+    # folder keeps (E2). field="cell": neither the band nor the recording length can help; what
+    # diverged is the cell's dynamics. A spectrum non-finite in only SOME bins is not this refusal --
+    # its blanks are counted below like any other. A grid with no positive bin at all (a one-sample
+    # recording) is not a divergence either, and is not called one.
+    positive = freqs_psd > 0
+    if bool(positive.any()) and not bool(torch.isfinite(G[positive]).any()):
+        raise Refusal(
+            f"The spontaneous simulation diverged: its spectrum holds no finite value at any positive "
+            f"frequency, so there is nothing to measure. Neither the frequency band (freq_bounds) nor "
+            f"the recording length (psd_T_obs_nd = {cfg.psd_T_obs_nd:g}) can help; what diverged is "
+            f"the cell's own dynamics, integrated at dt_nd = {cfg.dt_nd:g}.",
+            field="cell")
+
     # 4. Find natural frequency from the PSD peak directly (no search band).
     #    The PSD's argmax (skipping the DC bin) is robust because the peak is
     #    orders of magnitude above the noise floor for any active oscillator.
@@ -215,9 +234,10 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
 
     # The spectrum's own picture goes to disk BEFORE the band check and the driven campaign, because
     # it is what diagnoses both refusals that can follow -- a band reaching below what the spectrum
-    # resolves (just below) and nothing measurable (after the drive) -- and E2 keeps the folder it is
-    # written into (spec §3.6, P22). It used to be written at the very end, where neither refusal
-    # could ever reach it.
+    # resolves (just below) and nothing measurable (below that, still before the drive) -- and E2
+    # keeps the folder it is written into (spec §3.6, P22). It used to be written at the very end,
+    # where neither refusal could ever reach it. plot_psd draws the whole spectrum with the band
+    # shaded when the band holds none of it, which is exactly when those refusals fire.
     psd_path = _out_dir() / f"psd_{timestamp}.png"
     plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
               save_path=psd_path,
@@ -247,26 +267,31 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
             f"{lo_res / cfg.omega_0:g}{_low_end_advice(cfg, lo_res, 'the spontaneous recording')}",
             field="freq_bounds")
 
-    # 6. Campaign 2: forced chi via lock-in
-    log.info("Campaign 2: forced response -> chi via lock-in")
-    chis = run_campaign2_chi(cfg, omegas)
-
-    # 7. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y)
+    # 6. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y). BEFORE the drive: it
+    #    reads only the grid and Campaign 1's spectrum, so whether anything is measurable is known
+    #    now, and Campaign 2 changes neither (the review of Task 16).
     G_at_omegas = _interp_log(omegas, freqs_psd, G)
 
     # Nothing measurable is a refusal, not an empty picture (spec §3.6, E4). A probe the spontaneous
     # spectrum does not resolve comes back blank; when EVERY probe is blank there is no ratio, and
-    # this used to divide blanks by blanks, save a figure with no points on it and report success.
-    # The low end is gated above, so what stays reachable here is the UPPER end: the grid tops out at
+    # this used to divide blanks by blanks, save a figure with no points on it and report success --
+    # after spending the driven campaign, which it is refused before now. The low end is gated
+    # above, so what stays reachable here is the UPPER end: the grid tops out at
     # freq_bounds[1]*omega_0 against a spectrum Nyquist of pi/dt_nd, which an active cell can exceed
     # (spec §3.5). `blanks` and `of` are what T17 records as body.offgrid. Keyed "freq_bounds" like
     # the band refusal above (F37): the same subject, and no front end offers a fix sentence for it.
+    # The warning says "no value", not "outside the band": a spectrum non-finite in some bins blanks
+    # probes INSIDE the band too, and the sentence has to be true of those.
     blanks, of = int(torch.isnan(G_at_omegas).sum()), G_at_omegas.numel()
     if blanks == of:
         raise Refusal(_nothing_measurable(cfg, of, omega_lo, lo_res, hi_res), field="freq_bounds")
     if blanks:
-        log.warning(f"{blanks}/{of} probe frequencies fall outside the band the spontaneous spectrum "
-                    f"resolves ({lo_res:g}..{hi_res:g} ND) and are blank in the ratio.")
+        log.warning(f"{blanks}/{of} probe frequencies have no value in the spontaneous spectrum, whose "
+                    f"resolved band is {lo_res:g}..{hi_res:g} (ND), and are blank in the ratio.")
+
+    # 7. Campaign 2: forced chi via lock-in
+    log.info("Campaign 2: forced response -> chi via lock-in")
+    chis = run_campaign2_chi(cfg, omegas)
 
     # 8. T_eff/T -- the per-model normalization prefactor (Nadrowski n*beta, else 1/D_x) was
     #    resolved at the top of this function, before anything was spent.

@@ -151,6 +151,16 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
     :param omega_natural: characteristic frequency Omega_0; x-axis is omega/Omega_0.
     :param plot_band: optional (lo, hi) in RAW omega units to restrict the x-range,
                       e.g. matching the production grid. Applied before normalization.
+                      When the band holds no finite positive point of the spectrum -- wholly
+                      above its Nyquist top or below its first bin, exactly when the FDT run
+                      refuses -- the WHOLE finite spectrum is drawn with the band shaded instead.
+
+    The figure never raises for want of data. It is drawn BEFORE the FDT run's band refusals,
+    because it is the picture that diagnoses them (spec §3.6); a log axis cannot scale an empty data
+    set, so clipping to a band that misses the spectrum used to raise from ``tight_layout`` and the
+    refusal was never reached (the review of Task 16). Shading the band beside the whole spectrum
+    shows the distance between them, which is the diagnosis. A spectrum with no finite positive value
+    at all gets an annotated figure on linear axes.
     """
     omegas = np.asarray(omegas)
     G = np.asarray(G)
@@ -165,22 +175,36 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
         good = np.isfinite(G)
         omegas, G = omegas[good], G[good]
 
+    missed_band = None
     if plot_band is not None:
         in_band = (omegas >= plot_band[0]) & (omegas <= plot_band[1])
-        omegas, G = omegas[in_band], G[in_band]
-
-    x, xlabel, x_res = _normalized_freq_axis(omegas, omega_natural)
+        if np.any(G[in_band] > 0):
+            omegas, G = omegas[in_band], G[in_band]
+        else:
+            missed_band = plot_band      # nothing to clip to: draw the whole spectrum, shade the band
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(x, G, marker='.', linestyle='none', markersize=3, color='steelblue')
-    ax.set_xscale('log')
-    ax.set_yscale('log')
-    if x_res is not None:
-        ax.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
-                    label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
-        ax.legend()
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(r'$G(\tilde\omega)$, log scale')
+    if np.any(G > 0):
+        x, xlabel, x_res = _normalized_freq_axis(omegas, omega_natural)
+        ax.plot(x, G, marker='.', linestyle='none', markersize=3, color='steelblue')
+        ax.set_xscale('log')
+        ax.set_yscale('log')
+        if missed_band is not None:
+            per = omega_natural if x_res is not None else 1.0     # the band in the axis' own units
+            ax.axvspan(missed_band[0] / per, missed_band[1] / per, color='darkorange', alpha=0.2,
+                       label='probe band (no spectrum point inside it)')
+        if x_res is not None:
+            ax.axvline(x_res, color='darkorange', linestyle=':', linewidth=1.2,
+                        label=fr'$\omega/\Omega_0 = 1$ ($\Omega_0 \approx {omega_natural:.3f}$)')
+        if x_res is not None or missed_band is not None:
+            ax.legend()
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(r'$G(\tilde\omega)$, log scale')
+    else:
+        ax.text(0.5, 0.5, "The spectrum holds no finite positive value:\nthere is nothing to draw.",
+                ha='center', va='center', transform=ax.transAxes)
+        ax.set_xlabel(r'$\tilde\omega$ (ND)')
+        ax.set_ylabel(r'$G(\tilde\omega)$')
     ax.set_title(title)
     ax.grid(False)
     plt.tight_layout()
