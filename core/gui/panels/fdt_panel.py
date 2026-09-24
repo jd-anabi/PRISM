@@ -9,7 +9,8 @@ answers them -- a worker thread has no terminal to be asked at.
 """
 import traceback
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGroupBox, QPushButton
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QLineEdit,
+                               QPushButton)
 
 from core import cli, registry
 from core.config import CELL_PATH, VALID_MODELS
@@ -19,10 +20,11 @@ from core.artifacts import default_store
 
 from .base_panel import BasePanel
 from .. import settings
-from ..widgets.artifact_picker import ArtifactPicker
+from ..widgets.artifact_picker import ArtifactPicker, StorePicker
 from ..widgets.help_badge import add_help_row, with_badge
 from ..widgets.labeled_inputs import FloatField, IntField
 from ..widgets.forms import make_form
+from .. import fields as gui_fields
 
 HELP = {
     "model": "Which model to analyse. FDT supports NADROWSKI, HOPF, BP (experimental), and "
@@ -35,6 +37,15 @@ HELP = {
     "f0": "Non-dimensional forcing amplitude used to probe the susceptibility χ(ω).",
     "skip_sanity": "Skip the passive-baseline sanity checks and go straight to the production sweep.",
     "confirm_production": "After the sanity checks, proceed to the (long) production sweep automatically.",
+    "seed": "The seed this run uses. Leave it blank to draw one — whichever is used is recorded, so a "
+            "run can be repeated by typing its seed back here. Repeats of one cell with DIFFERENT "
+            "seeds are what measure the spread.",
+    "record_name": "A name for the record this run writes. The name is claimed before anything is "
+                   "computed, so a name already taken is refused at the click rather than hours in. "
+                   "Leave it blank for an unnamed record.",
+    "record_note": "Kept with the record and shown in the Artifacts browser.",
+    "record": "An earlier single-cell run from the artifact store. Selecting one shows its cell, its "
+              "settings, its seed and its notices, and re-opens its figures.",
 }
 
 
@@ -63,8 +74,15 @@ class FdtPanel(BasePanel):
     the stage no longer prompts, so a front end -- this panel, or ``python -m core fdt`` -- must
     supply both.
 
-    Persists (group "fdt"): model, cell picker, and the campaign knobs. Restore order matters --
-    model FIRST, then the pickers, or the model's refresh() wipes the restored picker.
+    Persists (group "fdt"): model, cell picker, saved-run picker, and the campaign knobs. Restore
+    order matters -- model FIRST, then the pickers, or the model's refresh() wipes the restored
+    picker.
+
+    The Seed box, the record name and the note are NOT persisted (E7, spec §5.5). The seed is how a
+    run is made a deliberate repeat of an earlier one, so a remembered value would turn every later
+    run into that repeat in silence and collapse the spread E8 measures; a remembered NAME would be
+    refused by assert_name_free at the next launch's first click, for a name nobody typed; and a note
+    describes one run.
 
     The two checkboxes are CONSENTS and are never persisted (V5): every launch opens at the
     construction defaults, sanity checks on and the production sweep after them -- the run
@@ -90,6 +108,18 @@ class FdtPanel(BasePanel):
         self.ensemble_m = IntField(256)
         self.freqs_per_batch = IntField(1)
         self.f0 = FloatField(0.05)
+        # Blank on purpose (IntField(None) is not a thing, so the text is cleared): blank means "draw
+        # one and record it" (E7). Never restored -- see the class docstring.
+        self.seed = IntField(0)
+        self.seed.clear()
+        self.record_name = QLineEdit()
+        self.record_name.setPlaceholderText("name for this run's record (optional)…")
+        self.record_note = QLineEdit()
+        self.record_note.setPlaceholderText("a note to keep with it (optional)…")
+        # Earlier runs of THIS analysis: filtered to its own study by the row predicate -- the kind
+        # also holds sweeps and comparisons (spec §5.4) -- and to finished records by StorePicker
+        # itself (T24).
+        self.record_picker = StorePicker("fdt", row_filter=lambda s: s.study == "single")
 
         self.skip_sanity = QCheckBox("Skip sanity checks")
         self.confirm_production = QCheckBox("Proceed to the production sweep after sanity")
@@ -101,12 +131,21 @@ class FdtPanel(BasePanel):
         self.btn_run.setProperty("accent", True)          # primary CTA (Fluent accent)
         self.btn_run.clicked.connect(self._run)
 
-        add_help_row(form, "Model", self.model_combo, HELP["model"])
-        add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
-        add_help_row(form, "n_freqs", self.n_freqs, HELP["n_freqs"])
-        add_help_row(form, "ensemble_M", self.ensemble_m, HELP["ensemble_M"])
-        add_help_row(form, "freqs_per_batch", self.freqs_per_batch, HELP["freqs_per_batch"])
-        add_help_row(form, "F0 (ND forcing amplitude)", self.f0, HELP["f0"])
+        # Row labels come from core/gui/fields.py (P34), so a row and the fix sentence a refusal prints
+        # for it cannot drift apart. "Record name", "Note" and "Saved run" stay literal: `name` and
+        # `note` are sentence entries (label() raises KeyError for them) and the saved-run picker is
+        # not a refusal field.
+        add_help_row(form, gui_fields.label("model"), self.model_combo, HELP["model"])
+        add_help_row(form, gui_fields.label("cell"), self.cell_picker, HELP["cell"])
+        add_help_row(form, gui_fields.label("n_freqs"), self.n_freqs, HELP["n_freqs"])
+        add_help_row(form, gui_fields.label("ensemble_m"), self.ensemble_m, HELP["ensemble_M"])
+        add_help_row(form, gui_fields.label("freqs_per_batch"), self.freqs_per_batch,
+                     HELP["freqs_per_batch"])
+        add_help_row(form, gui_fields.label("f0"), self.f0, HELP["f0"])
+        add_help_row(form, gui_fields.label("seed"), self.seed, HELP["seed"])
+        add_help_row(form, "Record name", self.record_name, HELP["record_name"])
+        add_help_row(form, "Note", self.record_note, HELP["record_note"])
+        add_help_row(form, "Saved run", self.record_picker, HELP["record"])
         form.addRow(with_badge(self.skip_sanity, HELP["skip_sanity"]))
         form.addRow(with_badge(self.confirm_production, HELP["confirm_production"]))
         form.addRow(self.btn_run)
@@ -133,11 +172,24 @@ class FdtPanel(BasePanel):
         # model re-saved with multiplicative noise -- is refused by cli.make_fdt_config with
         # fdt_support's own sentence as field "model", which the Refusal arm shows in the yellow box.
         # The "backstop" that stood here only logged that sentence and returned: a second, boxless path.
+
+        # value(), not value_or_none(): a blank box reads as 0 and the BUILDER refuses 0 by name
+        # (T10, spec §3.3), which is the one wording both front ends inherit. The seed is the
+        # exception -- 0 is a legal seed, so blank must stay blank and mean "draw one" (E7).
+        seed = self.seed.value_or_none()
         try:
             cfg = cli.make_fdt_config(
                 model, registry.state_dep_drift(model), cell,
                 n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
-                freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value())
+                freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value(), seed=seed)
+            # THE FRONT END CREATES, THE STAGE ENTERS (spec §1.2). create() mints the id and claims
+            # the name -- assert_name_free runs here, before a single trajectory is integrated -- and
+            # fills writer.dir WITHOUT creating it; run_fdt does `with writer:` on the worker thread,
+            # where runs.current_run_log() is populated and log.txt can therefore be written. It is
+            # inside this try because a taken name is a Refusal about an input on this screen, and
+            # belongs in the same yellow box as a bad n_freqs.
+            writer = default_store().create("fdt", cfg, name=self.record_name.text().strip(),
+                                            note=self.record_note.text().strip())
         except Refusal as e:                         # a setting the user can change: the yellow box
             self._refusal(e)
             return
@@ -145,26 +197,44 @@ class FdtPanel(BasePanel):
             self._on_error(e, traceback.format_exc())
             return
 
-        # The RECORD is created here, on the GUI thread: store.create mints the id and refuses a taken
-        # name before anything is spent, and it fills writer.dir WITHOUT creating the directory, so
-        # the watcher can be pointed at the record's figures/ before the run is dispatched. The stage
-        # enters the writer on the worker thread, where the run log lives (spec §1.2). T25 adds the
-        # Seed box, the name/note controls and the record picker on top of this.
-        writer = default_store().create("fdt", cfg)
-        self.dispatch(_run_fdt_guarded, cfg, watch_dir=writer.dir / "figures",
-                      writer=writer,
+        # The facts the panel knows. The STAGE fills `settings` from its own private copy of cfg
+        # before __enter__ writes the first manifest, and updates this dict in place -- replacing it
+        # would drop the study and the seed (spec §2.2, §2.3).
+        writer.body = {"study": "single", "settings": None, "seed": seed, "grid": None,
+                       "points": None, "offgrid": None, "notices": [], "compared": None,
+                       "complete": False, "results": None}
+        # Explicit bools, never None -- see the module docstring. The watcher is pointed at the
+        # record's own figures/ (spec §5.4); it globs ONE directory and does not recurse, which is
+        # exactly that shape, and a directory that does not exist yet lists nothing.
+        self.dispatch(_run_fdt_guarded, cfg, writer=writer, seed=seed,
+                      watch_dir=writer.dir / "figures",
                       skip_sanity=self.skip_sanity.isChecked(),
                       confirm_production=self.confirm_production.isChecked(),
+                      on_result=self._on_record,
                       on_finished=lambda: self.log_pane.append_line("FDT run finished."))
+
+    def _on_record(self, record):
+        """The ``LoadedFdt`` run_fdt returned (E1: the run now says what it wrote, where it used to
+        return None). The picker is re-listed and moved onto it, so the run that just finished is the
+        panel's current selection -- and T27's viewer therefore describes the record whose figures
+        are already in the stack, rather than clearing them for whatever was selected before."""
+        if record is None:
+            return
+        self.log_pane.append_line(
+            f"FDT record written: {record.name or '(unnamed)'} [{record.id}].")
+        self.record_picker.refresh()
+        self.record_picker.restore_key(record.id)
 
     def save_settings(self, qs):
         qs.beginGroup("fdt")
         qs.setValue("model", self.model_combo.currentText())
         qs.setValue("cell", self.cell_picker.key())
+        qs.setValue("record", self.record_picker.key())
         for name, fld in (("n_freqs", self.n_freqs), ("ensemble_m", self.ensemble_m),
                           ("freqs_per_batch", self.freqs_per_batch), ("f0", self.f0)):
             settings.save_field(qs, name, fld)
-        # The two checkboxes are not written: they are consents (see the class docstring).
+        # The two checkboxes are not written: they are consents (see the class docstring). Neither
+        # are the seed, the record name and the note -- all three belong to ONE run (E7, §5.5).
         qs.endGroup()
 
     def restore_settings(self, qs):
@@ -175,6 +245,7 @@ class FdtPanel(BasePanel):
         self.model_combo.setCurrentText(settings.get_str(qs, "model", self.model_combo.currentText()))
         self._on_model_changed(self.model_combo.currentText())
         self.cell_picker.restore_key(settings.get_str(qs, "cell"))
+        self.record_picker.restore_key(settings.get_str(qs, "record"))
         for name, fld in (("n_freqs", self.n_freqs), ("ensemble_m", self.ensemble_m),
                           ("freqs_per_batch", self.freqs_per_batch), ("f0", self.f0)):
             settings.restore_field(qs, name, fld)

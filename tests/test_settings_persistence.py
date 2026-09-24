@@ -474,6 +474,51 @@ def test_settings_round_trip_reduction_and_fdt():
     assert fdt2.skip_sanity.isChecked() is False
     assert fdt2.confirm_production.isChecked() is True
 
+def test_the_fdt_panel_remembers_its_saved_run_pick_and_never_its_seed(monkeypatch):
+    """E7 and spec §5.5. The record picker is a SELECTION and is restored at construction, like the
+    cell picker beside it; the Seed box is not, and neither are the record's name and note.
+
+    A remembered seed is the defect this pins: the box is how a run is made a deliberate repeat of an
+    earlier one, so a value carried over from the last session would silently turn every later run
+    into that repeat, and the spread across repeats -- which E8 calls the measurement error -- would
+    collapse to zero without anyone touching the box. A remembered NAME is the same defect wearing a
+    different hat: a progressive record occupies its name from its first moment (spec §2.2), so the
+    next launch's first click would be refused by ``assert_name_free`` for a name nobody typed.
+    """
+    import types
+    from core.gui import settings as st
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.widgets.artifact_picker import StorePicker
+    from tests._fixtures import qt_app
+
+    qt_app()
+    rows = [types.SimpleNamespace(complete=True, finished=True, study="single", label=label, id=id_,
+                                 created="2026-09-22T12:00:00", mode=None, width=None, amortized=None)
+            for label, id_ in (("first", "20260922T120000"), ("second", "20260922T130000"))]
+    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "fdt" else [])
+    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
+    fdt = FdtPanel()
+    fdt.record_picker.combo.setCurrentIndex(1)
+    fdt.seed.setText("4242")
+    fdt.record_name.setText("keep_me")
+    fdt.record_note.setText("a note about this run")
+    fdt.n_freqs.setText("77")
+
+    qs = st.settings()
+    fdt.save_settings(qs)
+    qs.sync()
+    qs.beginGroup("fdt")
+    written = set(qs.childKeys())
+    qs.endGroup()
+    assert not (written & {"seed", "record_name", "record_note"}), \
+        f"[fdt] writes a per-run value: {sorted(written)}"
+
+    again = FdtPanel()
+    assert again.record_picker.key() == "20260922T130000", "the saved run pick is a selection"
+    assert again.n_freqs.text() == "77", "the campaign knobs are still remembered (V5)"
+    assert again.seed.text() == "", "a remembered seed repeats the last run in silence"
+    assert again.record_name.text() == "" and again.record_note.text() == ""
+
 def test_missing_picker_key_restores_to_default_not_blank():
     """A saved selection whose file is gone must leave the picker at its default, never blank it via
     setCurrentIndex(-1)."""

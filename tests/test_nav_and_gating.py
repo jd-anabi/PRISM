@@ -1869,6 +1869,165 @@ def test_the_fdt_panel_leaves_an_unsupported_model_to_the_builders_refusal(monke
     assert "FDT analysis" in box.informativeText(), box.informativeText()
 
 
+def test_the_fdt_panel_offers_only_single_cell_records(monkeypatch):
+    """Spec §5.4. One kind holds three studies (E3), so the FDT screen's picker must filter to its
+    own: a sweep record has no single-cell ratio curve to draw and a comparison is a picture of other
+    records, and offering either would hand T27's viewer a body whose ``grid`` is null by design.
+
+    The filter is the picker's row predicate (T24), applied to the ``Summary`` rows, so nothing about
+    the kind's other studies has to be known here.
+
+    The tail pins the rows' labels (P34): the seven registered rows are built from label(key), and the
+    two literal ones -- "Record name" and "Note", whose keys are sentence entries with no label() --
+    are read back off the form and must be the words the ``name`` and ``note`` fix sentences quote,
+    because the control-table read-back skips sentence entries and nothing else would catch a drift."""
+    import types
+    from PySide6.QtWidgets import QFormLayout, QLabel
+    from core.gui import fields as gui_fields
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.gui.widgets.artifact_picker import StorePicker
+    from tests._fixtures import qt_app
+
+    qt_app()
+    rows = [types.SimpleNamespace(complete=True, finished=True, study=study, label=study, id=study,
+                                  created="2026-09-22T12:00:00", mode=None, width=None,
+                                  amortized=None)
+            for study in ("single", "sweep", "comparison")]
+    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "fdt" else [])
+    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
+    panel = FdtPanel()
+    combo = panel.record_picker.combo
+    assert [combo.itemData(i) for i in range(combo.count())] == ["single"], \
+        [combo.itemText(i) for i in range(combo.count())]
+
+    from tests._fixtures import code_only
+    src = code_only(FdtPanel._build_controls)
+    for key in ("model", "cell", "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "seed"):
+        assert f"label({key!r})" in src, f"the FDT panel must build its {key} row from label({key!r}) (P34)"
+
+    shown = []
+    for form in panel.findChildren(QFormLayout):
+        for i in range(form.rowCount()):
+            item = form.itemAt(i, QFormLayout.LabelRole)
+            w = item.widget() if item is not None else None
+            lab = w if isinstance(w, QLabel) else (w.findChild(QLabel) if w is not None else None)
+            if lab is not None:
+                shown.append(lab.text())
+    for key, text in (("name", "Record name"), ("note", "Note")):
+        assert text in shown, f"the FDT panel shows no {text!r} row: {shown}"
+        assert f"'{text}'" in gui_fields.fix_sentence(key), \
+            f"the {key} fix sentence does not name the {text!r} box: {gui_fields.fix_sentence(key)!r}"
+
+
+def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path):
+    """Spec §1.2 and §5.4, forced by V4. The panel must know the record's directory BEFORE the run
+    starts, because that directory is what the figure watcher is pointed at -- and it must not enter
+    the writer itself, because ``log.txt`` is written from ``runs.current_run_log()``, which is
+    thread-local and is only populated inside ``capture_run()`` on the WORKER thread. A writer entered
+    on the window's thread would write no log at all.
+
+    So: the front end CREATES (the id is minted and the name claimed, and nothing is on disk yet) and
+    the stage ENTERS. This pins all four halves of that -- the writer travels as a keyword, the first
+    body carries the facts the panel knows, the watch directory is the record's own ``figures/``, and
+    ``create`` has written nothing, since ``__enter__`` is what does the mkdir."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.fdt_panel import FdtPanel, _run_fdt_guarded
+    from tests._fixtures import qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    cap = {}
+    with use_store(store):
+        panel = FdtPanel()
+        panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
+        panel.seed.setText("4242")
+        panel.record_name.setText("cell_a_first")
+        panel.record_note.setText("the first look")
+        panel._run()
+
+    assert cap, "nothing was dispatched"
+    assert cap["fn"] is _run_fdt_guarded, cap["fn"]
+    writer = cap["kwargs"]["writer"]
+    assert writer.kind == "fdt" and writer.name == "cell_a_first" and writer.note == "the first look"
+    assert cap["kwargs"]["seed"] == 4242
+    assert cap["kwargs"]["watch_dir"] == writer.dir / "figures", cap["kwargs"]["watch_dir"]
+    assert not writer.dir.exists(), "create() must not touch the disk; __enter__ does the mkdir"
+    assert writer.body["study"] == "single" and writer.body["seed"] == 4242
+    assert writer.body["notices"] == [] and writer.body["complete"] is False
+    assert all(writer.body[k] is None
+               for k in ("grid", "points", "offgrid", "compared", "results")), writer.body
+
+
+def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
+    """Review Focus 2. A progressive record occupies its name from its first moment (spec §2.2), and
+    ``create`` runs ``assert_name_free``, so a second run started while an unfinished record of the
+    same name sits on disk is refused BEFORE it spends anything -- rather than colliding hours later
+    at a commit, which is how a finished run gets thrown away.
+
+    The refusal is a StoreError, a Refusal subclass carrying ``field="name"``, so it belongs in the
+    yellow "Check your inputs" box like every other input refusal on this screen. Raised out of the
+    clicked slot instead, it would reach app.py's last-resort excepthook as a raw traceback with
+    nothing in the panel's own log -- the defect BasePanel._config_error's docstring describes."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        taken = store.create("fdt", None, name="cell_a_first")
+        taken.body = {"study": "single", "settings": {}, "seed": 1, "grid": None, "points": None,
+                      "offgrid": None, "notices": [], "compared": None, "complete": False,
+                      "results": None}
+        taken.__enter__()                   # the record now exists, unfinished, holding its name
+
+        panel = FdtPanel()
+        panel.dispatch = lambda *a, **k: pytest.fail("a refused click dispatched a run anyway")
+        panel.record_name.setText("cell_a_first")
+        SHOWN.clear()
+        panel._run()
+
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert "cell_a_first" in box.text(), box.text()
+    assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
+    assert len(list((tmp_path / "fdt").iterdir())) == 1, "the refused click left a second directory"
+
+
+def test_the_fdt_panel_names_the_record_its_run_wrote(tmp_path):
+    """Spec §8.2 and E1. run_fdt used to return None, so a finished run left the operator to find its
+    output by hand; it now returns the LoadedFdt it wrote, and the panel's result slot must say which
+    record that was -- by name AND id, since an unnamed record has only the id -- and move the
+    saved-run picker onto it, so the selection matches the figures already in the stack.
+
+    The record is written AFTER the panel is built, so the picker's first listing cannot hold it: a
+    picker that ends up on it proves the slot re-listed the store rather than restoring a key into a
+    listing that never had it (restore_key silently does nothing then)."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import PaneCapture, qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        panel = FdtPanel()
+        pane = PaneCapture(panel)
+        assert not panel.record_picker.has_entries(), "a fresh store offers no saved run"
+        w = store.create("fdt", None, name="cell_a_first")
+        w.body = {"study": "single", "settings": {}, "seed": 4242, "grid": None, "points": None,
+                  "offgrid": None, "notices": [], "compared": None, "complete": False,
+                  "results": None}
+        with w:
+            w.body["complete"] = True
+        record = store.load_fdt(w.id)
+        panel._on_record(record)
+
+    said = [text for _level, text in pane.lines]
+    assert any("cell_a_first" in text and record.id in text for text in said), said
+    assert panel.record_picker.key() == record.id, "the picker must move onto the run just written"
+
+
 def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
     """V5 §5.2. The χ drive amplitude and band are MEASUREMENTS (config.py:541-573), not per-run
     choices: since D11 any other value is refused by build_prior seconds after Apply, so a box that
@@ -2799,10 +2958,10 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     for key in ("drive_amplitude", "drive_frequency", "drive_phase"):
         assert key in tuples, f"{key} must be a (tab, label) entry so the read-back covers the drive rows"
     # A row a CONTROL entry names before the panel that shows it is built. Each entry must be ABSENT
-    # from its tab, so the task that builds the row turns this red and deletes its own line (T25: the
-    # FDT analysis Seed row; T26: the Sweep study cross-validation one). An exemption cannot outlive
-    # its row.
-    _NOT_BUILT_YET = {("seed", "FDT analysis"), ("seed", "Sweep study cross-validation")}
+    # from its tab, so the task that builds the row turns this red and deletes its own line (T25
+    # deleted the FDT analysis Seed row's; T26: the Sweep study cross-validation one). An exemption
+    # cannot outlive its row.
+    _NOT_BUILT_YET = {("seed", "Sweep study cross-validation")}
     for key, name in _NOT_BUILT_YET:
         assert labels.pretty_gui(gui_fields.label(key)) not in seen[name], \
             f"{key} now has its row on {name}: delete its _NOT_BUILT_YET entry"

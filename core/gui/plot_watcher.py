@@ -1,10 +1,12 @@
 """Pick up PNGs that a runner saved to disk and show them in the panel's FigureStack.
 
-WHY NOT just take them from the runner's return value: the FDT / Reduction / CrossVal runners don't
-hand their figures back. run_fdt returns None, run_reduction_map returns a ReductionRecord, and
-run_param_study_cli returns the two HDF5 *data* paths -- the figure paths are only reported as text:
-log records in FDT.fdt_pipeline.run_fdt and FDT.cross_validation.run_param_study_cli (piece 3), a
-print() in Reduction.sweep.
+WHY NOT just take them from the runner's return value: it arrives only when the run has ended.
+run_fdt returns the LoadedFdt of the record it wrote and run_param_study_cli one per sweep (piece 5,
+E1), each keeping its PNGs in the record's own figures/ folder -- the folder the panel, which creates
+the record before dispatching the run, points this watcher at (spec §5.4) -- and run_reduction_map
+returns a ReductionRecord. While a run is going, the figures are only reported as text: log records
+naming the file or the record's folder in FDT.fdt_pipeline.run_fdt and
+FDT.cross_validation.run_param_study_cli (piece 3), a print() in Reduction.sweep.
 
 WHY NOT scrape those messages: several modules, several formats, and it would weld the GUI to message
 text inside core.

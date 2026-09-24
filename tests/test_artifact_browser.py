@@ -988,13 +988,17 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
         ids = [picker.combo.itemData(i) for i in range(picker.combo.count())]
         assert doomed.id not in ids, "the picker still offers the deleted prior"
         assert keep.id in ids and picker.key() != doomed.id
-        # and it is all THREE pickers, not just the one that happened to be looked at
+        # and it is EVERY picker, not just the one that happened to be looked at
         seen = []
         real = StorePicker.refresh
         monkeypatch.setattr(StorePicker, "refresh",
                             lambda self: seen.append(self.kind) or real(self))
         w._refresh_store_pickers()
-        assert sorted(seen) == ["observation", "posterior", "prior"], seen
+        # A SUBSET, not an equality: the pickers are found by type, so a screen that gains one is
+        # covered by construction, and an equality would make that screen's task break this test
+        # instead. The FDT screen's saved-run picker (T25) is the first such addition.
+        assert {"observation", "posterior", "prior"} <= set(seen), seen
+        assert "fdt" in seen, seen
     finally:
         w.close()
 
