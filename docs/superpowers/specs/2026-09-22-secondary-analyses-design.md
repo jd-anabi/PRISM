@@ -204,6 +204,7 @@ which a reviewer should check against.
 | A cross-process lock on a record being written | Out of scope in piece 4 and still out of scope. §2.5 says what the recency guard now means. | nobody yet |
 | Deleting the owner's legacy files | E10 is "let the owner clear them", not "clear them". | the owner |
 | The third wording of "the cell lacks what the bounds file requires", in `cli._merge_vals_bounds` (P53) | It carries the cell PATH, which the FDT builders need and the other two wordings do not, so folding it into `missing_values_phrase` would drop that or change the other two. §6.2 unifies two and knowingly leaves this one. | nobody yet |
+| The Live simulation tab crashes into the red box, `KeyError: "Forcing parameter 'amp' missing for kind 'sin'."`, on a spontaneous built-in cell such as `nadrowski/master_spont.txt`: `simulate_runner.run_simulation_stream` builds the sinusoidal force tensor for every built-in model, while `build_stream_config` leaves `forcing_idx` empty for a cell with no drive (found by T23's review, handed on by T35, §5.6) | Not a refusal or data-loss defect, so §5.6's bounded mandate hands it on (P58). Cost if it is left: no spontaneous built-in cell — the passive recordings the inference is fitted to — can be streamed on the Live simulation tab; the operator gets a traceback where a trace should be, though nothing is lost or written. | nobody yet |
 
 ---
 

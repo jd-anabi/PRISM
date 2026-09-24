@@ -737,6 +737,60 @@ def test_the_builder_refuses_at_validate_what_save_would_refuse():
         _remove_user_model(name)
 
 
+def test_a_model_round_trips_through_the_builder_and_back():
+    """Build a model in the screen, save it, load it back, and the form assembles the SAME document.
+
+    Spec section 5.6. The builder is the one surface where a user types a model from nothing, and
+    every field it drops on the way back is silent: a forcing amplitude, a box coordinate or an
+    initial condition that quietly reverts to its default would be discovered only by a later run
+    that behaved differently from the form the operator was looking at. The pieces are individually
+    tested -- ``_ParamRow`` preserves a custom box across a re-detect, ``model_store`` emits a
+    parseable triple -- but nothing has ever asserted that the WHOLE path is lossless.
+
+    Exercises the fields most likely to be lost: a forcing block with four parameters, a log box
+    with a positive lower bound, a non-default initial condition, and both display scales. Writes a
+    throwaway UMTEST* model into the real Resources tree and removes it in a finally -- the
+    convention every other round trip in this file follows.
+    """
+    from core.gui.screens.model_builder_screen import _FORCE_KINDS, ModelBuilderScreen
+
+    qt_app()
+    name = "UMTESTRT"
+    sin_index = [k for k, _ in _FORCE_KINDS].index("sin")
+    try:
+        mb = ModelBuilderScreen()
+        mb.name_edit.setText(name)
+        mb.vars_edit.setText("x, y")
+        mb._set_variables()
+        mb._var_rows[0].drift.setText("-k1*x")
+        mb._var_rows[0].noise.setText("d0")
+        mb._var_rows[0].init.setText("0.1")
+        mb._var_rows[0].force_kind.setCurrentIndex(sin_index)
+        for pname, val in (("amp", 0.5), ("freq", 10.0), ("phase", 0.25), ("offset", 0.1)):
+            mb._var_rows[0]._force_fields["sin"][pname].setText(repr(val))
+        mb._var_rows[1].drift.setText("-y + x")
+        mb._var_rows[1].noise.setText("0")
+        mb._var_rows[1].init.setText("0.0")
+        mb.x_scale.setText("10.0")
+        mb.t_scale.setText("0.01")
+        mb._detect_params()
+        assert list(mb._param_fields) == ["k1", "d0"], list(mb._param_fields)
+        mb._param_fields["k1"].set_spec(1.0, 0.5, 1.5, "linear")
+        mb._param_fields["d0"].set_spec(0.05, 0.01, 0.1, "log")   # a log box needs min > 0
+
+        before = mb._assemble_doc()
+        mb._save()
+        assert mb.status.text().startswith(f"Saved '{name}'"), mb.status.text()
+
+        mb.reset()
+        mb.load_existing(name)
+        after = mb._assemble_doc()
+        assert after == before, \
+            [k for k in set(before) | set(after) if before.get(k) != after.get(k)]
+    finally:
+        _remove_user_model(name)
+
+
 def test_model_store_rejects_unusable_values_and_names():
     """Values/names that would persist a registered-but-unstreamable model must fail at save time:
     t_scale past the transient budget, non-finite numbers, and Windows reserved device names."""

@@ -242,6 +242,44 @@ def test_export_animation_writes_a_readable_gif():
     assert len(frames) >= 2, "expected a multi-frame gif"
     assert frames[0].shape[0] % 2 == 0 and frames[0].shape[1] % 2 == 0, "exported frame dims must be even"
 
+def test_a_simulate_recording_round_trips_through_the_video_export():
+    """Every frame the panel PROMISED the operator is in the file it wrote. Spec section 5.6.
+
+    ``_save_video`` prints "Exporting {n} frames" from ``estimate_frame_count(len(series),
+    export_stride(1.0 / DT_EXP_S, fps))`` and then hands the concatenated recording to
+    ``export_animation``, which strides it a second time with its own default ``sample_rate_hz``. The
+    two arithmetics are written out separately, in two modules, so if they ever drift the video
+    silently holds fewer frames than the run it claims to be -- and nothing would say so.
+
+    Half of this round trip is NOT new: test_export_animation_writes_a_readable_gif already renders a
+    series to a GIF and reads it back, asking only for "at least 2" frames. What this test adds is
+    precision: the exact count the panel promises, and that the frames advance (planning ruling P59).
+
+    Also asserts the frames ADVANCED: a writer that appended the same buffer every time would pass a
+    frame count on its own.
+    """
+    import os
+    import tempfile
+
+    import numpy as np
+
+    from core.config import DT_EXP_S
+    from core.gui.panels.simulate_export import (estimate_frame_count, export_animation,
+                                                 export_stride)
+
+    series = _tiny_series()
+    kw = _export_kwargs()
+    promised = estimate_frame_count(len(series), export_stride(1.0 / DT_EXP_S, kw["video_fps"]))
+    assert promised > 2, promised                    # the fixture must exercise more than the edges
+
+    path = os.path.join(tempfile.mkdtemp(), "roundtrip.gif")
+    export_animation(series, path, **kw)
+
+    import imageio
+    frames = imageio.mimread(path)
+    assert len(frames) == promised, (len(frames), promised)
+    assert not np.array_equal(frames[0], frames[-1]), "the exported frames never advanced"
+
 def test_export_animation_writes_a_readable_mp4_when_ffmpeg_is_available():
     import os
     import tempfile
