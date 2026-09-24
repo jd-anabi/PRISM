@@ -1778,6 +1778,85 @@ def test_fdt_plot_functions_close_a_saved_figure_instead_of_show(tmp_path):
     assert len(plt.get_fignums()) == before
 
 
+def _figure_is_saved_closed_and_silent(draw, out, monkeypatch):
+    """The three properties the test above asserts for ``plot_psd``, as one helper the other three
+    drawing functions reuse: the file is written, ``plt.show`` is never reached, no "non-interactive"
+    warning is emitted, and the figure the call drew is closed again.
+
+    ``plt.show`` is spied on rather than inferred from the absence of the warning: under a backend
+    that IS interactive (a display-marked run, or a future matplotlib) the warning would simply not
+    appear and the interactive half of the assertion would silently stop testing anything.
+    """
+    import warnings
+
+    from matplotlib import pyplot as plt
+
+    shown = []
+    monkeypatch.setattr(plt, "show", lambda *a, **k: shown.append(True))
+    before = len(plt.get_fignums())
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        draw(out)
+    assert out.exists(), "save_path was given and nothing was written"
+    assert shown == [], "plt.show() was called although save_path was given"
+    assert not any("non-interactive" in str(w.message) for w in rec), \
+        [str(w.message) for w in rec]
+    assert len(plt.get_fignums()) == before, "the saved figure was left open"
+
+
+def test_plot_eff_temp_ratio_closes_a_saved_figure_instead_of_show(tmp_path, monkeypatch):
+    """The headline T_eff/T figure. ``bb22ac4`` gave all four of core/FDT/plots.py's drawing
+    functions the close-when-saved branch and only ``plot_psd`` got a test -- the gap
+    ``docs/STATE.md``'s piece-5 row hands on and spec section 8.2 closes.
+
+    This one matters most of the four: a real ``fdt`` run draws it once at the end, and on a
+    NADROWSKI cell with the sanity checks on the passive-baseline check draws it again
+    (core/FDT/sanity.py, ``plot_eff_temp_ratio(... save_path=save_plot_path ...)``) -- so a
+    regression here leaks two live figures per such run for the life of the process.
+    """
+    import numpy as np
+
+    from core.FDT.plots import plot_eff_temp_ratio
+
+    _figure_is_saved_closed_and_silent(
+        lambda out: plot_eff_temp_ratio(np.array([1.0, 2.0, 3.0]), np.array([1.0, 1.2, 0.9]),
+                                        save_path=out, omega_natural=2.0),
+        tmp_path / "ratio.png", monkeypatch)
+
+
+def test_plot_spontaneous_trajectory_closes_a_saved_figure_instead_of_show(tmp_path, monkeypatch):
+    """The Campaign-1 diagnostic trace. Like ``plot_chi_components`` it has no non-finite filter of
+    its own, so its save branch is reached on every input; and it is one of the two figures (with the
+    spontaneous PSD, which piece 5 moved ahead of Campaign 2) that a run cancelled between the two
+    campaigns has already drawn into its record.
+    """
+    import numpy as np
+
+    from core.FDT.plots import plot_spontaneous_trajectory
+
+    t = np.linspace(0.0, 10.0, 64)
+    _figure_is_saved_closed_and_silent(
+        lambda out: plot_spontaneous_trajectory(t, np.sin(t) * 0.1, save_path=out, burn_in=2.0),
+        tmp_path / "traj.png", monkeypatch)
+
+
+def test_plot_chi_components_closes_a_saved_figure_instead_of_show(tmp_path, monkeypatch):
+    """The two-panel susceptibility figure. It is the one function that builds a MULTI-axes figure
+    (``plt.subplots(2, 1, ...)``), so it is the one where "close the figure" and "close the axes"
+    could plausibly come apart: ``plt.get_fignums()`` counts figures, and a two-panel figure left
+    open counts once just like a one-panel one.
+    """
+    import numpy as np
+
+    from core.FDT.plots import plot_chi_components
+
+    chis = np.array([1.0 + 1.0j, 2.0 + 0.5j, 1.5 - 0.2j])
+    _figure_is_saved_closed_and_silent(
+        lambda out: plot_chi_components(np.array([1.0, 2.0, 3.0]), chis,
+                                        save_path=out, omega_natural=2.0),
+        tmp_path / "chi.png", monkeypatch)
+
+
 def test_the_tool_prints_a_refusal_with_its_flag_and_a_bug_with_a_traceback(tool_env, monkeypatch, capsys):
     """Spec section 1.2, "V3 and the tool's ladder": four rungs, told apart by TYPE.
 
