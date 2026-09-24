@@ -17,9 +17,14 @@ differs only in what it draws. The modes register themselves in ``_DRAWERS``.
 
 REFUSED BEFORE THE RECORD OPENS. The record is progressive (spec §2.2): it exists from the moment
 its writer is entered, and an exception after that KEEPS it (E2). So everything a comparison can
-refuse from what it was given -- the mode, its settings, the arity, each record -- is refused before
-``open_record``, and a refused comparison leaves nothing on disk. An interrupted one keeps its
-record, unfinished; nothing resumes it, and re-running draws a new one.
+refuse from what it was given is refused before ``open_record``: the mode, its settings, the arity
+and each record by ``compare`` and ``load_records``, and what the records HOLD -- whether their
+curves share a band, the constant a record was normalised with, a sweep's operating points and where
+the slice falls among them -- by the mode's pre-flight (``_PREFLIGHT``), which reads them once they
+load. A refused comparison therefore leaves nothing on disk and announces no record. Each pre-flight
+check is a helper its drawer calls again as a backstop, so a refusal reads the same whichever route
+raises it. An interrupted comparison keeps its record, unfinished; nothing resumes it, and
+re-running draws a new one.
 
 BLANKS ARE NEVER INTERPOLATED ACROSS. A frequency a run could not measure comes back blank (E9), and
 a comparison that blended over one would put back exactly the fabricated tail the off-grid fix
@@ -75,6 +80,16 @@ MODE_OPTIONS: dict[str, tuple[str, ...]] = {
 #: ``sink`` and the numbers through ``write_curves``, and ``results`` holds finite numbers only
 #: (``_num``) -- a manifest refuses NaN, and this ratio legitimately carries it (spec §2.3).
 _DRAWERS: dict = {}
+
+#: ``mode -> check(records, **options)``: the refusals a mode can make only once it has READ the
+#: records it was handed -- whether their curves share a band, the constant a record holds, what a
+#: sweep swept and where the slice falls -- run by ``compare`` after ``load_records`` and before
+#: ``open_record``. They used to be the drawers' alone, raised inside the record already opened, so a
+#: refused run first announced "Writing comparison record <id> at <dir>" for a directory the writer
+#: then removed. Each check is a helper its drawer calls again as the backstop, so there is one
+#: wording either way, at the cost of reading each record's small ``data.h5`` twice. What a check
+#: returns is ignored: the drawer contract above is unchanged, and a drawer settles its own inputs.
+_PREFLIGHT: dict = {}
 
 #: What a single-cell record's ``data.h5`` calls its two curves (spec §2.3). The names are
 #: ``cross_validation._fdt_measure``'s own vocabulary, which the sweep's file already uses, so one
@@ -248,6 +263,17 @@ def curve_of(rec) -> Curve:
                  omega_0=omega_0, prefactor=prefactor)
 
 
+def _record_labels(records: list) -> tuple:
+    """``(labels, cells)`` by ``labelled_curves``' rule, without reading a curve: the sweeps mode names
+    its runs by the same rule, and a sweep record holds no single curve for ``curve_of`` to read."""
+    keys = [_cell_key(r) for r in records]
+    names = _shortest_names(list(dict.fromkeys(keys)))
+    cells = [names[k] for k in keys]
+    labels = [cell if keys.count(key) == 1 else f"{cell} ({rec.name or rec.id})"
+              for rec, key, cell in zip(records, keys, cells)]
+    return labels, cells
+
+
 def labelled_curves(records: list) -> tuple:
     """``(curves, cells)``: each record's curve, labelled so that no two curves in one picture share a
     legend entry, and each record's cell under the name its label uses.
@@ -259,12 +285,8 @@ def labelled_curves(records: list) -> tuple:
     labels add the run ("default (run_a)") and each curve can still be found. ``cells`` is what a
     mode reports as the cells it drew (P60), so it follows the same rule and counts cells, not runs.
     """
-    keys = [_cell_key(r) for r in records]
-    names = _shortest_names(list(dict.fromkeys(keys)))
-    cells = [names[k] for k in keys]
-    curves = [replace(curve_of(rec), label=cell if keys.count(key) == 1
-                      else f"{cell} ({rec.name or rec.id})")
-              for rec, key, cell in zip(records, keys, cells)]
+    labels, cells = _record_labels(records)
+    curves = [replace(curve_of(rec), label=label) for rec, label in zip(records, labels)]
     return curves, cells
 
 
@@ -431,6 +453,11 @@ def compare(mode: str, refs, *, name: str = "", note: str = "", fig_sink=None, s
                f"(it draws {', '.join(sorted(_DRAWERS)) or 'none yet'}).")
     options = _checked_options(mode, options)
     records = load_records(store, refs, mode)
+    # What the records HOLD, judged before the record opens and before anything is said about it: a
+    # refusal here leaves no folder and no "Writing comparison record" line (the module docstring).
+    preflight = _PREFLIGHT.get(mode)
+    if preflight is not None:
+        preflight(records, **options)
     log.info(f"Comparing {len(records)} record(s) as a {mode} comparison: "
              f"{', '.join(r.name or r.id for r in records)}")
     w = open_record(store, mode, records, name=name, note=note, settings=options)
@@ -480,10 +507,17 @@ def ratio_axes(title: str, blanks: int):
     return fig, ax
 
 
+def _shares_a_band(records) -> None:
+    """cells' and repeats' pre-flight: the records' curves must share a frequency band, and each
+    record's data file must hold its curve. ``curve_of`` and ``common_grid`` hold the refusals' one
+    wording, and each drawer calls both again on the same records as its backstop."""
+    common_grid([curve_of(r) for r in records])
+
+
 def draw_cells(w, records, *, sink):
     """Several single-cell records' ratio curves on one axis, labelled by cell (spec §7.1)."""
     curves, _cells = labelled_curves(records)
-    grid = common_grid(curves)
+    grid = common_grid(curves)             # the backstop of the pre-flight's _shares_a_band
     values = [interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
     blanks, notices = blank_notice(values)
     write_curves(w, grid, values, [c.label for c in curves],
@@ -511,7 +545,7 @@ def draw_repeats(w, records, *, sink):
     the band: an envelope narrowed by a missing run would understate the error it exists to show.
     """
     curves, cell_of = labelled_curves(records)
-    grid = common_grid(curves)
+    grid = common_grid(curves)             # the backstop of the pre-flight's _shares_a_band
     values = [interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
     blanks, notices = blank_notice(values)
     # P60: "the same cell" is not enforced -- a record's cell lives in its manifest's inputs and
@@ -549,27 +583,11 @@ def draw_repeats(w, records, *, sink):
     return results, notices
 
 
-def draw_renormalise(w, records, *, sink, prefactor):
-    """One record's ratio recomputed with a supplied normalisation constant, drawn against the
-    original (spec §7.1).
-
-    An exact rescaling, not a re-measurement: ``spectral.eff_temp_ratio`` is
-    ``prefactor * omega * G / (4 chi'')``, linear in the constant, so the new curve is the recorded
-    one times the ratio of the two constants and nothing is simulated. A blank stays blank (NaN
-    times any scale is NaN): no constant measures a frequency the run could not. The record's OWN
-    grid is the common grid here -- there is one record, so there is nothing to interpolate onto,
-    and interpolating a curve onto a regenerated copy of its own grid would only add float error.
-
-    The supplied constant was judged before the record opened (``_checked_options``, F57); judging
-    it again here is the backstop for a caller that reaches the drawer another way. The RECORDED
-    constant can only be judged once the record's numbers are read, and it is judged before anything
-    is written, so a refusal here still leaves no record behind (the writer removes a progressive
-    record refused before its first payload or figure). A record that holds no constant (NaN)
-    cannot be undone, and one that holds zero or less is no normalisation constant -- it is
-    ``coupling / D_x``, which is positive -- and a ratio computed with zero is zero everywhere,
-    which no scale brings back.
-    """
-    want = require_positive("prefactor", prefactor)
+def _renormalisable(records) -> Curve:
+    """renormalise's pre-flight, and its drawer's backstop: the one record's labelled curve, refused
+    when the constant it RECORDS cannot be undone. A record that holds no constant (NaN) cannot be,
+    and one that holds zero or less is no normalisation constant -- it is ``coupling / D_x``, which
+    is positive -- and a ratio computed with zero is zero everywhere, which no scale brings back."""
     curves, _cells = labelled_curves(records)
     curve = curves[0]
     who = records[0].name or records[0].id
@@ -582,6 +600,29 @@ def draw_renormalise(w, records, *, sink, prefactor):
                f"The saved runs to compare must record a finite normalisation constant greater "
                f"than 0 to be renormalised; {who!r} records {curve.prefactor:g}, so its ratio "
                f"cannot be recomputed with another one.")
+    return curve
+
+
+def draw_renormalise(w, records, *, sink, prefactor):
+    """One record's ratio recomputed with a supplied normalisation constant, drawn against the
+    original (spec §7.1).
+
+    An exact rescaling, not a re-measurement: ``spectral.eff_temp_ratio`` is
+    ``prefactor * omega * G / (4 chi'')``, linear in the constant, so the new curve is the recorded
+    one times the ratio of the two constants and nothing is simulated. A blank stays blank (NaN
+    times any scale is NaN): no constant measures a frequency the run could not. The record's OWN
+    grid is the common grid here -- there is one record, so there is nothing to interpolate onto,
+    and interpolating a curve onto a regenerated copy of its own grid would only add float error.
+
+    Both constants were judged before the record opened: the supplied one with the options
+    (``_checked_options``, F57), the RECORDED one by the pre-flight (``_renormalisable``), once the
+    record's numbers were read. Judging them again here is the backstop for a caller that reaches
+    the drawer another way, and it still comes before anything is written, so a refusal here leaves
+    no record behind either (the writer removes a progressive record refused before its first
+    payload or figure).
+    """
+    want = require_positive("prefactor", prefactor)
+    curve = _renormalisable(records)
     scale = want / curve.prefactor
     grid = np.asarray(curve.omegas, dtype=np.float64)
     original = np.asarray(curve.ratio, dtype=np.float64)
@@ -610,6 +651,160 @@ def draw_renormalise(w, records, *, sink, prefactor):
     return results, notices
 
 
+def _sweep_rows(rec) -> list:
+    """One sweep record's usable operating points, in ``load_param_sweep``'s own shape -- the read-back
+    the sweep's own figure (``plot_fdt_3d_vs_param``) is drawn from, so this mode reads the record
+    exactly as the sweep that wrote it does. A point that failed carries an ``error`` and no response
+    data (spec §4.3), so it is not usable; nor is one without the normalised axis both of this mode's
+    figures are drawn on, which is ``cross_validation_plots._stack``'s own rule for a usable row."""
+    from .cross_validation import load_param_sweep
+    who = rec.name or rec.id
+    with h5py.File(rec.data_path, "r") as h5:
+        held = "operating_points" in h5
+    if not held:
+        refuse("compare_records",
+               f"The saved runs to compare must hold their numbers; the data file of {who!r} has no "
+               f"'operating_points' in it.")
+    rows = [r for r in load_param_sweep(rec.data_path) if not r["failed"] and "omega_norm" in r]
+    if not rows:
+        refuse("compare_records",
+               f"The saved runs to compare must hold at least one measured operating point; "
+               f"{who!r} has none that finished.")
+    return rows
+
+
+@dataclass(frozen=True)
+class SweepSlice:
+    """What a sweeps comparison draws, settled from the two records and the slice point before the
+    record opens -- every refusal the mode can make is made while this is built."""
+    param: str              # the parameter both sweeps swept
+    lo: float               # the range both cover, [lo, hi], over their usable operating points
+    hi: float
+    at: float               # the operating point both are sliced at
+    labels: list            # per record: its name in the pictures, by labelled_curves' rule
+    rows: list              # per record: its usable operating points (load_param_sweep's dicts)
+    chosen: list            # per record: its usable row nearest ``at``
+    curves: list            # per record: that row's ratio, a Curve on the normalised axis
+    grid: np.ndarray        # the common grid of those curves
+
+
+def sweep_slice(records, *, at=None) -> SweepSlice:
+    """sweeps' pre-flight, and the plan its drawer draws (called again there as the backstop).
+
+    The two grids are chosen independently, so an exact shared operating point is not something to
+    require: each sweep contributes the usable row NEAREST the slice point, and the record says which
+    row that was. ``at`` defaults to the middle of the range the sweeps share; outside that range it is
+    refused, because a slice each sweep answers from its own end point is not one measurement. Two
+    sweeps of different parameters are refused -- one operating point does not name a state of an S
+    sweep and a temperature sweep -- and so are sweeps whose ranges do not meet, and slice rows that
+    share no frequency band (``common_grid``).
+
+    Each row is drawn on the sweep's normalised axis ``omega / omega_0_ref`` (spec §2.3's layout), so
+    its curve's ``omega_0`` is 1 -- the reference, on that axis. Its ``prefactor`` is NaN, meaning not
+    recorded: a sweep's ``data.h5`` holds one constant, the cell's, and none per operating point,
+    while each point's ratio was computed from its own overridden configuration.
+    """
+    rows = [_sweep_rows(r) for r in records]
+    params = sorted({str(row["sweep_param"]) for rr in rows for row in rr})
+    if len(params) != 1:
+        refuse("compare_records",
+               f"The saved runs to compare must sweep the SAME parameter; these sweep "
+               f"{', '.join(params)}, and one operating point does not name a state of both.")
+    param = params[0]
+    lo = max(min(row["param_value"] for row in rr) for rr in rows)
+    hi = min(max(row["param_value"] for row in rr) for rr in rows)
+    if hi < lo:
+        refuse("compare_records",
+               f"The saved runs to compare must overlap in {param}; their ranges do not meet.")
+    if at is None:
+        at = 0.5 * (lo + hi)
+    at = float(at)
+    if not (lo <= at <= hi):
+        refuse("slice_at",
+               f"The operating point to slice at must be inside the range both sweeps cover "
+               f"([{lo:g}, {hi:g}] in {param}); got {at:g}.")
+    labels, _cells = _record_labels(records)
+    chosen, curves = [], []
+    for rec, rr, label in zip(records, rows, labels):
+        row = min(rr, key=lambda r: abs(float(r["param_value"]) - at))
+        chosen.append(row)
+        curves.append(Curve(id=rec.id, name=rec.name,
+                            label=f"{label}  ({param} = {row['param_value']:g})",
+                            omegas=np.asarray(row["omega_norm"], dtype=np.float64),
+                            ratio=np.asarray(row["T_eff_over_T"], dtype=np.float64),
+                            omega_0=1.0, prefactor=math.nan))
+    return SweepSlice(param=param, lo=float(lo), hi=float(hi), at=at, labels=labels, rows=rows,
+                      chosen=chosen, curves=curves, grid=common_grid(curves))
+
+
+def draw_sweeps(w, records, *, sink, at=None):
+    """Two sweep records together, and a slice of both at one operating point (spec §7.1).
+
+    The surfaces answer "does FDT come back" along each sweep; the slice is where the two can be
+    read against each other, at one operating point on one common grid. ``sweep_slice`` settles the
+    slice before anything is written (P49), so a refusal here -- the backstop of the pre-flight that
+    already ran it -- leaves no record behind: the writer removes a progressive record refused before
+    its first figure or payload. Each curve in the file also carries its row's swept value and its
+    sweep's ``omega_0_ref``, the reference its normalised axis was divided by.
+    """
+    from matplotlib import pyplot as plt
+
+    from .cross_validation_plots import _OMEGA_NORM_MAX, _stack
+
+    plan = sweep_slice(records, at=at)
+    values = [interpolate_onto(plan.grid, c.omegas, c.ratio) for c in plan.curves]
+    blanks, notices = blank_notice(values)
+
+    # the surfaces, side by side, each on its own axes
+    fig = plt.figure(figsize=(12, 5))
+    for i, (label, rr) in enumerate(zip(plan.labels, plan.rows)):
+        omega_norm, param_values, matrix = _stack(rr, _OMEGA_NORM_MAX)
+        ax = fig.add_subplot(1, len(records), i + 1)
+        mesh = ax.pcolormesh(*np.meshgrid(omega_norm, param_values), matrix, cmap="viridis",
+                             shading="auto", vmin=0.0, vmax=2.0)
+        ax.axvline(1.0, color="darkorange", ls=":", lw=1.2)
+        ax.axhline(plan.at, color=plt.rcParams["axes.edgecolor"], ls="--", lw=0.8)
+        ax.set_xlabel(r"$\tilde\omega / \Omega_0$")
+        ax.set_ylabel(plan.param)
+        ax.set_title(label)
+        fig.colorbar(mesh, ax=ax, label=r"$T_{\rm eff}/T$")
+    fig.tight_layout()
+    sink("Sweep surfaces", fig)
+
+    # the slice: the row of each sweep nearest `at`, on the common grid settled above
+    write_curves(w, plan.grid, values, [c.label for c in plan.curves],
+                 constants=[(c.omega_0, c.prefactor) for c in plan.curves])
+    with h5py.File(w.payload("data.h5"), "a") as h5:
+        for i, row in enumerate(plan.chosen):
+            curve = h5["curves"][f"{i:03d}"]
+            curve.attrs["param_value"] = float(row["param_value"])
+            curve.attrs["omega_0_ref"] = float(row["omega_0_ref"])
+    fig, ax = ratio_axes(f"Sweep slice at {plan.param} = {plan.at:g}", blanks)
+    ax.set_xlabel(ax.get_xlabel().replace(r"$\tilde\omega$ (ND)", r"$\tilde\omega / \Omega_0$"))
+    for curve, vals in zip(plan.curves, values):
+        ax.plot(plan.grid, vals, marker="o", markersize=4, linewidth=1.0, label=curve.label)
+    ax.legend()
+    fig.tight_layout()
+    sink("Sweep slice", fig)
+
+    nearest = ", ".join(f"{row['param_value']:g}" for row in plan.chosen)
+    log.info(f"Sliced both sweeps at {plan.param} = {plan.at:g} (nearest rows: {nearest})")
+    per_record = [dict(peak_of(c, plan.grid, v), param_value=_num(row["param_value"]))
+                  for c, v, row in zip(plan.curves, values, plan.chosen)]
+    results = {"n_records": len(records), "n_grid": int(plan.grid.size), "blanks": blanks,
+               "param": plan.param, "at": _num(plan.at),
+               "shared_range": [_num(plan.lo), _num(plan.hi)], "per_record": per_record}
+    return results, notices
+
+
 _DRAWERS["cells"] = draw_cells
 _DRAWERS["repeats"] = draw_repeats
 _DRAWERS["renormalise"] = draw_renormalise
+_DRAWERS["sweeps"] = draw_sweeps
+
+# Each mode's pre-flight, called as ``check(records, **options)`` with the options the mode accepts:
+# renormalise's supplied constant was already judged with the options (F57), so its check reads only
+# the recorded one.
+_PREFLIGHT["cells"] = _PREFLIGHT["repeats"] = _shares_a_band
+_PREFLIGHT["renormalise"] = lambda records, *, prefactor: _renormalisable(records)
+_PREFLIGHT["sweeps"] = sweep_slice

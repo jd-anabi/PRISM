@@ -1798,6 +1798,41 @@ def test_a_compare_that_names_one_run_twice_is_refused_naming_the_record_flag(tm
     assert sorted(p.name for p in store.kind_dir("fdt").iterdir()) == before, "a refusal opened a record"
 
 
+def test_a_compare_refused_by_its_preflight_opens_no_record_and_announces_none(tmp_path, monkeypatch,
+                                                                               capsys):
+    """The per-mode pre-flight at the command line, with the REAL drawers. What a comparison can only
+    judge once it has read its records -- a shared band, a recorded constant, a sweep's points, the
+    range two sweeps share and where --at falls in it -- is judged after they load and before the
+    record opens. Judged by a drawer, inside the record already opened, a refusal made the tool print
+    "Writing comparison record <id> at <dir>" for a directory the writer then removed (Task 38's
+    review). Each such refusal is one line naming the flag that answers it, with no "Writing
+    comparison record" line and no folder."""
+    from core.artifacts import ArtifactStore
+    from core.tool.fields import FLAG
+    from tests._fixtures import compare_preflight_refusals
+    root = tmp_path / "A"
+    store = ArtifactStore(root)
+    cases = compare_preflight_refusals(store)
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
+    option_flags = {"prefactor": "--prefactor", "at": "--at"}
+    before = sorted(p.name for p in store.kind_dir("fdt").iterdir())
+    for label, mode, refs, options, field, words in cases:
+        argv = ["compare", mode]
+        for ref in refs:
+            argv += ["--record", ref]
+        for key, value in options.items():
+            argv += [option_flags[key], str(value)]
+        capsys.readouterr()
+        assert main(argv) == 1, label
+        captured = capsys.readouterr()
+        lines = [ln for ln in captured.err.splitlines() if ln.strip()]
+        assert len(lines) == 1 and lines[0].startswith("prism compare: refused:"), (label, captured.err)
+        assert words in lines[0] and lines[0].endswith(f"({FLAG[field]})"), (label, lines[0])
+        assert "Writing comparison record" not in captured.out + captured.err, (label, captured.out)
+        assert sorted(p.name for p in store.kind_dir("fdt").iterdir()) == before, \
+            f"{label}: a refusal opened a record"
+
+
 def test_compare_ctrl_c_keeps_the_record_and_says_nothing_resumes(tmp_path, monkeypatch, capsys):
     """F56, the comparison's own interrupt note. A comparison's record is progressive, so a Ctrl-C
     after it opened KEEPS it, marked unfinished (E2) -- the opposite of main's generic "the artifact

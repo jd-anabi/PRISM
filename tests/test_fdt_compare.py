@@ -10,6 +10,7 @@ whole file costs the writer's git calls and no solver at all.
 
 Run:  pytest tests/test_fdt_compare.py
 """
+import logging
 import math
 import os
 import subprocess
@@ -29,7 +30,7 @@ import pytest                                                      # noqa: E402
 from core.artifacts import ArtifactStore                           # noqa: E402
 from core.FDT import compare as cmp                                # noqa: E402
 from core.refusals import Refusal                                  # noqa: E402
-from tests._fixtures import build_fdt_record                       # noqa: E402
+from tests._fixtures import build_fdt_record, compare_preflight_refusals  # noqa: E402
 
 
 def _store(tmp_path):
@@ -201,19 +202,27 @@ def test_a_comparison_refuses_one_record_another_study_and_an_unfinished_one(tmp
     assert "prefactor" in str(e.value), e.value
 
 
-def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, monkeypatch):
+def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, monkeypatch, caplog):
     """Refuse before the spend (P49, F57-F59). A progressive record exists from the moment its writer
     is entered, and E2 keeps it through an exception -- so a refusal raised after that point would
-    leave a comparison record behind that holds nothing. Every refusal a comparison can make from
-    what it was GIVEN is therefore made before the record opens, and each one leaves the kind
-    directory exactly as it found it:
+    leave a comparison record behind that holds nothing, or, refused before its first write, announce
+    a record ("Writing comparison record <id> at <dir>") for a directory the writer then removes.
+    Every refusal a comparison can make from what it was GIVEN is therefore made before the record
+    opens: each one leaves the kind directory exactly as it found it and logs no such line.
 
-    the mode and its settings (a mode this build does not draw, a setting the mode has no use for, a
-    blank or non-positive normalisation constant, a non-finite slice point); the arity, both ways (a
-    mode that draws one record or two is never handed more and silently draws the first), counted in
-    distinct RUNS (one run named twice is one run); and each record (one that names nothing, one of
-    another study, one that did not finish, one with no numbers beside its manifest). The ref that names nothing is refused under the comparison's own
-    field, not the store's ``artifact``, so both front ends name the control that answers it (F58)."""
+    What was given is the mode and its settings (a mode this build does not draw, a setting the mode
+    has no use for, a blank or non-positive normalisation constant, a non-finite slice point); the
+    arity, both ways (a mode that draws one record or two is never handed more and silently draws the
+    first), counted in distinct RUNS (one run named twice is one run); each record (one that names
+    nothing, one of another study, one that did not finish, one with no numbers beside its manifest);
+    and -- the mode's PRE-FLIGHT, which reads the records once they load -- what they hold: curves
+    that share no band, a data file without its curve, a recorded constant that cannot be undone, a
+    sweep with no finished operating point, two sweeps of different parameters or of ranges that do
+    not meet, a slice point outside the range they share, and slice rows that share no band. The
+    drawers are stubs here, so a pre-flight refusal cannot be the drawer's. The ref that names
+    nothing is refused under the comparison's own field, not the store's ``artifact``, so both front
+    ends name the control that answers it (F58)."""
+    caplog.set_level(logging.INFO, logger="core")
     store = _store(tmp_path)
     for mode in cmp.MODE_RULES:
         monkeypatch.setitem(cmp._DRAWERS, mode, _curves_stub)
@@ -252,13 +261,19 @@ def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, mo
         ("id and name", ("cells", [a, "a"], {}), "compare_records", "'a' is named twice"),
         ("one sweep twice", ("sweeps", [s1, s1], {}), "compare_records", "'s1' is named twice"),
     ]
+    cases += [(label, (mode, refs, options), field, words)
+              for label, mode, refs, options, field, words in compare_preflight_refusals(store)]
     before = _record_dirs(store)
     for label, (mode, refs, options), field, words in cases:
+        caplog.clear()
         with pytest.raises(Refusal) as e:
             cmp.compare(mode, refs, store=store, **options)
         assert e.value.field == field, (label, e.value.field, str(e.value))
         assert words in str(e.value), (label, str(e.value))
         assert _record_dirs(store) == before, f"{label}: a refused comparison left a record behind"
+        opened = [r.getMessage() for r in caplog.records
+                  if r.getMessage().startswith("Writing comparison record")]
+        assert not opened, f"{label}: refused after the record opened: {opened}"
 
     # A bare string is not a list of refs: iterated, a run's id would be read as one ref per
     # character ("'2' names no fdt record"). No front end can hand one over -- --record appends, and
@@ -275,6 +290,32 @@ def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, mo
     assert e.value.field == "compare_records" and "no cells comparison" in str(e.value), e.value
     assert "(it draws renormalise, repeats, sweeps)" in str(e.value), e.value
     assert _record_dirs(store) == before
+
+
+def test_each_drawer_backstops_its_preflight_in_the_same_words(tmp_path, monkeypatch, caplog):
+    """The pre-flight is where these refusals LAND; the drawers keep them as a backstop, for a caller
+    that reaches a drawer another way. Each check is one helper that both call, so a refusal has one
+    wording whichever route raises it: with the pre-flight table emptied, the REAL drawer refuses the
+    same input with the same field and the same sentence. And it refuses before its first write
+    (P49): the record it opened -- the log names it, which is the proof the drawer ran -- is removed
+    by the writer, because nothing was written into it."""
+    caplog.set_level(logging.INFO, logger="core")
+    store = _store(tmp_path)
+    cases = compare_preflight_refusals(store)
+    before = _record_dirs(store)
+    for label, mode, refs, options, _field, _words in cases:
+        with pytest.raises(Refusal) as first:
+            cmp.compare(mode, refs, store=store, **options)
+        caplog.clear()
+        with monkeypatch.context() as m:
+            m.setattr(cmp, "_PREFLIGHT", {})
+            with pytest.raises(Refusal) as backstop:
+                cmp.compare(mode, refs, store=store, **options)
+        assert (backstop.value.field, str(backstop.value)) == (first.value.field, str(first.value)), \
+            label
+        assert any(r.getMessage().startswith("Writing comparison record") for r in caplog.records), \
+            f"{label}: the drawer never ran, so this is not its backstop"
+        assert _record_dirs(store) == before, f"{label}: the drawer wrote before it refused"
 
 
 def test_a_comparison_is_a_record_that_names_the_mode_and_the_runs_it_drew(tmp_path, monkeypatch):
@@ -410,10 +451,15 @@ def test_the_compare_path_loads_no_inference_machinery(tmp_path):
     interpreter -- this process holds the orchestrator through the session fixtures, so a
     ``sys.modules`` check here would pass vacuously -- over records this process wrote. The bare
     ``sbi`` package is the store's (``provenance.env_info`` reads its version into every manifest);
-    every other ``sbi`` module is the inference stack and is forbidden here."""
+    every other ``sbi`` module is the inference stack and is forbidden here. The sweeps mode is drawn
+    too, by its REAL drawer: it reads its records through ``cross_validation.load_param_sweep``, the
+    one import on this path that brings a measurement module (and the simulators) with it."""
     root = tmp_path / "artifacts"
     store = ArtifactStore(root)
     ids = [build_fdt_record(store, name=f"cell_{i}") for i in range(2)]
+    ids += [build_fdt_record(store, name=f"sweep_{i}", study="sweep", omegas=(0.5, 1.0, 2.0),
+                             points=[(0.1 * i, (1.0, 2.0, 1.0)), (0.5 + 0.1 * i, (1.0, 3.0, 1.0))])
+            for i in range(2)]
     probe = (
         "import sys\n"
         "from core.artifacts import ArtifactStore\n"
@@ -426,7 +472,9 @@ def test_the_compare_path_loads_no_inference_machinery(tmp_path):
         "                     constants=[(c.omega_0, c.prefactor) for c in curves])\n"
         "    return {}, []\n"
         "cmp._DRAWERS['cells'] = draw\n"
-        "rec = cmp.compare('cells', sys.argv[2:], store=ArtifactStore(sys.argv[1]))\n"
+        "rec = cmp.compare('cells', sys.argv[2:4], store=ArtifactStore(sys.argv[1]))\n"
+        "assert rec.body['complete'] is True, rec.body\n"
+        "rec = cmp.compare('sweeps', sys.argv[4:6], store=ArtifactStore(sys.argv[1]))\n"
         "assert rec.body['complete'] is True, rec.body\n"
         "bad = sorted(m for m in sys.modules\n"
         "             if m in ('core.diagnostics', 'core.orchestrator', 'pytensor')\n"
@@ -752,3 +800,129 @@ def test_renormalising_a_real_run_equals_measuring_it_again_with_the_other_const
     assert peak["peak_ratio"] == pytest.approx(float(np.nanmax(renormalised)))
     assert rec.body["notices"] and "never interpolated across" in rec.body["notices"][0]
     assert [r["id"] for r in rec.body["compared"]["records"]] == [measured.id]
+
+
+def test_compare_sweeps_draws_both_surfaces_and_one_slice_through_them(tmp_path):
+    """Spec §7.1's fourth mode. Two sweeps answer "does FDT come back" along one parameter each, and
+    the question this mode exists for is whether they agree -- which is read at ONE operating point,
+    not off two surfaces side by side. The slice point defaults to the middle of the range the two
+    sweeps share, is recorded, and each sweep contributes the row nearest it (the two grids are set
+    independently, so an exact match is not something to require). Two sweeps of DIFFERENT parameters
+    are refused: "the same operating point" means nothing across an S sweep and a temperature one."""
+    store = _store(tmp_path)
+    om = (0.5, 1.0, 2.0)
+    a = build_fdt_record(store, name="s_low", study="sweep", omegas=om, sweep_param="s",
+                         points=[(0.0, (1.0, 1.0, 1.0)), (0.5, (1.0, 3.0, 1.1))])
+    b = build_fdt_record(store, name="s_high", study="sweep", omegas=om, sweep_param="s",
+                         points=[(0.25, (1.0, 2.0, 1.0)), (0.75, (1.0, 6.0, 1.2))])
+    seen, sink = _closing()
+    rec = cmp.compare("sweeps", [a, b], fig_sink=sink, store=store)
+
+    assert seen == ["Sweep surfaces", "Sweep slice"], seen
+    res = rec.body["results"]
+    assert res["param"] == "s"
+    # the shared range is [0.25, 0.5]; its middle is 0.375, and the nearest rows are 0.5 and 0.25
+    assert res["at"] == pytest.approx(0.375)
+    assert [p["param_value"] for p in res["per_record"]] == [0.5, 0.25]
+    assert res["per_record"][0]["peak_ratio"] == pytest.approx(3.0)
+    with h5py.File(rec.data_path, "r") as h5:
+        assert sorted(h5["curves"]) == ["000", "001"]
+        assert h5["curves"]["000"].attrs["label"].startswith("s_low")
+
+    # an operating point outside the range they share is refused, naming the setting
+    with pytest.raises(Refusal) as e:
+        cmp.compare("sweeps", [a, b], at=9.0, store=store)
+    assert e.value.field == "slice_at" and "0.25" in str(e.value), e.value
+
+    # and two different swept parameters are refused, naming both
+    t = build_fdt_record(store, name="t_sweep", study="sweep", omegas=om, sweep_param="temp",
+                         points=[(1.0, (1.0, 2.0, 1.0)), (1.5, (1.0, 4.0, 1.1))])
+    with pytest.raises(Refusal) as e:
+        cmp.compare("sweeps", [a, t], store=store)
+    assert e.value.field == "compare_records" and "temp" in str(e.value), e.value
+
+
+def _stub_sweep(monkeypatch, *, fail_at=()):
+    """Both campaigns of a REAL ``run_fdt_param_sweep`` replaced by arithmetic. Every operating point
+    has the same spectrum and the same resonance (omega_0 = 1), and its ratio is flat at 1 + the
+    swept S, so a row says which point it came from. The driven-campaign calls whose running index is
+    in ``fail_at`` raise, as a point that failed: the sweep records it failed, with an ``error``
+    attribute and no response data, and goes on. The sweep's own figure is stubbed to the file it was
+    handed."""
+    import torch
+    from core.FDT import cross_validation as cv
+
+    calls = {"n": 0}
+
+    def _c1(cfg_op):
+        return (torch.linspace(0.1, 40.0, 8, dtype=torch.float64),
+                torch.ones(8, dtype=torch.float64))
+
+    def _c2(cfg_op, omegas, freqs_psd, G):
+        idx = calls["n"]
+        calls["n"] += 1
+        if idx in fail_at:
+            raise RuntimeError(f"stub driven-campaign failure at call {idx}")
+        return (torch.ones(omegas.shape, dtype=torch.complex128),
+                torch.full(omegas.shape, 1.0 + float(cfg_op.params_dict["s"][0]),
+                           dtype=torch.float64))
+
+    monkeypatch.setattr(cv, "run_campaign1_psd", _c1)
+    monkeypatch.setattr(cv, "_detect_resonance", lambda omegas, G, w0: (1.0, True))
+    monkeypatch.setattr(cv, "_campaign2_ratio", _c2)
+    monkeypatch.setattr(cv, "plot_fdt_3d_vs_param",
+                        lambda *a, save_path=None, **k: Path(save_path).write_bytes(b"\x89PNG"))
+
+
+def test_compare_sweeps_reads_what_a_real_sweep_wrote_and_never_slices_a_failed_point(store,
+                                                                                    monkeypatch):
+    """The fixture's sweep layout is written to match the sweep's own; this checks the match against
+    records ``run_fdt_param_sweep`` itself wrote (campaigns stubbed). Two S sweeps of ONE cell, on
+    grids that overlap without meeting point for point: the slice takes each sweep's row nearest the
+    middle of the range they share, and a point whose driven campaign failed -- kept in the file with
+    an ``error`` and no response data -- is never that row, however near it sits, and does not count
+    towards the range either.
+
+    Two sweeps of the same cell share its name, so their curves are told apart by the run
+    (``labelled_curves``' rule), and each curve in the comparison's file carries the constants F55
+    requires: omega_0 = 1, because the slice is drawn on the sweeps' normalised axis
+    omega / omega_0_ref, whose reference sits at 1; and the prefactor NaN, because a sweep records
+    one constant for the cell and none per operating point."""
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+
+    _stub_sweep(monkeypatch, fail_at=(2,))
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+
+    def sweep(name, lo, hi):
+        cfg, s_grid, _t = cli.make_param_sweep_config(
+            cell, preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+            s_spec=(lo, hi, 4), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2, seed=1)
+        return cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
+                                      writer=store.create("fdt", cfg, name=name))
+
+    with pytest.warns(UserWarning, match="operating points failed"):
+        a = sweep("sweep_a", 0.0, 0.3)          # S = 0, 0.1, 0.2 (its driven campaign fails), 0.3
+    b = sweep("sweep_b", 0.15, 0.45)            # S = 0.15, 0.25, 0.35, 0.45
+    assert a.body["points"]["failed"] == 1 and b.body["points"]["failed"] == 0
+
+    seen, sink = _closing()
+    rec = cmp.compare("sweeps", ["sweep_a", "sweep_b"], fig_sink=sink, store=store)
+
+    assert seen == ["Sweep surfaces", "Sweep slice"], seen
+    res = rec.body["results"]
+    assert res["param"] == "s" and res["shared_range"] == pytest.approx([0.15, 0.3]), res
+    assert res["at"] == pytest.approx(0.225)
+    # sweep_a's nearest point, 0.2, failed; its nearest USABLE row is 0.3 (0.075 away, 0.1 is 0.125)
+    assert [p["param_value"] for p in res["per_record"]] == pytest.approx([0.3, 0.25]), res
+    assert [p["peak_ratio"] for p in res["per_record"]] == pytest.approx([1.3, 1.25]), res
+    with h5py.File(rec.data_path, "r") as h5:
+        keys = sorted(h5["curves"])
+        labels = [h5["curves"][k].attrs["label"] for k in keys]
+        constants = [(float(h5["curves"][k].attrs["omega_0"]),
+                      float(h5["curves"][k].attrs["prefactor"])) for k in keys]
+    assert labels == ["master_spont (sweep_a)  (s = 0.3)", "master_spont (sweep_b)  (s = 0.25)"], \
+        labels
+    assert [o for o, _p in constants] == [1.0, 1.0] and all(math.isnan(p) for _o, p in constants), \
+        constants
+    assert [r["id"] for r in rec.body["compared"]["records"]] == [a.id, b.id]
