@@ -3102,7 +3102,7 @@ class _FdtWriter:
     def __init__(self, tmp_path):
         self.id = "20260922T000000"
         self.dir = Path(tmp_path) / "fdt" / f"_unnamed__{self.id}"
-        self.body, self.parents, self.fingerprints = {}, {}, {}
+        self.body, self.parents, self.fingerprints, self.config = {}, {}, {}, {}
         self.store = SimpleNamespace(load_fdt=lambda ref: SimpleNamespace(id=ref, body=self.body))
         self.refreshed = 0
 

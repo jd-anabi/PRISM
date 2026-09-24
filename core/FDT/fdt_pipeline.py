@@ -20,14 +20,17 @@ from core import config
 from core.config import FDTConfig
 from core.FDT.campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
 from core.FDT.spectral import gen_freqs_log, eff_temp_ratio, find_spectral_peak
-from core.FDT.sanity import run_all_sanity, _interp_log, _resolved_span, _low_end_advice
+from core.FDT.sanity import (run_all_sanity, _interp_log, _resolved_span, _low_end_advice,
+                             _runs_nadrowski_only_checks)
 from core.FDT.plots import (
     plot_eff_temp_ratio, plot_chi_components, plot_psd,
     plot_spontaneous_trajectory,
 )
-# Both torch-free and stdlib-only: the judgement channel and the run boundary cost this module nothing,
-# where core.orchestrator (which re-exports the same PreflightWarning) would load the SBI stack.
+# All three stdlib-only at import: the judgement channel, the seeding context and the run boundary
+# cost this module nothing, where core.orchestrator (which re-exports the same PreflightWarning) or
+# core.diagnostics (the seeding context's first home) would load the SBI stack.
 from core.refusals import PreflightWarning, Refusal
+from core.rng import seeded
 from core.runs import RUN_BOUNDARY_FILES, public_entry
 
 # Banners and saved-plot paths are information; a failed sanity verdict is a warning (piece 3, V4).
@@ -206,10 +209,6 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool,
     land on a private copy and the caller's settings object is exactly what it was, whether this
     returned, refused or crashed (V1).
     """
-    # F38: imported HERE, not at module scope -- importing core.diagnostics.rng runs
-    # core/diagnostics/__init__.py, which imports the diagnostics and through them core.orchestrator.
-    from core.diagnostics.rng import seeded
-
     # The per-model normalisation prefactor FIRST, before anything is simulated -- and before the
     # writer is entered, so a cell FDT cannot normalise opens no record at all. It reads the cell's
     # parameters and nothing else, and it used to sit at step 8 -- so a cell missing `n` or `beta`
@@ -231,6 +230,11 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool,
     body["settings"] = _settings_block(cfg, skip_sanity=skip_sanity,
                                        confirm_production=confirm_production)
     body["seed"] = seed
+    # The config block too, and before the writer is entered so the FIRST manifest carries it:
+    # store.create computed that block from the caller's object before any seed was resolved, so it
+    # holds the builder's seed (or none), and `artifacts show` would print that beside a body that
+    # names the one this run used (Task 17, fix round 1).
+    writer.config.update({"seed": seed})
     body["notices"] = [*(body.get("notices") or []), *notices]
     for key in ("grid", "points", "offgrid", "compared", "results"):
         body.setdefault(key, None)
@@ -261,7 +265,11 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     if skip_sanity:
         log.info("Skipping sanity checks.")
     else:
-        passive_plot_path = writer.figure_path("Passive baseline ratio")
+        # The passive-baseline figure is drawn only where that check runs -- Nadrowski alone, a rule
+        # sanity owns -- so its path is asked for only then: a path handed out is a figure the record
+        # lists, and a listed figure that is never drawn is a phantom (Task 17, fix round 1).
+        passive_plot_path = (writer.figure_path("Passive baseline ratio")
+                             if _runs_nadrowski_only_checks(cfg) else None)
         results = run_all_sanity(cfg, passive_plot_path=passive_plot_path)
         if not all(passed for passed, _ in results.values()):
             # The level carries the severity: the hand-typed "WARNING: " word went with the print (on

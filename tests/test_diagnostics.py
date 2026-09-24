@@ -188,6 +188,35 @@ def test_seeded_restores_the_callers_rng():
     assert not torch.equal(a_t, before_t), "the seed inside the block must actually take effect"
 
 
+@pytest.mark.gpu
+def test_a_cpu_seeded_block_leaves_every_cuda_generator_alone():
+    """Task 17, fix round 1, finding 2 (spec §3.7). ``torch.manual_seed`` reseeds EVERY CUDA device as
+    well as the CPU, and a CPU block forks no CUDA generator -- ``fork_rng(devices=[cpu])`` raises --
+    so the old ``seeded(seed, cpu)`` left each card's generator pinned at the block's seed: two CPU FDT
+    runs at seed 5, each followed by a CUDA draw, drew identical CUDA numbers. That is the hazard
+    core/SBI/decorrelate.py documents, reached through the context whose whole job is to hand the
+    caller's streams back. A CPU block now seeds the CPU generator and numpy only.
+
+    The context lives in core/rng.py (finding 1), and core.diagnostics.rng re-exports the SAME object,
+    so the diagnostics and `smoke` -- which a tool test patches through core.diagnostics.rng --
+    keep their import."""
+    import core.diagnostics.rng
+    import core.rng
+    from core import config
+    from core.rng import seeded
+
+    assert core.diagnostics.rng.seeded is core.rng.seeded
+    cpu = config.cpu_device().device
+    before = [torch.cuda.get_rng_state(i) for i in range(torch.cuda.device_count())]
+    with seeded(5, cpu):
+        first = torch.randn(3)
+    with seeded(5, cpu):
+        assert torch.equal(torch.randn(3), first), "the CPU seed must still take effect"
+    after = [torch.cuda.get_rng_state(i) for i in range(torch.cuda.device_count())]
+    assert all(torch.equal(a, b) for a, b in zip(before, after)), \
+        "a CPU seeded() block reseeded a CUDA generator and did not restore it"
+
+
 def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(store, monkeypatch, caplog):
     """T16's sbc_repeats draws its per-repeat calibration set through EXACTLY the code
     validate_calibration draws its own through. That is what gives the repeat-SBC run the four things

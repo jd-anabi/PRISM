@@ -344,6 +344,22 @@ def check_psd_window(cfg: FDTConfig) -> tuple[bool, dict]:
                     "omegas_sampled": omegas1[sample_idx].cpu().tolist()}
 
 
+# passive_baseline / high_freq_fdt reason about Nadrowski-specific physics (the s-feedback and the
+# motor thermostat via with_overrides(s=, temp=)), which only exist as params_dict keys for Nadrowski.
+_NADROWSKI_ONLY = frozenset({"passive_baseline", "high_freq_fdt"})
+
+
+def _runs_nadrowski_only_checks(cfg) -> bool:
+    """Whether ``run_all_sanity`` runs the Nadrowski-only checks (``_NADROWSKI_ONLY``) for ``cfg``.
+
+    The ONE place the rule lives, because two callers act on it: ``run_all_sanity`` drops those checks
+    for every other model, and ``fdt_pipeline.run_fdt`` asks its record for the passive-baseline
+    figure's path only when that check will draw it. Asked separately, the two drifted: every HOPF,
+    BP and user-model sanity run listed a passive-baseline figure that was never drawn (Task 17, fix
+    round 1)."""
+    return cfg.model.lower() == "nadrowski"
+
+
 def run_all_sanity(cfg: FDTConfig, passive_plot_path=None) -> dict:
     """
     Run all five checks; print summary; return dict[name -> (passed, metrics)].
@@ -363,11 +379,8 @@ def run_all_sanity(cfg: FDTConfig, passive_plot_path=None) -> dict:
         ("ensemble_convergence",  check_ensemble_convergence,  "chi'' stable by M=256"),
         ("psd_window",            check_psd_window,            "PSD halves agree"),
     ]
-    # passive_baseline / high_freq_fdt reason about Nadrowski-specific physics (the s-feedback and the
-    # motor thermostat via with_overrides(s=, temp=)), which only exist as params_dict keys for
-    # Nadrowski. For any other model run only the model-agnostic checks (linearity / convergence / PSD).
-    _NADROWSKI_ONLY = {"passive_baseline", "high_freq_fdt"}
-    if cfg.model.lower() != "nadrowski":
+    # For any model but Nadrowski run only the model-agnostic checks (linearity / convergence / PSD).
+    if not _runs_nadrowski_only_checks(cfg):
         checks = [c for c in checks if c[0] not in _NADROWSKI_ONLY]
         log.info(f"Note: the passive-baseline / high-frequency FDT checks are Nadrowski-specific and are "
                  f"skipped for {cfg.model}; running the model-agnostic checks only.")

@@ -53,7 +53,7 @@ class _LogWriter:
     body, payload and figure paths inside it, and a store that hands back what it was given. A real
     ArtifactWriter would drag a manifest (and its validation) into tests about the pipeline's logs."""
     def __init__(self, d):
-        self.id, self.dir, self.body = "x", Path(d), {}
+        self.id, self.dir, self.body, self.config = "x", Path(d), {}, {}
         self.store = SimpleNamespace(load_fdt=lambda ref: ref)
 
     def __enter__(self):
@@ -1428,7 +1428,14 @@ def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monk
 
     The body must carry EVERY key of BODY_KEYS["fdt"] (manifest.validate compares the key set by
     equality), with the keys a single-cell run cannot fill left null. Two trajectories is below the
-    trust threshold, so the run warns -- asserted, never leaked -- and the record KEEPS the sentence."""
+    trust threshold, so the run warns -- asserted, never leaked -- and the record KEEPS the sentence.
+
+    The seed argument OVERRIDES the one the config was built with (P12), and the record's config block
+    must say so from its FIRST manifest: store.create computes that block from the caller's object,
+    before any seed is resolved, so it read the builder's seed (or none) while the body held the one
+    the run used -- and `artifacts show` prints the config block (fix round 1, finding 3)."""
+    import json
+
     import pytest
 
     from core import cli, config
@@ -1439,13 +1446,24 @@ def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monk
 
     _stub_campaigns(monkeypatch)
     cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
-                              n_freqs=5, ensemble_M=2)
+                              n_freqs=5, ensemble_M=2, seed=3)
     snap = snapshot_cfg(cfg)
 
     w = store.create("fdt", cfg, name="run1", note="a stubbed measurement")
+    stub_c1, first_manifest_seed = fdt_pipeline.run_campaign1_psd, []
+
+    def _c1(c, return_trajectory=False):
+        # Campaign 1 runs after __enter__ and before the first refresh: this is the FIRST manifest.
+        first_manifest_seed.append(
+            json.loads((w.dir / "manifest.json").read_text(encoding="utf-8"))["config"]["seed"])
+        return stub_c1(c, return_trajectory=return_trajectory)
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd", _c1)
     with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"):
         rec = fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=11)
 
+    assert first_manifest_seed == [11], f"the first manifest's config block said {first_manifest_seed}"
+    assert rec.manifest.config["seed"] == 11, "the config block names the seed the run USED"
     assert rec.name == "run1" and rec.body["study"] == "single"
     assert set(rec.body) == set(mf.BODY_KEYS["fdt"]), "validate compares the key set by equality"
     assert rec.body["seed"] == 11 and rec.body["complete"] is True
@@ -1542,7 +1560,11 @@ def test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_l
 def test_run_fdt_draws_and_records_a_seed_when_none_is_given(store, monkeypatch):
     """E7: every run records the seed it used, so repeats of one cell can be told apart and their
     spread read as the measurement error. A blank Seed box and an absent --seed both mean "draw one
-    and record it" -- a run whose seed were simply unset could never be repeated."""
+    and record it" -- a run whose seed were simply unset could never be repeated.
+
+    The draw comes from a seeded Random patched in as the module's ``random``, never from reseeding
+    Python's global stream: that would leave it seeded for every later test in the one-process gate.
+    The config block records the drawn seed too, not the builder's None (fix round 1, finding 3)."""
     import random
     from core import cli, config
     from core.FDT import fdt_pipeline
@@ -1550,12 +1572,12 @@ def test_run_fdt_draws_and_records_a_seed_when_none_is_given(store, monkeypatch)
     _stub_campaigns(monkeypatch)
     cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
                               n_freqs=3, ensemble_M=8)
-    random.seed(4242)
-    drawn = random.randrange(2 ** 31)
-    random.seed(4242)
+    drawn = random.Random(4242).randrange(2 ** 31)
+    monkeypatch.setattr(fdt_pipeline, "random", random.Random(4242))
     rec = fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True,
                                writer=store.create("fdt", cfg, name="drawn"))
     assert rec.body["seed"] == drawn, "the drawn seed is the recorded seed"
+    assert rec.manifest.config["seed"] == drawn, "the config block names the drawn seed, not None"
     assert cfg.seed is None, "the draw lands on the private copy, never on the caller's config"
 
 
@@ -1584,3 +1606,94 @@ def test_the_seed_determines_the_numbers(store, monkeypatch):
                              writer=store.create("fdt", cfg), seed=seed)
     assert drawn[0] == drawn[1], "one seed, one draw: the seed determines the numbers"
     assert drawn[0] != drawn[2], "a different seed draws differently"
+
+
+def test_a_sanity_run_lists_only_the_figures_it_drew(store, monkeypatch):
+    """Fix round 1, finding 4. The passive-baseline check is NADROWSKI-only -- run_all_sanity drops it
+    for every other model -- but run_fdt asked the writer for its figure path before the sanity run
+    regardless, so every HOPF, BP or user-model sanity run listed figures/passive_baseline_ratio.png
+    in its manifest and the file never existed. One helper in core/FDT/sanity.py now owns the rule and
+    both sides ask it.
+
+    The REAL run_all_sanity runs here, so the two sides are held to the same rule: only the five
+    checks are recorders (the passive one writes the figure it was handed a path for). For each
+    model, the passive check runs exactly when its figure is listed, and every listed figure is on
+    disk."""
+    from core import cli, config, registry
+    from core.FDT import fdt_pipeline, sanity
+
+    _stub_campaigns(monkeypatch)
+    ran = []
+
+    def _recorder(name):
+        def check(cfg, save_plot_path=None):
+            ran.append(name)
+            if save_plot_path is not None:
+                Path(save_plot_path).write_bytes(b"\x89PNG")
+            return True, {}
+        return check
+
+    for name in ("check_passive_baseline", "check_high_freq_fdt", "check_linearity",
+                 "check_ensemble_convergence", "check_psd_window"):
+        monkeypatch.setattr(sanity, name, _recorder(name))
+
+    for model, cell, passive in (("HOPF", "hopf/cell.txt", False),
+                                 ("NADROWSKI", "nadrowski/master_spont.txt", True)):
+        ran.clear()
+        cfg = cli.make_fdt_config(model, registry.state_dep_drift(model), str(config.CELL_PATH / cell),
+                                  n_freqs=3, ensemble_M=8)
+        rec = fdt_pipeline.run_fdt(cfg, skip_sanity=False, confirm_production=True,
+                                   writer=store.create("fdt", cfg, name=model.lower()), seed=2)
+        assert ("check_passive_baseline" in ran) is passive, (model, ran)
+        assert ("figures/passive_baseline_ratio.png" in rec.manifest.figures) is passive, \
+            (model, rec.manifest.figures)
+        missing = [f for f in rec.manifest.figures if not (rec.path / f).is_file()]
+        assert missing == [], f"{model}: the manifest lists figures that were never drawn: {missing}"
+
+
+def test_an_fdt_run_loads_no_inference_machinery(tmp_path):
+    """Fix round 1, finding 1. The seeding context used to live in core/diagnostics/rng.py, and
+    importing ANY submodule runs its package's __init__ -- which imports the five diagnostics and
+    through them core.orchestrator, sbi and pytensor: about two seconds and two false pytensor "g++"
+    lines on stderr at the head of every `python -m core fdt`, refused runs included. It lives in
+    core/rng.py now. The import-time probe above cannot see a cost paid when the run STARTS, so this
+    one RUNS run_fdt in a fresh interpreter -- campaigns and figures stubbed, a temp store -- and then
+    looks. A fresh interpreter because this process holds the orchestrator through the session
+    fixtures, so a sys.modules check here would pass vacuously.
+
+    The bare ``sbi`` package IS loaded, by the store rather than the run: provenance.env_info reads
+    ``sbi.__version__`` into every manifest of every kind, and sbi's ``__init__`` imports nothing but
+    its version string (``sbi`` and ``sbi.__version__``, measured at under 0.01 s). Every OTHER sbi
+    module is the inference stack, and is forbidden here."""
+    import subprocess
+
+    probe = (
+        "import sys\n"
+        "import torch\n"
+        "from core import cli, config\n"
+        "from core.artifacts import ArtifactStore\n"
+        "from core.FDT import fdt_pipeline as fp\n"
+        "w = torch.linspace(0.0, 40.0, 1601, dtype=torch.float64)\n"
+        "G = torch.exp(-((w - 1.0) ** 2) / 0.02) + 1e-6\n"
+        "t = torch.linspace(0.0, 1.0, 8, dtype=torch.float64)\n"
+        "fp.run_campaign1_psd = lambda cfg, return_trajectory=False: (w, G, t, torch.zeros_like(t))\n"
+        "fp.run_campaign2_chi = lambda cfg, om: torch.full(om.shape, 1 + 1j, dtype=torch.complex128)\n"
+        "for name in ('plot_psd', 'plot_eff_temp_ratio', 'plot_chi_components',\n"
+        "             'plot_spontaneous_trajectory'):\n"
+        "    setattr(fp, name, lambda *a, save_path=None, **k: save_path.write_bytes(b'png'))\n"
+        "cfg = cli.make_fdt_config('HOPF', False, str(config.CELL_PATH / 'hopf' / 'cell.txt'),\n"
+        "                          n_freqs=3, ensemble_M=8)\n"
+        "store = ArtifactStore(sys.argv[1])\n"
+        "rec = fp.run_fdt(cfg, skip_sanity=True, confirm_production=True,\n"
+        "                 writer=store.create('fdt', cfg), seed=1)\n"
+        "assert rec.body['complete'] is True, rec.body\n"
+        "bad = sorted(m for m in sys.modules\n"
+        "             if m in ('core.diagnostics', 'core.orchestrator', 'pytensor')\n"
+        "             or (m.startswith('sbi.') and m != 'sbi.__version__'))\n"
+        "sys.exit(0 if not bad else repr(bad))\n")
+    r = subprocess.run([sys.executable, "-c", probe, str(tmp_path / "Artifacts")],
+                       cwd=str(Path(__file__).resolve().parents[1]), capture_output=True, text=True,
+                       timeout=300, env={**os.environ, "MPLBACKEND": "Agg", "KMP_DUPLICATE_LIB_OK": "TRUE",
+                                         "PRISM_ARTIFACTS": str(tmp_path / "Artifacts")})
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "pytensor" not in r.stderr, r.stderr
