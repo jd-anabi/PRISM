@@ -2445,8 +2445,10 @@ def test_the_crossval_window_shows_both_records_figures_and_names_them(tmp_path,
     if s_refused:
         assert not any(f"[{writers['s'].id}]" in text for text in said), \
             f"the refused sweep's unfinished record was named as written: {said}"
+    # ORDER-FREE (sorted, so a duplicate row still fails): the listing is newest first by `created`,
+    # and the two creates in _run land on one clock tick or straddle one, which flipped a list compare.
     combo = panel.record_picker.combo
-    assert [combo.itemData(i) for i in range(combo.count())] == [w.id for w in finished], \
+    assert sorted(combo.itemData(i) for i in range(combo.count())) == sorted(w.id for w in finished), \
         "the picker offers the FINISHED sweeps only"
     assert panel.record_picker.key() == writers["temp"].id, \
         "the picker must move onto the last record the study wrote"
