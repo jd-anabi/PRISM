@@ -138,14 +138,25 @@ def _summary_line(s) -> str:
 
 class StorePicker(QWidget):
     """A combo over one KIND of the artifact store -- the generated-kind twin of ArtifactPicker,
-    which stays for the input pickers (cells, bounds). Items are complete artifacts only, labelled by
+    which stays for the input pickers (cells, bounds). Items are FINISHED artifacts only, labelled by
     name (or ``(unnamed <id>)``), with the id, creation time, mode, width and amortization in the
-    tooltip; ``userData`` is the id, which is what ``key()`` persists and ``selected()`` returns."""
+    tooltip; ``userData`` is the id, which is what ``key()`` persists and ``selected()`` returns.
+
+    ``row_filter`` narrows the listing further -- one kind can hold several things a screen offers
+    separately (spec §5.4).
+    """
     NEW_LABEL = ArtifactPicker.NEW_LABEL
 
-    def __init__(self, kind: str, allow_new: bool = False, store=None, parent=None):
+    def __init__(self, kind: str, allow_new: bool = False, store=None, row_filter=None,
+                 parent=None):
         super().__init__(parent)
         self.kind, self._allow_new, self._store = kind, allow_new, store
+        # ``Summary -> bool``, or None for "every row of the kind". One kind can hold several things
+        # a screen wants to offer separately: the ``fdt`` kind holds single-cell measurements, sweeps
+        # and comparisons, told apart by ``body["study"]`` (spec §2.1), and the FDT and CrossVal
+        # screens each offer one of them. Applied AFTER the finished rule. Before ``parent`` (spec
+        # §5.4, P9); no caller passes ``parent`` positionally.
+        self._row_filter = row_filter
         # id -> the line selection_summary() returns, recorded by refresh(). BEFORE refresh() below,
         # which fills it.
         self._summaries: dict = {}
@@ -177,7 +188,14 @@ class StorePicker(QWidget):
         except Exception:                        # noqa: BLE001 -- an unreadable root lists nothing
             rows = []
         for s in rows:
-            if not s.complete:
+            # FINISHED, not ``complete``. ``complete`` means "has a valid manifest"; for the two
+            # kinds written progressively (the training cache, and piece 5's ``fdt``) a record
+            # carries one from its first moment, so ``complete`` would offer a run still going, or
+            # one a cancel left half written, as a result (spec §5.4). For every other kind the two
+            # are the same fact, because _commit writes the manifest last.
+            if not s.finished:
+                continue
+            if self._row_filter is not None and not self._row_filter(s):
                 continue
             # The suffix is appended to the DISPLAY only. key(), restore_key(), selected() and
             # has_entries() all go through userData, which is still the bare id, so nothing that

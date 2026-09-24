@@ -1063,7 +1063,8 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
     qt_app()
     # Two complete observations, so a restored pick is distinguishable from the default first entry.
     # The store is stubbed at the picker's one seam; each row carries exactly what refresh() reads.
-    rows = [types.SimpleNamespace(complete=True, label=label, id=id_, created="2026-09-16T12:00:00",
+    rows = [types.SimpleNamespace(complete=True, finished=True, label=label, id=id_,
+                                  created="2026-09-16T12:00:00",
                                   mode="spontaneous", width=50, amortized=None)
             for label, id_ in (("first", "20260916T120000"), ("second", "20260916T130000"))]
     store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "observation" else [])

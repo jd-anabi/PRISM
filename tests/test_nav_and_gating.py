@@ -3335,8 +3335,13 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
 
     qt_app()
 
-    def row(label, id_, created, *, mode=None, width=None, amortized=None, complete=True):
-        return types.SimpleNamespace(complete=complete, label=label, id=id_, created=created,
+    def row(label, id_, created, *, mode=None, width=None, amortized=None, complete=True,
+            finished=None):
+        # For these six kinds ``complete`` and ``finished`` are the same fact, so the stub derives
+        # one from the other rather than making every call site repeat it (store.Summary).
+        return types.SimpleNamespace(complete=complete,
+                                     finished=complete if finished is None else finished,
+                                     label=label, id=id_, created=created,
                                      mode=mode, width=width, amortized=amortized)
 
     rows = {
@@ -3399,6 +3404,64 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     assert [combo.itemText(i) for i in range(combo.count())] == [StorePicker.NEW_LABEL, "amort"]
     assert pp.post_line.text() == "chi · width 18 · amortized · 2026-09-14T10:22:31", \
         pp.post_line.text()
+
+
+def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(monkeypatch):
+    """Spec §5.4, checklist item 19. ``StorePicker`` skipped rows whose ``complete`` was false, and
+    ``complete`` means "has a valid manifest" -- NOT "the run finished" (store.Summary). For the six
+    ordinary kinds the two coincide, because ``ArtifactWriter._commit`` writes the manifest last. For
+    the two kinds written PROGRESSIVELY -- the training cache, and piece 5's ``fdt`` -- they do not:
+    a record carries a manifest from its first moment, so the picker would have offered a run that
+    is still going, or one a cancel left half written, as if it were a result. It filters on
+    ``finished`` instead, which is the same answer for every kind that is not progressive.
+
+    And ``refresh`` listed every row of the kind with no hook, so the FDT and CrossVal screens could
+    not show only their own study out of the one ``fdt`` kind (E3 puts both analyses and their
+    comparisons in it). An optional row predicate is the whole addition -- no new widget, because
+    every fact the picker shows is already a ``Summary`` field.
+
+    The store is stubbed at the picker's one seam, ``_resolved_store``, as the picker tests already
+    stub it; each row carries exactly the ``Summary`` fields ``refresh()`` reads and no more, so the
+    test cannot pass on a field the real listing does not fill.
+    """
+    import types
+    from core.gui.widgets.artifact_picker import StorePicker
+    from tests._fixtures import qt_app
+
+    qt_app()
+
+    def row(label, id_, *, complete=True, finished=True, study=None):
+        return types.SimpleNamespace(complete=complete, finished=finished, label=label, id=id_,
+                                     created="2026-09-22T09:00:00", mode=None, width=None,
+                                     amortized=None, study=study)
+
+    rows = [row("done_single", "a", study="single"),
+            row("running_single", "b", finished=False, study="single"),
+            row("done_sweep", "c", study="sweep"),
+            row("no_manifest", "d", complete=False, finished=False)]
+    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "fdt" else [])
+    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
+
+    # (a) unfiltered: the unfinished run and the manifest-less leftover are both absent
+    plain = StorePicker("fdt")
+    assert [plain.combo.itemText(i) for i in range(plain.combo.count())] == \
+        ["done_single", "done_sweep"]
+
+    # (b) the predicate narrows it to one study, and is applied on top of the finished rule
+    single = StorePicker("fdt", row_filter=lambda s: s.study == "single")
+    assert [single.combo.itemText(i) for i in range(single.combo.count())] == ["done_single"]
+    sweep = StorePicker("fdt", row_filter=lambda s: s.study == "sweep")
+    assert [sweep.combo.itemText(i) for i in range(sweep.combo.count())] == ["done_sweep"]
+
+    # (c) the predicate survives a refresh, which is how a screen sees a run that just finished
+    rows.append(row("second_single", "e", study="single"))
+    single.refresh()
+    assert [single.combo.itemText(i) for i in range(single.combo.count())] == \
+        ["done_single", "second_single"]
+
+    # (d) the default is no predicate at all, so every existing caller is unchanged: the sentinel +
+    # the THREE finished rows, because (c) appended one
+    assert StorePicker("fdt", allow_new=True).combo.count() == 4
 
 
 # ── piece 6: the panel/tab counts, stale since the TSNPE tab arrived ─────────────────────────────
