@@ -306,6 +306,8 @@ def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaig
                             freqs_psd, G, torch.arange(4, dtype=torch.float64),
                             torch.zeros(4, dtype=torch.float64)))
     monkeypatch.setattr(fdt_pipeline, "plot_spontaneous_trajectory", lambda *a, **kw: None)
+    monkeypatch.setattr(fdt_pipeline, "plot_psd",
+                        lambda *a, save_path=None, **kw: save_path.write_bytes(b"png"))
 
     def _no_drive(*a, **kw):
         driven.append(a)
@@ -327,6 +329,9 @@ def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaig
     from core.tool.fields import fix_sentence
     assert fix_sentence("freq_bounds") == "", "no flag exposes the band, so no fix is offered (P2, P75)"
     assert driven == [], "Campaign 2 was entered before the band was checked"
+    written = [p.name.rsplit("_", 2)[0] for p in tmp_path.glob("*.png")]
+    assert written == ["psd"], ("the spontaneous spectrum's picture must be on disk when the band "
+                                f"refusal fires -- it is what diagnoses it (P22): {written}")
 
 
 def test_the_band_refusal_offers_a_longer_recording_only_where_it_lowers_the_resolution(
@@ -460,6 +465,192 @@ def test_the_sanity_warnings_name_what_really_bounds_each_end_of_the_spectrum(mo
     msg = str(rec[0].message)
     assert "Narrow cfg.freq_bounds, or lengthen the passive run (psd_T_obs_nd = 100)" in msg, msg
     assert "would not help" not in msg and "cap of 16384 samples" in msg, msg
+
+
+def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(tmp_path, monkeypatch):
+    """Spec §3.6, E4. A run whose every probe frequency is blank has measured nothing: today it
+    divides blanks by blanks, saves a figure with no points on it, and reports success -- an answer
+    indistinguishable from a real one until someone opens the picture. It refuses instead, naming the
+    band and the two settings that set it. Its field is "freq_bounds", as the band refusal's is (F37):
+    the same subject, and neither front end exposes it, so neither offers a fix sentence.
+
+    E4's other half is asserted here too: the run leaves behind what diagnoses the failure. The
+    spontaneous spectrum's picture is written BEFORE the driven campaign, so it is on disk when this
+    refusal fires, while the ratio and susceptibility figures -- which would have been empty -- are
+    not. T17 turns that directory into the record's unfinished folder; the ordering is what makes the
+    promise keepable.
+
+    The low end is gated by T15, so the reachable case is the UPPER end (spec §3.5): here the probe
+    grid runs 1.0..6.0 against a spectrum that resolves 0.1..0.3. The four plot helpers are replaced
+    by recorders that write their save_path, so the test asserts WHICH figures a run leaves without
+    paying for matplotlib."""
+    import pytest
+
+    from core.FDT import fdt_pipeline
+    from core.refusals import Refusal
+
+    class _Cfg:
+        model = "HOPF"
+        params_dict = {"sigma_x": (0.1, None)}
+        n_freqs, freq_bounds = 5, (5.0, 30.0)
+        ensemble_M = 8        # read first by the thin-setting check; at its threshold, so it says nothing
+        burn_in_nd, dt_nd, psd_T_obs_nd, omega_0 = 0.0, 0.01, 50.0, 1.0
+
+        class hw:
+            device = torch.device("cpu")
+            dtype = torch.float64
+
+    # Resolves 0.1..0.3, peak at 0.2 -> the grid runs 1.0 .. 6.0: its LOWEST probe is above the
+    # spectrum's highest bin, so T15's low-end gate passes and every probe is blank anyway.
+    freqs_psd = torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64)
+    G = torch.tensor([9.0, 1.0, 5.0, 1.0], dtype=torch.float64)
+    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
+                        lambda cfg, return_trajectory=False: (
+                            freqs_psd, G, torch.arange(4, dtype=torch.float64),
+                            torch.zeros(4, dtype=torch.float64)))
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi",
+                        lambda cfg, om, **kw: torch.full((len(om),), 1 + 1j, dtype=torch.complex128))
+    for name in ("plot_spontaneous_trajectory", "plot_psd", "plot_eff_temp_ratio",
+                 "plot_chi_components"):
+        monkeypatch.setattr(fdt_pipeline, name,
+                            lambda *a, save_path=None, **kw: save_path.write_bytes(b"png"))
+
+    with pytest.raises(Refusal) as e:
+        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True)
+    msg = str(e.value)
+    assert "0.1..0.3" in msg and "psd_T_obs_nd = 50" in msg, msg
+    assert e.value.field == "freq_bounds", e.value.field
+
+    written = sorted(p.name.rsplit("_", 2)[0] for p in tmp_path.glob("*.png"))
+    assert written == ["psd", "spontaneous_trajectory"], written
+
+
+def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
+        tmp_path, monkeypatch, caplog):
+    """The ruling carried from Tasks 14 and 15: every sentence a refusal says about what the spectrum
+    resolves must be TRUE of the spectrum the run measured -- advice that sends the operator to double
+    a spontaneous campaign for an identical band is worse than none. The test above pins the refusal
+    on a four-bin stub, where no sentence about a Nyquist frequency can be true; this one runs the
+    REAL Campaign 1 -- only the simulator is replaced, by a noiseless tone at 1 ND, so the peak is
+    known -- and holds each claim the refusal makes to the code that decides it:
+
+    * the top it names is the spectrum's Nyquist frequency pi/dt_nd, which a step half as long
+      doubles and a recording four times as long leaves where it is (it lowers only the bottom) --
+      so the refusal says a longer recording would not help, and offers none;
+    * the band it prints works when copied: a lower multiplier inside the range it names measures
+      some probes -- the run completes and warns ONCE how many are blank -- and an upper multiplier
+      below the bound it names measures every probe, with no warning at all.
+
+    The grid lies wholly above the top here (lower multiplier 8, top 2*pi at dt_nd = 0.5), which is
+    the one way every probe can blank once the band check has gated the low end: the resonance is a
+    bin of the spectrum, so a lower multiplier of 1 or less keeps the lowest probe resolved. Lowering
+    the UPPER multiplier alone therefore cannot help, and the refusal does not say it would.
+
+    Last, a spectrum with no finite value at all -- a spontaneous campaign that diverged -- is refused
+    too, but without the Nyquist sentence: its probes lie inside the resolved band, where that
+    sentence would be false."""
+    import logging
+    import math
+    import re
+
+    import pytest
+
+    from core.FDT import campaigns, fdt_pipeline
+    from core.FDT.sanity import _resolved_span
+    from core.FDT.spectral import find_spectral_peak
+    from core.refusals import Refusal
+
+    finite = [True]
+
+    class _Tone:
+        """The simulator, replaced: every trajectory is sin(t) -- or, for the last case, blank."""
+        def __init__(self, t, M):
+            self.t, self.M = t, M
+
+        def simulate(self, state_dep_drift=False):
+            x = torch.sin(self.t) if finite[0] else torch.full_like(self.t, float("nan"))
+            return x.expand(self.M, -1).reshape(1, 1, self.M, -1)
+
+    class _Cfg:
+        """The subset of FDTConfig run_fdt and the real Campaign 1 read. 2048 ND at dt_nd = 0.5 is
+        4096 samples: one Welch segment, well inside the cap."""
+        model = "HOPF"
+        params_dict = {"sigma_x": (0.1, None)}
+        force_params_dict, state_dep_drift = {}, False
+        n_freqs, ensemble_M, burn_in_nd, omega_0 = 5, 8, 0.0, 1.0
+
+        class hw:
+            device = torch.device("cpu")
+            dtype = torch.float64
+
+        def __init__(self, freq_bounds, dt_nd=0.5, psd_T_obs_nd=2048.0):
+            self.freq_bounds, self.dt_nd, self.psd_T_obs_nd = freq_bounds, dt_nd, psd_T_obs_nd
+
+        def inits_for_M(self, M):
+            return None
+
+        def params_for_M(self, M):
+            return None
+
+    monkeypatch.setattr(campaigns, "_make_simulator",
+                        lambda cfg, params, force, inits, t, **kw: _Tone(t, kw["batch_size"]))
+    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi",
+                        lambda cfg, om, **kw: torch.full((len(om),), 1 + 1j, dtype=torch.complex128))
+    for name in ("plot_spontaneous_trajectory", "plot_psd", "plot_eff_temp_ratio",
+                 "plot_chi_components"):
+        monkeypatch.setattr(fdt_pipeline, name, lambda *a, **kw: None)
+
+    def span(**kw):
+        return _resolved_span(campaigns.run_campaign1_psd(_Cfg((8.0, 30.0), **kw))[0])
+
+    def warned():
+        return [r.getMessage() for r in caplog.records
+                if r.name == "core.FDT.fdt_pipeline" and r.levelno == logging.WARNING]
+
+    freqs, G = campaigns.run_campaign1_psd(_Cfg((8.0, 30.0)))
+    lo, hi = _resolved_span(freqs)
+    w0 = find_spectral_peak(freqs, G)
+    assert hi == pytest.approx(math.pi / 0.5, rel=1e-12), "the spectrum's top is not pi/dt_nd"
+    long_lo, long_hi = span(psd_T_obs_nd=4 * 2048.0)
+    assert long_hi == hi and long_lo < lo, "a longer recording must lower the bottom and leave the top"
+    assert span(dt_nd=0.25)[1] == pytest.approx(2 * hi, rel=1e-12), "a shorter step must raise the top"
+
+    with pytest.raises(Refusal) as e:
+        fdt_pipeline.run_fdt(_Cfg((8.0, 30.0)), skip_sanity=True, confirm_production=True)
+    msg = str(e.value)
+    assert e.value.field == "freq_bounds", e.value.field
+    assert f"the band it resolves is {lo:g}..{hi:g} (ND)" in msg, msg
+    assert f"The lowest probe frequency, {8.0 * w0:g} (ND), is above that band's top" in msg, msg
+    assert "Nyquist frequency pi/dt_nd (dt_nd = 0.5): only a shorter integration step raises it" in msg, msg
+    assert "Lengthening the spontaneous recording (psd_T_obs_nd = 2048) would not help." in msg, msg
+    assert "or lengthen" not in msg, msg
+
+    got = re.search(r"lower multiplier into ([0-9.e+-]+?)\.\.([0-9.e+-]+) for any probe to be measured, "
+                    r"and its upper multiplier below ([0-9.e+-]+) for all of them", msg)
+    assert got, msg
+    low, high, upper = (float(v) for v in got.groups())
+    assert low == pytest.approx(lo / w0, rel=1e-5) and high == upper == pytest.approx(hi / w0, rel=1e-5)
+
+    # copied: a lower multiplier inside the named range measures some probes, and says how many not
+    caplog.clear()
+    fdt_pipeline.run_fdt(_Cfg((0.9 * high, 30.0)), skip_sanity=True, confirm_production=True)
+    assert warned() == [f"4/5 probe frequencies fall outside the band the spontaneous spectrum resolves "
+                        f"({lo:g}..{hi:g} ND) and are blank in the ratio."], warned()
+    # ...and an upper multiplier below the named bound measures all of them
+    caplog.clear()
+    fdt_pipeline.run_fdt(_Cfg((high / 4, 0.99 * upper)), skip_sanity=True, confirm_production=True)
+    assert warned() == [], warned()
+
+    # a diverged spontaneous campaign: nothing is finite, the probes sit INSIDE the resolved band
+    finite[0] = False
+    with pytest.raises(Refusal) as e:
+        fdt_pipeline.run_fdt(_Cfg((2.0, 4.0)), skip_sanity=True, confirm_production=True)
+    msg = str(e.value)
+    assert e.value.field == "freq_bounds", e.value.field
+    assert "has no value at any of the 5 probe frequencies" in msg, msg
+    assert "Nyquist" not in msg and "multiplier" not in msg, f"a false sentence about the top: {msg}"
 
 
 def test_fdt_support_gate():

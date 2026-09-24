@@ -104,6 +104,40 @@ def warn_thin_settings(cfg: FDTConfig) -> list:
     return notices
 
 
+def _nothing_measurable(cfg, n_probes: int, omega_lo: float, lo_res: float, hi_res: float) -> str:
+    """The refusal's words when every probe frequency came back blank (spec §3.6, E4).
+
+    Every clause must be TRUE of the spectrum the run measured (the ruling after Task 14's review,
+    carried to every sentence about the resolution). By the time this is asked, the band check has
+    refused any grid reaching below the spectrum's first real bin, so a probe that blanks lies ABOVE
+    the spectrum's top -- and since the probes ascend, every probe blanks exactly when the lowest one
+    does. The resonance the grid is built around is itself a bin of the spectrum, so this happens only
+    when freq_bounds' lower multiplier exceeds top/omega_0, which is at least 1. Lowering the UPPER
+    multiplier alone would then bring no probe back, so the advice names the lower one first, with the
+    floor the band check enforces. The top is the Nyquist frequency pi/dt_nd, which the recording
+    length does not move, so a longer recording is named only to say it would not help: the one thing
+    a longer recording can lower is the BOTTOM, which is not what failed here (``_low_end_advice``
+    words that case).
+
+    The explanation is conditional on the lowest probe really lying above the top. The only other way
+    to get here is a spectrum with no finite value at all -- a spontaneous campaign that diverged --
+    whose probes sit INSIDE the resolved band, and there the Nyquist sentence would be false; the
+    first sentence alone is true in both cases.
+    """
+    what = "the one probe frequency" if n_probes == 1 else f"any of the {n_probes} probe frequencies"
+    msg = (f"The spontaneous spectrum has no value at {what}, so the effective-temperature ratio is "
+           f"unmeasurable here; the band it resolves is {lo_res:g}..{hi_res:g} (ND).")
+    if omega_lo > hi_res:
+        top = hi_res / cfg.omega_0
+        msg += (f" The lowest probe frequency, {omega_lo:g} (ND), is above that band's top, which is "
+                f"the spectrum's Nyquist frequency pi/dt_nd (dt_nd = {cfg.dt_nd:g}): only a shorter "
+                f"integration step raises it. Lower freq_bounds' lower multiplier into "
+                f"{lo_res / cfg.omega_0:g}..{top:g} for any probe to be measured, and its upper "
+                f"multiplier below {top:g} for all of them. Lengthening the spontaneous recording "
+                f"(psd_T_obs_nd = {cfg.psd_T_obs_nd:g}) would not help.")
+    return msg
+
+
 def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> None:
     """End-to-end FDT analysis. Runs sanity checks first; gates on the caller's answer before the
     production sweep.
@@ -179,6 +213,20 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     omegas = gen_freqs_log(cfg.omega_0, cfg.n_freqs, cfg.freq_bounds,
                             cfg.hw.device, cfg.hw.dtype)
 
+    # The spectrum's own picture goes to disk BEFORE the band check and the driven campaign, because
+    # it is what diagnoses both refusals that can follow -- a band reaching below what the spectrum
+    # resolves (just below) and nothing measurable (after the drive) -- and E2 keeps the folder it is
+    # written into (spec §3.6, P22). It used to be written at the very end, where neither refusal
+    # could ever reach it.
+    psd_path = _out_dir() / f"psd_{timestamp}.png"
+    plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
+              save_path=psd_path,
+              title=f"Spontaneous PSD (Campaign 1): ND {cfg.model}",
+              omega_natural=omega_natural,
+              plot_band=(cfg.omega_0 * cfg.freq_bounds[0],
+                          cfg.omega_0 * cfg.freq_bounds[1]))
+    log.info(f"Saved spontaneous PSD plot to: {psd_path}")
+
     # The band, checked the first moment it is knowable and BEFORE the driven campaign -- the
     # expensive half of the run (spec §3.4). The grid's lowest frequency is known only now, because
     # it is built around the resonance Campaign 1 found; the spectrum's lowest RESOLVED frequency is
@@ -189,7 +237,7 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     # field="freq_bounds" (P2, P75): the key is registered and BOTH front-end tables map it to None,
     # because neither the band nor the spontaneous duration is exposed by a front end -- so no table
     # offers a fix sentence and none pretends to.
-    lo_res, _hi_res = _resolved_span(freqs_psd)
+    lo_res, hi_res = _resolved_span(freqs_psd)
     omega_lo = float(omegas[0])
     if omega_lo < lo_res:
         raise Refusal(
@@ -206,21 +254,28 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     # 7. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y)
     G_at_omegas = _interp_log(omegas, freqs_psd, G)
 
+    # Nothing measurable is a refusal, not an empty picture (spec §3.6, E4). A probe the spontaneous
+    # spectrum does not resolve comes back blank; when EVERY probe is blank there is no ratio, and
+    # this used to divide blanks by blanks, save a figure with no points on it and report success.
+    # The low end is gated above, so what stays reachable here is the UPPER end: the grid tops out at
+    # freq_bounds[1]*omega_0 against a spectrum Nyquist of pi/dt_nd, which an active cell can exceed
+    # (spec §3.5). `blanks` and `of` are what T17 records as body.offgrid. Keyed "freq_bounds" like
+    # the band refusal above (F37): the same subject, and no front end offers a fix sentence for it.
+    blanks, of = int(torch.isnan(G_at_omegas).sum()), G_at_omegas.numel()
+    if blanks == of:
+        raise Refusal(_nothing_measurable(cfg, of, omega_lo, lo_res, hi_res), field="freq_bounds")
+    if blanks:
+        log.warning(f"{blanks}/{of} probe frequencies fall outside the band the spontaneous spectrum "
+                    f"resolves ({lo_res:g}..{hi_res:g} ND) and are blank in the ratio.")
+
     # 8. T_eff/T -- the per-model normalization prefactor (Nadrowski n*beta, else 1/D_x) was
     #    resolved at the top of this function, before anything was spent.
     ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), prefactor)
 
-    # 9. Plot + save (timestamp set at the top of run_fdt)
+    # 9. Plot + save (timestamp set at the top of run_fdt; the PSD went to disk before Campaign 2)
     ratio_path = _out_dir() / f"fdt_ratio_{timestamp}.png"
     chi_path = _out_dir() / f"chi_components_{timestamp}.png"
-    psd_path = _out_dir() / f"psd_{timestamp}.png"
 
-    plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
-              save_path=psd_path,
-              title=f"Spontaneous PSD (Campaign 1): ND {cfg.model}",
-              omega_natural=omega_natural,
-              plot_band=(cfg.omega_0 * cfg.freq_bounds[0],
-                          cfg.omega_0 * cfg.freq_bounds[1]))
     plot_eff_temp_ratio(omegas.cpu().numpy(), ratio.cpu().numpy(),
                         save_path=ratio_path,
                         title=f"FDT violation: ND {cfg.model} (cell file defaults)",
@@ -229,4 +284,4 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
                         save_path=chi_path,
                         title=fr"Susceptibility components: ND {cfg.model}",
                         omega_natural=omega_natural)
-    log.info(f"Saved plots to:\n  {psd_path}\n  {ratio_path}\n  {chi_path}")
+    log.info(f"Saved plots to:\n  {ratio_path}\n  {chi_path}")
