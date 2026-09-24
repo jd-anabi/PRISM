@@ -2,6 +2,7 @@
 progress pane + log pane), plus ``dispatch()`` to run a callable on a background worker with its
 output wired to those widgets."""
 import weakref
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QThreadPool, QTimer, Signal
 from PySide6.QtWidgets import (QHBoxLayout, QMessageBox, QPushButton, QScrollArea, QSplitter,
@@ -213,7 +214,9 @@ class BasePanel(QWidget):
 
         ``watch_dir`` is for the FDT / Reduction / CrossVal runners, which save their figures to disk
         instead of handing them back: any PNG appearing there during the run is picked up and shown
-        (see core/gui/plot_watcher.py).
+        (see core/gui/plot_watcher.py). It is one path, or a SEQUENCE of them -- the sweep study
+        writes two records and its figures land in two ``figures/`` directories (spec §4.1) -- and
+        every watcher feeds the same figure stack, in the order the files land.
         """
         if BasePanel._running:
             where = "in this tab" if self._busy else "in another tab"
@@ -221,11 +224,16 @@ class BasePanel(QWidget):
                 f"A task is already running ({where}); please wait for it to finish.", "warning")
             return
 
-        watcher = None
-        if watch_dir is not None:
-            watcher = NewPngWatcher(watch_dir, self)
+        # ONE watcher per directory. NewPngWatcher globs a single directory and does not recurse, and
+        # the sweep study writes into TWO records (spec §4.1), so a sequence is a real shape here --
+        # a lone path stays a lone path, which is what every other caller passes.
+        watchers = []
+        for one_dir in ([] if watch_dir is None else
+                        [watch_dir] if isinstance(watch_dir, (str, Path)) else list(watch_dir)):
+            watcher = NewPngWatcher(one_dir, self)
             watcher.png_ready.connect(self.figure_stack.add_png)
             watcher.start()
+            watchers.append(watcher)
 
         self._cancel = CancelToken()
         BasePanel._active_cancel = self._cancel
@@ -257,9 +265,9 @@ class BasePanel(QWidget):
             worker.signals.result.connect(on_result)
 
         def _finished():
-            if watcher is not None:
-                watcher.stop()          # one last scan: the final figure often lands right at the end
-                watcher.deleteLater()
+            for w in watchers:
+                w.stop()                # one last scan: the final figure often lands right at the end
+                w.deleteLater()
             self._set_busy(False)
             self._workers.discard(worker)
             # Release the PAYLOAD explicitly. discard() is not a lifetime bound: QThreadPool.start()

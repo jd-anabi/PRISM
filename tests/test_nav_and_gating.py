@@ -223,6 +223,34 @@ def test_plot_watcher_only_reports_pngs_written_after_start():
 
         assert seen == [("fdt3d vs S", "fdt3d_vs_S_20260714_120301.png")], seen
 
+def test_dispatch_watches_every_directory_it_is_given(tmp_path):
+    """Spec §4.1 makes the sweep study write TWO records, so its figures land in two separate
+    ``figures/`` directories -- and NewPngWatcher globs ONE directory and does not recurse
+    (core/gui/plot_watcher.py: ``self._dir.glob("*.png")``). One watcher would therefore show the S
+    sweep's plot and silently lose the T sweep's, which is the half of a long study you waited
+    longest for.
+
+    A single path still means one watcher, because every other caller passes one."""
+    from pathlib import Path
+    from core.gui.panels.base_panel import BasePanel
+    from tests._fixtures import qt_app
+
+    app = qt_app()
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.mkdir(); b.mkdir()
+    panel = BasePanel()
+    seen = []
+    panel.figure_stack.add_png = lambda title, path: seen.append((title, Path(path).name))
+    panel.dispatch(lambda: None, watch_dir=[a, b])
+    (a / "fdt3d_vs_S_20260922_120000.png").write_bytes(b"s")
+    (b / "fdt3d_vs_T_20260922_130000.png").write_bytes(b"t")
+    # `finished` is QUEUED to this thread; `_finished` stops BOTH watchers and each stop() does the
+    # final scan that ignores the settle delay. Wait for it as the module's other dispatch tests do,
+    # so BasePanel._running is False again before the next test dispatches anything.
+    _wait_for_run(app, panel, limit=30.0)
+    assert sorted(n for _t, n in seen) == ["fdt3d_vs_S_20260922_120000.png",
+                                           "fdt3d_vs_T_20260922_130000.png"], seen
+
 # ── PRISM navigation redesign ────────────────────────────────────────────────────────────────────
 def test_greeting_maps_hours_to_time_of_day():
     from core.gui.screens.home_screen import greeting
@@ -2105,6 +2133,325 @@ def test_the_fdt_panel_names_the_record_its_run_wrote(tmp_path):
     assert panel.record_picker.key() == record.id, "the picker must move onto the run just written"
 
 
+def test_the_crossval_panel_creates_one_writer_per_swept_parameter(tmp_path):
+    """Spec §4.1 and E4. The study sweeps two parameters and now writes a record for each, so the
+    panel creates TWO writers and hands them over keyed by the same names ``run_fdt_param_sweep``
+    already uses for ``sweep_param`` -- "s" and "temp". One record would put an all-failed activity
+    sweep and a good temperature sweep in one folder with one ``points`` block, which is precisely the
+    coupling E4 removes: before piece 5 an all-failed S sweep raised before the T sweep even started.
+
+    The base name is suffixed per parameter (``-s``, ``-temp``, P31), because two records cannot hold
+    one name: a name is claimed at create() and a progressive record holds it from its first moment
+    (spec §2.2) -- and ``assert_name_free`` reads only the disk, so two creates of ONE name before
+    either is entered would both pass; the distinct suffixes are what keep that unreachable from the
+    window. Both ``figures/`` directories are watched (one watcher each), and neither directory
+    exists yet -- __enter__ on the worker thread is what creates them.
+
+    The Seed box is read ONCE and the same value reaches the builder (``cfg.seed``), the run and both
+    first bodies; a BLANK box is None in all three (E7), never a seed of 0 nobody typed. A blank name
+    gives two unnamed records, which must still be two ids and two folders (F4: back-to-back creates
+    used to mint one id, so the temperature sweep's folder collided after the whole activity sweep)."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.FDT.cross_validation import run_param_study_cli
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from tests._fixtures import qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    cap = {}
+    with use_store(store):
+        panel = CrossValPanel()
+        panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
+        panel.seed.setText("99")
+        panel.record_name.setText("study_one")
+        panel.record_note.setText("both halves")
+        panel._run()
+
+    assert cap, "nothing was dispatched"
+    assert cap["fn"] is run_param_study_cli, cap["fn"]
+    writers = cap["kwargs"]["writers"]
+    assert sorted(writers) == ["s", "temp"], sorted(writers)
+    assert [writers[k].name for k in ("s", "temp")] == ["study_one-s", "study_one-temp"]
+    assert writers["s"].id != writers["temp"].id, "two records minted one id (F4)"
+    assert all(w.kind == "fdt" and w.note == "both halves" for w in writers.values())
+    assert cap["kwargs"]["seed"] == 99
+    cfg = cap["args"][0]
+    assert cfg.seed == 99, "the builder's half: the dispatched config carries the seed"
+    assert cfg.preset_name == panel.preset_combo.currentText(), \
+        "the preset's NAME must reach the record's settings (T11, P72)"
+    assert all(w.body["study"] == "sweep" and w.body["seed"] == 99 for w in writers.values())
+    assert all(w.body["complete"] is False and w.body["notices"] == [] for w in writers.values())
+    assert all(w.body[k] is None for w in writers.values()
+               for k in ("settings", "grid", "points", "offgrid", "compared", "results")), \
+        "the stage fills the rest (P15)"
+    assert cap["kwargs"]["watch_dir"] == [writers["s"].dir / "figures",
+                                          writers["temp"].dir / "figures"]
+    assert not any(w.dir.exists() for w in writers.values()), \
+        "create() must not touch the disk; the stage's __enter__ does the mkdir"
+    assert "s_grid" in cap["kwargs"] and "t_grid" in cap["kwargs"], \
+        f"the grids travel as keywords now (T19's signature): {sorted(cap['kwargs'])}"
+
+    # A blank name and a blank Seed box: two unnamed records in two folders, and None everywhere
+    cap.clear()
+    with use_store(store):
+        panel.record_name.setText("")
+        panel.seed.setText("")
+        panel._run()
+    blank = cap["kwargs"]["writers"]
+    assert [blank[k].name for k in ("s", "temp")] == ["", ""]
+    assert blank["s"].id != blank["temp"].id and blank["s"].dir != blank["temp"].dir, \
+        "two unnamed records share one folder (F4)"
+    assert cap["kwargs"]["seed"] is None, "a blank box must not reach the run as a seed of 0"
+    assert cap["args"][0].seed is None, "a blank box must not reach the builder as a seed of 0"
+    assert all(w.body["seed"] is None for w in blank.values()), \
+        "the panel records what it knows; the study records the seed it draws"
+
+
+def test_a_taken_crossval_record_name_is_refused_at_the_click(tmp_path):
+    """Review Focus 2, for the study's SECOND name. The two creates sit inside the builder's ``try``,
+    so a taken name -- here only the temperature sweep's, ``<base>-temp`` -- is the StoreError
+    (field "name") of the yellow box rather than a raw traceback out of the clicked slot, and it is
+    raised before anything is dispatched. The activity sweep's writer was already created by then,
+    but create() writes nothing, so the refused click leaves no folder behind."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        taken = store.create("fdt", None, name="study_one-temp")
+        taken.body = {"study": "sweep", "settings": {}, "seed": 1, "grid": None, "points": None,
+                      "offgrid": None, "notices": [], "compared": None, "complete": False,
+                      "results": None}
+        taken.__enter__()                   # the record now exists, unfinished, holding its name
+
+        panel = CrossValPanel()
+        panel.dispatch = lambda *a, **k: pytest.fail("a refused click dispatched a run anyway")
+        panel.record_name.setText("study_one")
+        SHOWN.clear()
+        panel._run()
+
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert "study_one-temp" in box.text(), box.text()
+    assert box.informativeText() == gui_fields.fix_sentence("name")
+    assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
+    assert len(list((tmp_path / "fdt").iterdir())) == 1, "the refused click left a second directory"
+
+
+@pytest.mark.parametrize("grid", ["s_grid", "t_grid"])
+@pytest.mark.parametrize("box", ["lo", "hi", "points"])
+def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, grid, box):
+    """Review Focus 3, carried from Task 8's review. The grid row used to read its three boxes with
+    value(), which turns a blank into 0 -- and 0 is a legal END of a sweep, so no rule the builder
+    could write refuses it: a blank min under a positive max arrived as (0.0, 1.5, n) and passed
+    "min below max", running a sweep nobody typed (for the temperature grid, one starting below the
+    bounds' own 0.05 floor). Each box is now read through value_or_none(), so a blank end reaches
+    cli._check_grid as None and is refused as blank, and a blank count as fewer than 2 points --
+    either way the yellow box, the refusal naming THAT grid, and nothing dispatched or minted."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.refusals import describe
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        panel = CrossValPanel()
+        panel.dispatch = lambda *a, **k: pytest.fail("a blank grid box dispatched a run anyway")
+        row = getattr(panel, grid)
+        assert all(v is not None for v in row.spec_or_none()), "the default grid is already blank"
+        getattr(row, box).setText("")
+        SHOWN.clear()
+        panel._run()
+
+    assert SHOWN, "a blank grid box reached no box"
+    shown = SHOWN[-1]
+    assert shown.windowTitle() == "Check your inputs" and shown.icon() == QMessageBox.Warning
+    what = describe(grid)
+    assert shown.text().startswith(what[0].upper() + what[1:]), shown.text()
+    assert ("at least 2 points" if box == "points" else "is blank") in shown.text(), shown.text()
+    assert shown.informativeText() == gui_fields.fix_sentence(grid)
+    assert not (tmp_path / "fdt").exists()
+
+
+def test_the_crossval_panel_fills_each_grid_in_ascending_order(tmp_path):
+    """Carried from Task 8's review. Each sweep runs from its FDT-restoring limit to the cell's own
+    value, and the panel used to fill the ends in THAT order: the temperature grid as lo=1, hi=the
+    cell's T_a/T. The bounds allow T_a/T anywhere in (0.05, 10), so for a cell below 1 the panel's own
+    untouched default was descending and "min below max" (spec §4.4) refused it -- a cell nobody could
+    sweep without retyping two boxes. The ends are now filled in ascending order; the sweep covers
+    the same points either way.
+
+    The cell is a copy of a real one with only T_a/T changed, written into this test's own directory
+    (never into Resources/); a cell outside the model folder resolves the model's master bounds file,
+    as a new cell dropped in there would."""
+    import numpy as np
+    from core.artifacts import ArtifactStore, use_store
+    from core.config import CELL_PATH
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    text = (CELL_PATH / "nadrowski" / "master_spont.txt").read_text(encoding="utf-8")
+    assert "temp = 1.5" in text and "s = 0.95" in text, "the source cell changed: re-derive this test"
+    cell = tmp_path / "nadrowski" / "cool_cell.txt"
+    cell.parent.mkdir()
+    cell.write_text(text.replace("temp = 1.5", "temp = 0.5"), encoding="utf-8")
+
+    cap = {}
+    with use_store(ArtifactStore(tmp_path / "store")):
+        panel = CrossValPanel()
+        panel.cell_picker.selected_path = lambda: str(cell)
+        panel._on_cell_changed()
+        assert "T_a/T = 0.5000" in panel.cell_values.text(), panel.cell_values.text()
+        assert panel.t_grid.spec_or_none()[:2] == (0.5, 1.0), panel.t_grid.spec_or_none()
+        assert panel.s_grid.spec_or_none()[:2] == (0.0, 0.95), panel.s_grid.spec_or_none()
+        panel.dispatch = lambda fn, *a, **k: cap.update(kwargs=k)
+        SHOWN.clear()
+        panel._run()
+
+    assert not SHOWN, [(b.windowTitle(), b.text()) for b in SHOWN]
+    t_grid = cap["kwargs"]["t_grid"]
+    assert t_grid[0] == 0.5 and t_grid[-1] == 1.0 and np.all(np.diff(t_grid) > 0), t_grid
+
+
+@pytest.mark.parametrize("how", ["too_long", "two_lines"])
+def test_a_crossval_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
+    """Carried from Task 25's fix round. The store does not judge a note's text
+    (``ArtifactStore.set_note``'s docstring) and every front end runs ``core.refusals.require_note``
+    before it writes one: ONE line, at most NOTE_MAX_CHARS. The CrossVal panel writes its note onto
+    BOTH records, so an unjudged one would put two notes on disk that the Artifacts screen's own Set
+    button refuses to write back.
+
+    The refusal is an input refusal: the yellow box, the rule's own sentence, the fix line naming the
+    'Note' box on this tab, nothing dispatched and no id minted -- the note is judged before either
+    ``create``."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.refusals import NOTE_MAX_CHARS
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    monkeypatch.setattr(store, "create",
+                        lambda *a, **k: pytest.fail("a refused note still minted a record"))
+    with use_store(store):
+        panel = CrossValPanel()
+        panel.dispatch = lambda *a, **k: pytest.fail("a refused note dispatched a run anyway")
+        if how == "too_long":
+            panel.record_note.setText("n" * (NOTE_MAX_CHARS + 1))
+            said = f"must be at most {NOTE_MAX_CHARS} characters"
+        else:
+            panel.record_note.insert("first line\nsecond line")
+            assert "\n" in panel.record_note.text(), "the line edit dropped the break: nothing is tested"
+            said = "must be one line"
+        SHOWN.clear()
+        panel._run()
+
+    assert SHOWN, "a refused note reached no box"
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, how
+    assert said in box.text(), box.text()
+    assert box.informativeText() == gui_fields.fix_sentence("note")
+    assert "'Note'" in box.informativeText()
+    assert "Sweep study cross-validation" in box.informativeText(), box.informativeText()
+    assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
+    assert not (tmp_path / "fdt").exists() or not any((tmp_path / "fdt").iterdir())
+
+
+@pytest.mark.parametrize("s_refused", [False, True], ids=["both_finish", "s_measured_nothing"])
+def test_the_crossval_window_shows_both_records_figures_and_names_them(tmp_path, monkeypatch,
+                                                                       s_refused):
+    """F18, carried from Task 19's and Task 20's reviews, and F46. The study writes two records, and
+    each sweep plots itself into its OWN record's ``figures/`` when it finishes (spec §4.1) -- so a
+    panel that watched one directory showed the S sweep's figure and never the T sweep's, the half of
+    a long study that arrives last. One watcher per record is how both reach the figure stack, with no
+    worker-to-window signal (F18).
+
+    The second case is the study E4 exists for: the activity sweep measured nothing and refused, its
+    record kept unfinished (E2), and the temperature sweep finished. The window then shows T's figure
+    -- the S directory lists nothing -- and no box, because the study itself did not fail.
+
+    Driven through the real dispatch, the real watchers and the real ``run_param_study_cli`` on the
+    worker thread; only the per-sweep physics (``run_fdt_param_sweep``) is stood in for, by a stage
+    that keeps its contract: it enters its writer on the worker thread and plots into the record's
+    own ``figures/``. The panel must then NAME what the study wrote (F46) -- by name and id, since an
+    unnamed record has only the id -- and move the saved-sweep picker onto the last finished record."""
+    from pathlib import Path
+    from core.artifacts import ArtifactStore, use_store
+    from core.FDT import cross_validation
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.refusals import Refusal
+    from tests._fixtures import SHOWN, PaneCapture, qt_app
+
+    app = qt_app()
+
+    def sweep(cfg, sweep_param, sweep_grid, fixed_overrides=None, *, writer):
+        writer.body.update(settings={}, points={"param": sweep_param, "planned": len(sweep_grid),
+                                                "done": 0, "failed": 0})
+        with writer:
+            writer.payload("data.h5").write_bytes(b"spectra")
+            if s_refused and sweep_param == "s":
+                raise Refusal("The s sweep measured nothing.", field="s_grid")
+            writer.figure_path(f"FDT ratio vs {sweep_param}").write_bytes(b"png")
+            writer.body["complete"] = True
+        return writer.store.load_fdt(writer.id)
+
+    monkeypatch.setattr(cross_validation, "run_fdt_param_sweep", sweep)
+    store = ArtifactStore(tmp_path)
+    cap = {}
+    with use_store(store):
+        panel = CrossValPanel()
+        pane = PaneCapture(panel)
+        seen = []
+        panel.figure_stack.add_png = lambda title, path: seen.append(Path(path))
+        real_dispatch = panel.dispatch
+
+        def spy(fn, *a, **k):
+            cap.update(k)
+            return real_dispatch(fn, *a, **k)
+
+        panel.dispatch = spy
+        panel.record_name.setText("study_one")
+        panel.seed.setText("7")
+        SHOWN.clear()
+        panel._run()
+        assert cap, "nothing was dispatched"
+        _wait_for_run(app, panel, limit=60.0)
+
+    assert SHOWN == [], [(b.windowTitle(), b.text()) for b in SHOWN]
+    writers = cap["writers"]
+    s_fig = writers["s"].dir / "figures" / "fdt_ratio_vs_s.png"
+    t_fig = writers["temp"].dir / "figures" / "fdt_ratio_vs_temp.png"
+    finished = [writers["temp"]] if s_refused else [writers["s"], writers["temp"]]
+    if s_refused:
+        assert seen == [t_fig], f"the window must show the T sweep's figure: {seen}"
+    else:
+        assert sorted(seen) == sorted([s_fig, t_fig]), f"both records' figures must arrive: {seen}"
+
+    # Ids BRACKETED, as the line prints them: two ids minted in one second differ only by a suffix
+    # ("...T145600" and "...T145600-2"), so a bare id is a substring of its sibling's.
+    said = [text for _level, text in pane.lines]
+    for w in finished:
+        assert any(w.name in text and f"[{w.id}]" in text for text in said), (w.name, said)
+    if s_refused:
+        assert not any(f"[{writers['s'].id}]" in text for text in said), \
+            f"the refused sweep's unfinished record was named as written: {said}"
+    combo = panel.record_picker.combo
+    assert [combo.itemData(i) for i in range(combo.count())] == [w.id for w in finished], \
+        "the picker offers the FINISHED sweeps only"
+    assert panel.record_picker.key() == writers["temp"].id, \
+        "the picker must move onto the last record the study wrote"
+
+
 def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
     """V5 §5.2. The χ drive amplitude and band are MEASUREMENTS (config.py:541-573), not per-run
     choices: since D11 any other value is refused by build_prior seconds after Apply, so a box that
@@ -3034,20 +3381,13 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     assert tuples, "the control table has no (tab, label) entries"
     for key in ("drive_amplitude", "drive_frequency", "drive_phase"):
         assert key in tuples, f"{key} must be a (tab, label) entry so the read-back covers the drive rows"
-    # A row a CONTROL entry names before the panel that shows it is built. Each entry must be ABSENT
-    # from its tab, so the task that builds the row turns this red and deletes its own line (T25
-    # deleted the FDT analysis Seed row's; T26: the Sweep study cross-validation one). An exemption
-    # cannot outlive its row.
-    _NOT_BUILT_YET = {("seed", "Sweep study cross-validation")}
-    for key, name in _NOT_BUILT_YET:
-        assert labels.pretty_gui(gui_fields.label(key)) not in seen[name], \
-            f"{key} now has its row on {name}: delete its _NOT_BUILT_YET entry"
+    # No exemptions: the two Seed rows Task 9 named before their panels had them were built by T25
+    # (FDT analysis) and T26 (Sweep study cross-validation), each deleting its _NOT_BUILT_YET line,
+    # and with both gone every entry is read back off its tab.
     missing = []
     for key, (tab, text) in tuples.items():
         for name in (tab if isinstance(tab, tuple) else (tab,)):   # the budget boxes name two tabs
             assert name in seen, f"{key}: CONTROL names a place that does not exist: {name!r}"
-            if (key, name) in _NOT_BUILT_YET:
-                continue
             if labels.pretty_gui(text) not in seen[name]:
                 missing.append((key, name, text))
     assert not missing, f"CONTROL names labels no tab shows: {missing}\nshown: {seen}"

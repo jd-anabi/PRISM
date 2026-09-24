@@ -9,22 +9,23 @@ FDT.cross_validation.run_param_study_cli on a worker. Model is fixed to NADROWSK
 """
 import traceback
 
-from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton,
-                               QWidget)
+from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+                               QPushButton, QWidget)
 
-from core import cli, config
+from core import cli
 from core.config import CELL_PATH
-from core.refusals import Refusal
+from core.refusals import Refusal, require_note
 from core.FDT.cross_validation import run_param_study_cli
 from core.artifacts import default_store
 
 from .base_panel import BasePanel
 from .. import settings
-from ..widgets.artifact_picker import ArtifactPicker
+from ..widgets.artifact_picker import ArtifactPicker, StorePicker
 from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField, IntField
 from ..widgets.field_row import LabeledFieldRow
 from ..widgets.forms import make_form
+from .. import fields as gui_fields
 
 _MODEL = "NADROWSKI"
 
@@ -37,6 +38,15 @@ HELP = {
     "ensemble_M": "Ensemble size: independent trajectories averaged per frequency.",
     "freqs_per_batch": "How many frequencies to simulate per batch (memory/speed; results identical).",
     "f0": "Non-dimensional forcing amplitude used to probe χ(ω) at each sweep point.",
+    "seed": "The seed this study uses. Leave it blank to draw one — whichever is used is recorded on "
+            "BOTH of the study's records, and each operating point derives its own stream from it, so "
+            "a point is reproducible from the seed and its index.",
+    "record_name": "A base name for the two records this study writes: '-s' and '-temp' are appended, "
+                   "one per swept parameter. Both names are claimed before anything is computed. "
+                   "Leave it blank for two unnamed records.",
+    "record_note": "Kept with both records and shown in the Artifacts browser.",
+    "record": "An earlier sweep from the artifact store. Selecting one shows its cell, its settings, "
+              "its seed and its notices, and re-opens its figures.",
 }
 
 
@@ -47,8 +57,16 @@ class _GridRow(LabeledFieldRow):
         self.lo, self.hi, self.points = FloatField(lo), FloatField(hi), IntField(points)
         super().__init__((("min", self.lo), ("max", self.hi), ("n", self.points)), parent=parent)
 
-    def spec(self) -> tuple:
-        return self.values()
+    def spec_or_none(self) -> tuple:
+        """``(min, max, n)``, each None when its box is blank.
+
+        Every box through value_or_none(), never value(): 0 is a legal END of a sweep (the activity
+        sweep starts at S = 0), so a blank read as 0 is not refused by any rule the builder could
+        write -- a blank min under a positive max arrived as (0.0, 1.5, n) and passed "min below
+        max", running a sweep nobody typed, and for the temperature grid one that starts below the
+        bounds' own floor. A None end is refused by cli._check_grid as blank, naming the grid; a None
+        count reaches it as "fewer than 2 points"."""
+        return self.lo.value_or_none(), self.hi.value_or_none(), self.points.value_or_none()
 
 
 class CrossValPanel(BasePanel):
@@ -57,9 +75,13 @@ class CrossValPanel(BasePanel):
     Model is fixed to NADROWSKI. Two sweeps -- S with T_a/T held at 1, and T_a/T with S held at 0 --
     each running from the FDT-restoring limit to the selected cell's own value.
 
-    Persists (group "crossval"): the cell picker, the preset, the free knobs (n_freqs, ensemble_M,
-    freqs_per_batch, F0) and each grid's point COUNT. Deliberately NOT the grids' lo/hi: those are
-    re-derived from the cell, so a value saved against a different cell would be a stale bound.
+    Persists (group "crossval"): the cell picker, the saved-sweep picker, the preset, the free knobs
+    (n_freqs, ensemble_M, freqs_per_batch, F0) and each grid's point COUNT. Deliberately NOT the
+    grids' lo/hi: those are re-derived from the cell, so a value saved against a different cell would
+    be a stale bound. Deliberately NOT the seed, the record name or the note either (E7, spec §5.5):
+    one seed is recorded on both of the study's records, so a remembered one would make every later
+    study a repeat of the last at every operating point, and a remembered name would be refused by
+    assert_name_free at the next launch's first click.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -90,21 +112,42 @@ class CrossValPanel(BasePanel):
         self.ensemble_m = IntField(256)
         self.freqs_per_batch = IntField(1)
         self.f0 = FloatField(0.05)
+        # ONE seed for the study, recorded on BOTH records (spec §4.1); blank draws one. Never
+        # restored -- see the class docstring.
+        self.seed = IntField(0)
+        self.seed.clear()
+        self.record_name = QLineEdit()
+        self.record_name.setPlaceholderText("base name for this study's two records (optional)…")
+        self.record_note = QLineEdit()
+        self.record_note.setPlaceholderText("a note to keep with both (optional)…")
+        # Earlier sweeps: filtered to this screen's own study by the row predicate -- the kind also
+        # holds single-cell runs and comparisons (spec §5.4) -- and to finished records by StorePicker
+        # itself (T24).
+        self.record_picker = StorePicker("fdt", row_filter=lambda s: s.study == "sweep")
 
         self.btn_run = QPushButton("Run sweep study")
         self.btn_run.setProperty("accent", True)          # primary CTA (Fluent accent)
         self.btn_run.clicked.connect(self._run)
 
+        # Row labels come from core/gui/fields.py (P34), so a row and the fix sentence a refusal prints
+        # for it cannot drift apart. "Cell values", "Record name", "Note" and "Saved sweep" stay
+        # literal: the first is an output, `name` and `note` are sentence entries (label() raises
+        # KeyError for them) and the saved-sweep picker is not a refusal field.
         form.addRow(QLabel(f"Model is fixed to {_MODEL}."))
-        add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
+        add_help_row(form, gui_fields.label("cell"), self.cell_picker, HELP["cell"])
         form.addRow("Cell values", self.cell_values)          # an output display, not a configurable input
-        add_help_row(form, "Preset", self.preset_combo, HELP["preset"])
-        add_help_row(form, "S grid  (T_a/T = 1)", self.s_grid, HELP["s_grid"])
-        add_help_row(form, "T_a/T grid  (S = 0)", self.t_grid, HELP["t_grid"])
-        add_help_row(form, "n_freqs", self.n_freqs, HELP["n_freqs"])
-        add_help_row(form, "ensemble_M", self.ensemble_m, HELP["ensemble_M"])
-        add_help_row(form, "freqs_per_batch", self.freqs_per_batch, HELP["freqs_per_batch"])
-        add_help_row(form, "F0 (ND forcing amplitude)", self.f0, HELP["f0"])
+        add_help_row(form, gui_fields.label("preset"), self.preset_combo, HELP["preset"])
+        add_help_row(form, gui_fields.label("s_grid"), self.s_grid, HELP["s_grid"])
+        add_help_row(form, gui_fields.label("t_grid"), self.t_grid, HELP["t_grid"])
+        add_help_row(form, gui_fields.label("n_freqs"), self.n_freqs, HELP["n_freqs"])
+        add_help_row(form, gui_fields.label("ensemble_m"), self.ensemble_m, HELP["ensemble_M"])
+        add_help_row(form, gui_fields.label("freqs_per_batch"), self.freqs_per_batch,
+                     HELP["freqs_per_batch"])
+        add_help_row(form, gui_fields.label("f0"), self.f0, HELP["f0"])
+        add_help_row(form, gui_fields.label("seed"), self.seed, HELP["seed"])
+        add_help_row(form, "Record name", self.record_name, HELP["record_name"])
+        add_help_row(form, "Note", self.record_note, HELP["record_note"])
+        add_help_row(form, "Saved sweep", self.record_picker, HELP["record"])
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)
@@ -128,11 +171,13 @@ class CrossValPanel(BasePanel):
         cell_s = float(params["s"][0])
         cell_temp = float(params["temp"][0])
         self.cell_values.setText(f"S = {cell_s:.4f},  T_a/T = {cell_temp:.4f}")
-        # The sweeps run FROM the FDT-restoring limit TO the cell's own value.
-        self.s_grid.lo.setText("0.0")
-        self.s_grid.hi.setText(f"{cell_s:g}")
-        self.t_grid.lo.setText("1.0")
-        self.t_grid.hi.setText(f"{cell_temp:g}")
+        # Each sweep spans the FDT-restoring limit (S = 0, T_a/T = 1) and the cell's own value, filled
+        # in ASCENDING order: the bounds allow T_a/T anywhere in (0.05, 10), so "limit first" made the
+        # untouched default descending for any cell below 1, and the builder refuses a grid whose
+        # min is not below its max (spec §4.4). The sweep covers the same points either way.
+        for row, limit, value in ((self.s_grid, 0.0, cell_s), (self.t_grid, 1.0, cell_temp)):
+            row.lo.setText(f"{min(limit, value):g}")
+            row.hi.setText(f"{max(limit, value):g}")
 
     def _on_preset_changed(self, name: str):
         preset = cli.SWEEP_PRESETS[name]
@@ -146,13 +191,36 @@ class CrossValPanel(BasePanel):
         if not cell:
             self.log_pane.append_line("Select a cell file first.", "warning")
             return
-        preset = dict(cli.SWEEP_PRESETS[self.preset_combo.currentText()])
+        preset_name = self.preset_combo.currentText()
+        preset = dict(cli.SWEEP_PRESETS[preset_name])
+        # The four knob boxes use value(): a blank reads as 0 and the BUILDER refuses 0 by name
+        # (T11), which is the one wording both front ends inherit. The grid rows and the seed cannot:
+        # 0 is a legal sweep END and a legal seed, so a blank must arrive as None -- a grid end is
+        # then refused as blank (spec_or_none), and a blank seed means "draw one" (E7). The seed is
+        # read ONCE and the same value goes to the builder, the run and both first bodies.
+        seed = self.seed.value_or_none()
+        base = self.record_name.text().strip()
         try:
             cfg, s_grid, temp_grid = cli.make_param_sweep_config(
-                cell, preset=preset, preset_name=self.preset_combo.currentText(),
-                s_spec=self.s_grid.spec(), t_spec=self.t_grid.spec(),
+                cell, preset=preset, preset_name=preset_name,
+                s_spec=self.s_grid.spec_or_none(), t_spec=self.t_grid.spec_or_none(),
                 n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
-                freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value())
+                freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value(), seed=seed)
+            # The NOTE is judged before either create, because the store does not judge it
+            # (ArtifactStore.set_note): every front end runs require_note -- one line, at most
+            # NOTE_MAX_CHARS -- so this box cannot put a note on both records that the Artifacts screen
+            # would refuse to write back. It trims the text itself; a blank box comes back "".
+            note = require_note("note", self.record_note.text())
+            # ONE RECORD PER SWEPT PARAMETER (spec §4.1), keyed by the names run_fdt_param_sweep
+            # already uses as sweep_param. Two records cannot share one name -- and assert_name_free
+            # reads only the disk, so two creates of one name would both pass -- hence the distinct
+            # suffixes (P31). Both names are claimed here, before anything is spent, inside this try so
+            # a taken one reaches the yellow box; ONE store object mints both ids, so they differ
+            # (F4); and neither directory exists until the stage's __enter__ on the worker thread
+            # (spec §1.2).
+            store = default_store()
+            writers = {key: store.create("fdt", cfg, name=f"{base}-{key}" if base else "", note=note)
+                       for key in ("s", "temp")}
         except Refusal as e:                         # a setting the user can change: the yellow box
             self._refusal(e)
             return
@@ -160,26 +228,46 @@ class CrossValPanel(BasePanel):
             self._on_error(e, traceback.format_exc())
             return
 
-        # run_param_study_cli returns the two HDF5 DATA paths, not the figures -- the plots are saved
-        # to disk (the S-sweep one at the study's midpoint, deliberately) and arrive via the watcher.
-        # Two records, created here so the watcher knows both folders before the run is dispatched;
-        # each sweep enters its own on the worker thread (spec §1.2, §4.1). The watcher takes ONE
-        # directory and does not recurse, so it follows the S sweep's figures and the T sweep's arrive
-        # with the result line. T26 gives this panel its own picker and Seed box.
-        writers = {"s": default_store().create("fdt", cfg), "temp": default_store().create("fdt", cfg)}
-        self.dispatch(run_param_study_cli, cfg, s_grid=s_grid, t_grid=temp_grid, writers=writers,
-                      watch_dir=writers["s"].dir / "figures", on_result=self._on_result)
+        for w in writers.values():
+            # The facts the panel knows. The STAGE fills `settings`, `points`, `offgrid` and
+            # `results` and updates this dict in place -- replacing it would drop the study and the
+            # seed before the first manifest is written (spec §2.2, §2.3). `points.param` is the
+            # stage's too: the swept parameter is recorded once, there.
+            w.body = {"study": "sweep", "settings": None, "seed": seed, "grid": None,
+                      "points": None, "offgrid": None, "notices": [], "compared": None,
+                      "complete": False, "results": None}
+        # run_param_study_cli returns the records it FINISHED, not the figures -- each sweep plots
+        # itself into its own record's figures/ when it ends (the S sweep's at the study's midpoint),
+        # and the plots arrive through ONE WATCHER PER RECORD (F18): the watcher globs one directory
+        # and does not recurse, so both folders are handed over. A folder the T sweep never reached
+        # simply lists nothing.
+        self.dispatch(run_param_study_cli, cfg, s_grid=s_grid, t_grid=temp_grid,
+                      writers=writers, seed=seed,
+                      watch_dir=[writers["s"].dir / "figures", writers["temp"].dir / "figures"],
+                      on_result=self._on_result)
 
     def _on_result(self, records):
+        """The ``LoadedFdt`` records the study FINISHED, S first (E1: it used to return two loose
+        HDF5 paths). A sweep that measured nothing is left out of the list -- its unfinished record
+        stays on disk and the study has already logged it at error (P77, spec §4.3) -- and a None, were
+        one ever handed back, is dropped rather than named. The picker is re-listed and moved onto the
+        LAST record, so the panel's selection is the one whose figures finished the run -- see
+        FdtPanel._on_record for why that matters to T27's viewer."""
+        records = [r for r in (records or []) if r is not None]   # P77: one sweep may have refused
         if not records:
             return
-        for rec in records:
-            self.log_pane.append_line(f"Sweep record: {rec.name or rec.id} at {rec.path}")
+        for record in records:
+            self.log_pane.append_line(
+                f"Sweep record written: {record.name or '(unnamed)'} [{record.id}].")
+        self.record_picker.refresh()
+        self.record_picker.restore_key(records[-1].id)
 
     def save_settings(self, qs):
         qs.beginGroup("crossval")
         qs.setValue("preset", self.preset_combo.currentText())
         qs.setValue("cell", self.cell_picker.key())
+        qs.setValue("record", self.record_picker.key())
+        # The seed, the record name and the note belong to ONE study and are never written (E7).
         settings.save_field(qs, "f0", self.f0)
         settings.save_field(qs, "freqs_per_batch", self.freqs_per_batch)
         settings.save_field(qs, "s_points", self.s_grid.points)
@@ -192,6 +280,7 @@ class CrossValPanel(BasePanel):
         # currentIndexChanged fires _on_cell_changed, which sets the grid lo/hi from the cell file).
         self.preset_combo.setCurrentText(settings.get_str(qs, "preset", self.preset_combo.currentText()))
         self.cell_picker.restore_key(settings.get_str(qs, "cell"))
+        self.record_picker.restore_key(settings.get_str(qs, "record"))
         # Restore ONLY the freely-set knobs -- and after the cell, so a saved `points` survives. Do NOT
         # restore the grid lo/hi: those are re-derived from the cell (cli.make_param_sweep_config's inputs), and a saved
         # value from a DIFFERENT cell would be a stale, wrong bound.

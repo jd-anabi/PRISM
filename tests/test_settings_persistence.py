@@ -562,6 +562,74 @@ def test_crossval_does_not_persist_cell_derived_bounds():
     assert xv2.f0.value() == 0.077
     assert xv2.s_grid.hi.text() == derived_hi, "the grid bound must be RE-DERIVED, not restored"
 
+def test_the_crossval_panel_remembers_its_saved_sweep_pick_and_never_its_seed(monkeypatch):
+    """The CrossVal half of E7 and spec §5.5, with the same reasoning as the FDT panel's: the picker
+    is a selection and is restored, the study's one seed is not. Here the cost of a remembered seed is
+    larger -- one seed is recorded on BOTH of the study's records (spec §4.1), so a carried-over value
+    would make every later study a bitwise repeat of the last one at every operating point, and the
+    two sweeps would agree for a reason that has nothing to do with the physics.
+
+    The tail pins the rows' labels (P34): the nine registered rows are built from label(key), and the
+    two literal ones -- "Record name" and "Note", whose keys are sentence entries with no label() --
+    are read back off the form and must be the words the ``name`` and ``note`` fix sentences quote,
+    because the control-table read-back skips sentence entries and nothing else would catch a drift."""
+    import types
+    from PySide6.QtWidgets import QFormLayout, QLabel
+    from core.gui import fields as gui_fields
+    from core.gui import settings as st
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.widgets.artifact_picker import StorePicker
+    from tests._fixtures import qt_app
+
+    qt_app()
+    rows = [types.SimpleNamespace(complete=True, finished=True, study=study, label=label, id=label,
+                                  created="2026-09-22T12:00:00", mode=None, width=None,
+                                  amortized=None)
+            for study, label in (("sweep", "s_run"), ("sweep", "t_run"), ("single", "one_cell"))]
+    store = types.SimpleNamespace(list=lambda kind: list(rows) if kind == "fdt" else [])
+    monkeypatch.setattr(StorePicker, "_resolved_store", lambda self: store)
+    xv = CrossValPanel()
+    combo = xv.record_picker.combo
+    assert [combo.itemData(i) for i in range(combo.count())] == ["s_run", "t_run"], \
+        "the CrossVal picker must show sweeps only"
+    combo.setCurrentIndex(1)
+    xv.seed.setText("99")
+    xv.record_name.setText("study_one")
+    xv.f0.setText("0.077")
+
+    qs = st.settings()
+    xv.save_settings(qs)
+    qs.sync()
+    qs.beginGroup("crossval")
+    written = set(qs.childKeys())
+    qs.endGroup()
+    assert not (written & {"seed", "record_name", "record_note"}), sorted(written)
+
+    again = CrossValPanel()
+    assert again.record_picker.key() == "t_run"
+    assert again.f0.value() == 0.077, "the free knobs are still remembered (V5)"
+    assert again.seed.text() == "" and again.record_name.text() == ""
+
+    from tests._fixtures import code_only
+    src = code_only(CrossValPanel._build_controls)
+    for key in ("cell", "preset", "s_grid", "t_grid", "n_freqs", "ensemble_m", "freqs_per_batch",
+                "f0", "seed"):
+        assert f"label({key!r})" in src, f"the CrossVal panel must build its {key} row from label({key!r}) (P34)"
+
+    shown = []
+    for form in again.findChildren(QFormLayout):
+        for i in range(form.rowCount()):
+            item = form.itemAt(i, QFormLayout.LabelRole)
+            w = item.widget() if item is not None else None
+            lab = w if isinstance(w, QLabel) else (w.findChild(QLabel) if w is not None else None)
+            if lab is not None:
+                shown.append(lab.text())
+    for key, text in (("name", "Record name"), ("note", "Note")):
+        assert text in shown, f"the CrossVal panel shows no {text!r} row: {shown}"
+        assert f"'{text}'" in gui_fields.fix_sentence(key), \
+            f"the {key} fix sentence does not name the {text!r} box: {gui_fields.fix_sentence(key)!r}"
+        assert "Sweep study cross-validation" in gui_fields.fix_sentence(key), gui_fields.fix_sentence(key)
+
 def test_panel_splitter_is_sized_and_not_collapsible():
     """Every panel opens with a usable controls column that cannot be dragged to nothing.
 

@@ -458,8 +458,11 @@ def _check_grid(key: str, spec: tuple) -> tuple:
     """One sweep axis, ``(min, max, N)``, as ``np.linspace`` needs it: both ends finite, ``N`` a
     whole number of at least 2, and the minimum below the maximum (§4.4).
 
-    Checked as a WHOLE, because a blank field in the window's grid row reads as 0 -- a grid whose
-    'max' was never filled in arrives as ``(0.0, 0.0, 0)``, and neither end on its own is wrong.
+    Checked as a WHOLE, because an end is only wrong against the other one. A blank box must
+    therefore arrive as None, never as 0: 0 is a legal sweep end, so a blank read as 0 under a
+    positive max passes "min below max" as a sweep nobody typed. The window's grid row reads its
+    boxes through value_or_none (Task 26's ruling), so a blank end is refused here as blank and a
+    blank count as fewer than 2 points.
     """
     lo, hi, n = spec
     if n is None:
