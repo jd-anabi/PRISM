@@ -25,26 +25,51 @@ from core.FDT.plots import plot_eff_temp_ratio
 log = logging.getLogger(__name__)
 
 
+def _resolved_span(omegas: torch.Tensor) -> tuple[float, float]:
+    """The band a spectrum on ``omegas`` actually resolves: its first STRICTLY POSITIVE frequency to
+    its last.
+
+    A Welch grid's first entry is exactly 0.0 (``spectral.psd_welch``: ``rfftfreq``), and the zero
+    bin is the segment mean -- it is not a measurement at any positive frequency, so nothing may
+    interpolate from it. The lower end is therefore the SECOND entry of a Welch grid, and it is the
+    resolution the spontaneous recording bought: 2*pi/(nperseg*dt).
+
+    A grid with no positive bin resolves nothing, and returns an EMPTY band (+inf, -inf) rather than
+    raising -- every probe is then out of range, which is the truthful answer.
+    """
+    pos = omegas[omegas > 0]
+    if pos.numel() == 0:
+        return float("inf"), float("-inf")
+    return float(pos[0]), float(pos[-1])
+
+
 def _interp_log(x_new: torch.Tensor, x_old: torch.Tensor, y_old: torch.Tensor) -> torch.Tensor:
-    """1-D linear INTERPOLATION in log-x, NaN outside the grid. Aligns PSD onto the chi grid.
+    """1-D linear INTERPOLATION in log-x, NaN outside the RESOLVED span. Aligns PSD onto the chi grid.
 
     The clamp below bounds the INDEX, not the VALUE. Left as it was, a frequency outside the Welch
     grid's span got ``frac < 0`` or ``frac > 1`` -- a linear EXTRAPOLATION off the two edge bins,
     returned silently as if it were data. ``eff_temp_ratio`` then divides by it, so widening
     ``freq_bounds`` past the PSD resolution grew a smooth, plausible-looking, entirely fabricated
-    T_eff/T tail. Out-of-range now yields NaN and the callers report how many points that cost.
+    T_eff/T tail. Out-of-range yields NaN and the callers report how many points that cost.
+
+    The in-range test is against ``_resolved_span``, NOT against ``x_old[0]``, and that is the whole
+    of the piece-5 fix (spec §3.5, E9). A Welch grid's first entry is exactly 0.0, the clamp turns it
+    into 1e-30, and ``log_x_new >= log_x_old[0]`` was therefore true for EVERY positive frequency --
+    so the promise above held at the top of the grid and was false at the bottom, where a probe
+    returned a value blended off the zero-frequency bin and the callers counted no exclusions at all.
     """
     x_new = x_new.to(torch.float64)
-    x_old = x_old.to(torch.float64).clamp(min=1e-30)
+    x_old = x_old.to(torch.float64)
     y_old = y_old.to(torch.float64)
-    log_x_old = torch.log(x_old)
+    lo, hi = _resolved_span(x_old)
+    log_x_old = torch.log(x_old.clamp(min=1e-30))
     log_x_new = torch.log(x_new.clamp(min=1e-30))
     idx = torch.searchsorted(log_x_old, log_x_new).clamp(1, len(log_x_old) - 1)
     x0, x1 = log_x_old[idx - 1], log_x_old[idx]
     y0, y1 = y_old[idx - 1], y_old[idx]
     frac = (log_x_new - x0) / (x1 - x0)
     out = y0 + frac * (y1 - y0)
-    in_range = (log_x_new >= log_x_old[0]) & (log_x_new <= log_x_old[-1])
+    in_range = (x_new >= lo) & (x_new <= hi)
     return torch.where(in_range, out, torch.full_like(out, float("nan")))
 
 
@@ -95,9 +120,10 @@ def check_passive_baseline(cfg: FDTConfig, save_plot_path=None) -> tuple[bool, d
     devs = np.abs(ratio - 1.0)
     n_off = int(np.isnan(devs).sum())
     if n_off:
+        lo_res, hi_res = _resolved_span(freqs_psd)
         warnings.warn(
             f"check_passive_baseline: {n_off}/{devs.size} probe frequencies fall outside the Welch "
-            f"PSD grid ({float(freqs_psd.min()):g}..{float(freqs_psd.max()):g}) and were EXCLUDED. "
+            f"PSD grid ({lo_res:g}..{hi_res:g}) and were EXCLUDED. "
             f"Narrow cfg.freq_bounds, or lengthen the passive run so the PSD resolves them.",
             stacklevel=2)
     covered = devs[~np.isnan(devs)]
@@ -163,9 +189,10 @@ def check_high_freq_fdt(cfg: FDTConfig) -> tuple[bool, dict]:
     devs = np.abs(ratio - 1.0)
     n_off = int(np.isnan(devs).sum())
     if n_off:
+        lo_res, hi_res = _resolved_span(freqs_psd)
         warnings.warn(
             f"check_high_freq_fdt: {n_off}/{devs.size} of the top probe frequencies fall outside the "
-            f"Welch PSD grid ({float(freqs_psd.min()):g}..{float(freqs_psd.max()):g}) and were "
+            f"Welch PSD grid ({lo_res:g}..{hi_res:g}) and were "
             f"EXCLUDED. This check previously extrapolated there, so a past pass at these "
             f"frequencies was not evidence. Lower cfg.freq_bounds' upper edge or raise psd_T_obs_nd.",
             stacklevel=2)

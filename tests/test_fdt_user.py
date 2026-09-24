@@ -166,6 +166,97 @@ def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeyp
     assert spent == [], "the prefactor refusal arrived only after a campaign had been spent"
 
 
+def test_a_probe_below_the_first_real_bin_comes_back_blank_not_blended():
+    """Spec §3.5, E9 -- and the demonstration of the defect, which is the whole point of the fix.
+
+    _interp_log's docstring promises NaN outside the grid, and PRISM_HANDOFF names the consequence of
+    not having it: "widen freq_bounds past the PSD resolution and T_eff/T acquires a smooth,
+    plausible-looking, entirely fabricated tail". A Welch grid starts at exactly 0.0, the helper
+    clamps that bin to 1e-30 before taking logarithms, and the in-range test compares against the
+    CLAMPED bin -- so every positive frequency passed it and the low end returned a value blended off
+    the zero-frequency bin. Here the zero bin holds 100 and the first real bin holds 1: a probe at
+    half the first real bin used to come back at about 1.993, a number with no measurement behind it.
+    It is a blank now, and the assertion message prints what came back instead so the defect is
+    legible in the failure rather than only in this docstring."""
+    import math
+
+    from core.FDT.sanity import _interp_log
+
+    x_old = torch.tensor([0.0, 1.0, 2.0], dtype=torch.float64)   # a Welch grid: the DC bin is 0.0
+    y_old = torch.tensor([100.0, 1.0, 2.0], dtype=torch.float64)
+    got = float(_interp_log(torch.tensor([0.5], dtype=torch.float64), x_old, y_old)[0])
+    assert math.isnan(got), (f"a probe at 0.5, below the spectrum's first real bin at 1.0, came back "
+                             f"blended off the zero bin instead of blank: {got:.4f}")
+
+
+def test_every_probe_outside_the_resolved_span_is_blank_and_the_covered_ones_are_exact():
+    """Spec §3.5. The count of excluded points is what reaches the record as body.offgrid (spec
+    §2.3) and what the sweep's per-point summary reports, so it has to be honest at BOTH ends: the
+    upper end already blanked, the lower end never did. The covered points are asserted too, because
+    a range test that blanked too much would also make the count "honest" and would silently throw
+    away measured frequencies -- 2**0.5 sits at exactly half a log-decade between the 1.0 and 2.0
+    bins, so its interpolated value is exactly halfway between their values."""
+    from core.FDT.sanity import _interp_log
+
+    x_old = torch.tensor([0.0, 1.0, 2.0, 4.0], dtype=torch.float64)
+    y_old = torch.tensor([100.0, 1.0, 2.0, 4.0], dtype=torch.float64)
+    probes = torch.tensor([0.5, 1.0, 2.0 ** 0.5, 2.0, 4.0, 8.0], dtype=torch.float64)
+
+    got = _interp_log(probes, x_old, y_old)
+    blanks = torch.isnan(got)
+    assert int(blanks.sum()) == 2, (f"expected 2 blanks -- 0.5 below the first real bin and 8.0 above "
+                                    f"the last -- got {int(blanks.sum())}: {got.tolist()}")
+    assert bool(blanks[0]) and bool(blanks[-1]), got.tolist()
+    assert torch.allclose(got[1:5], torch.tensor([1.0, 1.5, 2.0, 4.0], dtype=torch.float64),
+                          atol=1e-12), got.tolist()
+
+    from core.FDT.sanity import _resolved_span
+    assert _resolved_span(x_old) == (1.0, 4.0), "the zero bin is not the band's lower end"
+    assert _resolved_span(torch.tensor([0.0], dtype=torch.float64)) == (float("inf"), float("-inf")), \
+        "a grid with no positive bin resolves nothing: every probe is then out of range (P7)"
+
+
+def test_the_sanity_checks_name_the_band_the_spectrum_actually_resolves(monkeypatch):
+    """Spec §3.5: "the callers' count of excluded points becomes honest". The count is only half of
+    it. Both sanity checks print the excluded band as freqs_psd.min()..freqs_psd.max(), and a Welch
+    grid's min is exactly 0.0 -- so the sentence read "fall outside the Welch PSD grid (0..2)" while
+    excluding a probe at 0.5, which is inside 0..2. The band the reader is asked to narrow towards
+    has to be the band the spectrum resolves.
+
+    check_high_freq_fdt is the one to pin: it reads the TOP three frequencies of the probe grid,
+    precisely where the PSD runs out, so it was the check most exposed to the old extrapolation. Its
+    campaign seams are stubbed, so nothing is simulated."""
+    import pytest
+
+    from core.FDT import sanity
+
+    class _Cfg:
+        ensemble_M, psd_T_obs_nd, omega_0, freq_bounds = 8, 100.0, 1.0, (0.1, 30.0)
+
+        class hw:
+            device = torch.device("cpu")
+            dtype = torch.float64
+
+        def with_overrides(self, **kw):
+            return self
+
+    # A spectrum resolving 0.5..2.0; the top three of the 7-point probe grid are 4.48, 11.59 and 30.
+    freqs_psd = torch.tensor([0.0, 0.5, 1.0, 2.0], dtype=torch.float64)
+    G = torch.tensor([9.0, 1.0, 2.0, 1.0], dtype=torch.float64)
+    monkeypatch.setattr(sanity, "run_campaign1_psd", lambda c: (freqs_psd, G))
+    monkeypatch.setattr(sanity, "run_campaign2_chi",
+                        lambda c, om, **kw: torch.full((len(om),), 1 + 1j, dtype=torch.complex128))
+    monkeypatch.setattr(sanity, "observable_noise_prefactor", lambda c: 1.0)
+
+    with pytest.warns(UserWarning, match="3/3") as rec:
+        passed, metrics = sanity.check_high_freq_fdt(_Cfg())
+
+    msg = str(rec[0].message)
+    assert "(0.5..2)" in msg, msg
+    assert "(0..2)" not in msg, f"the warning named the zero bin as the band's lower end: {msg}"
+    assert passed is False and metrics["n_off_grid"] == 3, metrics
+
+
 def test_fdt_support_gate():
     """Built-ins are supported; user models are gated on additive, non-zero, unforced observable noise."""
     for m in ("NADROWSKI", "HOPF", "BP"):
