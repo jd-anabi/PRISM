@@ -249,6 +249,43 @@ def test_every_prior_flag_reaches_build_prior_as_a_keyword(tool_env, monkeypatch
         "an unset knob must not be forwarded -- the stage's own default is the one default"
 
 
+def test_a_stage_note_that_breaks_the_rule_is_refused_before_the_stage_runs(tool_env, monkeypatch,
+                                                                            capsys):
+    """The stage ``--note`` (config_args.add_name_flags) used to reach the manifest unchecked: piece
+    4's store contract leaves the note rule to each FRONT END (``ArtifactStore.set_note``:
+    "require_note is that rule, and both front ends run it"), ``create`` stores a note as it is
+    given, and only ``artifacts note`` ran the rule. So a 250-character note, or one with a newline,
+    was written into a record that the tool's own ``artifacts note`` would then refuse to write back.
+
+    ``main`` now judges it ONCE, before any handler runs, for every subcommand that has the flag
+    (piece 5, the Task 29 ruling): a refusal is the ladder's one line ending ``(--note)``, exit 1,
+    and nothing -- not the config build, not the stage -- has run. The stage is a recorder, so a
+    refused note is asserted by what never reached it.
+    """
+    from core import orchestrator
+    from core.refusals import NOTE_MAX_CHARS
+    bounds, cell, root = tool_env
+    rec = _Rec(_art(root, "prior"))
+    monkeypatch.setattr(orchestrator, "build_prior", rec)
+
+    for bad in ("a" * (NOTE_MAX_CHARS + 1), "two\nlines"):
+        capsys.readouterr()
+        assert main(["prior", *_cfg(bounds), "--note", bad]) == 1
+        out, err = capsys.readouterr()
+        lines = [ln for ln in err.splitlines() if ln.startswith("prism prior: refused:")]
+        assert len(lines) == 1 and lines[0].endswith("(--note)"), err
+        assert "raised at" not in err and "Traceback" not in err, err
+        assert rec.calls == [], "a refused note reached the stage"
+        assert "[cfg]" not in out, "the note is judged before the config is even built"
+
+    assert main(["prior", *_cfg(bounds), "--note", "a good note"]) == 0
+    assert rec.calls[-1][1]["note"] == "a good note", "a good note reaches the stage unchanged"
+    # The rule's one transformation is the trim, as `artifacts note` already applies it, so the
+    # manifest holds the same text whichever command wrote it.
+    assert main(["prior", *_cfg(bounds), "--note", "  padded  "]) == 0
+    assert rec.calls[-1][1]["note"] == "padded"
+
+
 def test_every_train_flag_reaches_build_posterior_as_a_keyword(tool_env, monkeypatch):
     from core import orchestrator
     bounds, cell, root = tool_env
@@ -1301,7 +1338,11 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys, monkeypatch):
     assert main(["fdt", "--cell", cell, "--model", "NOPE"]) == 1
     err = capsys.readouterr().err
     assert "Unknown model" in err
-    assert "pass a different --model" in err, "M1: the refusal says where the name came from"
+    # M1, as V3's one line since piece 5: the hint says where the NAME came from and the ladder's
+    # fix sentence says which flag answers it, so neither has to do the other's job.
+    assert "--model named it" in err, "M1: the refusal says where the name came from"
+    assert err.rstrip().endswith("(--model)"), err
+    assert "ValueError" not in err and "raised at" not in err, err
 
     nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
     assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2.5",
@@ -1343,6 +1384,37 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys, monkeypatch):
     err = capsys.readouterr().err
     assert "--skip-sanity" in err and "--no-production" in err, err
     assert built == [], "the refused pair built a config"
+
+
+def test_an_unsupported_model_named_by_the_cells_folder_is_one_refusal_line(tool_env, tmp_path,
+                                                                            capsys):
+    """The CELL-FOLDER branch of the unsupported-model hint -- the first of the two gaps
+    docs/STATE.md names. Only the ``--model`` branch has ever been tested
+    (test_fdt_and_crossval_usage_errors), and the two say different things on purpose: passing the
+    wrong ``--model`` and standing a cell in the wrong folder are different mistakes with different
+    fixes, and the operator cannot tell which one happened from the reason alone.
+
+    V3 as well (spec §6.2): this used to be a bare ``ValueError``, so ``main``'s unconverted-refusal
+    rung printed ``refused: ValueError: ... [raised at fdt.py:139]`` -- the class name and the raise
+    site are a hedge for a bug disguised as a refusal, and a fielded ``Refusal`` no longer needs
+    either. The cell file is never opened: the model gate runs before the builder, which is the
+    point -- refuse before the spend.
+    """
+    from core.tool import main
+
+    cell = tmp_path / "nosuchmodel" / "cell.txt"
+    cell.parent.mkdir(parents=True)
+    cell.write_text("", encoding="utf-8")
+
+    capsys.readouterr()
+    assert main(["fdt", "--cell", str(cell)]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism fdt: refused:")]
+    assert len(lines) == 1, err
+    assert "Unknown model 'NOSUCHMODEL'" in lines[0], lines[0]
+    assert "the cell's parent folder named it" in lines[0], lines[0]
+    assert lines[0].endswith("(--model)"), lines[0]
+    assert "ValueError" not in err and "raised at" not in err, err
 
 
 def test_fdt_and_crossval_take_store_root_and_otherwise_follow_the_environment(
@@ -1548,10 +1620,16 @@ def test_crossval_preset_choices_match_sweep_presets():
 def test_fdt_ctrl_c_gets_its_own_interrupt_note(tool_env, monkeypatch, capsys):
     """I2, fix round 1: fdt/crossval keep no cache and take no --resume, so main's generic advice
     ("if a [checkpoint] line above says batches were saved, ... --resume require") is simply wrong
-    for them -- there is no cache to resume. The partial plots already on disk are the whole
-    recovery story; re-running starts over. Every OTHER subcommand's Ctrl-C message is untouched
+    for them -- there is no cache to resume. Since piece 5 the recovery story is the RECORD the run
+    was writing: kept, marked unfinished, listed and deletable (E2); re-running still starts over,
+    because nothing resumes. Every OTHER subcommand's Ctrl-C message is untouched
     (test_smoke_ctrl_c_prints_store_specific_resume_advice and
-    test_ctrl_c_mid_simulation_keeps_the_committed_batches still pin the generic wording)."""
+    test_ctrl_c_mid_simulation_keeps_the_committed_batches still pin the generic wording).
+
+    Ruling F20: a static note cannot carry the record's id, so the handler prints it -- id and
+    directory -- the moment ``store.create`` mints it, which is before anything can be interrupted;
+    and the note says what an operator who passed ``--store-root`` must do first, because the
+    ``artifacts`` commands read only PRISM_ARTIFACTS."""
     from core import cli, config
     from core.FDT import fdt_pipeline
     from core.tool import main
@@ -1564,10 +1642,76 @@ def test_fdt_ctrl_c_gets_its_own_interrupt_note(tool_env, monkeypatch, capsys):
     cell = str(config.CELL_PATH / "hopf" / "cell.txt")
     capsys.readouterr()
     assert main(["fdt", "--cell", cell]) == 130
-    err = capsys.readouterr().err
+    captured = capsys.readouterr()
+    err = captured.err
     assert "interrupted" in err
-    assert "<artifacts root>/fdt" in err and "stay on disk" in err and "from scratch" in err
+    # E2, through the note: what survives an interrupt is a NAMED RECORD, kept and marked
+    # unfinished -- not "the plots already written under <artifacts root>/fdt", which is where these
+    # outputs stopped going when they became artifacts (spec §6.1).
+    assert "unfinished" in err and "artifacts list fdt" in err, err
+    assert "artifacts rm fdt" in err, "the note must say how to clear the record it just named"
+    assert "from scratch" in err, err
+    assert "<artifacts root>/fdt" not in err, "the flat output folder is gone"
     assert "--resume" not in err
+    assert "--store-root" in err and "PRISM_ARTIFACTS" in err, err
+    written = [ln for ln in captured.out.splitlines() if ln.startswith("[prism fdt] writing record ")]
+    assert len(written) == 1, captured.out
+    assert str(config.artifacts_root() / "fdt") in written[0], written[0]
+
+
+def test_crossval_ctrl_c_names_each_record_and_how_to_clear_them(tool_env, monkeypatch, capsys):
+    """The crossval twin of the test above (F20): a study opens TWO records, one per swept parameter
+    (spec §4.1), so the handler prints one ``writing record`` line for each before the study runs,
+    and the note is crossval's own -- one sweep's record may be finished, the one interrupted is kept
+    unfinished, and a sweep that never started left nothing."""
+    from core import cli, config
+    from core.FDT import cross_validation
+    from core.tool import main
+
+    def _boom(*a, **k):
+        raise KeyboardInterrupt
+
+    sweep_cfg = _fdt_cfg_stub()
+    sweep_cfg.preset_name = "exploratory"
+    monkeypatch.setattr(cli, "make_param_sweep_config", lambda *a, **k: (sweep_cfg, "S", "T"))
+    monkeypatch.setattr(cross_validation, "run_param_study_cli", _boom)
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    capsys.readouterr()
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                 "--t-grid", "1", "1.1", "2"]) == 130
+    captured = capsys.readouterr()
+    err = captured.err
+    assert err.startswith("prism crossval: interrupted:"), err
+    assert "unfinished" in err and "artifacts list fdt" in err and "artifacts rm fdt" in err, err
+    assert "--store-root" in err and "PRISM_ARTIFACTS" in err, err
+    assert "from scratch" in err and "--resume" not in err, err
+    assert "<artifacts root>/crossval" not in err, "the flat output folder is gone"
+    written = [ln for ln in captured.out.splitlines()
+               if ln.startswith("[prism crossval] writing record ")]
+    assert len(written) == 2, captured.out
+    assert "S sweep" in written[0] and "T_a/T sweep" in written[1], written
+
+
+def test_the_fdt_subcommands_no_longer_say_they_have_no_bounds_file():
+    """Spec §3.2. Two sentences in this module claimed these analyses have no bounds file. They are
+    false, and the record makes the falsehood expensive: ``cli.parse_cell`` DOES resolve one
+    (``resolve_bounds_for_cell`` -- the same-named sibling, else the folder's master), and on the
+    decoupled path that file "defines the param set + order" (core/cli.py:156-161). A record that
+    did not name which bounds file resolved would not say which parameter set its numbers were
+    measured under.
+
+    A source scan, because these are DOCSTRINGS -- nothing executes them, so nothing else can catch
+    them going stale. What is true and must stay said is that neither subcommand takes a ``--bounds``
+    flag or an observation mode.
+    """
+    import inspect
+    from core.tool import fdt
+
+    text = inspect.getsource(fdt)
+    assert "no bounds file" not in text, \
+        "a bounds file DOES resolve for the cell; it is recorded by path and hash"
+    assert "resolve_bounds_for_cell" in fdt.__doc__, fdt.__doc__
+    assert "resolve" in inspect.getdoc(fdt.model_for_cell), inspect.getdoc(fdt.model_for_cell)
 
 
 @pytest.mark.slow

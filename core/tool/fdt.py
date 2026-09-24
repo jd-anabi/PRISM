@@ -1,18 +1,23 @@
-"""``python -m core fdt`` and ``python -m core crossval``: the prompt CLI's two FDT modes as flags.
+"""``python -m core fdt`` and ``python -m core crossval``: the two FDT analyses as flags.
 
-No new science, and no hardening: each subcommand builds the config ``core/cli.py`` already builds
-prompt-free (``make_fdt_config`` / ``make_param_sweep_config``, the same functions the GUI panels
-call) and hands it to the same pipeline. FDT/CrossVal hardening, and wrapping their outputs in the
-artifact store, is piece 5's work -- until then FDT saves under ``<artifacts root>/fdt`` and the
-sweep study under ``<artifacts root>/crossval``, both moved by PRISM_ARTIFACTS and neither touching
-the store the tool opens.
+Each subcommand builds the config ``core/cli.py`` builds prompt-free (``make_fdt_config`` /
+``make_param_sweep_config``, the same functions the GUI panels call) and hands it to the same
+pipeline. Since piece 5 both write an ``fdt`` artifact RECORD -- progressively, so an interrupted
+run keeps its folder marked unfinished -- into ``--store-root``, or into the PRISM_ARTIFACTS root
+when that flag is not given.
 
-Neither takes the SBI config flags: no prior is built and no training runs, so there is no bounds
-file and no observation mode. There is no ``--device`` either -- both config builders force the CPU,
-where the sequential SDE loop at M ~ 256 is about 3.4x faster than on the card.
+Neither takes the SBI config flags: no prior is built and no training runs, so there is no
+observation mode and no ``--bounds``. A bounds file is not ABSENT, though: ``cli.parse_cell``
+resolves one for the cell (``cli.resolve_bounds_for_cell`` -- the same-named sibling, else the
+model folder's master), it defines the parameter set and its order on the decoupled path, and the
+record names it by path and SHA-256 like every other kind. There is no ``--device`` either -- both
+config builders force the CPU, where the sequential SDE loop at M ~ 256 is about 3.4x faster than
+on the card.
 """
 import argparse
 import math
+
+from core.refusals import Refusal
 
 from .config_args import UsageError, knobs, model_from_path
 
@@ -21,9 +26,9 @@ The model comes from the cell's parent folder (Resources/Cells/<model>/), or fro
 FDT cannot run is refused with the reason: FDT drives the observable itself, so a user model needs
 additive, non-zero observable noise and no intrinsic forcing.
 
-Plots (PSD, chi components, T_eff/T, the spontaneous trajectory) are written to
-<artifacts root>/fdt, timestamped. Sanity checks run first unless --skip-sanity; --no-production
-stops after them.
+The run writes one `fdt` record: its figures (PSD, chi components, T_eff/T, the spontaneous
+trajectory), its numbers in data.h5, its settings and seed, and its log. Sanity checks run first
+unless --skip-sanity; --no-production stops after them.
 """
 
 CROSSVAL_EPILOG = """\
@@ -32,30 +37,53 @@ T_a/T = 1 and varies S (FDT restored as S -> 0), the T sweep holds S = 0 and var
 as T_a/T -> 1). Each grid is MIN MAX N, and N must be a whole number of at least 2.
 
 --preset drives the resolution levers the flags do not expose (freq_bounds, T_obs_periods,
-psd_T_obs_nd) and supplies the defaults for --n-freqs and --ensemble-m. One HDF5 per sweep plus a
-3-D plot each go to <artifacts root>/crossval; the S-sweep plot is saved at the study's midpoint,
-so a long run gives you half its answer early.
+psd_T_obs_nd) and supplies the defaults for --n-freqs and --ensemble-m. Each sweep writes its OWN
+`fdt` record -- its data.h5, its 3-D plot and its point counts -- so the S sweep is a finished,
+readable answer before the T sweep starts.
 """
 
-# I2, fix round 1: fdt/crossval keep no cache and take no --resume (piece 5 wraps their outputs in
-# the store; until then there is nothing to resume), so main's generic Ctrl-C advice -- "if a
-# [checkpoint] line above says batches were saved, ... --resume require" -- is simply wrong for
-# them. Each note names its own output folder and says plainly that the only recovery is what is
-# already on disk, and that re-running starts over.
+# I2, fix round 1, rewritten for piece 5 (E2): fdt/crossval keep no cache and take no --resume, so
+# main's generic Ctrl-C advice -- "if a [checkpoint] line above says batches were saved, ...
+# --resume require" -- is simply wrong for them. What changed is WHAT SURVIVES. These runs write
+# their record PROGRESSIVELY, so an interrupt leaves a real artifact behind -- its directory, its
+# manifest marked unfinished, its data file and its figures, and the run's own log.txt -- listed
+# like any other and removable by id. Each note therefore says where to find that record and how
+# to clear it, and repeats that re-running starts over: an unfinished record is evidence, not a
+# resume point (spec §1.3, "Resuming an interrupted sweep": not asked for, and none is added).
+#
+# A note is fixed text, set once through set_defaults, so it cannot carry the record's id. Ruling
+# F20: the handler prints each record's id and directory -- the `writing record` line -- the moment
+# store.create mints it, which is before anything can be interrupted, and the note points back at
+# that line. And because the `artifacts` family reads only PRISM_ARTIFACTS (it has no --store-root,
+# core/tool/browse.py), a run given --store-root must be followed by pointing the variable there, or
+# the listing looks in the wrong root and finds nothing.
+_STORE_ROOT_ADVICE = ("If this run was given --store-root, set PRISM_ARTIFACTS to that root first: "
+                      "the `artifacts` commands read only the environment.")
 FDT_INTERRUPT_NOTE = (
-    "the plots already written under <artifacts root>/fdt stay on disk and can be inspected; fdt "
-    "keeps no cache, so re-running the same command starts the analysis from scratch.")
+    "the record named by the `writing record` line above is KEPT and marked unfinished, holding "
+    "everything measured so far; `python -m core artifacts list fdt` lists it and `python -m core "
+    f"artifacts rm fdt <id>` removes it. {_STORE_ROOT_ADVICE} fdt keeps no cache and nothing "
+    "resumes, so re-running the same command starts the analysis from scratch.")
+# Two records, three possible states (spec §4.1): the sweeps run S first, then T, each entering its
+# own record only when it starts. So an interrupt during S leaves S's record unfinished and T's never
+# written, and one during T leaves S's finished (or, had S measured nothing, unfinished) beside T's
+# unfinished one. The note says exactly that rather than promising two records on disk.
 CROSSVAL_INTERRUPT_NOTE = (
-    "the outputs already written under <artifacts root>/crossval -- any sweep that finished its "
-    "own .h5 and plot -- stay on disk and can be inspected; crossval keeps no cache, so re-running "
-    "the same command starts the study from scratch.")
+    "each sweep writes a record of its own, named by the two `writing record` lines above: a sweep "
+    "that had finished keeps its finished record, the one this run was in the middle of is KEPT and "
+    "marked unfinished, holding its data file and every operating point measured so far, and a "
+    "sweep that had not started left nothing on disk. `python -m core artifacts list fdt` lists "
+    f"them and `python -m core artifacts rm fdt <id>` removes one. {_STORE_ROOT_ADVICE} crossval "
+    "keeps no cache and nothing resumes, so re-running the same command starts the study from "
+    "scratch.")
 
 
 def model_for_cell(args) -> str:
     """``--model``, else the cell's parent folder upper-cased (the ``Cells/<model>/`` layout). The
-    SBI subcommands take the model from the BOUNDS folder; these two have no bounds file. A thin
-    wrapper over ``config_args.model_from_path`` -- kept as its own function because the interface
-    and the test suite name it ``fdt.model_for_cell``."""
+    SBI subcommands take the model from the BOUNDS folder, which they are given; these two are given
+    a CELL and resolve its bounds file from it (``cli.resolve_bounds_for_cell``), so the folder is
+    what names the model here. A thin wrapper over ``config_args.model_from_path`` -- kept as its
+    own function because the interface and the test suite name it ``fdt.model_for_cell``."""
     return model_from_path(args.model, args.cell)
 
 
@@ -156,14 +184,22 @@ def run_fdt_cmd(args, store):
     model = model_for_cell(args)
     ok, reason = registry.fdt_support(model)
     if not ok:
-        # M1, fix round 1: say where the model name came from and how to change it, matching
-        # config_args.build_cfg's own "Pass --model, or point --bounds at Bounds/<model>/." tail.
-        hint = ("pass a different --model" if args.model else
-                "the cell's parent folder set the model name; pass --model to override it")
-        raise ValueError(f"{reason} ({hint}.)")
+        # M1, fix round 1, now as V3's one line (spec §6.2): a Refusal with a field key, so the
+        # ladder prints `refused: <reason> (<where the name came from>.) (--model)` instead of
+        # `refused: ValueError: ... [raised at fdt.py:139]`. The FLAG is fix_sentence's to add, from
+        # core/tool/fields.py; what the hint still carries is what the flag cannot -- WHERE the name
+        # came from, because --model and a cell's parent folder are two different mistakes.
+        # cli.make_fdt_config refuses the same model since Task 10, with fdt_support's reason alone;
+        # this gate stays first because only a front end knows where the name came from.
+        hint = ("--model named it" if args.model else
+                "the cell's parent folder named it; pass --model to override that")
+        raise Refusal(f"{reason} ({hint}.)", field="model")
     cfg = cli.make_fdt_config(model, registry.state_dep_drift(model), args.cell,
                               **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0", "seed"))
     writer = store.create("fdt", cfg)
+    # F20: on screen BEFORE anything is spent, so a Ctrl-C finds the record's id already printed --
+    # FDT_INTERRUPT_NOTE points back at this line, being fixed text that cannot carry the id itself.
+    print(f"[prism fdt] writing record {writer.id} at {writer.dir}", flush=True)
     rec = fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,
                                confirm_production=not args.no_production, writer=writer,
                                seed=args.seed)
@@ -184,6 +220,11 @@ def run_crossval(args, store):
         ensemble_M=preset["ensemble_M"] if args.ensemble_M is None else args.ensemble_M,
         **knobs(args, "freqs_per_batch", "F0", "seed"))
     writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    # F20: one line per record, before either sweep spends anything -- CROSSVAL_INTERRUPT_NOTE points
+    # back at these two lines, being fixed text that cannot carry the ids itself.
+    for key, label in (("s", "S"), ("temp", "T_a/T")):
+        print(f"[prism crossval] writing record {writers[key].id} at {writers[key].dir} "
+              f"(the {label} sweep)", flush=True)
     recs = cross_validation.run_param_study_cli(cfg, s_grid=s_grid, t_grid=temp_grid,
                                                 writers=writers, seed=args.seed)
     for rec in recs:

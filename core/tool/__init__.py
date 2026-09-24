@@ -15,7 +15,7 @@ import traceback
 from pathlib import Path
 
 from core import logging_root
-from core.refusals import Refusal
+from core.refusals import Refusal, require_note
 
 from . import browse, config_args, diagnostics, fdt, smoke, stages
 from .config_args import UsageError  # noqa: F401 -- part of this package's public surface
@@ -133,6 +133,20 @@ def main(argv=None) -> int:
     # under the suite and a handler left behind would repeat every later run's library records.
     logging_root.install(_library_record_sink)
     try:
+        # The note rule, judged ONCE here for every subcommand whose parser has a --note (piece 5,
+        # Task 29). Piece 4's store contract leaves the rule to each FRONT END -- ArtifactStore.set_note
+        # says "require_note is that rule, and both front ends run it" -- and create() stores a note
+        # exactly as given, so a stage's --note (config_args.add_name_flags) used to reach the manifest
+        # unchecked: an over-long or multi-line note the tool's own `artifacts note` refuses to write.
+        # First in the try, so a refusal takes the Refusal rung below -- exit 1, `(--note)` -- before
+        # the mkdir just after it and before the handler builds anything (smoke's throwaway root,
+        # made above, is still removed by the auto_root cleanup). `artifacts note` is judged here
+        # too, not skipped: its handler runs the same rule again on the text this returns, and that
+        # second call changes nothing -- a trimmed note that passed returns itself, and a note that
+        # fails was already refused here with the same sentence and the same field. A blank note is
+        # left alone: "" means "no note" (or, for `artifacts note`, "clear it").
+        if getattr(args, "note", None):
+            args.note = require_note("note", args.note)
         root.mkdir(parents=True, exist_ok=True)
         # use_store AND store= at every call: the context makes the default right for anything that
         # reaches for it, the keyword makes each stage independent of the default. set_default_store
