@@ -678,6 +678,65 @@ def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
         assert gui_fields.fix_sentence(key).endswith("on the Model Builder screen."), key
 
 
+def test_the_builder_refuses_at_validate_what_save_would_refuse():
+    """Validate refuses every value Save refuses, in the yellow box naming the box. Spec §5.1, §5.6.
+
+    ``model_store._check_schema`` refuses three values the builder's own checks let through: a forcing
+    frequency or time constant at or below 0, and a t_scale at or above ``T_SCALE_MAX_S``, the
+    transient budget. Validate passed all three -- its smoke integration runs with the forcing off and
+    at any t_scale -- so the form said "valid", and Save then failed with "Save failed: ..." on the
+    status line alone, naming no box (found by Task 22's review; a REFUSAL defect, so §5.6's bounded
+    mandate fixes it here). Each is now the same rule in the same words, raised as a Refusal keyed to
+    the box, so both buttons reach the yellow box and nothing is saved.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui import fields as gui_fields
+    from core.gui.screens.model_builder_screen import _FORCE_KINDS, ModelBuilderScreen
+    from tests._fixtures import SHOWN
+
+    qt_app()
+    name = "UMTESTSAVEREF"
+    kinds = [k for k, _ in _FORCE_KINDS]
+    try:
+        mb = ModelBuilderScreen()
+        mb.name_edit.setText(name)
+        mb.vars_edit.setText("x")
+        mb._set_variables()
+        row = mb._var_rows[0]
+        row.drift.setText("-k*x")
+        row.noise.setText("d0")
+        mb._detect_params()
+        mb._param_fields["k"].set_spec(1.0, 0.5, 1.5)
+        mb._param_fields["d0"].set_spec(0.01, 0.001, 0.1)
+
+        def _refused(field, needle):
+            for click in (mb._validate_clicked, mb._save):
+                SHOWN.clear()
+                click()
+                assert SHOWN, f"{click.__name__} showed no box; the status line: {mb.status.text()}"
+                box = SHOWN[-1]
+                assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+                assert box.informativeText() == gui_fields.fix_sentence(field), box.informativeText()
+                assert needle in box.text(), box.text()
+                assert box.text() in mb.status.text(), mb.status.text()
+            assert not (config.MODELS_PATH / f"{name}.json").exists(), "a refused model was saved"
+
+        # a drive frequency of 0 ...
+        row.force_kind.setCurrentIndex(kinds.index("sin"))
+        row.forcing_fields()["freq"].setText("0")
+        _refused("forcing_value", "Variable 'x': forcing freq must be > 0")
+        # ... and a negative exponential time constant
+        row.force_kind.setCurrentIndex(kinds.index("exponential"))
+        row.forcing_fields()["tau"].setText("-1")
+        _refused("forcing_value", "Variable 'x': forcing tau must be > 0")
+        row.force_kind.setCurrentIndex(kinds.index(""))
+        # a t_scale AT the ceiling: the rule is "below", so the ceiling itself is refused
+        mb.t_scale.setText(repr(model_store.T_SCALE_MAX_S))
+        _refused("t_scale", "t_scale must be below")
+    finally:
+        _remove_user_model(name)
+
+
 def test_model_store_rejects_unusable_values_and_names():
     """Values/names that would persist a registered-but-unstreamable model must fail at save time:
     t_scale past the transient budget, non-finite numbers, and Windows reserved device names."""

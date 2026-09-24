@@ -402,7 +402,13 @@ class ModelBuilderScreen(QWidget):
         # returns 0.0 for a blank, so a check written against the assembled doc would judge a blank
         # box as a typed zero (Review Focus 3).
         require_positive("x_scale", self.x_scale.value_or_none())
-        require_positive("t_scale", self.t_scale.value_or_none())
+        # The transient budget and the positive forcing values are model_store's own save-time rules,
+        # asked here in its words: the smoke integration below runs with the forcing off and at any
+        # t_scale, so without these Validate passed a form that Save then refused on the status line
+        # alone, naming no box (spec §5.6, Task 35).
+        budget = model_store.t_scale_problem(require_positive("t_scale", self.t_scale.value_or_none()))
+        if budget:
+            refuse("t_scale", budget)
         for row in self._var_rows:
             v = row.init.value_or_none()
             if v is None or not math.isfinite(v):
@@ -413,6 +419,9 @@ class ModelBuilderScreen(QWidget):
                 if fv is None or not math.isfinite(fv):
                     refuse("forcing_value", f"The forcing parameter '{pname}' of '{row.var_name}' "
                                             f"is blank or not a finite number.")
+                problem = model_store.forcing_value_problem(row.var_name, pname, fv)
+                if problem:
+                    refuse("forcing_value", problem)
         doc = self._assemble_doc()
         doc["name"] = name
         try:

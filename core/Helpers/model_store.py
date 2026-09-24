@@ -132,6 +132,34 @@ _POSITIVE_FORCING = frozenset({"freq", "tau"})
 _NONNEGATIVE_FORCING = _POSITIVE_FORCING | {"amp"}
 
 
+def forcing_value_problem(var_name: str, pname: str, value: float) -> "str | None":
+    """The sentence refusing a forcing value at or below 0 where ``_POSITIVE_FORCING`` needs it
+    positive, or None when the value is acceptable. ``value`` must already be finite.
+
+    PUBLIC, and a sentence rather than a raise, because it has two callers that must say the same
+    thing: ``_check_schema`` raises it as a ValueError, and the model builder's Validate raises it
+    as a Refusal keyed to the forcing box -- before this, Validate passed the value and only Save
+    refused it, on the status line (piece 5, Task 35). One rule, one wording.
+    """
+    if pname in _POSITIVE_FORCING and value <= 0:
+        why = ("A drive frequency of 0 is no drive at all -- set this variable's forcing to None "
+               "instead." if pname == "freq" else
+               "A time constant of 0 divides by zero inside the exponential drive.")
+        return f"Variable '{var_name}': forcing {pname} must be > 0 (got {value:g}). {why}"
+    return None
+
+
+def t_scale_problem(t_scale: float) -> "str | None":
+    """The sentence refusing a t_scale at or above ``T_SCALE_MAX_S``, or None when it is below.
+    ``t_scale`` must already be finite and positive. Shared with the model builder's Validate for
+    the same reason as ``forcing_value_problem``."""
+    if t_scale >= T_SCALE_MAX_S:
+        return (f"t_scale must be below {T_SCALE_MAX_S:g} s: slower models exceed the transient "
+                f"budget (N_ND_MAX={config.N_ND_MAX} fine steps at the {config.DT_EXP_S * 1e3:g} ms "
+                "sample rate) and could never stream.")
+    return None
+
+
 def _forcing_bounds(pname: str, v: float) -> tuple:
     """The emitted box for one forcing parameter.
 
@@ -232,12 +260,9 @@ def _check_schema(doc: dict) -> None:
                 # Checked here rather than clamped in _forcing_bounds, so that function stays total
                 # and has no arbitrary fallback branch. A drive at freq = 0 is not a drive -- that is
                 # what "forcing": null expresses -- and tau = 0 divides by zero inside the exponential.
-                if pname in _POSITIVE_FORCING and pval <= 0:
-                    why = ("A drive frequency of 0 is no drive at all -- set this variable's forcing "
-                           "to None instead." if pname == "freq" else
-                           "A time constant of 0 divides by zero inside the exponential drive.")
-                    raise ValueError(
-                        f"Variable '{v['name']}': forcing {pname} must be > 0 (got {pval:g}). {why}")
+                problem = forcing_value_problem(v["name"], pname, pval)
+                if problem:
+                    raise ValueError(problem)
             if forcing["kind"] == "exponential" and forcing.get("sign") not in (1, -1):
                 raise ValueError(f"Variable '{v['name']}': exponential forcing needs sign 1 or -1.")
     params = doc.get("params")
@@ -270,11 +295,9 @@ def _check_schema(doc: dict) -> None:
     for key in ("x_scale", "t_scale"):
         if _finite(rescale[key], key) <= 0:
             raise ValueError(f"{key} must be > 0 (it scales the display axes).")
-    if float(rescale["t_scale"]) >= T_SCALE_MAX_S:
-        raise ValueError(
-            f"t_scale must be below {T_SCALE_MAX_S:g} s: slower models exceed the transient budget "
-            f"(N_ND_MAX={config.N_ND_MAX} fine steps at the {config.DT_EXP_S * 1e3:g} ms sample "
-            "rate) and could never stream.")
+    problem = t_scale_problem(float(rescale["t_scale"]))
+    if problem:
+        raise ValueError(problem)
 
 
 def load_user_model(path) -> dict:
