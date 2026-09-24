@@ -713,7 +713,8 @@ def test_the_builder_refuses_at_validate_what_save_would_refuse():
             for click in (mb._validate_clicked, mb._save):
                 SHOWN.clear()
                 click()
-                assert SHOWN, f"{click.__name__} showed no box; the status line: {mb.status.text()}"
+                assert len(SHOWN) == 1, \
+                    f"{click.__name__} showed {len(SHOWN)} boxes; the status line: {mb.status.text()}"
                 box = SHOWN[-1]
                 assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
                 assert box.informativeText() == gui_fields.fix_sentence(field), box.informativeText()
@@ -751,6 +752,11 @@ def test_a_model_round_trips_through_the_builder_and_back():
     with a positive lower bound, a non-default initial condition, and both display scales. Writes a
     throwaway UMTEST* model into the real Resources tree and removes it in a finally -- the
     convention every other round trip in this file follows.
+
+    Every typed value differs from its box's default, and the model is read back into a FRESH
+    screen: ``reset()`` never clears the scales, so a reload into the screen that saved -- or a
+    value equal to the default -- would pass even if ``load_existing`` never set it (Task 35's
+    review).
     """
     from core.gui.screens.model_builder_screen import _FORCE_KINDS, ModelBuilderScreen
 
@@ -771,8 +777,8 @@ def test_a_model_round_trips_through_the_builder_and_back():
         mb._var_rows[1].drift.setText("-y + x")
         mb._var_rows[1].noise.setText("0")
         mb._var_rows[1].init.setText("0.0")
-        mb.x_scale.setText("10.0")
-        mb.t_scale.setText("0.01")
+        mb.x_scale.setText("25.0")                    # not the boxes' 10.0 / 0.01 defaults
+        mb.t_scale.setText("0.02")
         mb._detect_params()
         assert list(mb._param_fields) == ["k1", "d0"], list(mb._param_fields)
         mb._param_fields["k1"].set_spec(1.0, 0.5, 1.5, "linear")
@@ -782,9 +788,9 @@ def test_a_model_round_trips_through_the_builder_and_back():
         mb._save()
         assert mb.status.text().startswith(f"Saved '{name}'"), mb.status.text()
 
-        mb.reset()
-        mb.load_existing(name)
-        after = mb._assemble_doc()
+        reloaded = ModelBuilderScreen()               # shares no state with the screen that saved
+        reloaded.load_existing(name)
+        after = reloaded._assemble_doc()
         assert after == before, \
             [k for k in set(before) | set(after) if before.get(k) != after.get(k)]
     finally:
