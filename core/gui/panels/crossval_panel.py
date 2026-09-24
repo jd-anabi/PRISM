@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, Q
 from core import cli, config
 from core.config import CELL_PATH
 from core.FDT.cross_validation import run_param_study_cli
+from core.artifacts import default_store
 
 from .base_panel import BasePanel
 from .. import settings
@@ -155,15 +156,19 @@ class CrossValPanel(BasePanel):
 
         # run_param_study_cli returns the two HDF5 DATA paths, not the figures -- the plots are saved
         # to disk (the S-sweep one at the study's midpoint, deliberately) and arrive via the watcher.
-        watch = config.artifacts_root() / "crossval"
-        self.dispatch(run_param_study_cli, cfg, s_grid, temp_grid, watch_dir=watch,
-                      on_result=self._on_result)
+        # Two records, created here so the watcher knows both folders before the run is dispatched;
+        # each sweep enters its own on the worker thread (spec §1.2, §4.1). The watcher takes ONE
+        # directory and does not recurse, so it follows the S sweep's figures and the T sweep's arrive
+        # with the result line. T26 gives this panel its own picker and Seed box.
+        writers = {"s": default_store().create("fdt", cfg), "temp": default_store().create("fdt", cfg)}
+        self.dispatch(run_param_study_cli, cfg, s_grid=s_grid, t_grid=temp_grid, writers=writers,
+                      watch_dir=writers["s"].dir / "figures", on_result=self._on_result)
 
-    def _on_result(self, paths):
-        if not paths:
+    def _on_result(self, records):
+        if not records:
             return
-        for path in paths:
-            self.log_pane.append_line(f"Sweep data: {path}")
+        for rec in records:
+            self.log_pane.append_line(f"Sweep record: {rec.name or rec.id} at {rec.path}")
 
     def save_settings(self, qs):
         qs.beginGroup("crossval")

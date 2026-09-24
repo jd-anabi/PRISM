@@ -1199,13 +1199,22 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
         seen["fdt_writer_entered"] = writer.dir.exists()
         return SimpleNamespace(id="rec", path=writer.dir)
 
+    # The sweep's recorder hands back the same kind of stub (ruling F6): the handler opens BOTH records
+    # on it with store.create("fdt", cfg) before the study runs, so a placeholder string would fail
+    # there. preset_name is what a sweep config adds (P72).
+    sweep_cfg = _fdt_cfg_stub()
+    sweep_cfg.preset_name = "exploratory"
+
     def _sweep_cfg(cell_file, **kw):
         seen["make_param_sweep_config"] = (cell_file, kw)
-        return "CFG", "S", "T"
+        return sweep_cfg, "S", "T"
 
-    def _study(cfg, s_grid, temp_grid):
-        seen["run_param_study_cli"] = (cfg, s_grid, temp_grid)
-        return Path("s.h5"), Path("t.h5")
+    def _study(cfg, *, s_grid, t_grid, writers, seed=None):
+        seen["run_param_study_cli"] = (cfg, s_grid, t_grid)
+        seen["crossval_writer_kinds"] = sorted(w.kind for w in writers.values())
+        seen["crossval_writers_entered"] = [w.dir.exists() for w in writers.values()]
+        return [SimpleNamespace(id="s.h5", path=writers["s"].dir),
+                SimpleNamespace(id="t.h5", path=writers["temp"].dir)]
 
     monkeypatch.setattr(cli, "make_fdt_config", _fdt_cfg)
     monkeypatch.setattr(fdt_pipeline, "run_fdt", _run_fdt)
@@ -1260,8 +1269,12 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     assert kw["n_freqs"] == 2 and kw["ensemble_M"] == 8
     assert kw["freqs_per_batch"] == 4 and kw["F0"] == 0.2
     assert kw["preset"] == dict(cli.SWEEP_PRESETS["exploratory"])
-    assert seen["run_param_study_cli"] == ("CFG", "S", "T")
-    assert "s.h5" in capsys.readouterr().out
+    assert seen["run_param_study_cli"] == (sweep_cfg, "S", "T")
+    assert seen["crossval_writer_kinds"] == ["fdt", "fdt"], "one record per swept parameter (§4.1)"
+    assert seen["crossval_writers_entered"] == [False, False], \
+        "the handler entered a writer each sweep must enter on its own (spec §1.2)"
+    out = capsys.readouterr().out
+    assert "s.h5" in out and "t.h5" in out, out
 
     seen.clear()
     assert main(["crossval", "--cell", nad, "--preset", "production",

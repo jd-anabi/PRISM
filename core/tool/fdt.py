@@ -148,8 +148,10 @@ def run_fdt_cmd(args, store):
 
 
 def run_crossval(args, store):
-    """``store`` is unused: the sweep study writes HDF5 and plots, not artifacts (piece 5)."""
-    from core import cli, config
+    """Two ``fdt`` records per study, one per swept parameter (spec §4.1). Both are created HERE --
+    ``store.create`` mints each id and runs ``assert_name_free`` before anything is spent -- and each
+    is ENTERED by its own sweep (spec §1.2)."""
+    from core import cli
     from core.FDT import cross_validation
     preset = dict(cli.SWEEP_PRESETS[args.preset])
     cfg, s_grid, temp_grid = cli.make_param_sweep_config(
@@ -158,7 +160,8 @@ def run_crossval(args, store):
         n_freqs=preset["n_freqs"] if args.n_freqs is None else args.n_freqs,
         ensemble_M=preset["ensemble_M"] if args.ensemble_M is None else args.ensemble_M,
         **knobs(args, "freqs_per_batch", "F0", "seed"))
-    s_path, t_path = cross_validation.run_param_study_cli(cfg, s_grid, temp_grid)
-    print(f"[prism crossval] S sweep: {s_path}")
-    print(f"[prism crossval] T sweep: {t_path}")
-    print(f"[prism crossval] plots under {config.artifacts_root() / 'crossval'}")
+    writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    recs = cross_validation.run_param_study_cli(cfg, s_grid=s_grid, t_grid=temp_grid,
+                                                writers=writers, seed=getattr(args, "seed", None))
+    for rec in recs:
+        print(f"[prism crossval] sweep record {rec.id} at {rec.path}")

@@ -171,7 +171,7 @@ def warn_thin_settings(cfg: FDTConfig) -> list:
     severity, the tool's stderr) and what the run buffer copies into ``log.txt``; the returned list
     is what the record keeps, which a warning alone cannot do. ``stacklevel=3`` names whoever called
     the STAGE, as the orchestrator's ``_preflight_warn`` does: frame 1 is this helper, frame 2 the
-    stage (``run_fdt`` or ``run_fdt_param_sweep``), frame 3 its caller, with a ``@public_entry``
+    stage (``run_fdt`` or ``run_param_study_cli``), frame 3 its caller, with a ``@public_entry``
     wrapper skipped when counting (``RUN_BOUNDARY_FILES``). The stage's own call line would tell the
     operator nothing.
     """

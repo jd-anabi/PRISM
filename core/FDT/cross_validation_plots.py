@@ -9,17 +9,10 @@ reference line at omega/omega_0 = 1 marks the resonance; the FDT-satisfied level
 is T_eff/T = 1.
 """
 from __future__ import annotations
-from datetime import datetime
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-
-from .. import config
-
-
-def _plot_dir():
-    """Where the crossval 3D plots are saved: <artifacts root>/crossval."""
-    return config.artifacts_root() / "crossval"
 
 # Default linear x-window. omega/omega_0 spans [0.1, 30] but the structure
 # (deviation from FDT) lives near resonance; a linear axis out to 30 squashes it.
@@ -72,10 +65,9 @@ def plot_fdt_3d_vs_param(
     records: list[dict],
     param_symbol: str,
     title: str,
-    filename_tag: str,
+    save_path,
     omega_norm_max: float = _OMEGA_NORM_MAX,
     z_clip: tuple[float, float] = (0.0, 2.0),
-    save: bool = True,
     show: bool = False,
 ) -> Path | None:
     """
@@ -84,7 +76,9 @@ def plot_fdt_3d_vs_param(
     :param records: output of load_param_sweep.
     :param param_symbol: y-axis label, e.g. r"$S$" or r"$T_a/T$".
     :param title: figure title.
-    :param filename_tag: prefix for the saved PNG.
+    :param save_path: where to write the PNG -- since piece 5 a path inside the sweep's own record
+                      (``writer.figure_path(...)``), which is why this function no longer builds one.
+                      None draws without saving.
     :param omega_norm_max: linear x-axis upper limit (crop). Full data is in the HDF5.
     :param z_clip: (lo, hi) display range for T_eff/T. T_eff/T has a genuine pole
                    where chi'' -> 0 (it can spike to ~1000s), which on a linear scale
@@ -128,11 +122,8 @@ def plot_fdt_3d_vs_param(
 
     fig.tight_layout()
 
-    if save:
-        plot_dir = _plot_dir()
-        plot_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out = plot_dir / f"{filename_tag}_{stamp}.png"
+    if save_path is not None:
+        out = Path(save_path)
         fig.savefig(out, dpi=160, bbox_inches="tight")
         if not show:
             plt.close(fig)

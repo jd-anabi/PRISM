@@ -576,6 +576,10 @@ class ArtifactStore:
     def __init__(self, root, *, clock=None):
         self.root = Path(root)
         self._clock = clock or _utc_now
+        # Ids this store has MINTED, per kind, entered or not. create() puts nothing on disk (the
+        # writer's __enter__ does), so two writers created in one second -- a sweep study's two
+        # records, created by the front end before dispatch -- would otherwise share an id.
+        self._minted: dict = {}
 
     def kind_dir(self, kind: str) -> Path:
         if kind not in KIND_DIRS:
@@ -731,9 +735,11 @@ class ArtifactStore:
         d = self.kind_dir(kind)
         if d.is_dir():
             taken |= {p.name.rsplit("__", 1)[-1] for p in d.iterdir() if p.is_dir()}
+        taken |= self._minted.setdefault(kind, set())
         cand, n = stamp, 2
         while cand in taken:
             cand, n = f"{stamp}-{n}", n + 1
+        self._minted[kind].add(cand)
         return cand
 
     def assert_name_free(self, kind: str, name: str, *, allow: "str | None" = None) -> None:

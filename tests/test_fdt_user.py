@@ -978,7 +978,6 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     from core import config
     from core.FDT import cross_validation as cv
     from core.FDT import fdt_pipeline, plots, sanity
-    from core.orchestrator import PreflightWarning
 
     assert logging.getLogger("core").level == logging.INFO, "core/runs.py sets it at import"
 
@@ -988,6 +987,10 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     # ── the sweep study: information progress, one ERROR per failed point ─────────────────────────
     class _SweepCfg:
         model, n_freqs, ensemble_M, F0, psd_T_obs_nd = "STUB", 4, 2, 0.1, 1.0
+        freqs_per_batch, freq_bounds, burn_in_nd = 1, (0.1, 30.0), 100.0
+        T_obs_periods, dt_nd, seed = 30, 0.01, 5
+        preset_name = None
+        hw = config.cpu_device()
 
         def with_overrides(self, **kw):
             return self
@@ -1007,16 +1010,18 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     monkeypatch.setattr(cv, "_build_common_grid",
                         lambda cfg, w0s, res: (torch.linspace(0.5, 2.0, 4, dtype=torch.float64), 1.0))
     monkeypatch.setattr(cv, "_campaign2_ratio", _campaign2)
-    out_h5 = tmp_path / "s.h5"
+    monkeypatch.setattr(cv, "observable_noise_prefactor", lambda c: 1.0)   # the "STUB" model has none
+    monkeypatch.setattr(cv, "plot_fdt_3d_vs_param", lambda *a, save_path=None, **k: None)
+    w = _LogWriter(tmp_path)
     caplog.clear()
-    # The stub's two trajectories are below the thin-setting threshold (E5), so the sweep raises that
-    # notice first. It is asserted, not left to leak: pytest.warns re-emits every warning it did not
-    # match when it closes, so the inner block alone would pass and still move the gate's count.
-    with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories") as thin, \
-            pytest.warns(UserWarning, match="1/2 operating points failed"):
-        cv.run_fdt_param_sweep(_SweepCfg(), "s", np.array([0.0, 0.1]), {"temp": 1.0}, output_path=out_h5)
-    assert {Path(w.filename).resolve() for w in thin if issubclass(w.category, PreflightWarning)} \
-        == {Path(__file__).resolve()}, "the notice names the sweep's caller, not the sweep's own line"
+    # The stub's two trajectories are below the thin-setting threshold (E5). A sweep called on its own
+    # does NOT warn it -- the study warns once, at its top, for both of its records (Task 12's review,
+    # pinned by test_a_thin_study_warns_once_and_both_records_keep_the_notice) -- but it still KEEPS
+    # the sentence in its body. Only the failed-point count is raised here.
+    with pytest.warns(UserWarning, match="1/2 operating points failed") as raised:
+        cv.run_fdt_param_sweep(_SweepCfg(), "s", np.array([0.0, 0.1]), {"temp": 1.0}, writer=w)
+    assert len(raised) == 1, [str(x.message) for x in raised]
+    assert w.body["notices"] == fdt_pipeline.thin_notices(_SweepCfg()) and w.body["notices"]
     got = records()
     name = "core.FDT.cross_validation"
     assert (name, "INFO", "--- Phase A (s sweep): spontaneous PSD + omega_0 detection ---") in got, got
@@ -1025,7 +1030,7 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     assert (name, "INFO", "Common grid: 4 pts spanning [0.5000, 2.0000] (omega_0_ref=1.0000)") in got, got
     assert (name, "ERROR", "      Campaign 2 FAILED: stub out of memory") in got, got
     assert (name, "INFO", "      T_eff/T peak = 2") in got, got
-    assert got[-1] == (name, "INFO", f"s sweep complete (1/2 points). Saved to: {out_h5}"), got
+    assert got[-1] == (name, "INFO", f"s sweep complete (1/2 points). Saved to: {w.dir}"), got
     assert [lvl for _, lvl, _ in got].count("ERROR") == 1, got
 
     # ── the FDT run: a failed sanity verdict is a WARNING, without the hand-typed word ─────────────
@@ -1309,12 +1314,14 @@ def test_a_thin_setting_warns_and_hands_back_the_sentence_for_the_record():
         assert fdt_pipeline.warn_thin_settings(fat) == []
     assert rec == [], "a run at the thresholds is not annotated"
 
-    # the run entries raise it themselves: a notice the operator never sees is not a notice
+    # the run entries raise it themselves: a notice the operator never sees is not a notice. The sweep
+    # study warns at ITS top, once for both records, not in each sweep (Task 12's review: a thin study
+    # warned twice, and the second warning arrived only after the whole first sweep had run).
     import inspect
-    for fn in (fdt_pipeline.run_fdt,):
-        assert "warn_thin_settings" in inspect.getsource(fn), fn.__name__
     from core.FDT import cross_validation
-    assert "warn_thin_settings" in inspect.getsource(cross_validation.run_fdt_param_sweep)
+    for fn in (fdt_pipeline.run_fdt, cross_validation.run_param_study_cli):
+        assert "warn_thin_settings" in inspect.getsource(fn), fn.__name__
+    assert "warn_thin_settings" not in inspect.getsource(cross_validation.run_fdt_param_sweep)
 
 
 def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(tmp_path, monkeypatch):
@@ -1781,3 +1788,135 @@ def test_an_fdt_run_loads_no_inference_machinery(tmp_path):
                                          "PRISM_ARTIFACTS": str(tmp_path / "Artifacts")})
     assert r.returncode == 0, r.stdout + r.stderr
     assert "pytensor" not in r.stderr, r.stderr
+
+
+def _stub_the_study(monkeypatch):
+    """Both of the sweep's campaigns replaced by arithmetic, and its 3-D figure by a file write: every
+    operating point resonates at 1.0 and its ratio is 2.0 everywhere. The study's RECORDS are the
+    subject; a real sweep is slow-marked and lives in tests/test_tool.py."""
+    from core.FDT import cross_validation as cv
+
+    monkeypatch.setattr(cv, "run_campaign1_psd",
+                        lambda c: (torch.linspace(0.1, 3.0, 8, dtype=torch.float64),
+                                   torch.ones(8, dtype=torch.float64)))
+    monkeypatch.setattr(cv, "_detect_resonance", lambda omegas, G, w0: (1.0, True))
+    monkeypatch.setattr(cv, "_campaign2_ratio",
+                        lambda c, om, f, g: (torch.ones(om.shape, dtype=torch.complex128),
+                                             torch.full(om.shape, 2.0, dtype=torch.float64)))
+    monkeypatch.setattr(cv, "plot_fdt_3d_vs_param", lambda *a, save_path=None, **k:
+                        Path(save_path).write_bytes(b"\x89PNG"))
+
+
+def _thin_study_cfg():
+    """The Nadrowski sweep config at its smallest: two points per grid, three frequencies, and two
+    trajectories -- below FDT_THIN_ENSEMBLE_M, so the study says so once (E5)."""
+    from core import cli, config
+    return cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.1, 2), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2)
+
+
+def test_a_study_writes_one_record_per_swept_parameter_under_one_seed(store, monkeypatch):
+    """Spec §4.1 (E4, E7). Before piece 5 the study ran the S sweep, plotted it, then ran the T sweep,
+    and an all-failed S sweep raised before the T sweep even started -- one listing entry for two
+    measurements, and the second measurement hostage to the first. Two records make each sweep
+    answerable on its own.
+
+    ONE seed is drawn once and recorded on BOTH, because the two sweeps are one study: a reader who
+    wants to repeat the study repeats it, not half of it. The config block says so too, from each
+    record's first manifest (Task 17's fix round 1: `artifacts show` prints that block).
+
+    The two records are created back to back, before either is entered, which is what the store's
+    in-memory "minted" set is for: without it both got one id, and the T sweep loaded as the S one."""
+    import h5py
+    import pytest
+
+    from core.FDT import cross_validation as cv
+    from core.refusals import PreflightWarning
+
+    _stub_the_study(monkeypatch)
+    cfg, s_grid, t_grid = _thin_study_cfg()
+    writers = {"s": store.create("fdt", cfg, name="sweep_s"),
+               "temp": store.create("fdt", cfg, name="sweep_t")}
+    with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"):
+        recs = cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=77)
+
+    assert [r.name for r in recs] == ["sweep_s", "sweep_t"]
+    assert len({r.id for r in recs}) == 2, [r.id for r in recs]
+    assert [r.body["points"]["param"] for r in recs] == ["s", "temp"]
+    assert {r.body["seed"] for r in recs} == {77}, "one study, one seed (spec §4.1)"
+    assert {r.manifest.config["seed"] for r in recs} == {77}, "the config block names the seed USED"
+    assert [r.body["settings"]["sweep_grid"] for r in recs] == [[0.0, 0.1, 2], [1.0, 1.1, 2]], \
+        "F40: [min, max, N] as spec §2.3 says; the array itself is in data.h5"
+    for r in recs:
+        assert r.body["study"] == "sweep" and r.body["complete"] is True
+        assert r.body["grid"] is None, "each point's grid is in data.h5, not in the body (§2.3)"
+        assert r.body["settings"]["preset"] == "exploratory"
+        assert r.data_path.exists() and r.manifest.figures, \
+            "each sweep plots into its OWN record when it finishes -- no midpoint special case"
+        with h5py.File(r.data_path, "r") as h5:
+            assert h5.attrs["study"] == "sweep" and "prefactor" in h5.attrs, "the contract's root attributes (P6)"
+            assert h5.attrs["omega_0"] == h5.attrs["omega_0_ref"] == 1.0
+        assert r.body["settings"]["skip_sanity"] is None, "P70: a sweep has no sanity branch"
+        assert (r.path / "log.txt").read_text(encoding="utf-8").strip(), \
+            "each sweep enters its own writer on the thread whose run log becomes log.txt"
+
+
+def test_a_thin_study_warns_once_and_both_records_keep_the_notice(store, monkeypatch):
+    """E5, and Task 12's review. The notice used to be raised inside each sweep, so a thin study warned
+    TWICE -- and the second warning, the T sweep's, arrived only after the whole S sweep had run, which
+    is not a warning before the spend at all. It is raised ONCE, at the top of the study, and it names
+    the front end's call (the study is the public entry, so stacklevel=3 past the run boundary lands
+    on the caller -- here, this file). Each record still KEEPS the sentence in body.notices, because a
+    warning scrolls away and the record is what a reader has later."""
+    import pytest
+
+    from core.FDT import cross_validation as cv
+    from core.FDT import fdt_pipeline
+    from core.refusals import PreflightWarning
+
+    _stub_the_study(monkeypatch)
+    cfg, s_grid, t_grid = _thin_study_cfg()
+    writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    with pytest.warns(PreflightWarning) as rec:
+        recs = cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=1)
+
+    said = [w for w in rec if issubclass(w.category, PreflightWarning)]
+    assert [str(w.message) for w in said] == fdt_pipeline.thin_notices(cfg) and len(said) == 1, \
+        [str(w.message) for w in said]
+    assert Path(said[0].filename).resolve() == Path(__file__).resolve(), (said[0].filename, said[0].lineno)
+    assert [r.body["notices"] for r in recs] == [fdt_pipeline.thin_notices(cfg)] * 2
+
+
+def test_a_cell_the_sweep_cannot_normalise_opens_no_record(store, monkeypatch):
+    """Spec §3.4, applied to the sweep, and Task 17's ordering carried to it. The normalisation
+    constant is resolved BEFORE the writer is entered: resolved inside, after data.h5 had been handed
+    out, a cell missing ``beta`` would have left an unfinished record around an empty file, for a run
+    that never simulated anything. The study refuses the same cell at its top, before its thin notice
+    (ruling F10): a study that is refused must not first warn about how far to trust its result."""
+    import warnings
+
+    import pytest
+
+    from core.FDT import cross_validation as cv
+    from core.FDT.campaigns import FDTModelError
+    from core.refusals import PreflightWarning
+
+    _stub_the_study(monkeypatch)
+    cfg, s_grid, t_grid = _thin_study_cfg()
+    cfg.params_dict.pop("beta")
+
+    w = store.create("fdt", cfg)
+    with pytest.raises(FDTModelError) as e:
+        cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
+    assert e.value.field == "cell" and not w.dir.exists(), "a refused cell opens no record"
+
+    writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        with pytest.raises(FDTModelError):
+            cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=1)
+    assert not [w for w in rec if issubclass(w.category, PreflightWarning)], \
+        "the refusal comes before the thin notice (F10)"
+    assert not any(wr.dir.exists() for wr in writers.values()) and store.list("fdt") == []

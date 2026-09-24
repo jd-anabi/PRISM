@@ -783,6 +783,16 @@ def test_same_second_ids_get_a_suffix(tmp_path):
     assert {r.id for r in s.list("calibration")} == set(ids)
 
 
+def test_two_writers_created_before_either_is_entered_get_different_ids(tmp_path):
+    """Piece 5, spec §4.1: the sweep study's front end creates BOTH records before it dispatches, and
+    create() puts nothing on disk -- so an id checked only against the disk would be minted twice in
+    one second, and the second record would load as the first."""
+    fixed = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
+    s = st.ArtifactStore(tmp_path, clock=lambda: fixed)
+    a, b = s.create("fdt", None), s.create("fdt", None)
+    assert a.id != b.id and a.dir != b.dir, (a.id, b.id)
+
+
 def test_rename_keeps_the_id_and_dependents_resolve(store):
     p = _make(store, "posterior", name="post", body={"mode": "chi", "conditioning": {}, "transform": {},
                                                      "amortized": True, "truncation": None, "training": {}})
@@ -3151,6 +3161,29 @@ def _leg_run_fdt(case, monkeypatch, tmp_path):
                                              writer=w, seed=11)
 
 
+def _leg_run_param_study_cli(case, monkeypatch, tmp_path):
+    """The study's three endings. Its own write on its working config is ``cfg.seed = ...`` -- the one
+    integer both records must agree on -- made before either sweep runs, so the seam that raises
+    _Injected is the first sweep. Its pre-spend refusal is §3.4's normalisation check, applied to the
+    sweep for the same reason it is applied to the single run: a cell missing n or beta would
+    otherwise cost the whole first phase before anything noticed."""
+    import numpy as np
+    from core.FDT import cross_validation as cv
+    cfg = _fdt_cfg_for_leg(case)
+    cfg.model = "HOPF"
+
+    def _sweep(c, sweep_param, sweep_grid, fixed_overrides=None, *, writer):
+        if case == "boom":
+            _raise_injected()
+        return f"REC-{sweep_param}"
+
+    monkeypatch.setattr(cv, "run_fdt_param_sweep", _sweep)
+    writers = {"s": _FdtWriter(tmp_path / "s"), "temp": _FdtWriter(tmp_path / "t")}
+    return cfg, lambda: cv.run_param_study_cli(cfg, s_grid=np.array([0.0, 0.1]),
+                                               t_grid=np.array([1.0, 1.1]),
+                                               writers=writers, seed=5)
+
+
 _UNTOUCHED_LEGS = {
     "generate_observations": _leg_generate_observations,
     "build_experiment_observation": _leg_build_experiment_observation,
@@ -3168,6 +3201,7 @@ _UNTOUCHED_LEGS = {
     "identifiability_jacobian": _leg_identifiability_jacobian,
     "channel_ablation": _leg_channel_ablation,
     "run_fdt": _leg_run_fdt,
+    "run_param_study_cli": _leg_run_param_study_cli,
 }
 
 # The field each "refusal" leg's refusal carries, for EVERY entry. The leg used to accept any
@@ -3193,13 +3227,14 @@ _REFUSAL_FIELDS = {
     "identifiability_jacobian": "m_noise",
     "channel_ablation": "rows",
     "run_fdt": "cell",                               # a cell with no FDT normalisation constant (§3.4)
+    "run_param_study_cli": "cell",                   # the same check, before the first phase's spend
 }
 
 
 def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     """V1 (spec §2.2). The private copy is kept by ONE decorator on exactly the functions named below:
     the ten stages and compositions of core/orchestrator.py, the five diagnostics, and -- since piece
-    5 -- core/FDT's single-cell measurement. Read off the source
+    5 -- core/FDT's single-cell measurement and its two-record sweep study. Read off the source
     (every `@public_entry` in CODE_ROOTS and CODE_FILES), not off `__wrapped__`, which any
     functools.wraps decorator sets: a public stage added without it hands its body the caller's config,
     and a helper given it (`_write_observation`, `_draw_calibration_set`, `training_identity`, ...)
@@ -3224,8 +3259,10 @@ def test_the_public_entries_carry_public_entry_and_nothing_else_does():
         "identifiability_rotation", "identifiability_laplace", "identifiability_jacobian")}
     # Piece 5: the FDT measurement writes a record and must not write on the caller's FDTConfig --
     # `cfg.omega_0 = ...` twice in its own body is exactly the V1 defect, and copy_for_run (T7) is
-    # what stops it reaching the panel's settings object.
-    want |= {("core/FDT/fdt_pipeline.py", "run_fdt")}
+    # what stops it reaching the panel's settings object. The sweep study writes `cfg.seed` -- the one
+    # integer its two records must agree on (spec §4.1) -- and it too must land on a private copy.
+    want |= {("core/FDT/fdt_pipeline.py", "run_fdt"),
+             ("core/FDT/cross_validation.py", "run_param_study_cli")}
     assert found == want, f"missing {sorted(want - found)}; unexpected {sorted(found - want)}"
     assert set(_UNTOUCHED_LEGS) == {name for _, name in want}, sorted(set(_UNTOUCHED_LEGS) ^ {n for _, n in want})
 
