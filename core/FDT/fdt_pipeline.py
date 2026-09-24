@@ -113,6 +113,13 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
                         thread could never answer.
     :param confirm_production: proceed to the production sweep after sanity. REQUIRED, for the same
                         reason; only consulted when the sanity checks run."""
+    # The per-model normalisation prefactor FIRST, before anything is simulated. It reads the cell's
+    # parameters and nothing else, and it used to sit at step 8 -- so a cell missing `n` or `beta`
+    # was refused only after BOTH campaigns had been spent (spec §3.4). Carried to step 8 below. It
+    # also precedes the thin-setting notices: a run that is refused must not first print a warning
+    # about how far to trust its result.
+    prefactor = observable_noise_prefactor(cfg)
+
     # 0. The settings too thin to trust: not a refusal (E5 keeps the quick look possible), a
     #    judgement the operator sees now and the record keeps afterwards (Task 17 stores it).
     notices = warn_thin_settings(cfg)
@@ -179,8 +186,8 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     # 7. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y)
     G_at_omegas = _interp_log(omegas, freqs_psd, G)
 
-    # 8. T_eff/T -- the normalization prefactor is per-model (Nadrowski n*beta, else 1/D_x).
-    prefactor = observable_noise_prefactor(cfg)
+    # 8. T_eff/T -- the per-model normalization prefactor (Nadrowski n*beta, else 1/D_x) was
+    #    resolved at the top of this function, before anything was spent.
     ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), prefactor)
 
     # 9. Plot + save (timestamp set at the top of run_fdt)

@@ -104,6 +104,50 @@ def test_observable_noise_prefactor_user_rejects_multiplicative_zero_negative():
         registry.unregister(name)
 
 
+def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeypatch):
+    """Spec §3.4, first bullet. The per-model normalisation prefactor was resolved at step 8 of
+    run_fdt -- AFTER both campaigns -- so a cell missing `n` or `beta` cost the entire run, hours of
+    it, before the pipeline said the one thing it could have said in a second. It is resolved first
+    now, and carried down to step 8.
+
+    The assertion that carries the point is that NO CAMPAIGN RAN. A refusal merely moved a few lines
+    up in the source but still sitting behind a campaign would pass a message-only test and buy the
+    operator nothing. Both entry shapes are checked: the sanity branch spends a campaign of its own
+    before the production one, so a check placed after the sanity gate would still be too late.
+
+    The field key is the second half. An FDTModelError is a Refusal (tests/test_refusals.py's
+    "every domain error is a refusal and carries a field"), but until now every FDT one carried
+    field=None, so neither front-end table could name the control or the flag that answers it.
+    """
+    import pytest
+
+    from core.FDT import fdt_pipeline
+    from core.FDT.campaigns import FDTModelError
+
+    spent = []
+
+    def _never(*a, **kw):
+        spent.append(a)
+        raise RuntimeError("a campaign ran: the prefactor must be refused before anything is spent")
+
+    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd", _never)
+    monkeypatch.setattr(fdt_pipeline, "run_all_sanity", _never)
+
+    class _NoN:
+        """A Nadrowski cell carrying k -- so the omega_0 estimate would have succeeded -- but no n,
+        which is half of the Nadrowski prefactor n*beta."""
+        model = "NADROWSKI"
+        params_dict = {"k": (1.0, None), "beta": (14.1, None)}
+
+    for skip_sanity in (True, False):
+        with pytest.raises(FDTModelError) as e:
+            fdt_pipeline.run_fdt(_NoN(), skip_sanity=skip_sanity, confirm_production=True)
+        assert "'n'" in str(e.value), str(e.value)
+        assert e.value.field == "cell", f"skip_sanity={skip_sanity}: field={e.value.field!r}"
+    assert spent == [], "the prefactor refusal arrived only after a campaign had been spent"
+
+
 def test_fdt_support_gate():
     """Built-ins are supported; user models are gated on additive, non-zero, unforced observable noise."""
     for m in ("NADROWSKI", "HOPF", "BP"):
@@ -214,7 +258,10 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     # ── the FDT run: a failed sanity verdict is a WARNING, without the hand-typed word ─────────────
     class _Hopf:
         model = "HOPF"
-        # run_fdt judges the thin settings first (E5) and reads both knobs to do it. At these values
+        # run_fdt resolves the normalisation prefactor before its first record (spec §3.4), and the
+        # HOPF prefactor is 2/sigma_x^2 -- so this stub has to carry the one parameter it reads.
+        params_dict = {"sigma_x": (0.1, None)}
+        # run_fdt judges the thin settings next (E5) and reads both knobs to do it. At these values
         # nothing is said, so the exact record list below is unchanged.
         n_freqs, ensemble_M = 60, 256
 
@@ -511,6 +558,8 @@ def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(
 
     class _ThinHopf:
         model = "HOPF"
+        # the prefactor (2/sigma_x^2) is resolved before the thin check, so this stub carries sigma_x
+        params_dict = {"sigma_x": (0.1, None)}
         n_freqs, ensemble_M = 1, 2
 
     monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)

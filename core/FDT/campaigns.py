@@ -100,7 +100,8 @@ def _make_simulator(cfg: FDTConfig, params, force, inits, t, *, freqs_per_batch=
             freqs_per_batch=freqs_per_batch, segs=segs, batch_size=batch_size, device=device)
     cls = VALID_SIMS.get(cfg.model.lower())
     if cls is None:
-        raise FDTModelError(f"Invalid model for FDT: {cfg.model}. Valid: {list(VALID_SIMS)}.")
+        raise FDTModelError(f"Invalid model for FDT: {cfg.model}. Valid: {list(VALID_SIMS)}.",
+                            field="model")
     return cls(params, force, inits, t, freqs_per_batch=freqs_per_batch, segs=segs,
                batch_size=batch_size, device=device)
 
@@ -124,26 +125,28 @@ def observable_noise_prefactor(cfg: FDTConfig) -> float:
             # No passive baseline exists to adjudicate the magnitude -- treat BP numbers as unverified.
             return float(2.0 * pd["tau_hb"][0] / pd["eta_hb"][0] ** 2)
     except KeyError as e:
-        raise FDTModelError(f"The {cfg.model} cell is missing the FDT parameter {e}.") from e
+        raise FDTModelError(f"The {cfg.model} cell is missing the FDT parameter {e}.",
+                            field="cell") from e
 
     # User model: g = sqrt(2 D) so D_x = D_0 (the observable's white-noise strength); coupling 1.
     from core import registry
     spec = registry.get(cfg.model)
     if spec is None or spec.compiled is None:
-        raise FDTModelError(f"User model '{cfg.model}' has no compiled definition for FDT.")
+        raise FDTModelError(f"User model '{cfg.model}' has no compiled definition for FDT.",
+                            field="model")
     c = spec.compiled
     if {str(s) for s in c.diff_exprs[0].free_symbols} & set(c.var_names):
         raise FDTModelError(f"Observable '{c.var_names[0]}' has state-dependent (multiplicative) noise; "
-                            "FDT supports additive-noise observables only.")
+                            "FDT supports additive-noise observables only.", field="model")
     try:
         param_vals = [pd[name][0] for name in c.param_names]
     except KeyError as e:
-        raise FDTModelError(f"The {cfg.model} cell is missing parameter {e}.") from e
+        raise FDTModelError(f"The {cfg.model} cell is missing parameter {e}.", field="cell") from e
     args = tuple(0.0 for _ in c.var_names) + tuple(param_vals)     # states irrelevant for additive D
     D0 = float(c.diff_fns[0](args))
     if not math.isfinite(D0) or D0 <= 0.0:
         raise FDTModelError(f"Observable '{c.var_names[0]}' has non-positive/zero noise (D0={D0}); "
-                            "FDT requires a stochastic observable.")
+                            "FDT requires a stochastic observable.", field="model")
     return 1.0 / D0
 
 
