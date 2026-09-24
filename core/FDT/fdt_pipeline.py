@@ -20,14 +20,14 @@ from core import config
 from core.config import FDTConfig
 from core.FDT.campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
 from core.FDT.spectral import gen_freqs_log, eff_temp_ratio, find_spectral_peak
-from core.FDT.sanity import run_all_sanity, _interp_log
+from core.FDT.sanity import run_all_sanity, _interp_log, _resolved_span, _low_end_advice
 from core.FDT.plots import (
     plot_eff_temp_ratio, plot_chi_components, plot_psd,
     plot_spontaneous_trajectory,
 )
 # Both torch-free and stdlib-only: the judgement channel and the run boundary cost this module nothing,
 # where core.orchestrator (which re-exports the same PreflightWarning) would load the SBI stack.
-from core.refusals import PreflightWarning
+from core.refusals import PreflightWarning, Refusal
 from core.runs import RUN_BOUNDARY_FILES
 
 # Banners and saved-plot paths are information; a failed sanity verdict is a warning (piece 3, V4).
@@ -178,6 +178,26 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool) -> N
     #    so ~50% more drive frequencies above Omega_0 than below.
     omegas = gen_freqs_log(cfg.omega_0, cfg.n_freqs, cfg.freq_bounds,
                             cfg.hw.device, cfg.hw.dtype)
+
+    # The band, checked the first moment it is knowable and BEFORE the driven campaign -- the
+    # expensive half of the run (spec §3.4). The grid's lowest frequency is known only now, because
+    # it is built around the resonance Campaign 1 found; the spectrum's lowest RESOLVED frequency is
+    # its first non-zero bin, which the spectrum's Welch segment sets -- not the recording, which
+    # stops lengthening the segment at campaigns.WELCH_NPERSEG_CAP samples (the ruling after Task
+    # 14's review; _low_end_advice words it). A grid reaching below it comes back blank there (spec
+    # §3.5), and used to come back with a fabricated tail instead.
+    # field="freq_bounds" (P2, P75): the key is registered and BOTH front-end tables map it to None,
+    # because neither the band nor the spontaneous duration is exposed by a front end -- so no table
+    # offers a fix sentence and none pretends to.
+    lo_res, _hi_res = _resolved_span(freqs_psd)
+    omega_lo = float(omegas[0])
+    if omega_lo < lo_res:
+        raise Refusal(
+            f"The frequency band reaches below what the spontaneous spectrum resolves: the lowest "
+            f"probe frequency is {omega_lo:g} (ND) but the lowest frequency the spectrum resolves "
+            f"is {lo_res:g} (ND). Raise freq_bounds' lower multiplier above "
+            f"{lo_res / cfg.omega_0:g}{_low_end_advice(cfg, lo_res, 'the spontaneous recording')}",
+            field="freq_bounds")
 
     # 6. Campaign 2: forced chi via lock-in
     log.info("Campaign 2: forced response -> chi via lock-in")

@@ -15,6 +15,7 @@ from core.config import FDTConfig
 from core.FDT.campaigns import (
     run_campaign1_psd, run_campaign2_chi,
     _make_simulator, _n_force_channels, _pick_n_segs, observable_noise_prefactor,
+    WELCH_NPERSEG_CAP,
 )
 from core.FDT.spectral import (
     psd_welch, lock_in_chi, eff_temp_ratio, gen_freqs_log, find_spectral_peak,
@@ -32,7 +33,9 @@ def _resolved_span(omegas: torch.Tensor) -> tuple[float, float]:
     A Welch grid's first entry is exactly 0.0 (``spectral.psd_welch``: ``rfftfreq``), and the zero
     bin is the segment mean -- it is not a measurement at any positive frequency, so nothing may
     interpolate from it. The lower end is therefore the SECOND entry of a Welch grid, and it is the
-    resolution the spontaneous recording bought: 2*pi/(nperseg*dt).
+    resolution the Welch SEGMENT buys: 2*pi/(nperseg*dt), where the segment stops growing with the
+    recording at ``campaigns.WELCH_NPERSEG_CAP`` samples. The upper end is the Nyquist frequency,
+    pi/dt, which only the integration step sets.
 
     A grid with no positive bin resolves nothing, and returns an EMPTY band (+inf, -inf) rather than
     raising -- every probe is then out of range, which is the truthful answer.
@@ -41,6 +44,37 @@ def _resolved_span(omegas: torch.Tensor) -> tuple[float, float]:
     if pos.numel() == 0:
         return float("inf"), float("-inf")
     return float(pos[0]), float(pos[-1])
+
+
+def _low_end_advice(cfg, lo_res: float, recording: str) -> str:
+    """The end of a sentence that has just told the reader to move the band's LOWER edge: whether a
+    longer ``recording`` would also help, and why.
+
+    What sets a spectrum's lowest resolved frequency, ``lo_res``, is its Welch segment, 2*pi/lo_res
+    ND long -- not the recording. Campaign 1 cuts the recording into segments of
+    min(WELCH_NPERSEG_CAP, recording) samples, so once the recording reaches the cap (163.84 ND at
+    dt_nd = 0.01, below both shipped durations) it resolves no lower however long it runs. A longer
+    recording is therefore offered only while this one is SHORTER than the cap, where it does
+    lengthen the segment -- and with the floor the cap reaches, because a band below that floor needs
+    the multiplier whatever the recording; otherwise the sentence says it would not help. Advice that
+    sends the operator to double a spontaneous campaign for an identical band is worse than none (the
+    ruling after Task 14's review, which measured 200, 4000, 8000 and 16000 ND giving the same first
+    bin).
+
+    ``cfg`` is the configuration the spectrum was MEASURED with -- the passive check's private copy,
+    not the caller's -- because its duration and step are what decide the segment.
+    """
+    segment_nd = 2.0 * math.pi / lo_res
+    n_obs = int(round(cfg.psd_T_obs_nd / cfg.dt_nd))     # the sample count run_campaign1_psd uses
+    if n_obs < WELCH_NPERSEG_CAP:
+        cap_nd = WELCH_NPERSEG_CAP * cfg.dt_nd
+        return (f", or lengthen {recording} (psd_T_obs_nd = {cfg.psd_T_obs_nd:g}): the spectrum's "
+                f"lowest resolved frequency is set by its Welch segment, {segment_nd:g} (ND) long, "
+                f"which a longer recording lengthens up to a cap of {WELCH_NPERSEG_CAP} samples "
+                f"({cap_nd:g} ND), where the spectrum resolves down to {2.0 * math.pi / cap_nd:g} (ND).")
+    return (f". Lengthening {recording} (psd_T_obs_nd = {cfg.psd_T_obs_nd:g}) would not help: the "
+            f"spectrum's lowest resolved frequency is set by its Welch segment, {segment_nd:g} (ND) "
+            f"long, which is already at its cap of {WELCH_NPERSEG_CAP} samples.")
 
 
 def _interp_log(x_new: torch.Tensor, x_old: torch.Tensor, y_old: torch.Tensor) -> torch.Tensor:
@@ -121,10 +155,13 @@ def check_passive_baseline(cfg: FDTConfig, save_plot_path=None) -> tuple[bool, d
     n_off = int(np.isnan(devs).sum())
     if n_off:
         lo_res, hi_res = _resolved_span(freqs_psd)
+        # A longer passive run is offered only where it lowers the first bin (_low_end_advice): the
+        # passive run is min(4000, psd_T_obs_nd) ND, past the Welch segment's cap at every shipped
+        # setting, and no length moves the top.
         warnings.warn(
             f"check_passive_baseline: {n_off}/{devs.size} probe frequencies fall outside the Welch "
             f"PSD grid ({lo_res:g}..{hi_res:g}) and were EXCLUDED. "
-            f"Narrow cfg.freq_bounds, or lengthen the passive run so the PSD resolves them.",
+            f"Narrow cfg.freq_bounds{_low_end_advice(passive, lo_res, 'the passive run')}",
             stacklevel=2)
     covered = devs[~np.isnan(devs)]
     if covered.size == 0:
@@ -194,7 +231,9 @@ def check_high_freq_fdt(cfg: FDTConfig) -> tuple[bool, dict]:
             f"check_high_freq_fdt: {n_off}/{devs.size} of the top probe frequencies fall outside the "
             f"Welch PSD grid ({lo_res:g}..{hi_res:g}) and were "
             f"EXCLUDED. This check previously extrapolated there, so a past pass at these "
-            f"frequencies was not evidence. Lower cfg.freq_bounds' upper edge or raise psd_T_obs_nd.",
+            f"frequencies was not evidence. Lower cfg.freq_bounds' upper edge: the spectrum's top, "
+            f"{hi_res:g}, is its Nyquist frequency pi/dt_nd, which the integration step sets and a "
+            f"longer recording does not move.",
             stacklevel=2)
     covered = devs[~np.isnan(devs)]
     if covered.size == 0:

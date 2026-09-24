@@ -43,6 +43,14 @@ FDT_MAX_ELEMENTS_PER_SEG = 200_000_000
 # tensors during integration. 0.6 leaves ~40% buffer.
 FDT_CUDA_MEM_FRACTION = 0.6
 
+#: Campaign 1's cap on its Welch segment, in samples. The spontaneous recording is cut into segments
+#: of min(cap, recording) samples rounded down to a power of two, and it is the SEGMENT, not the
+#: recording, that sets the spectrum's lowest resolved frequency, 2*pi/(nperseg*dt_nd). A recording
+#: at or past the cap -- 163.84 ND at dt_nd = 0.01, below both shipped durations -- buys more segments
+#: to average and no lower frequency. Named once, because the band refusal's advice
+#: (sanity._low_end_advice) must say exactly what this campaign does.
+WELCH_NPERSEG_CAP = 2 ** 14
+
 
 def _pick_n_segs(n_steps: int, batch_size: int) -> int:
     """Pick segs to keep the solver's per-segment xs buffer under the element budget."""
@@ -172,7 +180,7 @@ def run_campaign1_psd(cfg: FDTConfig, M: int = None, T_obs_nd: float = None,
     :param cfg: FDTConfig (defaults below pulled from cfg unless overridden).
     :param M: ensemble size; default cfg.ensemble_M.
     :param T_obs_nd: PSD observation duration in ND time; default cfg.psd_T_obs_nd.
-    :param nperseg: Welch segment length; default min(2**14, steady-state length)
+    :param nperseg: Welch segment length; default min(WELCH_NPERSEG_CAP, steady-state length)
                     rounded down to nearest power of 2.
     :param return_trajectory: if True, also returns the full time axis and the
                               ensemble-mean trajectory (including burn-in) for
@@ -208,7 +216,7 @@ def run_campaign1_psd(cfg: FDTConfig, M: int = None, T_obs_nd: float = None,
     del sol
 
     if nperseg is None:
-        nperseg = min(2 ** 14, x_steady.shape[-1])
+        nperseg = min(WELCH_NPERSEG_CAP, x_steady.shape[-1])
         nperseg = 1 << int(math.log2(nperseg))  # nearest power of 2 <= nperseg
 
     omegas, G = psd_welch(x_steady, dt=dt, nperseg=nperseg)

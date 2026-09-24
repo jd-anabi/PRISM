@@ -257,6 +257,211 @@ def test_the_sanity_checks_name_the_band_the_spectrum_actually_resolves(monkeypa
     assert passed is False and metrics["n_off_grid"] == 3, metrics
 
 
+def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaign(tmp_path, monkeypatch):
+    """Spec §3.4, second bullet, and E9. The probe grid is built around a resonance the spontaneous
+    campaign found, so the grid's lowest frequency and the lowest frequency the spectrum resolves are
+    only comparable once Campaign 1 is done. That is the first moment the condition is knowable, and
+    it sits directly before the expensive half of the run -- which is the only reason the check is
+    worth anything. Before T14 this band silently produced a fabricated low-frequency tail; after T14
+    it produces blanks; refusing says so before the drive is spent.
+
+    The assertion that carries the point is that Campaign 2 NEVER RAN. The message is checked too:
+    it names the band that was asked for, the band that exists, and what sets it -- and it names no
+    box, tab or flag. Its field is "freq_bounds" (P75): the key is registered, and both front-end
+    tables map it to None because no control and no flag exposes the band, so neither table offers a
+    fix sentence and neither pretends to.
+
+    What sets the resolution is the spectrum's Welch SEGMENT, not the recording (ruled after Task 14's
+    review, which measured it): Campaign 1's segment stops growing at WELCH_NPERSEG_CAP samples,
+    163.84 ND at dt_nd = 0.01. This recording is 200 ND -- 20,000 samples, past the cap, as both
+    shipped durations are -- so the refusal must NOT send the operator to lengthen it, and says why
+    instead. The below-cap branch is the next test."""
+    import pytest
+
+    from core.FDT import fdt_pipeline
+    from core.FDT.campaigns import WELCH_NPERSEG_CAP
+    from core.refusals import Refusal
+
+    driven = []
+
+    class _Cfg:
+        """The subset of FDTConfig run_fdt reads, at a size nothing simulates."""
+        model = "HOPF"
+        params_dict = {"sigma_x": (0.1, None)}
+        n_freqs, freq_bounds = 5, (0.1, 30.0)
+        ensemble_M = 8        # read first by the thin-setting check; at its threshold, so it says nothing
+        burn_in_nd, dt_nd, psd_T_obs_nd, omega_0 = 0.0, 0.01, 200.0, 1.0
+
+        class hw:
+            device = torch.device("cpu")
+            dtype = torch.float64
+
+    # A spectrum resolving 1.0..3.0 whose peak is at 2.0, so the grid runs 0.2 .. 60 -- its lowest
+    # probe sits a factor of five below the lowest frequency the spectrum resolves.
+    freqs_psd = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
+    G = torch.tensor([9.0, 1.0, 5.0, 1.0], dtype=torch.float64)
+    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
+                        lambda cfg, return_trajectory=False: (
+                            freqs_psd, G, torch.arange(4, dtype=torch.float64),
+                            torch.zeros(4, dtype=torch.float64)))
+    monkeypatch.setattr(fdt_pipeline, "plot_spontaneous_trajectory", lambda *a, **kw: None)
+
+    def _no_drive(*a, **kw):
+        driven.append(a)
+        raise AssertionError("the driven campaign ran: the band refusal must come first")
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _no_drive)
+
+    with pytest.raises(Refusal) as e:
+        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True)
+    msg = str(e.value)
+    assert "0.2" in msg and "psd_T_obs_nd = 200" in msg, msg
+    assert "Raise freq_bounds' lower multiplier above 0.5" in msg, msg
+    # past the segment's cap: a longer recording is not offered, and the message says why
+    assert round(_Cfg.psd_T_obs_nd / _Cfg.dt_nd) >= WELCH_NPERSEG_CAP, "the premise of this case"
+    assert "lengthen the spontaneous recording" not in msg, msg
+    assert "would not help" in msg and "Welch segment" in msg, msg
+    assert f"cap of {WELCH_NPERSEG_CAP} samples" in msg, msg
+    assert e.value.field == "freq_bounds", e.value.field
+    from core.tool.fields import fix_sentence
+    assert fix_sentence("freq_bounds") == "", "no flag exposes the band, so no fix is offered (P2, P75)"
+    assert driven == [], "Campaign 2 was entered before the band was checked"
+
+
+def test_the_band_refusal_offers_a_longer_recording_only_where_it_lowers_the_resolution(
+        tmp_path, monkeypatch):
+    """The other branch of the ruling above. Below the Welch segment's cap a longer recording DOES
+    lengthen the segment, so it lowers the spectrum's first real bin, and the refusal offers it beside
+    the band -- with the cap, so the operator knows how far it goes. 100 ND at dt_nd = 0.01 is 10,000
+    samples, cut into 8,192-sample segments.
+
+    The boundary is pinned on the one helper the refusal and check_passive_baseline share: a
+    recording of exactly the cap already fills it, one sample shorter does not. And the cap is ONE
+    constant, read by name in Campaign 1 as well, so the advice cannot drift from what the campaign
+    does."""
+    import inspect
+    from types import SimpleNamespace
+
+    import pytest
+
+    from core.FDT import campaigns, fdt_pipeline
+    from core.FDT.campaigns import WELCH_NPERSEG_CAP
+    from core.FDT.sanity import _low_end_advice
+    from core.refusals import Refusal
+
+    class _Cfg:
+        """As in the test above, with a recording shorter than the segment's cap."""
+        model = "HOPF"
+        params_dict = {"sigma_x": (0.1, None)}
+        n_freqs, freq_bounds, ensemble_M = 5, (0.1, 30.0), 8
+        burn_in_nd, dt_nd, psd_T_obs_nd, omega_0 = 0.0, 0.01, 100.0, 1.0
+
+        class hw:
+            device = torch.device("cpu")
+            dtype = torch.float64
+
+    freqs_psd = torch.tensor([0.0, 1.0, 2.0, 3.0], dtype=torch.float64)
+    G = torch.tensor([9.0, 1.0, 5.0, 1.0], dtype=torch.float64)
+    monkeypatch.setattr(fdt_pipeline, "_out_dir", lambda: tmp_path)
+    monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
+                        lambda cfg, return_trajectory=False: (
+                            freqs_psd, G, torch.arange(4, dtype=torch.float64),
+                            torch.zeros(4, dtype=torch.float64)))
+    # every figure is stubbed, so nothing is drawn wherever it sits relative to the check
+    for figure in ("plot_spontaneous_trajectory", "plot_psd"):
+        monkeypatch.setattr(fdt_pipeline, figure, lambda *a, **kw: None)
+
+    def _no_drive(*a, **kw):
+        raise AssertionError("the driven campaign ran: the band refusal must come first")
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _no_drive)
+
+    assert round(_Cfg.psd_T_obs_nd / _Cfg.dt_nd) < WELCH_NPERSEG_CAP, "the premise of this case"
+    with pytest.raises(Refusal) as e:
+        fdt_pipeline.run_fdt(_Cfg(), skip_sanity=True, confirm_production=True)
+    msg = str(e.value)
+    assert e.value.field == "freq_bounds", e.value.field
+    assert ("Raise freq_bounds' lower multiplier above 0.5, or lengthen the spontaneous recording "
+            "(psd_T_obs_nd = 100)") in msg, msg
+    assert "would not help" not in msg, msg
+    # the cap, and the floor it reaches (2*pi/163.84): a band below that needs the multiplier anyway
+    assert f"cap of {WELCH_NPERSEG_CAP} samples (163.84 ND)" in msg and "down to 0.0383495" in msg, msg
+
+    # the boundary, on the shared helper: exactly the cap fills it; one sample less does not
+    at_cap = _low_end_advice(SimpleNamespace(psd_T_obs_nd=163.84, dt_nd=0.01), 1.0, "the run")
+    short = _low_end_advice(SimpleNamespace(psd_T_obs_nd=163.83, dt_nd=0.01), 1.0, "the run")
+    assert "would not help" in at_cap and "or lengthen the run" not in at_cap, at_cap
+    assert "or lengthen the run (psd_T_obs_nd = 163.83)" in short and "would not help" not in short, short
+
+    # one cap: Campaign 1 reads the same constant, not a literal of its own
+    src = inspect.getsource(campaigns.run_campaign1_psd)
+    assert "WELCH_NPERSEG_CAP" in src and "2 ** 14" not in src, "the campaign's cap is not the advice's"
+
+
+def test_the_sanity_warnings_name_what_really_bounds_each_end_of_the_spectrum(monkeypatch):
+    """The same ruling, for the two sanity warnings T14 made print the resolved band. Both gave advice
+    that cannot work at the shipped settings. check_high_freq_fdt blanks at the TOP of the grid and
+    said "raise psd_T_obs_nd" -- but the top of a Welch spectrum is its Nyquist frequency, pi/dt_nd,
+    which no recording length moves. check_passive_baseline said "lengthen the passive run", which
+    moves the BOTTOM only while the recording is shorter than the Welch segment's cap; its passive run
+    is min(4000, psd_T_obs_nd) ND, past the cap at every shipped setting. Each now names what bounds
+    its end, and the passive one offers a longer run only below the cap, in the band refusal's words
+    (one helper). Nothing is simulated: the campaign seams are stubbed, and the passive check keeps
+    four covered probes, so its bare ValueError (Task 33's) is not reached."""
+    import copy
+
+    import pytest
+
+    from core.FDT import sanity
+
+    class _Cfg:
+        model, ensemble_M, omega_0, freq_bounds, dt_nd = "NADROWSKI", 8, 1.0, (0.1, 30.0), 0.01
+
+        class hw:
+            device = torch.device("cpu")
+            dtype = torch.float64
+
+        def __init__(self, psd_T_obs_nd):
+            self.psd_T_obs_nd = psd_T_obs_nd
+
+        def with_overrides(self, **kw):
+            c = copy.copy(self)
+            vars(c).update(kw)
+            return c
+
+    # A spectrum resolving 0.5..2.0 with its peak at 1.0: the passive check's 20-point grid then runs
+    # 0.1..30 and keeps four probes; the high-frequency check's top three (4.48, 11.59, 30) all blank.
+    freqs_psd = torch.tensor([0.0, 0.5, 1.0, 2.0], dtype=torch.float64)
+    G = torch.tensor([9.0, 1.0, 2.0, 1.0], dtype=torch.float64)
+    monkeypatch.setattr(sanity, "run_campaign1_psd", lambda c: (freqs_psd, G))
+    monkeypatch.setattr(sanity, "run_campaign2_chi",
+                        lambda c, om, **kw: torch.full((len(om),), 1 + 1j, dtype=torch.complex128))
+    monkeypatch.setattr(sanity, "observable_noise_prefactor", lambda c: 1.0)
+
+    # the top end: the step bounds it, and a longer recording is not offered
+    with pytest.warns(UserWarning, match="3/3") as rec:
+        sanity.check_high_freq_fdt(_Cfg(4000.0))
+    msg = str(rec[0].message)
+    assert "psd_T_obs_nd" not in msg, f"a longer recording cannot raise the top: {msg}"
+    assert "Lower cfg.freq_bounds' upper edge" in msg and "Nyquist" in msg and "pi/dt_nd" in msg, msg
+
+    # the bottom end, past the cap (the passive run is min(4000, 8000) = 4000 ND): not offered
+    with pytest.warns(UserWarning, match="16/20") as rec:
+        sanity.check_passive_baseline(_Cfg(8000.0))
+    msg = str(rec[0].message)
+    assert "or lengthen the passive run" not in msg, msg
+    assert ("Lengthening the passive run (psd_T_obs_nd = 4000) would not help" in msg
+            and "Welch segment" in msg), msg
+
+    # ...and below the cap (100 ND is 10,000 samples): offered, with the cap it stops at
+    with pytest.warns(UserWarning, match="16/20") as rec:
+        sanity.check_passive_baseline(_Cfg(100.0))
+    msg = str(rec[0].message)
+    assert "Narrow cfg.freq_bounds, or lengthen the passive run (psd_T_obs_nd = 100)" in msg, msg
+    assert "would not help" not in msg and "cap of 16384 samples" in msg, msg
+
+
 def test_fdt_support_gate():
     """Built-ins are supported; user models are gated on additive, non-zero, unforced observable noise."""
     for m in ("NADROWSKI", "HOPF", "BP"):
