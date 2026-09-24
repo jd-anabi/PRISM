@@ -369,3 +369,85 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
     assert box.informativeText() == "" and box.detailedText() == ""
     assert pane.lines[-1] == ("warning", box.text()), pane.lines
     assert sent == [], "an MP4 export was dispatched without ffmpeg"
+
+
+def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(monkeypatch, tmp_path):
+    """Spec §5.6. The panel used to dispatch ``max(1, frame_steps.value())`` and
+    ``float(max(1, fps.value()))`` and hand ``tobs.value()`` straight through. Every numeric box in
+    this window returns 0 for a BLANK (labeled_inputs.FloatField.value), so those clamps quietly
+    turned "I cleared this box" into 1 step per frame and 1 frame per second -- a run that looks
+    wedged rather than refused -- and a blank T_obs reached plan_stream, where ``n_obs`` came out 0
+    and ``run_simulation_stream`` returned at once, reporting success with nothing streamed.
+
+    Each is now a refusal naming the setting, raised at the CLICK and before the config is built, so
+    nothing is dispatched. Asserted against a blank box and not only a typed zero, because a rule
+    written as "reject below zero" would accept every blank box in the application (Review Focus 3).
+
+    ``t_obs`` is the shared key the Infer tab already owns, so its fix sentence now names both places
+    it appears -- E6's widening. Without that a blank length on this screen sent the operator to a
+    tab that has nothing to do with it.
+    """
+    import pytest
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui import fields as gui_fields
+    from core.gui.panels import simulate_panel as sim_mod
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    cell = tmp_path / "cell.txt"
+    cell.write_text("# values\n", encoding="utf-8")
+    p = SimulatePanel()
+    p.cell_picker.selected_path = lambda: str(cell)
+    sent = []
+    p.dispatch = lambda *a, **k: sent.append((a, k))
+    built = []
+    monkeypatch.setattr(sim_mod, "build_stream_config",
+                        lambda *a, **k: built.append(a) or pytest.fail(
+                            "the config was built before the boxes were checked"))
+
+    for box_widget, key, blank_needle in ((p.tobs, "t_obs", "is blank"),
+                                          (p.frame_steps, "frame_steps", "is blank"),
+                                          (p.fps, "fps", "is blank")):
+        original = box_widget.text()
+        box_widget.setText("")
+        SHOWN.clear()
+        p._start()
+        shown = SHOWN[-1]
+        assert shown.windowTitle() == "Check your inputs" and shown.icon() == QMessageBox.Warning, key
+        assert blank_needle in shown.text(), shown.text()
+        assert shown.informativeText() == gui_fields.fix_sentence(key), key
+        assert sent == [] and built == [], key
+        box_widget.setText(original)
+
+    # a typed zero is refused too, and by the rule the setting deserves
+    for box_widget, key, needle in ((p.tobs, "t_obs", "must be greater than 0"),
+                                    (p.frame_steps, "frame_steps", "must be at least 1"),
+                                    (p.fps, "fps", "must be greater than 0")):
+        original = box_widget.text()
+        box_widget.setText("0")
+        SHOWN.clear()
+        p._start()
+        assert needle in SHOWN[-1].text(), (key, SHOWN[-1].text())
+        assert sent == [] and built == [], key
+        box_widget.setText(original)
+
+    # the export path reads the same box and must refuse it the same way
+    import numpy as np
+    from PySide6.QtWidgets import QFileDialog
+    p._record = [np.array([[0.0, 0.1], [1e-3, 0.2]])]
+    monkeypatch.setattr(sim_mod, "ffmpeg_available", lambda: True)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("clip.gif", ""))
+    p.fps.setText("")
+    SHOWN.clear()
+    p._save_video()
+    assert SHOWN[-1].windowTitle() == "Check your inputs"
+    assert sent == [], "an export was dispatched with a blank frame rate"
+
+    # the two new boxes are named on this screen, and T_obs names BOTH places it appears
+    assert gui_fields.fix_sentence("frame_steps") == \
+        "Set it in the 'Steps / frame' box on the Live simulation tab."
+    assert gui_fields.fix_sentence("fps") == \
+        "Set it in the 'Max FPS' box on the Live simulation tab."
+    assert gui_fields.fix_sentence("t_obs") == \
+        "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."

@@ -17,11 +17,12 @@ import numpy as np
 from PySide6.QtWidgets import (QComboBox, QFileDialog, QFormLayout, QGroupBox, QLabel, QPushButton)
 
 from core.config import CELL_PATH, DT_EXP_S, T_MIN_EXP_S, VALID_MODELS
-from core.refusals import Refusal
+from core.refusals import Refusal, require_at_least, require_positive
 
 from .base_panel import BasePanel
 from .simulate_export import (estimate_frame_count, export_animation, export_stride, ffmpeg_available)
 from .simulate_runner import build_stream_config, run_simulation_stream
+from .. import fields as gui_fields
 from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker
 from ..widgets.help_badge import add_help_row
@@ -86,9 +87,9 @@ class SimulatePanel(BasePanel):
 
         add_help_row(form, "Model", self.model_combo, HELP["model"])
         add_help_row(form, "Cell", self.cell_picker, HELP["cell"])
-        add_help_row(form, "T_obs (s)", self.tobs, HELP["tobs"])
-        add_help_row(form, "Steps / frame", self.frame_steps, HELP["frame"])
-        add_help_row(form, "Max FPS", self.fps, HELP["fps"])
+        add_help_row(form, gui_fields.label("t_obs"), self.tobs, HELP["tobs"])
+        add_help_row(form, gui_fields.label("frame_steps"), self.frame_steps, HELP["frame"])
+        add_help_row(form, gui_fields.label("fps"), self.fps, HELP["fps"])
         form.addRow(QLabel("Streaming holds the app single-task until it finishes or you Cancel."))
         form.addRow(self.btn_start)
         form.addRow(self.btn_save_video)
@@ -104,8 +105,14 @@ class SimulatePanel(BasePanel):
             return
         model = self.model_combo.currentText()
         try:
+            # The boxes FIRST, and through value_or_none: every numeric box here returns 0 for a
+            # blank, so a blank T_obs used to reach plan_stream (n_obs 0, an instant "complete") and
+            # the two below were clamped with max(1, ...) to a value nobody typed (spec §5.6).
+            t_obs = require_positive("t_obs", self.tobs.value_or_none())
+            frame_steps = require_at_least("frame_steps", self.frame_steps.value_or_none(), 1)
+            fps = require_positive("fps", self.fps.value_or_none())
             cfg = build_stream_config(model, cell)
-        except Refusal as e:                         # a cell or model problem: the yellow box
+        except Refusal as e:                         # a box, a cell or a model problem: the yellow box
             self._refusal(e)
             return
         except Exception as e:                       # noqa: BLE001 -- a bug in the builder: the red box
@@ -115,9 +122,8 @@ class SimulatePanel(BasePanel):
         self.live_view.reset()
         self._record = []                                    # a new run: drop the previous recording
         self.log_pane.append_line(
-            f"Streaming {model} — {Path(cell).name} for {self.tobs.value():g} s of observation…")
-        self.dispatch(run_simulation_stream, cfg, self.tobs.value(),
-                      max(1, self.frame_steps.value()), float(max(1, self.fps.value())),
+            f"Streaming {model} — {Path(cell).name} for {t_obs:g} s of observation…")
+        self.dispatch(run_simulation_stream, cfg, t_obs, frame_steps, float(fps),
                       provide_stream=True, on_chunk=self._on_chunk,
                       on_result=lambda _r: self.log_pane.append_line("Simulation complete."))
 
@@ -145,7 +151,11 @@ class SimulatePanel(BasePanel):
             return
 
         series = np.concatenate(self._record, axis=0)
-        fps = float(max(1, self.fps.value()))
+        try:
+            fps = require_positive("fps", self.fps.value_or_none())      # the same box, the same rule
+        except Refusal as e:
+            self._refusal(e)
+            return
         n_frames = estimate_frame_count(len(series), export_stride(1.0 / DT_EXP_S, fps))
         if n_frames > 600:
             self.log_pane.append_line(

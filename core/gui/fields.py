@@ -154,6 +154,9 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # freq, tau, ...), built per kind, so there is no one label(key) to build a row from.
     "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' "
                       "choice, on the Model Builder screen."),
+    # the live simulation (piece 5, §5.6)
+    "frame_steps": ("Live simulation", "Steps / frame"),
+    "fps": ("Live simulation", "Max FPS"),
     # tool-only: the diagnostics' knobs; no window sentence
     "repeats": None, "n_points": None, "n_worst": None, "top_n": None, "m": None, "m_noise": None,
     "rel": None, "min_valid": None, "rows": None, "n_sweep": None, "chi_k_fixed": None,

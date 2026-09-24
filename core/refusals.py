@@ -151,6 +151,9 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("dt_nd", "the integration step, in ND units", "0.01"),                      # FDTConfig.dt_nd
     Field("psd_t_obs_nd", "the spontaneous recording length, in ND units",
           "8000.0, or the preset's in a sweep"),                                        # FDTConfig.psd_T_obs_nd
+    # the live simulation (piece 5, §5.6). Both were SILENT CLAMPS -- max(1, ...) -- before.
+    Field("frame_steps", "the number of simulation steps per displayed frame", "2000"),
+    Field("fps", "the maximum render frame rate, in frames per second", "30"),
     # the model builder (piece 5, §5.3). Window-only settings: core/tool/fields.py maps each to None.
     Field("param_value", "the parameter's value", None),
     Field("param_min", "the parameter's lower bound", None),

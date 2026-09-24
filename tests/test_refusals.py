@@ -47,6 +47,8 @@ BASE_KEYS = (
     "artifact", "note",
     # piece 5, the model builder (spec §5.3)
     "param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",
+    # piece 5, the live simulation (spec §5.6)
+    "frame_steps", "fps",
 )
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
                   "n_sweep", "chi_k_fixed")
@@ -99,7 +101,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     shows the default as the operator would type it. ``describe`` is the public reader and refuses
     an unknown key with a KeyError: a message can only be built for a field a front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 83, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 85, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -459,10 +461,11 @@ def test_every_registry_default_is_the_trees_own_default():
     what keeps them honest. Every default that config.py owns is pinned as ``str(constant)`` -- the
     same spelling the message shows -- and every other default against the object whose signature
     owns it: the truncation defaults, the stages' keyword defaults, the diagnostics' signatures, the
-    tool's ``--device`` and ``crossval --preset`` defaults, and FDTConfig's own field defaults (piece
-    5). A constant retuned in config.py without this registry following
-    it fails here, not in a message that names a default nobody set. The last assertion closes the
-    set: no default exists that this test did not look at."""
+    tool's ``--device`` and ``crossval --preset`` defaults, FDTConfig's own field defaults (piece
+    5), and the Simulate panel's two frame boxes as a built panel shows them (piece 5, §5.6). A
+    constant retuned in config.py without this registry following it fails here, not in a message
+    that names a default nobody set. The last assertion closes the set: no default exists that this
+    test did not look at."""
     import argparse
     import inspect
 
@@ -537,8 +540,20 @@ def test_every_registry_default_is_the_trees_own_default():
     assert (FIELDS["preset"].default == build_parser().subcommands["crossval"].get_default("preset")
             == next(iter(cli.SWEEP_PRESETS)))
 
+    # piece 5, §5.6 (F3): the live simulation's two frame settings have no constant and no signature
+    # default -- the panel's own boxes are constructed with them (IntField(2000), IntField(30)), so the
+    # box text of a freshly built panel is what owns them. The session's settings file is empty per
+    # test (tests/conftest.py), so nothing restored over the construction defaults.
+    from core.gui.panels.simulate_panel import SimulatePanel
+    from tests._fixtures import qt_app
+    qt_app()
+    sim = SimulatePanel()
+    owned_by_the_simulate_panel = {"frame_steps": sim.frame_steps.text(), "fps": sim.fps.text()}
+    for key, box_text in owned_by_the_simulate_panel.items():
+        assert FIELDS[key].default == box_text, (key, box_text, FIELDS[key].default)
+
     looked_at = (set(owned_by_config) | set(owned_by_a_signature) | {"device"} | set(owned_by_fdt_config)
-                 | set(set_by_the_preset) | {"freq_bounds", "preset"})
+                 | set(set_by_the_preset) | {"freq_bounds", "preset"} | set(owned_by_the_simulate_panel))
     rest = {k: f.default for k, f in FIELDS.items() if k not in looked_at}
     no_constant = {"t_obs": "none: it must be given", "seed": "none: one is drawn and recorded"}
     assert rest == {k: no_constant.get(k) for k in rest}, rest

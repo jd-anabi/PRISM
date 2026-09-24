@@ -16,8 +16,9 @@ constants only ``config.py`` sets (``chi_k_pad``, ``chi_max_cycles``, ``chi_f0``
 ``chi_freq_bounds``), ``artifact``, which the ``artifacts`` subcommand names POSITIONALLY
 (``artifacts show <kind> <ref>``) -- there is no flag to print, and the refusal's own sentence already
 quotes the ref -- the five FDT settings neither front end exposes (the frequency band, the
-burn-in, the two durations and the step), and the model builder's seven numeric fields, which live on
-a window-only screen. One repeatable flag can carry several keys:
+burn-in, the two durations and the step), the model builder's seven numeric fields, which live on
+a window-only screen, and the live simulation's two frame settings, on a window-only panel. One
+repeatable flag can carry several keys:
 ``--forced PATH[@HZ]`` is both the driven recording and a chi probe's, ``--drive NAME=VALUE`` is the
 amplitude, frequency and phase.
 """
@@ -67,6 +68,8 @@ FLAG: dict[str, str | None] = {
     # the model builder (piece 5): a window-only screen, so no option string answers any of these
     "param_value": None, "param_min": None, "param_max": None, "init": None,
     "x_scale": None, "t_scale": None, "forcing_value": None,
+    # the live simulation (piece 5): a window-only panel; the tool has no streaming subcommand
+    "frame_steps": None, "fps": None,
     # the two secondary analyses (piece 5): `fdt` and `crossval` share the four resolution knobs,
     # and the grids and the preset are the sweep's alone. --seed exists on smoke and the
     # diagnostics today; piece 5 adds it to these two as well (E7).
