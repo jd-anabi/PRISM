@@ -2618,6 +2618,156 @@ def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_d
     assert "nothing to sweep" in capsys.readouterr().out
 
 
+def test_artifacts_sweep_offers_a_loose_file_and_never_a_records_payload(browse_store, capsys):
+    """E10, first category. ``ArtifactStore._entries`` iterates DIRECTORIES only, so a file sitting
+    directly inside a kind directory is invisible to every listing in both front ends -- and the
+    owner's machine has two of them, the PNGs a pre-piece-5 fdt run left in ``Artifacts/fdt``. They
+    carry no record of which cell or which settings produced them and no command could reach them.
+
+    The complement matters as much as the category: ``loose_files`` reads the kind directory's own
+    files and never descends, so a real artifact's payload -- which lives one level down, inside the
+    record's folder -- is not offerable from here even in principle. The payload written below is
+    what asserts that, and it must still be on disk after ``--yes``.
+    """
+    from tests._fixtures import backdate_tree
+    root, ids = browse_store
+    stray = root / "priors" / "fdt_ratio_20260915_153042.png"
+    stray.write_bytes(b"a picture an older build left beside the records")
+    record = next(p for p in (root / "priors").iterdir() if p.is_dir() and ids["prior"] in p.name)
+    payload = record / "prior.pt"
+    payload.write_bytes(b"a real artifact's payload")
+    backdate_tree(root / "priors")           # the recency guard is tested on its own, below
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior"]) == 0
+    out = capsys.readouterr().out
+    assert f"would remove prior loose file {stray.name}" in out, out
+    assert "prior.pt" not in out, "a valid record's payload was offered for removal"
+    assert stray.is_file(), "a dry run removed something"
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert f"removed prior loose file {stray.name}" in out, out
+    assert not stray.exists()
+    assert payload.is_file(), "the sweep reached inside a valid record's own folder"
+    assert (record / "manifest.json").is_file(), "the record itself survived its neighbour's removal"
+
+
+def test_a_legacy_directory_is_offered_by_the_all_kinds_sweep_only(browse_store, capsys):
+    """E10's second category, and why it has a form of its own. A legacy directory -- a `crossval/`
+    an older build wrote -- sits BESIDE the kind directories, under no kind, and the store never
+    walks its own root, so it is invisible to every listing. ``sweep`` takes the kind POSITIONALLY
+    (core/tool/browse.py's `sweep [<kind>]`), so only the form with no kind can offer something that
+    belongs to none: a per-kind sweep that removed it would be answering a question nobody asked.
+
+    And a per-kind sweep that finds nothing must not SAY there is no legacy directory either: it never
+    read the store root, so that clause would claim what nobody checked -- with one sitting right
+    there.
+    """
+    from core.artifacts.store import LEGACY_DIRS
+    from tests._fixtures import backdate_tree
+    root, ids = browse_store
+    legacy = root / LEGACY_DIRS[0]
+    legacy.mkdir()
+    (legacy / "fdt3d_vs_S_20260915_153042.h5").write_bytes(b"an older build's sweep output")
+    backdate_tree(root)
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior"]) == 0
+    assert legacy.name not in capsys.readouterr().out, \
+        "a per-kind sweep offered a directory that belongs to no kind"
+    assert legacy.is_dir()
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "calibration"]) == 0
+    out = capsys.readouterr().out
+    assert "nothing to sweep" in out and "legacy" not in out, out
+
+    # an EMPTY kind is no kind -- not a second spelling of the all-kinds form that skips the legacy read
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", ""]) == 1
+    assert "unknown artifact kind" in capsys.readouterr().err
+    assert legacy.is_dir()
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep"]) == 0
+    out = capsys.readouterr().out
+    assert f"would remove legacy directory {legacy.name}" in out, out
+    assert legacy.is_dir(), "a dry run removed something"
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "--yes"]) == 0
+    assert f"removed legacy directory {legacy.name}" in capsys.readouterr().out
+    assert not legacy.exists()
+
+
+def test_a_loose_file_written_seconds_ago_is_refused_rather_than_swept(browse_store, capsys):
+    """R3's guard, extended to the new categories (spec §6.3: "the recency guard applies"). A file
+    inside a kind directory can be a run in flight writing its own figure as easily as it can be a
+    leftover -- and a sweep from a second process has no ``BasePanel._running`` to consult. The
+    removal refuses it, the tool reports it, and the exit code says the sweep did not do everything
+    it offered.
+    """
+    from tests._fixtures import backdate_tree
+    root, ids = browse_store
+    backdate_tree(root / "priors")            # every leftover directory is old; only the file is new
+    fresh = root / "priors" / "being_written_right_now.png"
+    fresh.write_bytes(b"a run may still be writing this")
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior", "--yes"]) == 1
+    cap = capsys.readouterr()
+    assert fresh.is_file(), "a file written seconds ago was removed"
+    assert f"could not remove prior loose file {fresh.name}" in cap.err, cap.err
+
+
+def test_an_unfinished_fdt_record_is_listed_as_not_finished_and_never_swept(browse_store, capsys):
+    """Controller ruling F7, the tool half of spec §8.2's "the leftover sweep never offers it" (the
+    store half is tests/test_artifact_store.py's
+    test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_record). E2 keeps an
+    interrupted fdt record's folder with what it measured inside, and that folder carries a manifest
+    from its first moment -- so it is an ARTIFACT, listed and honestly marked unfinished, never a
+    leftover. Now that the sweep also reaches FILES inside a kind directory, the record's own payload
+    is what this pins: it lives one level down, inside the record's folder, where ``loose_files``
+    never looks.
+
+    Backdated past the recency guard, so a sweep that did offer the record would also REMOVE it under
+    --yes rather than be saved by the age check.
+    """
+    from core.artifacts import ArtifactStore
+    from tests._fixtures import backdate_tree
+    root, ids = browse_store
+    w = ArtifactStore(root).create("fdt", None, name="stopped_fdt", note="interrupted")
+    w.body = {"study": "single", "settings": {}, "seed": 3, "notices": []}
+    with pytest.raises(RuntimeError):
+        with w:
+            w.payload("data.h5").write_bytes(b"the spontaneous spectrum, and nothing after it")
+            raise RuntimeError("stopped")
+    backdate_tree(root / "fdt")
+
+    capsys.readouterr()
+    assert main(["artifacts", "list", "fdt"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    header = next(ln for ln in lines if ln.split()[:1] == ["name"])
+    start, end = header.index("finished"), header.index("note")   # the table is column-aligned
+
+    def finished_cell(label):
+        return next(ln for ln in lines if label in ln)[start:end].strip()
+
+    assert finished_cell("stopped_fdt") == "no", lines
+    assert finished_cell("browse_fdt") == "yes", "the fixture's finished record, for contrast"
+
+    for argv in (["artifacts", "sweep", "fdt"], ["artifacts", "sweep", "fdt", "--yes"]):
+        capsys.readouterr()
+        assert main(argv) == 0
+        cap = capsys.readouterr()
+        assert "nothing to sweep" in cap.out, cap.out
+        assert w.dir.name not in cap.out + cap.err and "data.h5" not in cap.out + cap.err, cap
+    assert (w.dir / "data.h5").is_file() and (w.dir / "manifest.json").is_file(), \
+        "an unfinished record, or the measurement inside it, was swept"
+
+
 def test_a_sweep_that_could_not_remove_something_exits_1_naming_it(browse_store, monkeypatch, capsys):
     """§4.3: a sweep that removed everything is 0; one that could not remove a directory is 1, naming
     each failure. A held handle on Windows is what that stands for and it cannot be provoked on
