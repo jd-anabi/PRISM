@@ -18,6 +18,7 @@ from core.refusals import Refusal, require_note
 from core.FDT.fdt_pipeline import run_fdt
 from core.artifacts import default_store
 
+from . import record_view
 from .base_panel import BasePanel
 from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker, StorePicker
@@ -93,6 +94,14 @@ class FdtPanel(BasePanel):
         super().__init__(parent)
         self._build_controls()
         self.restore_settings(settings.settings())
+        # The saved run's LINE at launch, never its figures (ruling F47): re-opening an old run's
+        # pictures on every start is behaviour nobody asked for. The slot is connected only AFTER the
+        # restore for the same reason -- restore_key fires currentIndexChanged whenever the saved run
+        # is not the first row, and a slot connected before it would open that run's figures -- and
+        # this one call covers what the signal cannot: a saved run that IS the first row, or none at
+        # all, changes no index and fires nothing.
+        self._show_record(figures=False)
+        self.record_picker.combo.currentIndexChanged.connect(lambda _i: self._show_record())
 
     def _build_controls(self):
         box = QGroupBox("FDT analysis")
@@ -146,11 +155,54 @@ class FdtPanel(BasePanel):
         add_help_row(form, "Record name", self.record_name, HELP["record_name"])
         add_help_row(form, "Note", self.record_note, HELP["record_note"])
         add_help_row(form, "Saved run", self.record_picker, HELP["record"])
+        # What the selected run says, under its picker (spec §5.4); _show_record fills it. The picker's
+        # slot is connected in __init__, after restore_settings (F47).
+        self.record_line = record_view.details_label()
+        form.addRow("", self.record_line)
+        # The figure tabs _show_record opened for the current selection, and only those (F48).
+        self._record_tabs: list = []
         form.addRow(with_badge(self.skip_sanity, HELP["skip_sanity"]))
         form.addRow(with_badge(self.confirm_production, HELP["confirm_production"]))
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)
+
+    def _show_record(self, *, figures: bool = True) -> None:
+        """Spec §5.4: the selected record's cell, settings, seed and notices, and its figures
+        re-opened from its own ``figures/``. ``figures=False`` fills the line alone -- the launch's
+        call (F47).
+
+        Deliberately broad on the read. The launch's call runs inside __init__, so ANY exception here
+        escapes FdtPanel() -> MainWindow() -> build_app() -- before app.py installs its excepthook, so
+        nothing would even show it. One unreadable record must degrade this one label, never brick the
+        application. It reads the manifest and the directory, never ``load_fdt``, which would hash
+        the payload on every selection change (record_view's docstring).
+
+        The figure stack is left alone while a run is live: it then holds what the watcher is landing,
+        and the selection change _on_record makes before the run's ``finished`` arrives must not
+        clear the figures of the run that just produced them. Otherwise only the tabs this viewer
+        opened are replaced (F48), and a PNG already on the stack is not opened twice
+        (record_view.reopen_figures). A selection that cannot be read, or none, closes the viewer's
+        tabs and opens nothing: they described a record that is no longer the one selected.
+
+        "Is a record chosen" is asked of ``key()``: ``selected()``'s second half is True for an
+        EMPTY picker too, where there is no sentinel to be new.
+        """
+        ref = self.record_picker.key()
+        record_dir = None
+        if not ref:
+            self.record_line.setText("")
+        else:
+            try:
+                store = default_store()
+                manifest, record_dir = store.get("fdt", ref), store.path("fdt", ref)
+            except Exception as e:                   # noqa: BLE001 -- see the docstring
+                self.record_line.setText(f"(could not read the record: {e})")
+            else:
+                self.record_line.setText(record_view.record_summary(manifest))
+        if figures and not self._busy:
+            self._record_tabs = record_view.reopen_figures(self.figure_stack, self._record_tabs,
+                                                           record_dir)
 
     def _on_model_changed(self, model: str):
         self.cell_picker.repoint(CELL_PATH / model.lower())

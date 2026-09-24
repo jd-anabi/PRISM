@@ -18,6 +18,7 @@ from core.refusals import Refusal, require_note
 from core.FDT.cross_validation import run_param_study_cli
 from core.artifacts import default_store
 
+from . import record_view
 from .base_panel import BasePanel
 from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker, StorePicker
@@ -89,6 +90,10 @@ class CrossValPanel(BasePanel):
         self._on_preset_changed(self.preset_combo.currentText())
         self._on_cell_changed()
         self.restore_settings(settings.settings())
+        # The saved sweep's LINE at launch, never its figures (F47), with the slot connected only after
+        # the restore -- FdtPanel.__init__ gives the reason for both halves.
+        self._show_record(figures=False)
+        self.record_picker.combo.currentIndexChanged.connect(lambda _i: self._show_record())
 
     def _build_controls(self):
         box = QGroupBox("FDT parameter-sweep study")
@@ -148,9 +153,40 @@ class CrossValPanel(BasePanel):
         add_help_row(form, "Record name", self.record_name, HELP["record_name"])
         add_help_row(form, "Note", self.record_note, HELP["record_note"])
         add_help_row(form, "Saved sweep", self.record_picker, HELP["record"])
+        # What the selected sweep says, under its picker (spec §5.4); _show_record fills it. The
+        # picker's slot is connected in __init__, after restore_settings (F47).
+        self.record_line = record_view.details_label()
+        form.addRow("", self.record_line)
+        # The figure tabs _show_record opened for the current selection, and only those (F48).
+        self._record_tabs: list = []
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)
+
+    def _show_record(self, *, figures: bool = True) -> None:
+        """Spec §5.4, the CrossVal half: the selected sweep's cell, settings, seed, point counts and
+        notices, and its figures re-opened from its own ``figures/``; ``figures=False`` fills the line
+        alone (F47). Identical in shape and wording to FdtPanel._show_record, whose docstring gives
+        every reason -- the rendering and the tab bookkeeping are shared in ``record_view`` so the two
+        screens cannot word one record two ways -- and identically broad on the read, for the reason
+        this panel's _on_cell_changed already states: an exception raised by the launch's call from
+        __init__ escapes into build_app(), and the whole GUI fails to launch.
+        """
+        ref = self.record_picker.key()
+        record_dir = None
+        if not ref:
+            self.record_line.setText("")
+        else:
+            try:
+                store = default_store()
+                manifest, record_dir = store.get("fdt", ref), store.path("fdt", ref)
+            except Exception as e:                   # noqa: BLE001 -- see the docstring
+                self.record_line.setText(f"(could not read the record: {e})")
+            else:
+                self.record_line.setText(record_view.record_summary(manifest))
+        if figures and not self._busy:
+            self._record_tabs = record_view.reopen_figures(self.figure_stack, self._record_tabs,
+                                                           record_dir)
 
     # ── prefill from the cell file: the values cli.make_param_sweep_config then consumes ─────────
     def _on_cell_changed(self):

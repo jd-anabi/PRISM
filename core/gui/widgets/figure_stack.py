@@ -133,6 +133,13 @@ class FigureStack(QTabWidget):
     def _drop_window(self, window):
         self._windows.discard(window)
 
+    def png_path(self, index: int) -> "str | None":
+        """The file the tab at ``index`` shows when ``add_png`` opened it; None for a figure that
+        arrived as bytes (``add_figure``) and for an index with no tab. A saved-run viewer asks this so
+        a PNG the run's own watcher already put up is not opened a second time
+        (core/gui/panels/record_view.py)."""
+        return getattr(self.widget(index), "_png_path", None)
+
     def _close_tab(self, index: int):
         widget = self.widget(index)
         self.removeTab(index)

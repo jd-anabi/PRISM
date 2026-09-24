@@ -2452,6 +2452,273 @@ def test_the_crossval_window_shows_both_records_figures_and_names_them(tmp_path,
         "the picker must move onto the last record the study wrote"
 
 
+def test_record_summary_names_the_cell_the_settings_the_seed_and_the_notices():
+    """Spec §5.4. A saved run is only usable if you can see what produced it, and §1 measured that the
+    old flat output "carries no record of which cell or which settings produced it". The four facts
+    the spec names are the four this renders, in that order, off the manifest alone.
+
+    A record with no cell file -- the legacy inline-bounds branch records ``None``
+    (core/artifacts/provenance.py) -- must say so rather than raise: this feeds a read-only label, and
+    a formatter that raises inside a currentIndexChanged slot takes the panel down with it. The
+    notices are E5's "too thin to trust" sentences, and they are shown because a record that is a
+    quick look must SAY it is a quick look wherever it is read."""
+    from core.gui.panels.record_view import record_summary
+    from core.artifacts.manifest import Manifest
+
+    def _m(**over):
+        d = dict(schema=1, kind="fdt", id="20260922T120000", name="cell_a", created="2026-09-22T12:00:00",
+                 note="", prism={}, env={}, inputs={"cell": {"path": "Resources/Cells/nadrowski/x.txt",
+                                                             "sha256": "ab"},
+                                                    "bounds": None, "units": None, "model": "NADROWSKI"},
+                 config={}, parents={}, fingerprints={}, payloads={}, figures=[],
+                 body={"study": "single", "settings": {"n_freqs": 8, "F0": 0.05}, "seed": 4242,
+                       "grid": None, "points": None, "offgrid": {"blanks": 1, "of": 8},
+                       "notices": ["The frequency grid has 2 points, which is a quick look."],
+                       "compared": None, "complete": True, "results": None})
+        d.update(over)
+        return Manifest(**d)
+
+    text = record_summary(_m())
+    assert "2026-09-22T12:00:00" in text and "seed 4242" in text, text
+    assert "Resources/Cells/nadrowski/x.txt" in text, text
+    assert "F0=0.05" in text and "n_freqs=8" in text, text
+    assert "quick look" in text, "a notice must survive to the screen (E5)"
+    assert "did not finish" not in text
+
+    body = dict(_m().body, complete=False, seed=None, settings=None, notices=[])
+    bare = record_summary(_m(inputs={"cell": None, "bounds": None, "units": None, "model": None},
+                             body=body))
+    assert "no cell file" in bare, bare
+    assert "did not finish" in bare, "an unfinished record must say so wherever it is read (E2)"
+
+
+def test_record_summary_reads_a_finished_sweep_and_survives_a_hand_edited_body():
+    """The CrossVal half of spec §5.4, and the "never raises" half of record_view's contract.
+
+    A SWEEP's blank count is over every planned operating point's slot on its common grid (P78), so
+    the line must say so -- "5 of 240 probe frequencies came back blank" alone reads as one grid of
+    240 -- and its points block is the study's own progress, failures included.
+
+    A HAND-EDITED body reaches this formatter: ``manifest.validate`` checks the body's key set and
+    nothing inside it, so any value may be any JSON. Each shape below raised, or rendered garbage, in
+    the formatter as first drafted -- a number where the notices list belongs was iterated, a bare
+    string was iterated character by character, a non-dict body was asked for ``.get`` -- and this
+    runs from each panel's __init__ at every launch (F47), where one raise stops the application
+    launching at all."""
+    import types
+    from core.gui.panels.record_view import record_summary
+
+    sweep = types.SimpleNamespace(
+        created="2026-09-22T12:00:00",
+        inputs={"cell": {"path": "Resources/Cells/nadrowski/x.txt", "sha256": "ab"}},
+        body={"study": "sweep", "seed": 7, "grid": None, "compared": None, "complete": True,
+              "results": None,
+              "settings": {"n_freqs": 30, "ensemble_M": 256, "F0": 0.05, "skip_sanity": None,
+                           "preset": "exploratory", "sweep_grid": [0.0, 1.0, 8]},
+              "points": {"param": "s", "planned": 8, "done": 7, "failed": 1},
+              "offgrid": {"blanks": 5, "of": 240},
+              "notices": ["The ensemble is 16 trajectories: read the result as a quick look."]})
+    text = record_summary(sweep)
+    assert "seed 7" in text and "preset=exploratory" in text, text
+    assert "7 of 8 operating points measured (1 failed), sweeping s." in text, text
+    assert "5 of 240 probe frequencies across its operating points came back blank." in text, text
+    assert "Notice: The ensemble is 16 trajectories" in text and "did not finish" not in text, text
+
+    for body in ({"notices": 5, "settings": ["n_freqs", 8], "offgrid": "lots", "points": 3,
+                  "seed": {"a": 1}},
+                 {"notices": "one sentence, not a list", "settings": {1: "a", "b": 2}},
+                 None, [1, 2], "a string"):
+        text = record_summary(types.SimpleNamespace(created="2026-09-22T12:00:00",
+                                                    inputs={"cell": "a/bare/string"}, body=body))
+        assert text.startswith("Written 2026-09-22T12:00:00"), text
+        assert "Cell: (no cell file recorded)" in text, text
+        assert "Notice: o\n" not in text, f"a bare-string notice was iterated per character: {text}"
+    assert "Notice: one sentence, not a list" in record_summary(types.SimpleNamespace(
+        body={"notices": "one sentence, not a list"}))
+    assert record_summary(object()).startswith("Written ?"), "a manifest with no attributes at all"
+
+
+def test_record_figures_lists_a_records_pictures_by_the_watchers_own_title(tmp_path):
+    """The live watcher and the re-opened view must name the same picture the same way, or a figure
+    read off a saved record is a different thing from the one you watched land. Both go through
+    plot_watcher._title, which is why record_view imports it rather than restating it.
+
+    A record with no figures/ -- a run cancelled before it drew one, which E2 says keeps its folder --
+    is an empty list. It is not an error, and it must not be one: the folder surviving is the point."""
+    from core.gui.panels.record_view import record_figures
+
+    rec = tmp_path / "cell_a__20260922T120000"
+    (rec / "figures").mkdir(parents=True)
+    (rec / "figures" / "t_eff_ratio.png").write_bytes(b"png")
+    (rec / "figures" / "spontaneous_psd.png").write_bytes(b"png")
+    (rec / "data.h5").write_bytes(b"not a figure")
+
+    assert record_figures(rec) == [
+        ("spontaneous psd", str(rec / "figures" / "spontaneous_psd.png")),
+        ("t eff ratio", str(rec / "figures" / "t_eff_ratio.png"))]
+    assert record_figures(tmp_path / "cell_b__20260922T130000") == []
+
+
+def test_selecting_a_saved_run_describes_it_and_re_opens_its_figures(tmp_path):
+    """Spec §5.4 and E1, on both screens that carry a picker. Selecting a record shows its cell,
+    settings, seed and notices, and re-opens its figures from the record's own figures/ -- which is
+    what makes a saved run readable at all, and what §1 measured the old flat output could not do.
+
+    Two guards are pinned with it, and both are defects rather than niceties. (1) The slot must not
+    touch the figure stack while a run is live: the stack then holds the figures the watcher is
+    landing, and clearing it would delete the live run's output to show an older run's. (2) A record
+    the store cannot read must degrade to a line in the label, never raise -- this slot runs inside
+    __init__ at every launch (F47), and an exception there escapes CrossValPanel() -> MainWindow()
+    -> build_app() before app.py has installed its excepthook, so a single unreadable record would
+    leave the application unable to launch at all."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+
+    def _record(study, name):
+        w = store.create("fdt", None, name=name)
+        w.body = {"study": study, "settings": {"n_freqs": 8}, "seed": 4242, "grid": None,
+                  "points": None, "offgrid": None,
+                  "notices": ["The frequency grid has 2 points, which is a quick look."],
+                  "compared": None, "complete": False, "results": None}
+        with w:
+            w.figure_path("ratio").write_bytes(b"png")
+        return w
+
+    with use_store(store):
+        _record("single", "one_cell")
+        _record("sweep", "a_sweep")
+        for panel, key in ((FdtPanel(), "one_cell"), (CrossValPanel(), "a_sweep")):
+            panel.record_picker.restore_key(store.get("fdt", key).id)
+            panel._show_record()
+            text = panel.record_line.text()
+            assert "seed 4242" in text and "quick look" in text, (key, text)
+            assert panel.figure_stack.count() == 1, key
+            assert panel.figure_stack.tabText(0) == "ratio", panel.figure_stack.tabText(0)
+
+            # (1) a live run owns the figure stack
+            panel.figure_stack.clear_all()
+            panel._busy = True
+            try:
+                panel._show_record()
+            finally:
+                panel._busy = False
+            assert panel.figure_stack.count() == 0, f"{key}: a live run's figures were cleared"
+            assert "seed 4242" in panel.record_line.text(), "the LINE still follows the selection"
+
+            # (2) an unreadable record is a line, not a crash
+            panel.record_picker.combo.setItemData(panel.record_picker.combo.currentIndex(),
+                                                  "no_such_record")
+            panel._show_record()
+            assert "could not read" in panel.record_line.text(), panel.record_line.text()
+
+
+@pytest.mark.parametrize("which", ["fdt", "crossval"])
+def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_tabs(tmp_path, which):
+    """Rulings F47 and F48, and the run that just finished, on both screens.
+
+    F47: a launch fills the saved-run LINE for the restored selection and opens NONE of its figures
+    -- re-opening an old run's pictures on every start is behaviour nobody asked for. The saved run
+    here is deliberately not the first row, so restoring it CHANGES the combo's index: a slot
+    connected before restore_settings would open its figures anyway.
+
+    F48: choosing another record closes only the tabs the viewer itself opened. Anything else on the
+    stack -- a comparison drawn there (Task 40), a run's figures -- survives, and a tab the user
+    already closed by hand is skipped rather than touched after Qt deleted it.
+
+    The run that just finished: its result slot moves the picker onto the new record while the run is
+    still live (the worker emits ``result`` before ``finished``), and the figures its watcher put up
+    must not be opened a second time -- neither then, nor when the record is chosen again later."""
+    import shiboken6
+    from PySide6.QtCore import QCoreApplication, QEvent
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import settings as st
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    cls, study = {"fdt": (FdtPanel, "single"), "crossval": (CrossValPanel, "sweep")}[which]
+
+    def _record(name, seed, titles):
+        w = store.create("fdt", None, name=name)
+        w.body = {"study": study, "settings": {"n_freqs": 8}, "seed": seed, "grid": None,
+                  "points": None, "offgrid": None, "notices": [], "compared": None,
+                  "complete": False, "results": None}
+        with w:
+            for title in titles:
+                w.figure_path(title).write_bytes(b"png")
+        return w
+
+    def tabs(panel):
+        return [panel.figure_stack.tabText(i) for i in range(panel.figure_stack.count())]
+
+    with use_store(store):
+        # The listing is newest first, so which record lands in which row is the store's business;
+        # everything below is asserted by id, never by an assumed row.
+        facts = {}
+        for name, seed, titles in (("rec_a", 1, ["a one", "a two"]), ("rec_b", 2, ["b one"])):
+            facts[_record(name, seed, titles).id] = (seed, titles)
+        combo = cls().record_picker.combo
+        first, second = combo.itemData(0), combo.itemData(1)
+        qs = st.settings()
+        qs.beginGroup(which)
+        qs.setValue("record", second)
+        qs.endGroup()
+        qs.sync()
+
+        # F47: the restored run is described, and nothing is opened
+        panel = cls()
+        combo = panel.record_picker.combo
+        assert panel.record_picker.key() == second and combo.currentIndex() == 1
+        assert f"seed {facts[second][0]}" in panel.record_line.text(), panel.record_line.text()
+        assert tabs(panel) == [], f"a launch re-opened the saved run's figures: {tabs(panel)}"
+
+        # F48: a tab the viewer did not open survives every selection
+        panel.figure_stack.add_figure("comparison", b"")
+        combo.setCurrentIndex(0)
+        assert tabs(panel) == ["comparison", *facts[first][1]], tabs(panel)
+        combo.setCurrentIndex(1)
+        assert tabs(panel) == ["comparison", *facts[second][1]], tabs(panel)
+
+        # a viewer tab the user closed by hand, deleted by Qt, is skipped on the next selection
+        page = panel.figure_stack.widget(1)
+        panel.figure_stack.tabCloseRequested.emit(1)
+        # THIS page's deleteLater only: a flush for every receiver would also delete whatever earlier
+        # tests left pending, out of their order, and left an uncollectable object at shutdown.
+        QCoreApplication.sendPostedEvents(page, QEvent.DeferredDelete)
+        assert not shiboken6.isValid(page), "the closed tab's page was never deleted: nothing is tested"
+        combo.setCurrentIndex(0)
+        assert tabs(panel) == ["comparison", *facts[first][1]], tabs(panel)
+
+        # the run that just finished: its watcher put its figure up, then the result slot moved the
+        # picker onto its record while the run was still live
+        c = _record("rec_c", 3, ["c one"])
+        panel.figure_stack.add_png("c one", str(c.dir / "figures" / "c_one.png"))
+        before = tabs(panel)
+        panel._busy = True
+        try:
+            if which == "fdt":
+                panel._on_record(store.load_fdt(c.id))
+            else:
+                panel._on_result([store.load_fdt(c.id)])
+        finally:
+            panel._busy = False
+        assert panel.record_picker.key() == c.id and "seed 3" in panel.record_line.text()
+        assert tabs(panel) == before, f"the result slot touched a live run's stack: {tabs(panel)}"
+
+        # ...and choosing it again later does not open the watcher's figure a second time
+        combo.setCurrentIndex(combo.findData(first))
+        assert tabs(panel) == ["comparison", "c one", *facts[first][1]], tabs(panel)
+        combo.setCurrentIndex(combo.findData(c.id))
+        assert tabs(panel) == ["comparison", "c one"], tabs(panel)
+
+
 def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
     """V5 §5.2. The χ drive amplitude and band are MEASUREMENTS (config.py:541-573), not per-run
     choices: since D11 any other value is refused by build_prior seconds after Apply, so a box that
