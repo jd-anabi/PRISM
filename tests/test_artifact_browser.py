@@ -787,6 +787,105 @@ def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, m
     assert "could not be removed" in scr.status.text() and "held open" in scr.status.text()
 
 
+def test_the_screens_sweep_offers_a_loose_file_and_never_a_records_payload(store, monkeypatch):
+    """E10 through the window (spec §6.3): the two front ends stay in step, which is the property
+    piece 4 established -- the owner must not have to open a terminal to clear something the tool
+    can clear. The preview NAMES the file, as it names every leftover directory, because "Remove 3
+    items?" with no list is not a confirmation.
+
+    The payload written inside the real artifact's own folder is the complement: ``loose_files``
+    reads the kind directory's files and never descends, so nothing a record owns can be offered
+    here even in principle -- the same shape ``remove_incomplete`` has against ``delete``.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    cfg = _nad_cfg()
+    p = _prior_artifact(store, cfg, name="keeper")
+    payload = store.path("prior", p.id) / "prior.pt"
+    payload.write_bytes(b"a real artifact's payload")
+    stray = store.kind_dir("prior") / "fdt_ratio_20260915_153042.png"
+    stray.write_bytes(b"a picture an older build left beside the records")
+    backdate_tree(store.kind_dir("prior"))
+
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    scr._sweep(all_kinds=False)                      # the session guard answers No
+    box = SHOWN[-1]
+    assert stray.name in box.informativeText(), box.informativeText()
+    assert "prior.pt" not in box.informativeText(), "a record's payload was offered"
+    assert stray.is_file() and "Nothing was removed." in scr.status.text(), scr.status.text()
+
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._sweep(all_kinds=False)
+    assert not stray.exists(), "the file the operator confirmed is still there"
+    assert payload.is_file(), "the sweep reached inside a valid record's own folder"
+    assert store.get("prior", p.id).name == "keeper"
+    assert "Removed 1 of 1 loose file" in scr.status.text(), scr.status.text()
+    # F51: no directory was a candidate, so no directory count is reported at all.
+    assert "leftover director" not in scr.status.text(), scr.status.text()
+
+
+def test_the_screens_legacy_directory_is_offered_by_sweep_all_kinds_only(store, monkeypatch):
+    """The window and the tool answer the same question the same way (spec §6.3). A legacy directory
+    belongs to no kind, so "Sweep this kind…" has nothing to say about one -- offering it there
+    would let a sweep of Priors remove something that has nothing to do with priors. "Sweep all
+    kinds…" is the form that covers the whole root, and it is the only one that offers it.
+    """
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts.store import LEGACY_DIRS
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    legacy = store.root / LEGACY_DIRS[0]
+    legacy.mkdir(parents=True, exist_ok=True)
+    (legacy / "fdt3d_vs_S_20260915_153042.h5").write_bytes(b"an older build's sweep output")
+    backdate_tree(store.root)
+
+    scr = artifact_screen(store)
+    _show_kind(scr, "prior")
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._sweep(all_kinds=False)
+    assert legacy.is_dir(), "a per-kind sweep removed a directory that belongs to no kind"
+    assert "Nothing to remove" in scr.status.text(), scr.status.text()
+    # The per-kind form never read the store root, so it must not claim that no legacy directory
+    # is there -- one is. The tool's per-kind sentence leaves the clause out for the same reason.
+    assert "legacy" not in scr.status.text(), scr.status.text()
+
+    SHOWN.clear()
+    scr._sweep(all_kinds=True)
+    assert legacy.name in SHOWN[-1].informativeText(), SHOWN[-1].informativeText()
+    assert not legacy.exists(), "the directory the operator confirmed is still there"
+    assert "Removed 1 of 1 legacy director" in scr.status.text(), scr.status.text()
+
+
+def test_a_loose_file_written_moments_ago_is_offered_and_then_refused_not_removed(store, monkeypatch):
+    """R3 for the file category, through the window. ``loose_files`` lists a file by what it IS, not
+    by its age -- no listing can know whether something is still writing it -- so a file written
+    seconds ago is OFFERED, and ``remove_loose``'s own guard is what refuses it. What has to hold is
+    what already holds for a directory: the confirmation says so before it is answered, the file
+    survives, and the status line names it and says why."""
+    from PySide6.QtWidgets import QMessageBox
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+    d = store.kind_dir("fdt")
+    d.mkdir(parents=True, exist_ok=True)
+    fresh = d / "fdt_ratio_20260924_101500.png"
+    fresh.write_bytes(b"a picture something may still be writing")   # NOT backdated: written just now
+    scr = artifact_screen(store)
+    _show_kind(scr, "fdt")
+    _answer(monkeypatch, QMessageBox.Yes)
+    scr._sweep(all_kinds=False)
+    informative = SHOWN[-1].informativeText()
+    assert fresh.name in informative, informative
+    assert "recently written directory or file is refused" in informative, informative
+    said = scr.status.text()
+    assert fresh.is_file(), "a file something may still be writing was removed"
+    assert "Removed 0 of 1 loose file" in said and fresh.name in said, said
+    assert "may still be writing" in said, said
+    assert "leftover director" not in said, "F51: no directory was a candidate"
+    assert said.startswith("⚠ "), said
+
+
 def test_the_sweep_removes_exactly_what_the_confirmation_listed(store, monkeypatch):
     """R2: the confirmation BINDS the action. It used to re-scan at removal time, so a directory
     created while the dialog sat open -- by another process, or by a run in this one -- was deleted
@@ -915,7 +1014,7 @@ def test_a_sweep_that_throws_is_reported_on_the_status_line_and_the_pickers_are_
     assert "PermissionError" in said and "Access is denied" in said, said
     assert said.startswith("⚠ "), said
     assert changed, "the pickers were never told the store may have moved"
-    assert SHOWN[-1].windowTitle() == "Remove leftover directories", \
+    assert SHOWN[-1].windowTitle() == "Remove what no artifact accounts for", \
         "the confirmation is the only box: a disk problem is not a refusal"
 
 

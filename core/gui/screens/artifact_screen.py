@@ -483,7 +483,8 @@ class ArtifactScreen(QWidget):
         self.btn_delete = QPushButton("Delete…")
         self.btn_delete.clicked.connect(self._delete)
         self.btn_sweep = QPushButton("Sweep this kind…")
-        self.btn_sweep.setToolTip("Remove this kind's directories that have no usable manifest")
+        self.btn_sweep.setToolTip("Remove this kind's directories that have no manifest at all, and "
+                                  "any loose file inside its folder")
         self.btn_sweep.clicked.connect(lambda: self._sweep(all_kinds=False))
         self.btn_sweep_all = QPushButton("Sweep all kinds…")
         self.btn_sweep_all.clicked.connect(lambda: self._sweep(all_kinds=True))
@@ -742,8 +743,51 @@ class ArtifactScreen(QWidget):
                 target.append((k, row.dir_name, row.reason))
         return out, kept, problems
 
+    def _loose_and_legacy(self, store, kind) -> tuple:
+        """``(loose, legacy, problems)``: E10's two categories, beside ``_incomplete``'s directories.
+
+        ``loose`` is ``[(kind, LooseFile)]`` -- a FILE sitting directly inside a kind directory,
+        which no artifact accounts for. ``_entries`` iterates directories only (store.py's
+        ``for sub in ... if p.is_dir()``), so such a file is invisible to every listing and no front
+        end could see or clear one before piece 5; the owner's machine has two, left in
+        ``Artifacts/fdt`` by a run stamped 20260915_153042. ``loose_files`` reads the kind
+        directory's own files and NEVER DESCENDS, so nothing inside a record's folder is reachable
+        from here -- the same complement rule ``remove_incomplete`` has against ``delete``.
+
+        ``legacy`` is ``[name]`` and is filled for the ALL-KINDS sweep alone: a legacy directory
+        sits BESIDE the kind directories, under no kind, so the per-kind button has nothing to say
+        about one. ``kind is None`` means all kinds, EXPLICITLY, exactly as ``_incomplete`` reads it.
+
+        Both reads are guarded per kind: an unreadable directory is reported and does not stop the
+        others (§3.2 -- an unreadable kind is not an empty one).
+        """
+        loose, legacy, problems = [], [], []
+        for k in (list(KIND_DIRS) if kind is None else [kind]):
+            try:
+                loose += [(k, f) for f in store.loose_files(k)]
+            except Exception as e:      # noqa: BLE001 -- an unreadable kind is reported, not fatal
+                problems.append(f"The files in the {k} directory could not be read "
+                                f"({type(e).__name__}: {e}), so no {k} loose file can be swept; "
+                                f"check that folder's permissions on disk and sweep again.")
+        if kind is None:
+            try:
+                legacy = list(store.legacy_dirs())
+            except Exception as e:      # noqa: BLE001 -- reported, never swallowed
+                problems.append(f"The store root could not be read ({type(e).__name__}: {e}), so "
+                                f"no legacy directory can be swept; check its permissions on disk "
+                                f"and sweep again.")
+        return loose, legacy, problems
+
     def _sweep(self, *, all_kinds: bool) -> None:
-        """B7: remove every directory of this kind -- or of all kinds -- that has NO manifest at all.
+        """B7: remove every directory of this kind -- or of all kinds -- that has NO manifest at all,
+        and the two categories ``_loose_and_legacy`` reads.
+
+        TWO MORE CATEGORIES (spec §6.3, E10), so this screen can clear what the tool's
+        ``artifacts sweep`` can clear, by the same rules: a loose FILE directly inside a kind
+        directory, and -- from "Sweep all kinds…" ALONE -- a legacy directory beside the kind
+        directories. Each is named in the confirmation and removed from the list that confirmation
+        showed, one call per item through ``remove_loose`` / ``remove_legacy``, each of which
+        applies R3's recency guard itself.
 
         The candidates are listed BEFORE anything is removed, and THAT LIST is what is removed: each
         entry goes by name through ``remove_incomplete``, the call that can only ever touch a
@@ -768,6 +812,8 @@ class ArtifactScreen(QWidget):
         # kind() whenever it was falsy, and a falsy kind means "all kinds" downstream.
         kind = None if all_kinds else self.kind()
         cands, kept, problems = self._incomplete(store, kind)
+        loose, legacy, more = self._loose_and_legacy(store, kind)
+        problems = problems + more
         tail = (" " + " ".join(problems)) if problems else ""
         if kept:
             # Named, never silently dropped: the table shows these rows as incomplete, so a sweep
@@ -775,39 +821,81 @@ class ArtifactScreen(QWidget):
             tail += (" Left alone, because a directory that carries a manifest.json is reported and "
                      "never removed: "
                      + "; ".join(f"{k}/{d} ({why})" for k, d, why in kept) + ".")
-        if not cands:
+        if not cands and not loose and not legacy:
             where = "any kind's" if kind is None else f"{kind}"
-            self._set_status(f"Nothing to remove: every {where} directory carries a manifest.json."
-                             + tail, error=bool(problems))
+            # The legacy clause only where the store root was READ: a per-kind sweep never looks
+            # beside the kind directories, so "no legacy directory" would claim what nobody checked
+            # -- and a crossval/ may well sit there. The tool's per-kind sentence omits it too.
+            also = ("no loose file or legacy directory is here either" if kind is None
+                    else f"no loose file sits inside the {kind} directory")
+            self._set_status(f"Nothing to remove: every {where} directory carries a manifest.json, "
+                             f"and {also}." + tail, error=bool(problems))
             return
+        total = len(cands) + len(loose) + len(legacy)
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Remove leftover directories")
-        box.setText(f"Remove {len(cands)} director{'y' if len(cands) == 1 else 'ies'} with no "
-                    f"manifest at all?")
-        box.setInformativeText("\n".join(f"{k}/{d} — {why}" for k, d, why in cands)
-                               + "\n\nA directory that carries a manifest.json of any kind is never "
-                                 "touched by this. Nor is one that is still being written: an "
-                                 "artifact's manifest is written last, so a run in flight — in "
-                                 "another window or at a terminal — looks exactly like a leftover "
-                                 "until it commits, and a recently written directory is refused "
-                                 "rather than removed.")
+        box.setWindowTitle("Remove what no artifact accounts for")
+        box.setText(f"Remove {total} item{'' if total == 1 else 's'} that no artifact accounts for?")
+        box.setInformativeText(
+            "\n".join([*(f"{k}/{d} — {why}" for k, d, why in cands),
+                       *(f"{k}/{f.name} — a loose file inside the {k} directory, {f.size} bytes, "
+                         f"part of no artifact" for k, f in loose),
+                       *(f"{name}/ — a directory an older build wrote beside the kind directories"
+                         for name in legacy)])
+            + "\n\nA directory that carries a manifest.json of any kind is never touched by this. "
+              "Nothing inside a record's own folder is offered either. Nor is anything that is "
+              "still being written: an artifact's manifest is written last, so a run in flight — "
+              "in another window or at a terminal — looks exactly like a leftover until it "
+              "commits, and a recently written directory or file is refused rather than removed.")
         box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         box.setDefaultButton(QMessageBox.No)
         if box.exec() != QMessageBox.Yes:
             self._set_status("Nothing was removed." + tail, error=bool(problems))
             return
+        files_gone, files_failed, legacy_gone, legacy_failed = [], [], [], []
         try:
             removed, failed = store.sweep_incomplete([(k, d) for k, d, _ in cands])
+            # R2 for the two new categories too: `loose` and `legacy` were read BEFORE the dialog
+            # and THOSE LISTS are walked, so anything that appeared while it sat open is simply not
+            # in them. One call per item, because neither remover has a batch form -- each carries
+            # its own refusal (the recency guard among them), which is reported and never stops the
+            # rest, exactly as sweep_incomplete does for directories.
+            for k, f in loose:
+                try:
+                    store.remove_loose(k, f.name)
+                except (Refusal, OSError) as e:        # StoreError is a Refusal, and fielded
+                    files_failed.append((f"{k}/{f.name}",
+                                         getattr(e, "message", f"{type(e).__name__}: {e}")))
+                else:
+                    files_gone.append(f.name)
+            for name in legacy:
+                try:
+                    store.remove_legacy(name)
+                except (Refusal, OSError) as e:
+                    legacy_failed.append((name, getattr(e, "message", f"{type(e).__name__}: {e}")))
+                else:
+                    legacy_gone.append(name)
         except Exception as e:                  # noqa: BLE001 -- reported, never raised out of a click
             self._after_change(f"The sweep stopped part-way: {type(e).__name__}: {e}. Refresh to see "
                                f"what is left." + tail, error=True)
             return
-        said = f"Removed {len(removed)} of {len(cands)} leftover director" \
-               f"{'y' if len(cands) == 1 else 'ies'}."
-        for k, d, why in failed:
-            said += f" {k}/{d} could not be removed: {why}."
-        self._after_change(said + tail, error=bool(failed or problems))
+        # One count per category that HAD candidates (F51): a sweep that found only a loose file
+        # does not report "Removed 0 of 0 leftover directories" before saying what it did.
+        said = []
+        if cands:
+            said.append(f"Removed {len(removed)} of {len(cands)} leftover director"
+                        f"{'y' if len(cands) == 1 else 'ies'}.")
+            said += [f"{k}/{d} could not be removed: {why}." for k, d, why in failed]
+        if loose:
+            said.append(f"Removed {len(files_gone)} of {len(loose)} loose "
+                        f"file{'' if len(loose) == 1 else 's'}.")
+            said += [f"{what} could not be removed: {why}." for what, why in files_failed]
+        if legacy:
+            said.append(f"Removed {len(legacy_gone)} of {len(legacy)} legacy "
+                        f"director{'y' if len(legacy) == 1 else 'ies'}.")
+            said += [f"{what} could not be removed: {why}." for what, why in legacy_failed]
+        self._after_change(" ".join(said) + tail,
+                           error=bool(failed or files_failed or legacy_failed or problems))
 
     def _set_status(self, text: str, error: bool = False) -> None:
         """One line, with a ⚠ prefix when it is trouble -- ModelBuilderScreen._set_status's pattern."""
