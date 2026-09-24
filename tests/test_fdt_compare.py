@@ -83,7 +83,45 @@ def test_the_common_grid_is_the_log_spaced_intersection_at_the_smallest_point_co
     far = cmp.Curve("c", "c", "c", np.array([100.0, 200.0]), np.ones(2), 1.0, 1.0)
     with pytest.raises(Refusal) as e:
         cmp.common_grid([a, far])
-    assert e.value.field == "compare_records" and "overlap" in str(e.value), e.value
+    assert e.value.field == "compare_records" and "share a frequency band" in str(e.value), e.value
+
+
+def test_runs_that_share_no_band_are_refused_naming_two_that_share_nothing():
+    """The refusal used to print "the intersection of their grids is [100, 8]" -- an interval with
+    its ends the wrong way round, naming no run -- which is true only to a reader who already knows
+    how it was computed. It says instead that the runs share no band and names the two that prove it:
+    the run that STARTS last and the run that ENDS first. Those two are always disjoint when the
+    shared band is empty, whereas the run with the narrowest span need not be: below, ``mid`` is the
+    narrowest and overlaps both others, and it is ``lo`` and ``hi`` that share nothing. A run whose
+    own grid is a single frequency spans no band at all, and is named as the reason."""
+    def curve(name, om):
+        return cmp.Curve(name, name, name, np.asarray(om, dtype=float), np.ones(len(om)), 1.0, 1.0)
+
+    a, far = curve("a", [1.0, 2.0, 4.0, 8.0]), curve("far", [100.0, 200.0])
+    with pytest.raises(Refusal) as e:
+        cmp.common_grid([a, far])
+    msg = str(e.value)
+    assert e.value.field == "compare_records", e.value
+    assert "share none" in msg and "'far' starts at 100" in msg and "'a' ends at 8" in msg, msg
+    assert "[100, 8]" not in msg, "the inverted interval is gone"
+
+    lo, mid, hi = curve("lo", [1.0, 4.0]), curve("mid", [3.5, 5.5]), curve("hi", [5.0, 8.0])
+    with pytest.raises(Refusal) as e:
+        cmp.common_grid([lo, mid, hi])
+    msg = str(e.value)
+    assert "'hi' starts at 5" in msg and "'lo' ends at 4" in msg and "'mid'" not in msg, msg
+
+    one = curve("one", [2.0])
+    with pytest.raises(Refusal) as e:
+        cmp.common_grid([a, one])
+    msg = str(e.value)
+    assert "'one' spans no band" in msg and "'a'" not in msg, msg
+
+    # a shared band that reaches down to zero cannot carry a log-spaced grid: said, not a log(0)
+    with pytest.raises(Refusal) as e:
+        cmp.common_grid([curve("z", [0.0, 2.0]), curve("neg", [-1.0, 3.0])])
+    assert e.value.field == "compare_records" and "positive frequencies" in str(e.value), e.value
+    assert "starts at 0 or below" in str(e.value), e.value
 
 
 def test_the_common_grid_ends_exactly_on_the_shared_span_so_its_end_points_are_never_blank():
@@ -172,9 +210,9 @@ def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, mo
 
     the mode and its settings (a mode this build does not draw, a setting the mode has no use for, a
     blank or non-positive normalisation constant, a non-finite slice point); the arity, both ways (a
-    mode that draws one record or two is never handed more and silently draws the first); and each
-    record (one that names nothing, one of another study, one that did not finish, one with no
-    numbers beside its manifest). The ref that names nothing is refused under the comparison's own
+    mode that draws one record or two is never handed more and silently draws the first), counted in
+    distinct RUNS (one run named twice is one run); and each record (one that names nothing, one of
+    another study, one that did not finish, one with no numbers beside its manifest). The ref that names nothing is refused under the comparison's own
     field, not the store's ``artifact``, so both front ends name the control that answers it (F58)."""
     store = _store(tmp_path)
     for mode in cmp.MODE_RULES:
@@ -207,6 +245,12 @@ def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, mo
         ("other study", ("sweeps", [s1, a], {}), "compare_records", "'a' is a single run"),
         ("unfinished", ("repeats", [a, half], {}), "compare_records", "'half' did not"),
         ("no numbers", ("cells", [a, "bare"], {}), "compare_records", "'bare' has no data file"),
+        # the arity counts RUNS, not refs: one run named twice -- by its id twice, by its id and its
+        # name, or as both halves of a sweeps pair -- is one run, and a one-run "repeats" would record
+        # a zero-width band as two runs agreeing
+        ("one id twice", ("repeats", [a, a], {}), "compare_records", "'a' is named twice"),
+        ("id and name", ("cells", [a, "a"], {}), "compare_records", "'a' is named twice"),
+        ("one sweep twice", ("sweeps", [s1, s1], {}), "compare_records", "'s1' is named twice"),
     ]
     before = _record_dirs(store)
     for label, (mode, refs, options), field, words in cases:
@@ -215,6 +259,14 @@ def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, mo
         assert e.value.field == field, (label, e.value.field, str(e.value))
         assert words in str(e.value), (label, str(e.value))
         assert _record_dirs(store) == before, f"{label}: a refused comparison left a record behind"
+
+    # A bare string is not a list of refs: iterated, a run's id would be read as one ref per
+    # character ("'2' names no fdt record"). No front end can hand one over -- --record appends, and
+    # the window's list returns a list -- so it is the caller's bug, raised as one (a TypeError, which
+    # both front ends show as a bug) rather than dressed up as a refusal of the runs.
+    with pytest.raises(TypeError, match="a list of refs"):
+        cmp.compare("cells", a, store=store)
+    assert _record_dirs(store) == before
 
     # the no-drawer guard names what this build DOES draw (P11), once the table is back to real
     monkeypatch.delitem(cmp._DRAWERS, "cells")

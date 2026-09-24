@@ -149,8 +149,16 @@ def load_records(store, refs, mode: str) -> list:
     the ref it was given: too few or too many records for the mode, a ref that names no record, a
     record of the wrong study, a record whose run did not finish, and a record with no numbers beside
     its manifest. An unfinished record (E2 leaves those on disk with a valid manifest) can reach here
-    only from the tool, by id or name: the window's picker offers finished records only.
+    only from the tool, by id or name: the window's picker offers finished records only. One run
+    named twice is refused too, so the arity counts distinct runs.
+
+    A bare string for ``refs`` is a TypeError, not a refusal: iterated, it would be one ref per
+    character. Neither front end can produce one (``--record`` appends to a list, and the window's
+    comparison list returns one), so only a caller's bug gets here, and it should read as a bug.
     """
+    if isinstance(refs, (str, bytes)):
+        raise TypeError(f"compare takes a list of refs, not a single {type(refs).__name__} "
+                        f"({refs!r}); pass [{refs!r}] for one record")
     store = resolve_store(store)
     want_study, fewest, most = MODE_RULES[mode]
     refs = [str(r) for r in refs]
@@ -162,7 +170,7 @@ def load_records(store, refs, mode: str) -> list:
         refuse("compare_records",
                f"The saved runs to compare must be at most {most} for a {mode} comparison; "
                f"got {len(refs)}.")
-    out = []
+    out, seen = [], set()
     for ref in refs:
         if not _held(store, ref):
             # The store's own refusal carries field="artifact", which would send the window to the
@@ -170,6 +178,14 @@ def load_records(store, refs, mode: str) -> list:
             refuse("compare_records", f"The saved runs to compare must exist; {ref!r} names no fdt record.")
         rec = store.load_fdt(ref)
         who = rec.name or rec.id
+        if rec.id in seen:
+            # The arity above counts REFS, and a ref is an id OR a name: one run named twice -- by its
+            # id twice, or by its id and its name -- would meet "at least 2" alone, and a "repeats"
+            # of one run would record a zero-width band as two runs agreeing. Judged on the RESOLVED
+            # id, so both spellings are caught.
+            refuse("compare_records", f"The saved runs to compare must be different runs; {who!r} is "
+                                      f"named twice.")
+        seen.add(rec.id)
         study = rec.body.get("study")
         if study != want_study:
             refuse("compare_records",
@@ -211,14 +227,32 @@ def common_grid(curves: list) -> np.ndarray:
     The two end points are the span's own numbers, not their round trip through the logarithm:
     ``exp(log(3.0))`` is one ulp above 3.0, and an end point one ulp outside a record's span is
     outside it for ``interpolate_onto`` -- a blank the run never had.
+
+    With no shared band, the refusal names the run that STARTS last and the run that ENDS first:
+    the shared band is empty exactly when the one starts at or above where the other ends, so those
+    two share nothing, which is the fact to act on. (The run with the narrowest span need not be one
+    of them -- it can overlap every other run while two wider ones miss each other.) One run whose
+    grid is a single frequency is both, and spans no band itself.
     """
-    lo = max(float(np.min(c.omegas)) for c in curves)
-    hi = min(float(np.max(c.omegas)) for c in curves)
+    starts = [float(np.min(c.omegas)) for c in curves]
+    ends = [float(np.max(c.omegas)) for c in curves]
+    last, first = int(np.argmax(starts)), int(np.argmin(ends))
+    lo, hi = starts[last], ends[first]
     n = min(int(np.size(c.omegas)) for c in curves)
-    if not (lo > 0.0) or not (hi > lo) or n < 2:
+    if not (hi > lo):          # also n < 2: a one-frequency grid starts where it ends
+        if last == first:
+            who = curves[last].name or curves[last].id
+            refuse("compare_records",
+                   f"The saved runs to compare must share a frequency band; {who!r} spans no band "
+                   f"(its grid runs from {lo:g} to {hi:g}).")
+        late, early = (curves[i].name or curves[i].id for i in (last, first))
         refuse("compare_records",
-               f"The saved runs to compare must overlap in frequency; the intersection of their "
-               f"grids is [{lo:g}, {hi:g}] over {n} point(s).")
+               f"The saved runs to compare must share a frequency band; these share none: {late!r} "
+               f"starts at {lo:g} and {early!r} ends at {hi:g}.")
+    if not (lo > 0.0):
+        refuse("compare_records",
+               f"The saved runs to compare must be measured at positive frequencies; every one of "
+               f"them starts at {lo:g} or below, where a log-spaced grid cannot begin.")
     grid = np.exp(np.linspace(math.log(lo), math.log(hi), n))
     grid[0], grid[-1] = lo, hi
     return grid

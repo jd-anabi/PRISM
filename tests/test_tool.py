@@ -1778,6 +1778,26 @@ def test_a_compare_ref_that_names_nothing_is_refused_naming_the_record_flag(tmp_
     assert sorted(p.name for p in store.kind_dir("fdt").iterdir()) == before, "a refusal opened a record"
 
 
+def test_a_compare_that_names_one_run_twice_is_refused_naming_the_record_flag(tmp_path, monkeypatch,
+                                                                             capsys):
+    """Review Focus 5 at the command line: the arity counts RUNS, not ``--record`` flags. Two flags
+    naming one run -- by id both times, or by id and then by name -- would meet "at least 2" with a
+    single run and draw it as two agreeing with each other. Refused before the record opens, naming
+    the run and the flag."""
+    from core.FDT import compare as cmp
+    store, ids = _compare_root(tmp_path, monkeypatch)
+    monkeypatch.setitem(cmp._DRAWERS, "repeats", _compare_stub)
+    before = sorted(p.name for p in store.kind_dir("fdt").iterdir())
+    for second in (ids[0], "cell_0"):
+        capsys.readouterr()
+        assert main(["compare", "repeats", "--record", ids[0], "--record", second]) == 1
+        err = capsys.readouterr().err
+        lines = [ln for ln in err.splitlines() if ln.strip()]
+        assert len(lines) == 1 and "'cell_0' is named twice" in lines[0], err
+        assert lines[0].endswith("(--record)"), err
+    assert sorted(p.name for p in store.kind_dir("fdt").iterdir()) == before, "a refusal opened a record"
+
+
 def test_compare_ctrl_c_keeps_the_record_and_says_nothing_resumes(tmp_path, monkeypatch, capsys):
     """F56, the comparison's own interrupt note. A comparison's record is progressive, so a Ctrl-C
     after it opened KEEPS it, marked unfinished (E2) -- the opposite of main's generic "the artifact
