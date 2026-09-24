@@ -1919,7 +1919,7 @@ def test_the_fdt_panel_offers_only_single_cell_records(monkeypatch):
             f"the {key} fix sentence does not name the {text!r} box: {gui_fields.fix_sentence(key)!r}"
 
 
-def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path):
+def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path, monkeypatch):
     """Spec §1.2 and §5.4, forced by V4. The panel must know the record's directory BEFORE the run
     starts, because that directory is what the figure watcher is pointed at -- and it must not enter
     the writer itself, because ``log.txt`` is written from ``runs.current_run_log()``, which is
@@ -1929,8 +1929,17 @@ def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path):
     So: the front end CREATES (the id is minted and the name claimed, and nothing is on disk yet) and
     the stage ENTERS. This pins all four halves of that -- the writer travels as a keyword, the first
     body carries the facts the panel knows, the watch directory is the record's own ``figures/``, and
-    ``create`` has written nothing, since ``__enter__`` is what does the mkdir."""
+    ``create`` has written nothing, since ``__enter__`` is what does the mkdir.
+
+    The Seed box is read ONCE and the same value reaches both halves: the builder (``cfg.seed``) and
+    the run (the ``seed`` keyword). A BLANK box is the E7 case and the reason the box is read with
+    value_or_none(): None reaches both halves -- value() would have sent a seed of 0 nobody typed --
+    and the stage then draws one and records it. That last leg drives the dispatched call through the
+    real run_fdt with only the measurement stubbed; the draw comes from a seeded Random patched in as
+    the module's ``random``, never from reseeding Python's global stream (the one-process gate)."""
+    import random
     from core.artifacts import ArtifactStore, use_store
+    from core.FDT import fdt_pipeline
     from core.gui.panels.fdt_panel import FdtPanel, _run_fdt_guarded
     from tests._fixtures import qt_app
 
@@ -1950,12 +1959,32 @@ def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path):
     writer = cap["kwargs"]["writer"]
     assert writer.kind == "fdt" and writer.name == "cell_a_first" and writer.note == "the first look"
     assert cap["kwargs"]["seed"] == 4242
+    assert cap["args"][0].seed == 4242, "the builder's half: the dispatched config carries the seed"
     assert cap["kwargs"]["watch_dir"] == writer.dir / "figures", cap["kwargs"]["watch_dir"]
     assert not writer.dir.exists(), "create() must not touch the disk; __enter__ does the mkdir"
     assert writer.body["study"] == "single" and writer.body["seed"] == 4242
     assert writer.body["notices"] == [] and writer.body["complete"] is False
     assert all(writer.body[k] is None
                for k in ("grid", "points", "offgrid", "compared", "results")), writer.body
+
+    # A BLANK Seed box: None to the builder and to the run, and the run draws one and records it
+    cap.clear()
+    with use_store(store):
+        panel.seed.setText("")
+        panel.record_name.setText("cell_a_drawn")
+        panel._run()
+    blank = cap["kwargs"]["writer"]
+    assert cap["kwargs"]["seed"] is None, "a blank box must not reach the run as a seed of 0"
+    assert cap["args"][0].seed is None, "a blank box must not reach the builder as a seed of 0"
+    assert blank.body["seed"] is None, "the panel records what it knows; the stage records the draw"
+    drawn = random.Random(4242).randrange(2 ** 31)
+    monkeypatch.setattr(fdt_pipeline, "random", random.Random(4242))
+    monkeypatch.setattr(fdt_pipeline, "_measure", lambda *a, **k: None)
+    run_kwargs = {k: cap["kwargs"][k]
+                  for k in ("writer", "seed", "skip_sanity", "confirm_production")}
+    record = cap["fn"](*cap["args"], **run_kwargs)
+    assert record.id == blank.id and record.body["seed"] == drawn, record.body["seed"]
+    assert record.manifest.config["seed"] == drawn, "the config block names the drawn seed too"
 
 
 def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
@@ -1993,6 +2022,54 @@ def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
     assert "cell_a_first" in box.text(), box.text()
     assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
     assert len(list((tmp_path / "fdt").iterdir())) == 1, "the refused click left a second directory"
+
+
+@pytest.mark.parametrize("how", ["too_long", "two_lines"])
+def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
+    """Fix round 1 (T25). The store does not judge a note's text -- ``ArtifactStore.set_note``'s
+    docstring says so -- and every front end runs ``core.refusals.require_note`` before it writes one:
+    ONE line, at most NOTE_MAX_CHARS. The FDT panel passed its Note box straight to ``create``, so a
+    201-character note or a pasted two-line one was stored as typed, and the Artifacts screen then
+    showed a note its own Set button refuses to write back -- while ``fix_sentence("note")`` named
+    this box for a refusal nothing here could raise.
+
+    A line edit DOES hold a line break: ``insert`` (and a real paste) keeps it, so the two-line case
+    is asserted to have one before the click, or this would pass on a note that never had it. The
+    refusal is an input refusal: the yellow box, the rule's own sentence, the fix line naming the
+    'Note' box, nothing dispatched and no id minted -- ``create`` is never reached, so nothing is on
+    disk either."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.refusals import NOTE_MAX_CHARS
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    monkeypatch.setattr(store, "create",
+                        lambda *a, **k: pytest.fail("a refused note still minted a record"))
+    with use_store(store):
+        panel = FdtPanel()
+        panel.dispatch = lambda *a, **k: pytest.fail("a refused note dispatched a run anyway")
+        if how == "too_long":
+            panel.record_note.setText("n" * (NOTE_MAX_CHARS + 1))
+            said = f"must be at most {NOTE_MAX_CHARS} characters"
+        else:
+            panel.record_note.insert("first line\nsecond line")
+            assert "\n" in panel.record_note.text(), "the line edit dropped the break: nothing is tested"
+            said = "must be one line"
+        SHOWN.clear()
+        panel._run()
+
+    assert SHOWN, "a refused note reached no box"
+    box = SHOWN[-1]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, how
+    assert said in box.text(), box.text()
+    assert box.informativeText() == gui_fields.fix_sentence("note")
+    assert "'Note'" in box.informativeText() and "FDT analysis" in box.informativeText()
+    assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
+    assert not (tmp_path / "fdt").exists() or not any((tmp_path / "fdt").iterdir())
 
 
 def test_the_fdt_panel_names_the_record_its_run_wrote(tmp_path):

@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFormLayout, QGroupBox, QLi
 
 from core import cli, registry
 from core.config import CELL_PATH, VALID_MODELS
-from core.refusals import Refusal
+from core.refusals import Refusal, require_note
 from core.FDT.fdt_pipeline import run_fdt
 from core.artifacts import default_store
 
@@ -173,9 +173,10 @@ class FdtPanel(BasePanel):
         # fdt_support's own sentence as field "model", which the Refusal arm shows in the yellow box.
         # The "backstop" that stood here only logged that sentence and returned: a second, boxless path.
 
-        # value(), not value_or_none(): a blank box reads as 0 and the BUILDER refuses 0 by name
-        # (T10, spec §3.3), which is the one wording both front ends inherit. The seed is the
-        # exception -- 0 is a legal seed, so blank must stay blank and mean "draw one" (E7).
+        # The other boxes use value(), not value_or_none(): a blank box reads as 0 and the BUILDER
+        # refuses 0 by name (T10, spec §3.3), which is the one wording both front ends inherit. The
+        # seed is the exception -- 0 is a legal seed, so a blank must stay blank and mean "draw one"
+        # (E7), which only value_or_none() can tell apart from a typed 0.
         seed = self.seed.value_or_none()
         try:
             cfg = cli.make_fdt_config(
@@ -188,8 +189,13 @@ class FdtPanel(BasePanel):
             # where runs.current_run_log() is populated and log.txt can therefore be written. It is
             # inside this try because a taken name is a Refusal about an input on this screen, and
             # belongs in the same yellow box as a bad n_freqs.
+            # The NOTE is judged first, because the store does not judge it (ArtifactStore.set_note):
+            # every front end runs require_note -- one line, at most NOTE_MAX_CHARS -- before it
+            # writes one, so this box cannot store a note the Artifacts screen would refuse to write
+            # back. require_note trims it itself, and a blank box comes back "" (no note).
+            note = require_note("note", self.record_note.text())
             writer = default_store().create("fdt", cfg, name=self.record_name.text().strip(),
-                                            note=self.record_note.text().strip())
+                                            note=note)
         except Refusal as e:                         # a setting the user can change: the yellow box
             self._refusal(e)
             return
