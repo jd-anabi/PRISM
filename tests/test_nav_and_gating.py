@@ -41,6 +41,9 @@ from core.gui.worker import WorkerSignals                         # noqa: E402
 from tests._fixtures import qt_app                                # noqa: E402
 import contextlib                                                  # noqa: E402
 import pytest                                                      # noqa: E402
+from PySide6.QtCore import Qt as _Qt                              # noqa: E402
+
+_USER_ROLE = _Qt.UserRole
 
 def _prior_stub(id_="p1", name=""):
     """A LoadedPrior-shaped stub: the tabs now read ``.prior``/``.force_prior`` off session.inf_prior
@@ -4607,3 +4610,216 @@ def test_main_window_stops_claiming_it_owns_the_only_settings_write():
     src = " ".join(inspect.getsource(mw.MainWindow).split())
     assert "the only QSettings WRITE site" not in src
     assert "_persist_layout" in src and "1500" in src
+
+
+def test_the_comparison_list_appends_from_the_single_selection_picker():
+    """Spec §7.1: StorePicker is single-selection, so the comparison controls hold a LIST the picker
+    appends to and no multi-select widget is built. Adding the same record twice is not an error and
+    is not a second entry -- a curve drawn twice is a curve drawn once with a fatter line -- and the
+    order the list keeps is the order the legend will read."""
+    from core.gui.widgets.compare_list import CompareList
+    from tests._fixtures import qt_app
+
+    qt_app()
+
+    class _Picker:
+        def __init__(self):
+            self.current = ("id_a", "run A")
+
+        def selected(self):
+            return (self.current[0], self.current[0] is None)
+
+        def selection_text(self):
+            return self.current[1]
+
+    picker = _Picker()
+    lst = CompareList(picker)
+    assert lst.ids() == []
+    assert lst.add_selected() is True and lst.ids() == ["id_a"]
+    assert lst.add_selected() is False, "the same record twice is one curve, not two"
+    picker.current = ("id_b", "run B")
+    assert lst.add_selected() is True and lst.ids() == ["id_a", "id_b"]
+    lst.list.setCurrentRow(0)
+    lst.remove_selected()
+    assert lst.ids() == ["id_b"]
+    picker.current = (None, "")
+    assert lst.add_selected() is False, "nothing selected adds nothing"
+
+
+def test_the_fdt_and_crossval_screens_dispatch_their_comparison_modes():
+    """Spec §7.1: the FDT screen carries cells, repeats and renormalise over its own picker, the
+    CrossVal screen carries sweeps. Each button dispatches the ONE public entry with the mode, the
+    ids the list holds and the mode's own setting -- the panel reimplements nothing, so the arity,
+    the study and the unfinished-record refusals are the stage's and reach the yellow box through
+    _on_error. The renormalise box is read with value_or_none(), so a BLANK box is refused as blank
+    rather than read as the zero every numeric box returns for one."""
+    from core.FDT.compare import compare
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import qt_app
+
+    qt_app()
+    sent = {}
+    panel = FdtPanel()
+    panel.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    panel.compare_list.list.addItem("run A")
+    panel.compare_list.list.item(0).setData(_USER_ROLE, "id_a")
+    panel.compare_list.list.addItem("run B")
+    panel.compare_list.list.item(1).setData(_USER_ROLE, "id_b")
+
+    panel.compare_mode.setCurrentText("cells")
+    panel.btn_compare.click()
+    assert sent["fn"] is compare and sent["args"] == ("cells", ["id_a", "id_b"]), sent
+    assert sent["kwargs"]["provide_fig_sink"] is True and "prefactor" not in sent["kwargs"]
+
+    sent.clear()
+    panel.compare_mode.setCurrentText("renormalise")
+    panel.renorm_prefactor.setText("3.5")
+    panel.btn_compare.click()
+    assert sent["args"][0] == "renormalise" and sent["kwargs"]["prefactor"] == 3.5, sent
+
+    sent.clear()
+    panel.renorm_prefactor.setText("")
+    panel.btn_compare.click()
+    assert sent["kwargs"]["prefactor"] is None, "a blank box travels as blank; the stage refuses it"
+
+    sent.clear()
+    xv = CrossValPanel()
+    xv.dispatch = lambda fn, *a, **k: sent.update(fn=fn, args=a, kwargs=k)
+    xv.compare_list.list.addItem("S sweep")
+    xv.compare_list.list.item(0).setData(_USER_ROLE, "id_s")
+    xv.compare_list.list.addItem("T sweep")
+    xv.compare_list.list.item(1).setData(_USER_ROLE, "id_t")
+    xv.slice_at.setText("0.4")
+    xv.btn_compare.click()
+    assert sent["fn"] is compare and sent["args"] == ("sweeps", ["id_s", "id_t"]), sent
+    assert sent["kwargs"]["at"] == 0.4
+    sent.clear()
+    xv.slice_at.setText("")
+    xv.btn_compare.click()
+    assert "at" not in sent["kwargs"], "a blank slice point means 'the middle of the shared range'"
+
+
+def test_a_comparison_from_the_screen_names_its_record_and_outlives_the_next_pick(tmp_path):
+    """Spec §7.1 and ruling F48, end to end on the FDT screen. Two saved runs are chosen the way every
+    record in the window is chosen -- a user's pick in the picker, which also opens that run's
+    figures -- and Add puts each on the list; the button runs the REAL comparison on a worker. Its
+    figure reaches the stack through the dispatch's fig sink, and the pane names the record it wrote
+    (E1: a comparison says what it wrote, as a run does).
+
+    Then the figure SURVIVES the next pick. Choosing the next record for another comparison is the
+    very next thing a user does, and the saved-run viewer answers every pick by closing tabs -- only
+    its own (F48), which is what keeps the comparison just drawn on the stack.
+
+    The normalisation constant is read by one mode, so its box is live in that mode alone. None of
+    the controls is persisted (V5): a remembered list would name records a later session may have
+    deleted, and a remembered constant would renormalise by a number nobody typed this time."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import PaneCapture, build_fdt_record, code_only, qt_app
+
+    app = qt_app()
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        a = build_fdt_record(store, name="cell_a")
+        b = build_fdt_record(store, name="cell_b", ratio=(1.0, 2.0, 1.1, 1.0))
+        c = build_fdt_record(store, name="cell_c")
+        panel = FdtPanel()
+        pane = PaneCapture(panel)
+        combo = panel.record_picker.combo
+
+        assert panel.renorm_prefactor.isEnabled() is False
+        panel.compare_mode.setCurrentText("renormalise")
+        assert panel.renorm_prefactor.isEnabled() is True
+        panel.compare_mode.setCurrentText("cells")
+        assert panel.renorm_prefactor.isEnabled() is False
+
+        for ref in (a, b):
+            _choose(combo, combo.findData(ref))
+            panel.compare_list.btn_add.click()
+        assert panel.compare_list.ids() == [a, b]
+        assert [panel.compare_list.list.item(i).text() for i in range(2)] == ["cell_a", "cell_b"]
+        viewer_tabs = _tabs(panel)
+        assert viewer_tabs, "the pick opened none of the run's figures: the survival below is vacuous"
+
+        panel.btn_compare.click()
+        _wait_for_run(app, panel, limit=60.0)
+        _settle(app)
+        written = [s for s in store.list("fdt") if s.study == "comparison"]
+        assert len(written) == 1, [(s.name, s.study) for s in store.list("fdt")]
+        assert ("info", f"Comparison record written: (unnamed) [{written[0].id}].") in pane.lines, \
+            pane.lines
+        assert _tabs(panel) == [*viewer_tabs, "FDT ratio by cell"], _tabs(panel)
+
+        _choose(combo, combo.findData(c))
+        assert _tabs(panel)[0] == "FDT ratio by cell" and len(_tabs(panel)) == 1 + len(viewer_tabs), \
+            f"the next pick closed the comparison, or kept the last run's tabs: {_tabs(panel)}"
+
+    for cls in (FdtPanel, CrossValPanel):
+        for method in (cls.save_settings, cls.restore_settings):
+            src = code_only(method)
+            for attr in ("compare_list", "compare_mode", "renorm_prefactor", "slice_at"):
+                assert attr not in src, f"{cls.__name__}.{method.__name__} persists {attr}"
+
+
+def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_path):
+    """Spec §7.1 and V3. Every refusal a comparison can make from what it was given is the STAGE's,
+    raised on the worker -- the panel checks nothing -- and it must still reach the yellow "Check your
+    inputs" box through BasePanel._on_error, with the line under it naming the control that answers
+    it: the list for a choice of runs, the 'Normalisation constant' box, the 'Slice at' box. Driven
+    through the real button, dispatch and worker, over every refusal of the per-mode pre-flight
+    (``compare_preflight_refusals``) plus the two a screen reaches first: one run where two are
+    needed, and a blank constant. None of them may leave a comparison record behind.
+
+    The three sentences are pinned verbatim. ``prefactor`` and ``slice_at`` became (place, label)
+    entries when this task built their boxes, and the words the box shows did not change."""
+    from PySide6.QtWidgets import QListWidgetItem
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import SHOWN, build_fdt_record, compare_preflight_refusals, qt_app
+
+    fixes = {
+        "compare_records": ("Add the runs to compare to the comparison list on the FDT analysis or "
+                            "the Sweep study cross-validation tab."),
+        "prefactor": "Set it in the 'Normalisation constant' box on the FDT analysis tab.",
+        "slice_at": "Set it in the 'Slice at' box on the Sweep study cross-validation tab.",
+    }
+    assert gui_fields.CONTROL["prefactor"] == ("FDT analysis", "Normalisation constant")
+    assert gui_fields.CONTROL["slice_at"] == ("Sweep study cross-validation", "Slice at")
+
+    app = qt_app()
+    store = ArtifactStore(tmp_path)
+    with use_store(store):
+        a = build_fdt_record(store, name="a")
+        cases = compare_preflight_refusals(store) + [
+            ("one run for a cells comparison", "cells", [a], {}, "compare_records", "at least 2"),
+            ("a blank constant", "renormalise", [a], {"prefactor": None}, "prefactor", "blank"),
+        ]
+        fdt, xv = FdtPanel(), CrossValPanel()
+        for label, mode, refs, options, field, words in cases:
+            panel = xv if mode == "sweeps" else fdt
+            panel.compare_list.list.clear()
+            for ref in refs:
+                item = QListWidgetItem(ref)
+                item.setData(_USER_ROLE, ref)
+                panel.compare_list.list.addItem(item)
+            if mode == "sweeps":
+                at = options.get("at")
+                panel.slice_at.setText("" if at is None else repr(at))
+            else:
+                panel.compare_mode.setCurrentText(mode)
+                prefactor = options.get("prefactor")
+                panel.renorm_prefactor.setText("" if prefactor is None else repr(prefactor))
+            SHOWN.clear()
+            panel.btn_compare.click()
+            _wait_for_run(app, panel, limit=60.0)
+            assert SHOWN, f"{label}: the refusal reached no box"
+            box = SHOWN[-1]
+            assert box.windowTitle() == "Check your inputs", (label, box.windowTitle(), box.text())
+            assert words in box.text(), (label, box.text())
+            assert box.informativeText() == fixes[field], (label, box.informativeText())
+        written = [s.name for s in store.list("fdt") if s.study == "comparison"]
+        assert written == [], f"a refused comparison left a record behind: {written}"

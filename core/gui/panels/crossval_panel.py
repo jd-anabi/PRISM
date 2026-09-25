@@ -16,12 +16,14 @@ from core import cli
 from core.config import CELL_PATH
 from core.refusals import Refusal, require_note
 from core.FDT.cross_validation import run_param_study_cli
+from core.FDT.compare import compare
 from core.artifacts import default_store
 
 from . import record_view
 from .base_panel import BasePanel
 from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker, StorePicker
+from ..widgets.compare_list import CompareList
 from ..widgets.help_badge import add_help_row
 from ..widgets.labeled_inputs import FloatField, IntField
 from ..widgets.field_row import LabeledFieldRow
@@ -48,6 +50,10 @@ HELP = {
     "record_note": "Kept with both records and shown in the Artifacts browser.",
     "record": "An earlier sweep from the artifact store. Selecting one shows its cell, its settings, "
               "its seed and its notices, and re-opens its figures.",
+    "compare_list": "The saved sweep records a comparison draws. Pick one in the record picker above "
+                    "and press Add selected; the picker holds one at a time.",
+    "slice_at": "The operating point to slice both sweeps at. Blank means the middle of the range the "
+                "two of them share.",
 }
 
 
@@ -82,7 +88,8 @@ class CrossValPanel(BasePanel):
     be a stale bound. Deliberately NOT the seed, the record name or the note either (E7, spec §5.5):
     one seed is recorded on both of the study's records, so a remembered one would make every later
     study a repeat of the last at every operating point, and a remembered name would be refused by
-    assert_name_free at the next launch's first click.
+    assert_name_free at the next launch's first click. Nor are the comparison controls (spec §7.1): a
+    remembered list would name records a later session may have deleted.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -160,6 +167,42 @@ class CrossValPanel(BasePanel):
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)
+        self.controls_layout.addWidget(self._build_compare())
+
+    def _build_compare(self):
+        """The fourth comparison mode (spec §7.1): two sweep records together, and a slice of both at
+        one operating point. A blank slice point means the middle of the range the two sweeps share,
+        which is what the stage does with no `at` at all."""
+        box = QGroupBox("Compare saved sweeps")
+        form = make_form(box)
+        self.compare_list = CompareList(self.record_picker)
+        self.slice_at = FloatField(None)
+        self.btn_compare = QPushButton("Compare saved sweeps")
+        self.btn_compare.clicked.connect(self._compare)
+        # The slice point's row is labelled from core/gui/fields.py (P34); "Sweeps to compare" stays
+        # literal, because a refusal about the list is `compare_records`, a sentence entry naming it.
+        add_help_row(form, "Sweeps to compare", self.compare_list, HELP["compare_list"])
+        add_help_row(form, gui_fields.label("slice_at"), self.slice_at, HELP["slice_at"])
+        form.addRow(self.btn_compare)
+        return box
+
+    def _compare(self):
+        """Dispatch the sweeps comparison. Nothing is checked here: a slice point outside the range
+        the sweeps share, two sweeps of different parameters and an unfinished record are all the
+        stage's refusals, and reach the yellow box through BasePanel._on_error."""
+        options = {}
+        at = self.slice_at.value_or_none()
+        if at is not None:
+            options["at"] = at
+        self.dispatch(compare, "sweeps", self.compare_list.ids(), provide_fig_sink=True,
+                      on_result=self._on_comparison, **options)
+
+    def _on_comparison(self, record) -> None:
+        """The comparison record ``compare`` wrote, named on the pane as the study's records are
+        (``_on_result``). The picker is not moved onto it: it lists sweeps, and a comparison is a
+        record of its own study, which the Artifacts screen lists."""
+        self.log_pane.append_line(
+            f"Comparison record written: {record.name or '(unnamed)'} [{record.id}].")
 
     def _show_record(self, *, figures: bool = True) -> None:
         """Spec §5.4: the selected sweep's line and, with ``figures``, its figures (RecordViewer)."""

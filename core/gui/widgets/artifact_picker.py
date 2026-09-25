@@ -241,6 +241,10 @@ class StorePicker(QWidget):
         data = self.combo.currentData()
         return "" if data is None else self._summaries.get(str(data), "")
 
+    def selection_text(self) -> str:
+        """The current item's own text -- what a list built from this picker should show."""
+        return self.combo.currentText() if self.combo.currentData() is not None else ""
+
     def restore_key(self, key: str) -> None:
         if not key:
             return

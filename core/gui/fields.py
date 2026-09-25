@@ -102,10 +102,11 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # two tabs of the FDT section, and the box it sits in is added by the comparison controls.
     "compare_records": ("Add the runs to compare to the comparison list on the FDT analysis or the "
                         "Sweep study cross-validation tab."),
-    # The two mode settings, as sentences until the comparison controls build their boxes and these
-    # become (place, label) pairs rendering the same words.
-    "prefactor": "Set it in the 'Normalisation constant' box on the FDT analysis tab.",
-    "slice_at": "Set it in the 'Slice at' box on the Sweep study cross-validation tab.",
+    # The two mode settings, each a box the comparison controls build (Task 40): the renormalise
+    # mode's constant on the FDT analysis tab, the sweeps mode's slice point on the cross-validation
+    # tab. Sentences until those boxes existed; the words fix_sentence renders did not change.
+    "prefactor": ("FDT analysis", "Normalisation constant"),
+    "slice_at": ("Sweep study cross-validation", "Slice at"),
     # inputs. The cell picker and the model combo appear on several places at once and each entry
     # names them ALL (E6): a bad cell chosen on the FDT analysis tab used to be answered with "the
     # Infer tab". ``units`` is NOT widened -- one units control exists in the whole application (the

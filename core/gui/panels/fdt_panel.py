@@ -16,12 +16,14 @@ from core import cli, registry
 from core.config import CELL_PATH, VALID_MODELS
 from core.refusals import Refusal, require_note
 from core.FDT.fdt_pipeline import run_fdt
+from core.FDT.compare import compare
 from core.artifacts import default_store
 
 from . import record_view
 from .base_panel import BasePanel
 from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker, StorePicker
+from ..widgets.compare_list import CompareList
 from ..widgets.help_badge import add_help_row, with_badge
 from ..widgets.labeled_inputs import FloatField, IntField
 from ..widgets.forms import make_form
@@ -47,6 +49,13 @@ HELP = {
     "record_note": "Kept with the record and shown in the Artifacts browser.",
     "record": "An earlier single-cell run from the artifact store. Selecting one shows its cell, its "
               "settings, its seed and its notices, and re-opens its figures.",
+    "compare_list": "The saved runs a comparison draws. Pick one in the record picker above and press "
+                    "Add selected; the picker holds one at a time, so the list is how several are chosen.",
+    "compare_mode": "cells: each run's ratio curve on one axis, labelled by cell. repeats: several "
+                    "runs of one cell, with the spread across them as a band. renormalise: one run's "
+                    "ratio recomputed with the constant below, drawn against the original.",
+    "prefactor": "The normalisation constant to recompute T_eff/T with. The ratio is linear in it, so "
+                 "nothing is re-simulated.",
 }
 
 
@@ -83,7 +92,9 @@ class FdtPanel(BasePanel):
     run is made a deliberate repeat of an earlier one, so a remembered value would turn every later
     run into that repeat in silence and collapse the spread E8 measures; a remembered NAME would be
     refused by assert_name_free at the next launch's first click, for a name nobody typed; and a note
-    describes one run.
+    describes one run. Nor are the comparison controls (spec §7.1): a remembered list would name
+    records a later session may have deleted, and a remembered constant would renormalise by a number
+    nobody typed this time.
 
     The two checkboxes are CONSENTS and are never persisted (V5): every launch opens at the
     construction defaults, sanity checks on and the production sweep after them -- the run
@@ -161,6 +172,52 @@ class FdtPanel(BasePanel):
         form.addRow(self.btn_run)
 
         self.controls_layout.addWidget(box)
+        self.controls_layout.addWidget(self._build_compare())
+
+    def _build_compare(self):
+        """The comparison controls (spec §7.1, E8): the first three modes, over this screen's own
+        record picker. The list is what the single-selection picker appends to; the normalisation
+        constant is read only by the renormalise mode, so its box is enabled only there."""
+        box = QGroupBox("Compare saved runs")
+        form = make_form(box)
+        self.compare_list = CompareList(self.record_picker)
+        # Blank, and live in the renormalise mode alone. Built before the mode combo that toggles it.
+        self.renorm_prefactor = FloatField(None)
+        self.renorm_prefactor.setEnabled(False)
+        self.compare_mode = QComboBox()
+        self.compare_mode.addItems(["cells", "repeats", "renormalise"])
+        self.compare_mode.currentTextChanged.connect(
+            lambda mode: self.renorm_prefactor.setEnabled(mode == "renormalise"))
+        self.btn_compare = QPushButton("Compare saved runs")
+        self.btn_compare.clicked.connect(self._compare)
+        # The constant's row is labelled from core/gui/fields.py (P34), like every registered box on
+        # this screen. "Runs to compare" and "Comparison" stay literal: neither answers a registered
+        # key -- a refusal about the list is `compare_records`, a sentence entry naming it.
+        add_help_row(form, "Runs to compare", self.compare_list, HELP["compare_list"])
+        add_help_row(form, "Comparison", self.compare_mode, HELP["compare_mode"])
+        add_help_row(form, gui_fields.label("prefactor"), self.renorm_prefactor, HELP["prefactor"])
+        form.addRow(self.btn_compare)
+        return box
+
+    def _compare(self):
+        """Dispatch one comparison. The panel checks nothing itself: the arity, the study and the
+        unfinished-record refusals belong to the stage (one wording for both front ends), and a
+        Refusal from the worker reaches the yellow box through BasePanel._on_error."""
+        mode = self.compare_mode.currentText()
+        options = {}
+        if mode == "renormalise":
+            # value_or_none, never value(): a blank box returns 0.0 from value(), and 0 is refused
+            # with a sentence about a value nobody typed instead of "it is blank".
+            options["prefactor"] = self.renorm_prefactor.value_or_none()
+        self.dispatch(compare, mode, self.compare_list.ids(), provide_fig_sink=True,
+                      on_result=self._on_comparison, **options)
+
+    def _on_comparison(self, record) -> None:
+        """The comparison record ``compare`` wrote, named on the pane as a run's record is
+        (``_on_record``). The picker is not moved onto it: the picker lists single-cell runs, and a
+        comparison is a record of its own study, which the Artifacts screen lists."""
+        self.log_pane.append_line(
+            f"Comparison record written: {record.name or '(unnamed)'} [{record.id}].")
 
     def _show_record(self, *, figures: bool = True) -> None:
         """Spec §5.4: the selected run's line and, with ``figures``, its figures (RecordViewer)."""
