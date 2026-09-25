@@ -123,8 +123,12 @@ what is on disk, the last gate). Update it at the end of every session.
   rotation and calibration knobs, the HPD level and the direction count), the Config tab's
   non-dimensional χ drive amplitude and band are read-only displays of it, and a consent is never
   persisted — it is answered by the session that runs. A stale key an older build left in
-  `PRISM.ini` is ignored, not restored. The Simulate, FDT and CrossVal panels still remember their
-  own numeric fields — piece 5's (piece-3 spec §1.3).
+  `PRISM.ini` is ignored, not restored. The Simulate, FDT and CrossVal panels remember their own
+  numeric fields and their pickers' selections; the Seed box, the record name and the note are
+  never remembered — a remembered seed would silently turn every run into a repeat of the last one,
+  and a remembered name would be refused as taken at the next launch's first run (piece-5 spec
+  §5.5, E7; plan ruling P30) — and neither are the "Compare saved …" controls, whose remembered
+  list would name records a later session may have deleted.
 - `Resources/` holds the hand-edited inputs (`Bounds/`, `Cells/`, `Units/`, `Models/`). The
   bounds file declares WHICH parameters are inferred and in what order, and therefore the
   observation mode; a cell's model comes from its parent folder. Everything generated lives under
@@ -133,8 +137,13 @@ what is on disk, the last gate). Update it at the end of every session.
   stamped `HH:MM:SS info/warning/error` (`core/runs.py`) — for every kind but the simulation cache,
   which has no writer. The store's code is `core/artifacts/`; the `Artifacts/` tree is gitignored.
   The kinds are priors, simulations (the training cache, keyed by identity digest), posteriors,
-  observations, calibrations, inferences and diagnostics. Every stage writes its artifact at
-  completion and returns a `Loaded*` wrapper; Save is a rename; loading refuses any verifiable
+  observations, calibrations, inferences, diagnostics and fdt (the effective-temperature
+  measurement, the parameter sweep and their comparisons — piece 5). Every stage writes its
+  artifact at completion and returns a `Loaded*` wrapper, with two exceptions: the training cache,
+  which commits batch by batch and has no writer at all, and an `fdt` record, which is
+  PROGRESSIVE — its directory and a first manifest exist from the moment the run starts,
+  `refresh()` rewrites them as it goes, and a cancel or a crash keeps the folder, marked unfinished
+  (piece-5 spec §2.2, E2). Save is a rename; loading refuses any verifiable
   mismatch, and `Accept(truncated, other_observation)` are the only escape hatches (each use is
   recorded downstream). No code outside `core/config.py` builds a literal `Resources/` or
   `Artifacts/` path (a test pins it). The old `Resources/{Priors,Posteriors,Checkpoints,Observations,
@@ -157,18 +166,24 @@ what is on disk, the last gate). Update it at the end of every session.
 - `docs/superpowers/specs/` — approved designs. `docs/superpowers/plans/` — implementation plans.
 - `.superpowers/sdd/<date>-<slug>/` — a piece's gitignored execution workspace: the ledger
   (`progress.md`), the task briefs and reports, the review reports and the per-task gate logs.
-  Piece 2 is `2026-09-12-one-flow`, piece 3 `2026-09-16-validation-and-logging`. Untracked, so no
-  git command finds them.
+  Piece 2 is `2026-09-12-one-flow`, piece 3 `2026-09-16-validation-and-logging`, piece 5
+  `2026-09-22-secondary-analyses`. Untracked, so no git command finds them.
 - `docs/checklists/display-walkthrough.md` — GUI features never exercised on a real screen.
-- `tests/` — the eighteen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
+- `tests/` — the nineteen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
   command-line tool's, `test_diagnostics.py` the five diagnostics', `test_refusals.py` the
-  torch-free rules', tables' and run-buffer's, `test_artifact_browser.py` the artifact browser's;
-  `_fixtures.py` holds the shared stand-ins, the tiny real prior+posterior, and `CODE_ROOTS` plus
+  torch-free rules', tables' and run-buffer's, `test_artifact_browser.py` the artifact browser's,
+  `test_fdt_compare.py` the comparison facility's; `_fixtures.py` holds the shared stand-ins, the
+  tiny real prior+posterior, `build_fdt_record` (a single-cell or sweep `fdt` record, finished or
+  not, written in seconds) and `compare_preflight_refusals` (every comparison refusal made after
+  the records are read, shared by the API's and the tool's tests), and `CODE_ROOTS` plus
   `CODE_FILES`, the directories and top-level files the source scans walk); `core/Reduction/tests/`
   — the reduction map's (out of scope).
 - `core/tool/` — the command-line tool: `python -m core --help` lists every subcommand (the stages
-  `prior train tsnpe validate infer`, the diagnostics `sbc identifiability ablation`, plus `smoke`,
-  `fdt`, `crossval` and `artifacts` (list/show/note/rm/sweep/summary)). `scripts/` is gone: six of
-  its scripts became `smoke` and the diagnostics (git history keeps them), and six more joined the
-  gitignored `archive/scripts/`. The Artifacts screen (piece 4) is the store's GUI front end, over
-  the same `core/artifacts/` engine the tool's `artifacts` family reads.
+  `prior train validate infer tsnpe`, the diagnostics `sbc identifiability ablation`, plus `smoke`,
+  `fdt`, `crossval`, `compare` (cells/repeats/renormalise/sweeps) and `artifacts`
+  (list/show/note/rm/sweep/summary)); `fdt` and `crossval` take `--store-root`, `--seed`, `--name`
+  and `--note`, and a `crossval` study's two records are named `<name>-s` and `<name>-temp`.
+  `scripts/` is gone: six of its scripts became `smoke` and the diagnostics (git history keeps
+  them), and six more joined the gitignored `archive/scripts/`. The Artifacts screen (piece 4) is
+  the store's GUI front end, over the same `core/artifacts/` engine the tool's `artifacts` family
+  reads.

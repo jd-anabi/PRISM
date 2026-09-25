@@ -57,7 +57,7 @@ These readings go beyond the literal text of a decision. They are recorded here 
 |---|---|
 | Boundary validation of every field. Logging with severity in place of `print`, including the in-stage prints this piece leaves. Copy-on-run session config, which also covers an amortized training in a session whose cfg carries a truth: that training anchors the Fisher on the truth (`decorrelate.py:291-292`). Error dialogs that name the fix. `tsnpe_tab.restore_settings`, which is never called (`tsnpe_tab.py:154-169`). The Config tab's chi drive and band fields, editable and QSettings-restored while every non-default value is refused (§2.9). The budget status line's separate identity derivation (`base.py:154-182`). The TSNPE manifest recording Fisher defaults that did not run (`orchestrator.py:1075-1080`). `build_prior`'s load branch calling `plt.show()` when `fig_sink` is None (`orchestrator.py:440`, `visualizers.py:100-103`; every caller passes a sink). sbi writing `<cwd>/sbi-logs` (`train.py:182`). | piece 3 |
 | The artifact browser, including a listing of diagnostics. Annotate (`set_note` has no GUI caller). Cleanup of incomplete directories. | piece 4 |
-| FDT/CrossVal hardening, and wrapping them in the store. Their outputs stay in `artifacts_root()/fdt` and `/crossval`. | piece 5 |
+| FDT/CrossVal hardening, and wrapping them in the store. Their outputs stay in `artifacts_root()/fdt` and `/crossval`. **Piece 5's answer: one store kind `fdt`, whose records live at `artifacts_root()/fdt/<name>__<id>/`; a sweep is a record of that kind too, so nothing is written to `/crossval` any more (piece-5 spec §2.1).** | piece 5 |
 | The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes false (`:49,53-54,76,190-191`). A README reference section for the tool. | piece 6 |
 | Reduction on the command line. Its GUI panel stays. | out of the programme |
 
@@ -422,7 +422,7 @@ if __name__ == "__main__":
    - Create it with `mkdir(parents=True, exist_ok=True)`, so a root that cannot be created fails at start-up.
    - Run the handler under `with use_store(ArtifactStore(root)) as store:` (`store.py:765-773`), and ALSO pass `store=store` to every stage call.
    - `set_default_store` is never called; that call was `smoke_train.py:219-222`'s leak.
-   - There is no global `--artifacts` flag. The `fdt` and `crossval` outputs follow the environment, not the store (`fdt_pipeline.py:28-33`, `cross_validation.py:40-41`), so a flag for the store alone would split one run across two roots.
+   - There is no global `--artifacts` flag. When this was written the `fdt` and `crossval` outputs followed the environment rather than the store (`fdt_pipeline.py:28-33`, `cross_validation.py:40-41`), so a flag for the store alone would have split one run across two roots. **Corrected in place by piece 5 (E1, E11):** both analyses now write store records of the `fdt` kind and both subcommands declare their own `--store-root`, so the reason given here no longer holds — see `docs/superpowers/specs/2026-09-22-secondary-analyses-design.md` §6.1. There is still no global `--artifacts` flag.
 4. **Dispatch.** A handler that returns `None` means exit code 0.
 
 Exit codes (every message goes to stderr with the prefix `prism <subcommand>:`):

@@ -15,13 +15,24 @@ stay torch-free. The consequence is stated in EPILOG: this family cannot say "th
 match your bounds file" -- that is what LOADING it does. ``fdt``/``crossval`` are the precedent for a
 subcommand that builds no SimConfig.
 
-NO ``--store-root``, EITHER. The root is ``config.artifacts_root()`` (PRISM_ARTIFACTS), like every
-subcommand but ``smoke``, and ``main`` has already opened the store by the time a handler runs. The
-name is not reused because ``main`` keys three of smoke's behaviours on the FLAG's presence:
-``has_store_root = hasattr(args, "store_root")`` (:95) decides whether a fresh ``mkdtemp`` root is
-created (:96-98), whether an empty auto-created root is removed afterwards (:156-157), and which
-Ctrl-C advice is printed (:121-122). Declaring ``--store-root`` here would change all three for this
-family, for a root it does not want.
+NO ``--store-root``, EITHER. The root is ``config.artifacts_root()`` (PRISM_ARTIFACTS) and ``main``
+has already opened the store by the time a handler runs, so this family has no second root to point
+at: it creates nothing, spends nothing a Ctrl-C could abandon, and reads the one root the
+environment names.
+
+The flag is no longer a proxy for anything else, either. It used to be: ``main`` keyed three of
+smoke's behaviours on ``hasattr(args, "store_root")`` -- the throwaway ``mkdtemp`` root, the removal
+of an auto-created root left empty by a failure, and the Ctrl-C advice -- so declaring the name here
+would have changed all three for a root this family does not want. Piece 5 gave ``fdt`` and
+``crossval`` a ``--store-root`` of their own and reworked those three deliberately rather than
+letting them flip (piece-5 spec §6.1, E11): the throwaway root, its cleanup and smoke's Ctrl-C
+advice are now keyed on ``temp_store_root``, a property only ``smoke``'s parser sets
+(``set_defaults(temp_store_root=True)``), never on the flag's presence; ``fdt``, ``crossval`` and
+``compare`` print their own ``interrupt_note``, which ``main`` checks first. The absence here is now
+what it says on the face of it -- this family wants one root, the environment's.
+
+(No line numbers into ``core/tool/__init__.py`` on purpose: the four this paragraph used to carry
+had gone stale before piece 5 moved them again.)
 
 OUTPUT IS ``print``. The tool's framing prints are deliberately outside the no-print pin -- "The
 tool's framing prints (core/tool) stay prints and are deliberately outside this set"
