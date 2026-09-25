@@ -54,6 +54,9 @@ HELP = {
                     "and press Add selected; the picker holds one at a time.",
     "slice_at": "The operating point to slice both sweeps at. Blank means the middle of the range the "
                 "two of them share.",
+    "compare_name": "A name for the record the comparison writes. A name already taken is refused. "
+                    "Leave it blank for an unnamed record.",
+    "compare_note": "Kept with the comparison's record and shown in the Artifacts browser.",
 }
 
 
@@ -89,7 +92,8 @@ class CrossValPanel(BasePanel):
     one seed is recorded on both of the study's records, so a remembered one would make every later
     study a repeat of the last at every operating point, and a remembered name would be refused by
     assert_name_free at the next launch's first click. Nor are the comparison controls (spec §7.1): a
-    remembered list would name records a later session may have deleted.
+    remembered list would name records a later session may have deleted, and the comparison's own
+    name and note are the study's twins (plan ruling P30, the whole-piece review's R-F3).
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -177,25 +181,42 @@ class CrossValPanel(BasePanel):
         form = make_form(box)
         self.compare_list = CompareList(self.record_picker)
         self.slice_at = FloatField(None)
+        # The comparison's OWN name and note (the whole-piece review's M4, ruling R-F3), never the
+        # study's Record name box. Never persisted (the class docstring).
+        self.compare_name = QLineEdit()
+        self.compare_name.setPlaceholderText("name for the comparison's record (optional)…")
+        self.compare_note = QLineEdit()
+        self.compare_note.setPlaceholderText("a note to keep with it (optional)…")
         self.btn_compare = QPushButton("Compare saved sweeps")
         self.btn_compare.clicked.connect(self._compare)
         # The slice point's row is labelled from core/gui/fields.py (P34); "Sweeps to compare" stays
-        # literal, because a refusal about the list is `compare_records`, a sentence entry naming it.
+        # literal, because a refusal about the list is `compare_records`, a sentence entry naming it,
+        # and so do "Comparison name" and "Comparison note" (`name` and `note` are sentence entries).
         add_help_row(form, "Sweeps to compare", self.compare_list, HELP["compare_list"])
         add_help_row(form, gui_fields.label("slice_at"), self.slice_at, HELP["slice_at"])
+        add_help_row(form, "Comparison name", self.compare_name, HELP["compare_name"])
+        add_help_row(form, "Comparison note", self.compare_note, HELP["compare_note"])
         form.addRow(self.btn_compare)
         return box
 
     def _compare(self):
-        """Dispatch the sweeps comparison. Nothing is checked here: a slice point outside the range
-        the sweeps share, two sweeps of different parameters and an unfinished record are all the
-        stage's refusals, and reach the yellow box through BasePanel._on_error."""
+        """Dispatch the sweeps comparison, under the name and the note typed for it. The NOTE is
+        judged at the click (every front end runs require_note; the store does not). Everything else
+        is the stage's: a slice point outside the range the sweeps share, two sweeps of different
+        parameters, an unfinished record and a taken name are its refusals, and reach the yellow box
+        through BasePanel._on_error."""
+        try:
+            note = require_note("note", self.compare_note.text())
+        except Refusal as e:
+            self._refusal(e)
+            return
         options = {}
         at = self.slice_at.value_or_none()
         if at is not None:
             options["at"] = at
         self.dispatch(compare, "sweeps", self.compare_list.ids(), provide_fig_sink=True,
-                      on_result=self._on_comparison, **options)
+                      on_result=self._on_comparison, name=self.compare_name.text().strip(),
+                      note=note, **options)
 
     def _on_comparison(self, record) -> None:
         """The comparison record ``compare`` wrote, named on the pane as the study's records are

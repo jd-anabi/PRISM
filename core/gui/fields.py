@@ -90,14 +90,17 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # consents and names
     "accept_truncated": "Confirm the load in the dialog on the Posterior tab.",
     "accept_other_observation": "Tick 'Run on a different observation' on the Infer tab.",
-    "name": ("Choose another name in the Save box, or in the 'Record name' box on the FDT analysis or "
-             "Sweep study cross-validation tab."),
+    # A name and a note are typed in several boxes, and each sentence lists them all: a run's record
+    # and a comparison's are named in boxes of their own on the same two tabs (the whole-piece
+    # review's M4), so a taken comparison name is sent to the 'Comparison name' box, not the run's.
+    "name": ("Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
+             "on the FDT analysis or Sweep study cross-validation tab."),
     # the artifact browser (piece 4). Sentences, not (place, label), although the Artifacts screen is
     # a place since E6: the list is not a box, and the Note box sits in the screen's action row, not
     # in a form row the read-back pin reads.
     "artifact": "Select an artifact in the list on the Artifacts screen.",
-    "note": ("Edit it in the Note box on the Artifacts screen, or in the 'Note' box on the FDT "
-             "analysis or Sweep study cross-validation tab."),
+    "note": ("Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
+             "box on the FDT analysis or Sweep study cross-validation tab."),
     # A sentence and not a (place, label) pair: the comparison list is one control that appears on
     # two tabs of the FDT section, and the box it sits in is added by the comparison controls.
     "compare_records": ("Add the runs to compare to the comparison list on the FDT analysis or the "

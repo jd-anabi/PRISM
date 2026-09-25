@@ -489,8 +489,8 @@ def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
     assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
     assert "200" in box.text() and "201" in box.text(), box.text()
     assert box.informativeText() == (
-        "Edit it in the Note box on the Artifacts screen, or in the 'Note' box on the FDT analysis or "
-        "Sweep study cross-validation tab.")
+        "Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
+        "box on the FDT analysis or Sweep study cross-validation tab.")
     assert store.get("prior", p.id).note == ""
 
 

@@ -1565,8 +1565,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.fix_sentence("recording_probe") == \
         "Pick the probe's recording in the χ probe table on the Infer tab."
     assert gui_fields.fix_sentence("name") == (
-        "Choose another name in the Save box, or in the 'Record name' box on the FDT analysis or "
-        "Sweep study cross-validation tab.")
+        "Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
+        "on the FDT analysis or Sweep study cross-validation tab.")
     assert (gui_fields.fix_sentence("chi_f0") == gui_fields.fix_sentence("chi_freq_bounds")
             == "Fixed by measurement: change it in config.py, deliberately.")
     # the budget boxes sit on two tabs, and a refusal raised on either must name the one the user is on
@@ -1592,8 +1592,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     # piece 4's two, on the Artifacts screen rather than a tab (B5, design §2.5)
     assert gui_fields.fix_sentence("artifact") == "Select an artifact in the list on the Artifacts screen."
     assert gui_fields.fix_sentence("note") == (
-        "Edit it in the Note box on the Artifacts screen, or in the 'Note' box on the FDT analysis or "
-        "Sweep study cross-validation tab.")
+        "Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
+        "box on the FDT analysis or Sweep study cross-validation tab.")
 
     # (d) no window control: the six the window never exposes, and the tool-only set
     assert {k for k, e in gui_fields.CONTROL.items() if e is None} == {
@@ -1654,8 +1654,8 @@ def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
         assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning, kind
         assert box.text() == f"a {kind} named 'p' already exists; rename or delete it first", kind
         assert box.informativeText() == gui_fields.fix_sentence("name") == (
-            "Choose another name in the Save box, or in the 'Record name' box on the FDT analysis or "
-            "Sweep study cross-validation tab."), kind
+            "Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
+            "on the FDT analysis or Sweep study cross-validation tab."), kind
         assert box.detailedText() == "", kind
         assert loaded.name == "", "a refused rename must not relabel the loaded artifact"
         assert pane.lines[-1][0] == "warning" and "already exists" in pane.lines[-1][1], pane.lines
@@ -4673,6 +4673,7 @@ def test_the_fdt_and_crossval_screens_dispatch_their_comparison_modes():
     panel.btn_compare.click()
     assert sent["fn"] is compare and sent["args"] == ("cells", ["id_a", "id_b"]), sent
     assert sent["kwargs"]["provide_fig_sink"] is True and "prefactor" not in sent["kwargs"]
+    assert (sent["kwargs"]["name"], sent["kwargs"]["note"]) == ("", ""), "blank boxes: unnamed, no note"
 
     sent.clear()
     panel.compare_mode.setCurrentText("renormalise")
@@ -4693,9 +4694,12 @@ def test_the_fdt_and_crossval_screens_dispatch_their_comparison_modes():
     xv.compare_list.list.addItem("T sweep")
     xv.compare_list.list.item(1).setData(_USER_ROLE, "id_t")
     xv.slice_at.setText("0.4")
+    xv.compare_name.setText("  s_vs_t  ")
+    xv.compare_note.setText("  two sweeps  ")
     xv.btn_compare.click()
     assert sent["fn"] is compare and sent["args"] == ("sweeps", ["id_s", "id_t"]), sent
     assert sent["kwargs"]["at"] == 0.4
+    assert (sent["kwargs"]["name"], sent["kwargs"]["note"]) == ("s_vs_t", "two sweeps"), sent
     sent.clear()
     xv.slice_at.setText("")
     xv.btn_compare.click()
@@ -4761,8 +4765,78 @@ def test_a_comparison_from_the_screen_names_its_record_and_outlives_the_next_pic
     for cls in (FdtPanel, CrossValPanel):
         for method in (cls.save_settings, cls.restore_settings):
             src = code_only(method)
-            for attr in ("compare_list", "compare_mode", "renorm_prefactor", "slice_at"):
+            for attr in ("compare_list", "compare_mode", "renorm_prefactor", "slice_at",
+                         "compare_name", "compare_note"):
                 assert attr not in src, f"{cls.__name__}.{method.__name__} persists {attr}"
+
+
+def test_a_comparison_from_either_screen_is_named_and_noted_and_a_taken_name_names_its_box(
+        tmp_path, monkeypatch):
+    """The whole-piece review's M4, the window's half (ruling R-F3). Both "Compare saved ..." groups
+    dispatched their comparison with neither a name nor a note, and nothing renames an fdt record
+    afterwards -- so every comparison the window drew was "(unnamed)" for good, while the tool's
+    ``compare`` took ``--name``. Each group now has a Comparison name and a Comparison note row of its
+    own (the run's Record name box names the RUN), passed to the comparison.
+
+    The note is judged at the click by the house rule (one line, at most NOTE_MAX_CHARS): a refused
+    note is one yellow box and no dispatch. A taken name is the stage's refusal, raised on the worker
+    by ``store.create``; its yellow box must name THIS box, so the ``name`` and ``note`` sentences
+    list the comparison's boxes beside the run's. Neither box is ever written to PRISM.ini (plan
+    ruling P30: a remembered name is refused as taken at the next launch) -- the pin is in
+    test_a_comparison_from_the_screen_names_its_record_and_outlives_the_next_pick."""
+    import pytest
+    from PySide6.QtWidgets import QListWidgetItem
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from core.refusals import NOTE_MAX_CHARS
+    from tests._fixtures import SHOWN, build_fdt_record, qt_app
+
+    assert "'Comparison name'" in gui_fields.fix_sentence("name"), gui_fields.fix_sentence("name")
+    assert "'Comparison note'" in gui_fields.fix_sentence("note"), gui_fields.fix_sentence("note")
+
+    app = qt_app()
+    store = ArtifactStore(tmp_path)
+    om = (0.5, 1.0, 2.0)
+    with use_store(store):
+        cells = [build_fdt_record(store, name="cell_a"),
+                 build_fdt_record(store, name="cell_b", ratio=(1.0, 2.0, 1.1, 1.0))]
+        sweeps = [build_fdt_record(store, name="s_low", study="sweep", omegas=om, sweep_param="s",
+                                   points=[(0.0, (1.0, 1.0, 1.0)), (0.5, (1.0, 3.0, 1.1))]),
+                  build_fdt_record(store, name="s_high", study="sweep", omegas=om, sweep_param="s",
+                                   points=[(0.25, (1.0, 2.0, 1.0)), (0.75, (1.0, 6.0, 1.2))])]
+        for panel, refs, name in ((FdtPanel(), cells, "ab_cells"), (CrossValPanel(), sweeps, "lo_hi")):
+            for ref in refs:
+                item = QListWidgetItem(ref)
+                item.setData(_USER_ROLE, ref)
+                panel.compare_list.list.addItem(item)
+            panel.compare_name.setText(name)
+            panel.compare_note.setText("  drawn from the screen  ")
+            SHOWN.clear()
+            panel.btn_compare.click()
+            _wait_for_run(app, panel, limit=60.0)
+            m = store.get("fdt", name)
+            assert (m.name, m.note, m.body["study"]) == (name, "drawn from the screen", "comparison"), m
+            assert SHOWN == [], [b.text() for b in SHOWN]
+
+            # the same name again: refused by the stage, and the box names the comparison's box
+            panel.btn_compare.click()
+            _wait_for_run(app, panel, limit=60.0)
+            box = SHOWN[-1]
+            assert box.windowTitle() == "Check your inputs" and "already exists" in box.text(), box.text()
+            assert box.informativeText() == gui_fields.fix_sentence("name"), box.informativeText()
+
+            # a note the house rule refuses: one box at the click, nothing dispatched
+            panel.compare_name.setText(f"{name}_again")
+            panel.compare_note.setText("n" * (NOTE_MAX_CHARS + 1))
+            monkeypatch.setattr(panel, "dispatch", lambda *a, **k: pytest.fail("a refused note ran"))
+            SHOWN.clear()
+            panel.btn_compare.click()
+            assert len(SHOWN) == 1 and SHOWN[0].windowTitle() == "Check your inputs", \
+                [b.text() for b in SHOWN]
+            assert SHOWN[0].informativeText() == gui_fields.fix_sentence("note")
+    assert len([s for s in store.list("fdt") if s.study == "comparison"]) == 2
 
 
 def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_path):

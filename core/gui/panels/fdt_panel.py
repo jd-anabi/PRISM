@@ -56,6 +56,9 @@ HELP = {
                     "ratio recomputed with the constant below, drawn against the original.",
     "prefactor": "The normalisation constant to recompute T_eff/T with. The ratio is linear in it, so "
                  "nothing is re-simulated.",
+    "compare_name": "A name for the record the comparison writes. A name already taken is refused. "
+                    "Leave it blank for an unnamed record.",
+    "compare_note": "Kept with the comparison's record and shown in the Artifacts browser.",
 }
 
 
@@ -93,8 +96,9 @@ class FdtPanel(BasePanel):
     run into that repeat in silence and collapse the spread E8 measures; a remembered NAME would be
     refused by assert_name_free at the next launch's first click, for a name nobody typed; and a note
     describes one run. Nor are the comparison controls (spec §7.1): a remembered list would name
-    records a later session may have deleted, and a remembered constant would renormalise by a number
-    nobody typed this time.
+    records a later session may have deleted, a remembered constant would renormalise by a number
+    nobody typed this time, and the comparison's own name and note are the run's twins (plan ruling
+    P30, the whole-piece review's R-F3).
 
     The two checkboxes are CONSENTS and are never persisted (V5): every launch opens at the
     construction defaults, sanity checks on and the production sweep after them -- the run
@@ -188,21 +192,39 @@ class FdtPanel(BasePanel):
         self.compare_mode.addItems(["cells", "repeats", "renormalise"])
         self.compare_mode.currentTextChanged.connect(
             lambda mode: self.renorm_prefactor.setEnabled(mode == "renormalise"))
+        # The comparison's OWN name and note (the whole-piece review's M4, ruling R-F3): the run's
+        # Record name box names the run, and a comparison is a record of its own. Never persisted
+        # (the class docstring).
+        self.compare_name = QLineEdit()
+        self.compare_name.setPlaceholderText("name for the comparison's record (optional)…")
+        self.compare_note = QLineEdit()
+        self.compare_note.setPlaceholderText("a note to keep with it (optional)…")
         self.btn_compare = QPushButton("Compare saved runs")
         self.btn_compare.clicked.connect(self._compare)
         # The constant's row is labelled from core/gui/fields.py (P34), like every registered box on
         # this screen. "Runs to compare" and "Comparison" stay literal: neither answers a registered
-        # key -- a refusal about the list is `compare_records`, a sentence entry naming it.
+        # key -- a refusal about the list is `compare_records`, a sentence entry naming it. So do
+        # "Comparison name" and "Comparison note": `name` and `note` are sentence entries, which name
+        # these two boxes beside the run's own.
         add_help_row(form, "Runs to compare", self.compare_list, HELP["compare_list"])
         add_help_row(form, "Comparison", self.compare_mode, HELP["compare_mode"])
         add_help_row(form, gui_fields.label("prefactor"), self.renorm_prefactor, HELP["prefactor"])
+        add_help_row(form, "Comparison name", self.compare_name, HELP["compare_name"])
+        add_help_row(form, "Comparison note", self.compare_note, HELP["compare_note"])
         form.addRow(self.btn_compare)
         return box
 
     def _compare(self):
-        """Dispatch one comparison. The panel checks nothing itself: the arity, the study and the
-        unfinished-record refusals belong to the stage (one wording for both front ends), and a
-        Refusal from the worker reaches the yellow box through BasePanel._on_error."""
+        """Dispatch one comparison, under the name and the note typed for it. The NOTE is judged here,
+        at the click, because the store does not judge it (ArtifactStore.set_note): every front end
+        runs require_note. Everything else is the stage's: the arity, the study, the unfinished-record
+        and the taken-name refusals belong to it (one wording for both front ends), and a Refusal from
+        the worker reaches the yellow box through BasePanel._on_error."""
+        try:
+            note = require_note("note", self.compare_note.text())
+        except Refusal as e:
+            self._refusal(e)
+            return
         mode = self.compare_mode.currentText()
         options = {}
         if mode == "renormalise":
@@ -210,7 +232,8 @@ class FdtPanel(BasePanel):
             # with a sentence about a value nobody typed instead of "it is blank".
             options["prefactor"] = self.renorm_prefactor.value_or_none()
         self.dispatch(compare, mode, self.compare_list.ids(), provide_fig_sink=True,
-                      on_result=self._on_comparison, **options)
+                      on_result=self._on_comparison, name=self.compare_name.text().strip(),
+                      note=note, **options)
 
     def _on_comparison(self, record) -> None:
         """The comparison record ``compare`` wrote, named on the pane as a run's record is
