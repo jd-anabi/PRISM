@@ -651,12 +651,43 @@ def draw_renormalise(w, records, *, sink, prefactor):
     return results, notices
 
 
+#: Two values of a swept parameter -- or two distances from the slice point -- that agree to this
+#: many decimal places are equal. The swept parameters (S, T_a/T) are of order 0.01 to 10, where float
+#: noise sits near 1e-16 of the value: twelve places remove it, and keep every difference a sweep grid
+#: of either is built with. Without it a near-tie was decided by noise (from 0.2, the rows 0.1 and 0.3
+#: are 0.1 and 0.09999999999999998 away).
+_SLICE_DECIMALS = 12
+
+
+def _rounded(x: float) -> float:
+    """``x`` to ``_SLICE_DECIMALS`` places, ``-0.0`` folded into ``0.0``."""
+    return round(float(x), _SLICE_DECIMALS) + 0.0
+
+
+def _rows_notice(param: str, at: float, labels: list, values: list) -> list:
+    """The record's sentence when a sweep was not sliced AT the slice point, or the sweeps were not
+    sliced at one point: each sweep contributes the row nearest ``at``, and a reader of two curves
+    should not have to find out from the legend that they are not one operating point. ``[]`` when
+    every row sits on ``at``."""
+    if all(_rounded(v - at) == 0.0 for v in values):
+        return []
+    if all(_rounded(v - values[0]) == 0.0 for v in values):
+        return [f"Both sweeps were sliced at {param} = {values[0]:g}, the nearest operating point "
+                f"each measured to the slice point {param} = {at:g}."]
+    rows = " and ".join(f"{label!r} at {param} = {v:g}" for label, v in zip(labels, values))
+    return [f"The sweeps were sliced at different operating points, the nearest each measured to the "
+            f"slice point {param} = {at:g}: {rows}. A difference between their curves is partly the "
+            f"difference in {param}."]
+
+
 def _sweep_rows(rec) -> list:
     """One sweep record's usable operating points, in ``load_param_sweep``'s own shape -- the read-back
     the sweep's own figure (``plot_fdt_3d_vs_param``) is drawn from, so this mode reads the record
     exactly as the sweep that wrote it does. A point that failed carries an ``error`` and no response
-    data (spec §4.3), so it is not usable; nor is one without the normalised axis both of this mode's
-    figures are drawn on, which is ``cross_validation_plots._stack``'s own rule for a usable row."""
+    data (spec §4.3), so it is not usable; nor is one without either axis this mode draws on -- the
+    normalised one of the surfaces (``cross_validation_plots._stack``'s own rule for a usable row)
+    and the absolute one of the slice. The sweep writes both with the ratio, so a finished point has
+    them."""
     from .cross_validation import load_param_sweep
     who = rec.name or rec.id
     with h5py.File(rec.data_path, "r") as h5:
@@ -665,7 +696,8 @@ def _sweep_rows(rec) -> list:
         refuse("compare_records",
                f"The saved runs to compare must hold their numbers; the data file of {who!r} has no "
                f"'operating_points' in it.")
-    rows = [r for r in load_param_sweep(rec.data_path) if not r["failed"] and "omega_norm" in r]
+    rows = [r for r in load_param_sweep(rec.data_path)
+            if not r["failed"] and "omega_norm" in r and "omega_grid" in r]
     if not rows:
         refuse("compare_records",
                f"The saved runs to compare must hold at least one measured operating point; "
@@ -683,8 +715,8 @@ class SweepSlice:
     at: float               # the operating point both are sliced at
     labels: list            # per record: its name in the pictures, by labelled_curves' rule
     rows: list              # per record: its usable operating points (load_param_sweep's dicts)
-    chosen: list            # per record: its usable row nearest ``at``
-    curves: list            # per record: that row's ratio, a Curve on the normalised axis
+    chosen: list            # per record: its usable row nearest ``at`` (the tie rule: sweep_slice)
+    curves: list            # per record: that row's ratio, a Curve on the absolute ND axis
     grid: np.ndarray        # the common grid of those curves
 
 
@@ -693,16 +725,22 @@ def sweep_slice(records, *, at=None) -> SweepSlice:
 
     The two grids are chosen independently, so an exact shared operating point is not something to
     require: each sweep contributes the usable row NEAREST the slice point, and the record says which
-    row that was. ``at`` defaults to the middle of the range the sweeps share; outside that range it is
-    refused, because a slice each sweep answers from its own end point is not one measurement. Two
+    row that was. THE TIE RULE: distances are compared rounded to ``_SLICE_DECIMALS`` places, so
+    float noise never decides between two rows, and of two rows equally near, the one with the LOWER
+    value is taken. ``at`` defaults to the middle of the range the sweeps share; outside that range it
+    is refused, because a slice each sweep answers from its own end point is not one measurement. Two
     sweeps of different parameters are refused -- one operating point does not name a state of an S
     sweep and a temperature sweep -- and so are sweeps whose ranges do not meet, and slice rows that
     share no frequency band (``common_grid``).
 
-    Each row is drawn on the sweep's normalised axis ``omega / omega_0_ref`` (spec §2.3's layout), so
-    its curve's ``omega_0`` is 1 -- the reference, on that axis. Its ``prefactor`` is NaN, meaning not
-    recorded: a sweep's ``data.h5`` holds one constant, the cell's, and none per operating point,
-    while each point's ratio was computed from its own overridden configuration.
+    Each row is drawn on its ABSOLUTE ND frequency axis, ``omega_grid``: the axis every other mode
+    and ``ratio_axes``' own label use. Not on the sweep's normalised axis ``omega / omega_0_ref``,
+    which each sweep divides by its OWN reference -- the largest resonance over the range it covers --
+    so two sweeps over different ranges are scaled differently, and one operating point measured by
+    both would read as two disagreeing curves (the surfaces keep it: that is each sweep's own figure).
+    A curve's ``omega_0`` is its row's own resonance, ``omega_0_resonance``. Its ``prefactor`` is NaN,
+    meaning not recorded: a sweep's ``data.h5`` holds one constant, the cell's, and none per operating
+    point, while each point's ratio was computed from its own overridden configuration.
     """
     rows = [_sweep_rows(r) for r in records]
     params = sorted({str(row["sweep_param"]) for rr in rows for row in rr})
@@ -726,13 +764,14 @@ def sweep_slice(records, *, at=None) -> SweepSlice:
     labels, _cells = _record_labels(records)
     chosen, curves = [], []
     for rec, rr, label in zip(records, rows, labels):
-        row = min(rr, key=lambda r: abs(float(r["param_value"]) - at))
+        row = min(rr, key=lambda r: (_rounded(abs(float(r["param_value"]) - at)),
+                                     float(r["param_value"])))
         chosen.append(row)
         curves.append(Curve(id=rec.id, name=rec.name,
                             label=f"{label}  ({param} = {row['param_value']:g})",
-                            omegas=np.asarray(row["omega_norm"], dtype=np.float64),
+                            omegas=np.asarray(row["omega_grid"], dtype=np.float64),
                             ratio=np.asarray(row["T_eff_over_T"], dtype=np.float64),
-                            omega_0=1.0, prefactor=math.nan))
+                            omega_0=float(row["omega_0_resonance"]), prefactor=math.nan))
     return SweepSlice(param=param, lo=float(lo), hi=float(hi), at=at, labels=labels, rows=rows,
                       chosen=chosen, curves=curves, grid=common_grid(curves))
 
@@ -740,12 +779,15 @@ def sweep_slice(records, *, at=None) -> SweepSlice:
 def draw_sweeps(w, records, *, sink, at=None):
     """Two sweep records together, and a slice of both at one operating point (spec §7.1).
 
-    The surfaces answer "does FDT come back" along each sweep; the slice is where the two can be
-    read against each other, at one operating point on one common grid. ``sweep_slice`` settles the
-    slice before anything is written (P49), so a refusal here -- the backstop of the pre-flight that
-    already ran it -- leaves no record behind: the writer removes a progressive record refused before
-    its first figure or payload. Each curve in the file also carries its row's swept value and its
-    sweep's ``omega_0_ref``, the reference its normalised axis was divided by.
+    The surfaces answer "does FDT come back" along each sweep, each on that sweep's own normalised
+    axis and marking the row it was sliced at; the slice is where the two can be read against each
+    other, at one operating point on one common grid of ABSOLUTE frequency (``sweep_slice`` says
+    why). ``sweep_slice`` settles the slice before anything is written (P49), so a refusal here --
+    the backstop of the pre-flight that already ran it -- leaves no record behind: the writer removes
+    a progressive record refused before its first figure or payload. Each curve in the file also
+    carries its row's swept value and, as provenance, its sweep's ``omega_0_ref``. When a sweep was
+    not sliced AT the slice point, or the two were sliced at different points, the record's notices
+    say which rows were compared.
     """
     from matplotlib import pyplot as plt
 
@@ -754,16 +796,19 @@ def draw_sweeps(w, records, *, sink, at=None):
     plan = sweep_slice(records, at=at)
     values = [interpolate_onto(plan.grid, c.omegas, c.ratio) for c in plan.curves]
     blanks, notices = blank_notice(values)
+    sliced = [float(row["param_value"]) for row in plan.chosen]
+    notices = list(notices) + _rows_notice(plan.param, plan.at, plan.labels, sliced)
 
-    # the surfaces, side by side, each on its own axes
+    # the surfaces, side by side, each on its own axes, each marking the row it was sliced at -- which
+    # is not the slice point when no row sits on it
     fig = plt.figure(figsize=(12, 5))
-    for i, (label, rr) in enumerate(zip(plan.labels, plan.rows)):
+    for i, (label, rr, row_value) in enumerate(zip(plan.labels, plan.rows, sliced)):
         omega_norm, param_values, matrix = _stack(rr, _OMEGA_NORM_MAX)
         ax = fig.add_subplot(1, len(records), i + 1)
         mesh = ax.pcolormesh(*np.meshgrid(omega_norm, param_values), matrix, cmap="viridis",
                              shading="auto", vmin=0.0, vmax=2.0)
         ax.axvline(1.0, color="darkorange", ls=":", lw=1.2)
-        ax.axhline(plan.at, color=plt.rcParams["axes.edgecolor"], ls="--", lw=0.8)
+        ax.axhline(row_value, color=plt.rcParams["axes.edgecolor"], ls="--", lw=0.8)
         ax.set_xlabel(r"$\tilde\omega / \Omega_0$")
         ax.set_ylabel(plan.param)
         ax.set_title(label)
@@ -771,26 +816,27 @@ def draw_sweeps(w, records, *, sink, at=None):
     fig.tight_layout()
     sink("Sweep surfaces", fig)
 
-    # the slice: the row of each sweep nearest `at`, on the common grid settled above
+    # the slice: the row of each sweep nearest `at`, on the absolute common grid settled above; each
+    # curve also keeps its swept value, and as provenance the reference its sweep's own surface is
+    # normalised by
     write_curves(w, plan.grid, values, [c.label for c in plan.curves],
                  constants=[(c.omega_0, c.prefactor) for c in plan.curves])
     with h5py.File(w.payload("data.h5"), "a") as h5:
-        for i, row in enumerate(plan.chosen):
+        for i, (row, value) in enumerate(zip(plan.chosen, sliced)):
             curve = h5["curves"][f"{i:03d}"]
-            curve.attrs["param_value"] = float(row["param_value"])
+            curve.attrs["param_value"] = value
             curve.attrs["omega_0_ref"] = float(row["omega_0_ref"])
     fig, ax = ratio_axes(f"Sweep slice at {plan.param} = {plan.at:g}", blanks)
-    ax.set_xlabel(ax.get_xlabel().replace(r"$\tilde\omega$ (ND)", r"$\tilde\omega / \Omega_0$"))
     for curve, vals in zip(plan.curves, values):
         ax.plot(plan.grid, vals, marker="o", markersize=4, linewidth=1.0, label=curve.label)
     ax.legend()
     fig.tight_layout()
     sink("Sweep slice", fig)
 
-    nearest = ", ".join(f"{row['param_value']:g}" for row in plan.chosen)
+    nearest = ", ".join(f"{v:g}" for v in sliced)
     log.info(f"Sliced both sweeps at {plan.param} = {plan.at:g} (nearest rows: {nearest})")
-    per_record = [dict(peak_of(c, plan.grid, v), param_value=_num(row["param_value"]))
-                  for c, v, row in zip(plan.curves, values, plan.chosen)]
+    per_record = [dict(peak_of(c, plan.grid, v), param_value=_num(value))
+                  for c, v, value in zip(plan.curves, values, sliced)]
     results = {"n_records": len(records), "n_grid": int(plan.grid.size), "blanks": blanks,
                "param": plan.param, "at": _num(plan.at),
                "shared_range": [_num(plan.lo), _num(plan.hi)], "per_record": per_record}

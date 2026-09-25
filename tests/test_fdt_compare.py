@@ -842,87 +842,182 @@ def test_compare_sweeps_draws_both_surfaces_and_one_slice_through_them(tmp_path)
     assert e.value.field == "compare_records" and "temp" in str(e.value), e.value
 
 
-def _stub_sweep(monkeypatch, *, fail_at=()):
-    """Both campaigns of a REAL ``run_fdt_param_sweep`` replaced by arithmetic. Every operating point
-    has the same spectrum and the same resonance (omega_0 = 1), and its ratio is flat at 1 + the
-    swept S, so a row says which point it came from. The driven-campaign calls whose running index is
-    in ``fail_at`` raise, as a point that failed: the sweep records it failed, with an ``error``
-    attribute and no response data, and goes on. The sweep's own figure is stubbed to the file it was
-    handed."""
+def _sweep_sink():
+    """``(lines, sink)``: a sink that closes every figure and, for the surfaces figure, records each
+    surface's dashed horizontal line -- ``{surface title: [heights]}`` -- which is where that sweep
+    was sliced. The colorbars' axes carry no title and are skipped."""
+    lines = {}
+
+    def _sink(title, fig):
+        from matplotlib import pyplot as plt
+        if title == "Sweep surfaces":
+            lines.update({ax.get_title(): [float(ln.get_ydata()[0]) for ln in ax.get_lines()
+                                           if ln.get_linestyle() == "--"]
+                          for ax in fig.axes if ax.get_title()})
+        plt.close(fig)
+    return lines, _sink
+
+
+def test_a_sweep_slice_breaks_a_near_tie_by_its_rule_and_says_which_rows_it_compared(tmp_path):
+    """Each sweep contributes its row NEAREST the slice point, and "nearest" must not be decided by
+    float noise: from 0.2, the rows 0.1 and 0.3 are 0.1 and 0.09999999999999998 away, and a raw
+    comparison picks 0.3 for a reason nobody chose. Distances are compared rounded, and a tie goes to
+    the LOWER value, the rule ``sweep_slice`` states. A slice that could not take a row AT the slice
+    point says so in the record's notices, naming the row it took; and each surface's dashed line
+    marks the row that sweep was actually sliced at, which is not the slice point when no row sits
+    on it. A slice point both sweeps measured has nothing to explain."""
+    store = _store(tmp_path)
+    om = (0.5, 1.0, 2.0)
+    pts = [(0.1, (1.0, 2.0, 1.0)), (0.3, (1.0, 4.0, 1.0))]
+    a = build_fdt_record(store, name="tie_a", study="sweep", omegas=om, points=pts)
+    b = build_fdt_record(store, name="tie_b", study="sweep", omegas=om, points=pts)
+    assert abs(0.3 - 0.2) < abs(0.1 - 0.2), "the float noise this test is about"
+
+    lines, sink = _sweep_sink()
+    rec = cmp.compare("sweeps", [a, b], at=0.2, fig_sink=sink, store=store)
+    assert [p["param_value"] for p in rec.body["results"]["per_record"]] == [0.1, 0.1]
+    assert lines == {"tie_a": [0.1], "tie_b": [0.1]}, lines
+    said = [n for n in rec.body["notices"] if "sliced at" in n]
+    assert len(said) == 1 and "Both sweeps were sliced at s = 0.1" in said[0], rec.body["notices"]
+    assert "slice point s = 0.2" in said[0], said
+
+    lines.clear()
+    rec = cmp.compare("sweeps", [a, b], at=0.3, fig_sink=sink, store=store)
+    assert [p["param_value"] for p in rec.body["results"]["per_record"]] == [0.3, 0.3]
+    assert lines == {"tie_a": [0.3], "tie_b": [0.3]}, lines
+    assert not any("sliced at" in n for n in rec.body["notices"]), rec.body["notices"]
+
+
+def _resonance_of(cfg_op) -> float:
+    """The stubbed cell's resonance at an operating point: it moves with S, as a real cell's does."""
+    return 1.0 + 2.0 * float(cfg_op.params_dict["s"][0])
+
+
+def _stub_sweep(monkeypatch, *, fail_s=()):
+    """Both campaigns of a REAL ``run_fdt_param_sweep`` replaced by one physical law.
+
+    The spontaneous spectrum peaks at the resonance ``1 + 2 S`` and the detector takes that peak, so
+    a sweep's reference ``omega_0_ref`` -- its LARGEST resonance -- depends on the range of S it
+    covers, as a real sweep's does: two sweeps over different ranges divide their axes by different
+    numbers. The ratio is ``1 + S + 0.5 log(omega / (1 + 2 S))``, a law of the ABSOLUTE frequency and
+    S alone, and linear in log-omega, so interpolation reproduces it exactly and one operating point
+    measured by two sweeps must read the same from both. A driven campaign at an S in ``fail_s``
+    raises, as a point that failed: the sweep records it failed, with an ``error`` attribute and no
+    response data, and goes on. The sweep's own figure is stubbed to the file it was handed."""
     import torch
     from core.FDT import cross_validation as cv
 
-    calls = {"n": 0}
+    freqs = torch.linspace(0.05, 70.0, 1400, dtype=torch.float64)
 
     def _c1(cfg_op):
-        return (torch.linspace(0.1, 40.0, 8, dtype=torch.float64),
-                torch.ones(8, dtype=torch.float64))
+        return freqs, torch.exp(-((freqs - _resonance_of(cfg_op)) ** 2) / 0.02) + 1e-6
 
     def _c2(cfg_op, omegas, freqs_psd, G):
-        idx = calls["n"]
-        calls["n"] += 1
-        if idx in fail_at:
-            raise RuntimeError(f"stub driven-campaign failure at call {idx}")
-        return (torch.ones(omegas.shape, dtype=torch.complex128),
-                torch.full(omegas.shape, 1.0 + float(cfg_op.params_dict["s"][0]),
-                           dtype=torch.float64))
+        s = float(cfg_op.params_dict["s"][0])
+        if any(abs(s - f) < 1e-9 for f in fail_s):
+            raise RuntimeError(f"stub driven-campaign failure at S = {s:g}")
+        om = omegas.to(torch.float64)
+        return (torch.ones(om.shape, dtype=torch.complex128),
+                1.0 + s + 0.5 * torch.log(om / _resonance_of(cfg_op)))
 
     monkeypatch.setattr(cv, "run_campaign1_psd", _c1)
-    monkeypatch.setattr(cv, "_detect_resonance", lambda omegas, G, w0: (1.0, True))
+    monkeypatch.setattr(cv, "_detect_resonance",
+                        lambda omegas, G, w0: (float(omegas[int(torch.argmax(G))]), True))
     monkeypatch.setattr(cv, "_campaign2_ratio", _c2)
     monkeypatch.setattr(cv, "plot_fdt_3d_vs_param",
                         lambda *a, save_path=None, **k: Path(save_path).write_bytes(b"\x89PNG"))
 
 
-def test_compare_sweeps_reads_what_a_real_sweep_wrote_and_never_slices_a_failed_point(store,
-                                                                                    monkeypatch):
-    """The fixture's sweep layout is written to match the sweep's own; this checks the match against
-    records ``run_fdt_param_sweep`` itself wrote (campaigns stubbed). Two S sweeps of ONE cell, on
-    grids that overlap without meeting point for point: the slice takes each sweep's row nearest the
-    middle of the range they share, and a point whose driven campaign failed -- kept in the file with
-    an ``error`` and no response data -- is never that row, however near it sits, and does not count
-    towards the range either.
+def test_compare_sweeps_reads_one_measurement_the_same_from_both_sweeps(store, monkeypatch):
+    """Records ``run_fdt_param_sweep`` itself wrote (campaigns stubbed by one physical law), so the
+    fixture's layout is checked against the sweep's own. Two S sweeps of ONE cell over different
+    ranges: each divides its axis by its OWN largest resonance, so the two references differ, and a
+    slice drawn on those normalised axes would read one measurement as two disagreeing ones. The
+    slice is drawn on the ABSOLUTE frequency axis instead, where the same operating point measured by
+    both sweeps gives one curve.
+
+    The default slice point is 0.25, which both sweeps straddle: sweep_a's rows 0.2 and 0.3 are
+    0.05000000000000002 and 0.04999999999999999 away, and only the stated tie rule (rounded
+    distances, the lower value) sends both sweeps to the same row, 0.2. A point whose driven campaign
+    failed -- kept in the file with an ``error`` and no response data -- is never the row sliced,
+    however near it sits; and when the two rows differ, the record says so, naming both.
 
     Two sweeps of the same cell share its name, so their curves are told apart by the run
-    (``labelled_curves``' rule), and each curve in the comparison's file carries the constants F55
-    requires: omega_0 = 1, because the slice is drawn on the sweeps' normalised axis
-    omega / omega_0_ref, whose reference sits at 1; and the prefactor NaN, because a sweep records
-    one constant for the cell and none per operating point."""
+    (``labelled_curves``' rule), and each curve carries the constants F55 requires: ``omega_0`` its
+    row's own resonance, the ``prefactor`` NaN (a sweep records one constant for the cell and none
+    per operating point), plus its swept value and its sweep's reference as provenance."""
     from core import cli, config
     from core.FDT import cross_validation as cv
 
-    _stub_sweep(monkeypatch, fail_at=(2,))
+    _stub_sweep(monkeypatch, fail_s=(0.25,))
     cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
 
     def sweep(name, lo, hi):
         cfg, s_grid, _t = cli.make_param_sweep_config(
             cell, preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
-            s_spec=(lo, hi, 4), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2, seed=1)
+            s_spec=(lo, hi, 4), t_spec=(1.0, 1.1, 2), n_freqs=8, ensemble_M=2, seed=1)
         return cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
                                       writer=store.create("fdt", cfg, name=name))
 
+    a = sweep("sweep_a", 0.0, 0.3)              # S = 0, 0.1, 0.2, 0.3
+    b = sweep("sweep_b", 0.2, 0.5)              # S = 0.2, 0.3, 0.4, 0.5
     with pytest.warns(UserWarning, match="operating points failed"):
-        a = sweep("sweep_a", 0.0, 0.3)          # S = 0, 0.1, 0.2 (its driven campaign fails), 0.3
-    b = sweep("sweep_b", 0.15, 0.45)            # S = 0.15, 0.25, 0.35, 0.45
-    assert a.body["points"]["failed"] == 1 and b.body["points"]["failed"] == 0
+        c = sweep("sweep_c", 0.15, 0.45)        # S = 0.15, 0.25 (its driven campaign fails), ...
+    assert (a.body["points"]["failed"], b.body["points"]["failed"], c.body["points"]["failed"]) == \
+        (0, 0, 1)
 
-    seen, sink = _closing()
+    def reference(rec):
+        with h5py.File(rec.data_path, "r") as h5:
+            return float(h5.attrs["omega_0_ref"])
+
+    def row_at(rec, s):
+        return next(r for r in cv.load_param_sweep(rec.data_path) if abs(r["param_value"] - s) < 1e-9)
+
+    # the precondition: each sweep's reference is its own largest resonance, and they differ
+    assert reference(a) == pytest.approx(1.6, abs=0.06), reference(a)
+    assert reference(b) == pytest.approx(2.0, abs=0.06), reference(b)
+
+    lines, sink = _sweep_sink()
     rec = cmp.compare("sweeps", ["sweep_a", "sweep_b"], fig_sink=sink, store=store)
-
-    assert seen == ["Sweep surfaces", "Sweep slice"], seen
     res = rec.body["results"]
-    assert res["param"] == "s" and res["shared_range"] == pytest.approx([0.15, 0.3]), res
-    assert res["at"] == pytest.approx(0.225)
-    # sweep_a's nearest point, 0.2, failed; its nearest USABLE row is 0.3 (0.075 away, 0.1 is 0.125)
-    assert [p["param_value"] for p in res["per_record"]] == pytest.approx([0.3, 0.25]), res
-    assert [p["peak_ratio"] for p in res["per_record"]] == pytest.approx([1.3, 1.25]), res
+    assert res["param"] == "s" and res["shared_range"] == pytest.approx([0.2, 0.3]), res
+    assert res["at"] == pytest.approx(0.25)
+    assert [p["param_value"] for p in res["per_record"]] == pytest.approx([0.2, 0.2]), res
+    labels = ["master_spont (sweep_a)", "master_spont (sweep_b)"]
+    assert set(lines) == set(labels) and all(v == pytest.approx([0.2]) for v in lines.values()), \
+        "each surface marks the row it was sliced at, not the slice point 0.25"
+    assert any("Both sweeps were sliced at s = 0.2" in n for n in rec.body["notices"]), \
+        rec.body["notices"]
     with h5py.File(rec.data_path, "r") as h5:
-        keys = sorted(h5["curves"])
-        labels = [h5["curves"][k].attrs["label"] for k in keys]
-        constants = [(float(h5["curves"][k].attrs["omega_0"]),
-                      float(h5["curves"][k].attrs["prefactor"])) for k in keys]
-    assert labels == ["master_spont (sweep_a)  (s = 0.3)", "master_spont (sweep_b)  (s = 0.25)"], \
-        labels
-    assert [o for o, _p in constants] == [1.0, 1.0] and all(math.isnan(p) for _o, p in constants), \
-        constants
+        grid = h5["omega_common"][...]
+        curves = [h5["curves"][k][...] for k in ("000", "001")]
+        attrs = [dict(h5["curves"][k].attrs) for k in ("000", "001")]
+    both = np.isfinite(curves[0]) & np.isfinite(curves[1])
+    assert both.sum() >= 5, curves
+    assert curves[0][both] == pytest.approx(curves[1][both], rel=1e-9, abs=1e-12), \
+        "one operating point, measured by two sweeps, reads the same from both"
+    assert curves[0][both] == pytest.approx(1.2 + 0.5 * np.log(grid[both] / 1.4), rel=1e-9), \
+        "and it is the measurement, on the absolute axis"
+    # the intersection of the two sweeps' ABSOLUTE grids: sweep_b's start (0.2 x its lowest
+    # resonance, 1.4) and sweep_a's end (30 x its highest, 1.6), in the preset's freq_bounds
+    assert grid[0] == pytest.approx(0.2 * 1.4, rel=0.05), grid
+    assert grid[-1] == pytest.approx(30 * 1.6, rel=0.05), grid
+    for attr, rec_of in zip(attrs, (a, b)):
+        assert attr["label"].startswith("master_spont (sweep_"), attr
+        assert attr["omega_0"] == row_at(rec_of, 0.2)["omega_0_resonance"], "the row's own resonance"
+        assert math.isnan(attr["prefactor"]), attr
+        assert attr["param_value"] == pytest.approx(0.2) and attr["omega_0_ref"] == reference(rec_of)
     assert [r["id"] for r in rec.body["compared"]["records"]] == [a.id, b.id]
+
+    # sweep_c's point 0.25 failed: from 0.24 it is by far the nearest, and it is never the row sliced
+    lines.clear()
+    rec = cmp.compare("sweeps", ["sweep_a", "sweep_c"], at=0.24, fig_sink=sink, store=store)
+    res = rec.body["results"]
+    assert res["shared_range"] == pytest.approx([0.15, 0.3]), res
+    assert [p["param_value"] for p in res["per_record"]] == pytest.approx([0.2, 0.15]), res
+    assert lines["master_spont (sweep_a)"] == pytest.approx([0.2]), lines
+    assert lines["master_spont (sweep_c)"] == pytest.approx([0.15]), lines
+    said = [n for n in rec.body["notices"] if "different operating points" in n]
+    assert len(said) == 1, rec.body["notices"]
+    assert "'master_spont (sweep_a)' at s = 0.2" in said[0], said
+    assert "'master_spont (sweep_c)' at s = 0.15" in said[0] and "s = 0.24" in said[0], said
