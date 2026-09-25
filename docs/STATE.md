@@ -1,17 +1,55 @@
 # PRISM — state
 
-**Last updated:** 2026-09-23. **Piece 5, "the secondary analyses", is IN EXECUTION**: tasks 1–3 of 41
-done and gated green (`f6a722c`, `d9afaba`, `7930e52`+`4d8a782`; 747 passed, 181 warnings). **To
-continue, read the section "HANDOFF" at the end of the gitignored ledger
-`.superpowers/sdd/2026-09-22-secondary-analyses/progress.md`** — it holds the exact per-task
-procedure, the owner's execution decisions, the items carried to later tasks and the first action.
-Brainstormed 2026-09-22 (decisions E1–E12), design `a0d85da`, plan `e902256`+`5354e6b`, pre-flight
-`cbc2187` (every ruling folded into the task it binds). **Piece 4, "GUI usability and the artifact browser", is DONE**:
+**Last updated:** 2026-09-24. **Piece 5, "the secondary analyses", is DONE**: commits
+`a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus this documents
+commit, on the local `main` branch, NOT YET PUSHED (the owner pushes) — with this commit `main` is
+129 commits ahead of `origin/main` (`cfe261b`), pieces 4 and 5 both unpushed. The 77: `a0d85da` the
+design and `0c974c1` its STATE note; `e902256`+`5354e6b` the plan and its review's thirteen fixes;
+`673868d` the hand-over note; `cbc2187` the pre-flight (every ruling folded into the task it
+binds); Tasks 1–40 in 58 commits (`f6a722c`..`7b12c34`, their fix rounds and two mid-execution
+STATE notes `74a7693`, `407ce0c` included); the whole-piece review's fix dispatch in 11
+(`d13ca96`..`6be832c`); and Task 41's documents (`c29320c`, `7e51275`). Its design is
+`docs/superpowers/specs/2026-09-22-secondary-analyses-design.md` (`a0d85da`; decisions E1–E12 in
+§1.1, the design rulings in §1.2, what is handed on in §1.3, and §12 now 36 deviations with what
+each costs if wrong) and its plan `docs/superpowers/plans/2026-09-22-secondary-analyses.md`
+(`e902256`+`5354e6b`, 41 tasks, 433 steps, 82 planning rulings P1–P82). **What landed:** an eighth
+store kind, `fdt`, whose records are PROGRESSIVE — the folder and a first manifest exist from the
+moment a run starts, `refresh()` rewrites them as it goes, and a cancel or a crash keeps the folder
+marked unfinished, while the six ordinary kinds still lose theirs on any exception (a mode on
+`ArtifactWriter`, never a second writer). Both analyses are public entries writing named records
+with provenance (the cell, the units and the resolved bounds file by path and SHA-256), a recorded
+seed and their numbers in `data.h5`. The sweep is split into one record per swept parameter,
+carrying its done/failed counts, with an all-failed refusal — and an all-failed first sweep no
+longer costs the second: the temperature sweep runs regardless and the study refuses only if both
+measured nothing (P77). Two pre-spend refusals — the normalisation constant before the first
+campaign, the band once the grid is built and before the driven campaign — plus a third for a
+diverged spectrum, and the off-grid fix (probes the spectrum cannot supply come back blank and are
+counted, not fabricated). The five screens' builder refusals reach the yellow box, `_config_error`
+is gone, and the fix-hint table understands screens as well as the six inference tabs. The pickers
+offer earlier runs, and the figure watcher points at the record's `figures/`. `fdt` and `crossval`
+take `--store-root`, with the three behaviours that keyed off the flag reworked (smoke's throwaway
+root is its own `temp_store_root` property), and `--seed` (P79) — and, since the review, `--name`
+and `--note`. The tidy-up offers loose files inside a kind directory and a legacy directory beside
+them, in both front ends. The comparison facility has four modes (`compare cells`, `repeats`,
+`renormalise`, `sweeps`, and a "Compare saved …" group on each screen), each writing a comparison
+record. **Execution (2026-09-23/24, Opus 5.5, subagent-driven):** the pre-flight found that the
+brief extractor never carries a plan's preamble and ruled 66 further findings into the tasks;
+every task had a review that drove the real API and its own one-process gate, started with the
+review (the owner's decision of 2026-09-23). A whole-piece review by five lenses, each followed by
+an adversarial verifier, found 0 Critical and 5 Important (a diverged sweep point counted as done,
+a sweep's summary naming no point's own ratio, a delete prompt false for a run writing in another
+process, no names for the tool's records or the window's comparisons, and a walkthrough row that
+could not be run as drafted); one fix dispatch took all four code items and 42 cheap fixes, each
+behaviour fix test-first, and a scoped re-review approved it with nine minors parked ("Owed" item
+7). The final fast gate, the slow set and the GPU smoke-gate judgement of record are in the gate
+table below.
+**Rows E1–E17 of `docs/checklists/display-walkthrough.md` are OWED by the owner on a real screen.**
+**Piece 4, "GUI usability and the artifact browser", is DONE**:
 commits `5902259`..`80be144` (47), on the local `main` branch, NOT YET PUSHED (the owner pushes) —
-`main` is 49 commits ahead of `origin/main` (`cfe261b`): `691a233` (piece 3's C1–C11 rows recorded),
-the 47 of `5902259`..`80be144` (`5902259` the design, `6fc399f` the plan, `644dcdb` the pre-flight
-fixes, then the 26 tasks, then the whole-piece review's fix wave `e9318ff`, `114711b`, `5e4543b`,
-`ee2dd33`, `80be144`), and this documents commit. Its design is
+`main` was 49 commits ahead of `origin/main` (`cfe261b`) when it closed: `691a233` (piece 3's
+C1–C11 rows recorded), the 47 of `5902259`..`80be144` (`5902259` the design, `6fc399f` the plan,
+`644dcdb` the pre-flight fixes, then the 26 tasks, then the whole-piece review's fix wave `e9318ff`,
+`114711b`, `5e4543b`, `ee2dd33`, `80be144`), and that piece's documents commit. Its design is
 `docs/superpowers/specs/2026-09-17-gui-usability-and-artifact-browser-design.md` (`5902259`,
 decisions B1–B17 in §1.1, §12 the deviations) and its plan
 `docs/superpowers/plans/2026-09-17-gui-usability-and-artifact-browser.md` (`6fc399f`, 26 tasks). What
@@ -47,23 +85,7 @@ slow set and the GPU smoke gate of record are in the table below; the diagnostic
 unnecessary (no line under `core/diagnostics` moves a tensor) and that judgement held. **Rows D1–D17
 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen on 2026-09-21: all
 seventeen pass** (the gate table below).
-**Piece 5 is under way** ("Owed" item 7); piece 6 follows. Its design is
-`docs/superpowers/specs/2026-09-22-secondary-analyses-design.md` (`a0d85da`; §1.1 holds decisions
-E1–E12, §1.2 the design rulings, §12 nine deviations ruled at planning time) and its plan is
-`docs/superpowers/plans/2026-09-22-secondary-analyses.md` (41 tasks, 433 steps). The plan holds
-**82 rulings**: 69 from ten drafters who read the code for their own tasks, and 13 from three
-lenses over the assembled plan plus a judge. Ten of them corrected the spec inline. **Execution
-(2026-09-23, Opus 5.5, subagent-driven):** a pre-flight scan by eleven readers found that the
-brief extractor never carries a plan's preamble, so none of the 82 rulings would have reached an
-implementer; it wrote a binding amendment block into every task and ruled 66 further findings
-(`cbc2187`). Tasks 1–3 are done: the `fdt` kind declared everywhere with its three silent members
-pinned, the listing filled with a numeric sort, and the progressive writer — whose review found and
-fixed a refused run leaving an empty folder and a late `refresh()` silently un-finishing a record.
-Every task has a review that drives the real API and its own one-process gate; **the owner decided
-on 2026-09-23 that each gate starts at the same moment as its task's review** (option 1), and that
-every task stays gated. Gate times swing 15–19 minutes on unchanged code because the machine is
-shared, so a count or warning change, not wall time, is the regression signal; the final gate of
-record runs on a quiet machine. Piece 3
+**Piece 6 is next** ("Owed" item 7). Piece 3
 (`3db271e`..`9e2f7ef`) is DONE and pushed, and its rows C1–C11 all pass; piece 2
 (`0016dae`..`d34997c`) is also pushed, and its rows B1–B8 all pass.
 
@@ -252,21 +274,32 @@ record runs on a quiet machine. Piece 3
      - ~~Rows D1–D17 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done
        2026-09-21 by the USER: **all seventeen pass**, recorded in that file's last two columns and in
        the gate table below.
-   - **Piece 5.** FDT/CrossVal hardening and wrapping them in the store (their outputs still go to
-     `artifacts_root()/fdt` and `/crossval`). Two test gaps: the cell-folder branch of the `fdt`
-     unsupported-model hint is untested (`core/tool/fdt.py`), and only `plot_psd` of the four
-     `core/FDT/plots.py` functions is unit-tested for closing its figure. Handed on by piece 3
-     (spec §1.3, §11 row 2): the Simulate, FDT, CrossVal, Reduction and model-builder panels adopt
-     `core/refusals.py`'s rules and the two field tables (their numeric fields are still remembered
-     and their builder failures still go to `BasePanel._config_error`); and `load_and_validate_gt`'s
-     `Refusal(field="cell")` and the FDT dry run's problem strings are still two wordings for one
-     rule.
-     Handed on by piece 4's final review (its ledger, now deleted): the artifact table's numeric
-     columns sort as text, so `Width 18` sorts before `3` and `10/12 batches` before `9/12` — a
-     small, safe follow-up the hazards reader called "worth doing in piece 5"; and
-     `tests/test_artifact_browser.py:864` asserts the window's picker kinds by EQUALITY
-     (`sorted(seen) == ["observation", "posterior", "prior"]`) where its sibling at `:252` states the
-     rule is a SUBSET, so any picker piece 5 adds turns it into a false red.
+   - **Piece 5** — DONE 2026-09-22/24 (`a0d85da`..`7e51275`). Every item carried into it is closed:
+     - ~~FDT/CrossVal hardening and wrapping them in the store~~ — the `fdt` kind, its progressive
+       writer and the loose-file and legacy-directory calls (T1–T4); the settings object's sources,
+       seed and private copy (T7); the field keys, the fix-hint table widened to screens, the checks
+       and the pre-spend refusals (T8–T16); the single-cell run as a public entry writing a record
+       with its numbers (T17–T18); the sweep split into two records with its failure counts
+       (T19–T20); the screens' pickers and watcher (T24–T27); the command line's `--store-root`,
+       `--seed`, refusals and tidy-up (T28–T31); and the comparison facility (T36–T40). Nothing is
+       written to `artifacts_root()/crossval` any more.
+     - ~~The cell-folder branch of the `fdt` unsupported-model hint is untested~~ — T29 (`70d23ab`).
+     - ~~Only `plot_psd` of the four `core/FDT/plots.py` functions is unit-tested for closing its
+       figure~~ — T32 (tests only: all four functions already closed their figures since `bb22ac4`;
+       P17).
+     - ~~The five panels adopt `core/refusals.py`'s rules and the two field tables~~ — T21, T22,
+       T23; `_config_error` is gone since `f19e6dd`, and every builder refusal reaches the yellow
+       box.
+     - ~~`load_and_validate_gt`'s `Refusal(field="cell")` and the FDT dry run's problem strings are
+       two wordings for one rule~~ — one message builder, `core.refusals.missing_values_phrase`,
+       delivered by T21 (P4, P76); T29 produces none. A THIRD wording, `cli._merge_vals_bounds`, is
+       knowingly left (P53; below).
+     - ~~The artifact table's numeric columns sort as text~~ — T2 (`d9afaba`).
+     - ~~`tests/test_artifact_browser.py:864` asserts the window's picker kinds by EQUALITY~~ —
+       T25 (`da5c392`) made it a subset assertion with `"fdt" in seen` (ruling F24).
+     - **Rows E1–E17 of `docs/checklists/display-walkthrough.md` on the real screen** — OWED by the
+       USER. No task may fill their date and result columns; the gate table's walkthrough row, now
+       reading "Not yet run", is filled in when the owner has run them.
    - **Piece 6.** The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes
      false (`:49,53-54,76,190-191`), and a README reference section for the tool.
    - **Open, with no piece owning them yet** (the owner decides each, or where it goes):
@@ -284,9 +317,11 @@ record runs on a quiet machine. Piece 3
      - *Spec.* `tsnpe_round` refuses more directions than the latent width but allows exactly as
        many, which truncates every direction. That matches spec §2.5 word for word, so tightening
        it needs a spec decision.
-     - *Dormant.* `core.diagnostics.rng.seeded()` restores only the CUDA device it is given, while
-       `torch.manual_seed` reseeds every CUDA device; on a machine with several GPUs the others'
-       streams are not restored. Revisit if a gpu-marked test starts to depend on test order.
+     - *Dormant.* `seeded()` — since piece 5 it lives in `core/rng.py`, re-exported unchanged from
+       `core.diagnostics.rng` — restores only the CUDA device it is given, while `torch.manual_seed`
+       reseeds every CUDA device; on a machine with several GPUs the others' streams are not
+       restored. On a CPU device it no longer touches CUDA at all: it seeds only the CPU generator
+       and numpy (spec §12 row 19). Revisit if a gpu-marked test starts to depend on test order.
      - *Tests.* The code-directory guard skips an enumerated list of directories, so a local
        virtual environment at the repository root would fail it for a non-code reason.
      - *Science (from piece 3).* The tool accepts `--chi-k 1`: `SimConfig.__post_init__` allows one
@@ -310,7 +345,7 @@ record runs on a quiet machine. Piece 3
        measurement against 1181 s recorded for piece 3, on code this piece's diff does not reach on
        that test's path (the root handler and the cancel deferral are consulted only by the two front
        ends, never by a bare `core` pipeline run). It passed both times; worth watching at the
-       retrain, where the same test runs for real.
+       retrain, where the same test runs for real. (Piece 5's slow set: 1397 s.)
      - *From piece 4, declined by the owner or left unsound (design spec §1.3).* Figures in the
        browser, an open-the-folder button and "use this" jumps into a stage tab — considered and
        declined 2026-09-17. A session summary at quit — declined in favour of Apply's session line
@@ -319,6 +354,100 @@ record runs on a quiet machine. Piece 3
        writes a name into the manifest and moves nothing, because a cache's directory name is always
        its digest), and the browser never calls it. `unnamed()` stays uncalled — every simulation
        cache has `name=""`, so a caller built on it would offer to delete committed training rows.
+     - *From piece 5 — the owner's decisions* (the whole-piece review's list 4,
+       `final-review-synthesis.md` §4 in the gitignored ledger folder; each is science, an owner
+       resource file or an environment choice, so none was decided for the owner):
+       - The passive-baseline check's Ω₀: the passive process is reversible, so its spectrum has no
+         finite-frequency peak and the check's "resonance" is always its search band's first bin
+         (0.268 on `master_spont`). Anchor on `cfg.omega_0`, report "no peak", clip the probes to
+         the resolved span, or relabel the line? The two probes it then drops cost about 37 % of
+         the check's 466 s.
+       - The single-run `ratio_at_resonance` takes the probe nearest ω₀, which is a decade away at 2
+         frequencies; and no test pins the lock-in's χ″ SIGN — Task 33's test accepts
+         `[FAIL] passive_baseline`, so a sign flip would pass the suite. Pin the sign or not?
+       - `find_spectral_peak` takes a NaN bin as the peak, which moves ω₀ for a spectrum that is NaN
+         in some bins and would shift two pinned counts. A science pass, piece 6 or later.
+       - The shipped Hopf cell is refused at the default band (at the shipped band and settings a
+         cell is refused iff its spontaneous peak lies below 0.3835 ND, because the Welch segment's
+         2^14-sample cap fixes the first bin at 0.0383 ND): one band for every model, or a per-model
+         preset? (Spec §12 row 16.)
+       - `render_lineage`'s `MISSING <kind> [<id>]` line could also print the record's recorded
+         name (a §12 row if done), and a comparison with a null mode prints `compared ((none)):`.
+       - `Resources/Cells/nadrowski/master_spont_tier1.txt` resolves to `master.txt` and is refused
+         (it lacks `f_scale`), yet both FDT pickers offer it: fix the cell, add a same-named bounds
+         file, or remove it.
+       - sbi 0.25.0 is installed while 0.26.1 is pinned; syncing would let provenance read the
+         version with `importlib.metadata.version` and settle a warning whitelist (review items
+         L573, L576).
+       - The fix sentences everywhere else still quote a control's raw label; piece 5 relabelled
+         only 'M_ensemble' and 'freqs / batch' (N23). A house-wide pass is the owner's call.
+     - *From piece 5 — decided at the end of the piece, by controller rulings the owner may
+       reverse* (list 4's items 5, 7, 8, 9, 10): a T_a/T grid reaching below 0 is refused, 0 is
+       allowed and S has no floor (R-F1, §12 row 27); the Live-simulation crash on a spontaneous
+       built-in cell is fixed, departing from §5.6's bound (R-F4, §12 row 34); a saved model with a
+       negative forcing amplitude is refused at load as well as at Validate and Save (R-F5, §12 row
+       35); repeats that share a seed get a notice, never a refusal (R-F6); the window names its
+       comparisons, with Comparison name and note boxes never remembered (R-F3).
+     - *From piece 5.* A third wording of "the cell lacks what the bounds file requires" stays in
+       `cli._merge_vals_bounds` (P53, spec §1.3): it carries the cell PATH, which the FDT builders
+       need and the other two sites do not, so folding it into `missing_values_phrase` would drop
+       that or change the other two.
+     - *From piece 5.* `core/tool/fdt.py`'s crossval handler still resolves `--n-freqs` and
+       `--ensemble-m` from the preset at the call site (`preset[…] if args.… is None`), though
+       `make_param_sweep_config` now resolves a None from the preset itself (P50: "a later piece may
+       delete the now-redundant one"). Harmless; two sources for one default.
+     - *From piece 5.* `check_passive_baseline` still raises a bare `ValueError` when every probe
+       lies outside the PSD grid: the new end-to-end Nadrowski test never reached it, so P23 left it
+       unconverted (spec §12 row 9) — converting it needs a field-key decision.
+     - *From piece 5.* The round trips' one handed-on defect (the Live-simulation crash, spec §1.3)
+       was fixed after all by N17; §1.3's remaining defect row is the re-review's minor 2 below.
+     - *From piece 5.* No ceilings on 'M_ensemble' and 'n_freqs': a 10⁷ ensemble fails at allocation
+       within seconds (walkthrough E8 relies on exactly that), but a huge value that CAN be
+       allocated could exhaust RAM before anything refuses.
+     - *From piece 5.* A sweep that measured nothing because of one systematic cause (out of memory,
+       as in E8) is still advised to move its grid or change its cell; the sentence does say "one
+       systematic cause", but not which.
+     - *From piece 5 (pre-existing).* A new cell copied into `Cells/hopf/` or `Cells/bp/` under
+       another name falls to the legacy parse branch and is refused with a misleading "Could not
+       detect time unit from cell file".
+     - *From piece 5, out of scope by spec §1.3.* No cross-process lock on a record being written:
+       `artifacts note` from a second shell is overwritten by the running writer's next refresh, and
+       deleting a live record from another process now leaves nothing rather than a husk (§12 row
+       36). Piece 4's delete half-deletes a record when a file late in its walk is read-only.
+     - *From piece 5, for a later refusals-hardening pass.* Builder paths no front end reaches:
+       `int()` coercion of counts, NaN or infinite counts, a malformed `freq_bounds`, and agreement
+       between `preset` and `preset_name` (review items L473, L483). `_newest_mtime` walks into
+       directory junctions (latency only, pre-existing, L396).
+     - *From piece 5, cosmetic or breadth* — each judged not worth a change now, listed with its
+       reason in `final-review-synthesis.md` §3: e.g. `remove_loose`'s alias handling (L394), a
+       refusal printed three times on a one-sided study failure (L616), an empty surface panel for a
+       one-point sweep (L826), stale "Runs to compare" entries after a delete and comparison tabs
+       piling up with one title (L839), curve colours and keying (L807), literal captions (L641).
+     - *From piece 5, the fix re-review's nine parked minors* (`final-fix-rereview.md` §Minor; the
+       ledger's ruling parked them rather than send a second fix loop — none load-bearing; its cost:
+       a regression of the negative-grid or zero-knob refusal would HANG a gate instead of failing
+       it, visible but slow). Line numbers as at `6be832c`:
+       1. `tests/test_tool.py:1646`, `:1732`: if the builder refusal regressed, these two would run
+          a REAL study or `fdt` run inside the fast gate — stub `run_param_study_cli` /
+          `run_fdt` with `pytest.fail`.
+       2. `core/FDT/fdt_pipeline.py`: the passive-baseline figure is listed one refresh late in an
+          unfinished record (spec §1.3's new row): one `writer.refresh()` after `run_all_sanity`.
+       3. Half-typed text ('-') in the four FDT/CrossVal knob boxes is reported "is blank", while
+          Slice at, the constant and Seed say "must be a number": read them through
+          `number_or_blank` too.
+       4. `core/gui/widgets/labeled_inputs.py:44`: the Seed sentence puts its default clause after
+          the period (the house `refuse()` shape, L711).
+       5. `core/Helpers/model_store.py:158`: "the amplitude's saved box starts at 0" reads as a GUI
+          box in a yellow box; "its saved prior bounds start at 0" says what is meant.
+       6. `core/gui/panels/record_view.py:71`: the settings line prints `held={'temp': 1.0}`, a
+          Python dict repr.
+       7. `core/tool/fdt.py:75-77`: in `FDT_INTERRUPT_NOTE` the "it" of "lists it" follows the hedge
+          saying there may be no record; put the hedge last.
+       8. `tests/test_tool.py:1615`, `:1646`, `:1667`: three fast tool tests request `tool_env`
+          (which installs SBITEST into the real `Resources/`) though they need only
+          `PRISM_ARTIFACTS`.
+       9. Process: several fix-dispatch commit subjects are longer than the house's short subject
+          (no amend is allowed).
    - Piece 3 did not take the optional tidy-up of `decorrelate.py`'s `or` fallbacks and `prior.py`'s
      clamps (spec §1.3 "the plan, if cheap; else none"); it stays unowned.
    - Piece 3's other open minors, each judged not worth a change now: the decorator scan matches only
@@ -415,6 +544,11 @@ record runs on a quiet machine. Piece 3
 | slow set of record, `pytest -m slow -q --durations=5` (piece 4) | 2026-09-21 at `80be144`: **2 passed**, 730 deselected, 93 warnings, **30 min 43 s**, exit 0. No "More than 20 figures" line, no `sbi-logs/`, tree clean. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1610 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size` 229 s (back near piece 3's recorded 208 s, so an earlier 428 s reading was transient). The chi figure is 13 % above piece 3's recorded 1181 s on code this piece's diff does not reach on that test's path; it passed at every measurement and is recorded as a thing to watch at the retrain, not chased further ("Owed" item 7) |
 | **GPU smoke gate, piece 4** (`python -m core smoke`, the four command lines of `CLAUDE.md`, at `d1f0b98` — no line on the training path changed after it except the fix wave's sweep/delete/logging work, which that path does not reach) | 2026-09-21, alone on the card: **run 1** chi `master_spont`: prior 92.3 s, posterior 198.5 s, validate 22.3 s, infer 85.9 s, exit 0 (piece 3: 92/196/22/84); **run 2** `--resume require`: "Reusing the Fisher rotation stored with the training checkpoint (4/4 batches — COMPLETE …)", `[checkpoint] resuming at batch 4/4`, exit 0; **run 2b** `--num-runs 2`: **exit 1**, the refusal reads "differs only in n_runs: this run 2, that cache 4" and ends `(--new-run)`, no `[fisher]` line, `simulations/` still only `4d8022b100db`; **run 3** forced `master_weak`: 100.4 / 63.9 / 15.0 / 19.3 s, exit 0 (piece 3: 92/60/13/18). No OOM line, no Traceback and no `warning: ` line in any run. Run 1's masked probes 79/224, 15/96, 108/192, 58/192 = 260/704 = 36.9 %, identical to pieces 2 and 3. The diagnostic card was not required and was not run: the piece's diff touches no file under `core/diagnostics` that creates or moves a tensor (design spec §10); that judgement held. Scratch stores deleted |
 | display walkthrough, piece-4 rows D1–D17 (`docs/checklists/display-walkthrough.md`) | 2026-09-21, the user on the real screen at `44ed3ed` (piece 4 as it stands; the code is `80be144`, that commit being documents only): **rows D1–D17 all pass** — the Artifacts tile and its seven kinds, the empty kind's "Nothing here yet.", a cache's batches-against-planned row and its finished form, the detail pane's manifest-then-records and the cache's no-log sentence, the note set/cleared/refused, delete refused by a dependent (the fingerprint-only cache included), the unfinished cache's batch-count confirmation with No then Yes, the sweep of manifest-less directories only, the picker refreshed after a delete, Note/Delete/Sweep refused while a run is live with reading still working, the live-run header line with the tile and tab markers, Apply's session line and its No, "narrowed (TSNPE)" in the closed dropdown, the blank probe row reported as blank, no doubled `core` line and the `library: <logger>: ` prefix, the taskbar mark after the header's new slot (row 1 re-run), and the table's colours, sorting and column widths in Light and Dark. Rows 1–20, A1–A9, B1–B8 and C1–C11 stand |
+| `pytest --collect-only -q` after piece 5 | 2026-09-24 at `7e51275`: **968** collected (the fast gate's 964 passed and 1 skipped, plus the 3 slow tests), 236 more than the 732 at `80be144` — **above** design spec §8.4's stated band of 170 ± 40 added, by 26. The 40 tasks added 185 (917 at `7b12c34`, inside the band); the whole-piece review's fix dispatch added 51 more (its fixes' tests and its test-only items N31–N42); the overrun is recorded here, not in the design's §12. `tests/test_*.py` holds nineteen suites (the new one is `tests/test_fdt_compare.py`) |
+| **final fast gate, piece 5**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-24 at `7e51275`, after the whole-piece review's fix dispatch and Task 41's documents, on a quiet machine: **964 passed, 1 skipped** (the display-marked test, offscreen), 3 deselected (the three slow tests), **181 warnings**, **14 min 42 s** (882.29 s; wall 14 min 47 s — inside design spec §9's 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing (still `fdt/` with the two legacy PNGs, and `priors/`); no `sbi-logs/`. The warning baseline is piece 4's 181, unchanged across the whole piece: no new warning class appeared. Slowest: `test_user_sbi.py::test_train_and_validate_without_a_loaded_cell` 85.07 s, `::test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 70.89 s, `::test_no_forcing_user_model_full_sbi_pipeline` 42.06 s. Every task had its own one-process gate, recorded in the execution ledger, and so did the fix dispatch (`6be832c`: 964 passed, 181 warnings, 15 min 18 s) |
+| slow set of record, `pytest -m slow -q --durations=5` (piece 5) | 2026-09-24 at `c29320c` (the same code as `7e51275`, which changed documents only), beside the read-only Task 41 document review: **3 passed**, 965 deselected, 102 warnings, **38 min 6 s** (2286.51 s; wall 38 min 8 s), exit 0, against design spec §9's ~45-minute budget. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1396.87 s (piece 4: 1610 s); **new**, `test_tool.py::test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (Task 33) 562.38 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size`, rewritten by Task 34 to assert records and on the fixed seed 20260925 since the review's N40, 322.93 s (302 s solo at Task 36). Afterwards no `Resources/*/sbitest` (the two slow tool tests now set `PRISM_ARTIFACTS` themselves, N38), no `sbi-logs/`, tree clean, the real `Artifacts/` unchanged |
+| **GPU smoke gate, piece 5** | 2026-09-24: **judged NOT REQUIRED; the card was not run.** The judgement was re-made against the whole piece, `a0d85da^..c29320c`. The changed lines that create or move a tensor are in `core/FDT/cross_validation.py`, `fdt_pipeline.py` and `sanity.py` — all on the FDT and sweep path, pinned to `cpu_device()` by `cli.make_fdt_config` and `make_param_sweep_config` — in `core/gui/panels/simulate_runner.py` (N17's zero-forcing tensor, on the Live simulation's CPU-pinned path, which the gate does not reach), and in `core/rng.py`: `seeded`'s CUDA branch (fork the device, `torch.manual_seed`) is the base's byte for byte, and its new CPU branch seeds `torch.default_generator`, the CPU half of `manual_seed`, so no CPU draw changes. `core/diagnostics/rng.py` re-exports the same object, and `core/orchestrator.py` only re-imports `PreflightWarning` from `core/refusals.py`. **T28's change to `core/tool/__init__.py` and `core/tool/smoke.py` IS on `smoke`'s path**: it chooses the store root through `temp_store_root` (set by `set_defaults` on smoke's parser) instead of the flag's presence, creates or moves no tensor, and T28's tests pin the root choice; the gate always passes `--store-root` anyway. The fix range `d13ca96..6be832c` touched nothing under `core/SBI`, `core/diagnostics`, `core/orchestrator.py` or `core/tool/smoke.py`, and `core/rng.py` only in its docstring (the re-review verified); nothing under `core/SBI`, `core/Simulator`, `core/Solvers` or `core/Models` changed in the piece. The diagnostic card is not needed either: no line under `core/diagnostics` that moves a tensor changed (only `rng.py`'s re-export). Piece 4's run (`d1f0b98`) remains the last card measurement |
+| display walkthrough, piece-5 rows E1–E17 (`docs/checklists/display-walkthrough.md`) | **Not yet run.** Owed by the owner, on a real screen |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the two copies identical. Run it from the repository root, with `$S` set to
@@ -638,7 +772,7 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     through happy-path checks, which the final fast gate covers. The slow set's warning count moves
     with the random draws, because each probe-masking notice carries its masked count in its text.
 
-- **2026-09-22** — **piece 5 (the secondary analyses): decisions E1–E12** (spec
+- **2026-09-22/24** — **piece 5 (the secondary analyses): decisions E1–E12** (spec
   `docs/superpowers/specs/2026-09-22-secondary-analyses-design.md` §1.1; plan
   `docs/superpowers/plans/2026-09-22-secondary-analyses.md`), each chosen by the owner in
   plain-language questions. E1 both analyses move into the store FULLY, with a reading side: named
@@ -664,7 +798,14 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     writes TWO records; a comparison names its sources in the BODY, so deleting one is not refused and
     `render_lineage` gains a branch that prints `MISSING`; `fdt` and `crossval` gain `--seed`,
     deliberately widening piece 2's recorded reading; five checked settings that no front end exposes
-    carry `field=None` and get no table entry.
+    (`freq_bounds`, `burn_in_nd`, `t_obs_periods`, `dt_nd`, `psd_t_obs_nd`) are registered in
+    `FIELDS` like any other key, with `None` in BOTH front-end tables, so a refusal names the
+    setting and `fix_sentence` offers no fix — not unregistered, because every `require_*` rule
+    builds its sentence through `describe(key)`, which raises a bare `KeyError` for a key `FIELDS`
+    does not hold (plan rulings P2, P75). The progressive mode is opt-in per kind, and the six
+    ordinary kinds still lose their directory on any exception, pinned by a test written before the
+    mode existed; the kind directory is the legacy `fdt/` on purpose, which makes the owner's stray
+    pictures loose files INSIDE a kind directory, the only place the tidy-up can reach them.
   - **The spec was reviewed against the code before the owner read it** — four independent lenses
     (anchors, completeness, consistency, standing rules) and a judge that re-checked every blocking
     and important finding itself. Verdict `needs-rework`: 12 must-fix, 7 rejected with reasons, ~28
@@ -674,4 +815,47 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     `Artifacts/` root after a failed run. The fourteen reports are in the gitignored ledger
     `.superpowers/sdd/2026-09-22-secondary-analyses/` (`recon/`, `spec-review/`, `progress.md` with
     rulings R1–R10, each carrying what it costs if it is wrong).
+  - The plan (`e902256`+`5354e6b`) carries 82 planning rulings, P1–P82; the spec's §12 rows 1–10 are
+    the ones that depart from the spec. D11 and D12 stay standing refusals; this piece re-opened
+    neither.
+  - The execution rulings are in the spec's §12 (rows from 11) and in the gitignored ledger
+    `.superpowers/sdd/2026-09-22-secondary-analyses/progress.md`.
+  - Execution rulings a later piece would otherwise re-litigate, each with what it costs if wrong:
+    - **The brief extractor drops a plan's preamble**, so every ruling is folded INTO the task body
+      it binds (pre-flight, `cbc2187`), with a stated precedence: the latest controller block beats
+      the amendments, which beat the task text. *Cost: a task body carries up to three layers an
+      implementer must reconcile in order.*
+    - **Every task is gated, and the gate starts at the same moment as the task's review** (the
+      owner's decision of 2026-09-23). A gate's wall time on this shared machine is NOT a regression
+      signal on its own — a count or warning change is; the gates of record run on a quiet machine.
+      *Cost: a global slowdown could hide in the noise until the final gate, which is why that gate
+      is taken quiet.*
+    - **A sweep's `results` is one entry per finished operating point**, each at its own resonance,
+      with the top-level `ratio_at_resonance` null and `offgrid.of` counting only measured probes
+      (the review's M2, re-litigating P78, whose single-run summary did not carry over to a
+      concatenation). *Cost: a body shape changed before any owner record of the old one existed.*
+    - **A T_a/T grid reaching below 0 is refused before anything is spent; 0 is allowed; S has no
+      floor** (R-F1), and a diverged operating point is a FAILED point, never a done one (M1).
+      *Cost: an owner who wants T_a/T = 0 excluded, or an S floor, adds one rule.*
+    - **The window names its comparisons** (R-F3): a Comparison name and note box in both "Compare
+      saved …" groups, never remembered, answering the same refusals as the run's Record name.
+      *Cost: two rows per screen.*
+    - **The store neither reserves names nor re-mints ids**: `_new_id` skips the ids this store
+      object has minted (two writers created back to back got the same id), but a name is claimed
+      only on disk, so a writer created and never entered does not hold its name. *Cost: a
+      programming error creating two same-named writers in one process commits two records with one
+      name.*
+    - **`PreflightWarning` lives in the torch-free `core/refusals.py`** (re-exported by
+      `core.orchestrator`), and `seeded` in the light `core/rng.py` (re-exported by
+      `core.diagnostics.rng`), so an FDT run loads neither sbi nor the diagnostics. *Cost: two
+      names moved module; every old import keeps working.*
+    - **The GPU smoke gate was judged not required** against the whole piece: every changed line
+      that creates or moves a tensor is either off `smoke`'s path (CPU-pinned FDT, sweep and Live
+      simulation code) or, in `core/rng.py`'s `seeded`, identical to the base on CUDA (the gate row
+      names each site). *Cost: a CUDA-only regression on that path would go unseen until the next
+      card run.*
+    - **The fix re-review's nine minors were parked**, not sent round a second fix loop: the owner's
+      end-of-piece process is one fix dispatch and one scoped re-review, and none is load-bearing
+      ("Owed" item 7 lists them). *Cost: a regression of the negative-grid or zero-knob refusal
+      would hang a gate instead of failing it — visible, but slow.*
 
