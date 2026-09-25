@@ -220,8 +220,9 @@ def region_from_json(d: dict) -> dict:
 
 def _fdt_config_from_cfg(cfg) -> dict:
     """``config_from_cfg``'s branch for an FDTConfig: the cell's parameter values and every
-    resolution knob the run was built with. Floats only and all finite -- ``validate`` refuses a
-    non-finite number anywhere in the config block (``_check_finite(d["config"], "config")``)."""
+    resolution knob the run was built with -- strings, a bool, ints, floats, lists and a null seed --
+    and every number finite: ``validate`` refuses a non-finite number anywhere in the config block
+    (``_check_finite(d["config"], "config")``)."""
     return {
         "model": cfg.model,
         "state_dep_drift": bool(cfg.state_dep_drift),

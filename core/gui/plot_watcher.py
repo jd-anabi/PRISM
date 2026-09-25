@@ -26,11 +26,16 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 _POLL_MS = 1200
 _SETTLE_S = 1.0                                     # savefig may still be writing; let the file age
-_STAMP = re.compile(r"_\d{8}_\d{6}$")               # the ..._20260714_120301 suffix every writer adds
+# The ..._20260714_120301 suffix the pre-piece-5 writers put on every figure. A record's figures are
+# figures/<slug>.png and carry none (the whole-piece review's N29): the stamp is stripped from the
+# LEGACY names alone -- a loose figure an older build left, the Reduction map's own PNG -- and a
+# record's name passes through unchanged but for its underscores.
+_STAMP = re.compile(r"_\d{8}_\d{6}$")
 
 
 def _title(name: str) -> str:
-    """'fdt3d_vs_S_20260714_120301.png' -> 'fdt3d vs S'."""
+    """A figure's title from its file name: 'spontaneous_psd.png' -> 'spontaneous psd', a record's
+    figure; and 'fdt3d_vs_S_20260714_120301.png' -> 'fdt3d vs S', a legacy stamped name."""
     return _STAMP.sub("", Path(name).stem).replace("_", " ") or Path(name).stem
 
 

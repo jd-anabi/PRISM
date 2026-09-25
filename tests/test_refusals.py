@@ -300,10 +300,11 @@ def test_require_between_honours_open_and_closed_ends_and_treats_nan_as_outside(
 def test_require_below_refuses_an_inverted_or_blank_pair_and_returns_two_floats():
     """The sweep grids and the FDT frequency band are ORDERED PAIRS, and none of the existing eight
     rules covers that shape: require_between judges one value against fixed bounds, and a pair whose
-    own two ends are the thing being judged has no bound to compare to. An inverted pair is not
-    hypothetical -- every window numeric box returns 0 for a blank (FloatField.value), so a grid
-    whose 'max' was left empty arrives as (0.0, 0.0) and np.linspace would happily produce a sweep
-    of one repeated value rather than refusing.
+    own two ends are the thing being judged has no bound to compare to. An inverted or degenerate
+    pair is not hypothetical: a typed (0.0, 0.0) would make np.linspace produce a sweep of one
+    repeated value rather than refuse. A BLANK end is another matter -- value() would read it as a
+    real 0, which passes here whenever the other end is above it -- so every caller reads its ends
+    through value_or_none and a blank arrives as None (the whole-piece review's N30).
 
     Both ends are refused blank and non-finite first, so the message never reads "0 and nan"; the
     pair comes back as floats, which is what the caller binds."""
@@ -799,7 +800,10 @@ def test_the_public_entry_decorator_passes_a_sentinel_through():
 # core/tool/config_args.py has a describe(cfg, ...) of its own: that one's first argument is a config,
 # never a string literal, so a name match cannot mistake it for the registry's describe(key).
 _RULE_CALLS = ("describe", "refuse", "require_given", "require_finite", "require_positive",
-               "require_at_least", "require_between", "require_below", "require_choice", "require_file")
+               "require_at_least", "require_between", "require_below", "require_choice", "require_file",
+               # piece 5 added require_note("note", ...) call sites in both measurement panels and
+               # the tool, which the scan did not see (the whole-piece review's N30)
+               "require_note")
 
 
 def _field_key_literals(tree) -> list:

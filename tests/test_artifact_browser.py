@@ -866,6 +866,41 @@ def test_the_screens_legacy_directory_is_offered_by_sweep_all_kinds_only(store, 
     assert "Removed 1 of 1 legacy director" in scr.status.text(), scr.status.text()
 
 
+def test_the_screens_sweep_claims_nothing_it_could_not_read(store, monkeypatch):
+    """The whole-piece review's N25 (L736), the window's half, in step with the tool's. "Nothing to
+    remove: every any kind's directory carries a manifest.json, and no loose file or legacy directory
+    is here either" -- ungrammatical, and still printed when the store root could not be read, beside
+    the sentence saying so. Each clause is said only where its read succeeded; the live-run refusal
+    says "leftovers" (the sweep removes files too); "Sweep all kinds…" says what it covers."""
+    from tests._fixtures import SHOWN, artifact_screen, qt_app
+    qt_app()
+
+    def _unreadable():
+        raise PermissionError(13, "Access is denied", str(store.root))
+
+    monkeypatch.setattr(store, "legacy_dirs", _unreadable)
+    scr = artifact_screen(store)
+    SHOWN.clear()
+    scr._sweep(all_kinds=True)
+    status = scr.status.text()
+    assert SHOWN == [] and status.startswith("⚠ Nothing to remove"), status
+    head = status.split(". ")[0]                     # the "nothing to remove" sentence itself
+    assert "legacy" not in head and "any kind's" not in head, status
+    assert "every directory of every kind carries a manifest.json" in head, status
+    assert "no legacy directory can be swept" in status, "the unread root is still reported"
+    assert "legacy directory" in scr.btn_sweep_all.toolTip(), scr.btn_sweep_all.toolTip()
+
+    from core.gui.panels.base_panel import BasePanel
+    from core.gui.screens.artifact_screen import KIND_LABELS
+    monkeypatch.setattr(BasePanel, "_running", True)
+    scr._sweep(all_kinds=True)
+    assert scr.status.text().endswith("before removing leftovers."), scr.status.text()
+    monkeypatch.setattr(BasePanel, "_running", False)
+    # N26: a comparison is a record of this kind, and the Kind picker says so
+    assert KIND_LABELS["fdt"] == "FDT measurements, sweeps and comparisons"
+    assert scr.kind_combo.findText(KIND_LABELS["fdt"]) >= 0
+
+
 def test_a_loose_file_written_moments_ago_is_offered_and_then_refused_not_removed(store, monkeypatch):
     """R3 for the file category, through the window. ``loose_files`` lists a file by what it IS, not
     by its age -- no listing can know whether something is still writing it -- so a file written

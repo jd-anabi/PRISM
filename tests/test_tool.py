@@ -1785,6 +1785,11 @@ def test_fdt_ctrl_c_gets_its_own_interrupt_note(tool_env, monkeypatch, capsys):
     assert "<artifacts root>/fdt" not in err, "the flat output folder is gone"
     assert "--resume" not in err
     assert "--store-root" in err and "PRISM_ARTIFACTS" in err, err
+    # the whole-piece review's N24: what the record holds, not "everything measured" (a record
+    # stopped during the sanity checks holds no measurement at all), and the first moments, before
+    # its folder existed, when there is nothing to clear
+    assert "holding what it had written so far" in err and "everything measured" not in err, err
+    assert "before its folder existed; then there is nothing to clear" in err, err
     written = [ln for ln in captured.out.splitlines() if ln.startswith("[prism fdt] writing record ")]
     assert len(written) == 1, captured.out
     assert str(config.artifacts_root() / "fdt") in written[0], written[0]
@@ -1817,6 +1822,7 @@ def test_crossval_ctrl_c_names_each_record_and_how_to_clear_them(tool_env, monke
     assert "--store-root" in err and "PRISM_ARTIFACTS" in err, err
     assert "from scratch" in err and "--resume" not in err, err
     assert "<artifacts root>/crossval" not in err, "the flat output folder is gone"
+    assert "before its folder existed; then there is nothing to clear" in err, err     # N24
     written = [ln for ln in captured.out.splitlines()
                if ln.startswith("[prism crossval] writing record ")]
     assert len(written) == 2, captured.out
@@ -3349,6 +3355,49 @@ def test_a_legacy_directory_is_offered_by_the_all_kinds_sweep_only(browse_store,
     assert main(["artifacts", "sweep", "--yes"]) == 0
     assert f"removed legacy directory {legacy.name}" in capsys.readouterr().out
     assert not legacy.exists()
+
+
+def test_a_sweep_claims_nothing_it_could_not_read_and_its_help_names_every_category(
+        tmp_path, monkeypatch, capsys):
+    """The whole-piece review's N25 (L728), the tool's half. "nothing to sweep: ... and no legacy
+    directory sits beside them" printed even when the store root could not be read -- a line that
+    contradicted the error printed beside it. Each clause is printed only when its read succeeded.
+    The dry-run footnote named only "a directory that is still being written", though a recently
+    written loose file and the legacy directory are refused too, and ``artifacts sweep --help``
+    never mentioned the legacy directory at all."""
+    from core.artifacts import ArtifactStore
+
+    root = tmp_path / "empty_root"
+    root.mkdir()
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
+
+    def _unreadable(self):
+        raise PermissionError(13, "Access is denied", str(self.root))
+
+    monkeypatch.setattr(ArtifactStore, "legacy_dirs", _unreadable)
+    capsys.readouterr()
+    assert main(["artifacts", "sweep"]) == 1, "an unread root is a problem, not an empty one"
+    cap = capsys.readouterr()
+    assert "no legacy directory was swept" in cap.err, cap.err
+    (line,) = [ln for ln in cap.out.splitlines() if "nothing to sweep" in ln]
+    assert "legacy" not in line, line
+    assert "every directory here carries a manifest.json" in line, "the reads that worked still say so"
+
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "--help"]) == 0
+    assert "legacy directory" in " ".join(capsys.readouterr().out.split())
+
+    # the dry run's footnote, printed under a loose FILE it previews, speaks of files too
+    from tests._fixtures import backdate_tree
+    stray = root / "priors" / "fdt_ratio_20260915_153042.png"
+    stray.parent.mkdir()
+    stray.write_bytes(b"a picture an older build left beside the records")
+    backdate_tree(root / "priors")
+    capsys.readouterr()
+    assert main(["artifacts", "sweep", "prior"]) == 0
+    out = capsys.readouterr().out
+    assert f"would remove prior loose file {stray.name}" in out, out
+    assert "a loose file, the legacy directory -- is refused at removal" in out, out
 
 
 def test_a_loose_file_written_seconds_ago_is_refused_rather_than_swept(browse_store, capsys):

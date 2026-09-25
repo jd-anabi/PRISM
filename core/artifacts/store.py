@@ -316,6 +316,17 @@ def _is_link(path: Path) -> bool:
     return path.is_symlink() or path.is_junction()
 
 
+def _resolves_as_itself(path: Path, name: str) -> bool:
+    """Does ``path`` RESOLVE to a directory called ``name``? (the whole-piece review's N27)
+
+    Windows addresses one directory by several names -- a case variant, an 8.3 short name -- and
+    ``realpath`` expands them. A legacy name that is really an alias of a KIND directory passes every
+    string check and the resolved-parent comparison (its parent IS the root); its resolved basename
+    is what gives it away. Compared case-folded, as the filesystem compares names."""
+    resolved = os.path.basename(os.path.realpath(path))
+    return os.path.normcase(resolved) == os.path.normcase(name)
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1159,11 +1170,13 @@ class ArtifactStore:
         structural guarantee that this family can never reach a real artifact, rather than a promise
         the literal is trusted to keep. A link is skipped too -- a junction included, which
         ``is_symlink()`` does not report on Windows -- because ``remove_legacy`` refuses one, and
-        offering what the removal will refuse is a list the operator cannot act on.
+        offering what the removal will refuse is a list the operator cannot act on. So is a name
+        that RESOLVES to another directory (``_resolves_as_itself``), for the same reason.
         """
         taken = set(KIND_DIRS.values())
         return [n for n in LEGACY_DIRS
-                if n not in taken and (self.root / n).is_dir() and not _is_link(self.root / n)]
+                if n not in taken and (self.root / n).is_dir() and not _is_link(self.root / n)
+                and _resolves_as_itself(self.root / n, n)]
 
     def remove_legacy(self, name: str) -> None:
         """Remove one legacy directory under this root, by its own name.
@@ -1191,6 +1204,10 @@ class ArtifactStore:
         if os.path.dirname(os.path.realpath(candidate)) != os.path.realpath(self.root):
             raise StoreError(f"{name!r} under {self.root} resolves outside the store root, so it is "
                              f"not this store's to remove", field="artifact")
+        if not _resolves_as_itself(candidate, name):
+            raise StoreError(f"{name!r} under {self.root} resolves to "
+                             f"{os.path.basename(os.path.realpath(candidate))!r}, another directory's "
+                             f"name, so it is not this store's to remove", field="artifact")
         age = time.time() - _newest_mtime(candidate)
         if age < RECENT_WRITE_SECONDS:
             raise StoreError(

@@ -45,7 +45,9 @@ KIND_LABELS = {
     "calibration": "Calibrations",
     "inference": "Inferences",
     "diagnostic": "Diagnostics",
-    "fdt": "FDT measurements and sweeps",
+    # comparisons too (the whole-piece review's N26): a comparison is a record of this kind, and both
+    # measurement panels send the owner here to find one
+    "fdt": "FDT measurements, sweeps and comparisons",
 }
 
 # The tail of a run's records the pane shows (§3.3). A ceiling, not a budget: a training run's log is
@@ -496,6 +498,9 @@ class ArtifactScreen(QWidget):
                                   "any loose file inside its folder")
         self.btn_sweep.clicked.connect(lambda: self._sweep(all_kinds=False))
         self.btn_sweep_all = QPushButton("Sweep all kinds…")
+        self.btn_sweep_all.setToolTip("Remove every kind's directories that have no manifest at all, "
+                                      "any loose file inside a kind's folder, and a legacy directory "
+                                      "an older build wrote beside them")
         self.btn_sweep_all.clicked.connect(lambda: self._sweep(all_kinds=True))
         row.addWidget(QLabel("Note"))
         row.addWidget(self.note_edit, 1)
@@ -753,7 +758,9 @@ class ArtifactScreen(QWidget):
         return out, kept, problems
 
     def _loose_and_legacy(self, store, kind) -> tuple:
-        """``(loose, legacy, problems)``: E10's two categories, beside ``_incomplete``'s directories.
+        """``(loose, legacy, loose_problems, legacy_problems)``: E10's two categories, beside
+        ``_incomplete``'s directories, and each category's unreadable parts APART, so a "nothing to
+        remove" line claims only what was read (the whole-piece review's N25).
 
         ``loose`` is ``[(kind, LooseFile)]`` -- a FILE sitting directly inside a kind directory,
         which no artifact accounts for. ``_entries`` iterates directories only (store.py's
@@ -770,22 +777,23 @@ class ArtifactScreen(QWidget):
         Both reads are guarded per kind: an unreadable directory is reported and does not stop the
         others (§3.2 -- an unreadable kind is not an empty one).
         """
-        loose, legacy, problems = [], [], []
+        loose, legacy, loose_problems, legacy_problems = [], [], [], []
         for k in (list(KIND_DIRS) if kind is None else [kind]):
             try:
                 loose += [(k, f) for f in store.loose_files(k)]
             except Exception as e:      # noqa: BLE001 -- an unreadable kind is reported, not fatal
-                problems.append(f"The files in the {k} directory could not be read "
-                                f"({type(e).__name__}: {e}), so no {k} loose file can be swept; "
-                                f"check that folder's permissions on disk and sweep again.")
+                loose_problems.append(f"The files in the {k} directory could not be read "
+                                      f"({type(e).__name__}: {e}), so no {k} loose file can be "
+                                      f"swept; check that folder's permissions on disk and sweep "
+                                      f"again.")
         if kind is None:
             try:
                 legacy = list(store.legacy_dirs())
             except Exception as e:      # noqa: BLE001 -- reported, never swallowed
-                problems.append(f"The store root could not be read ({type(e).__name__}: {e}), so "
-                                f"no legacy directory can be swept; check its permissions on disk "
-                                f"and sweep again.")
-        return loose, legacy, problems
+                legacy_problems.append(f"The store root could not be read ({type(e).__name__}: {e}), "
+                                       f"so no legacy directory can be swept; check its permissions "
+                                       f"on disk and sweep again.")
+        return loose, legacy, loose_problems, legacy_problems
 
     def _sweep(self, *, all_kinds: bool) -> None:
         """B7: remove every directory of this kind -- or of all kinds -- that has NO manifest at all,
@@ -813,16 +821,18 @@ class ArtifactScreen(QWidget):
         gone: the application's red box, no status line, and ``store_changed`` never emitted, so the
         three pickers went on showing rows that had just been deleted.
         """
-        if self._refuse_while_running("removing leftover directories"):
+        # "leftovers", not "leftover directories": the sweep removes loose files and the legacy
+        # directory too (the whole-piece review's N25).
+        if self._refuse_while_running("removing leftovers"):
             return
         store = self._resolved_store()
         # self.kind(), the one accessor everything else on this screen reads, and None ONLY for the
         # all-kinds button: reading currentData() here gave a second answer that disagreed with
         # kind() whenever it was falsy, and a falsy kind means "all kinds" downstream.
         kind = None if all_kinds else self.kind()
-        cands, kept, problems = self._incomplete(store, kind)
-        loose, legacy, more = self._loose_and_legacy(store, kind)
-        problems = problems + more
+        cands, kept, dir_problems = self._incomplete(store, kind)
+        loose, legacy, loose_problems, legacy_problems = self._loose_and_legacy(store, kind)
+        problems = dir_problems + loose_problems + legacy_problems
         tail = (" " + " ".join(problems)) if problems else ""
         if kept:
             # Named, never silently dropped: the table shows these rows as incomplete, so a sweep
@@ -831,14 +841,24 @@ class ArtifactScreen(QWidget):
                      "never removed: "
                      + "; ".join(f"{k}/{d} ({why})" for k, d, why in kept) + ".")
         if not cands and not loose and not legacy:
-            where = "any kind's" if kind is None else f"{kind}"
-            # The legacy clause only where the store root was READ: a per-kind sweep never looks
-            # beside the kind directories, so "no legacy directory" would claim what nobody checked
-            # -- and a crossval/ may well sit there. The tool's per-kind sentence omits it too.
-            also = ("no loose file or legacy directory is here either" if kind is None
-                    else f"no loose file sits inside the {kind} directory")
-            self._set_status(f"Nothing to remove: every {where} directory carries a manifest.json, "
-                             f"and {also}." + tail, error=bool(problems))
+            # Each clause only where its read SUCCEEDED (the whole-piece review's N25): the problems
+            # in the tail say what could not be read, and "none here" beside "could not be read"
+            # contradicted itself. The legacy clause only where the store root was READ: a per-kind
+            # sweep never looks beside the kind directories, so "no legacy directory" would claim what
+            # nobody checked -- and a crossval/ may well sit there. The tool's sentence does the same.
+            said = [text for ok, text in (
+                (not dir_problems, ("every directory of every kind carries a manifest.json"
+                                    if kind is None else
+                                    f"every {kind} directory carries a manifest.json")),
+                (not loose_problems, ("no loose file sits inside a kind's folder" if kind is None
+                                      else f"no loose file sits inside the {kind} directory")),
+                (kind is None and not legacy_problems,
+                 "no legacy directory sits beside the kind directories")) if ok]
+            joined = (" and ".join(said) if len(said) < 3
+                      else ", ".join(said[:-1]) + ", and " + said[-1])
+            self._set_status("Nothing to remove" + (f": {joined}." if said else
+                                                    " among what could be read.") + tail,
+                             error=bool(problems))
             return
         total = len(cands) + len(loose) + len(legacy)
         box = QMessageBox(self)

@@ -430,6 +430,34 @@ def test_a_legacy_name_that_is_a_junction_is_neither_offered_nor_followed(store)
         os.rmdir(link)                       # the junction only; its target is untouched
 
 
+def test_a_legacy_name_that_resolves_to_another_directory_is_neither_offered_nor_removed(
+        store, monkeypatch):
+    """The whole-piece review's N27 (L395). Windows addresses one directory by several names -- an
+    8.3 short name among them -- so a ``crossval`` that is really an alias of a KIND directory would
+    pass every string check, and its resolved parent IS the root, so the realpath-parent check passes
+    too. ``realpath`` expands the alias, so the resolved BASENAME must be the legacy name itself.
+    The alias cannot be made without an administrator, so ``os.path.realpath`` is made to resolve
+    ``crossval`` to ``simulations``, which is what an alias would look like to this code."""
+    old = store.root / "crossval"
+    old.mkdir(parents=True)
+    (old / "sweep_S.h5").write_bytes(b"what an alias of a kind directory would hold")
+    backdate_tree(old)                       # old enough that only the name rule can protect it
+    real = os.path.realpath
+
+    def _alias(p, *a, **k):
+        r = real(p, *a, **k)
+        if os.path.basename(r).lower() == "crossval":
+            return os.path.join(os.path.dirname(r), st.KIND_DIRS["simulation"])
+        return r
+
+    monkeypatch.setattr(os.path, "realpath", _alias)
+    assert store.legacy_dirs() == [], "an alias of another directory was offered"
+    with pytest.raises(st.StoreError, match="resolves to") as exc:
+        store.remove_legacy("crossval")
+    assert exc.value.field == "artifact"
+    assert (old / "sweep_S.h5").is_file(), "the aliased directory was removed"
+
+
 def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
     """Spec §2.2 step 1 and E2. ``validate`` refuses a PARTIAL body key set, so the first manifest
     cannot carry only what is known -- it carries every key of BODY_KEYS["fdt"] with the unknown ones

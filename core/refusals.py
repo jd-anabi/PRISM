@@ -289,8 +289,9 @@ def require_below(key: str, lo, hi) -> tuple:
     The ordered-pair rule the other eight do not cover: ``require_between`` judges ONE value against
     fixed bounds, and here the two ends are themselves what is being judged. Each end goes through
     ``require_finite`` first, so None (a blank read through value_or_none) and a NaN are refused by
-    their own sentences; a blank that value() reads as 0 reaches the ordering test as (0, 0) and is
-    refused there.
+    their own sentences. A blank that value() reads as 0 would arrive as a REAL 0, refused here only
+    when the other end is not above it -- ``(0, 1.5)`` passes -- which is why every caller hands its
+    ends over through value_or_none (the whole-piece review's N30).
     """
     a, b = require_finite(key, lo), require_finite(key, hi)
     if not a < b:

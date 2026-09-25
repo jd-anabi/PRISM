@@ -352,6 +352,14 @@ def _rm(args, store) -> int:
     return 0
 
 
+def _joined(clauses: list) -> str:
+    """``"a"``, ``"a and b"``, ``"a, b, and c"``: the sweep's "nothing to sweep" clauses, however
+    many of them its reads can back."""
+    if len(clauses) < 3:
+        return " and ".join(clauses)
+    return ", ".join(clauses[:-1]) + ", and " + clauses[-1]
+
+
 def _sweep(args, store) -> int:
     """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all eight) that has NO
     manifest at all, and the two categories below. §4.3: nothing to remove is 0; anything that would
@@ -385,6 +393,9 @@ def _sweep(args, store) -> int:
     reported and does not stop the others."""
     from core.artifacts.store import NO_MANIFEST_REASON
     cands, kept, problems, loose, legacy = [], [], [], [], []
+    # Which of the three reads SUCCEEDED: a "nothing to sweep" clause may claim only what was read
+    # (the whole-piece review's N25) -- an unreadable kind is not an empty one (§3.2).
+    read_dirs = read_loose = read_legacy = True
     # ONE test for "the all-kinds form", here and at the legacy read below: with a truthiness test
     # here, `sweep ""` swept every kind while skipping the legacy read. Now it is `list`'s refusal.
     kinds = (args.kind,) if args.kind is not None else KINDS
@@ -394,6 +405,7 @@ def _sweep(args, store) -> int:
         except OSError as e:                       # a kind that cannot be read is not an empty one
             problems.append(f"prism artifacts: the {kind} directory could not be read "
                             f"({type(e).__name__}: {e}), so no {kind} leftover was swept")
+            read_dirs = False
             continue
         for row in rows:
             if row.complete:
@@ -410,6 +422,7 @@ def _sweep(args, store) -> int:
         except OSError as e:
             problems.append(f"prism artifacts: the {kind} directory's files could not be read "
                             f"({type(e).__name__}: {e}), so no {kind} loose file was swept")
+            read_loose = False
     if args.kind is None:
         # E10's second category, and the ALL-KINDS form ALONE: `sweep` takes the kind positionally
         # and a legacy directory sits BESIDE the kind directories, under no kind at all, so there is
@@ -419,6 +432,7 @@ def _sweep(args, store) -> int:
         except OSError as e:
             problems.append(f"prism artifacts: the store root could not be read "
                             f"({type(e).__name__}: {e}), so no legacy directory was swept")
+            read_legacy = False
     reasons = {(k, d): why for k, d, why in cands}
     for kind, dir_name, why in kept:
         print(f"[prism] kept {kind} {dir_name} -- {why}: a directory that carries a manifest.json is "
@@ -426,14 +440,16 @@ def _sweep(args, store) -> int:
     for line in problems:
         print(line, file=sys.stderr)
     if not cands and not loose and not legacy:
-        if args.kind is None:
-            print("[prism] nothing to sweep: every directory here carries a manifest.json, no loose "
-                  "file sits inside a kind directory, and no legacy directory sits beside them.")
-        else:
-            # No legacy clause: a per-kind sweep never reads the store root, so it would be claiming
-            # what nobody checked -- and a `crossval/` may well sit there.
-            print(f"[prism] nothing to sweep: every directory here carries a manifest.json and no "
-                  f"loose file sits inside the {args.kind} directory.")
+        # Each clause only where its read SUCCEEDED (N25): the problems above say what was not read.
+        # No legacy clause for a per-kind sweep at all: it never reads the store root, so it would
+        # be claiming what nobody checked -- and a `crossval/` may well sit there.
+        where = "a kind directory" if args.kind is None else f"the {args.kind} directory"
+        said = [text for ok, text in (
+            (read_dirs, "every directory here carries a manifest.json"),
+            (read_loose, f"no loose file sits inside {where}"),
+            (args.kind is None and read_legacy, "no legacy directory sits beside them")) if ok]
+        print("[prism] nothing to sweep" + (": " + _joined(said) if said else
+                                            " among what could be read") + ".")
         return 1 if problems else 0
     if not args.yes:
         for kind, dir_name, why in cands:
@@ -449,10 +465,13 @@ def _sweep(args, store) -> int:
               f"{total} item{'' if total == 1 else 's'}.")
         # The listing cannot tell a run in flight from a leftover -- the manifest is written LAST --
         # so a preview taken beside a live training names that training's own directory. The removal
-        # refuses it; say so here, where the operator is deciding whether to pass --yes.
-        print("[prism] a directory that is still being written is refused at removal, not swept: an "
-              "artifact's manifest is written last, so a run in flight looks exactly like a "
-              "leftover until it commits.")
+        # refuses it; say so here, where the operator is deciding whether to pass --yes. For every
+        # category the preview can hold (N25): each remover applies the recency guard, and the
+        # window's own dialog already said "a recently written directory or file is refused".
+        print("[prism] anything still being written -- a leftover directory, a loose file, the legacy "
+              "directory -- is refused at removal, not swept: an artifact's manifest is written last, "
+              "so a run in flight looks exactly like a leftover until it commits, and whatever was "
+              "written recently is refused.")
         return 1 if problems else 0
     removed, failed = store.sweep_incomplete([(k, d) for k, d, _ in cands])
     for kind, dir_name in removed:
@@ -555,11 +574,12 @@ def register(subparsers) -> dict:
     rm.add_argument("ref", metavar="<ref>", help=_REF)
     rm.set_defaults(handler=_rm)
 
-    sweep = modes.add_parser("sweep", help="remove every directory with no manifest at all, and "
-                                           "every loose file beside the records (a dry run until "
-                                           "--yes)")
+    sweep = modes.add_parser("sweep", help="remove every directory with no manifest at all, every "
+                                           "loose file beside the records, and (with no kind) the "
+                                           "legacy directory an older build left beside the kind "
+                                           "directories (a dry run until --yes)")
     sweep.add_argument("kind", nargs="?", default=None, metavar="<kind>",
-                       help=f"{_KIND}; with no kind, all eight")
+                       help=f"{_KIND}; with no kind, all eight, and the legacy directory beside them")
     sweep.add_argument("--yes", action="store_true",
                        help="actually remove them. Without it this is a DRY RUN: it prints exactly "
                             "what it would remove and removes nothing, which is the confirmation "

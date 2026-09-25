@@ -57,8 +57,11 @@ readable answer before the T sweep starts.
 #
 # A note is fixed text, set once through set_defaults, so it cannot carry the record's id. Ruling
 # F20: the handler prints each record's id and directory -- the `writing record` line -- the moment
-# store.create mints it, which is before anything can be interrupted, and the note points back at
-# that line. And because the `artifacts` family reads only PRISM_ARTIFACTS (it has no --store-root,
+# store.create mints it, before anything is spent, and the note points back at that line. NOT before
+# anything can be interrupted: a Ctrl-C during the handler's imports or the config build comes
+# before any record, and one between that line and the stage's `with writer:` comes before its
+# folder exists -- so each note says that then there is nothing to clear (the whole-piece review's
+# N24). And because the `artifacts` family reads only PRISM_ARTIFACTS (it has no --store-root,
 # core/tool/browse.py), a run given --store-root must be followed by pointing the variable there, or
 # the listing looks in the wrong root and finds nothing.
 _STORE_ROOT_ADVICE = ("If this run was given --store-root, set PRISM_ARTIFACTS to that root first: "
@@ -69,8 +72,9 @@ _STORE_ROOT_ADVICE = ("If this run was given --store-root, set PRISM_ARTIFACTS t
 # COMPARE_INTERRUPT_NOTE's words.
 FDT_INTERRUPT_NOTE = (
     "the record named by the `writing record` line above is KEPT and marked unfinished, holding "
-    "everything measured so far; `python -m core artifacts list fdt` lists it and `python -m core "
-    f"artifacts rm fdt <id>` removes it. {_STORE_ROOT_ADVICE} fdt keeps no cache and nothing "
+    "what it had written so far -- unless the run was stopped in its first moments, before its "
+    "folder existed; then there is nothing to clear. `python -m core artifacts list fdt` lists it "
+    f"and `python -m core artifacts rm fdt <id>` removes it. {_STORE_ROOT_ADVICE} fdt keeps no cache and nothing "
     "resumes, so re-running the same command starts the analysis from scratch (given --name, only "
     "once the unfinished record is removed, because it keeps the name).")
 # Two records, three possible states (spec §4.1): the sweeps run S first, then T, each entering its
@@ -80,8 +84,9 @@ FDT_INTERRUPT_NOTE = (
 CROSSVAL_INTERRUPT_NOTE = (
     "each sweep writes a record of its own, named by the two `writing record` lines above: a sweep "
     "that had finished keeps its finished record, the one this run was in the middle of is KEPT and "
-    "marked unfinished, holding its data file and every operating point measured so far, and a "
-    "sweep that had not started left nothing on disk. `python -m core artifacts list fdt` lists "
+    "marked unfinished, holding what it had written so far, and a sweep that had not started left "
+    "nothing on disk -- nor did a study stopped in its first moments, before its folder existed; then "
+    "there is nothing to clear. `python -m core artifacts list fdt` lists "
     f"them and `python -m core artifacts rm fdt <id>` removes one. {_STORE_ROOT_ADVICE} crossval "
     "keeps no cache and nothing resumes, so re-running the same command starts the study from "
     "scratch (given --name, only once the unfinished record is removed, because it keeps the name).")
