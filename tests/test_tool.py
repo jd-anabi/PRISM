@@ -1627,6 +1627,69 @@ def test_a_temperature_grid_below_zero_is_refused_naming_the_flag_before_any_rec
     assert after == before, "a refused grid opened a record"
 
 
+def test_fdt_and_crossval_name_their_records_and_refuse_a_taken_name_before_any_folder(tool_env,
+                                                                                        monkeypatch,
+                                                                                        capsys):
+    """The whole-piece review's M4, the tool's half (FE1 + S2). Neither analysis declared --name or
+    --note: every record the tool wrote was "(unnamed)", ``--name`` exited 2, and nothing renames an
+    fdt record afterwards -- E1's named records, and the parity between the two front ends, broken.
+
+    ``fdt --name N --note T`` names its record N; ``crossval --name N`` names its two N-s and N-temp,
+    the window's stem rule, one per swept parameter. Both creates happen before anything is spent, so
+    a taken name -- either of the study's two -- is refused (exit 1, the line ending in ``(--name)``)
+    before a folder exists. The stages are replaced by writers that commit at once: the names are
+    the subject, and a real campaign is slow-marked elsewhere."""
+    from core.artifacts import ArtifactStore
+    from core.FDT import cross_validation, fdt_pipeline
+
+    _bounds, _cell, root = tool_env
+    store = ArtifactStore(root)
+
+    def _commit(writer, study):
+        writer.body.update(study=study, settings={}, seed=1, notices=[])
+        with writer:
+            pass
+        return writer.store.load_fdt(writer.id)
+
+    monkeypatch.setattr(fdt_pipeline, "run_fdt",
+                        lambda cfg, *, skip_sanity, confirm_production, writer, seed=None:
+                        _commit(writer, "single"))
+    monkeypatch.setattr(cross_validation, "run_param_study_cli",
+                        lambda cfg, *, s_grid, t_grid, writers, seed=None:
+                        [_commit(writers[k], "sweep") for k in ("s", "temp")])
+    hopf = str(config.CELL_PATH / "hopf" / "cell.txt")
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    study = ["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2", "--t-grid", "1", "1.1", "2"]
+
+    assert main(["fdt", "--cell", hopf, "--name", "spont_a", "--note", "the first look"]) == 0
+    m = store.get("fdt", "spont_a")
+    assert (m.name, m.note) == ("spont_a", "the first look"), (m.name, m.note)
+    assert main([*study, "--name", "nightly", "--note", "both halves"]) == 0
+    for name in ("nightly-s", "nightly-temp"):
+        m = store.get("fdt", name)
+        assert m.note == "both halves" and m.body["study"] == "sweep", (name, m.note)
+
+    kind_dir = Path(root) / "fdt"
+    before = sorted(kind_dir.iterdir())
+    for cmd, argv in (("fdt", ["fdt", "--cell", hopf, "--name", "spont_a"]),
+                      ("crossval", [*study, "--name", "nightly"])):
+        capsys.readouterr()
+        assert main(argv) == 1, cmd
+        err = capsys.readouterr().err
+        lines = [ln for ln in err.splitlines() if ln.startswith(f"prism {cmd}: refused:")]
+        assert len(lines) == 1 and "already exists" in lines[0], err
+        assert lines[0].endswith("(--name)"), lines[0]
+    assert sorted(kind_dir.iterdir()) == before, "a refused name left a folder behind"
+
+    # the help says the stem rule, and each interrupt note says a kept record keeps its name
+    from core.tool.fdt import CROSSVAL_INTERRUPT_NOTE, FDT_INTERRUPT_NOTE
+    capsys.readouterr()
+    assert main(["crossval", "--help"]) == 0
+    assert "NAME-s and NAME-temp" in " ".join(capsys.readouterr().out.split())
+    for note in (FDT_INTERRUPT_NOTE, CROSSVAL_INTERRUPT_NOTE):
+        assert "given --name, only once the unfinished record is removed" in note, note
+
+
 def test_crossval_preset_choices_match_sweep_presets():
     """M5, fix round 1: ``--preset``'s hard-coded choices stay hard-coded -- importing ``core.cli``
     while building the parser would cost a torch import on plain ``--help`` -- so this pins the two

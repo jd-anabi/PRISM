@@ -62,11 +62,16 @@ readable answer before the T sweep starts.
 # the listing looks in the wrong root and finds nothing.
 _STORE_ROOT_ADVICE = ("If this run was given --store-root, set PRISM_ARTIFACTS to that root first: "
                       "the `artifacts` commands read only the environment.")
+#
+# A kept record keeps its NAME (the whole-piece review's M4): a re-run given the same --name is
+# refused as taken until the unfinished record is removed, so each note says so, in
+# COMPARE_INTERRUPT_NOTE's words.
 FDT_INTERRUPT_NOTE = (
     "the record named by the `writing record` line above is KEPT and marked unfinished, holding "
     "everything measured so far; `python -m core artifacts list fdt` lists it and `python -m core "
     f"artifacts rm fdt <id>` removes it. {_STORE_ROOT_ADVICE} fdt keeps no cache and nothing "
-    "resumes, so re-running the same command starts the analysis from scratch.")
+    "resumes, so re-running the same command starts the analysis from scratch (given --name, only "
+    "once the unfinished record is removed, because it keeps the name).")
 # Two records, three possible states (spec §4.1): the sweeps run S first, then T, each entering its
 # own record only when it starts. So an interrupt during S leaves S's record unfinished and T's never
 # written, and one during T leaves S's finished (or, had S measured nothing, unfinished) beside T's
@@ -78,7 +83,13 @@ CROSSVAL_INTERRUPT_NOTE = (
     "sweep that had not started left nothing on disk. `python -m core artifacts list fdt` lists "
     f"them and `python -m core artifacts rm fdt <id>` removes one. {_STORE_ROOT_ADVICE} crossval "
     "keeps no cache and nothing resumes, so re-running the same command starts the study from "
-    "scratch.")
+    "scratch (given --name, only once the unfinished record is removed, because it keeps the name).")
+
+# The stem rule, the window's (CrossValPanel._run): one record per swept parameter, so the one name
+# the operator gives becomes two. Both are claimed before anything is spent.
+CROSSVAL_NAME_HELP = ("a base name for the study's two records, which are named NAME-s and NAME-temp, "
+                      "one per swept parameter ('' = both unnamed). Both names are claimed before "
+                      "anything is spent, so a taken one is refused before either sweep starts.")
 
 
 def model_for_cell(args) -> str:
@@ -155,6 +166,7 @@ def register(subparsers):
                      help="skip the sanity checks and go straight to the production sweep")
     fdt.add_argument("--no-production", dest="no_production", action="store_true",
                      help="stop after the sanity checks")
+    add_name_flags(fdt)
     fdt.set_defaults(handler=run_fdt_cmd, interrupt_note=FDT_INTERRUPT_NOTE)
 
     cv = subparsers.add_parser(
@@ -169,6 +181,7 @@ def register(subparsers):
                     metavar=("MIN", "MAX", "N"), help="the T_a/T sweep grid")
     _add_store_root(cv)
     _add_fdt_knobs(cv)
+    add_name_flags(cv, name_help=CROSSVAL_NAME_HELP)
     cv.set_defaults(handler=run_crossval, interrupt_note=CROSSVAL_INTERRUPT_NOTE)
     return {"fdt": fdt, "crossval": cv, **_register_compare(subparsers)}
 
@@ -199,7 +212,9 @@ def run_fdt_cmd(args, store):
         raise Refusal(f"{reason} ({hint}.)", field="model")
     cfg = cli.make_fdt_config(model, registry.state_dep_drift(model), args.cell,
                               **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0", "seed"))
-    writer = store.create("fdt", cfg)
+    # The name and the note as the window's Record name and Note boxes give them (the whole-piece
+    # review's M4). The note was judged by main before this handler ran.
+    writer = store.create("fdt", cfg, name=args.name, note=args.note)
     # F20: on screen BEFORE anything is spent, so a Ctrl-C finds the record's id already printed --
     # FDT_INTERRUPT_NOTE points back at this line, being fixed text that cannot carry the id itself.
     print(f"[prism fdt] writing record {writer.id} at {writer.dir}", flush=True)
@@ -222,7 +237,11 @@ def run_crossval(args, store):
         n_freqs=preset["n_freqs"] if args.n_freqs is None else args.n_freqs,
         ensemble_M=preset["ensemble_M"] if args.ensemble_M is None else args.ensemble_M,
         **knobs(args, "freqs_per_batch", "F0", "seed"))
-    writers = {"s": store.create("fdt", cfg), "temp": store.create("fdt", cfg)}
+    # The stem rule, as the window applies it (CROSSVAL_NAME_HELP): both names are claimed here,
+    # before either sweep spends anything, so a taken one -- either of the two -- is refused first.
+    writers = {key: store.create("fdt", cfg, name=f"{args.name}-{key}" if args.name else "",
+                                 note=args.note)
+               for key in ("s", "temp")}
     # F20: one line per record, before either sweep spends anything -- CROSSVAL_INTERRUPT_NOTE points
     # back at these two lines, being fixed text that cannot carry the ids itself.
     for key, label in (("s", "S"), ("temp", "T_a/T")):

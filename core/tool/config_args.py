@@ -47,10 +47,12 @@ def add_config_flags(p) -> None:
                         "detection, refused when it does not yield the card (default: auto)")
 
 
-def add_name_flags(p) -> None:
+def add_name_flags(p, *, name_help: "str | None" = None) -> None:
+    """``--name`` and ``--note``. ``name_help`` replaces the name's help for a subcommand whose name
+    is not used as given -- ``crossval`` names its two records from it (the stem rule)."""
     p.add_argument("--name", default="", metavar="NAME",
-                   help="name the artifact this command writes ('' = unnamed). A taken name is "
-                        "refused at the stage's entry, before anything is spent.")
+                   help=name_help or ("name the artifact this command writes ('' = unnamed). A taken "
+                                      "name is refused at the stage's entry, before anything is spent."))
     p.add_argument("--note", default="", metavar="TEXT",
                    help="free text recorded in the artifact's manifest")
 
