@@ -682,6 +682,76 @@ def test_a_committed_record_refuses_a_refresh(store):
     assert store.get("fdt", w.id).payloads["data.h5"] == prov.sha256_file(w.dir / "data.h5")
 
 
+def test_an_unfinished_records_log_ends_with_what_stopped_it_and_nothing_says_it_twice(store, caplog):
+    """The whole-piece review's N1 (L280, L569, L808). The keep branch wrote the run's log as it
+    stood, and nothing put the exception in it: a record stopped by a refusal, a crash or an
+    interrupt had a log.txt ending at the last progress line, so the one document that says why the
+    run stopped did not say it. The branch now ends log.txt with one stamped line, ``error stopped:
+    <Type>: <message>``, written STRAIGHT to the file -- never as a logging record, which the tool's
+    console and the window's pane would show a second time beside the front end's own refusal line or
+    box. Outside a run (no run log) it writes nothing, as ``_write_log`` always has."""
+    import logging
+    import re
+    from core import runs
+
+    def _run(name, exc):
+        w = store.create("fdt", None, name=name)
+        w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+        with w:
+            logging.getLogger("core.test").info("the spontaneous campaign finished")
+            w.figure_path("Spontaneous PSD").write_bytes(b"\x89PNG")
+            raise exc
+
+    for name, exc, said in (
+            ("refused_late", Refusal("the band reaches below what the spectrum resolves",
+                                     field="freq_bounds"),
+             "Refusal: the band reaches below what the spectrum resolves"),
+            ("interrupted", KeyboardInterrupt(), "KeyboardInterrupt")):
+        caplog.clear()
+        with caplog.at_level(logging.INFO, logger="core"):
+            with pytest.raises(type(exc)):
+                runs.public_entry(lambda: _run(name, exc))()
+        text, _ = store.read_log("fdt", name)
+        lines = text.splitlines()
+        assert lines[-2].endswith("info the spontaneous campaign finished"), lines
+        assert re.fullmatch(r"\d\d:\d\d:\d\d error stopped: " + re.escape(said), lines[-1]), lines
+        assert not [r for r in caplog.records if "stopped" in r.getMessage()], \
+            "the store logged the stop as a record: every front end would show it twice"
+
+    w = store.create("fdt", None, name="no_run_log")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with pytest.raises(RuntimeError):
+        with w:
+            w.payload("data.h5").write_bytes(b"numbers")
+            raise RuntimeError("the driven campaign failed")
+    assert w.dir.is_dir() and not (w.dir / st.LOG_FILE).exists(), "no run log, so no log.txt"
+
+
+def test_an_unfinished_record_lists_only_the_figures_on_disk_and_a_commit_lists_every_one(store):
+    """The whole-piece review's N2 (L573, L576, L589). ``figure_path`` records a figure when the
+    PATH is handed out, and every manifest listed it -- so a run stopped between the hand-out and
+    the save (Ctrl-C inside the Nadrowski passive check, a figure that failed to draw) left an
+    unfinished record listing a picture that was never written. An unfinished manifest lists only
+    the figures on disk. The COMMIT lists every one, as it always has, so a finished record's
+    manifest -- any kind's -- is byte-for-byte what it was (the GPU gate's condition)."""
+    w = store.create("fdt", None, name="phantom")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with pytest.raises(KeyboardInterrupt):
+        with w:
+            w.figure_path("Spontaneous trajectory").write_bytes(b"\x89PNG")
+            w.figure_path("Passive baseline ratio")          # handed out, never drawn
+            raise KeyboardInterrupt
+    assert store.get("fdt", w.id).figures == ["figures/spontaneous_trajectory.png"]
+
+    done = store.create("fdt", None, name="committed")
+    done.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with done:
+        done.figure_path("Drawn").write_bytes(b"\x89PNG")
+        done.figure_path("Handed out only")
+    assert store.get("fdt", done.id).figures == ["figures/drawn.png", "figures/handed_out_only.png"], \
+        "the commit's listing is unchanged: every figure handed out"
+
+
 def test_a_record_removed_while_its_run_was_writing_it_is_not_rebuilt(store):
     """The whole-piece review's M3 (H1 + L278). A progressive record looks exactly the same whether
     its run was interrupted or is still being written from another window or a terminal, and nothing

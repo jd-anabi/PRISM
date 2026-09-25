@@ -369,6 +369,9 @@ def run_fdt_param_sweep(
     # load_param_sweep at the end, and that plot must still be drawn inside the writer so its PNG
     # lands in the record's figures/.
     with writer:
+        # The record's id, on screen and in its own log the moment it exists (the whole-piece
+        # review's N1, H3), as run_fdt and compare do.
+        log.info(f"Writing fdt record {writer.id} at {writer.dir}")
         with h5py.File(writer.payload("data.h5"), "w") as h5:
             # The contract's root attributes (P6), on every data.h5 so a reader can check the layout
             # before reading a dataset. omega_0 is the common grid's reference, set once it exists.
@@ -386,6 +389,11 @@ def run_fdt_param_sweep(
             h5.attrs["n_operating_points"] = int(len(sweep_grid))
             h5.attrs["sweep_grid"] = np.asarray(sweep_grid, dtype=np.float64)
             ops = h5.create_group("operating_points")
+            # data.h5 listed from here, before the first point (spec §2.2 step 2; the whole-piece
+            # review's N2): until the first point's refresh no manifest named it, and a process that
+            # died without an exception in that first point's campaign left it unlisted.
+            h5.flush()
+            writer.refresh()
 
             # --- Phase A: spontaneous PSD + robust omega_0 per operating point ---
             log.info(f"--- Phase A ({sweep_param} sweep): spontaneous PSD + omega_0 detection ---")

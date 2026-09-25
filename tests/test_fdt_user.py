@@ -1055,6 +1055,7 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
                          writer=_LogWriter(tmp_path), seed=1)
     name = "core.FDT.fdt_pipeline"
     assert records() == [
+        (name, "INFO", f"Writing fdt record x at {Path(tmp_path)}"),     # the whole-piece review's N1
         (name, "INFO", "Cell file natural-frequency estimate: omega_0 ~= 1.0 (ND Hopf natural frequency)"),
         (name, "WARNING", "One or more sanity checks failed (see metrics above)."),
         (name, "INFO", "Aborted by user."),
@@ -1538,6 +1539,10 @@ def test_the_single_cell_record_holds_the_numbers_not_only_the_pictures(store, m
     from core.refusals import PreflightWarning
 
     _stub_campaigns(monkeypatch)
+    # Real and imaginary parts DIFFERENT (1 + 2j), so a swap of chi' and chi'' in the file fails
+    # here: the shared stub's 1 + 1j could not tell them apart (the whole-piece review's N2, L589).
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi",
+                        lambda cfg, omegas: torch.full(omegas.shape, 1 + 2j, dtype=torch.complex128))
     cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
                               n_freqs=5, ensemble_M=2)
     with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"):
@@ -1553,7 +1558,8 @@ def test_the_single_cell_record_holds_the_numbers_not_only_the_pictures(store, m
         assert h5["omega_grid"].shape == (5,) and h5["T_eff_over_T"].shape == (5,)
         assert h5["chi_prime"].dtype == np.float64 and h5["chi_prime"].shape == (5,)
         assert h5["chi_double_prime"].shape == (5,)
-        assert np.allclose(h5["chi_double_prime"][...], 1.0), "the stub's chi is 1+1j"
+        assert np.all(h5["chi_prime"][...] == 1.0), "chi' is the real part of the stub's 1 + 2j"
+        assert np.all(h5["chi_double_prime"][...] == 2.0), "chi'' is its imaginary part"
         assert float(h5.attrs["omega_0"]) == rec.body["grid"]["omega_0"]
         assert h5["PSD_omegas"].shape == h5["PSD_G"].shape, \
             "the spontaneous spectrum carries its OWN frequency axis -- it is not on the chi grid"
@@ -1620,8 +1626,14 @@ def test_a_figure_that_fails_after_the_driven_campaign_does_not_cost_the_numbers
 
     (summary,) = store.list("fdt")
     assert summary.name == "unplotted" and summary.complete and not summary.finished
-    payloads = json.loads((w.dir / "manifest.json").read_text(encoding="utf-8"))["payloads"]
+    manifest = json.loads((w.dir / "manifest.json").read_text(encoding="utf-8"))
+    payloads = manifest["payloads"]
     assert payloads == {"data.h5": None}, payloads
+    # Neither the ratio figure that failed nor the chi figure after it is listed: the chi path is
+    # asked for only when its figure is drawn, and an unfinished manifest lists only the figures on
+    # disk (the whole-piece review's N2). Before, both were listed and neither existed.
+    assert sorted(manifest["figures"]) == ["figures/spontaneous_psd.png",
+                                           "figures/spontaneous_trajectory.png"], manifest["figures"]
     with h5py.File(w.dir / "data.h5", "r") as h5:
         assert h5.attrs["study"] == "single"
         for name in ("omega_grid", "T_eff_over_T", "chi_prime", "chi_double_prime"):
@@ -1769,6 +1781,133 @@ def test_a_sanity_run_lists_only_the_figures_it_drew(store, monkeypatch):
             (model, rec.manifest.figures)
         missing = [f for f in rec.manifest.figures if not (rec.path / f).is_file()]
         assert missing == [], f"{model}: the manifest lists figures that were never drawn: {missing}"
+
+
+def test_an_interrupted_passive_check_leaves_no_phantom_figure(store, monkeypatch):
+    """The whole-piece review's N2 (L573). The passive-baseline check takes its figure's path as an
+    argument and saves at its END, so a Ctrl-C inside it -- the first and longest stage of a sanity
+    run -- left the unfinished record listing figures/passive_baseline_ratio.png, which was never
+    drawn. An unfinished manifest lists only what is on disk."""
+    import json
+
+    import pytest
+    from core import cli, config, registry
+    from core.FDT import fdt_pipeline, sanity
+
+    _stub_campaigns(monkeypatch)
+
+    def _interrupted(cfg, save_plot_path=None):
+        assert save_plot_path is not None, "the premise: the path is handed out before the check runs"
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(sanity, "check_passive_baseline", _interrupted)
+    cfg = cli.make_fdt_config("NADROWSKI", registry.state_dep_drift("NADROWSKI"),
+                              str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+                              n_freqs=3, ensemble_M=8)
+    w = store.create("fdt", cfg, name="ctrl_c_in_sanity")
+    with pytest.raises(KeyboardInterrupt):
+        fdt_pipeline.run_fdt(cfg, skip_sanity=False, confirm_production=True, writer=w, seed=2)
+    manifest = json.loads((w.dir / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["body"]["complete"] is False and manifest["figures"] == [], manifest["figures"]
+
+
+def test_the_spectrum_figure_offgrid_and_numbers_are_on_disk_before_what_follows_them(store,
+                                                                                     monkeypatch):
+    """The whole-piece review's N2 (S1) and ruling R-F7. Spec §2.2 step 2: the stage refreshes after
+    each figure and after data.h5. run_fdt refreshed only after Campaign 1 and at the end, so a
+    process that died WITHOUT an exception during the hours of Campaign 2 -- a closed window, a
+    kill, a power cut; no ``__exit__`` runs -- left a manifest listing neither the spontaneous-PSD
+    figure, the picture that diagnoses the run, nor the ``offgrid`` count computed before the drive;
+    and one that died while the two final figures were drawn left data.h5 unlisted.
+
+    Proved in-process (R-F7, never a child calling ``os._exit``): Campaign 2, when entered, and the
+    ratio figure, when drawn, read ``manifest.json`` FROM DISK -- what a hard kill at that moment
+    would leave -- and assert what it lists. The sweep's data.h5 is listed from before its first
+    point, too."""
+    import json
+
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=5, ensemble_M=8)
+    w = store.create("fdt", cfg, name="on_disk")
+    seen = {}
+
+    def _on_disk():
+        return json.loads((w.dir / "manifest.json").read_text(encoding="utf-8"))
+
+    def _c2(c, omegas):
+        seen["campaign 2"] = _on_disk()
+        return torch.full(omegas.shape, 1 + 1j, dtype=torch.complex128)
+
+    def _ratio(*a, save_path=None, **k):
+        seen["ratio figure"] = _on_disk()
+        Path(save_path).write_bytes(b"\x89PNG")
+
+    monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi", _c2)
+    monkeypatch.setattr(fdt_pipeline, "plot_eff_temp_ratio", _ratio)
+    fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=2)
+
+    at_drive = seen["campaign 2"]
+    assert "figures/spontaneous_psd.png" in at_drive["figures"], at_drive["figures"]
+    assert at_drive["body"]["offgrid"] == {"blanks": 0, "of": 5}, at_drive["body"]["offgrid"]
+    assert "data.h5" in seen["ratio figure"]["payloads"], seen["ratio figure"]["payloads"]
+
+    # the sweep: data.h5 is listed once its root attributes are written, before the first point
+    _sweep_stubs(monkeypatch)
+    first_point = {}
+    c1 = cv.run_campaign1_psd
+
+    sw_cfg, s_grid, _t = _thin_study_cfg()
+    sw_cfg.seed = 1
+    sw = store.create("fdt", sw_cfg, name="sweep_on_disk")
+
+    def _c1(cfg_op):
+        first_point.setdefault("manifest", json.loads((sw.dir / "manifest.json").read_text(
+            encoding="utf-8")))
+        return c1(cfg_op)
+
+    monkeypatch.setattr(cv, "run_campaign1_psd", _c1)
+    cv.run_fdt_param_sweep(sw_cfg, "s", s_grid, {"temp": 1.0}, writer=sw)
+    assert "data.h5" in first_point["manifest"]["payloads"], first_point["manifest"]["payloads"]
+
+
+def test_both_stages_name_the_record_they_write_before_anything_else(store, monkeypatch, caplog):
+    """The whole-piece review's N1 (H3). The tool prints `writing record <id> at <dir>` before
+    anything is spent (ruling F20), and ``compare`` logs `Writing comparison record ...` the moment
+    its record opens -- but run_fdt and the sweep said nothing, so a window run cancelled or crashed
+    during the long first stages ended with "Run cancelled." and never named the unfinished record it
+    left on disk. Each stage's first line inside its entered writer names the record: a logging
+    record, so it reaches the window's pane, the tool's console and the record's own log.txt."""
+    import logging
+
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    w = store.create("fdt", cfg, name="named_on_screen")
+    with caplog.at_level(logging.INFO, logger="core"):
+        fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=2)
+    first = [r for r in caplog.records if r.name == "core.FDT.fdt_pipeline"][0]
+    assert first.getMessage() == f"Writing fdt record {w.id} at {w.dir}", first.getMessage()
+    assert f"info Writing fdt record {w.id} at {w.dir}" in (w.dir / "log.txt").read_text(encoding="utf-8")
+
+    _sweep_stubs(monkeypatch)
+    sw_cfg, s_grid, _t = _thin_study_cfg()
+    sw_cfg.seed = 1
+    sw = store.create("fdt", sw_cfg, name="sweep_named_on_screen")
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="core"):
+        cv.run_fdt_param_sweep(sw_cfg, "s", s_grid, {"temp": 1.0}, writer=sw)
+    first = [r for r in caplog.records if r.name == "core.FDT.cross_validation"][0]
+    assert first.getMessage() == f"Writing fdt record {sw.id} at {sw.dir}", first.getMessage()
 
 
 def test_an_fdt_run_loads_no_inference_machinery(tmp_path):
@@ -2029,9 +2168,10 @@ def test_a_sweep_counts_failures_in_both_phases(store, monkeypatch):
     assert rec.body["offgrid"] == {"blanks": 0, "of": 2 * 3}, \
         "the 2 LANDED points x the 3-point common grid (every stubbed omega_0 is 1.0): the two " \
         "failed points' slots were never measured (the whole-piece review's M2, departing from P78)"
-    assert refreshed == [(0, 1), (1, 1), (1, 2), (2, 2), (2, 2)], \
-        "one refresh per point as it lands or fails (A: point 0 fails; B: 1 lands, 2 fails, 3 " \
-        f"lands), then the final one: {refreshed}"
+    assert refreshed == [(0, 0), (0, 1), (1, 1), (1, 2), (2, 2), (2, 2)], \
+        "one refresh once data.h5 is open (it is listed before the first point, the whole-piece " \
+        "review's N2), one per point as it lands or fails (A: point 0 fails; B: 1 lands, 2 fails, " \
+        f"3 lands), then the final one: {refreshed}"
     (summary,) = store.list("fdt")
     assert (summary.points_done, summary.points_failed, summary.points_planned) == (2, 2, 4)
 
@@ -2318,7 +2458,9 @@ def test_a_mid_run_refresh_refused_by_a_file_lock_is_warned_and_the_sweep_goes_o
 
     def _write_log():
         calls["n"] += 1
-        if calls["n"] == 2:                 # the refresh after the first operating point
+        # 1 is __enter__'s first manifest, 2 the refresh once data.h5 is open, 3 the refresh after
+        # the first operating point
+        if calls["n"] == 3:
             raise PermissionError(13, "The process cannot access the file", str(w.dir / "log.txt"))
         real()
 
@@ -2755,7 +2897,7 @@ def test_a_refusal_that_is_not_measured_nothing_ends_the_study_at_once(store, mo
     def _refresh():
         raise StoreError("stub: the manifest could not be written", field="artifact")
 
-    writers["s"].refresh = _refresh                  # the first per-point refresh of the S sweep
+    writers["s"].refresh = _refresh                  # the S sweep's first refresh, once data.h5 is open
     with caplog.at_level(logging.INFO, logger="core"):
         with pytest.warns(PreflightWarning, match="The ensemble is 2 trajectories"):
             with pytest.raises(StoreError, match="stub: the manifest"):

@@ -3,12 +3,11 @@
 Here, at the top of ``core``, and not in ``core/diagnostics`` where it started (piece 2): importing ANY
 submodule of a package runs the package's ``__init__``, and ``core/diagnostics/__init__.py`` imports
 the five diagnostics and through them ``core.orchestrator``, sbi's inference modules and
-``pytensor``. An FDT run
-needs none of that, and paid about two seconds and two false pytensor "g++" lines on stderr for it at
-the head of every ``python -m core fdt`` (Task 17, fix round 1). This module imports only
-``contextlib`` and the stdlib-only ``core.refusals``; torch and numpy are imported when the context is
-entered. ``core.diagnostics.rng`` re-exports the same object, so every diagnostics import keeps
-working.
+``pytensor``. An FDT run needs none of that, and paid about two seconds and two false pytensor "g++"
+lines on stderr for it at the head of every ``python -m core fdt`` (Task 17, fix round 1). This
+module imports only ``contextlib`` and the stdlib-only ``core.refusals``; torch and numpy are
+imported when the context is entered. ``core.diagnostics.rng`` re-exports the same object, so every
+diagnostics import keeps working.
 
 Seed ONCE and let the streams run on, exactly as ``scripts/smoke_train.py`` did. Training and
 calibration both draw their initial conditions from numpy's global RNG and their Sobol (t_scale, T)

@@ -299,6 +299,10 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool,
         body.setdefault(key, None)
     body["complete"] = False
     with writer:
+        # The record's id, on screen and in its own log the moment it exists, as compare's `Writing
+        # comparison record` line does (the whole-piece review's N1, H3): a run cancelled or crashed
+        # in the long first stages otherwise never named the unfinished record it left behind.
+        log.info(f"Writing fdt record {writer.id} at {writer.dir}")
         with seeded(seed, cfg.hw.device):
             _measure(cfg, skip_sanity=skip_sanity, confirm_production=confirm_production,
                      writer=writer, prefactor=prefactor)
@@ -439,6 +443,12 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     if blanks:
         log.warning(f"{blanks}/{of} probe frequencies have no value in the spontaneous spectrum, whose "
                     f"resolved band is {lo_res:g}..{hi_res:g} (ND), and are blank in the ratio.")
+    # The spectrum's figure and the offgrid count on disk BEFORE the drive (spec §2.2 step 2; the
+    # whole-piece review's N2). ONE refresh, here, after both: Campaign 2 is the hours of the run, and
+    # a process that dies in it without an exception -- a closed window, a kill -- runs no __exit__,
+    # so this manifest is what it leaves. A refusal between the figure and here goes through the keep
+    # branch, whose final manifest lists the figure anyway.
+    writer.refresh()
 
     # 7. Campaign 2: forced chi via lock-in
     log.info("Campaign 2: forced response -> chi via lock-in")
@@ -456,15 +466,17 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     # data.h5.
     _write_single_h5(writer.payload("data.h5"), cfg, omegas, ratio, chis, freqs_psd, G,
                      omega_natural, prefactor)
+    writer.refresh()          # the numbers are listed before a figure can fail (N2)
 
-    # 9. Plot + save (the PSD went to disk before Campaign 2)
+    # 9. Plot + save (the PSD went to disk before Campaign 2). Each figure's path is asked for just
+    #    before it is drawn: the chi path, asked for up front, was listed by a record whose ratio
+    #    figure failed first (the whole-piece review's N2).
     ratio_path = writer.figure_path("Effective temperature ratio")
-    chi_path = writer.figure_path("Chi components")
-
     plot_eff_temp_ratio(omegas.cpu().numpy(), ratio.cpu().numpy(),
                         save_path=ratio_path,
                         title=f"FDT violation: ND {cfg.model} (cell file defaults)",
                         omega_natural=omega_natural)
+    chi_path = writer.figure_path("Chi components")
     plot_chi_components(omegas.cpu().numpy(), chis.cpu().numpy(),
                         save_path=chi_path,
                         title=fr"Susceptibility components: ND {cfg.model}",

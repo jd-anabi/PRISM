@@ -425,7 +425,9 @@ class ArtifactWriter:
             if self.progressive and not (isinstance(exc, Refusal) and not self._wrote_anything):
                 # E2. The run was interrupted or it failed AFTER spending something: the folder stays,
                 # ``complete`` stays False, and one last refresh puts the log up to the failure on
-                # disk -- that log is the document that says why it stopped.
+                # disk, ending with one stamped line that names what stopped it (the whole-piece
+                # review's N1) -- the run's own records up to the failure say nothing of the
+                # exception, so without that line the log could not say why the run stopped.
                 #
                 # Unless the folder is GONE (the whole-piece review's M3): a record still being written
                 # looks exactly like an interrupted one, so it can be deleted -- from the Artifacts
@@ -444,7 +446,7 @@ class ArtifactWriter:
                 # take the records since the last good refresh down with it. Neither attempt may
                 # REPLACE the exception that ended the run, so each failure is a warning.
                 try:
-                    self._write_log()
+                    self._write_log(stopped_by=exc)
                 except Exception as e:        # noqa: BLE001 -- the in-flight cause must propagate
                     warnings.warn(f"could not write the log of the unfinished {self.kind} record "
                                   f"{self.dir} ({type(e).__name__}: {e}); it keeps the log it had.",
@@ -536,18 +538,29 @@ class ArtifactWriter:
             self._write_log()
         _write_manifest(self.dir, self.manifest)
 
-    def _write_log(self) -> None:
+    def _write_log(self, stopped_by: "BaseException | None" = None) -> None:
         # The run's log so far, BEFORE the manifest: every ``core`` record and every Python warning
         # since the outermost public entry began (core/runs.py). A composition's first artifact
         # therefore holds the records up to its own commit and its last one the whole run. Written
         # whenever a run is active, empty when it said nothing: every committed artifact but the
         # simulation cache (which has no writer) carries the file. Outside any entry, no file.
+        #
+        # ``stopped_by`` is the keep branch's exception, and the file then ENDS with one stamped line
+        # naming it (the whole-piece review's N1). Appended to the text written here and never to the
+        # run's buffer, and never as a logging record: a record would reach the tool's console and
+        # the window's pane too, beside the refusal line or box the front end already shows for the
+        # same exception (E16), and would repeat in every later record of the same run.
         run_log = runs.current_run_log()
         if run_log is not None:
+            text = run_log.text()
+            if stopped_by is not None:
+                said = " ".join(str(stopped_by).split())
+                what = type(stopped_by).__name__ + (f": {said}" if said else "")
+                text += f"{runs._stamp()} error stopped: {what}\n"
             # newline="\n" explicitly: write_text's default would make every record CRLF on Windows,
             # and this file is read back by read_log, shown in the browser's detail pane and saved
             # verbatim to a report whose bytes spec §5 says both front ends must agree on.
-            (self.dir / LOG_FILE).write_text(run_log.text(), encoding="utf-8", newline="\n")
+            (self.dir / LOG_FILE).write_text(text, encoding="utf-8", newline="\n")
 
     def _inputs(self, *, warn: bool) -> dict:
         # missing_ok: this runs at the END of a run that may have taken days, and an input file moved
@@ -592,7 +605,12 @@ class ArtifactWriter:
             inputs=self._inputs(warn=hashed),
             config=self.config, parents=dict(self.parents), fingerprints=dict(self.fingerprints),
             payloads={f: (prov.sha256_file(self.dir / f) if hashed else None) for f in self._payloads},
-            figures=list(self._figures), body=body,
+            # An UNFINISHED manifest lists only the figures on disk (the whole-piece review's N2): a
+            # figure is recorded when its PATH is handed out, so a run stopped before the save -- a
+            # Ctrl-C inside the passive check, a figure that failed to draw -- listed a picture that
+            # was never written. The commit lists every one as it always has, so a finished record's
+            # manifest, any kind's, is byte-identical to what it was.
+            figures=[f for f in self._figures if hashed or (self.dir / f).is_file()], body=body,
         )
 
     def _commit(self) -> None:
