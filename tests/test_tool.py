@@ -3101,11 +3101,11 @@ def test_artifacts_show_on_a_missing_ref_exits_1_through_the_refused_rung(browse
 def test_the_artifacts_family_takes_no_configuration_flags_and_its_help_costs_no_torch():
     """B9's two halves, pinned. (1) No configuration flags anywhere in the family: a listing must not
     be able to fail on a bounds file it does not need, and --store-root in particular is absent
-    because this family creates no root and reads the one PRISM_ARTIFACTS names. It used to be
-    absent for a second reason as well -- ``main`` keyed smoke's temp root, its empty-root cleanup
-    and its Ctrl-C advice on ``hasattr(args, "store_root")`` -- which piece 5 retired when it gave
-    fdt/crossval the flag and made those three an explicit per-subcommand choice (piece-5 spec
-    §6.1). (2) ``--help``
+    because this family creates no second root and reads the one PRISM_ARTIFACTS names. It used to
+    be absent for a second reason as well -- ``main`` keyed smoke's temp root, its empty-root
+    cleanup and its Ctrl-C advice on ``hasattr(args, "store_root")`` -- which piece 5 retired when it
+    gave fdt/crossval the flag and made those three an explicit per-subcommand choice (piece-5
+    spec §6.1). (2) ``--help``
     for the family imports no torch -- checked in a FRESH interpreter, because in this process torch
     is long since imported by the session fixtures, so a sys.modules check here would pass
     vacuously (the pattern of test_every_field_key_has_a_flag_..., leg (d))."""

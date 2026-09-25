@@ -124,11 +124,12 @@ what is on disk, the last gate). Update it at the end of every session.
   non-dimensional χ drive amplitude and band are read-only displays of it, and a consent is never
   persisted — it is answered by the session that runs. A stale key an older build left in
   `PRISM.ini` is ignored, not restored. The Simulate, FDT and CrossVal panels remember their own
-  numeric fields and their pickers' selections; the Seed box, the record name and the note are
-  never remembered — a remembered seed would silently turn every run into a repeat of the last one,
-  and a remembered name would be refused as taken at the next launch's first run (piece-5 spec
-  §5.5, E7; plan ruling P30) — and neither are the "Compare saved …" controls, whose remembered
-  list would name records a later session may have deleted.
+  numeric fields — except the ones the CrossVal panel re-derives instead, n_freqs and M_ensemble
+  from its preset and the grid ends from its cell — and their pickers' selections; the Seed box,
+  the record name and the note are never remembered — a remembered seed would silently turn every
+  run into a repeat of the last one, and a remembered name would be refused as taken at the next
+  launch's first run (piece-5 spec §5.5, E7; plan ruling P30) — and neither are the "Compare
+  saved …" controls, whose remembered list would name records a later session may have deleted.
 - `Resources/` holds the hand-edited inputs (`Bounds/`, `Cells/`, `Units/`, `Models/`). The
   bounds file declares WHICH parameters are inferred and in what order, and therefore the
   observation mode; a cell's model comes from its parent folder. Everything generated lives under

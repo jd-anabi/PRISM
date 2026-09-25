@@ -17,8 +17,8 @@ subcommand that builds no SimConfig.
 
 NO ``--store-root``, EITHER. The root is ``config.artifacts_root()`` (PRISM_ARTIFACTS) and ``main``
 has already opened the store by the time a handler runs, so this family has no second root to point
-at: it creates nothing, spends nothing a Ctrl-C could abandon, and reads the one root the
-environment names.
+at: it creates no root of its own (``main``'s ``mkdir`` of the environment's root is every
+subcommand's), spends nothing a Ctrl-C could abandon, and reads the one root the environment names.
 
 The flag is no longer a proxy for anything else, either. It used to be: ``main`` keyed three of
 smoke's behaviours on ``hasattr(args, "store_root")`` -- the throwaway ``mkdtemp`` root, the removal

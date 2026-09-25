@@ -418,7 +418,7 @@ if __name__ == "__main__":
 1. **Parse** with `prog="python -m core"`. argparse's `SystemExit` is caught and its code returned: 0 for `--help`, 2 for bad usage. `main` never calls `sys.exit`.
 2. Call `registry.load_user_models()`, which is idempotent.
 3. **Store.**
-   - The root is `args.store_root` for `smoke` and `config.artifacts_root()` for every other subcommand; `PRISM_ARTIFACTS` is read at call time.
+   - The root is `args.store_root` for `smoke` and `config.artifacts_root()` for every other subcommand; `PRISM_ARTIFACTS` is read at call time. **Corrected in place by piece 5 (E11):** `fdt` and `crossval` too take `args.store_root` when given `--store-root`, and follow `config.artifacts_root()` without it; `smoke`'s throwaway root is keyed on its own `temp_store_root` property, not on the flag (`docs/superpowers/specs/2026-09-22-secondary-analyses-design.md` §6.1).
    - Create it with `mkdir(parents=True, exist_ok=True)`, so a root that cannot be created fails at start-up.
    - Run the handler under `with use_store(ArtifactStore(root)) as store:` (`store.py:765-773`), and ALSO pass `store=store` to every stage call.
    - `set_default_store` is never called; that call was `smoke_train.py:219-222`'s leak.
