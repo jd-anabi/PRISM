@@ -54,8 +54,7 @@ def rescale_axis_label(name: str, *, length_unit: str | None = None, time_unit: 
 GUI_HTML = {
     "T_obs (s)":                 "T<sub>obs</sub> (s)",
     "n_freqs":                   "n<sub>freqs</sub>",
-    "ensemble_M":                "M<sub>ensemble</sub>",
-    "freqs_per_batch":           "freqs / batch",
+    "M_ensemble":                "M<sub>ensemble</sub>",     # "freqs / batch" needs no entry
     "F0 (ND forcing amplitude)": "F<sub>0</sub> (ND forcing amplitude)",
     "S grid  (T_a/T = 1)":       "S grid  (T<sub>a</sub>/T = 1)",
     "T_a/T grid  (S = 0)":       "T<sub>a</sub>/T grid  (S = 0)",

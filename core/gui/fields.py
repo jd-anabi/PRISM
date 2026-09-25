@@ -102,9 +102,11 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "note": ("Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
              "box on the FDT analysis or Sweep study cross-validation tab."),
     # A sentence and not a (place, label) pair: the comparison list is one control that appears on
-    # two tabs of the FDT section, and the box it sits in is added by the comparison controls.
-    "compare_records": ("Add the runs to compare to the comparison list on the FDT analysis or the "
-                        "Sweep study cross-validation tab."),
+    # two tabs of the FDT section, under a different row on each. Both rows are quoted, and the verb
+    # is "Choose", not "Add": a mode's ceiling ("at most 2") and a run named twice are fixed by
+    # REMOVING one (the whole-piece review's N22).
+    "compare_records": ("Choose the records in the 'Runs to compare' list on the FDT analysis tab, or "
+                        "in the 'Sweeps to compare' list on the Sweep study cross-validation tab."),
     # The two mode settings, each a box the comparison controls build (Task 40): the renormalise
     # mode's constant on the FDT analysis tab, the sweeps mode's slice point on the cross-validation
     # tab. Sentences until those boxes existed; the words fix_sentence renders did not change.
@@ -141,9 +143,13 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the two secondary analyses (piece 5, §5.3). Ordinary tuple entries now that a place may be any
     # section's tab title: the label is the row the panel builds, so label(key) keeps a box and its
     # hint sentence from drifting apart. The Seed rows arrive with the panels (Tasks 25, 26).
+    # The two labels are the words the rows SHOW (the whole-piece review's N23): the raw forms
+    # "ensemble_M" and "freqs_per_batch" rendered as "M_ensemble" and "freqs / batch", so the fix
+    # sentence named a box the tab does not show. pretty_gui still renders "M_ensemble" with its
+    # subscript; no QSettings key is a label (each panel writes its own literal key names).
     "n_freqs": (("FDT analysis", "Sweep study cross-validation"), "n_freqs"),
-    "ensemble_m": (("FDT analysis", "Sweep study cross-validation"), "ensemble_M"),
-    "freqs_per_batch": (("FDT analysis", "Sweep study cross-validation"), "freqs_per_batch"),
+    "ensemble_m": (("FDT analysis", "Sweep study cross-validation"), "M_ensemble"),
+    "freqs_per_batch": (("FDT analysis", "Sweep study cross-validation"), "freqs / batch"),
     "f0": (("FDT analysis", "Sweep study cross-validation", "NWK → Hopf reduction map"),
            "F0 (ND forcing amplitude)"),
     "preset": ("Sweep study cross-validation", "Preset"),

@@ -134,18 +134,28 @@ _NONNEGATIVE_FORCING = _POSITIVE_FORCING | {"amp"}
 
 def forcing_value_problem(var_name: str, pname: str, value: float) -> "str | None":
     """The sentence refusing a forcing value at or below 0 where ``_POSITIVE_FORCING`` needs it
-    positive, or None when the value is acceptable. ``value`` must already be finite.
+    positive, or below 0 for the amplitude, or None when the value is acceptable. ``value`` must
+    already be finite.
 
     PUBLIC, and a sentence rather than a raise, because it has two callers that must say the same
     thing: ``_check_schema`` raises it as a ValueError, and the model builder's Validate raises it
     as a Refusal keyed to the forcing box -- before this, Validate passed the value and only Save
     refused it, on the status line (piece 5, Task 35). One rule, one wording.
+
+    The amplitude is a magnitude (the comment above ``_POSITIVE_FORCING``) and its saved box is
+    floored at 0 (``_forcing_bounds``), so a negative one saved a box that excluded its own value; it
+    is refused at Validate, at Save and at load (the whole-piece review's N18, the owner's ruling
+    R-F5). 0 stays legal: "no drive".
     """
     if pname in _POSITIVE_FORCING and value <= 0:
         why = ("A drive frequency of 0 is no drive at all -- set this variable's forcing to None "
                "instead." if pname == "freq" else
                "A time constant of 0 divides by zero inside the exponential drive.")
         return f"Variable '{var_name}': forcing {pname} must be > 0 (got {value:g}). {why}"
+    if pname == "amp" and value < 0:
+        return (f"Variable '{var_name}': forcing amp must be >= 0 (got {value:g}). An amplitude is a "
+                f"magnitude: a drive's sign is set by its phase (or, for an exponential drive, by its "
+                f"sign), and the amplitude's saved box starts at 0.")
     return None
 
 

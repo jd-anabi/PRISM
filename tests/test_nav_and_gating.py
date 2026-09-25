@@ -1582,6 +1582,12 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "Set it in the 'Model' box on the Config or FDT analysis or Live simulation tab.")
     assert gui_fields.fix_sentence("n_freqs") == (
         "Set it in the 'n_freqs' box on the FDT analysis or Sweep study cross-validation tab.")
+    # the whole-piece review's N23: the label is the word the row SHOWS, and the row renders it
+    assert gui_fields.fix_sentence("ensemble_m") == (
+        "Set it in the 'M_ensemble' box on the FDT analysis or Sweep study cross-validation tab.")
+    assert labels.pretty_gui(gui_fields.label("ensemble_m")) == "M<sub>ensemble</sub>"
+    assert gui_fields.label("freqs_per_batch") == "freqs / batch" == \
+        labels.pretty_gui(gui_fields.label("freqs_per_batch"))
     assert gui_fields.label("s_grid") == "S grid  (T_a/T = 1)", \
         "a box on a SCREEN still has a label, so a row and its hint cannot drift apart (§5.2)"
     # the screen noun, exercised on a place no key claims yet: Task 22's model-builder keys will.
@@ -1857,6 +1863,21 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
         assert box.informativeText() == gui_fields.fix_sentence("f0"), typed
         assert "NWK → Hopf reduction map" in box.informativeText(), box.informativeText()
 
+    # (d) the whole-piece review's N16 (L630): a cell deleted after it was picked. The panel checks
+    #     the file itself, beside the F0 check (P19: make_reduction_config stays untouched), so it is
+    #     one yellow box naming the cell -- not a FileNotFoundError out of the parser in the red one,
+    #     the regression removing _config_error caused. The builder is never reached.
+    gone = tmp_path / "deleted_after_the_pick.txt"
+    reduction.cell_picker.selected_path = lambda: str(gone)
+    reduction.f0.setText("0.05")
+    monkeypatch.setattr(reduction, "_on_error", lambda *a, **k: pytest.fail("the red box opened"))
+    SHOWN.clear()
+    reduction._run()
+    assert len(SHOWN) == 1, [b.text() for b in SHOWN]
+    box = SHOWN[0]
+    assert box.windowTitle() == "Check your inputs" and "was not found" in box.text(), box.text()
+    assert box.informativeText() == gui_fields.fix_sentence("cell"), box.informativeText()
+
     # (d) the generic box is gone, and nothing under core/gui reaches for it
     assert not hasattr(BasePanel, "_config_error")
     gui_root = Path(sim_mod.__file__).resolve().parents[1]
@@ -2055,6 +2076,44 @@ def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
     assert len(list((tmp_path / "fdt").iterdir())) == 1, "the refused click left a second directory"
 
 
+@pytest.mark.parametrize("key", ["n_freqs", "ensemble_m", "freqs_per_batch", "f0"])
+@pytest.mark.parametrize("panel_name", ["fdt", "crossval"])
+def test_a_blank_knob_box_is_refused_as_blank_on_both_measurement_tabs(tmp_path, monkeypatch,
+                                                                       panel_name, key):
+    """The whole-piece review's N21 (FE5, T4, S5's click half). Both tabs read their four knob boxes
+    with value(), which turns a blank into 0: the FDT tab then said "must be at least 1; got 0" about
+    a value nobody typed, where the Reduction tab says the same key "is blank". And the CrossVal
+    builder reads None as "use the preset", so reading the boxes with value_or_none() alone -- the
+    "consistency" edit the grid rows invite -- would have run the preset's value in silence. The FDT
+    tab hands the builder the blank (value_or_none), and the CrossVal tab refuses the blank itself
+    before the builder (require_given): one yellow box, "is blank", the fix line naming the box, and
+    nothing dispatched or minted. The fix line is read through ``fix_sentence`` (ruling R-F11), never
+    a copy of the box's label."""
+    from PySide6.QtWidgets import QMessageBox
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.panels.crossval_panel import CrossValPanel
+    from core.gui.panels.fdt_panel import FdtPanel
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    monkeypatch.setattr(store, "create", lambda *a, **k: pytest.fail("a blank knob minted a record"))
+    with use_store(store):
+        panel = {"fdt": FdtPanel, "crossval": CrossValPanel}[panel_name]()
+        panel.dispatch = lambda *a, **k: pytest.fail("a blank knob box dispatched a run anyway")
+        assert panel.cell_picker.selected_path(), "the premise: a cell is selected"
+        getattr(panel, key).setText("")
+        SHOWN.clear()
+        panel._run()
+
+    assert len(SHOWN) == 1, [b.text() for b in SHOWN]
+    box = SHOWN[0]
+    assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+    assert "is blank" in box.text(), box.text()
+    assert box.informativeText() == gui_fields.fix_sentence(key), box.informativeText()
+
+
 @pytest.mark.parametrize("how", ["too_long", "two_lines"])
 def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
     """Fix round 1 (T25). The store does not judge a note's text -- ``ArtifactStore.set_note``'s
@@ -2100,7 +2159,6 @@ def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
     assert box.informativeText() == gui_fields.fix_sentence("note")
     assert "'Note'" in box.informativeText() and "FDT analysis" in box.informativeText()
     assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
-    assert not (tmp_path / "fdt").exists() or not any((tmp_path / "fdt").iterdir())
 
 
 def test_the_fdt_panel_names_the_record_its_run_wrote(tmp_path):
@@ -2247,14 +2305,19 @@ def test_a_taken_crossval_record_name_is_refused_at_the_click(tmp_path):
 
 @pytest.mark.parametrize("grid", ["s_grid", "t_grid"])
 @pytest.mark.parametrize("box", ["lo", "hi", "points"])
-def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, grid, box):
+def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, monkeypatch, grid, box):
     """Review Focus 3, carried from Task 8's review. The grid row used to read its three boxes with
     value(), which turns a blank into 0 -- and 0 is a legal END of a sweep, so no rule the builder
     could write refuses it: a blank min under a positive max arrived as (0.0, 1.5, n) and passed
     "min below max", running a sweep nobody typed (for the temperature grid, one starting below the
     bounds' own 0.05 floor). Each box is now read through value_or_none(), so a blank end reaches
     cli._check_grid as None and is refused as blank, and a blank count as fewer than 2 points --
-    either way the yellow box, the refusal naming THAT grid, and nothing dispatched or minted."""
+    either way the yellow box, the refusal naming THAT grid, and nothing dispatched or minted.
+
+    The whole-piece review's N20 (L684): a blank COUNT used to read "needs at least 2 points; got 0",
+    a typed 0 nobody typed, against the house rule that a blank is refused as a blank; and every blank
+    part is now named -- its minimum, its maximum or its point count. "Nothing minted" is asserted by
+    ``create`` failing the test: a folder check could not fail, because ``create`` writes nothing."""
     from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
@@ -2264,6 +2327,8 @@ def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, grid, bo
 
     qt_app()
     store = ArtifactStore(tmp_path)
+    monkeypatch.setattr(store, "create",
+                        lambda *a, **k: pytest.fail("a blank grid box still minted a record"))
     with use_store(store):
         panel = CrossValPanel()
         panel.dispatch = lambda *a, **k: pytest.fail("a blank grid box dispatched a run anyway")
@@ -2278,9 +2343,9 @@ def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, grid, bo
     assert shown.windowTitle() == "Check your inputs" and shown.icon() == QMessageBox.Warning
     what = describe(grid)
     assert shown.text().startswith(what[0].upper() + what[1:]), shown.text()
-    assert ("at least 2 points" if box == "points" else "is blank") in shown.text(), shown.text()
+    part = {"lo": "minimum", "hi": "maximum", "points": "point count"}[box]
+    assert f"its {part} is blank" in shown.text(), shown.text()
     assert shown.informativeText() == gui_fields.fix_sentence(grid)
-    assert not (tmp_path / "fdt").exists()
 
 
 def test_the_crossval_panel_fills_each_grid_in_ascending_order(tmp_path):
@@ -2367,7 +2432,6 @@ def test_a_crossval_record_note_is_judged_at_the_click(tmp_path, monkeypatch, ho
     assert "'Note'" in box.informativeText()
     assert "Sweep study cross-validation" in box.informativeText(), box.informativeText()
     assert box.detailedText() == "", "a refusal is not a crash and carries no traceback"
-    assert not (tmp_path / "fdt").exists() or not any((tmp_path / "fdt").iterdir())
 
 
 @pytest.mark.parametrize("s_refused", [False, True], ids=["both_finish", "s_measured_nothing"])
@@ -4839,6 +4903,49 @@ def test_a_comparison_from_either_screen_is_named_and_noted_and_a_taken_name_nam
     assert len([s for s in store.list("fdt") if s.study == "comparison"]) == 2
 
 
+def test_a_half_typed_number_is_refused_never_read_as_blank(tmp_path, monkeypatch):
+    """The whole-piece review's N22 (L839). A numeric box's validator accepts '-', '1e', '.' and '+'
+    as text still being typed, and value_or_none() reads each as None -- which each of these boxes
+    takes as "blank": the Slice at box then sliced at the MIDDLE of the shared range, a Seed box DREW
+    a seed, and the renormalise constant was refused as "blank" although the box was not. Text that
+    is not empty and does not parse is refused at the click, naming the box's setting: one yellow
+    box, and nothing dispatched or written. The two list rows' help names the picker by its row."""
+    from core.artifacts import ArtifactStore, use_store
+    from core.gui import fields as gui_fields
+    from core.gui.panels import crossval_panel as xv_mod
+    from core.gui.panels import fdt_panel as fdt_mod
+    from tests._fixtures import SHOWN, qt_app
+
+    qt_app()
+    store = ArtifactStore(tmp_path)
+    monkeypatch.setattr(store, "create", lambda *a, **k: pytest.fail("a half-typed box minted a record"))
+    with use_store(store):
+        fdt, xv = fdt_mod.FdtPanel(), xv_mod.CrossValPanel()
+        for p in (fdt, xv):
+            p.dispatch = lambda *a, **k: pytest.fail("a half-typed box dispatched anyway")
+
+        def refused(click, key, typed):
+            SHOWN.clear()
+            click()
+            assert len(SHOWN) == 1, (key, [b.text() for b in SHOWN])
+            box = SHOWN[0]
+            assert box.windowTitle() == "Check your inputs", box.windowTitle()
+            assert repr(typed) in box.text(), box.text()
+            assert box.informativeText() == gui_fields.fix_sentence(key), box.informativeText()
+
+        xv.slice_at.setText("-")
+        refused(xv._compare, "slice_at", "-")
+        fdt.compare_mode.setCurrentText("renormalise")
+        fdt.renorm_prefactor.setText("1e")
+        refused(fdt._compare, "prefactor", "1e")
+        for panel in (fdt, xv):
+            panel.seed.setText("-")
+            refused(panel._run, "seed", "-")
+
+    assert "'Saved run'" in fdt_mod.HELP["compare_list"] and "above" in fdt_mod.HELP["compare_list"]
+    assert "'Saved sweep'" in xv_mod.HELP["compare_list"]
+
+
 def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_path):
     """Spec §7.1 and V3. Every refusal a comparison can make from what it was given is the STAGE's,
     raised on the worker -- the panel checks nothing -- and it must still reach the yellow "Check your
@@ -4858,8 +4965,11 @@ def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_
     from tests._fixtures import SHOWN, build_fdt_record, compare_preflight_refusals, qt_app
 
     fixes = {
-        "compare_records": ("Add the runs to compare to the comparison list on the FDT analysis or "
-                            "the Sweep study cross-validation tab."),
+        # the whole-piece review's N22: the list quoted by its own row, and "Choose" -- the fix
+        # for "at most 2" or "named twice" is a removal, never an "Add"
+        "compare_records": ("Choose the records in the 'Runs to compare' list on the FDT analysis "
+                            "tab, or in the 'Sweeps to compare' list on the Sweep study "
+                            "cross-validation tab."),
         "prefactor": "Set it in the 'Normalisation constant' box on the FDT analysis tab.",
         "slice_at": "Set it in the 'Slice at' box on the Sweep study cross-validation tab.",
     }
@@ -4892,7 +5002,7 @@ def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_
             SHOWN.clear()
             panel.btn_compare.click()
             _wait_for_run(app, panel, limit=60.0)
-            assert SHOWN, f"{label}: the refusal reached no box"
+            assert len(SHOWN) == 1, f"{label}: {len(SHOWN)} boxes, not one"
             box = SHOWN[-1]
             assert box.windowTitle() == "Check your inputs", (label, box.windowTitle(), box.text())
             assert words in box.text(), (label, box.text())

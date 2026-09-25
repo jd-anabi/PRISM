@@ -2,6 +2,8 @@
 from PySide6.QtGui import QDoubleValidator, QIntValidator
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QLineEdit, QPushButton, QWidget
 
+from core.refusals import describe, refuse
+
 from ..design import FIELD_MIN_W, PATH_FIELD_MIN_W
 
 # These classes set a validator and, now, a MINIMUM WIDTH. Qt's default QFormLayout policy on Windows
@@ -37,6 +39,22 @@ class FloatField(QLineEdit):
             return float(self.text().strip())
         except (TypeError, ValueError):
             return None
+
+
+def number_or_blank(field, key: str):
+    """``field.value_or_none()`` -- except that text which is NOT blank and does not parse is refused
+    under ``key`` rather than read as blank.
+
+    A numeric validator lets '-', '1e', '.' and '+' stand in a box as text still being typed, and
+    value_or_none() reads each as None. For the boxes this serves, None MEANS something -- the middle
+    of the range two sweeps share, "draw a seed", "the constant is blank" -- so a half-typed number
+    silently became that (the whole-piece review's N22). Only a truly empty box is blank."""
+    value = field.value_or_none()
+    text = field.text().strip()
+    if value is None and text:
+        what = describe(key)
+        refuse(key, f"{what[0].upper()}{what[1:]} must be a number; got {text!r}.")
+    return value
 
 
 class IntField(QLineEdit):

@@ -462,16 +462,19 @@ def _check_grid(key: str, spec: tuple) -> tuple:
     Checked as a WHOLE, because an end is only wrong against the other one. A blank box must
     therefore arrive as None, never as 0: 0 is a legal sweep end, so a blank read as 0 under a
     positive max passes "min below max" as a sweep nobody typed. The window's grid row reads its
-    boxes through value_or_none (Task 26's ruling), so a blank end is refused here as blank and a
-    blank count as fewer than 2 points.
+    boxes through value_or_none (Task 26's ruling), so each blank part is refused here AS blank,
+    naming which one -- its minimum, its maximum or its point count (the whole-piece review's N20: a
+    blank count used to read "needs at least 2 points; got 0", a zero nobody typed).
     """
     lo, hi, n = spec
-    if n is None:
-        n = 0
+    what = describe(key)
+    what = what[0].upper() + what[1:]
+    for part, value in (("minimum", lo), ("maximum", hi), ("point count", n)):
+        if value is None:
+            refuse(key, f"{what} is incomplete: its {part} is blank.")
     n = int(n)
     if n < 2:
-        what = describe(key)
-        refuse(key, f"{what[0].upper()}{what[1:]} needs at least 2 points; got {n}.")
+        refuse(key, f"{what} needs at least 2 points; got {n}.")
     lo, hi = require_below(key, lo, hi)
     return lo, hi, n
 

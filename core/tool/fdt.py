@@ -37,7 +37,8 @@ unless --skip-sanity; --no-production stops after them.
 CROSSVAL_EPILOG = """\
 Two sweeps probe FDT restoration on the Nadrowski model (the model is fixed): the S sweep holds
 T_a/T = 1 and varies S (FDT restored as S -> 0), the T sweep holds S = 0 and varies T_a/T (restored
-as T_a/T -> 1). Each grid is MIN MAX N, and N must be a whole number of at least 2.
+as T_a/T -> 1). Each grid is MIN MAX N: N must be a whole number of at least 2, MIN must be below MAX,
+and the T_a/T grid's MIN may not be below 0 (a negative temperature ratio is unphysical).
 
 --preset drives the resolution levers the flags do not expose (freq_bounds, T_obs_periods,
 psd_T_obs_nd) and supplies the defaults for --n-freqs and --ensemble-m. Each sweep writes its OWN

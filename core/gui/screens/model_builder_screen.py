@@ -459,6 +459,14 @@ class ModelBuilderScreen(QWidget):
             # would train in a coordinate the user did not pick, silently. model_store._check_schema
             # re-enforces this.
             if e["box"] == "log" and e["lo"] <= 0:
+                if self._param_fields[p].auto.isChecked():
+                    # The automatic box starts at or below 0 for EVERY value (nd_bounds pads by at
+                    # least |v|), so "raise the minimum" named a box 'auto' has disabled; the fix is to
+                    # leave the automatic bounds first (the whole-piece review's N19).
+                    refuse("param_min", f"Parameter '{p}': a log coordinate needs a minimum above 0, "
+                                        f"and its automatic bounds always start at or below 0 (here "
+                                        f"{e['lo']:g}); turn the automatic bounds off and raise the "
+                                        f"minimum, or set this parameter back to 'linear'.")
                 refuse("param_min", f"Parameter '{p}': a log coordinate needs a minimum above 0 "
                                     f"(got {e['lo']:g}); raise the minimum, or set this parameter "
                                     f"back to 'linear'.")

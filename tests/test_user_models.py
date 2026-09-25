@@ -598,6 +598,34 @@ def test_builder_refuses_a_log_box_with_a_non_positive_minimum():
     assert "log coordinate needs a minimum above 0" in ei.value.message, ei.value.message
 
 
+def test_a_log_box_under_automatic_bounds_is_refused_with_a_fix_that_can_be_done():
+    """The whole-piece review's N19 (L641). The automatic box is ``nd_bounds(v) = (v - pad, v + pad)``
+    with ``pad = max(|v|, 1)``, so its minimum is at or below 0 for EVERY value: a log parameter under
+    'auto' is always refused. The sentence said "raise the minimum" -- and the fix line under it
+    points at the 'min' box, which 'auto' has just disabled. Under 'auto' the sentence says to turn
+    the automatic bounds off first (or go back to linear)."""
+    from core.gui.screens.model_builder_screen import ModelBuilderScreen
+    from core.refusals import Refusal
+    qt_app()
+    mb = ModelBuilderScreen()
+    mb.vars_edit.setText("x")
+    mb._set_variables()
+    mb._var_rows[0].drift.setText("-k*x")
+    mb._var_rows[0].noise.setText("d0")
+    mb.name_edit.setText("UMTESTLOGAUTO")
+    mb._detect_params()
+    mb._param_fields["d0"].set_spec(0.01, 0.001, 0.1)
+    row = mb._param_fields["k"]
+    row.set_spec(5.0, None, None, "log")                           # automatic bounds: (0, 10)
+    assert row.auto.isChecked() and not row.lo.isEnabled(), "the premise: the min box is disabled"
+    with pytest.raises(Refusal) as ei:
+        mb._validate()
+    msg = ei.value.message
+    assert ei.value.field == "param_min", ei.value.field
+    assert "automatic bounds" in msg and "turn the automatic bounds off" in msg, msg
+    assert "'linear'" in msg, msg
+
+
 def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
     """Spec §1.2, §5.1, §5.3. The model builder is the fifth surface of piece 5's set, and the only
     one that is a plain QWidget rather than a BasePanel -- it has no ``_refusal`` and no log pane --
@@ -736,6 +764,61 @@ def test_the_builder_refuses_at_validate_what_save_would_refuse():
         _refused("t_scale", "t_scale must be below")
     finally:
         _remove_user_model(name)
+
+
+def test_a_negative_drive_amplitude_is_refused_at_validate_at_save_and_at_load(tmp_path):
+    """The whole-piece review's N18 (L777), and the owner's ruling R-F5. A drive amplitude is a
+    magnitude -- its sign is the phase's (or, for an exponential drive, its ``sign``'s) -- and its
+    saved box is floored at 0 (``_forcing_bounds``), so amp = -2 saved a (0, 0) box that excluded its
+    own value, and Validate and Save both passed it. ``forcing_value_problem`` refuses it now, so the
+    builder's Validate and Save show the yellow box naming the forcing box and nothing is written,
+    and a saved JSON carrying one is refused at load (the shipped SHM and SHM2 carry no forcing). A
+    zero amplitude is still a legitimate "no drive"."""
+    import json
+    from PySide6.QtWidgets import QMessageBox
+    from core.gui import fields as gui_fields
+    from core.gui.screens.model_builder_screen import _FORCE_KINDS, ModelBuilderScreen
+    from tests._fixtures import SHOWN
+
+    assert model_store.forcing_value_problem("x", "amp", 0.0) is None, "amp = 0 is 'no drive'"
+    said = model_store.forcing_value_problem("x", "amp", -0.5)
+    assert said and said.startswith("Variable 'x': forcing amp must be >= 0 (got -0.5)"), said
+
+    qt_app()
+    name = "UMTESTNEGAMP"
+    try:
+        mb = ModelBuilderScreen()
+        mb.name_edit.setText(name)
+        mb.vars_edit.setText("x")
+        mb._set_variables()
+        row = mb._var_rows[0]
+        row.drift.setText("-k*x")
+        row.noise.setText("d0")
+        mb._detect_params()
+        mb._param_fields["k"].set_spec(1.0, 0.5, 1.5)
+        mb._param_fields["d0"].set_spec(0.01, 0.001, 0.1)
+        row.force_kind.setCurrentIndex([k for k, _ in _FORCE_KINDS].index("sin"))
+        for pname, val in (("amp", "-0.5"), ("freq", "10.0"), ("phase", "0.0"), ("offset", "0.0")):
+            row.forcing_fields()[pname].setText(val)
+        for click in (mb._validate_clicked, mb._save):
+            SHOWN.clear()
+            click()
+            assert len(SHOWN) == 1, f"{click.__name__}: {mb.status.text()}"
+            box = SHOWN[0]
+            assert box.windowTitle() == "Check your inputs" and box.icon() == QMessageBox.Warning
+            assert "forcing amp must be >= 0" in box.text(), box.text()
+            assert box.informativeText() == gui_fields.fix_sentence("forcing_value")
+        assert not (config.MODELS_PATH / f"{name}.json").exists(), "a refused model was saved"
+    finally:
+        _remove_user_model(name)
+
+    doc = json.loads((config.MODELS_PATH / "SHM.json").read_text(encoding="utf-8"))
+    doc["variables"][0]["forcing"] = {"kind": "sin", "params": {"amp": -0.5, "freq": 10.0,
+                                                                "phase": 0.0, "offset": 0.0}}
+    saved = tmp_path / "SHM.json"                  # a copy: nothing under Resources/ is written
+    saved.write_text(json.dumps(doc), encoding="utf-8")
+    with pytest.raises(ValueError, match="forcing amp must be >= 0"):
+        model_store.load_user_model(saved)
 
 
 def test_a_model_round_trips_through_the_builder_and_back():

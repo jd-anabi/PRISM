@@ -132,6 +132,26 @@ def test_simulate_plan_stream_matches_generate_observations_arithmetic():
     x_scale_gt = cfg.rescale_params["x_scale"][0]
     assert abs(plan.x_scale - x_scale_gt) <= 1e-5 * abs(x_scale_gt)
 
+def test_a_spontaneous_built_in_cell_streams_with_no_drive():
+    """The whole-piece review's N17 (L650), taken by the owner's ruling (R-F4). A built-in cell with
+    no Forcing section -- the shipped ``nadrowski/master_spont.txt`` -- has no forcing parameters, and
+    the Live simulation tab built its drive with the sinusoid builder regardless: ``KeyError: Forcing
+    parameter 'amp' missing`` in the red box, on a shipped tab and a shipped cell. With no forcing
+    parameter the drive is ZERO, in the sinusoid builder's own (batch, channels, T) shape, and the
+    stream runs: every frame it emits holds finite samples. (This departs from spec §5.6's bound;
+    Task 41 records the §12 row and strikes the §1.3 one.)"""
+    import numpy as np
+    from core.config import CELL_PATH
+    from core.gui.panels.simulate_runner import build_stream_config, plan_stream, run_simulation_stream
+
+    cfg = build_stream_config("NADROWSKI", str(CELL_PATH / "nadrowski" / "master_spont.txt"))
+    assert plan_stream(cfg, 0.02).forcing_idx == {}, "the premise: a cell with no forcing parameter"
+    frames = []
+    run_simulation_stream(cfg, 0.02, frame_steps=2000, fps=0, emit_chunk=frames.append)
+    assert frames, "the stream emitted nothing"
+    assert all(f.shape[1] == 2 and np.isfinite(f).all() for f in frames), [f.shape for f in frames]
+
+
 def test_simulate_dispatch_streams_chunks_and_a_cancel_is_not_an_error():
     """dispatch(provide_stream=True) must inject the chunk emitter + stop flag, deliver frames to
     on_chunk, and a cancel of a streaming run must land as `cancelled` (not `error`)."""

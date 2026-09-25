@@ -25,7 +25,7 @@ from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker, StorePicker
 from ..widgets.compare_list import CompareList
 from ..widgets.help_badge import add_help_row, with_badge
-from ..widgets.labeled_inputs import FloatField, IntField
+from ..widgets.labeled_inputs import FloatField, IntField, number_or_blank
 from ..widgets.forms import make_form
 from .. import fields as gui_fields
 
@@ -49,8 +49,9 @@ HELP = {
     "record_note": "Kept with the record and shown in the Artifacts browser.",
     "record": "An earlier single-cell run from the artifact store. Selecting one shows its cell, its "
               "settings, its seed and its notices, and re-opens its figures.",
-    "compare_list": "The saved runs a comparison draws. Pick one in the record picker above and press "
-                    "Add selected; the picker holds one at a time, so the list is how several are chosen.",
+    "compare_list": "The saved runs a comparison draws. Pick one in the 'Saved run' picker above and "
+                    "press Add selected; the picker holds one at a time, so the list is how several "
+                    "are chosen.",
     "compare_mode": "cells: each run's ratio curve on one axis, labelled by cell. repeats: several "
                     "runs of one cell, with the spread across them as a band. renormalise: one run's "
                     "ratio recomputed with the constant below, drawn against the original.",
@@ -215,22 +216,24 @@ class FdtPanel(BasePanel):
         return box
 
     def _compare(self):
-        """Dispatch one comparison, under the name and the note typed for it. The NOTE is judged here,
-        at the click, because the store does not judge it (ArtifactStore.set_note): every front end
-        runs require_note. Everything else is the stage's: the arity, the study, the unfinished-record
-        and the taken-name refusals belong to it (one wording for both front ends), and a Refusal from
-        the worker reaches the yellow box through BasePanel._on_error."""
+        """Dispatch one comparison, under the name and the note typed for it. Two things are judged
+        here, at the click: the NOTE, because the store does not judge it (ArtifactStore.set_note) and
+        every front end runs require_note, and a half-typed constant, which only this box can tell from
+        a blank (N22). Everything else is the stage's: the arity, the study, the unfinished-record and
+        the taken-name refusals belong to it (one wording for both front ends), and a Refusal from the
+        worker reaches the yellow box through BasePanel._on_error."""
+        mode = self.compare_mode.currentText()
+        options = {}
         try:
             note = require_note("note", self.compare_note.text())
+            if mode == "renormalise":
+                # Never value(): a blank box returns 0.0 from it, and 0 is refused with a sentence
+                # about a value nobody typed instead of "it is blank". A blank travels as None and the
+                # stage refuses it as blank; half-typed text ('1e') is refused here (N22).
+                options["prefactor"] = number_or_blank(self.renorm_prefactor, "prefactor")
         except Refusal as e:
             self._refusal(e)
             return
-        mode = self.compare_mode.currentText()
-        options = {}
-        if mode == "renormalise":
-            # value_or_none, never value(): a blank box returns 0.0 from value(), and 0 is refused
-            # with a sentence about a value nobody typed instead of "it is blank".
-            options["prefactor"] = self.renorm_prefactor.value_or_none()
         self.dispatch(compare, mode, self.compare_list.ids(), provide_fig_sink=True,
                       on_result=self._on_comparison, name=self.compare_name.text().strip(),
                       note=note, **options)
@@ -274,16 +277,19 @@ class FdtPanel(BasePanel):
         # fdt_support's own sentence as field "model", which the Refusal arm shows in the yellow box.
         # The "backstop" that stood here only logged that sentence and returned: a second, boxless path.
 
-        # The other boxes use value(), not value_or_none(): a blank box reads as 0 and the BUILDER
-        # refuses 0 by name (T10, spec §3.3), which is the one wording both front ends inherit. The
-        # seed is the exception -- 0 is a legal seed, so a blank must stay blank and mean "draw one"
-        # (E7), which only value_or_none() can tell apart from a typed 0.
-        seed = self.seed.value_or_none()
         try:
+            # Every box through value_or_none(): a blank reaches the builder as None and is refused
+            # AS BLANK, where value() turned it into a 0 the builder refused as "got 0" -- a value
+            # nobody typed (the whole-piece review's N21; the Reduction tab already said "is blank").
+            # The seed's blank means "draw one and record it" (E7), so half-typed text there ('-')
+            # is refused rather than read as blank (number_or_blank, N22). It is read ONCE and the
+            # same value goes to the builder, the run and the first body.
+            seed = number_or_blank(self.seed, "seed")
             cfg = cli.make_fdt_config(
                 model, registry.state_dep_drift(model), cell,
-                n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
-                freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value(), seed=seed)
+                n_freqs=self.n_freqs.value_or_none(), ensemble_M=self.ensemble_m.value_or_none(),
+                freqs_per_batch=self.freqs_per_batch.value_or_none(), F0=self.f0.value_or_none(),
+                seed=seed)
             # THE FRONT END CREATES, THE STAGE ENTERS (spec §1.2). create() mints the id and claims
             # the name -- assert_name_free runs here, before a single trajectory is integrated -- and
             # fills writer.dir WITHOUT creating it; run_fdt does `with writer:` on the worker thread,

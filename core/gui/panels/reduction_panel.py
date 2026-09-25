@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel, QPushButton
 
 from core import cli, config
 from core.config import CELL_PATH
-from core.refusals import Refusal, require_positive
+from core.refusals import Refusal, require_file, require_positive
 from core.Reduction.sweep import run_reduction_map
 
 from .base_panel import BasePanel
@@ -71,6 +71,11 @@ class ReductionPanel(BasePanel):
             # The box FIRST, through value_or_none: value() reads a blank box as 0 and the builder
             # takes F0 as given, so a blank used to reach the f_max sweep as a zero drive (F15).
             F0 = require_positive("f0", self.f0.value_or_none())
+            # The cell as a FILE, here beside the F0 check -- make_reduction_config stays untouched
+            # (P19) -- so a cell deleted after it was picked is the yellow box naming the cell, not a
+            # FileNotFoundError out of the parser in the red one (the whole-piece review's N16: a
+            # regression this piece caused when it retired _config_error).
+            require_file("cell", cell, "cell")
             cfg = cli.make_reduction_config(cell, F0=F0)
         except Refusal as e:                         # the F0 box, or a cell refusal: the yellow box
             self._refusal(e)

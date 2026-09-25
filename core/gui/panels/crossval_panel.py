@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QComboBox, QFormLayout, QGroupBox, QHBoxLayout, Q
 
 from core import cli
 from core.config import CELL_PATH
-from core.refusals import Refusal, require_note
+from core.refusals import Refusal, require_given, require_note
 from core.FDT.cross_validation import run_param_study_cli
 from core.FDT.compare import compare
 from core.artifacts import default_store
@@ -25,7 +25,7 @@ from .. import settings
 from ..widgets.artifact_picker import ArtifactPicker, StorePicker
 from ..widgets.compare_list import CompareList
 from ..widgets.help_badge import add_help_row
-from ..widgets.labeled_inputs import FloatField, IntField
+from ..widgets.labeled_inputs import FloatField, IntField, number_or_blank
 from ..widgets.field_row import LabeledFieldRow
 from ..widgets.forms import make_form
 from .. import fields as gui_fields
@@ -50,8 +50,8 @@ HELP = {
     "record_note": "Kept with both records and shown in the Artifacts browser.",
     "record": "An earlier sweep from the artifact store. Selecting one shows its cell, its settings, "
               "its seed and its notices, and re-opens its figures.",
-    "compare_list": "The saved sweep records a comparison draws. Pick one in the record picker above "
-                    "and press Add selected; the picker holds one at a time.",
+    "compare_list": "The saved sweep records a comparison draws. Pick one in the 'Saved sweep' picker "
+                    "above and press Add selected; the picker holds one at a time.",
     "slice_at": "The operating point to slice both sweeps at. Blank means the middle of the range the "
                 "two of them share.",
     "compare_name": "A name for the record the comparison writes. A name already taken is refused. "
@@ -201,17 +201,19 @@ class CrossValPanel(BasePanel):
 
     def _compare(self):
         """Dispatch the sweeps comparison, under the name and the note typed for it. The NOTE is
-        judged at the click (every front end runs require_note; the store does not). Everything else
-        is the stage's: a slice point outside the range the sweeps share, two sweeps of different
-        parameters, an unfinished record and a taken name are its refusals, and reach the yellow box
-        through BasePanel._on_error."""
+        judged at the click (every front end runs require_note; the store does not), and so is a
+        half-typed slice point (N22). Everything else is the stage's: a slice point outside the range
+        the sweeps share, two sweeps of different parameters, an unfinished record and a taken name
+        are its refusals, and reach the yellow box through BasePanel._on_error."""
+        options = {}
         try:
             note = require_note("note", self.compare_note.text())
+            # A blank slice point means the middle of the shared range; half-typed text ('-') is not
+            # blank, and is refused rather than sliced at the middle in silence (N22).
+            at = number_or_blank(self.slice_at, "slice_at")
         except Refusal as e:
             self._refusal(e)
             return
-        options = {}
-        at = self.slice_at.value_or_none()
         if at is not None:
             options["at"] = at
         self.dispatch(compare, "sweeps", self.compare_list.ids(), provide_fig_sink=True,
@@ -270,19 +272,26 @@ class CrossValPanel(BasePanel):
             return
         preset_name = self.preset_combo.currentText()
         preset = dict(cli.SWEEP_PRESETS[preset_name])
-        # The four knob boxes use value(): a blank reads as 0 and the BUILDER refuses 0 by name
-        # (T11), which is the one wording both front ends inherit. The grid rows and the seed cannot:
-        # 0 is a legal sweep END and a legal seed, so a blank must arrive as None -- a grid end is
-        # then refused as blank (spec_or_none), and a blank seed means "draw one" (E7). The seed is
-        # read ONCE and the same value goes to the builder, the run and both first bodies.
-        seed = self.seed.value_or_none()
         base = self.record_name.text().strip()
         try:
+            # The four knob boxes are refused HERE when blank (the whole-piece review's N21): the
+            # builder reads None as "use the preset", so a blank passed on would run the preset's
+            # value in silence, and one read through value() was refused as "got 0", a value nobody
+            # typed. The grid rows and the seed arrive as None when blank too -- 0 is a legal sweep END
+            # and a legal seed -- a grid end then refused as blank (spec_or_none), and a blank seed
+            # meaning "draw one" (E7), which is why half-typed seed text is refused rather than read
+            # as blank (number_or_blank, N22). The seed is read ONCE and the same value goes to the
+            # builder, the run and both first bodies.
+            knobs = {kw: require_given(key, box.value_or_none())
+                     for kw, key, box in (("n_freqs", "n_freqs", self.n_freqs),
+                                          ("ensemble_M", "ensemble_m", self.ensemble_m),
+                                          ("freqs_per_batch", "freqs_per_batch", self.freqs_per_batch),
+                                          ("F0", "f0", self.f0))}
+            seed = number_or_blank(self.seed, "seed")
             cfg, s_grid, temp_grid = cli.make_param_sweep_config(
                 cell, preset=preset, preset_name=preset_name,
                 s_spec=self.s_grid.spec_or_none(), t_spec=self.t_grid.spec_or_none(),
-                n_freqs=self.n_freqs.value(), ensemble_M=self.ensemble_m.value(),
-                freqs_per_batch=self.freqs_per_batch.value(), F0=self.f0.value(), seed=seed)
+                seed=seed, **knobs)
             # The NOTE is judged before either create, because the store does not judge it
             # (ArtifactStore.set_note): every front end runs require_note -- one line, at most
             # NOTE_MAX_CHARS -- so this box cannot put a note on both records that the Artifacts screen

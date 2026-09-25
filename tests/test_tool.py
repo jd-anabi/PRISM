@@ -1727,6 +1727,16 @@ def test_fdt_and_crossval_name_their_records_and_refuse_a_taken_name_before_any_
         assert "given --name, only once the unfinished record is removed" in note, note
 
 
+def test_the_crossval_help_states_every_rule_its_grids_are_held_to():
+    """The whole-piece review's N20 (L483). The epilog said each grid is MIN MAX N with N at least 2,
+    and not that MIN must be below MAX -- the rule the builder refuses a grid by -- nor, since M1,
+    that the T_a/T grid may not reach below 0. The help an operator reads states all three."""
+    from core.tool.fdt import CROSSVAL_EPILOG
+    text = " ".join(CROSSVAL_EPILOG.split())
+    assert "at least 2" in text and "MIN must be below MAX" in text, text
+    assert "T_a/T grid's MIN may not be below 0" in text, text
+
+
 def test_crossval_preset_choices_match_sweep_presets():
     """M5, fix round 1: ``--preset``'s hard-coded choices stay hard-coded -- importing ``core.cli``
     while building the parser would cost a torch import on plain ``--help`` -- so this pins the two
