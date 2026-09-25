@@ -20,6 +20,7 @@ from PySide6.QtCore import QObject, Qt, QTimer
 from PySide6.QtWidgets import QLabel
 
 from core.artifacts import default_store
+from core.FDT.cross_validation import SWEEP_LABELS
 
 # The ONE title formatter. The live watcher names a figure this way as it lands
 # (core/gui/plot_watcher.py), so a re-opened figure must be named by the same function or the same
@@ -83,9 +84,13 @@ def record_summary(m) -> str:
                      f"blank.")
     if points is not None and points.get("done") is not None and points.get("planned") is not None:
         failed, param = points.get("failed"), points.get("param")
-        lines.append(f"{points['done']} of {points['planned']} operating points measured"
-                     + (f" ({failed} failed)" if failed is not None else "")
-                     + (f", sweeping {param}" if param is not None else "") + ".")
+        # The sweep by the name both front ends give it ("the T_a/T sweep"), never its parameter key
+        # ("temp" appears on no screen; the whole-piece review's N9). An unknown key -- a hand-edited
+        # body -- is shown as it is rather than raising (the module docstring).
+        sweep = SWEEP_LABELS.get(param, param) if isinstance(param, str) else param
+        lines.append(f"{points['done']} of {points['planned']} operating points"
+                     + (f" of the {sweep} sweep" if sweep is not None else "") + " measured"
+                     + (f" ({failed} failed)" if failed is not None else "") + ".")
     notices = body.get("notices")
     if isinstance(notices, str):
         notices = [notices]

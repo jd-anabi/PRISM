@@ -2526,7 +2526,7 @@ def test_record_summary_reads_a_finished_sweep_and_survives_a_hand_edited_body()
               "notices": ["The ensemble is 16 trajectories: read the result as a quick look."]})
     text = record_summary(sweep)
     assert "seed 7" in text and "preset=exploratory" in text, text
-    assert "7 of 8 operating points measured (1 failed), sweeping s." in text, text
+    assert "7 of 8 operating points of the S sweep measured (1 failed)." in text, text
     assert "5 of 240 probe frequencies across the operating points it measured came back blank." \
         in text, text
     assert "Notice: The ensemble is 16 trajectories" in text and "did not finish" not in text, text
@@ -2966,7 +2966,7 @@ def test_record_summary_never_prints_none():
                               "offgrid": {"blanks": 5, "of": 240}}))
     assert "None" not in text, text
     assert "preset=exploratory" in text and "ensemble_M=256" in text, text
-    assert "8 of 8 operating points measured (0 failed), sweeping s." in text, text
+    assert "8 of 8 operating points of the S sweep measured (0 failed)." in text, text
 
     partial = record_summary(_m({"settings": {"n_freqs": 30, "F0": None}, "seed": 7,
                                  "complete": False, "notices": [None, "A real notice."],

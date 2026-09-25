@@ -152,8 +152,11 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
     :param plot_band: optional (lo, hi) in RAW omega units to restrict the x-range,
                       e.g. matching the production grid. Applied before normalization.
                       When the band holds no finite positive point of the spectrum -- wholly
-                      above its Nyquist top or below its first bin, exactly when the FDT run
-                      refuses -- the WHOLE finite spectrum is drawn with the band shaded instead.
+                      above its Nyquist top, below its first bin, or between two bins -- the WHOLE
+                      finite spectrum is drawn with the band shaded instead. That is the shape the
+                      FDT run's band refusals usually meet, not an exact match: a band straddling
+                      the first bin is refused beside the ordinary figure, and one between two bins
+                      is drawn this way and not refused.
 
     The figure never raises for want of data. It is drawn BEFORE the FDT run's band refusals,
     because it is the picture that diagnoses them (spec §3.6); a log axis cannot scale an empty data

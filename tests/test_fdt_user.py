@@ -95,6 +95,27 @@ def test_observable_noise_prefactor_builtins():
         raise AssertionError("missing HOPF param not reported")
 
 
+def test_a_built_in_cell_with_no_observable_noise_is_refused_as_the_cells():
+    """The whole-piece review's N8 (FE6). The user-model branch refuses a zero noise ("FDT requires a
+    stochastic observable", field ``cell``), but the Hopf and BP branches divided by the noise term
+    bare: a cell with ``sigma_x = 0`` or ``eta_hb = 0`` -- parse_cell does not range-check values on
+    the FDT path -- raised ZeroDivisionError at the very top of the run, a bug report in both front
+    ends. Any noise term that is not finite and positive is refused like the user model's, and the
+    arithmetic for a good one is unchanged (test_observable_noise_prefactor_builtins)."""
+    import pytest
+
+    for model, params, term in (("HOPF", {"sigma_x": 0.0}, "sigma_x"),
+                                ("HOPF", {"sigma_x": math.nan}, "sigma_x"),
+                                ("HOPF", {"sigma_x": -0.1}, "sigma_x"),
+                                ("BP", {"tau_hb": 1.0, "eta_hb": 0.0}, "eta_hb"),
+                                ("BP", {"tau_hb": 1.0, "eta_hb": math.inf}, "eta_hb")):
+        with pytest.raises(FDTModelError) as e:
+            observable_noise_prefactor(_FakeCfg(model, params))
+        assert e.value.field == "cell", (model, params, e.value.field)
+        assert term in str(e.value) and "FDT requires a stochastic observable" in str(e.value), \
+            str(e.value)
+
+
 def test_observable_noise_prefactor_user_additive():
     """An additive-noise user model's prefactor is 1/D_0 evaluated at the cell param values."""
     name = "FDTUADD"
@@ -1508,7 +1529,8 @@ def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monk
     assert rec.body["notices"] == fdt_pipeline.thin_notices(cfg) and len(rec.body["notices"]) == 1, \
         "ensemble_M=2 is below FDT_THIN_ENSEMBLE_M: T12's sentence is KEPT in the record (P51)"
     assert rec.body["offgrid"]["blanks"] == 0
-    assert rec.body["settings"]["confirm_production"] is True, "P70"
+    assert rec.body["settings"]["confirm_production"] is None, \
+        "skip_sanity was set, so confirm_production was never consulted (the whole-piece review's N6)"
     assert rec.body["grid"]["n_freqs"] == 5 and rec.body["grid"]["omega_0"] > 0.0
     assert rec.body["offgrid"]["of"] == 5
     assert rec.body["settings"]["ensemble_M"] == 2 and rec.body["settings"]["skip_sanity"] is True
@@ -1687,6 +1709,51 @@ def test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_l
     assert e.value.field == "cell", e.value.field
     assert not w2.dir.exists(), "a refusal before anything was spent left a folder behind"
     assert [s.name for s in store.list("fdt")] == ["band"]
+
+
+def test_run_fdt_refuses_a_seed_the_generator_cannot_take_before_its_record_opens(store, monkeypatch):
+    """The whole-piece review's N5 (L711). run_fdt resolved its seed with no rule of its own: -1 was
+    accepted and recorded, and 2**64 reached ``seeded`` inside the entered writer as a bare
+    ValueError, leaving an unfinished husk with no figures. Both builders and the sweep apply
+    ``require_seed``; run_fdt now applies it too, after the prefactor (ruling F10) and before the
+    writer is entered, so a refused seed opens no record."""
+    import pytest
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+    from core.refusals import Refusal
+
+    _stub_campaigns(monkeypatch)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    for bad in (-1, 2 ** 64):
+        w = store.create("fdt", cfg)
+        with pytest.raises(Refusal) as e:
+            fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=bad)
+        assert e.value.field == "seed", (bad, e.value.field)
+        assert not w.dir.exists(), f"seed={bad}: a refused seed opened a record"
+    assert store.list("fdt") == []
+
+
+def test_confirm_production_is_recorded_only_when_it_was_consulted(store, monkeypatch):
+    """The whole-piece review's N6 (C3). ``confirm_production`` is read only on the sanity branch, so
+    with ``skip_sanity`` the production run goes ahead whatever its value -- and the window can pass
+    False there (untick Proceed, then tick Skip: the disabled box keeps its state). The record then
+    paired ``skip_sanity: true, confirm_production: false`` with a production result, a setting the
+    run never obeyed and the tool's refusal of the same pair contradicts. It is recorded null when
+    it was not consulted, and as given when it was."""
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+    monkeypatch.setattr(fdt_pipeline, "run_all_sanity", lambda cfg, passive_plot_path=None: {})
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    for skip, confirm, recorded in ((True, False, None), (True, True, None), (False, True, True),
+                                    (False, False, False)):
+        rec = fdt_pipeline.run_fdt(cfg, skip_sanity=skip, confirm_production=confirm,
+                                   writer=store.create("fdt", cfg), seed=1)
+        s = rec.body["settings"]
+        assert (s["skip_sanity"], s["confirm_production"]) == (skip, recorded), (skip, confirm, s)
 
 
 def test_run_fdt_draws_and_records_a_seed_when_none_is_given(store, monkeypatch):
@@ -2017,6 +2084,8 @@ def test_a_study_writes_one_record_per_swept_parameter_under_one_seed(store, mon
     assert {r.manifest.config["seed"] for r in recs} == {77}, "the config block names the seed USED"
     assert [r.body["settings"]["sweep_grid"] for r in recs] == [[0.0, 0.1, 2], [1.0, 1.1, 2]], \
         "F40: [min, max, N] as spec §2.3 says; the array itself is in data.h5"
+    assert [r.body["settings"]["held"] for r in recs] == [{"temp": 1.0}, {"s": 0.0}], \
+        "what each sweep held fixed is a knob it resolved (spec §2.3; the whole-piece review's N7)"
     for r in recs:
         assert r.body["study"] == "sweep" and r.body["complete"] is True
         assert r.body["grid"] is None, "each point's grid is in data.h5, not in the body (§2.3)"
@@ -2538,7 +2607,7 @@ def test_an_all_failed_first_sweep_does_not_cost_the_second(store, monkeypatch, 
 
     assert sorted((w.category.__name__, " ".join(str(w.message).split()[:4])) for w in said) == [
         ("PreflightWarning", "The ensemble is 2"),
-        ("UserWarning", "s sweep: 2/2 operating")], [str(w.message) for w in said]
+        ("UserWarning", "The S sweep: 2/2")], [str(w.message) for w in said]
     assert [r.name for r in recs] == ["t_half"], "only the sweep that measured something returns"
     rows = {s.name: s for s in store.list("fdt")}
     assert rows["t_half"].finished, "the temperature sweep ran and finished"
@@ -2546,13 +2615,18 @@ def test_an_all_failed_first_sweep_does_not_cost_the_second(store, monkeypatch, 
     assert rows["s_half"].points_failed == 2
     errors = [r.getMessage() for r in caplog.records
               if r.levelname == "ERROR" and "measured nothing" in r.getMessage()]
-    assert len(errors) == 1 and errors[0].startswith("The s sweep measured nothing"), errors
+    assert len(errors) == 1 and errors[0].startswith("The S sweep measured nothing"), errors
 
 
 def test_a_study_whose_two_sweeps_both_measured_nothing_refuses(store, monkeypatch, caplog):
-    """P77's other half: only when BOTH sweeps measured nothing does the study refuse -- with the
-    activity sweep's refusal, after logging both at error (ruling F14/F45) -- and both unfinished
-    records stay on disk."""
+    """P77's other half: only when BOTH sweeps measured nothing does the study refuse, after logging
+    both at error (ruling F14/F45), and both unfinished records stay on disk.
+
+    ONE refusal naming BOTH grids (the whole-piece review's N9, FE8): it used to be the activity
+    sweep's own, so the yellow box and the tool's line sent the operator to the S grid alone although
+    the T_a/T grid had failed too. Keyed ``s_grid`` still -- a refusal names one field -- but its
+    sentence names both. And each sweep is called what both front ends call it, "the S sweep" and
+    "the T_a/T sweep", never by its parameter key ("the temp sweep" appeared on no screen)."""
     import logging
     import pytest
     from core import cli, config
@@ -2571,16 +2645,20 @@ def test_a_study_whose_two_sweeps_both_measured_nothing_refuses(store, monkeypat
             with pytest.raises(Refusal) as e:
                 cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=3)
     assert e.value.field == "s_grid"
+    msg = str(e.value)
+    assert msg.startswith("Both sweeps of master_spont.txt measured nothing"), msg
+    assert "the activity sweep grid and the temperature sweep grid" in msg, msg
     assert sorted((w.category.__name__, " ".join(str(w.message).split()[:4])) for w in said) == [
         ("PreflightWarning", "The ensemble is 2"),
-        ("UserWarning", "s sweep: 2/2 operating"),
-        ("UserWarning", "temp sweep: 2/2 operating")], [str(w.message) for w in said]
+        ("UserWarning", "The S sweep: 2/2"),
+        ("UserWarning", "The T_a/T sweep: 2/2")], [str(w.message) for w in said]
     rows = store.list("fdt")
     assert len(rows) == 2 and all(r.complete and not r.finished for r in rows)
     errors = [r.getMessage() for r in caplog.records
               if r.levelname == "ERROR" and "measured nothing" in r.getMessage()]
-    assert [m.split(";")[0] for m in errors] == ["The s sweep measured nothing",
-                                                 "The temp sweep measured nothing"], errors
+    assert [m.split(";")[0] for m in errors] == ["The S sweep measured nothing",
+                                                 "The T_a/T sweep measured nothing"], errors
+    assert all("temp sweep" not in m for m in [msg, *errors]), "a parameter key on the screen"
 
 
 def test_a_sweep_point_is_reproducible_from_the_seed_and_its_index(store, monkeypatch):

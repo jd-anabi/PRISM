@@ -32,7 +32,7 @@ from core.FDT.plots import (
 # cost this module nothing, where core.orchestrator (which re-exports the same PreflightWarning) or
 # core.diagnostics (the seeding context's first home) would load the SBI stack.
 from core.refusals import PreflightWarning, Refusal
-from core.rng import seeded
+from core.rng import require_seed, seeded
 from core.runs import RUN_BOUNDARY_FILES, public_entry
 
 # Banners and saved-plot paths are information; a failed sanity verdict is a warning (piece 3, V4).
@@ -276,7 +276,10 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool,
     # not first print a warning about how far to trust its result.
     prefactor = observable_noise_prefactor(cfg)
 
-    seed = _resolve_seed(seed, cfg)
+    # The builders' seed rule, here too (the whole-piece review's N5): a direct call handed -1 was
+    # accepted and recorded, and 2**64 reached ``seeded`` inside the entered writer as a bare
+    # ValueError, leaving an unfinished husk. After the prefactor (ruling F10), before the writer.
+    seed = require_seed(_resolve_seed(seed, cfg))
     cfg.seed = seed                                  # on the PRIVATE copy; recorded in the body below
     # 0. The settings too thin to trust (T12, E5): warned now and KEPT in body.notices (P51). HERE, in
     #    the decorated function itself: T12's pin reads inspect.getsource(fdt_pipeline.run_fdt), which
@@ -286,8 +289,12 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool,
     # study and the notices (T25's panel does). The stage owns `settings` and the RESOLVED seed.
     body = writer.body
     body.setdefault("study", "single")
+    # confirm_production is recorded only when it was CONSULTED (the whole-piece review's N6): with
+    # skip_sanity the production run goes ahead whatever its value, and the window can pass False
+    # there (a disabled box keeps its state), so recording it would pair "skip the checks" with "do
+    # not proceed" beside a production result.
     body["settings"] = _settings_block(cfg, skip_sanity=skip_sanity,
-                                       confirm_production=confirm_production)
+                                       confirm_production=None if skip_sanity else confirm_production)
     body["seed"] = seed
     # The config block too, and before the writer is entered so the FIRST manifest carries it:
     # store.create computed that block from the caller's object before any seed was resolved, so it
@@ -390,7 +397,10 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     # resolves (just below) and nothing measurable (below that, still before the drive) -- and E2
     # keeps the folder it is written into (spec §3.6, P22). It used to be written at the very end,
     # where neither refusal could ever reach it. plot_psd draws the whole spectrum with the band
-    # shaded when the band holds none of it, which is exactly when those refusals fire.
+    # shaded when the band holds no point of it -- the shape those refusals usually meet, but not
+    # exactly: a band straddling the first bin is refused beside the ordinary clipped figure, and a
+    # narrow band between two bins gets the whole spectrum and is not refused (the whole-piece
+    # review's N10).
     psd_path = writer.figure_path("Spontaneous PSD")
     plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
               save_path=psd_path,

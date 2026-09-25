@@ -123,15 +123,28 @@ def observable_noise_prefactor(cfg: FDTConfig) -> float:
     For Nadrowski this reduces to the historical n*beta. Raises FDTModelError when a model/cell cannot
     supply it (missing param, or a user model with multiplicative/zero observable noise)."""
     m, pd = cfg.model.lower(), cfg.params_dict
+
+    def _noise(name: str) -> float:
+        # The observable's noise term, refused unless finite and positive -- the user-model branch's
+        # rule and words below (the whole-piece review's N8). parse_cell does not range-check values
+        # on the FDT path, so a cell with sigma_x = 0 or eta_hb = 0 reached the division bare and
+        # raised ZeroDivisionError: a bug report in both front ends, for a cell value.
+        v = float(pd[name][0])
+        if not (math.isfinite(v) and v > 0.0):
+            raise FDTModelError(f"The {cfg.model} cell's observable noise {name} is {v:g}, not a "
+                                f"finite positive number; FDT requires a stochastic observable.",
+                                field="cell")
+        return v
+
     try:
         if m == "nadrowski":       # x_noise = sqrt(2/(n*beta)) -> D_x = 1/(n*beta); coupling 1
             return float(pd["n"][0] * pd["beta"][0])
         if m == "hopf":            # x_noise = sigma_x -> D_x = sigma_x^2/2; coupling 1
-            return float(2.0 / pd["sigma_x"][0] ** 2)
+            return float(2.0 / _noise("sigma_x") ** 2)
         if m == "bp":              # EXPERIMENTAL: drive enters as force/tau_hb (coupling 1/tau_hb),
             # x_noise = eta_hb/tau_hb -> D_x = (eta_hb/tau_hb)^2/2, so prefactor = 2*tau_hb/eta_hb^2.
             # No passive baseline exists to adjudicate the magnitude -- treat BP numbers as unverified.
-            return float(2.0 * pd["tau_hb"][0] / pd["eta_hb"][0] ** 2)
+            return float(2.0 * pd["tau_hb"][0] / _noise("eta_hb") ** 2)
     except KeyError as e:
         raise FDTModelError(f"The {cfg.model} cell is missing the FDT parameter {e}.",
                             field="cell") from e

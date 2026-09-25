@@ -1595,15 +1595,52 @@ def test_a_seed_the_generator_cannot_take_is_refused_naming_the_flag(tool_env, c
                                     "--t-grid", "1", "1.1", "2"])):
         capsys.readouterr()
         assert main([*argv, "--seed", "18446744073709551616"]) == 1, cmd
-        err = capsys.readouterr().err
+        captured = capsys.readouterr()
+        err = captured.err
         lines = [ln for ln in err.splitlines() if ln.startswith(f"prism {cmd}: refused:")]
         assert len(lines) == 1, err
         assert "must be at most 18446744073709551615" in lines[0], lines[0]
         assert lines[0].endswith("(--seed)"), lines[0]
         assert "Overflow" not in err and "Traceback" not in err, err
+        # The folder snapshot below cannot fail on its own -- create() writes nothing, so a refusal
+        # from run_fdt's own seed rule (after the record is created and announced) would leave the
+        # same listing. The announcement is what tells them apart (the whole-piece review's N5, T5):
+        # the BUILDER refuses, before any record is created or named.
+        assert "writing record" not in captured.out, captured.out
 
     after = sorted(kind_dir.iterdir()) if kind_dir.is_dir() else []
     assert after == before, "a refused seed opened a record"
+
+
+def test_a_hopf_cell_with_no_observable_noise_is_one_refusal_line_naming_the_cell(tool_env, tmp_path,
+                                                                                 capsys):
+    """The whole-piece review's N8 (FE6), end to end. A Hopf cell whose ``sigma_x`` is 0 reached the
+    normalisation's division bare: a ZeroDivisionError traceback and ``*** FAILED ***``. It is one
+    ``refused:`` line now, ending in ``(--cell)``, and no record is opened -- the normalisation is
+    resolved before the writer is entered.
+
+    The cell is a COPY in a temp folder named ``hopf`` (its model comes from the folder, and its
+    bounds resolve from the real Bounds/hopf/ by name, read-only): nothing under Resources/ is
+    written. The FDT settings are the smallest the builder takes; nothing is simulated."""
+    _bounds, _cell, root = tool_env
+    src = (config.CELL_PATH / "hopf" / "cell.txt").read_text(encoding="utf-8")
+    assert "sigma_x = 0.005" in src, "the premise: the shipped cell's noise term"
+    cell = tmp_path / "hopf" / "cell.txt"
+    cell.parent.mkdir()
+    cell.write_text(src.replace("sigma_x = 0.005", "sigma_x = 0"), encoding="utf-8")
+    kind_dir = Path(root) / "fdt"
+    before = sorted(kind_dir.iterdir()) if kind_dir.is_dir() else []
+
+    capsys.readouterr()
+    assert main(["fdt", "--cell", str(cell), "--skip-sanity", "--n-freqs", "2",
+                 "--ensemble-m", "8"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism fdt: refused:")]
+    assert len(lines) == 1, err
+    assert "sigma_x" in lines[0] and "FDT requires a stochastic observable" in lines[0], lines[0]
+    assert lines[0].endswith("(--cell)"), lines[0]
+    assert "Traceback" not in err and "ZeroDivisionError" not in err and "FAILED" not in err, err
+    assert (sorted(kind_dir.iterdir()) if kind_dir.is_dir() else []) == before
 
 
 def test_a_temperature_grid_below_zero_is_refused_naming_the_flag_before_any_record(tool_env, capsys):

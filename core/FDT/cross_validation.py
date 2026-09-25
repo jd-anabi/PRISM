@@ -32,7 +32,7 @@ from ..config import FDTConfig
 # core.rng, never core.diagnostics.rng: importing anything under core.diagnostics runs its __init__,
 # which loads the orchestrator, sbi and pytensor -- two seconds and two false "g++" lines on every
 # sweep, for a context manager that needs none of them (Task 17, fix round 1).
-from ..refusals import Refusal
+from ..refusals import Refusal, describe
 from ..rng import require_seed, seeded
 from ..runs import public_entry
 from .campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
@@ -48,6 +48,11 @@ log = logging.getLogger(__name__)
 
 # The two canonical sweeps' labels, which used to live inline in run_param_study_cli's two plot calls.
 _PARAM_SYMBOL = {"s": r"$S$", "temp": r"$T_a/T$"}
+#: Each sweep's name in plain text -- _PARAM_SYMBOL without the LaTeX -- as both front ends say it:
+#: the tool's "(the T_a/T sweep)", the window's "T_a/T grid". Every sentence a sweep says about itself
+#: uses it, and so does the record's summary line (core/gui/panels/record_view.py): "the temp sweep"
+#: named a parameter key that appears on no screen (the whole-piece review's N9).
+SWEEP_LABELS = {"s": "S", "temp": "T_a/T"}
 _PARAM_TITLE = {"s": r"FDT ratio vs $(\tilde\omega/\Omega_0,\ S)$  ($T_a/T=1$)",
                 "temp": r"FDT ratio vs $(\tilde\omega/\Omega_0,\ T_a/T)$  ($S=0$)"}
 # Which front-end setting an all-failed sweep names (spec §4.3, E4). The swept parameter IS the grid
@@ -184,6 +189,12 @@ def _peak_of(ratio) -> str:
     return f"{finite.max():.3g}" if finite.size else "none (no finite value on the grid)"
 
 
+def _cell_name(cfg) -> str:
+    """The cell by its file name, as the measured-nothing refusals name it (F41)."""
+    cell = (getattr(cfg, "sources", None) or {}).get("cell")
+    return Path(cell).name if cell else "this cell"
+
+
 def _finite_or_none(v):
     """A float the manifest can hold: finite, or None -- ``manifest.validate`` refuses a non-finite
     number anywhere in the body (spec §2.3)."""
@@ -226,14 +237,16 @@ def _sweep_results(omegas, landed: list) -> dict:
 def _check_sweep_param(sweep_param: str) -> None:
     """Refuse a parameter this module cannot sweep, before anything is spent.
 
-    A sweep reads four per-parameter tables, each of them only once it is under way: ``_SWEEP_NO``
+    A sweep reads five per-parameter tables, each of them only once it is under way: ``_SWEEP_NO``
     derives every point's streams inside the per-point guard, where a KeyError would be counted as a
     failure at EVERY point and end in a false "measured nothing"; ``_GRID_FIELD`` names that
-    refusal's setting; ``_PARAM_SYMBOL`` and ``_PARAM_TITLE`` label the figure drawn after the whole
-    spend. A programming error -- no front end sweeps anything else -- so a ValueError, not a Refusal.
+    refusal's setting and ``SWEEP_LABELS`` its sweep; ``_PARAM_SYMBOL`` and ``_PARAM_TITLE`` label
+    the figure drawn after the whole spend. A programming error -- no front end sweeps anything else
+    -- so a ValueError, not a Refusal.
     """
     missing = [name for name, table in (("_PARAM_SYMBOL", _PARAM_SYMBOL), ("_PARAM_TITLE", _PARAM_TITLE),
-                                        ("_GRID_FIELD", _GRID_FIELD), ("_SWEEP_NO", _SWEEP_NO))
+                                        ("_GRID_FIELD", _GRID_FIELD), ("_SWEEP_NO", _SWEEP_NO),
+                                        ("SWEEP_LABELS", SWEEP_LABELS))
                if sweep_param not in table]
     if missing:
         raise ValueError(f"cannot sweep {sweep_param!r}: it has no entry in {', '.join(missing)} "
@@ -354,7 +367,10 @@ def run_fdt_param_sweep(
     body = writer.body
     body.setdefault("study", "sweep")
     body["settings"] = {**_settings_block(cfg), "preset": cfg.preset_name,
-                        "sweep_grid": [float(sweep_grid[0]), float(sweep_grid[-1]), n_points]}
+                        "sweep_grid": [float(sweep_grid[0]), float(sweep_grid[-1]), n_points],
+                        # what the sweep held fixed is a knob it resolved too (spec §2.3; the
+                        # whole-piece review's N7): it used to live only in a data.h5 attribute
+                        "held": {k: float(v) for k, v in fixed_overrides.items()}}
     body["seed"] = seed
     # The config block too, and before the writer is entered so the FIRST manifest carries it:
     # store.create computed that block from the caller's object before any seed was resolved
@@ -530,8 +546,9 @@ def run_fdt_param_sweep(
 
             if n_failed:
                 warnings.warn(
-                    f"{sweep_param} sweep: {n_failed}/{n_points} operating points failed (in either "
-                    f"campaign) and carry no response data. See their 'error' attrs in {writer.dir}.",
+                    f"The {SWEEP_LABELS[sweep_param]} sweep: {n_failed}/{n_points} operating points "
+                    f"failed (in either campaign) and carry no response data. See their 'error' attrs "
+                    f"in {writer.dir}.",
                     stacklevel=2)
             if n_failed == n_points:
                 # AFTER the final refresh, so the spectra this message points at are on disk before the
@@ -542,12 +559,11 @@ def run_fdt_param_sweep(
                 # what the record holds, so the spectra clause depends on how many first campaigns
                 # landed (F41: the cell is named by its file name).
                 _refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)
-                cell = (getattr(cfg, "sources", None) or {}).get("cell")
                 held = (f"The record holds the spontaneous spectra of the {len(omega0s)} points whose "
                         f"first campaign finished" if omega0s else
                         "No point's spontaneous campaign finished either, so the record holds no spectra")
                 raise Refusal(
-                    f"The {sweep_param} sweep of {Path(cell).name if cell else 'this cell'} measured "
+                    f"The {SWEEP_LABELS[sweep_param]} sweep of {_cell_name(cfg)} measured "
                     f"nothing: all {n_points} operating points failed (each point's reason is in its "
                     f"'error' attribute in the record's data.h5). This is almost always one systematic "
                     f"cause repeating identically at every point, not {n_points} independent failures. "
@@ -597,7 +613,8 @@ def run_param_study_cli(cfg: FDTConfig, *, s_grid: np.ndarray, t_grid: np.ndarra
     :param seed: overrides ``cfg.seed``; None falls back to it, and None in both draws one (P12).
     :returns: the LoadedFdt of every sweep that finished, S first; a sweep that measured nothing is
               logged and left on disk unfinished, and the study refuses only when both did -- with
-              the activity sweep's refusal (field ``s_grid``), after logging both at error (F14/F45).
+              one refusal naming both grids (field ``s_grid``), after logging both at error
+              (F14/F45; the whole-piece review's N9).
     """
     sweeps = (("s", s_grid, {"temp": 1.0},
                "# S sweep:  vary S, hold T_a/T = 1   (FDT restored as S -> 0)"),
@@ -635,10 +652,23 @@ def run_param_study_cli(cfg: FDTConfig, *, s_grid: np.ndarray, t_grid: np.ndarra
             # record stays on disk, unfinished (E2). Its own log.txt was written as its writer exited,
             # so this line reaches only a record written after it: the T record's, when the S sweep
             # refused.
-            log.error(f"The {key} sweep measured nothing; its unfinished record is kept. {e}")
+            log.error(f"The {SWEEP_LABELS[key]} sweep measured nothing; its unfinished record is "
+                      f"kept. {e}")
             refused.append(e)
     if len(refused) == len(sweeps):
-        raise refused[0]            # the study measured nothing at all: the first grid's refusal
+        # The study measured nothing at all: ONE refusal that names BOTH grids (the whole-piece
+        # review's N9). Re-raising the activity sweep's own sent the operator to the S grid alone,
+        # though the T_a/T grid had failed too. Keyed s_grid -- a refusal names one field, and each
+        # front end's fix line names that one control -- so the sentence names the other. Each
+        # sweep's own sentence is in the error line logged for it above.
+        raise Refusal(
+            f"Both sweeps of {_cell_name(cfg)} measured nothing: every operating point of the "
+            f"{SWEEP_LABELS['s']} sweep and of the {SWEEP_LABELS['temp']} sweep failed, and both "
+            f"unfinished records are kept (each point's reason is in its 'error' attribute in its "
+            f"record's data.h5). One systematic cause repeating at every point of both grids is far "
+            f"likelier than independent failures; widen or move {describe('s_grid')} and "
+            f"{describe('t_grid')}, or choose a cell whose operating points are reachable.",
+            field="s_grid")
     return recs                     # the sweeps that FINISHED, in study order
 
 
