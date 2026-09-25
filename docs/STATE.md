@@ -1,9 +1,10 @@
 # PRISM — state
 
 **Last updated:** 2026-09-24. **Piece 5, "the secondary analyses", is DONE**: commits
-`a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus this documents
-commit, on the local `main` branch, NOT YET PUSHED (the owner pushes) — with this commit `main` is
-129 commits ahead of `origin/main` (`cfe261b`), pieces 4 and 5 both unpushed. The 77: `a0d85da` the
+`a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus the documents
+commits that close it (this file's `fec2cde`, its review fixes `6c68a22`, and a count correction), on
+the local `main` branch, NOT YET PUSHED (the owner pushes) — at `6c68a22` `main` was 130 commits
+ahead of `origin/main` (`cfe261b`), pieces 4 and 5 both unpushed. The 77: `a0d85da` the
 design and `0c974c1` its STATE note; `e902256`+`5354e6b` the plan and its review's thirteen fixes;
 `673868d` the hand-over note; `cbc2187` the pre-flight (every ruling folded into the task it
 binds); Tasks 1–40 in 58 commits (`f6a722c`..`7b12c34`, their fix rounds and two mid-execution
