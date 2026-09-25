@@ -75,9 +75,10 @@ def record_summary(m) -> str:
     offgrid = body.get("offgrid")
     offgrid = offgrid if isinstance(offgrid, dict) else {}
     if offgrid.get("blanks") is not None and offgrid.get("of") is not None:
-        # A sweep's count is over EVERY planned point's slot on its common grid (P78), so a bare
-        # "of N probe frequencies" would read as one grid's size when it is the whole study's.
-        where = " across its operating points" if points is not None else ""
+        # A sweep's count is over every probe of every point it MEASURED on its common grid (the
+        # whole-piece review's M2), so a bare "of N probe frequencies" would read as one grid's size
+        # when it is the whole study's.
+        where = " across the operating points it measured" if points is not None else ""
         lines.append(f"{offgrid['blanks']} of {offgrid['of']} probe frequencies{where} came back "
                      f"blank.")
     if points is not None and points.get("done") is not None and points.get("planned") is not None:

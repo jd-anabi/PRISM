@@ -184,6 +184,45 @@ def _peak_of(ratio) -> str:
     return f"{finite.max():.3g}" if finite.size else "none (no finite value on the grid)"
 
 
+def _finite_or_none(v):
+    """A float the manifest can hold: finite, or None -- ``manifest.validate`` refuses a non-finite
+    number anywhere in the body (spec §2.3)."""
+    v = float(v)
+    return v if math.isfinite(v) else None
+
+
+def _sweep_results(omegas, landed: list) -> dict:
+    """A finished sweep's ``results``: one entry per LANDED operating point, and a peak that names its
+    point (the whole-piece review's M2, departing from P78/A6).
+
+    P78 ran the single-cell summary, ``_results_block``, over every landed point's curve concatenated
+    on the repeated common grid. Its ``ratio_at_resonance`` was then the FIRST landed point's ratio
+    at the probe nearest the sweep's reference -- its LARGEST resonance -- which is no operating
+    point's ratio at its own resonance, and its peak did not say which point peaked. So the summary
+    is taken per point, each at its OWN resonance, and the top-level ``ratio_at_resonance`` is null:
+    a sweep has no one resonance to read a ratio at. ``usable_fraction`` and ``offgrid_blanks`` stay
+    over the landed points' probes, the population ``offgrid`` counts. Every float is finite or null.
+
+    :param omegas: the common grid every landed point was driven on.
+    :param landed: ``(param_value, omega_0_resonance, is_resonant, ratio, blanks)`` per landed point,
+                   in grid order; never empty (a sweep with no landed point refuses before this).
+    """
+    per_point, peaked = [], []
+    for value, w0, resonant, ratio, blanks in landed:
+        blk = _results_block(omegas, ratio, w0, blanks)
+        per_point.append({"param_value": _finite_or_none(value), "omega_0_resonance": _finite_or_none(w0),
+                          "is_resonant": bool(resonant), "ratio_at_resonance": blk["ratio_at_resonance"]})
+        if blk["peak_ratio"] is not None:
+            peaked.append((blk["peak_ratio"], blk["peak_omega"], _finite_or_none(value)))
+    ratios = torch.cat([ratio.reshape(-1) for _v, _w, _r, ratio, _b in landed])
+    # max() keeps the FIRST of equal peaks, so a tie goes to the lower swept value (grid order)
+    peak_ratio, peak_omega, peak_value = max(peaked, key=lambda p: p[0]) if peaked else (None,) * 3
+    return {"usable_fraction": float(torch.isfinite(ratios).sum()) / float(ratios.numel()),
+            "offgrid_blanks": int(sum(blanks for *_, blanks in landed)),
+            "peak_ratio": peak_ratio, "peak_omega": peak_omega, "peak_param_value": peak_value,
+            "ratio_at_resonance": None, "points": per_point}
+
+
 def _check_sweep_param(sweep_param: str) -> None:
     """Refuse a parameter this module cannot sweep, before anything is spent.
 
@@ -258,7 +297,8 @@ def run_fdt_param_sweep(
     completed record carrying the count. All points failed is a ``Refusal`` naming the grid and the
     cell (field ``s_grid`` or ``t_grid``), raised AFTER the record's final refresh and from inside the
     entered writer, so the folder and the spectra it does hold stay on disk (E2). A finished sweep
-    fills ``results`` and ``offgrid`` over the points that landed (P78).
+    fills ``results`` (one entry per landed point, ``_sweep_results``) and ``offgrid`` over the
+    points that landed (the whole-piece review's M2, departing from P78).
 
     DELIBERATELY NOT an atomic write, unlike the prior/posterior artifacts, and the reason is that
     the two situations are not alike. An atomic write buys exactly one thing: an existing good file is
@@ -401,7 +441,9 @@ def run_fdt_param_sweep(
                 h5.flush()
 
             # --- Common grid covering every row's resonance band ---
-            ok_ratios, blanks_total = [], 0      # the landed points' ratios and blanks (P78)
+            # One (param_value, omega_0, is_resonant, ratio, blanks) per LANDED point, for results and
+            # offgrid (the whole-piece review's M2).
+            landed = []
             if not omega0s:
                 # Every point failed in Phase A, each one counted there: with no resonance to build it
                 # around, _build_common_grid would raise ValueError from min() on an empty sequence.
@@ -425,8 +467,8 @@ def run_fdt_param_sweep(
                 log.info(f"--- Phase B ({sweep_param} sweep): forced response on common grid ---")
                 # ``indices`` keeps Phase B's group keys aligned with Phase A's after a Phase-A point
                 # dropped out: enumerating the survivors would write point 2's response into point 1's
-                # group.
-                for cfg_op, (freqs_psd, G), idx in zip(cfg_ops, psds, indices):
+                # group. Each point's own resonance travels with it, for its own summary (M2).
+                for cfg_op, (freqs_psd, G), idx, w0, res in zip(cfg_ops, psds, indices, omega0s, is_res):
                     log.info(f"  [B {idx+1}/{n_points}] {sweep_param}={sweep_grid[idx]:.6g}")
                     grp = ops[f"{idx:03d}"]
                     try:
@@ -473,8 +515,8 @@ def run_fdt_param_sweep(
                         _refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)
                         continue
                     n_done += 1
-                    ok_ratios.append(ratio.detach().cpu().to(torch.float64).reshape(-1))
-                    blanks_total += point_blanks    # its off-grid probes on the common grid (P78)
+                    landed.append((float(sweep_grid[idx]), w0, res,
+                                   ratio.detach().cpu().to(torch.float64).reshape(-1), point_blanks))
                     h5.flush()
                     _refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)
 
@@ -504,15 +546,15 @@ def run_fdt_param_sweep(
                     f"{held}; widen or move the grid, or choose a cell whose operating points are "
                     f"reachable.",
                     field=_GRID_FIELD[sweep_param])
-            # A FINISHED sweep fills results and offgrid (P78; spec §2.3 "null only until the run
-            # finishes"). results: T17's _results_block over every usable point's ratio on the common
-            # grid; offgrid: the blanks those points left on it, of every planned point's slot. Reached
-            # only when a point landed, so the common grid exists and ok_ratios is not empty.
-            writer.body["results"] = _results_block(
-                omegas_common.detach().cpu().to(torch.float64).repeat(len(ok_ratios)),
-                torch.cat(ok_ratios), omega_0_ref, blanks_total)
-            writer.body["offgrid"] = {"blanks": int(blanks_total),
-                                      "of": int(n_points * omegas_common.numel())}
+            # A FINISHED sweep fills results and offgrid (spec §2.3 "null only until the run
+            # finishes"): results one entry per landed point (_sweep_results says why), offgrid the
+            # blanks the landed points left on the common grid, OF THE PROBES THEY MEASURED -- the
+            # population blanks and usable_fraction count. P78 counted every planned point's slot,
+            # the failed points' never-measured ones included (the whole-piece review's M2). Reached
+            # only when a point landed, so the common grid exists and ``landed`` is not empty.
+            writer.body["results"] = _sweep_results(omegas_common, landed)
+            writer.body["offgrid"] = {"blanks": int(sum(blanks for *_, blanks in landed)),
+                                      "of": int(n_done * omegas_common.numel())}
             log.info(f"{sweep_param} sweep complete ({n_done}/{n_points} points). "
                      f"Saved to: {writer.dir}")
         # The file is closed; the sweep's own figure is drawn from it, into this record, while the

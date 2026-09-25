@@ -2500,9 +2500,10 @@ def test_record_summary_names_the_cell_the_settings_the_seed_and_the_notices():
 def test_record_summary_reads_a_finished_sweep_and_survives_a_hand_edited_body():
     """The CrossVal half of spec §5.4, and the "never raises" half of record_view's contract.
 
-    A SWEEP's blank count is over every planned operating point's slot on its common grid (P78), so
-    the line must say so -- "5 of 240 probe frequencies came back blank" alone reads as one grid of
-    240 -- and its points block is the study's own progress, failures included.
+    A SWEEP's blank count is over every probe of every operating point it measured on its common
+    grid (the whole-piece review's M2), so the line must say so -- "5 of 240 probe frequencies came
+    back blank" alone reads as one grid of 240 -- and its points block is the study's own progress,
+    failures included.
 
     A HAND-EDITED body reaches this formatter: ``manifest.validate`` checks the body's key set and
     nothing inside it, so any value may be any JSON. Each shape below raised, or rendered garbage, in
@@ -2526,7 +2527,8 @@ def test_record_summary_reads_a_finished_sweep_and_survives_a_hand_edited_body()
     text = record_summary(sweep)
     assert "seed 7" in text and "preset=exploratory" in text, text
     assert "7 of 8 operating points measured (1 failed), sweeping s." in text, text
-    assert "5 of 240 probe frequencies across its operating points came back blank." in text, text
+    assert "5 of 240 probe frequencies across the operating points it measured came back blank." \
+        in text, text
     assert "Notice: The ensemble is 16 trajectories" in text and "did not finish" not in text, text
 
     for body in ({"notices": 5, "settings": ["n_freqs", 8], "offgrid": "lots", "points": 3,

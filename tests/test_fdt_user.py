@@ -2026,8 +2026,9 @@ def test_a_sweep_counts_failures_in_both_phases(store, monkeypatch):
     assert rec.body["complete"] is True, "some points failed is a completed record (E4)"
     assert rec.body["points"] == {"param": "s", "planned": 4, "done": 2, "failed": 2}
     assert rec.body["results"] is not None and rec.body["results"]["peak_ratio"] == 2.0, "P78"
-    assert rec.body["offgrid"] == {"blanks": 0, "of": 4 * 3}, \
-        "P78: 4 planned points x the 3-point common grid (every stubbed omega_0 is 1.0)"
+    assert rec.body["offgrid"] == {"blanks": 0, "of": 2 * 3}, \
+        "the 2 LANDED points x the 3-point common grid (every stubbed omega_0 is 1.0): the two " \
+        "failed points' slots were never measured (the whole-piece review's M2, departing from P78)"
     assert refreshed == [(0, 1), (1, 1), (1, 2), (2, 2), (2, 2)], \
         "one refresh per point as it lands or fails (A: point 0 fails; B: 1 lands, 2 fails, 3 " \
         f"lands), then the final one: {refreshed}"
@@ -2207,6 +2208,96 @@ def test_a_sweep_point_whose_driven_simulation_diverged_is_a_failed_point(store,
     assert rec.body["points"] == {"param": "s", "planned": 2, "done": 1, "failed": 1}, rec.body["points"]
     errors = _point_errors(rec.data_path)
     assert list(errors) == ["000"] and "diverged" in errors["000"], errors
+
+
+def _stub_resonances(monkeypatch, *, fail_s=()):
+    """Both campaigns of a sweep stubbed by one law, with a resonance that MOVES with S -- ``1 + 2 S``,
+    the spectrum's peak, which the detector takes -- and a ratio ``1 + S + 0.5 log(omega / (1 + 2 S))``,
+    so every operating point has a ratio at its own resonance of its own. A driven campaign at an S in
+    ``fail_s`` raises: a failed point."""
+    from core.FDT import cross_validation as cv
+
+    freqs = torch.linspace(0.05, 70.0, 1400, dtype=torch.float64)
+
+    def res(cfg_op):
+        return 1.0 + 2.0 * float(cfg_op.params_dict["s"][0])
+
+    def _c1(cfg_op):
+        return freqs, torch.exp(-((freqs - res(cfg_op)) ** 2) / 0.02) + 1e-6
+
+    def _c2(cfg_op, omegas, freqs_psd, G):
+        s = float(cfg_op.params_dict["s"][0])
+        if any(abs(s - f) < 1e-9 for f in fail_s):
+            raise RuntimeError(f"stub driven-campaign failure at S = {s:g}")
+        om = omegas.to(torch.float64)
+        return torch.ones(om.shape, dtype=torch.complex128), 1.0 + s + 0.5 * torch.log(om / res(cfg_op))
+
+    monkeypatch.setattr(cv, "run_campaign1_psd", _c1)
+    monkeypatch.setattr(cv, "_detect_resonance",
+                        lambda omegas, G, w0: (float(omegas[int(torch.argmax(G))]), True))
+    monkeypatch.setattr(cv, "_campaign2_ratio", _c2)
+    monkeypatch.setattr(cv, "plot_fdt_3d_vs_param",
+                        lambda *a, save_path=None, **k: Path(save_path).write_bytes(b"\x89PNG"))
+
+
+def test_a_sweeps_results_are_per_point_and_its_offgrid_counts_only_what_was_measured(store,
+                                                                                       monkeypatch):
+    """The whole-piece review's M2 (C2 + S3), departing from P78/A6. A finished sweep's ``results`` was
+    the single-cell summary run over every landed point's curve CONCATENATED: its
+    ``ratio_at_resonance`` was then the FIRST landed point's ratio at the sweep's LARGEST resonance --
+    no operating point's ratio at its own resonance -- and its peak did not say which point produced
+    it. ``offgrid.of`` counted every PLANNED point's slots, the failed points' never-measured ones
+    included, beside blanks and a usable fraction taken over the landed points only.
+
+    Now: one entry per landed point, each with its OWN ratio at its own resonance (what
+    ``load_param_sweep``'s row gives at the probe nearest that row's resonance); the top-level
+    ``ratio_at_resonance`` null, because a sweep has no one resonance; the peak names its operating
+    point; and ``of`` counts the landed points' probes. The nested list must survive the manifest's
+    validation and print legibly, one line per field of each point."""
+    import numpy as np
+    import pytest
+    from core import cli, config
+    from core.artifacts.report import render_manifest
+    from core.FDT import cross_validation as cv
+
+    _stub_resonances(monkeypatch)
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+
+    def sweep(name, s_spec):
+        cfg, s_grid, _t = cli.make_param_sweep_config(
+            cell, preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+            s_spec=s_spec, t_spec=(1.0, 1.1, 2), n_freqs=8, ensemble_M=2, seed=1)
+        return cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
+                                      writer=store.create("fdt", cfg, name=name))
+
+    rec = sweep("resonances", (0.1, 0.5, 3))             # S = 0.1, 0.3, 0.5: resonances 1.2, 1.6, 2.0
+    res = rec.body["results"]
+    rows = cv.load_param_sweep(rec.data_path)
+    assert res["ratio_at_resonance"] is None, "a sweep has no one resonance to read a ratio at"
+    assert [p["param_value"] for p in res["points"]] == pytest.approx([0.1, 0.3, 0.5])
+    own = []
+    for p, row in zip(res["points"], rows):
+        k = int(np.argmin(np.abs(row["omega_grid"] - row["omega_0_resonance"])))
+        own.append(float(row["T_eff_over_T"][k]))
+        assert p["omega_0_resonance"] == row["omega_0_resonance"] and p["is_resonant"] is True, p
+    assert [p["ratio_at_resonance"] for p in res["points"]] == own, (res["points"], own)
+    assert len(set(own)) == 3, f"three points, three resonances, three ratios at them: {own}"
+    peaks = [float(np.nanmax(row["T_eff_over_T"])) for row in rows]
+    best = int(np.argmax(peaks))
+    assert res["peak_ratio"] == peaks[best] and res["peak_param_value"] == rows[best]["param_value"], res
+    grid = rows[0]["omega_grid"].size
+    assert rec.body["offgrid"] == {"blanks": 0, "of": 3 * grid}, "every point landed: all their probes"
+
+    text = render_manifest(store.get("fdt", rec.id))
+    assert "    points:\n      [0]\n" in text and "        ratio_at_resonance: " in text, text
+    assert f"    peak_param_value: {rows[best]['param_value']!r}\n" in text, text
+
+    # one point failed: `of` counts the two points that were measured, not the failed one's slots
+    _stub_resonances(monkeypatch, fail_s=(0.3,))
+    with pytest.warns(UserWarning, match="1/3 operating points failed"):
+        part = sweep("one_failed", (0.1, 0.5, 3))
+    assert part.body["offgrid"] == {"blanks": 0, "of": 2 * grid}, part.body["offgrid"]
+    assert [p["param_value"] for p in part.body["results"]["points"]] == pytest.approx([0.1, 0.5])
 
 
 def test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash(store, monkeypatch, caplog):
