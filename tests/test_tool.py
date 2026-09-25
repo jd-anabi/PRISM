@@ -1727,6 +1727,32 @@ def test_fdt_and_crossval_name_their_records_and_refuse_a_taken_name_before_any_
         assert "given --name, only once the unfinished record is removed" in note, note
 
 
+@pytest.mark.parametrize("flag", ["--n-freqs", "--ensemble-m", "--freqs-per-batch", "--f0"])
+@pytest.mark.parametrize("cmd", ["fdt", "crossval"])
+def test_a_zero_knob_is_one_refusal_line_naming_its_flag_and_opens_no_record(tmp_path, monkeypatch,
+                                                                             capsys, cmd, flag):
+    """The whole-piece review's N42 (S5): spec §8.2's "each floor in §3.3 refuses, at the click and
+    at the flag, naming its setting". The floors were pinned at the builder only, so a tool-side
+    regression -- a knob filter that drops a 0 so the builder's default runs silently, a FLAG entry
+    mapped to None -- would pass the suite. Through ``main``: exit 1, ONE ``refused:`` line ending in
+    the flag, no record announced and no folder under the root's ``fdt/``."""
+    from core import config
+
+    root = tmp_path / "A"
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(root))
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    argv = (["fdt", "--cell", nad, "--skip-sanity"] if cmd == "fdt" else
+            ["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2", "--t-grid", "1", "1.1", "2"])
+    capsys.readouterr()
+    assert main([*argv, flag, "0"]) == 1, (cmd, flag)
+    captured = capsys.readouterr()
+    lines = [ln for ln in captured.err.splitlines() if ln.startswith(f"prism {cmd}: refused:")]
+    assert len(lines) == 1, captured.err
+    assert lines[0].endswith(f"({flag})"), lines[0]
+    assert "writing record" not in captured.out, captured.out
+    assert not (root / "fdt").exists() or not any((root / "fdt").iterdir())
+
+
 def test_the_crossval_help_states_every_rule_its_grids_are_held_to():
     """The whole-piece review's N20 (L483). The epilog said each grid is MIN MAX N with N at least 2,
     and not that MIN must be below MAX -- the rule the builder refuses a grid by -- nor, since M1,
@@ -2073,7 +2099,7 @@ def test_the_fdt_subcommands_no_longer_say_they_have_no_bounds_file():
 
 
 @pytest.mark.slow
-def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
+def test_fdt_and_crossval_run_at_tiny_size(tmp_path, monkeypatch, capsys):
     """The real pipelines, at the smallest sizes the flags allow, writing real ``fdt`` records.
 
     No new science: this asks only whether the two subcommands drive the campaigns end to end and
@@ -2084,9 +2110,16 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
 
     Neither subcommand is given --store-root, deliberately: with the flag unset these two follow
     ``config.artifacts_root()`` and NOT a throwaway temp root (spec section 6.1), and this test is
-    what keeps that true end to end. ``tool_env`` is what makes "the temp artifacts root" true --
-    it sets PRISM_ARTIFACTS, which ``artifacts_root()`` reads at every call; without it the records
-    land in the real ``Artifacts/`` and the session teardown fails.
+    what keeps that true end to end. The test points PRISM_ARTIFACTS at a temp root of its own, which
+    ``artifacts_root()`` reads at every call; without it the records land in the real ``Artifacts/``
+    and the session teardown fails. Not through ``tool_env``, which also installs SBITEST into the
+    REAL ``Resources/`` -- a slow set killed part-way left it there (the whole-piece review's N38).
+
+    Both runs take a FIXED seed (N40), so a failure minutes in can be reproduced exactly; the
+    draw-when-absent path (E7) is pinned by the fast tests. 20260925 is this test's own: the other
+    slow test measures the same cell under 20260924, so no two single-cell records of the slow set
+    are one run drawn twice, and the study's point streams are SeedSequence derivations of it
+    (``cross_validation._point_seed``), never the seed itself.
 
     The single-cell leg runs a shipped NADROWSKI cell. Until piece 5 it ran the shipped Hopf cell,
     which the band check now refuses at the default band by design: its lowest probe, 0.1 x its
@@ -2097,11 +2130,9 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     The study writes TWO records, one per swept parameter, carrying ONE seed (spec section 4.1): an
     activity sweep that failed entirely no longer costs the temperature sweep.
 
-    Measured 2026-09-24: 452.03 s on the CPU. (The previous figure, 598.55 s recorded 2026-09-15,
-    was stale against every gate since -- 243, 208 and 229 s -- so it is replaced by a measurement,
-    not by a copied number.) It is longer than those gates because the single-cell leg now runs a
-    Nadrowski cell: about 173 s of the total, against 138 s and 141 s for the two sweeps (the
-    records' own timestamps).
+    Measured alone at e952f48: 302.22 s on the CPU. (A 452.03 s figure taken the same day was a
+    loaded machine's, and the earlier gates' 243, 208 and 229 s were before the single-cell leg moved
+    to a Nadrowski cell; no cause is claimed for the difference -- N34.)
     """
     import math
 
@@ -2111,22 +2142,24 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     from core.artifacts import ArtifactStore
     from core.tool import main
 
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    seed = 20260925                          # fixed (N40); the docstring says why it cannot collide
     cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
     capsys.readouterr()
     assert main(["fdt", "--cell", cell, "--n-freqs", "2", "--ensemble-m", "8",
-                 "--skip-sanity"]) == 0
+                 "--skip-sanity", "--seed", str(seed)]) == 0, f"seed {seed}"
     out = capsys.readouterr().out
 
     store = ArtifactStore(config.artifacts_root())
     # ``list`` returns complete rows first, newest first, so [0] is this run even if a sibling test
     # in this module has left an older fdt record in the shared root.
     single = [s for s in store.list("fdt") if s.study == "single"]
-    assert single and single[0].finished, single
+    assert single and single[0].finished, (seed, single)
     rec = store.load_fdt(single[0].id)
     # The record the tool named before it spent anything (ruling F20) is the one it wrote.
     assert f"[prism fdt] writing record {rec.id} at " in out, out[-2000:]
     assert rec.body["study"] == "single" and rec.body["complete"] is True
-    assert isinstance(rec.body["seed"], int), rec.body["seed"]
+    assert rec.body["seed"] == seed, rec.body["seed"]
     assert rec.body["settings"]["n_freqs"] == 2 and rec.body["settings"]["ensemble_M"] == 8
     assert rec.body["settings"]["skip_sanity"] is True
     # 2 frequencies and 8 trajectories are the thin-setting THRESHOLDS themselves, not below them
@@ -2143,7 +2176,10 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     with h5py.File(rec.data_path, "r") as h5:
         assert h5.attrs["study"] == "single", dict(h5.attrs)
         assert float(h5.attrs["omega_0"]) > 0.0, dict(h5.attrs)
-        assert math.isfinite(float(h5.attrs["prefactor"])), dict(h5.attrs)
+        # POSITIVE, not only finite: a normalisation constant is coupling / D_x, and a zero or a
+        # negative one would pass a finiteness check while every ratio came out wrong (N37)
+        assert math.isfinite(float(h5.attrs["prefactor"])) and float(h5.attrs["prefactor"]) > 0, \
+            dict(h5.attrs)
         for key in ("omega_grid", "T_eff_over_T", "chi_prime", "chi_double_prime"):
             assert key in h5 and h5[key].shape == (2,), (key, list(h5))
         assert "PSD_omegas" in h5 and "PSD_G" in h5, list(h5)
@@ -2154,7 +2190,7 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     curve = cmp.curve_of(store.load_fdt(rec.id))
     assert curve.id == rec.id and curve.label == "master_spont", curve
     assert curve.omegas.shape == curve.ratio.shape == (2,), curve
-    assert curve.omega_0 > 0.0 and math.isfinite(curve.prefactor), curve
+    assert curve.omega_0 > 0.0 and math.isfinite(curve.prefactor) and curve.prefactor > 0, curve
     # The four figures by name: ``writer.figure_path`` names each by the slug of its title.
     assert sorted(rec.manifest.figures) == [
         "figures/chi_components.png", "figures/effective_temperature_ratio.png",
@@ -2168,23 +2204,24 @@ def test_fdt_and_crossval_run_at_tiny_size(tool_env, capsys):
     assert rec.manifest.inputs["bounds"] is not None, rec.manifest.inputs
 
     assert main(["crossval", "--cell", cell, "--s-grid", "0", "0.1", "2",
-                 "--t-grid", "1", "1.1", "2", "--n-freqs", "2", "--ensemble-m", "8"]) == 0
+                 "--t-grid", "1", "1.1", "2", "--n-freqs", "2", "--ensemble-m", "8",
+                 "--seed", str(seed)]) == 0, f"seed {seed}"
     out = capsys.readouterr().out
 
     sweeps = [s for s in store.list("fdt") if s.study == "sweep"]
-    assert len(sweeps) == 2, sweeps
-    assert all(s.finished for s in sweeps), sweeps
+    assert len(sweeps) == 2, (seed, sweeps)
+    assert all(s.finished for s in sweeps), (seed, sweeps)
     # Every real operating point lands at this size (ruling F53): a failed point is a finding to
     # report, not a tolerance to allow.
-    assert {s.points_planned for s in sweeps} == {2}, sweeps
-    assert {s.points_done for s in sweeps} == {2}, sweeps
-    assert {s.points_failed for s in sweeps} == {0}, sweeps
+    assert {s.points_planned for s in sweeps} == {2}, (seed, sweeps)
+    assert {s.points_done for s in sweeps} == {2}, (seed, sweeps)
+    assert {s.points_failed for s in sweeps} == {0}, (seed, sweeps)
 
     recs = [store.load_fdt(s.id) for s in sweeps]
     assert {r.body["points"]["param"] for r in recs} == {"s", "temp"}, \
         [r.body["points"] for r in recs]
-    assert len({r.body["seed"] for r in recs}) == 1, \
-        "the study draws ONE seed and records it on both records (spec section 4.1)"
+    assert {r.body["seed"] for r in recs} == {seed}, \
+        "the study records its ONE seed on both records (spec section 4.1)"
     for r in recs:
         param = r.body["points"]["param"]
         assert r.body["complete"] is True
@@ -2250,14 +2287,14 @@ def test_the_nadrowski_only_sanity_checks_are_selected_for_a_nadrowski_cell(monk
 
 
 @pytest.mark.slow
-def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, capsys):
+def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tmp_path, monkeypatch, capsys):
     """The real sanity checks on a real Nadrowski cell, and the passive-baseline figure they draw.
 
     This is the gap spec section 1's last bullet names: the single-cell leg above runs with
     --skip-sanity (on a Hopf cell until piece 5, a Nadrowski one since), so
     ``check_passive_baseline`` and ``check_high_freq_fdt`` -- the two checks that decide whether the
-    whole PSD / lock-in / noise-prefactor convention is right, and the only ones that draw a figure
-    of their own -- had never executed under test. Everything is real: the campaigns, the checks,
+    whole PSD / lock-in / noise-prefactor convention is right; the passive one also draws a figure of
+    its own -- had never executed under test. Everything is real: the campaigns, the checks,
     the production sweep and the record.
 
     Production is NOT skipped. ``--no-production`` would be cheaper, and its contract is fixed too
@@ -2267,15 +2304,17 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
     records what that costs.
 
     Its own --store-root, so the record cannot be confused with the one the tiny-size test above
-    writes into the module's shared artifacts root. ``tool_env`` is still requested: it pins
-    PRISM_ARTIFACTS at a temp root, so any write that escapes the store still misses the real
-    ``Artifacts/``.
+    writes into its own artifacts root. PRISM_ARTIFACTS is pointed at a temp root too, so any write
+    that escapes the store still misses the real ``Artifacts/`` -- set here rather than through
+    ``tool_env``, which also installs SBITEST into the REAL ``Resources/`` (the whole-piece review's
+    N38).
 
     Measured 2026-09-24 at 6210a05, run alone: 796.34 s on the CPU (13 min 22 s for the whole
     pytest process). Most of it is the checks: an earlier run cut off at 540 s had by then spent
     466 s on the passive-baseline check ALONE (the record was created at 12:41:35 and that check's
-    figure written at 12:49:21). The seed was drawn in that measurement and is fixed since; the
-    step count, and so the time, does not depend on it.
+    figure written at 12:49:21). The seed was drawn in that measurement and is fixed since. The time
+    can still move with the seed: omega_0 comes from Campaign 1's stochastic spectrum, and the probe
+    grid and the drive lengths follow it (N34).
     """
     import warnings
 
@@ -2283,6 +2322,7 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
     from core.artifacts import ArtifactStore
     from core.tool import main
 
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
     root = tmp_path / "store"
     cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
     # A FIXED seed, so a failure thirteen minutes in can be reproduced exactly; the record carries
@@ -2294,8 +2334,9 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
     # (its figure, 2026-09-24). That notice is this path's own output, so it is caught here rather
     # than leaked into the session's warning count. It is not REQUIRED -- whether a probe falls off
     # the grid is physics, and this test is about the path -- but any OTHER warning is a finding, and
-    # fails. The filters are inherited, not "always": what is recorded is exactly what would
-    # otherwise have reached the session's warnings summary.
+    # fails: the high-frequency check's own off-grid notice included, which the old substring match
+    # also swallowed (the whole-piece review's N39). The filters are inherited, not "always": what is
+    # recorded is exactly what would otherwise have reached the session's warnings summary.
     with warnings.catch_warnings(record=True) as said:
         rc = main(["fdt", "--cell", cell, "--n-freqs", "2", "--ensemble-m", "8",
                    "--seed", str(seed), "--store-root", str(root)])
@@ -2303,8 +2344,11 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
     out = captured.out
     assert rc == 0, captured.err[-2000:]
     others = [f"{w.category.__name__}: {w.message}" for w in said
-              if "probe frequencies fall outside the Welch PSD grid" not in str(w.message)]
+              if not str(w.message).startswith("check_passive_baseline:")]
     assert not others, others
+    # ...and the high-frequency check MEASURED something: every probe off the grid is a FAIL whose
+    # only trace would be this metric (N39)
+    assert "all high-frequency probes lie outside the PSD grid" not in out, out[-2000:]
 
     # The two Nadrowski-only checks ran, and the note that announces dropping them did not appear.
     assert "[passive_baseline] true equilibrium (s=0): T_eff/T ~ 1" in out, out[-2000:]
@@ -2327,7 +2371,7 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tool_env, tmp_path, cap
         assert (rec.path / fig).exists(), fig
 
 
-def test_fdt_plot_functions_close_a_saved_figure_instead_of_show(tmp_path):
+def test_fdt_plot_functions_close_a_saved_figure_instead_of_show(tmp_path, monkeypatch):
     """Commit B, fix round 1: every real caller (fdt_pipeline.py, sanity.py) always passes
     ``save_path``, so the old unconditional ``plt.show()`` was pure cost under the tool's Agg
     backend -- it does nothing there except print "FigureCanvasAgg is non-interactive, and thus
@@ -2335,29 +2379,23 @@ def test_fdt_plot_functions_close_a_saved_figure_instead_of_show(tmp_path):
     the figure it drew, leaking one live figure per call for the life of the process. Close-when-
     saved is the right default; ``plt.show()`` survives for the no-``save_path`` case no current
     caller uses.
-    """
-    import warnings
 
+    Through the same helper as its three siblings (the whole-piece review's N36), so ``plt.show`` is
+    SPIED here too rather than inferred from a missing Agg warning.
+    """
     import numpy as np
-    from matplotlib import pyplot as plt
 
     from core.FDT.plots import plot_psd
 
-    before = len(plt.get_fignums())
-    out = tmp_path / "psd.png"
-    with warnings.catch_warnings(record=True) as rec:
-        warnings.simplefilter("always")
-        plot_psd(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 1.5]), save_path=out)
-    assert out.exists()
-    assert not any("non-interactive" in str(w.message) for w in rec), \
-        [str(w.message) for w in rec]
-    assert len(plt.get_fignums()) == before
+    _figure_is_saved_closed_and_silent(
+        lambda out: plot_psd(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0, 1.5]), save_path=out),
+        tmp_path / "psd.png", monkeypatch)
 
 
 def _figure_is_saved_closed_and_silent(draw, out, monkeypatch):
-    """The three properties the test above asserts for ``plot_psd``, as one helper the other three
-    drawing functions reuse: the file is written, ``plt.show`` is never reached, no "non-interactive"
-    warning is emitted, and the figure the call drew is closed again.
+    """The four properties every drawing function of core/FDT/plots.py is held to, as one helper all
+    four tests use: the file is written, ``plt.show`` is never reached, no warning at all is emitted
+    (the "non-interactive" one Agg prints included), and the figure the call drew is closed again.
 
     ``plt.show`` is spied on rather than inferred from the absence of the warning: under a backend
     that IS interactive (a display-marked run, or a future matplotlib) the warning would simply not
@@ -2377,6 +2415,7 @@ def _figure_is_saved_closed_and_silent(draw, out, monkeypatch):
     assert shown == [], "plt.show() was called although save_path was given"
     assert not any("non-interactive" in str(w.message) for w in rec), \
         [str(w.message) for w in rec]
+    assert [str(w.message) for w in rec] == [], "a clean drawing warns about nothing"
     assert len(plt.get_fignums()) == before, "the saved figure was left open"
 
 
@@ -2903,12 +2942,16 @@ def test_the_artifacts_listing_points_cell_is_plain_ascii_and_a_dash_when_there_
 
 
 def test_artifacts_list_with_no_kind_covers_every_kind_under_a_heading(browse_store, capsys):
+    """Every kind the tool lists, fdt included -- read off ``browse.KINDS`` (pinned equal to the
+    store's own kinds by test_the_artifacts_listing_shows_the_browsers_own_columns), never a literal
+    that had fallen one kind behind (the whole-piece review's N31)."""
+    from core.tool import browse
     root, ids = browse_store
     capsys.readouterr()
     assert main(["artifacts", "list"]) == 0
     out = capsys.readouterr().out
-    for kind in ("prior", "simulation", "posterior", "observation", "calibration", "inference",
-                 "diagnostic"):
+    assert "fdt" in browse.KINDS
+    for kind in browse.KINDS:
         assert f"== {kind} ==" in out, kind
     assert "nothing in:" not in out, "build_browse_store writes one artifact of every kind"
 
@@ -2927,8 +2970,8 @@ def test_an_empty_artifacts_listing_exits_0_and_a_bad_kind_exits_1(tmp_path, mon
     assert main(["artifacts", "list"]) == 0
     out = capsys.readouterr().out
     named_empty = out.split("nothing in:")[1]
-    for kind in ("prior", "simulation", "posterior", "observation", "calibration", "inference",
-                 "diagnostic"):
+    from core.tool import browse
+    for kind in browse.KINDS:                    # fdt included (the whole-piece review's N31)
         assert kind in named_empty, kind
     assert "holds no artifacts yet" in out, out
 

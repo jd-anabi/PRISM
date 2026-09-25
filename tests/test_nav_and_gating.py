@@ -1530,9 +1530,11 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
             assert names and all(t in places for t in names), f"{key}: {tab!r} is not a place"
             assert isinstance(text, str) and text, f"{key}: empty label"
             assert gui_fields.label(key) == text
-            noun = "screen" if all(n in gui_fields.SCREENS for n in names) else "tab"
+            # the place phrase through _where itself, pinned verbatim below (the mixed tab+screen
+            # case included): one noun for the whole tuple would be a false red on the first mixed
+            # entry (the whole-piece review's N33)
             assert gui_fields.fix_sentence(key) == \
-                f"Set it in the '{text}' box on the {' or '.join(names)} {noun}."
+                f"Set it in the '{text}' box on {gui_fields._where(tab)}."
         elif isinstance(entry, str):
             assert entry.endswith("."), f"{key}: a fix sentence ends with a period: {entry!r}"
             assert gui_fields.fix_sentence(key) == entry
@@ -1621,7 +1623,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
     """Save on the Prior and Posterior tabs is a rename, and a bad or taken name is a StoreError -- a
     Refusal with field="name" since piece 3 -- so it opens the yellow box with the core's sentence
-    as its text and this front end's fix ("Choose another name in the Save box.") under it. It used
+    as its text and this front end's fix ``fix_sentence("name")``, which starts "Choose another name
+    in the Save box" and goes on to the record and comparison name boxes, under it. It used
     to go through _config_error, whose box read "The configuration could not be built." over a
     sentence about a name: a lie for a rename. A rename that fails for any other reason is a bug and
     stays red, with its traceback. Either way the loaded artifact keeps its old name."""
@@ -4626,8 +4629,12 @@ def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(mon
         ["done_single", "second_single"]
 
     # (d) the default is no predicate at all, so every existing caller is unchanged: the sentinel +
-    # the THREE finished rows, because (c) appended one
-    assert StorePicker("fdt", allow_new=True).combo.count() == 4
+    # the THREE finished rows, because (c) appended one. BOUND to a name: a temporary picker can be
+    # collected before .count() runs -- "Internal C++ object already deleted" in plain Python -- so
+    # the one-liner passed only because pytest's assertion rewrite held it (the whole-piece review's
+    # N35)
+    default = StorePicker("fdt", allow_new=True)
+    assert default.combo.count() == 4
 
 
 # ── piece 6: the panel/tab counts, stale since the TSNPE tab arrived ─────────────────────────────

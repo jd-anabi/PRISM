@@ -262,7 +262,7 @@ def test_export_animation_writes_a_readable_gif():
     assert len(frames) >= 2, "expected a multi-frame gif"
     assert frames[0].shape[0] % 2 == 0 and frames[0].shape[1] % 2 == 0, "exported frame dims must be even"
 
-def test_a_simulate_recording_round_trips_through_the_video_export():
+def test_a_simulate_recording_round_trips_through_the_video_export(tmp_path):
     """Every frame the panel PROMISED the operator is in the file it wrote. Spec section 5.6.
 
     ``_save_video`` prints "Exporting {n} frames" from ``estimate_frame_count(len(series),
@@ -278,9 +278,6 @@ def test_a_simulate_recording_round_trips_through_the_video_export():
     Also asserts the frames ADVANCED: a writer that appended the same buffer every time would pass a
     frame count on its own.
     """
-    import os
-    import tempfile
-
     import numpy as np
 
     from core.config import DT_EXP_S
@@ -292,7 +289,9 @@ def test_a_simulate_recording_round_trips_through_the_video_export():
     promised = estimate_frame_count(len(series), export_stride(1.0 / DT_EXP_S, kw["video_fps"]))
     assert promised > 2, promised                    # the fixture must exercise more than the edges
 
-    path = os.path.join(tempfile.mkdtemp(), "roundtrip.gif")
+    # pytest's own temp directory, removed with the session's: mkdtemp left one more directory
+    # and GIF in %TEMP% on every gate (the whole-piece review's N41)
+    path = str(tmp_path / "roundtrip.gif")
     export_animation(series, path, **kw)
 
     import imageio

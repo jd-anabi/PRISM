@@ -488,7 +488,10 @@ def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
             == {"omega_0": 1.0}, "refresh re-writes the manifest as the run proceeds"
         w.payload("data.h5").write_bytes(b"numbers")
         assert w._wrote_anything is True
-        assert mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8")) is not None
+        # the manifest still parses, and a payload write does not mark the record finished (the
+        # whole-piece review's N32: `is not None` could never fail -- from_json_text returns or raises)
+        assert mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8")).body["complete"] \
+            is False
     assert store.list("fdt")[0].finished, "the commit is what makes it finished"
     assert store.get("fdt", w.id).body["complete"] is True
     assert store.get("fdt", w.id).payloads["data.h5"] == prov.sha256_file(w.dir / "data.h5"), \
@@ -4162,8 +4165,9 @@ def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
     and keeps its folder when the run is interrupted (E2). For both, ``body["complete"]`` is the field
     that says whether the run got to the end.
 
-    ``complete`` is NOT redefined: StorePicker.refresh skips rows without it, ``list``'s secondary
-    sort puts them last, and this suite asserts on it. The honest question goes beside it instead.
+    ``complete`` is NOT redefined: ``list``'s secondary sort puts rows without it last, and this suite
+    asserts on it. The honest question goes beside it instead -- and it is the one StorePicker.refresh
+    asks: it skips every row that is not FINISHED (the whole-piece review's N34).
     """
     from core import artifacts
     from core.SBI.training_checkpoint import identity_digest

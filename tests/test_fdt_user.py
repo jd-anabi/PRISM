@@ -1165,6 +1165,81 @@ def test_make_fdt_config_refuses_every_zero_knob_a_blank_box_produces():
         cli.make_fdt_config("NADROWSKI", True, cell, **{**ok, "F0": blank_float.value()})
 
 
+def test_a_zero_frequencies_per_call_would_spin_the_batch_planner_and_is_refused_first():
+    """The whole-piece review's N42 (S5): spec §8.2 asks that each floor be "shown failing before the
+    change with the behaviour it prevents", and the batch planner's unbounded loop "asserted with a
+    bounded call count, not by running it". ``_plan_adaptive_batches`` packs ``min(fpb_max, ...)``
+    frequencies per batch and advances by that many: at ``fpb_max = 0`` it never advances -- the run
+    LOOKS HUNG rather than failing. The grid it walks is handed in as a list that counts its reads and
+    raises past a bound, so the spin is observed without being run; the same planner at 1 finishes;
+    and both builders refuse the 0 before any planner could see it."""
+    import pytest
+
+    from core import cli, config
+    from core.FDT import campaigns
+    from core.refusals import Refusal
+
+    class _Counted(list):
+        reads = 0
+
+        def __getitem__(self, i):
+            type(self).reads += 1
+            if type(self).reads > 50:
+                raise RuntimeError("the planner spun: 50 reads of one grid and still not done")
+            return super().__getitem__(i)
+
+    plan = dict(M=8, n_vars=3, n_force=1, dt=0.01, burn_idx=100, n_periods=5, budget_elements=10 ** 9)
+    with pytest.raises(RuntimeError, match="spun"):
+        campaigns._plan_adaptive_batches(_Counted([1.0, 2.0, 3.0]), 0, **plan)
+    _Counted.reads = 0
+    assert campaigns._plan_adaptive_batches(_Counted([1.0, 2.0, 3.0]), 1, **plan) == \
+        [(0, 1), (1, 1), (2, 1)]
+
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    with pytest.raises(Refusal) as e:
+        cli.make_fdt_config("NADROWSKI", True, cell, n_freqs=4, ensemble_M=8, freqs_per_batch=0)
+    assert e.value.field == "freqs_per_batch"
+    with pytest.raises(Refusal) as e:
+        cli.make_param_sweep_config(cell, preset=dict(cli.SWEEP_PRESETS["exploratory"]),
+                                    preset_name="exploratory", s_spec=(0.0, 0.1, 2),
+                                    t_spec=(1.0, 1.1, 2), freqs_per_batch=0)
+    assert e.value.field == "freqs_per_batch"
+
+
+def test_a_record_created_on_one_thread_and_run_on_another_logs_the_run(store, monkeypatch):
+    """The whole-piece review's N42 (S5), spec §8.2 "the run entries": a record's log.txt holds the
+    run's records, written from the WORKER thread. The window CREATES the writer on its own thread and
+    the stage ENTERS it on the worker (spec §1.2), and the run log is thread-local: every other
+    log.txt test runs both halves on one thread, so none could tell a panel that entered the writer
+    itself -- whose log would be empty -- from a correct one. Here the writer is created on this
+    thread and run_fdt runs on a ``threading.Thread``."""
+    import threading
+
+    from core import cli, config
+    from core.FDT import fdt_pipeline
+
+    _stub_campaigns(monkeypatch)
+    cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
+                              n_freqs=3, ensemble_M=8)
+    w = store.create("fdt", cfg, name="created_here_run_there")     # the window's thread
+    failed = []
+
+    def _worker():
+        try:
+            fdt_pipeline.run_fdt(cfg, skip_sanity=True, confirm_production=True, writer=w, seed=1)
+        except BaseException as e:                  # noqa: BLE001 -- reported below, on this thread
+            failed.append(e)
+
+    worker = threading.Thread(target=_worker)
+    worker.start()
+    worker.join(120)
+    assert not worker.is_alive() and not failed, failed
+    text = (w.dir / "log.txt").read_text(encoding="utf-8")
+    assert f"Writing fdt record {w.id}" in text, text
+    assert "Campaign 1: spontaneous fluctuations -> PSD" in text, text
+    assert "Campaign 2: forced response -> chi via lock-in" in text, text
+
+
 def test_make_fdt_config_refuses_a_missing_cell_an_unsupported_model_and_a_broken_band():
     """The rest of spec §3.3's table. A missing cell surfaced as FileNotFoundError from the parser;
     it is now refused by its input kind first, with field="cell", exactly as make_sim_config refuses
@@ -1232,10 +1307,12 @@ def test_make_fdt_config_refuses_a_missing_cell_an_unsupported_model_and_a_broke
 
 
 def test_make_param_sweep_config_refuses_a_blank_grid_and_records_the_preset_name():
-    """Spec §4.4. The window checks NOTHING about its two grids today, and _GridRow.spec() is three
-    value() calls -- so a grid whose 'max' was left empty arrives as (0.0, 0.0, 0) and np.linspace
-    produces a sweep of zero points without a word. Each grid is therefore checked as a whole: both
-    ends finite, at least 2 points, and the minimum below the maximum.
+    """Spec §4.4. Before piece 5 the window checked nothing about its two grids, and its grid row
+    read three value() calls -- so a grid whose boxes were left empty arrived as (0.0, 0.0, 0) and
+    np.linspace produced a sweep of zero points without a word. The row now reads its boxes through
+    value_or_none (``_GridRow.spec_or_none``), and each grid is checked as a whole HERE: every part
+    given, both ends finite, at least 2 points, and the minimum below the maximum (the whole-piece
+    review's N34 corrected this sentence).
 
     ``preset_name`` exists because the builder takes ``preset`` as an already-RESOLVED dict and both
     call sites drop the name (core/tool/fdt.py's ``dict(cli.SWEEP_PRESETS[args.preset])``), while

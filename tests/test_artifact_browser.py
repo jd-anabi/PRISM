@@ -1062,7 +1062,9 @@ def test_a_sweep_that_throws_is_reported_on_the_status_line_and_the_pickers_are_
 
 
 def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_not(store):
-    """B6's second half, in the window's own wording (model_builder_screen.py:371 and :447). Every
+    """B6's second half, in the window's own wording -- the model builder's "A task is running --
+    wait for it to finish before validating." and "... before saving." (quoted, not cited by line
+    number, which moved; the whole-piece review's N34). Every
     WRITE is refused while a run is live; READING never is -- which is the whole reason the browser
     is a plain screen and not a BasePanel (B1), so nothing here is greyed out either."""
     from core.gui.panels.base_panel import BasePanel
