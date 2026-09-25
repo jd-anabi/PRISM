@@ -650,6 +650,155 @@ def test_two_cells_that_share_a_file_name_never_share_a_legend_entry(tmp_path, m
     assert any("1 cell(s): default." in n for n in rec.body["notices"]), rec.body["notices"]
 
 
+def _lines_sink():
+    """``(lines, sink)``: a sink that keeps each figure's first axes' labelled lines --
+    ``{title: {label: Line2D}}`` -- and closes the figure."""
+    lines = {}
+
+    def _sink(title, fig):
+        from matplotlib import pyplot as plt
+        lines[title] = {ln.get_label(): ln for ln in fig.axes[0].get_lines()}
+        plt.close(fig)
+    return lines, _sink
+
+
+def test_repeats_of_one_cell_say_so_as_information_and_draw_every_measured_point(tmp_path,
+                                                                                  monkeypatch,
+                                                                                  caplog):
+    """The whole-piece review's N11 (L807). Per P60/A1 the repeats mode reports which cells it drew,
+    in the record's notices -- and ``compare`` logged every notice at WARNING, so EVERY correct
+    comparison of one cell's repeats warned: a warning on every run trains the owner to ignore
+    warnings. The one-cell sentence is kept in the notices and logged as information; drawing more
+    than one cell is still the warning it should be.
+
+    And the repeat curves and their mean were drawn as lines with no marker, so a measured point
+    with a blank on each side -- a segment of one point -- was not drawn at all. Every curve now marks
+    its points: here the first repeat measured the two ends of the grid and not its middle."""
+    store = _store(tmp_path)
+    a = _record_of_cell(store, monkeypatch, "Cells/shm/default.txt", name="run_a", seed=1,
+                        omegas=(1.0, 2.0, 4.0), ratio=(1.0, float("nan"), 2.0))
+    b = _record_of_cell(store, monkeypatch, "Cells/shm/default.txt", name="run_b", seed=2,
+                        omegas=(1.0, 2.0, 4.0), ratio=(1.2, 3.0, 2.2))
+    lines, sink = _lines_sink()
+    with caplog.at_level(logging.INFO, logger="core"):
+        rec = cmp.compare("repeats", [a, b], fig_sink=sink, store=store)
+    said = [(r.levelno, r.getMessage()) for r in caplog.records if r.name == "core.FDT.compare"]
+    cells = [(lvl, m) for lvl, m in said if "come from 1 cell(s)" in m]
+    assert [lvl for lvl, _ in cells] == [logging.INFO], said
+    assert any("come from 1 cell(s): default." in n for n in rec.body["notices"]), rec.body["notices"]
+
+    drawn = lines["FDT ratio across repeats"]
+    first = drawn["default (run_a)"]
+    assert np.isnan(first.get_ydata()[1]) and np.isfinite(first.get_ydata()[[0, 2]]).all(), \
+        "the premise: two measured points with a blank between them"
+    for label in ("default (run_a)", "default (run_b)", "mean of the repeats"):
+        assert drawn[label].get_marker() == "o", f"{label!r} draws a lone point as nothing"
+
+    # two different cells: still a warning, and still in the notices
+    other = _record_of_cell(store, monkeypatch, "Cells/shm2/default.txt", name="run_c", seed=3,
+                            omegas=(1.0, 2.0, 4.0), ratio=(1.1, 3.1, 2.1))
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="core"):
+        rec = cmp.compare("repeats", [a, other], fig_sink=sink, store=store)
+    warned = [r.getMessage() for r in caplog.records
+              if r.name == "core.FDT.compare" and r.levelno == logging.WARNING]
+    assert any("come from 2 cell(s)" in m for m in warned), warned
+    assert any("come from 2 cell(s)" in n for n in rec.body["notices"]), rec.body["notices"]
+
+
+def test_repeats_that_share_a_seed_are_named_as_one_run_drawn_twice(tmp_path, caplog):
+    """The whole-piece review's N12 (S4), as the owner ruled it (R-F6: a notice, never a refusal).
+    E7: repeats of a cell use DIFFERENT seeds, and their spread is the measurement error. Two records
+    of one seed and one setting are one run drawn twice -- a deliberate reproducibility check -- and
+    their band has zero width; the record reported that as the measurement error without a word.
+    The mode now groups the records by seed, names the ones that share one in the notices (logged as
+    a warning: it changes what the band means) and records every seed in ``results``."""
+    store = _store(tmp_path)
+    ids = [build_fdt_record(store, name=name, seed=seed, omegas=(1.0, 2.0, 4.0), ratio=(1.0, 3.0, 1.0))
+           for name, seed in (("twin_a", 7), ("twin_b", 7), ("other", 8))]
+    _seen, sink = _closing()
+    with caplog.at_level(logging.INFO, logger="core"):
+        rec = cmp.compare("repeats", ids, fig_sink=sink, store=store)
+    assert rec.body["results"]["seeds"] == [7, 7, 8], rec.body["results"]
+    said = [n for n in rec.body["notices"] if "share seed" in n]
+    assert len(said) == 1, rec.body["notices"]
+    assert "'twin_a' and 'twin_b' share seed 7" in said[0] and "other" not in said[0], said
+    assert "one run drawn twice" in said[0] and "not a measurement error" in said[0], said
+    assert any("share seed 7" in r.getMessage() for r in caplog.records
+               if r.levelno == logging.WARNING), "a shared seed changes what the band means"
+
+    # every seed its own: nothing to say
+    distinct = [build_fdt_record(store, name=f"rep{i}", seed=i, omegas=(1.0, 2.0, 4.0),
+                                 ratio=(1.0, 3.0, 1.0)) for i in range(2)]
+    rec = cmp.compare("repeats", distinct, fig_sink=sink, store=store)
+    assert not [n for n in rec.body["notices"] if "share seed" in n], rec.body["notices"]
+    assert rec.body["results"]["seeds"] == [0, 1]
+
+
+def test_a_renormalised_blank_is_described_without_an_interpolation_it_never_did(tmp_path):
+    """The whole-piece review's N13 (L817). The blank notice every mode shares speaks of "the common
+    grid" and of blanks "never interpolated across", and renormalise draws the record on its OWN grid
+    and interpolates nothing -- so its record described a step that never ran. It says what is true
+    of a rescaling: the run did not measure those points, and no constant brings them back. The
+    interpolating modes keep their sentence."""
+    store = _store(tmp_path)
+    one = build_fdt_record(store, name="gappy", omegas=(1.0, 2.0, 4.0), ratio=(1.0, float("nan"), 1.5))
+    _seen, sink = _closing()
+    rec = cmp.compare("renormalise", [one], prefactor=3.0, fig_sink=sink, store=store)
+    (said,) = [n for n in rec.body["notices"] if "blank" in n]
+    assert "interpolat" not in said and "common grid" not in said, said
+    assert said.startswith("1 of 3 points of the run's own grid are blank"), said
+    assert "no constant brings them back" in said, said
+    blanks, notices = cmp.blank_notice([np.array([1.0, np.nan])])
+    assert blanks == 1 and "never interpolated across" in notices[0], "the default is unchanged"
+
+
+def test_sweeps_that_do_not_overlap_are_refused_naming_each_sweep_and_its_range(tmp_path):
+    """The whole-piece review's N14 (L826). "Their ranges do not meet" named neither sweep nor range,
+    and the ranges are taken over the operating points that FINISHED -- so two sweeps whose grids
+    overlap on paper can be refused, and the operator could not tell why. The refusal names each
+    sweep and the range of its finished points."""
+    store = _store(tmp_path)
+    om = (0.5, 1.0, 2.0)
+    low = build_fdt_record(store, name="s_low", study="sweep", omegas=om,
+                           points=[(0.0, (1.0, 1.0, 1.0)), (0.5, (1.0, 3.0, 1.1))])
+    apart = build_fdt_record(store, name="s_apart", study="sweep", omegas=om,
+                             points=[(2.0, (1.0, 2.0, 1.0)), (3.0, (1.0, 2.5, 1.0))])
+    with pytest.raises(Refusal) as e:
+        cmp.compare("sweeps", [low, apart], store=store)
+    msg = str(e.value)
+    assert e.value.field == "compare_records" and msg.startswith("The saved runs to compare must "
+                                                                 "overlap in s"), msg
+    assert "'s_low' covers [0, 0.5]" in msg and "'s_apart' covers [2, 3]" in msg, msg
+
+
+def test_a_sweep_slice_prints_the_values_it_compared_to_the_places_it_compared_them(tmp_path):
+    """The whole-piece review's N15 (L830). Rows are compared rounded to twelve decimal places and
+    were printed with ``:g`` -- six significant digits -- so a slice point typed with more digits
+    produced a sentence that contradicts itself ("sliced at s = 0.1, the nearest ... to the slice
+    point s = 0.1"). The sentence, the slice figure's title and the log line print to the precision
+    the comparison is made at."""
+    both = cmp._rows_notice("s", 0.1000001, ["a", "b"], [0.1, 0.1])
+    assert both and "sliced at s = 0.1," in both[0] and "slice point s = 0.1000001" in both[0], both
+    apart = cmp._rows_notice("s", 0.1, ["a", "b"], [0.1000001, 0.1000002])
+    assert "'a' at s = 0.1000001" in apart[0] and "'b' at s = 0.1000002" in apart[0], apart
+
+    store = _store(tmp_path)
+    om = (0.5, 1.0, 2.0)
+    pts = [(0.1, (1.0, 2.0, 1.0)), (0.3, (1.0, 4.0, 1.0))]
+    a = build_fdt_record(store, name="p_a", study="sweep", omegas=om, points=pts)
+    b = build_fdt_record(store, name="p_b", study="sweep", omegas=om, points=pts)
+    titles = []
+
+    def _sink(title, fig):
+        from matplotlib import pyplot as plt
+        titles.append(fig.axes[0].get_title())
+        plt.close(fig)
+
+    cmp.compare("sweeps", [a, b], at=0.1000001, fig_sink=_sink, store=store)
+    assert "Sweep slice at s = 0.1000001" in titles, titles
+
+
 def test_compare_renormalise_rescales_one_run_and_draws_it_against_the_original(tmp_path):
     """Spec §7.1. T_eff/T is LINEAR in the normalisation constant -- spectral.eff_temp_ratio is
     ``prefactor * omega * G / (4 chi'')`` -- so recomputing it with another constant is an exact
@@ -798,7 +947,8 @@ def test_renormalising_a_real_run_equals_measuring_it_again_with_the_other_const
     assert res["n_records"] == 1 and res["n_grid"] == grid.size, res
     peak = res["per_record"][0]
     assert peak["peak_ratio"] == pytest.approx(float(np.nanmax(renormalised)))
-    assert rec.body["notices"] and "never interpolated across" in rec.body["notices"][0]
+    assert rec.body["notices"] and "no constant brings them back" in rec.body["notices"][0], \
+        "renormalise interpolates nothing, and its notice says so (the whole-piece review's N13)"
     assert [r["id"] for r in rec.body["compared"]["records"]] == [measured.id]
 
 

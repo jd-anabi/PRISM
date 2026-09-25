@@ -471,7 +471,8 @@ class _FdtStop(Exception):
 
 def build_fdt_record(store, *, study="single", name="", note="", finished=True,
                      omegas=(0.5, 1.0, 2.0, 4.0), ratio=(1.0, 3.0, 1.2, 1.05),
-                     omega_0=1.0, prefactor=2.0, settings=None, sweep_param="s", points=None):
+                     omega_0=1.0, prefactor=2.0, settings=None, sweep_param="s", points=None,
+                     seed=7):
     """One ``fdt`` record with a real manifest, a real ``data.h5`` and one figure (spec §8.1), written
     in seconds.
 
@@ -482,7 +483,9 @@ def build_fdt_record(store, *, study="single", name="", note="", finished=True,
     group per entry of ``points``, swept in ``sweep_param``, each on the ``omegas`` axis; with no
     ``points`` it holds an empty group, a sweep in which no operating point finished.
     ``finished=False`` leaves the record unfinished on disk with its numbers already written -- the
-    state E2 exists to preserve, and the one a comparison refuses.
+    state E2 exists to preserve, and the one a comparison refuses. ``seed`` is the seed the body
+    records: 7 unless a test gives each record its own, which a repeats comparison reads -- records
+    that share one are one run drawn twice (the whole-piece review's N12).
 
     The figure is drawn on a bare ``matplotlib.figure.Figure``, never through pyplot, so a fixture
     that writes dozens of records leaves no open figure and touches no backend.
@@ -494,7 +497,7 @@ def build_fdt_record(store, *, study="single", name="", note="", finished=True,
     from matplotlib.figure import Figure
     w = store.create("fdt", None, name=name, note=note)
     w.body = {"study": study, "settings": dict(settings or {"n_freqs": len(omegas), "F0": 0.05}),
-              "seed": 7, "grid": None, "points": None, "offgrid": None, "notices": [],
+              "seed": seed, "grid": None, "points": None, "offgrid": None, "notices": [],
               "compared": None, "complete": False, "results": None}
     try:
         with w:

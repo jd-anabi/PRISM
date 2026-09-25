@@ -72,9 +72,11 @@ MODE_OPTIONS: dict[str, tuple[str, ...]] = {
     "cells": (), "repeats": (), "renormalise": ("prefactor",), "sweeps": ("at",),
 }
 
-#: ``mode -> drawer(w, records, *, sink, **options) -> (results, notices)``. Filled by the mode
-#: modules below as each lands; a mode with no drawer is refused, which also covers a mode string
-#: that reached here without passing through the tool's own choices.
+#: ``mode -> drawer(w, records, *, sink, **options) -> (results, notices[, info])``. Filled by the
+#: mode modules below as each lands; a mode with no drawer is refused, which also covers a mode
+#: string that reached here without passing through the tool's own choices. ``info``, when a drawer
+#: returns it, is sentences the record keeps in its notices that ``compare`` logs as information
+#: rather than as warnings (the whole-piece review's N11).
 #:
 #: A drawer runs inside the ENTERED writer and keeps its contract: every figure goes through
 #: ``sink`` and the numbers through ``write_curves``, and ``results`` holds finite numbers only
@@ -349,14 +351,22 @@ def interpolate_onto(grid, omegas, values) -> np.ndarray:
     return out
 
 
-def blank_notice(values: list) -> tuple:
+def blank_notice(values: list, *, interpolated: bool = True) -> tuple:
     """``(blanks, notices)`` -- how many common-grid points are blank in at least one curve, and the
     sentence the record keeps when there are any (spec §7.2: "the drawing says so, in the axis label
-    and in the record's notices")."""
+    and in the record's notices").
+
+    ``interpolated=False`` is renormalise's (the whole-piece review's N13): it draws the run on its
+    OWN grid and interpolates nothing, so the sentence about a common grid and bracketing samples
+    would describe a step that never ran. Its blanks are what the run did not measure, which is all
+    there is to say of them."""
     stack = np.stack([np.asarray(v, dtype=np.float64) for v in values], axis=0)
     blanks = int((~np.isfinite(stack)).any(axis=0).sum())
     if blanks == 0:
         return 0, []
+    if not interpolated:
+        return blanks, [f"{blanks} of {stack.shape[1]} points of the run's own grid are blank: the "
+                        f"run did not measure those frequencies, and no constant brings them back."]
     return blanks, [f"{blanks} of {stack.shape[1]} points on the common grid are blank in at least "
                     f"one run: a point whose bracketing samples include a blank is left blank, "
                     f"never interpolated across."]
@@ -466,10 +476,16 @@ def compare(mode: str, refs, *, name: str = "", note: str = "", fig_sink=None, s
         # note is fixed text and points back at this line, which is all that can name the record
         # an interrupt leaves behind.
         log.info(f"Writing comparison record {w.id} at {w.dir}")
-        results, notices = drawer(w, records, sink=w.fig_sink(fig_sink), **options)
+        results, notices, *rest = drawer(w, records, sink=w.fig_sink(fig_sink), **options)
+        # A drawer may hand back a third list: sentences the record keeps in its notices that are
+        # INFORMATION, not something to act on -- repeats' one-cell report (the whole-piece review's
+        # N11). Logged at info; the rest at warning, as before.
+        info = list(rest[0]) if rest else []
         for sentence in notices:
             log.warning(sentence)
-        finish_record(w, results=results, notices=notices)
+        for sentence in info:
+            log.info(sentence)
+        finish_record(w, results=results, notices=[*notices, *info])
     return store.load_fdt(w.id)
 
 
@@ -548,15 +564,29 @@ def draw_repeats(w, records, *, sink):
     grid = common_grid(curves)             # the backstop of the pre-flight's _shares_a_band
     values = [interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
     blanks, notices = blank_notice(values)
+    notices = list(notices)
+    # E7: repeats use DIFFERENT seeds, and their spread is the measurement error. Records that share
+    # one are one run drawn twice -- a reproducibility check, whose band has no width -- so the mode
+    # names them (the whole-piece review's N12; the owner ruled a notice, R-F6, never a refusal: the
+    # comparison is still a true picture of what was asked) and records every seed in `results`.
+    seeds = [rec.body.get("seed") for rec in records]
+    for seed in dict.fromkeys(s for s in seeds if s is not None and seeds.count(s) > 1):
+        twins = " and ".join(repr(rec.name or rec.id) for rec, s in zip(records, seeds) if s == seed)
+        notices.append(f"{twins} share seed {seed}: they are one run drawn twice, and their spread "
+                       f"is not a measurement error.")
     # P60: "the same cell" is not enforced -- a record's cell lives in its manifest's inputs and
     # nothing stops a caller passing two -- so the mode REPORTS which cells it drew: in the legend
-    # (each curve is labelled by its cell) and here, in the record's notices. Named by
-    # ``labelled_curves``' rule, so two different cells that share a file name count as two.
+    # (each curve is labelled by its cell) and here, in the record's notices (A1). Named by
+    # ``labelled_curves``' rule, so two different cells that share a file name count as two. With ONE
+    # cell the sentence is information, returned apart so ``compare`` logs it at INFO: logged as a
+    # warning it fired on every correct run of this mode (the whole-piece review's N11).
     cells = sorted(set(cell_of))
-    notices = list(notices) + [
-        f"The repeats drawn come from {len(cells)} cell(s): {', '.join(cells)}. The band is the "
-        f"spread across these runs, and it is one cell's measurement error only when every run is "
-        f"of the same cell."]
+    said = (f"The repeats drawn come from {len(cells)} cell(s): {', '.join(cells)}. The band is the "
+            f"spread across these runs, and it is one cell's measurement error only when every run "
+            f"is of the same cell.")
+    info = [said] if len(cells) == 1 else []
+    if len(cells) > 1:
+        notices.append(said)
     stack = np.stack(values, axis=0)
     lo, hi, mean = stack.min(axis=0), stack.max(axis=0), stack.mean(axis=0)
     write_curves(w, grid, values, [c.label for c in curves],
@@ -567,20 +597,23 @@ def draw_repeats(w, records, *, sink):
             band.create_dataset(key, data=np.asarray(arr, dtype=np.float64))
     fig, ax = ratio_axes("FDT ratio across repeats", blanks)
     ax.fill_between(grid, lo, hi, alpha=0.25, color="steelblue", label="spread across the repeats")
-    ax.plot(grid, mean, color="steelblue", linewidth=1.4, label="mean of the repeats")
+    # Markers on every curve, as the other modes draw theirs (the whole-piece review's N11): a line
+    # alone draws nothing for a measured point with a blank on each side.
+    ax.plot(grid, mean, color="steelblue", linewidth=1.4, marker="o", markersize=4,
+            label="mean of the repeats")
     for curve, vals in zip(curves, values):
-        ax.plot(grid, vals, linewidth=0.6, alpha=0.7, label=curve.label)
+        ax.plot(grid, vals, linewidth=0.6, alpha=0.7, marker="o", markersize=3, label=curve.label)
     ax.legend()
     fig.tight_layout()
     sink("FDT ratio across repeats", fig)
     widest = hi - lo
     results = {"n_records": len(curves), "n_grid": int(grid.size), "blanks": blanks,
-               "cells": cells,
+               "cells": cells, "seeds": seeds,
                "widest": _num(np.nanmax(widest)) if np.isfinite(widest).any() else None,
                "band": {"lo": [_num(v) for v in lo], "hi": [_num(v) for v in hi],
                         "mean": [_num(v) for v in mean]},
                "per_record": [peak_of(c, grid, v) for c, v in zip(curves, values)]}
-    return results, notices
+    return results, notices, info
 
 
 def _renormalisable(records) -> Curve:
@@ -630,7 +663,7 @@ def draw_renormalise(w, records, *, sink, prefactor):
     labels = [f"{curve.label} (recorded, {curve.prefactor:g})",
               f"{curve.label} (renormalised, {want:g})"]
     values = [original, renormalised]
-    blanks, notices = blank_notice(values)
+    blanks, notices = blank_notice(values, interpolated=False)
     # Each curve carries the constant ITS numbers were computed with (F55): the original its
     # record's own, the renormalised one the constant supplied -- so a reader of the file never has
     # to know which of the two curves was rescaled to read either correctly.
@@ -664,20 +697,27 @@ def _rounded(x: float) -> float:
     return round(float(x), _SLICE_DECIMALS) + 0.0
 
 
+#: How an operating point is PRINTED: to the precision it is compared at (``_SLICE_DECIMALS``). With
+#: ``:g``'s six digits a slice point typed with more read as the row it was compared with -- "sliced
+#: at s = 0.1 ... slice point s = 0.1", a sentence that contradicts itself (the whole-piece review's
+#: N15). ``.12g`` still prints 0.1 as "0.1".
+_POINT = ".12g"
+
+
 def _rows_notice(param: str, at: float, labels: list, values: list) -> list:
     """The record's sentence when a sweep was not sliced AT the slice point, or the sweeps were not
     sliced at one point: each sweep contributes the row nearest ``at``, and a reader of two curves
     should not have to find out from the legend that they are not one operating point. ``[]`` when
-    every row sits on ``at``."""
+    every row sits on ``at``. Values print to the precision they are compared at (``_POINT``)."""
     if all(_rounded(v - at) == 0.0 for v in values):
         return []
     if all(_rounded(v - values[0]) == 0.0 for v in values):
-        return [f"Both sweeps were sliced at {param} = {values[0]:g}, the nearest operating point "
-                f"each measured to the slice point {param} = {at:g}."]
-    rows = " and ".join(f"{label!r} at {param} = {v:g}" for label, v in zip(labels, values))
+        return [f"Both sweeps were sliced at {param} = {values[0]:{_POINT}}, the nearest operating "
+                f"point each measured to the slice point {param} = {at:{_POINT}}."]
+    rows = " and ".join(f"{label!r} at {param} = {v:{_POINT}}" for label, v in zip(labels, values))
     return [f"The sweeps were sliced at different operating points, the nearest each measured to the "
-            f"slice point {param} = {at:g}: {rows}. A difference between their curves is partly the "
-            f"difference in {param}."]
+            f"slice point {param} = {at:{_POINT}}: {rows}. A difference between their curves is "
+            f"partly the difference in {param}."]
 
 
 def _sweep_rows(rec) -> list:
@@ -752,8 +792,15 @@ def sweep_slice(records, *, at=None) -> SweepSlice:
     lo = max(min(row["param_value"] for row in rr) for rr in rows)
     hi = min(max(row["param_value"] for row in rr) for rr in rows)
     if hi < lo:
+        # Each sweep and the range of its FINISHED points (the whole-piece review's N14): the ranges
+        # are taken over those alone, so two sweeps whose grids overlap on paper can be refused, and
+        # a sentence naming neither left the operator nothing to check.
+        spans = " and ".join(
+            f"{(rec.name or rec.id)!r} covers [{min(r['param_value'] for r in rr):g}, "
+            f"{max(r['param_value'] for r in rr):g}]" for rec, rr in zip(records, rows))
         refuse("compare_records",
-               f"The saved runs to compare must overlap in {param}; their ranges do not meet.")
+               f"The saved runs to compare must overlap in {param}; their ranges do not meet: "
+               f"{spans} (over the operating points that finished).")
     if at is None:
         at = 0.5 * (lo + hi)
     at = float(at)
@@ -826,15 +873,15 @@ def draw_sweeps(w, records, *, sink, at=None):
             curve = h5["curves"][f"{i:03d}"]
             curve.attrs["param_value"] = value
             curve.attrs["omega_0_ref"] = float(row["omega_0_ref"])
-    fig, ax = ratio_axes(f"Sweep slice at {plan.param} = {plan.at:g}", blanks)
+    fig, ax = ratio_axes(f"Sweep slice at {plan.param} = {plan.at:{_POINT}}", blanks)
     for curve, vals in zip(plan.curves, values):
         ax.plot(plan.grid, vals, marker="o", markersize=4, linewidth=1.0, label=curve.label)
     ax.legend()
     fig.tight_layout()
     sink("Sweep slice", fig)
 
-    nearest = ", ".join(f"{v:g}" for v in sliced)
-    log.info(f"Sliced both sweeps at {plan.param} = {plan.at:g} (nearest rows: {nearest})")
+    nearest = ", ".join(f"{v:{_POINT}}" for v in sliced)
+    log.info(f"Sliced both sweeps at {plan.param} = {plan.at:{_POINT}} (nearest rows: {nearest})")
     per_record = [dict(peak_of(c, plan.grid, v), param_value=_num(value))
                   for c, v, value in zip(plan.curves, values, sliced)]
     results = {"n_records": len(records), "n_grid": int(plan.grid.size), "blanks": blanks,
