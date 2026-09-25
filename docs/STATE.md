@@ -1,6 +1,6 @@
 # PRISM — state
 
-**Last updated:** 2026-09-24. **Piece 5, "the secondary analyses", is DONE**: commits
+**Last updated:** 2026-09-25. **Piece 5, "the secondary analyses", is DONE**: commits
 `a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus the documents
 commits that close it (this file's `fec2cde`, its review fixes `6c68a22`, and a count correction), on
 the local `main` branch, NOT YET PUSHED (the owner pushes) — at `6c68a22` `main` was 130 commits
@@ -45,7 +45,8 @@ could not be run as drafted); one fix dispatch took all four code items and 42 c
 behaviour fix test-first, and a scoped re-review approved it with nine minors parked ("Owed" item
 7). The final fast gate, the slow set and the GPU smoke-gate judgement of record are in the gate
 table below.
-**Rows E1–E17 of `docs/checklists/display-walkthrough.md` are OWED by the owner on a real screen.**
+**Rows E1–E17 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen,
+reported 2026-09-25: all seventeen pass** (the gate table below).
 **Piece 4, "GUI usability and the artifact browser", is DONE**:
 commits `5902259`..`80be144` (47), on the local `main` branch, NOT YET PUSHED (the owner pushes) —
 `main` was 49 commits ahead of `origin/main` (`cfe261b`) when it closed: `691a233` (piece 3's
@@ -300,9 +301,9 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
      - ~~The artifact table's numeric columns sort as text~~ — T2 (`d9afaba`).
      - ~~`tests/test_artifact_browser.py:864` asserts the window's picker kinds by EQUALITY~~ —
        T25 (`da5c392`) made it a subset assertion with `"fdt" in seen` (ruling F24).
-     - **Rows E1–E17 of `docs/checklists/display-walkthrough.md` on the real screen** — OWED by the
-       USER. No task may fill their date and result columns; the gate table's walkthrough row, now
-       reading "Not yet run", is filled in when the owner has run them.
+     - ~~Rows E1–E17 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done by the
+       USER, reported 2026-09-25: **all seventeen pass**, recorded in that file's last two columns and
+       in the gate table below.
    - **Piece 6.** The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes
      false (`:49,53-54,76,190-191`), and a README reference section for the tool; and, handed on by
      piece 5's design spec §1.3, the stale memory figures at `PRISM_HANDOFF.md:2615-2616` against
@@ -558,7 +559,7 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
 | **final fast gate, piece 5**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-24 at `7e51275`, after the whole-piece review's fix dispatch and Task 41's documents, on a quiet machine: **964 passed, 1 skipped** (the display-marked test, offscreen), 3 deselected (the three slow tests), **181 warnings**, **14 min 42 s** (882.29 s; wall 14 min 47 s — inside design spec §9's 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing (still `fdt/` with the two legacy PNGs, and `priors/`); no `sbi-logs/`. The warning baseline is piece 4's 181, unchanged across the whole piece: no new warning class appeared. Slowest: `test_user_sbi.py::test_train_and_validate_without_a_loaded_cell` 85.07 s, `::test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 70.89 s, `::test_no_forcing_user_model_full_sbi_pipeline` 42.06 s. Every task had its own one-process gate, recorded in the execution ledger, and so did the fix dispatch (`6be832c`: 964 passed, 181 warnings, 15 min 18 s) |
 | slow set of record, `pytest -m slow -q --durations=5` (piece 5) | 2026-09-24 at `c29320c` (the same code as `7e51275`, which changed documents and two docstrings only), beside the read-only Task 41 document review: **3 passed**, 965 deselected, 102 warnings, **38 min 6 s** (2286.51 s; wall 38 min 8 s), exit 0, against design spec §9's ~45-minute budget. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1396.87 s (piece 4: 1610 s); **new**, `test_tool.py::test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (Task 33) 562.38 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size`, rewritten by Task 34 to assert records and on the fixed seed 20260925 since the review's N40, 322.93 s (302 s solo at Task 36). Afterwards no `Resources/*/sbitest` (the two slow tool tests no longer request `tool_env`, which installed SBITEST into the real `Resources/`; they set `PRISM_ARTIFACTS` themselves, N38), no `sbi-logs/`, tree clean, the real `Artifacts/` unchanged |
 | **GPU smoke gate, piece 5** | 2026-09-24: **judged NOT REQUIRED; the card was not run.** The judgement was re-made against the whole piece, `a0d85da^..c29320c`. The changed lines that create or move a tensor are in `core/FDT/cross_validation.py`, `fdt_pipeline.py` and `sanity.py` — all on the FDT and sweep path, pinned to `cpu_device()` by `cli.make_fdt_config` and `make_param_sweep_config` — in `core/gui/panels/simulate_runner.py` (N17's zero-forcing tensor, on the Live simulation's CPU-pinned path, which the gate does not reach), and in `core/rng.py`: `seeded`'s CUDA branch (fork the device, `torch.manual_seed`) is the base's byte for byte, and its new CPU branch seeds `torch.default_generator`, the CPU half of `manual_seed`, so no CPU draw changes. `core/diagnostics/rng.py` re-exports the same object, and `core/orchestrator.py` only re-imports `PreflightWarning` from `core/refusals.py`. **T28's change to `core/tool/__init__.py` and `core/tool/smoke.py` IS on `smoke`'s path**: it chooses the store root through `temp_store_root` (set by `set_defaults` on smoke's parser) instead of the flag's presence, creates or moves no tensor, and T28's tests pin the root choice; the gate always passes `--store-root` anyway. The fix range `d13ca96..6be832c` touched nothing under `core/SBI`, `core/diagnostics`, `core/orchestrator.py` or `core/tool/smoke.py`, and `core/rng.py` only in its docstring (the re-review verified); nothing under `core/SBI`, `core/Simulator`, `core/Solvers` or `core/Models` changed in the piece. The diagnostic card is not needed either: no line under `core/diagnostics` that moves a tensor changed (only `rng.py`'s re-export). Piece 4's run (`d1f0b98`) remains the last card measurement |
-| display walkthrough, piece-5 rows E1–E17 (`docs/checklists/display-walkthrough.md`) | **Not yet run.** Owed by the owner, on a real screen |
+| display walkthrough, piece-5 rows E1–E17 (`docs/checklists/display-walkthrough.md`) | reported 2026-09-25, the user on the real screen (piece 5 as it stands; the code is `7e51275`, every later commit being documents only): **rows E1–E17 all pass** — the date and result columns of each row record it |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the two copies identical. Run it from the repository root, with `$S` set to
