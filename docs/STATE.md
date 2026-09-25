@@ -30,13 +30,14 @@ offer earlier runs, and the figure watcher points at the record's `figures/`. `f
 take `--store-root`, with the three behaviours that keyed off the flag reworked (smoke's throwaway
 root is its own `temp_store_root` property), and `--seed` (P79) — and, since the review, `--name`
 and `--note`. The tidy-up offers loose files inside a kind directory and a legacy directory beside
-them, in both front ends. The comparison facility has four modes (`compare cells`, `repeats`,
-`renormalise`, `sweeps`, and a "Compare saved …" group on each screen), each writing a comparison
-record. **Execution (2026-09-23/24, Opus 5.5, subagent-driven):** the pre-flight found that the
-brief extractor never carries a plan's preamble and ruled 66 further findings into the tasks;
-every task had a review that drove the real API and its own one-process gate, started with the
-review (the owner's decision of 2026-09-23). A whole-piece review by five lenses, each followed by
-an adversarial verifier, found 0 Critical and 5 Important (a diverged sweep point counted as done,
+them, in both front ends. The comparison facility has four modes — `compare cells`, `repeats`,
+`renormalise` and `sweeps` on the command line, and a "Compare saved runs"/"Compare saved sweeps"
+group on the two analysis screens — each writing a comparison record. **Execution (2026-09-23/24,
+Opus 5.5, subagent-driven):** the pre-flight found that the brief extractor never carries a plan's
+preamble and ruled 66 further findings into the tasks; every task had a review that drove the real
+API and its own one-process gate, from Task 4 on started with the review (the owner's decision of
+2026-09-23). A whole-piece review by five lenses, each followed by an adversarial verifier, found 0
+Critical and 5 Important (a diverged sweep point counted as done,
 a sweep's summary naming no point's own ratio, a delete prompt false for a run writing in another
 process, no names for the tool's records or the window's comparisons, and a walkthrough row that
 could not be run as drafted); one fix dispatch took all four code items and 42 cheap fixes, each
@@ -80,11 +81,11 @@ one ordered list so a test sees what a user sees (B17). A whole-piece review by 
 readers (correctness, spec compliance, tests, the hazards no CPU suite reaches) found 0 Critical, 12
 Important and 38 Minor findings; the fix wave landed in `e9318ff`, `114711b`, `5e4543b`, `ee2dd33`,
 `80be144` with a scoped re-review — ten of the twelve Importants addressed there, the other two being
-this piece's own spec-document corrections, made by this documents task. The final fast gate, the
-slow set and the GPU smoke gate of record are in the table below; the diagnostic card was judged
-unnecessary (no line under `core/diagnostics` moves a tensor) and that judgement held. **Rows D1–D17
-of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen on 2026-09-21: all
-seventeen pass** (the gate table below).
+that piece's own spec-document corrections, made by that piece's documents task. The final fast
+gate, the slow set and the GPU smoke gate of record are in the table below; the diagnostic card was
+judged unnecessary (no line under `core/diagnostics` moves a tensor) and that judgement held.
+**Rows D1–D17 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen on
+2026-09-21: all seventeen pass** (the gate table below).
 **Piece 6 is next** ("Owed" item 7). Piece 3
 (`3db271e`..`9e2f7ef`) is DONE and pushed, and its rows C1–C11 all pass; piece 2
 (`0016dae`..`d34997c`) is also pushed, and its rows B1–B8 all pass.
@@ -133,9 +134,10 @@ seventeen pass** (the gate table below).
   the Fisher step (the costly rotation computed before training simulates) and before any
   simulation (D7); the tool refuses by default and `--accept-*` maps onto `Accept` (D8); every
   driven chi recording states its drive frequency in Hz (D9).
-- **Piece 3 is DONE** (2026-09-16/17, commits `3db271e`..`9e2f7ef`, on the local `main` branch, not
-  yet pushed). It follows the design `docs/superpowers/specs/2026-09-15-validation-and-logging-design.md`
-  (§1.1 holds decisions V1–V9; §11 lists the deviations ruled during execution) and the 24 tasks of
+- **Piece 3 is DONE** (2026-09-16/17, commits `3db271e`..`9e2f7ef`, on the local `main` branch,
+  pushed — `origin/main` is `cfe261b`, its last documents commit). It follows the design
+  `docs/superpowers/specs/2026-09-15-validation-and-logging-design.md` (§1.1 holds decisions V1–V9;
+  §11 lists the deviations ruled during execution) and the 24 tasks of
   `docs/superpowers/plans/2026-09-16-validation-and-logging.md`. Each task had tests written first, a
   review and fix loop, and a one-process fast gate. A whole-piece review then ran as four independent
   readers (correctness, spec compliance, tests, the hazards no CPU suite reaches). They found two
@@ -281,8 +283,8 @@ seventeen pass** (the gate table below).
        and the pre-spend refusals (T8–T16); the single-cell run as a public entry writing a record
        with its numbers (T17–T18); the sweep split into two records with its failure counts
        (T19–T20); the screens' pickers and watcher (T24–T27); the command line's `--store-root`,
-       `--seed`, refusals and tidy-up (T28–T31); and the comparison facility (T36–T40). Nothing is
-       written to `artifacts_root()/crossval` any more.
+       `--seed`, refusals and tidy-up (T28–T30), and the Artifacts screen's tidy-up (T31); and the
+       comparison facility (T36–T40). Nothing is written to `artifacts_root()/crossval` any more.
      - ~~The cell-folder branch of the `fdt` unsupported-model hint is untested~~ — T29 (`70d23ab`).
      - ~~Only `plot_psd` of the four `core/FDT/plots.py` functions is unit-tested for closing its
        figure~~ — T32 (tests only: all four functions already closed their figures since `bb22ac4`;
@@ -301,7 +303,9 @@ seventeen pass** (the gate table below).
        USER. No task may fill their date and result columns; the gate table's walkthrough row, now
        reading "Not yet run", is filled in when the owner has run them.
    - **Piece 6.** The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes
-     false (`:49,53-54,76,190-191`), and a README reference section for the tool.
+     false (`:49,53-54,76,190-191`), and a README reference section for the tool; and, handed on by
+     piece 5's design spec §1.3, the stale memory figures at `PRISM_HANDOFF.md:2615-2616` against
+     `:6756` (opposite status for the same two items).
    - **Open, with no piece owning them yet** (the owner decides each, or where it goes):
      - *Science.* In `identifiability jacobian`, a NaN in a measurable Jacobian column makes the
        least-squares step raise `LinAlgError` after all the simulations are spent (the retired
@@ -414,15 +418,20 @@ seventeen pass** (the gate table below).
        `artifacts note` from a second shell is overwritten by the running writer's next refresh, and
        deleting a live record from another process now leaves nothing rather than a husk (§12 row
        36). Piece 4's delete half-deletes a record when a file late in its walk is read-only.
+     - *From piece 5, out of scope by spec §1.3.* Resuming an interrupted sweep — not asked for; E2
+       keeps the folder so its data file can be read, not so a later run can continue it. A later
+       piece, if wanted.
      - *From piece 5, for a later refusals-hardening pass.* Builder paths no front end reaches:
        `int()` coercion of counts, NaN or infinite counts, a malformed `freq_bounds`, and agreement
        between `preset` and `preset_name` (review items L473, L483). `_newest_mtime` walks into
        directory junctions (latency only, pre-existing, L396).
      - *From piece 5, cosmetic or breadth* — each judged not worth a change now, listed with its
-       reason in `final-review-synthesis.md` §3: e.g. `remove_loose`'s alias handling (L394), a
-       refusal printed three times on a one-sided study failure (L616), an empty surface panel for a
-       one-point sweep (L826), stale "Runs to compare" entries after a delete and comparison tabs
-       piling up with one title (L839), curve colours and keying (L807), literal captions (L641).
+       reason in `final-review-synthesis.md` §3: e.g. `remove_loose`'s alias handling (L394), the
+       both-sweeps-measured-nothing case printing its refusal three times (L616; since N9 each
+       sweep's error line carries its own sentence and one refusal names both grids — revisit
+       whether that still reads as repetition), an empty surface panel for a one-point sweep (L826),
+       stale "Runs to compare" entries after a delete and comparison tabs piling up with one title
+       (L839), curve colours and keying (L807), literal captions (L641).
      - *From piece 5, the fix re-review's nine parked minors* (`final-fix-rereview.md` §Minor; the
        ledger's ruling parked them rather than send a second fix loop — none load-bearing; its cost:
        a regression of the negative-grid or zero-knob refusal would HANG a gate instead of failing
@@ -546,7 +555,7 @@ seventeen pass** (the gate table below).
 | display walkthrough, piece-4 rows D1–D17 (`docs/checklists/display-walkthrough.md`) | 2026-09-21, the user on the real screen at `44ed3ed` (piece 4 as it stands; the code is `80be144`, that commit being documents only): **rows D1–D17 all pass** — the Artifacts tile and its seven kinds, the empty kind's "Nothing here yet.", a cache's batches-against-planned row and its finished form, the detail pane's manifest-then-records and the cache's no-log sentence, the note set/cleared/refused, delete refused by a dependent (the fingerprint-only cache included), the unfinished cache's batch-count confirmation with No then Yes, the sweep of manifest-less directories only, the picker refreshed after a delete, Note/Delete/Sweep refused while a run is live with reading still working, the live-run header line with the tile and tab markers, Apply's session line and its No, "narrowed (TSNPE)" in the closed dropdown, the blank probe row reported as blank, no doubled `core` line and the `library: <logger>: ` prefix, the taskbar mark after the header's new slot (row 1 re-run), and the table's colours, sorting and column widths in Light and Dark. Rows 1–20, A1–A9, B1–B8 and C1–C11 stand |
 | `pytest --collect-only -q` after piece 5 | 2026-09-24 at `7e51275`: **968** collected (the fast gate's 964 passed and 1 skipped, plus the 3 slow tests), 236 more than the 732 at `80be144` — **above** design spec §8.4's stated band of 170 ± 40 added, by 26. The 40 tasks added 185 (917 at `7b12c34`, inside the band); the whole-piece review's fix dispatch added 51 more (its fixes' tests and its test-only items N31–N42); the overrun is recorded here, not in the design's §12. `tests/test_*.py` holds nineteen suites (the new one is `tests/test_fdt_compare.py`) |
 | **final fast gate, piece 5**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-24 at `7e51275`, after the whole-piece review's fix dispatch and Task 41's documents, on a quiet machine: **964 passed, 1 skipped** (the display-marked test, offscreen), 3 deselected (the three slow tests), **181 warnings**, **14 min 42 s** (882.29 s; wall 14 min 47 s — inside design spec §9's 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing (still `fdt/` with the two legacy PNGs, and `priors/`); no `sbi-logs/`. The warning baseline is piece 4's 181, unchanged across the whole piece: no new warning class appeared. Slowest: `test_user_sbi.py::test_train_and_validate_without_a_loaded_cell` 85.07 s, `::test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 70.89 s, `::test_no_forcing_user_model_full_sbi_pipeline` 42.06 s. Every task had its own one-process gate, recorded in the execution ledger, and so did the fix dispatch (`6be832c`: 964 passed, 181 warnings, 15 min 18 s) |
-| slow set of record, `pytest -m slow -q --durations=5` (piece 5) | 2026-09-24 at `c29320c` (the same code as `7e51275`, which changed documents only), beside the read-only Task 41 document review: **3 passed**, 965 deselected, 102 warnings, **38 min 6 s** (2286.51 s; wall 38 min 8 s), exit 0, against design spec §9's ~45-minute budget. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1396.87 s (piece 4: 1610 s); **new**, `test_tool.py::test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (Task 33) 562.38 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size`, rewritten by Task 34 to assert records and on the fixed seed 20260925 since the review's N40, 322.93 s (302 s solo at Task 36). Afterwards no `Resources/*/sbitest` (the two slow tool tests now set `PRISM_ARTIFACTS` themselves, N38), no `sbi-logs/`, tree clean, the real `Artifacts/` unchanged |
+| slow set of record, `pytest -m slow -q --durations=5` (piece 5) | 2026-09-24 at `c29320c` (the same code as `7e51275`, which changed documents and two docstrings only), beside the read-only Task 41 document review: **3 passed**, 965 deselected, 102 warnings, **38 min 6 s** (2286.51 s; wall 38 min 8 s), exit 0, against design spec §9's ~45-minute budget. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1396.87 s (piece 4: 1610 s); **new**, `test_tool.py::test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (Task 33) 562.38 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size`, rewritten by Task 34 to assert records and on the fixed seed 20260925 since the review's N40, 322.93 s (302 s solo at Task 36). Afterwards no `Resources/*/sbitest` (the two slow tool tests no longer request `tool_env`, which installed SBITEST into the real `Resources/`; they set `PRISM_ARTIFACTS` themselves, N38), no `sbi-logs/`, tree clean, the real `Artifacts/` unchanged |
 | **GPU smoke gate, piece 5** | 2026-09-24: **judged NOT REQUIRED; the card was not run.** The judgement was re-made against the whole piece, `a0d85da^..c29320c`. The changed lines that create or move a tensor are in `core/FDT/cross_validation.py`, `fdt_pipeline.py` and `sanity.py` — all on the FDT and sweep path, pinned to `cpu_device()` by `cli.make_fdt_config` and `make_param_sweep_config` — in `core/gui/panels/simulate_runner.py` (N17's zero-forcing tensor, on the Live simulation's CPU-pinned path, which the gate does not reach), and in `core/rng.py`: `seeded`'s CUDA branch (fork the device, `torch.manual_seed`) is the base's byte for byte, and its new CPU branch seeds `torch.default_generator`, the CPU half of `manual_seed`, so no CPU draw changes. `core/diagnostics/rng.py` re-exports the same object, and `core/orchestrator.py` only re-imports `PreflightWarning` from `core/refusals.py`. **T28's change to `core/tool/__init__.py` and `core/tool/smoke.py` IS on `smoke`'s path**: it chooses the store root through `temp_store_root` (set by `set_defaults` on smoke's parser) instead of the flag's presence, creates or moves no tensor, and T28's tests pin the root choice; the gate always passes `--store-root` anyway. The fix range `d13ca96..6be832c` touched nothing under `core/SBI`, `core/diagnostics`, `core/orchestrator.py` or `core/tool/smoke.py`, and `core/rng.py` only in its docstring (the re-review verified); nothing under `core/SBI`, `core/Simulator`, `core/Solvers` or `core/Models` changed in the piece. The diagnostic card is not needed either: no line under `core/diagnostics` that moves a tensor changed (only `rng.py`'s re-export). Piece 4's run (`d1f0b98`) remains the last card measurement |
 | display walkthrough, piece-5 rows E1–E17 (`docs/checklists/display-walkthrough.md`) | **Not yet run.** Owed by the owner, on a real screen |
 
@@ -816,20 +825,23 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     `.superpowers/sdd/2026-09-22-secondary-analyses/` (`recon/`, `spec-review/`, `progress.md` with
     rulings R1–R10, each carrying what it costs if it is wrong).
   - The plan (`e902256`+`5354e6b`) carries 82 planning rulings, P1–P82; the spec's §12 rows 1–10 are
-    the ones that depart from the spec. D11 and D12 stay standing refusals; this piece re-opened
-    neither.
-  - The execution rulings are in the spec's §12 (rows from 11) and in the gitignored ledger
+    the planning-time departures recorded at planning time, and rows 11, 12 and 21 are three more
+    planning-time departures recorded only at the end of the piece (§12's preamble). D11 and D12
+    stay standing refusals; this piece re-opened neither.
+  - The execution rulings are the rest of the spec's §12 (rows 13–20 and 22–36: pre-flight F-, task
+    T- and the review's M/N/R-F rulings) and the gitignored ledger
     `.superpowers/sdd/2026-09-22-secondary-analyses/progress.md`.
   - Execution rulings a later piece would otherwise re-litigate, each with what it costs if wrong:
     - **The brief extractor drops a plan's preamble**, so every ruling is folded INTO the task body
       it binds (pre-flight, `cbc2187`), with a stated precedence: the latest controller block beats
       the amendments, which beat the task text. *Cost: a task body carries up to three layers an
       implementer must reconcile in order.*
-    - **Every task is gated, and the gate starts at the same moment as the task's review** (the
-      owner's decision of 2026-09-23). A gate's wall time on this shared machine is NOT a regression
-      signal on its own — a count or warning change is; the gates of record run on a quiet machine.
-      *Cost: a global slowdown could hide in the noise until the final gate, which is why that gate
-      is taken quiet.*
+    - **Every task is gated, and from Task 4 on the gate starts at the same moment as the task's
+      review** (the owner's decision of 2026-09-23; gate t1 had run solo, after its review). A
+      gate's wall time on this shared machine is NOT a regression signal on its own — a count or
+      warning change is, or a slowdown concentrated in the tests the task touched; the final fast
+      gate of record runs on a quiet machine. *Cost: a global slowdown could hide in the noise until
+      the final gate, which is why that gate is taken quiet.*
     - **A sweep's `results` is one entry per finished operating point**, each at its own resonance,
       with the top-level `ratio_at_resonance` null and `offgrid.of` counting only measured probes
       (the review's M2, re-litigating P78, whose single-run summary did not carry over to a
@@ -847,8 +859,10 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
       name.*
     - **`PreflightWarning` lives in the torch-free `core/refusals.py`** (re-exported by
       `core.orchestrator`), and `seeded` in the light `core/rng.py` (re-exported by
-      `core.diagnostics.rng`), so an FDT run loads neither sbi nor the diagnostics. *Cost: two
-      names moved module; every old import keeps working.*
+      `core.diagnostics.rng`), so an FDT run loads neither the orchestrator (and with it sbi's
+      inference modules and pytensor) nor the diagnostics — only the bare `sbi` package, whose
+      version every manifest's provenance records. *Cost: two names moved module; every old import
+      keeps working.*
     - **The GPU smoke gate was judged not required** against the whole piece: every changed line
       that creates or moves a tensor is either off `smoke`'s path (CPU-pinned FDT, sweep and Live
       simulation code) or, in `core/rng.py`'s `seeded`, identical to the base on CUDA (the gate row
@@ -858,4 +872,19 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
       end-of-piece process is one fix dispatch and one scoped re-review, and none is load-bearing
       ("Owed" item 7 lists them). *Cost: a regression of the negative-grid or zero-knob refusal
       would hang a gate instead of failing it — visible, but slow.*
+    - **The note rule is run by each front end**, never by the store (a store-level ruling at Task
+      25 was superseded, keeping piece 4's store contract): both panels run `require_note` at the
+      click, for a run's Note and a comparison's alike, and the tool's `main` judges any `--note`
+      once, before any subcommand's handler. *Cost: an over-long or multi-line `--note` that used to
+      be stored is refused before any spend; several call sites instead of one.*
+    - **`artifacts sweep ""` is refused as an unknown kind** (exit 1), while `artifacts list ""`
+      lists every kind (T30's D2). *Cost: the two readings of an empty kind disagree, on purpose —
+      the delete command takes the safer one.*
+    - **The CrossVal panel fills each grid's ends in ascending order** (min and max of the limit and
+      the cell's value), so a cell with T_a/T < 1 is not refused on the panel's own defaults. *Cost:
+      a descending sweep is computed ascending; a cell exactly at the limit is refused as an empty
+      sweep.*
+    - **A sweep record's `settings` names the held parameter** (`held`: `{'temp': 1.0}` on the S
+      sweep, `{'s': 0.0}` on the T_a/T sweep; the review's N7). *Cost: none; the value was only in
+      `data.h5`.*
 
