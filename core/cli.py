@@ -505,6 +505,15 @@ def make_param_sweep_config(cell_file: str, *, preset: dict, preset_name: str,
         seed = require_seed(seed)
     s_spec = _check_grid("s_grid", s_spec)
     t_spec = _check_grid("t_grid", t_spec)
+    if t_spec[0] < 0:
+        # The owner's ruling on the whole-piece review's M1 (R-F1): a negative T_a/T is unphysical,
+        # and it is the one known way a sweep point diverges -- the model takes a square root of it,
+        # which torch answers with NaN rather than an error. 0 stays legal (no active noise is a
+        # meaningful operating point) and S has no floor; any other diverging point is a failed point
+        # in the sweep itself.
+        refuse("t_grid", f"The temperature sweep grid must not reach below 0: T_a/T is a ratio of two "
+                         f"temperatures, so a negative value is unphysical, and the simulation "
+                         f"diverges there; got a minimum of {t_spec[0]:g}.")
     require_file("cell", cell_file, "cell")
     (inits_dict, params_dict, rescale_params, force_params_dict,
      units_dict, _, _) = parse_cell(cell_file, model="NADROWSKI")

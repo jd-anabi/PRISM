@@ -1606,6 +1606,27 @@ def test_a_seed_the_generator_cannot_take_is_refused_naming_the_flag(tool_env, c
     assert after == before, "a refused seed opened a record"
 
 
+def test_a_temperature_grid_below_zero_is_refused_naming_the_flag_before_any_record(tool_env, capsys):
+    """The whole-piece review's M1, fix 3, at the command line (ruling R-F1). ``--t-grid`` is three
+    plain floats, so a negative end reached the sweep, where every point's simulation diverged and
+    the study recorded two "finished" sweeps that measured nothing. The builder refuses it now --
+    exit 1, one ``refused:`` line ending in the flag -- before either record is created."""
+    _bounds, _cell, root = tool_env
+    kind_dir = Path(root) / "fdt"
+    before = sorted(kind_dir.iterdir()) if kind_dir.is_dir() else []
+
+    nad = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    capsys.readouterr()
+    assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
+                 "--t-grid", "-1", "-0.5", "2"]) == 1
+    err = capsys.readouterr().err
+    lines = [ln for ln in err.splitlines() if ln.startswith("prism crossval: refused:")]
+    assert len(lines) == 1, err
+    assert "must not reach below 0" in lines[0] and lines[0].endswith("(--t-grid)"), lines[0]
+    after = sorted(kind_dir.iterdir()) if kind_dir.is_dir() else []
+    assert after == before, "a refused grid opened a record"
+
+
 def test_crossval_preset_choices_match_sweep_presets():
     """M5, fix round 1: ``--preset``'s hard-coded choices stay hard-coded -- importing ``core.cli``
     while building the parser would cost a torch import on plain ``--help`` -- so this pins the two

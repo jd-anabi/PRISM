@@ -183,6 +183,32 @@ def warn_thin_settings(cfg: FDTConfig) -> list:
     return notices
 
 
+def _refuse_a_diverged_spectrum(cfg, freqs_psd, G) -> None:
+    """Refuse a spontaneous spectrum with no finite value at any positive frequency: the simulation
+    diverged, and there is nothing to measure against it (field ``cell``).
+
+    ONE test and one sentence for both studies (the whole-piece review's M1). ``run_fdt`` raises it
+    straight after Campaign 1, before the peak search -- argmax takes NaN for the largest value, so
+    the search would return the first bin as the resonance, and the band check and the
+    nothing-measurable refusal would then describe a band that does not exist (the review of Task
+    16). The sweep raises it inside each operating point's guard, where it makes that point a FAILED
+    one with this sentence as its ``error``: before, the point's resonance search fell back to the
+    linearised estimate without a word, and the point was counted done with every probe booked as
+    off-grid. field="cell": neither the band nor the recording length can help; what diverged is the
+    cell's dynamics. A spectrum non-finite in only SOME bins is not this refusal -- its blanks are
+    counted like any other. A grid with no positive bin at all (a one-sample recording) is not a
+    divergence either, and is not called one.
+    """
+    positive = freqs_psd > 0
+    if bool(positive.any()) and not bool(torch.isfinite(G[positive]).any()):
+        raise Refusal(
+            f"The spontaneous simulation diverged: its spectrum holds no finite value at any positive "
+            f"frequency, so there is nothing to measure. Neither the frequency band (freq_bounds) nor "
+            f"the recording length (psd_T_obs_nd = {cfg.psd_T_obs_nd:g}) can help; what diverged is "
+            f"the cell's own dynamics, integrated at dt_nd = {cfg.dt_nd:g}.",
+            field="cell")
+
+
 def _nothing_measurable(cfg, n_probes: int, omega_lo: float, lo_res: float, hi_res: float) -> str:
     """The refusal's words when every probe frequency came back blank (spec §3.6, E4).
 
@@ -331,24 +357,10 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     )
     log.info(f"Saved spontaneous trajectory plot to: {traj_path}")
 
-    # A spontaneous simulation that diverged leaves a spectrum with no finite value at any positive
-    # frequency, and there is nothing to measure against it. Refused HERE, before the peak search:
-    # argmax takes NaN for the largest value, so the search would return the first bin as the
-    # resonance, and the band check and the nothing-measurable refusal below would then describe a
-    # band that does not exist -- advice that is false and a diagnosis never said (the review of Task
-    # 16). After the trajectory figure, which is the picture that shows the divergence, and which the
-    # folder keeps (E2). field="cell": neither the band nor the recording length can help; what
-    # diverged is the cell's dynamics. A spectrum non-finite in only SOME bins is not this refusal --
-    # its blanks are counted below like any other. A grid with no positive bin at all (a one-sample
-    # recording) is not a divergence either, and is not called one.
-    positive = freqs_psd > 0
-    if bool(positive.any()) and not bool(torch.isfinite(G[positive]).any()):
-        raise Refusal(
-            f"The spontaneous simulation diverged: its spectrum holds no finite value at any positive "
-            f"frequency, so there is nothing to measure. Neither the frequency band (freq_bounds) nor "
-            f"the recording length (psd_T_obs_nd = {cfg.psd_T_obs_nd:g}) can help; what diverged is "
-            f"the cell's own dynamics, integrated at dt_nd = {cfg.dt_nd:g}.",
-            field="cell")
+    # A spontaneous simulation that diverged is refused HERE, before the peak search (the helper says
+    # why), and after the trajectory figure, which is the picture that shows the divergence and which
+    # the folder keeps (E2).
+    _refuse_a_diverged_spectrum(cfg, freqs_psd, G)
 
     # 4. Find natural frequency from the PSD peak directly (no search band).
     #    The PSD's argmax (skipping the DC bin) is robust because the peak is

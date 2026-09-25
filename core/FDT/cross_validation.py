@@ -38,8 +38,8 @@ from ..runs import public_entry
 from .campaigns import run_campaign1_psd, run_campaign2_chi, observable_noise_prefactor
 from .spectral import eff_temp_ratio
 from .sanity import _interp_log
-from .fdt_pipeline import (_estimate_omega_0, _resolve_seed, _results_block, _settings_block,
-                           thin_notices, warn_thin_settings)
+from .fdt_pipeline import (_estimate_omega_0, _refuse_a_diverged_spectrum, _resolve_seed,
+                           _results_block, _settings_block, thin_notices, warn_thin_settings)
 from .cross_validation_plots import plot_fdt_3d_vs_param
 
 # Phase banners and per-point progress are information; an operating point that failed in either
@@ -251,7 +251,9 @@ def run_fdt_param_sweep(
     Phase B), so an interrupt still leaves a partially-populated, readable file.
 
     An operating point that fails in EITHER phase is logged, recorded in its group's ``error``
-    attribute and COUNTED, and the sweep goes on (spec §4.3, E4); ``body.points`` is refreshed after
+    attribute and COUNTED, and the sweep goes on (spec §4.3, E4) -- and a point whose spontaneous
+    spectrum or driven susceptibility diverged (no finite value at all) is such a failure, not a
+    landed point with every probe blank (the whole-piece review's M1). ``body.points`` is refreshed after
     every point, so the listings follow the counts while the sweep runs. Some points failed is a
     completed record carrying the count. All points failed is a ``Refusal`` naming the grid and the
     cell (field ``s_grid`` or ``t_grid``), raised AFTER the record's final refresh and from inside the
@@ -363,6 +365,12 @@ def run_fdt_param_sweep(
                     # would make point k's draw depend on how many points preceded it.
                     with seeded(_point_seed(seed, sweep_param, 0, idx), cfg.hw.device):
                         freqs_psd, G = run_campaign1_psd(cfg_op)
+                    # run_fdt's own test and sentence, BEFORE the resonance search (the whole-piece
+                    # review's M1): on a spectrum with no finite value that search falls back to the
+                    # linearised estimate without a word, and Phase B then counted the point DONE with
+                    # every probe booked as off-grid -- so a sweep whose every point diverged finished
+                    # as a success. Raised here, the point is a counted failure with this as its error.
+                    _refuse_a_diverged_spectrum(cfg_op, freqs_psd, G)
                     w0, res = _detect_resonance(freqs_psd, G, omega_0_lin)
                 except Exception as e:         # noqa: BLE001 -- counted, recorded, and the sweep goes on
                     # Phase A caught NOTHING before piece 5: one bad operating point ended the study with
@@ -427,8 +435,16 @@ def run_fdt_param_sweep(
                         # The peak line FIRST, before anything about this point is called a success: an
                         # EMPTY ratio raises here, and a group already flipped to failed=False would then
                         # be counted a failure and stored as a success at the same time. An all-blank
-                        # ratio does not raise; it lands.
+                        # ratio does not raise; it lands -- unless its driven campaign diverged, below.
                         log.info(f"      T_eff/T peak = {_peak_of(ratio)}")
+                        # A susceptibility with no finite value at any probe is a driven simulation that
+                        # diverged: the point measured nothing, whatever the spontaneous spectrum could
+                        # supply, and is a FAILED point (the whole-piece review's M1) rather than a
+                        # landed one whose probes all read as blank.
+                        if not bool(torch.isfinite(chis).any()):
+                            raise RuntimeError(
+                                "The driven simulation diverged: its susceptibility holds no finite "
+                                "value at any probe frequency, so this operating point measured nothing.")
                         # The probes the SPONTANEOUS spectrum could not supply, and only those -- what
                         # the single-cell record counts (torch.isnan(G_at_omegas) in fdt_pipeline), so
                         # offgrid means one thing in both study types. Recomputed with the interpolation

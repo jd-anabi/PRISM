@@ -1264,6 +1264,35 @@ def test_make_param_sweep_config_refuses_a_blank_grid_and_records_the_preset_nam
     assert e.value.field == "ensemble_m" and "at least 1" in str(e.value)
 
 
+def test_a_temperature_grid_reaching_below_zero_is_refused_and_zero_is_allowed():
+    """The whole-piece review's M1, fix 3, as the owner ruled it (R-F1). A negative T_a/T is
+    unphysical -- the active temperature below zero -- and it is the one known way a sweep point
+    diverges: the model takes a square root of it, which torch answers with NaN rather than an error,
+    so every such point's spectrum came back empty and the sweep booked the point as done. It is
+    refused under ``t_grid`` before anything is spent. Zero stays LEGAL (no active noise is a
+    meaningful operating point), and S has no floor: any other diverging point is caught by the
+    sweep's own per-point checks."""
+    import pytest
+
+    from core import cli, config
+    from core.refusals import Refusal
+
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    ok = dict(preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+              s_spec=(0.0, 0.5, 3), t_spec=(1.0, 1.5, 3))
+    for spec in ((-1.0, -0.5, 2), (-0.1, 1.0, 3)):
+        with pytest.raises(Refusal) as e:
+            cli.make_param_sweep_config(cell, **{**ok, "t_spec": spec})
+        msg = str(e.value)
+        assert e.value.field == "t_grid", e.value.field
+        assert msg.startswith("The temperature sweep grid must not reach below 0") and \
+            f"got a minimum of {spec[0]:g}" in msg, msg
+    _cfg, _s, t_grid = cli.make_param_sweep_config(cell, **{**ok, "t_spec": (0.0, 1.0, 3)})
+    assert t_grid[0] == 0.0, "a zero T_a/T is a meaningful operating point and stays legal"
+    _cfg, s_grid, _t = cli.make_param_sweep_config(cell, **{**ok, "s_spec": (-0.5, 0.5, 3)})
+    assert s_grid[0] == -0.5, "the ruling sets no floor on S"
+
+
 def test_a_thin_setting_warns_and_hands_back_the_sentence_for_the_record():
     """E5: checks refuse what BREAKS; a setting too thin to trust warns instead, and the warning is
     recorded. A one-frequency grid and a two-trajectory ensemble both produce a real number -- the
@@ -2072,6 +2101,114 @@ def test_a_sweep_whose_first_phase_lost_every_point_refuses_without_a_common_gri
     assert (summary.points_done, summary.points_failed) == (0, 2) and not summary.finished
 
 
+def _diverging_phase_a(monkeypatch, diverged):
+    """Phase A's campaign stubbed so the points whose CALL index is in ``diverged`` come back the way a
+    diverged simulation does -- a spectrum with no finite value at any positive frequency -- and every
+    other point comes back as ``_sweep_stubs``' flat spectrum."""
+    from core.FDT import cross_validation as cv
+
+    calls = {"n": 0}
+
+    def _c1(cfg_op):
+        idx = calls["n"]
+        calls["n"] += 1
+        G = (torch.full((8,), math.nan, dtype=torch.float64) if idx in diverged
+             else torch.ones(8, dtype=torch.float64))
+        return torch.linspace(0.1, 40.0, 8, dtype=torch.float64), G
+
+    monkeypatch.setattr(cv, "run_campaign1_psd", _c1)
+
+
+def _point_errors(data_path) -> dict:
+    """``{group key: its error attribute}`` for every operating point of a sweep's data.h5 that has one."""
+    import h5py
+    with h5py.File(data_path, "r") as h5:
+        ops = h5["operating_points"]
+        return {k: str(ops[k].attrs["error"]) for k in sorted(ops) if "error" in ops[k].attrs}
+
+
+def test_a_sweep_point_whose_spontaneous_simulation_diverged_is_a_failed_point(store, monkeypatch):
+    """The whole-piece review's M1 (C1). Phase A never looked at the spontaneous spectrum: a point
+    whose simulation diverged returned a spectrum NaN in every bin, the resonance search quietly fell
+    back to the linearised estimate, Phase B then booked every one of its probes as off-grid and
+    counted the point DONE -- so a sweep where every point diverged committed a finished record,
+    ``done N, failed 0``, which the CrossVal picker offered and ``compare sweeps`` accepted. A
+    single-cell run refuses the same spectrum (field ``cell``). The sweep now applies that run's own
+    test, with its own sentence, straight after each point's Campaign 1: the point is FAILED, its
+    reason in its ``error`` attribute, and a sweep that measured nothing reaches the all-failed
+    refusal it always should have.
+
+    Two cases: every point diverged (the refusal, an unfinished record, Phase B never entered), and one
+    point of three (a finished record counting it failed)."""
+    import pytest
+    from core import cli, config
+    from core.FDT import cross_validation as cv
+    from core.refusals import Refusal
+
+    _sweep_stubs(monkeypatch)
+    _diverging_phase_a(monkeypatch, {0, 1})
+    driven = []
+    monkeypatch.setattr(cv, "_campaign2_ratio", lambda *a: driven.append(a))
+    cfg, s_grid, _t = _thin_study_cfg()
+    cfg.seed = 1
+    w = store.create("fdt", cfg, name="all_diverged")
+    with pytest.warns(UserWarning, match="2/2 operating points failed"):
+        with pytest.raises(Refusal) as e:
+            cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
+    assert e.value.field == "s_grid" and "measured nothing" in str(e.value), str(e.value)
+    assert driven == [], "Phase B ran on points whose spectra diverged"
+    (summary,) = store.list("fdt")
+    assert not summary.finished and (summary.points_done, summary.points_failed) == (0, 2)
+    errors = _point_errors(w.dir / "data.h5")
+    assert sorted(errors) == ["000", "001"], errors
+    assert all(m.startswith("The spontaneous simulation diverged") for m in errors.values()), errors
+
+    # one point of three diverged: counted failed, and the sweep finishes on the other two
+    _sweep_stubs(monkeypatch)
+    _diverging_phase_a(monkeypatch, {1})
+    cfg, s_grid, _t = cli.make_param_sweep_config(
+        str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
+        preset=dict(cli.SWEEP_PRESETS["exploratory"]), preset_name="exploratory",
+        s_spec=(0.0, 0.2, 3), t_spec=(1.0, 1.1, 2), n_freqs=3, ensemble_M=2, seed=1)
+    with pytest.warns(UserWarning, match="1/3 operating points failed"):
+        rec = cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
+                                     writer=store.create("fdt", cfg, name="one_diverged"))
+    assert rec.body["complete"] is True
+    assert rec.body["points"] == {"param": "s", "planned": 3, "done": 2, "failed": 1}, rec.body["points"]
+    assert list(_point_errors(rec.data_path)) == ["001"]
+
+
+def test_a_sweep_point_whose_driven_simulation_diverged_is_a_failed_point(store, monkeypatch):
+    """M1's Phase-B half. A driven campaign whose susceptibility holds no finite value at any probe
+    measured nothing at that point, whatever the spontaneous spectrum supplied: it used to LAND, as a
+    point with every probe blank. It is a failed point now, with its reason recorded, and the rest of
+    the sweep is unaffected. A chi'' that is non-finite at SOME probes still lands (the off-grid test
+    above pins that it adds nothing to ``offgrid``)."""
+    import pytest
+    from core.FDT import cross_validation as cv
+
+    _sweep_stubs(monkeypatch)
+    driven = []
+
+    def _c2(cfg_op, omegas, freqs_psd, G):
+        chis = torch.full(omegas.shape, 1 + 1j, dtype=torch.complex128)
+        if not driven:                                       # point 0's driven campaign diverged
+            chis = torch.full(omegas.shape, complex(math.nan, math.nan), dtype=torch.complex128)
+        driven.append(1)
+        return chis, torch.full(omegas.shape, 2.0 if len(driven) > 1 else math.nan,
+                                dtype=torch.float64)
+
+    monkeypatch.setattr(cv, "_campaign2_ratio", _c2)
+    cfg, s_grid, _t = _thin_study_cfg()
+    cfg.seed = 1
+    with pytest.warns(UserWarning, match="1/2 operating points failed"):
+        rec = cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0},
+                                     writer=store.create("fdt", cfg, name="chi_diverged"))
+    assert rec.body["points"] == {"param": "s", "planned": 2, "done": 1, "failed": 1}, rec.body["points"]
+    errors = _point_errors(rec.data_path)
+    assert list(errors) == ["000"] and "diverged" in errors["000"], errors
+
+
 def test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash(store, monkeypatch, caplog):
     """The nanmax defect (§4.3). ``log.info(f"... {np.nanmax(ratio.cpu().numpy()):.3g}")`` sits
     OUTSIDE the try that guards Campaign 2, so a point whose ratio comes back EMPTY raises
@@ -2447,7 +2584,12 @@ def test_an_all_blank_point_lands_without_a_numpy_warning(store, monkeypatch, ca
     with no finite value numpy warns ``RuntimeWarning: All-NaN slice encountered`` -- which reached
     the run log and stderr as if the operator had something to act on. The peak is taken over the
     FINITE values only: a point with none still LANDS, its line says there is no peak, and an EMPTY
-    ratio is still a counted failure (test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash)."""
+    ratio is still a counted failure (test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash).
+
+    The susceptibility is FINITE here: a ratio with no finite value beside a measured chi is what a
+    spectrum that supplied no probe gives. A chi with no finite value is a diverged driven campaign,
+    a failed point since the whole-piece review's M1
+    (test_a_sweep_point_whose_driven_simulation_diverged_is_a_failed_point)."""
     import logging
     import warnings
 
@@ -2455,8 +2597,7 @@ def test_an_all_blank_point_lands_without_a_numpy_warning(store, monkeypatch, ca
 
     _sweep_stubs(monkeypatch)
     monkeypatch.setattr(cv, "_campaign2_ratio",
-                        lambda c, om, f, g: (torch.full(om.shape, complex(1.0, math.nan),
-                                                        dtype=torch.complex128),
+                        lambda c, om, f, g: (torch.full(om.shape, 1 + 1j, dtype=torch.complex128),
                                              torch.full(om.shape, math.nan, dtype=torch.float64)))
     cfg, s_grid, _t = _thin_study_cfg()
     cfg.seed = 1
