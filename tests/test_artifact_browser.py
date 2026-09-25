@@ -646,11 +646,17 @@ def test_an_unfinished_fdt_record_is_described_by_what_its_study_holds(store):
     - a single-cell run cancelled before its first figure has none, so its figures and log are
       "any it had written", not "its";
     - a sweep whose planned count is not recorded names its done count alone, as the table's Points
-      cell does, never "4 of ?".
+      cell does, never "4 of ?";
+    - a record still being WRITTEN, by a run in another window or at a terminal, looks exactly like
+      an interrupted one, and nothing stops it being deleted (spec §1.3 leaves the cross-process lock
+      out) -- so "the run was interrupted or it failed" was false for it, and deleting on the
+      strength of that sentence killed the live run (the whole-piece review's M3). Every fdt branch
+      says it may still be running, and what to do first.
     """
     from core.gui.screens.artifact_screen import _delete_prompt
 
     base = {"settings": {}, "seed": 5, "notices": []}
+    live = "still being written by a run in another window or at a terminal"
 
     cmp_ = _interrupted_fdt(store, "drawn_half", {
         **base, "study": "comparison",
@@ -661,6 +667,7 @@ def test_an_unfinished_fdt_record_is_described_by_what_its_study_holds(store):
     assert "measuring again" not in detail and "no resume" not in detail, detail
     assert "redraws it" in detail, "running the comparison again redraws it"
     assert "cannot be undone" in detail
+    assert live in detail and "let it finish or stop it before deleting" in detail, detail
 
     single = _interrupted_fdt(store, "cancelled_early", {**base, "study": "single"})
     assert single.points_done is None, "a single run has no operating points"
@@ -669,6 +676,7 @@ def test_an_unfinished_fdt_record_is_described_by_what_its_study_holds(store):
     assert "None" not in detail, detail
     assert "any figures and log it had written" in detail, detail
     assert "from the start" in detail, detail
+    assert live in detail and "let it finish or stop it before deleting" in detail, detail
 
     unplanned = _interrupted_fdt(store, "sweep_no_plan", {
         **base, "study": "sweep",

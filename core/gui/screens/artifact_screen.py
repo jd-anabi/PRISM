@@ -115,6 +115,12 @@ def _unfinished_note(s) -> str:
 
     The study is named as a phrase, not as the body's bare word: "This single record" reads as "this
     one record". A null or unrecognised study is a "measurement", which claims nothing it cannot back.
+
+    An fdt record still being WRITTEN -- by a run in another window or at a terminal -- looks exactly
+    like an interrupted one until it finishes, and nothing stops it being deleted (spec §1.3 leaves the
+    cross-process lock out; ``_refuse_while_running`` sees only this process). A flat "the run was
+    interrupted or it failed" was false for it, and deleting on the strength of it killed the live run
+    (the whole-piece review's M3), so every fdt branch says so and says what to do first.
     """
     if s.kind == "simulation":
         return (f"This training cache is UNFINISHED: {s.batches_done} committed batch(es). "
@@ -122,21 +128,22 @@ def _unfinished_note(s) -> str:
                 "(Only the batch count is known while a cache is running: the rows are "
                 "recorded when the cache finishes.)")
     if s.kind == "fdt":
+        why = ("its run was interrupted or failed, or it is still being written by a run in another "
+               "window or at a terminal, which looks exactly the same until it finishes. If one is "
+               "still running, let it finish or stop it before deleting.")
         if s.study == "comparison":
-            return ("This comparison record is UNFINISHED: the run was interrupted or it failed, "
-                    "and it holds whatever it had drawn when it stopped. Deleting it loses nothing "
-                    "measured: running the comparison again redraws it from the records it "
-                    "compares.")
+            return (f"This comparison record is UNFINISHED: {why} It holds whatever it had drawn "
+                    "when it stopped. Deleting it loses nothing measured: running the comparison "
+                    "again redraws it from the records it compares.")
         if s.points_done is None:
             held = "whatever it had measured when it stopped"
         elif s.points_planned is None:
             held = f"{s.points_done} operating point(s)"
         else:
             held = f"{s.points_done} of {s.points_planned} operating point(s)"
-        return (f"This {_STUDY_PHRASES.get(s.study, 'measurement')} record is UNFINISHED: the run "
-                f"was interrupted or it failed, and it holds {held} and any figures and log it had "
-                "written. There is no resume for these runs -- deleting it means measuring again "
-                "from the start.")
+        return (f"This {_STUDY_PHRASES.get(s.study, 'measurement')} record is UNFINISHED: {why} "
+                f"It holds {held} and any figures and log it had written. There is no resume for "
+                "these runs -- deleting it means measuring again from the start.")
     return ("This record is UNFINISHED: its folder holds only what the run had written when it "
             "stopped.")
 
@@ -149,8 +156,10 @@ def _delete_prompt(s) -> tuple:
     that a later run could not simply remake. ``_unfinished_note`` is where each kind's sentence is.
 
     ``s.complete and not s.finished`` rather than ``not s.finished`` alone: an INCOMPLETE row (a
-    directory with no usable manifest) is not an artifact at all, ``finished`` is False for it, and
-    it is removed by the sweep rather than by this button.
+    directory with no usable manifest) is not an artifact at all and ``finished`` is False for it. It
+    never reaches this button (``_sync_actions`` enables Delete on complete rows only); the leftover
+    sweep removes one only when it has no manifest file at all, and leaves one whose manifest this
+    build cannot read for the operator (``ArtifactStore.remove_incomplete``, R1).
     """
     lines = [f"id {s.id}"]
     if s.complete and not s.finished:

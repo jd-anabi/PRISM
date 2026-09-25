@@ -682,6 +682,55 @@ def test_a_committed_record_refuses_a_refresh(store):
     assert store.get("fdt", w.id).payloads["data.h5"] == prov.sha256_file(w.dir / "data.h5")
 
 
+def test_a_record_removed_while_its_run_was_writing_it_is_not_rebuilt(store):
+    """The whole-piece review's M3 (H1 + L278). A progressive record looks exactly the same whether
+    its run was interrupted or is still being written from another window or a terminal, and nothing
+    stops it being deleted meanwhile (spec §1.3 leaves the cross-process lock out). The live run then
+    fails at its next write, and its ``__exit__`` took the keep branch -- whose manifest write goes
+    through ``_atomic_write``, which creates the parent folder -- so the deleted record came BACK as a
+    manifest-only husk, listing a figure that was gone, under the id just deleted.
+
+    The keep branch now checks the folder first: gone, it keeps nothing and says so, once."""
+    import shutil
+
+    w = store.create("fdt", None, name="removed")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    w.__enter__()
+    w.figure_path("Spontaneous trajectory").write_bytes(b"\x89PNG")
+    w.refresh()
+    shutil.rmtree(w.dir)                        # `artifacts rm fdt <id>` from another process
+
+    with pytest.warns(UserWarning) as rec:
+        assert w.__exit__(RuntimeError, RuntimeError("the run's next write failed"), None) is False
+    said = [str(r.message) for r in rec]
+    assert len(said) == 1 and "was removed while its run was writing it" in said[0], said
+    assert not w.dir.exists(), "the keep branch rebuilt the folder it was told was deleted"
+    assert store.list("fdt") == []
+
+
+def test_a_refresh_outside_the_writers_with_block_is_refused_and_creates_nothing(store):
+    """The whole-piece review's N3 (L279). ``refresh`` had no lifecycle check, and its manifest write
+    creates the parent folder -- so a refresh BEFORE ``__enter__`` made the folder the later ``with``
+    then refused as existing, leaving a permanent unfinished record, and one after a pre-spend
+    refusal brought back the folder the refusal had just removed. Both are refused now, with nothing
+    written. (After a COMMIT the refusal is the existing "already committed" one.)"""
+    w = store.create("fdt", None, name="early")
+    w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with pytest.raises(st.StoreError, match="not being written"):
+        w.refresh()
+    assert not w.dir.exists() and store.list("fdt") == []
+
+    w2 = store.create("fdt", None, name="refused")
+    w2.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
+    with pytest.raises(Refusal, match="below what the spectrum resolves"):
+        with w2:
+            raise Refusal("the band reaches below what the spectrum resolves", field="freq_bounds")
+    assert not w2.dir.exists()
+    with pytest.raises(st.StoreError, match="not being written"):
+        w2.refresh()
+    assert not w2.dir.exists() and store.list("fdt") == []
+
+
 def test_the_log_up_to_a_failure_reaches_disk_even_when_the_last_manifest_cannot(store):
     """Fix round 1, finding 3; spec §2.2 step 3 ("the log up to the failure is on disk"). A stage that
     stores a value the manifest cannot hold (here a NaN in ``results``) and then fails leaves a final

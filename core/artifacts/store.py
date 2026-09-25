@@ -355,6 +355,11 @@ class ArtifactWriter:
         # refresh writes ``complete: false`` and null payload hashes, so a late one would turn a
         # finished record back into an unfinished one that ``load_fdt`` never verifies again.
         self._committed = False
+        # True between ``__enter__``'s first manifest and the top of ``__exit__``: the only window in
+        # which ``refresh`` may write (the whole-piece review's N3). Its manifest write creates the
+        # parent folder, so a refresh before ``__enter__`` made the folder the ``with`` then refused
+        # as existing, and one after a pre-spend refusal brought back the folder the refusal removed.
+        self._entered = False
         # The header blocks, computed once and reused by every refresh. git_info runs three git
         # subprocesses and env_info imports torch; a sweep refreshes after every operating point, and
         # neither block can change while one run is in flight.
@@ -411,14 +416,28 @@ class ArtifactWriter:
                 # manifest is written last and atomically, so a failure here means it never landed.
                 self._remove_dir("it has no manifest, so the store ignores it")
                 raise
+        self._entered = True
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        self._entered = False
         if exc_type is not None:
             if self.progressive and not (isinstance(exc, Refusal) and not self._wrote_anything):
                 # E2. The run was interrupted or it failed AFTER spending something: the folder stays,
                 # ``complete`` stays False, and one last refresh puts the log up to the failure on
                 # disk -- that log is the document that says why it stopped.
+                #
+                # Unless the folder is GONE (the whole-piece review's M3): a record still being written
+                # looks exactly like an interrupted one, so it can be deleted -- from the Artifacts
+                # screen, or by `artifacts rm` in another shell -- while its run is live, and that run
+                # then fails at its next write and lands here. Both writes below would rebuild the
+                # folder (``_atomic_write`` creates the parent) as a manifest-only husk, listing
+                # figures that are gone, under the id just deleted. So nothing is kept, and a warning
+                # says why the record the run was writing no longer exists.
+                if not self.dir.is_dir():
+                    warnings.warn(f"the {self.kind} record {self.dir} was removed while its run was "
+                                  f"writing it; nothing is kept", stacklevel=2)
+                    return False
                 #
                 # The log FIRST, and in an attempt of its own (fix round 1, finding 3): a body the
                 # final manifest cannot validate -- a NaN the stage stored as it failed -- must not
@@ -477,7 +496,18 @@ class ArtifactWriter:
         and the real hashes land at the commit. ``load_fdt`` treats a null hash as "not yet".
 
         Refused once the record is committed (fix round 1, finding 2): for the same reason, a refresh
-        then would write ``complete: false`` and null hashes over a finished record.
+        then would write ``complete: false`` and null hashes over a finished record. Refused, too,
+        outside the ``with`` block (the whole-piece review's N3): its manifest write creates the
+        folder, so a refresh before ``__enter__`` or after a pre-spend refusal would put one on disk
+        that nothing is writing.
+
+        A refresh the OS refuses mid-run -- a PermissionError, which is what Windows raises for a file
+        another program holds open without write sharing (Explorer's preview pane, a scanner) -- is
+        WARNED and skipped (the whole-piece review's N4): the refresh is bookkeeping, the run's numbers
+        are already on disk, and ending an overnight sweep over it cost every point still to run. The
+        next refresh, or the commit, writes what this one could not; the commit and the failure path
+        stay strict. A FileNotFoundError still propagates: the folder is gone (M3), and that error is
+        what stops the run.
         """
         if not self.progressive:
             raise StoreError(f"{self.kind} artifacts are written in one step, so there is nothing to "
@@ -486,7 +516,17 @@ class ArtifactWriter:
             raise StoreError(f"the {self.kind} record {self.name or self.id} is already committed; a "
                              f"refresh now would mark a finished record unfinished and drop the hashes "
                              f"of its payloads")
-        self._write(hashed=False, complete=False)
+        if not self._entered:
+            raise StoreError(f"the {self.kind} record {self.name or self.id} is not being written: a "
+                             f"refresh belongs between its writer's __enter__ and __exit__, and one "
+                             f"outside them would put a folder on disk that nothing is writing")
+        try:
+            self._write(hashed=False, complete=False)
+        except PermissionError as e:
+            warnings.warn(f"could not refresh the {self.kind} record {self.dir} mid-run "
+                          f"({type(e).__name__}: {e}); another program may hold one of its files open. "
+                          f"The run goes on, and the next refresh or the commit writes what this one "
+                          f"could not.", stacklevel=2)
 
     def _write(self, *, hashed: bool, complete: bool, log: bool = True) -> None:
         """Build, validate and write the manifest (and, unless ``log`` is False, the run's log beside

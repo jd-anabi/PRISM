@@ -2300,6 +2300,36 @@ def test_a_sweeps_results_are_per_point_and_its_offgrid_counts_only_what_was_mea
     assert [p["param_value"] for p in part.body["results"]["points"]] == pytest.approx([0.1, 0.5])
 
 
+def test_a_mid_run_refresh_refused_by_a_file_lock_is_warned_and_the_sweep_goes_on(store, monkeypatch):
+    """The whole-piece review's N4 (H2). A refresh is bookkeeping -- each point's numbers are already
+    flushed to data.h5 before it runs -- yet one refused by the OS ended the sweep: Windows fails a
+    write to a file another program holds without write sharing (Explorer's preview pane on log.txt,
+    a scanner), and the refresh after every operating point let that PermissionError out, so the
+    rest of an overnight sweep never ran. A mid-run refresh now warns once and returns; the next
+    refresh, or the commit (which stays strict), writes what it could not."""
+    import pytest
+    from core.FDT import cross_validation as cv
+
+    _sweep_stubs(monkeypatch)
+    cfg, s_grid, _t = _thin_study_cfg()
+    cfg.seed = 1
+    w = store.create("fdt", cfg, name="locked")
+    real, calls = w._write_log, {"n": 0}
+
+    def _write_log():
+        calls["n"] += 1
+        if calls["n"] == 2:                 # the refresh after the first operating point
+            raise PermissionError(13, "The process cannot access the file", str(w.dir / "log.txt"))
+        real()
+
+    w._write_log = _write_log
+    with pytest.warns(UserWarning) as said:
+        rec = cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
+    msgs = [str(x.message) for x in said]
+    assert len(msgs) == 1 and "could not refresh" in msgs[0] and "PermissionError" in msgs[0], msgs
+    assert rec.body["complete"] is True and rec.body["points"]["done"] == 2, rec.body["points"]
+
+
 def test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash(store, monkeypatch, caplog):
     """The nanmax defect (§4.3). ``log.info(f"... {np.nanmax(ratio.cpu().numpy()):.3g}")`` sits
     OUTSIDE the try that guards Campaign 2, so a point whose ratio comes back EMPTY raises
