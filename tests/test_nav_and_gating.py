@@ -1277,7 +1277,7 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
     assert any(k == "warning" and "unreadable header" in t for k, t in lines), lines
 
 
-def test_the_d7_and_d8_dialogs_default_to_cancel(monkeypatch):
+def test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel(monkeypatch):
     """Enter on either dialog must do the SAFE thing. Spec §5.3 makes Cancel the default: on D8 the
     other button loads a NON-AMORTIZED posterior with Accept(truncated=True), and on D7 it starts a
     fresh cache one setting away from a committed one, the accident D7 exists to stop. Every other test

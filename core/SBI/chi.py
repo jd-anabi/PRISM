@@ -330,9 +330,9 @@ def peak_freq(x: torch.Tensor, dt: float, batch: int = _PEAK_FREQ_BATCH) -> torc
     """
     Per-sample spontaneous peak frequency Omega_0/2pi (cell freq units) from a batch of traces.
 
-    Mirrors statistics.SummaryStatistics._build_spectral: rfft of the demeaned trace, drop the DC bin,
-    take the argmax, clamp to the first non-zero bin. One noisy trace gives a noisy peak (as the real
-    passive recording would); the network also sees A3 (log f_peak) so it is not blind to the estimate.
+    Mirrors statistics.SummaryStatistics._build_spectral: rfft of the demeaned trace, drop the DC bin, take
+    the argmax, clamp to the first non-zero bin. One noisy trace gives a noisy peak (as the real passive
+    recording would); the network also sees A3_log_fpeak (log f_peak) so it is not blind to the estimate.
 
     Sub-batched over SAMPLES, the same treatment (and for the same reason) as pipeline.gen_stats'
     stats_batch_size: every row is independent, so this is numerically identical, but it keeps the

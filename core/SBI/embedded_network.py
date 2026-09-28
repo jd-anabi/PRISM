@@ -62,10 +62,10 @@ class EmbeddedNet(nn.Module):
         was measured on the 2026-08-25 retrain's own artifact: ``A1_mean`` was fitted at
         std = 4.19e11 against a physical range of ~1e3, and ``D3_bimodality`` at std = 4.42e8
         against a range of (0, 1]. Both were driven there by a handful of pathological trajectories
-        -- ~1e29-magnitude traces for A1, exactly-constant ones for D3 (which make ``_group_d``'s
-        clamp fire and return exactly 1/1e-12). The consequence is that sweeping either channel
-        across its ENTIRE physical range moved the embedding by 1.8e-7 / 8.9e-8, against ~1.4 for a
-        healthy channel: less than one float32 ulp, i.e. the flow could not see two of its own
+        -- ~1e29-magnitude traces for ``A1_mean``, exactly-constant ones for ``D3_bimodality`` (which make
+        ``_group_d``'s clamp fire and return exactly 1/1e-12). The consequence is that sweeping either
+        channel across its ENTIRE physical range moved the embedding by 1.8e-7 / 8.9e-8, against ~1.4
+        for a healthy channel: less than one float32 ulp, i.e. the flow could not see two of its own
         conditioning channels at all.
 
         Rank-Gaussianisation fixes that by construction and buys three more things:

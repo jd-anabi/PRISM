@@ -59,9 +59,9 @@ def _select_ref(table, ident):
 
 def _answer(monkeypatch, button):
     """Layer a chosen answer over tests/conftest.py::_no_modal_dialogs, the pattern
-    tests/test_nav_and_gating.py::test_the_d7_and_d8_dialogs_default_to_cancel uses (a NAME, because
-    the line it sits on moves). The session guard records every box and returns 0, which
-    every confirmation here reads as No; these dialogs use STANDARD buttons, so the answer is the
+    tests/test_nav_and_gating.py::test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel
+    uses (a NAME, because the line it sits on moves). The session guard records every box and returns 0,
+    which every confirmation here reads as No; these dialogs use STANDARD buttons, so the answer is the
     returned enum rather than a click on an added button."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN

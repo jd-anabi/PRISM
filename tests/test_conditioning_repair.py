@@ -238,7 +238,7 @@ def test_pathological_counter_separates_the_three_populations():
     acc = dict.fromkeys(("rows", "nonfinite", "constant", "overflow"), 0)
     x = torch.randn(5, 100)
     x[0] = float("nan")
-    x[1] = 3.0                                                   # exactly constant -> D3 = 1/_EPS
+    x[1] = 3.0                                                   # exactly constant -> D3_bimodality = 1/_EPS
     x[2] = 1e29                                                  # constant AND overflow
     pipeline.count_pathological(x, acc)
     assert acc["rows"] == 5

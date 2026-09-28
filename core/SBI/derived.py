@@ -124,13 +124,13 @@ def describe_derived_f_scale(nd_samples: torch.Tensor, rescale_samples: torch.Te
                              chi_f0: float | None = None) -> str:
     """What force scale does this prior actually imply? A PREFLIGHT line, not a check.
 
-    HAZARD 1 OF SECTION 11.5, answered the way the chi banner answers its own: by putting the number
-    on screen before the run rather than by adding a threshold nobody chose. Under tier 1 f_scale is
-    no longer bounded by a declared box -- it follows from (N, beta, x_scale, T) -- and on the master
-    box that range reaches ~1.2e4 pN at the corner, against the (1, 1000) the retired box declared.
-    The chi drive is ``CHI_F0 * f_scale``, so that corner drives at ~1.9e3 pN. Whether that is
-    physically reasonable is a judgement about the preparation, which is exactly why this reports
-    rather than refuses.
+    The first of the two hazards in this module's docstring, answered the way the chi banner answers its
+    own: by putting the number on screen before the run rather than by adding a threshold nobody chose.
+    Under tier 1 f_scale is no longer bounded by a declared box -- it follows from (N, beta, x_scale, T)
+    -- and on the master box that range reaches ~1.2e4 pN at the corner, against the (1, 1000) the
+    retired box declared. The chi drive is ``CHI_F0 * f_scale``, so that corner drives at ~1.9e3 pN.
+    Whether that is physically reasonable is a judgement about the preparation, which is exactly why
+    this reports rather than refuses.
     """
     f = to_sim_rescale(nd_samples, rescale_samples, rescale_idx,
                        nd_idx, k_b_cell)[:, rescale_idx[TEMPERATURE_PARAM]]

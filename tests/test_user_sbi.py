@@ -3181,7 +3181,7 @@ def test_the_cuda_graph_step_matches_the_eager_step_bitwise():
 
 
 @pytest.mark.gpu
-def test_the_cuda_graph_preserves_the_rng_contract_c11_depends_on():
+def test_the_cuda_graph_preserves_the_rng_contract_a_cache_resume_depends_on():
     """C-11's resume restores the CUDA RNG state and expects the noise stream to continue from there.
 
     A captured graph could plausibly have broken this in two ways: by FREEZING the noise (replaying
