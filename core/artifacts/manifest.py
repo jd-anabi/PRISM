@@ -1,4 +1,4 @@
-"""Manifest schema for the artifact store (piece 1 of the 2026-09-10 hardening programme).
+"""Manifest schema for the artifact store.
 
 One JSON file per artifact: a common header (who wrote it, from what, with which knobs, from which
 parents) and a kind-specific body. Small tensors are float64 lists -- Python's repr is
@@ -42,8 +42,8 @@ BODY_KEYS = {
     # body.get("mode"), where ``mode`` means the OBSERVATION mode -- a listing that showed "laplace"
     # in that column would be reporting a conditioning geometry that does not exist.
     "diagnostic": ("diagnostic", "variant", "settings", "results"),
-    # A measurement of a CELL (not of another artifact), or a comparison of such measurements
-    # (piece 5, E3). ``study`` is "single", "sweep" or "comparison" and is what tells the three
+    # A measurement of a CELL (not of another artifact), or a comparison of such measurements.
+    # ``study`` is "single", "sweep" or "comparison" and is what tells the three
     # apart; there is deliberately no second kind and no registry of study names here.
     # Written PROGRESSIVELY (store.PROGRESSIVE_KINDS): every key is present from the FIRST manifest,
     # with the not-yet-known ones null, because ``validate`` below refuses a partial key set. So the
@@ -156,14 +156,14 @@ def validate(d: dict) -> Manifest:
     if set(d["body"]) != want:
         raise ManifestError(f"{d['kind']} body keys are {sorted(d['body'])}, expected {sorted(want)}")
     if d["kind"] == "posterior" and bool(d["body"]["amortized"]) != (d["body"]["truncation"] is None):
-        # DEFECT D3's signature, refused at the schema: the amortization flag and the region are two
+        # The amortization flag and the region disagreeing, refused at the schema: they are two
         # views of one fact, and the load path gates on the flag while calibration and inference gate
         # on the region. A manifest where they disagree is a posterior that is truncated in one
         # reader's eyes and amortized in another's -- which is how a "0.000%" round passed every check.
         raise ManifestError(
             f"posterior body says amortized={d['body']['amortized']!r} beside "
             f"{'a truncation region' if d['body']['truncation'] is not None else 'no truncation region'}; "
-            f"a truncated posterior carries its region and an amortized one carries none (defect D3)")
+            f"a truncated posterior carries its region and an amortized one carries none")
     _check_finite(d["body"], "body")
     _check_finite(d["config"], "config")
     return Manifest(**d)
@@ -251,7 +251,7 @@ def config_from_cfg(cfg) -> dict:
     An FDTConfig takes the second branch, chosen on the ABSENCE of ``observation_mode``: the fdt
     kind measures a CELL rather than conditioning a network, so it has no mode, no chi geometry and
     no training grid, and reading ``cfg.observation_mode`` on one is an AttributeError two keys into
-    the dict below (piece 5, §1.2). That branch records the settings AS GIVEN TO THE BUILDER --
+    the dict below. That branch records the settings AS GIVEN TO THE BUILDER --
     ``omega_0`` is deliberately absent, because the writer computes this block at ``create()`` time
     from the caller's object while the run refines the resonance on its own private copy, and the
     refined value belongs in ``body.grid``.

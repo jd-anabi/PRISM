@@ -1,5 +1,5 @@
 """Refusals: the one exception kind for "asked for, and will not be done", and the field rules that
-raise it before anything is spent (piece 3 of the 2026-09-10 hardening programme, design §3.1).
+raise it before anything is spent.
 
 WHY ONE KIND. The window flattened every exception to a red "Error" box with a traceback behind
 Details, and the tool guessed from the type: any ValueError printed as a refusal. A refusal and a
@@ -48,7 +48,7 @@ class Refusal(ValueError):
 # The refusal's counterpart: what is judged rather than refused. It lives HERE, beside Refusal, and not
 # in core.orchestrator (which re-exports this same class), because the FDT path raises it too and
 # must not pay for the SBI stack to do so: importing the orchestrator for one class cost every
-# fdt/crossval tool run about two seconds and two false pytensor warnings (piece 5, Task 12).
+# fdt/crossval tool run about two seconds and two false pytensor warnings.
 class PreflightWarning(UserWarning):
     """A judgement reported before or instead of refusing: out-of-distribution truth, a truth outside a
     non-amortized posterior's region, T_obs outside the training range, an HPD tighter than recommended,
@@ -73,9 +73,9 @@ class Field:
     default: str | None
 
 
-# The registry: every key raised anywhere under core/ is here (Task 4's AST scan pins it), and both
-# front-end tables map every key here. The words are the design's (§3.1); each default is the str()
-# of the constant named beside it, so a message shows the default as the operator would type it.
+# The registry: every key raised anywhere under core/ is here (an AST scan in tests/test_refusals.py
+# pins it), and both front-end tables map every key here. Each default is the str() of the constant
+# named beside it, so a message shows the default as the operator would type it.
 FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("t_obs", "the observation length, in seconds", "none: it must be given"),
     Field("num_runs", "the number of training batches", "5000"),                       # TRAINING_NUM_RUNS
@@ -127,18 +127,18 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("observation", "the observation", None),
     Field("posterior", "the posterior", None),
     Field("prior", "the prior", None),
-    # the artifact browser (piece 4): the artifact a browse action acts on, and its note
+    # the artifact browser: the artifact a browse action acts on, and its note
     Field("artifact", "the artifact", None),
     Field("note", "the note", None),
-    # comparing saved FDT records (piece 5, E8): which records a comparison was asked to draw, and the
-    # two settings a mode takes -- checked by the comparison BEFORE its record opens (F57), which is
-    # why they are registered with it: the normalisation constant renormalise recomputes the ratio
+    # comparing saved FDT records: which records a comparison was asked to draw, and the two settings
+    # a mode takes -- checked by the comparison BEFORE its record opens, which is why they are
+    # registered with it: the normalisation constant renormalise recomputes the ratio
     # with, and the operating point sweeps slices both records at
     Field("compare_records", "the saved runs to compare", None),
     Field("prefactor", "the normalisation constant", None),
     Field("slice_at", "the operating point to slice at", None),
-    # the two secondary analyses (piece 5, §5.3): the knobs both front ends expose. n_freqs and
-    # ensemble_m have two effective defaults, the dataclass's and the sweep preset's (P54).
+    # the two secondary analyses: the knobs both front ends expose. n_freqs and ensemble_m have two
+    # effective defaults, the dataclass's and the sweep preset's.
     Field("n_freqs", "the number of drive frequencies", "60, or the preset's in a sweep"),        # FDTConfig.n_freqs
     Field("ensemble_m", "the number of trajectories per frequency", "256, or the preset's in a sweep"),  # FDTConfig.ensemble_M
     Field("freqs_per_batch", "the number of frequencies per simulator call", "1"),     # FDTConfig.freqs_per_batch
@@ -147,10 +147,10 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("s_grid", "the activity sweep grid", None),
     Field("t_grid", "the temperature sweep grid", None),
     Field("seed", "the random seed", "none: one is drawn and recorded"),
-    # the five FDT settings NEITHER front end exposes (§1.2, P2, P75). Registered like any other key,
-    # because every require_* rule builds its sentence through describe(key); both front-end tables
-    # map them to None, so a refusal names the setting and offers no fix -- there is nothing to name.
-    # The band and the two durations are also set by the sweep preset, so their defaults say so (F32).
+    # the five FDT settings NEITHER front end exposes. Registered like any other key, because every
+    # require_* rule builds its sentence through describe(key); both front-end tables map them to
+    # None, so a refusal names the setting and offers no fix -- there is nothing to name. The band
+    # and the two durations are also set by the sweep preset, so their defaults say so.
     Field("freq_bounds", "the drive frequency band, in multiples of the resonance",
           "0.1 to 30.0, or the preset's in a sweep"),                                   # FDTConfig.freq_bounds
     Field("burn_in_nd", "the burn-in, in ND units", "100.0"),                         # FDTConfig.burn_in_nd
@@ -158,10 +158,10 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("dt_nd", "the integration step, in ND units", "0.01"),                      # FDTConfig.dt_nd
     Field("psd_t_obs_nd", "the spontaneous recording length, in ND units",
           "8000.0, or the preset's in a sweep"),                                        # FDTConfig.psd_T_obs_nd
-    # the live simulation (piece 5, §5.6). Both were SILENT CLAMPS -- max(1, ...) -- before.
+    # the live simulation. Both were SILENT CLAMPS -- max(1, ...) -- before.
     Field("frame_steps", "the number of simulation steps per displayed frame", "2000"),
     Field("fps", "the maximum render frame rate, in frames per second", "30"),
-    # the model builder (piece 5, §5.3). Window-only settings: core/tool/fields.py maps each to None.
+    # the model builder. Window-only settings: core/tool/fields.py maps each to None.
     Field("param_value", "the parameter's value", None),
     Field("param_min", "the parameter's lower bound", None),
     Field("param_max", "the parameter's upper bound", None),
@@ -186,7 +186,7 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
 
 def missing_values_phrase(label: str, missing) -> str:
     """"missing ND parameters the bounds file requires: k_gs, gamma" -- the ONE wording for a cell
-    that does not supply something the bounds file declares (spec §6.2).
+    that does not supply something the bounds file declares.
 
     A fragment, deliberately: ``cli.validate_gt_file`` returns it as one of its problem strings,
     which the Infer tab joins with "; ", while ``SimConfig._fill_checked`` puts "Cell file is " in
@@ -291,7 +291,7 @@ def require_below(key: str, lo, hi) -> tuple:
     ``require_finite`` first, so None (a blank read through value_or_none) and a NaN are refused by
     their own sentences. A blank that value() reads as 0 would arrive as a REAL 0, refused here only
     when the other end is not above it -- ``(0, 1.5)`` passes -- which is why every caller hands its
-    ends over through value_or_none (the whole-piece review's N30).
+    ends over through value_or_none.
     """
     a, b = require_finite(key, lo), require_finite(key, hi)
     if not a < b:
@@ -335,7 +335,7 @@ def require_note(key: str, text: str) -> str:
     """The trimmed note, or a Refusal. One LINE, at most NOTE_MAX_CHARS characters; "" clears it.
 
     Surrounding whitespace is trimmed -- the one transformation this module allows, because it changes
-    no meaning -- and everything else is refused rather than fixed (V2): a line break or a tab left
+    no meaning -- and everything else is refused rather than fixed: a line break or a tab left
     INSIDE the text refuses, and so does a note over the limit, whose message gives the limit and the
     length given. A blank box (None) and an all-whitespace note are not refusals: both mean "clear it"
     and both come back as "", which is what ``ArtifactStore.set_note`` writes for no note.

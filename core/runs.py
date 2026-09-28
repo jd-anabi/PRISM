@@ -1,11 +1,11 @@
-"""The run boundary of the core (piece 3, V1 and V4): torch-free, imported by every public entry
-point and by both front ends.
+"""The run boundary of the core: torch-free, imported by every public entry point and by both front
+ends.
 
 Three jobs. The first two are one decorator, `public_entry`, which wraps every public function that
-takes a SimConfig and may write to it or to an artifact (spec §2.2 lists the fifteen); the third is a
-context manager the front ends' cancel checkpoints consult:
+takes a SimConfig and may write to it or to an artifact; the third is a context manager the front
+ends' cancel checkpoints consult:
 
-- THE PRIVATE COPY (V1). The window builds ONE SimConfig at Build/Load prior, and every later run
+- THE PRIVATE COPY. The window builds ONE SimConfig at Build/Load prior, and every later run
   used to write onto that same object -- the observation length, the loaded cell's truth, a
   recording's drive values and probe count -- and nothing cleared them: a bench chi inference with
   three probes made the next simulated chi inference simulate three, and an amortized training
@@ -14,15 +14,15 @@ context manager the front ends' cancel checkpoints consult:
   is exactly what it was, whether the run succeeds, is refused or crashes. Duck-typed
   (`hasattr(cfg, "copy_for_run")`) so this module never imports torch, and so a stub or an
   `object()` sentinel passes through untouched.
-- THE RUN LOG (V4). Records emitted since the OUTERMOST public entry began are buffered per thread,
+- THE RUN LOG. Records emitted since the OUTERMOST public entry began are buffered per thread,
   formatted `HH:MM:SS level message`, together with every Python warning raised meanwhile
   (PreflightWarning judgements included); ArtifactWriter._commit writes the buffer so far to
   `log.txt` in every artifact the entry commits. A composition and the stages it calls share one
   buffer: `capture_run` pushes only when none is active on this thread.
-- THE DEFERRED CANCEL (piece 4, B15; the raise-time half is B15 fix round 1). `cancel_is_deferred()`
-  is true in TWO cases, either sufficient on its own: inside the named critical section
-  `cancel_deferred()` opens (COUNTED, explicit -- the checkpoint commit and the completion write, and
-  the training rescue save's own section), OR while THIS thread is handling an exception
+- THE DEFERRED CANCEL. `cancel_is_deferred()` is true in TWO cases, either sufficient on its own:
+  inside the named critical section `cancel_deferred()` opens (COUNTED, explicit -- the checkpoint
+  commit and the completion write, and the training rescue save's own section), OR while THIS thread
+  is handling an exception
   (`sys.exc_info()[1] is not None` -- inside every `except`, every `finally` a propagating exception
   entered, every `__exit__` leaving by one, and every generator teardown). A Cancel that would
   otherwise land where a raise skips a write that must happen, or REPLACES a crash that is still
@@ -170,7 +170,7 @@ _deferred = threading.local()                  # _deferred.depth: how many secti
 
 def cancel_is_deferred() -> bool:
     """True inside a ``cancel_deferred()`` block ON THIS THREAD, OR while this thread is handling an
-    exception (piece 4, B15 fix round 1). Read by the window's two cancel checkpoints
+    exception. Read by the window's two cancel checkpoints
     (``gui.streams._SignalStream.write`` and ``_PumpLogHandler.emit``) before they call
     ``CancelToken.check()``.
 
@@ -183,9 +183,9 @@ def cancel_is_deferred() -> bool:
     in tests/test_worker_dispatch.py.
 
     A checkpoint reached this way used to fire mid-unwind and REPLACE whatever was propagating with a
-    clean "Run cancelled." -- the residual race the first B15 design left open, and not a rare one:
-    core/Solvers/sdeint.py's ``try ... finally: bar.close()`` sits on the graphed CUDA solver, the
-    likeliest GPU crash site. This rule defers there too, so the ORIGINAL failure reaches
+    clean "Run cancelled." -- the residual race the explicit section alone left open, and not a rare
+    one: core/Solvers/sdeint.py's ``try ... finally: bar.close()`` sits on the graphed CUDA solver,
+    the likeliest GPU crash site. This rule defers there too, so the ORIGINAL failure reaches
     ``Worker.run``'s generic handler and is reported as the crash it is, with the cancel noted rather
     than substituted.
 
@@ -210,11 +210,11 @@ def cancel_deferred():
     refresh after state.pt moves, the rescue save that commits a crashed run's completed batches. It
     defers a cancel; it never discards one.
 
-    SINCE PIECE 4'S B15 FIX ROUND 1, ``cancel_is_deferred()`` also defers whenever THIS thread is
-    handling an exception (``sys.exc_info()[1] is not None``), with no section needed -- see that
-    function's docstring. The checkpoint commit and the completion write still need THIS explicit
-    section: they are normal-flow writes, not exception handlers, so the raise-time rule does not
-    reach them.
+    ``cancel_is_deferred()`` also defers whenever THIS thread is handling an
+    exception (``sys.exc_info()[1] is not None``), with no section needed -- see that
+    function's docstring. The checkpoint commit and the completion write still need THIS
+    explicit section: they are normal-flow writes, not exception handlers, so the
+    raise-time rule does not reach them.
 
     PER THREAD and COUNTED. Per thread, because the token only ever raises on the armed (worker)
     thread and a GUI-thread print must not be silenced by a worker's section. Counted, because the

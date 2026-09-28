@@ -1,7 +1,7 @@
 """
 Prompt-free configuration builders, shared by PRISM's two front ends.
 
-The interactive prompts this module was named for went with the prompt CLI (piece 2, D1). What is
+The interactive prompts this module was named for went with the retired prompt CLI. What is
 left is pure: cell / bounds / units parsing, the unit conversion factors, and the ``make_*_config``
 builders that the GUI (``core/gui``) and the command-line tool (``core/tool``) each call with values
 they obtained their own way. The module keeps the name ``core.cli``.
@@ -91,7 +91,7 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
              (e.g. f_scale + the drive when a forced cell is paired with spontaneous bounds). Empty in
              the usual matched case; callers may surface it, and existing callers can ignore it.
     :raises Refusal: (field "cell") for a blank path or one that names no file, before the parser
-             (§3.3's file rule; a file that exists but does not parse keeps the parser's behaviour).
+             (a file that exists but does not parse keeps the parser's behaviour).
     """
     require_file("cell", cell_path, "cell")
     inits, param_vals, rescale_vals, forcing_vals = file_manager.parse_values_file(cell_path)
@@ -302,7 +302,7 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
     if bounds_dicts is not None:
         params_dict, rescale_params, force_params_dict = (OrderedDict(d) for d in bounds_dicts)
     else:
-        # §3.3: the file is checked by its input kind first, so both front ends refuse a missing one
+        # The file is checked by its input kind first, so both front ends refuse a missing one
         # with the field key; the parser's own FileNotFoundError is then reached only by a race.
         require_file("bounds", bounds_file, "bounds")
         params_dict, rescale_params, force_params_dict, _ = file_manager.parse_bounds_file(bounds_file)
@@ -349,23 +349,24 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
 # ── Pure config core (FDT) ───────────────────────────────────────────────────
 def check_fdt_settings(cfg: FDTConfig) -> None:
     """Refuse the five FDT settings neither front end exposes: the frequency band, the burn-in, the
-    two durations and the integration step (§1.2, §3.3).
+    two durations and the integration step.
 
     They are parameters of neither builder -- they arrive from the dataclass defaults, from the
     closed preset, or from ``with_overrides`` -- so a bad one is a hand-edited preset or a caller's
     bug, not a mistyped control. They are registered in ``core.refusals.FIELDS`` like every key and
-    map to ``None`` in BOTH front-end tables (P2, P75): each refusal names the setting and offers no
-    fix, because there is no box and no flag to name.
+    map to ``None`` in BOTH front-end tables: each refusal names the setting and offers no fix,
+    because there is no box and no flag to name.
     """
     require_positive("dt_nd", cfg.dt_nd)
     require_positive("psd_t_obs_nd", cfg.psd_T_obs_nd)
     require_positive("t_obs_periods", cfg.T_obs_periods)
-    # A zero burn-in is a well-defined setting, not a broken one: E5 forbids the over-floor. Not the
-    # count rule, require_at_least: it coerces with int(), so -0.5 would pass as 0 and NaN would raise
-    # a bare ValueError (F33). Finite first, so NaN and an infinity get that rule's own sentence; then
-    # the CLOSED half-line, which keeps 0 legal and reports a negative as it was given. Closed, not
-    # F33's open_hi=True: require_between marks any open end "(exclusive)" without saying which, and
-    # beside a legal 0 that reads as though 0 were excluded.
+    # A zero burn-in is a well-defined setting, not a broken one, and a floor sits only where the
+    # computation would otherwise be undefined (a setting merely too thin to trust warns). Not the
+    # count rule, require_at_least: it coerces with int(), so -0.5 would pass as 0 and NaN would
+    # raise a bare ValueError. Finite first, so NaN and an infinity get that rule's own sentence; then
+    # the CLOSED half-line, which keeps 0 legal and reports a negative as it was given. Closed, not an
+    # open upper end (open_hi=True): require_between marks any open end "(exclusive)" without saying
+    # which, and beside a legal 0 that reads as though 0 were excluded.
     require_between("burn_in_nd", require_finite("burn_in_nd", cfg.burn_in_nd), 0.0, math.inf)
     lo, hi = cfg.freq_bounds
     require_positive("freq_bounds", lo)
@@ -378,7 +379,7 @@ def make_fdt_config(model: str, state_dep_drift: bool, cell_file: str, *,
     """Build an FDTConfig (no prompts) from a model + cell file + FDT knobs. Shared by the command-line
     tool (core/tool) and the GUI's FDT form.
 
-    The checks live HERE and not on FDTConfig and not in the screens (§1.2), so both front ends
+    The checks live HERE and not on FDTConfig and not in the screens, so both front ends
     inherit one wording. The knobs, the cell and the model are checked before ``parse_cell``: every
     one of those checks is free, and the four knobs are what a blank field turns into a zero -- 0
     frequencies is an empty figure and exit 0, 0 trajectories is a ZeroDivisionError, 0 frequencies
@@ -457,14 +458,14 @@ SWEEP_PRESETS = {
 
 def _check_grid(key: str, spec: tuple) -> tuple:
     """One sweep axis, ``(min, max, N)``, as ``np.linspace`` needs it: both ends finite, ``N`` a
-    whole number of at least 2, and the minimum below the maximum (§4.4).
+    whole number of at least 2, and the minimum below the maximum.
 
     Checked as a WHOLE, because an end is only wrong against the other one. A blank box must
     therefore arrive as None, never as 0: 0 is a legal sweep end, so a blank read as 0 under a
     positive max passes "min below max" as a sweep nobody typed. The window's grid row reads its
-    boxes through value_or_none (Task 26's ruling), so each blank part is refused here AS blank,
-    naming which one -- its minimum, its maximum or its point count (the whole-piece review's N20: a
-    blank count used to read "needs at least 2 points; got 0", a zero nobody typed).
+    boxes through value_or_none, so each blank part is refused here AS blank, naming which one --
+    its minimum, its maximum or its point count (a blank count used to read "needs at least 2
+    points; got 0", a zero nobody typed).
     """
     lo, hi, n = spec
     what = describe(key)
@@ -491,7 +492,7 @@ def make_param_sweep_config(cell_file: str, *, preset: dict, preset_name: str,
     ``preset_name`` is the name of the preset ``preset`` was resolved from. Both front ends pick the
     preset from a closed list and then pass the resolved DICT, dropping the name -- and the record's
     ``settings["preset"]`` has to hold the name, because the dict alone does not say which of the two
-    a reader is looking at (§4.4).
+    a reader is looking at.
 
     Each unset knob falls back to the preset (or to FDTConfig's own default), here rather than at
     each call site, so the window and the tool cannot fall back differently.
@@ -509,11 +510,10 @@ def make_param_sweep_config(cell_file: str, *, preset: dict, preset_name: str,
     s_spec = _check_grid("s_grid", s_spec)
     t_spec = _check_grid("t_grid", t_spec)
     if t_spec[0] < 0:
-        # The owner's ruling on the whole-piece review's M1 (R-F1): a negative T_a/T is unphysical,
-        # and it is the one known way a sweep point diverges -- the model takes a square root of it,
-        # which torch answers with NaN rather than an error. 0 stays legal (no active noise is a
-        # meaningful operating point) and S has no floor; any other diverging point is a failed point
-        # in the sweep itself.
+        # A negative T_a/T is unphysical, and it is the one known way a sweep point diverges -- the
+        # model takes a square root of it, which torch answers with NaN rather than an error. 0
+        # stays legal (no active noise is a meaningful operating point) and S has no floor; any other
+        # diverging point is a failed point in the sweep itself.
         refuse("t_grid", f"The temperature sweep grid must not reach below 0: T_a/T is a ratio of two "
                          f"temperatures, so a negative value is unphysical, and the simulation "
                          f"diverges there; got a minimum of {t_spec[0]:g}.")

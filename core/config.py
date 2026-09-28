@@ -45,10 +45,10 @@ import torch
 # build (measured): it needs CUDA's VMM API, which cu130-on-Windows does not
 # expose. These two options are pure allocator POLICY and are not platform-gated.
 #
-# SET HERE rather than in run.bat so the CLI, the scripts and the tests get it too. Safe this late:
-# the config is parsed at the FIRST CUDA ALLOCATION, not at `import torch` -- verified by setting an
-# invalid value after importing torch and watching it still raise. `setdefault`, so anything the
-# operator exports wins.
+# SET HERE rather than in run.bat so the command-line tool, the window and the tests all get it.
+# Safe this late: the config is parsed at the FIRST CUDA ALLOCATION, not at `import torch` -- verified
+# by setting an invalid value after importing torch and watching it still raise. `setdefault`, so
+# anything the operator exports wins.
 PYTORCH_ALLOC_CONF_ENV = "PYTORCH_CUDA_ALLOC_CONF"     # NOT PYTORCH_ALLOC_CONF -- see above
 PYTORCH_ALLOC_CONF_DEFAULT = "roundup_power2_divisions:8,garbage_collection_threshold:0.6"
 os.environ.setdefault(PYTORCH_ALLOC_CONF_ENV, PYTORCH_ALLOC_CONF_DEFAULT)
@@ -223,12 +223,12 @@ DT_EXP_S = 1e-3        # 1000 FPS camera frame interval
 T_MIN_EXP_S = 1.0      # shortest expected recording (1 s)
 T_MAX_EXP_S = 60.0     # longest expected recording (1 min)
 
-# === FDT "TOO THIN TO TRUST" THRESHOLDS (piece 5, E5) ===
+# === FDT "TOO THIN TO TRUST" THRESHOLDS ===
 # NOT floors. Below either of these the effective-temperature measurement is still well defined and
 # still runs -- a deliberately tiny quick look is a thing the owner does on purpose -- but the run
 # raises a PreflightWarning and the sentence is recorded in the record's `notices`, so the answer
 # cannot later be read as a measurement. Floors live in the config builders and exist only where the
-# computation is otherwise undefined (core/cli.py, spec §3.3).
+# computation is otherwise undefined (core/cli.py).
 FDT_THIN_N_FREQS = 2    # one frequency is not a spectrum
 FDT_THIN_ENSEMBLE_M = 8 # the existing tiny-size end-to-end run uses exactly 8 and must stay unmarked
 
@@ -288,11 +288,11 @@ TRAINING_NUM_RUNS = 5000  # number of (t_scale_k, T_k) batches per training roun
 # ~21 [mem] lines over a 5000-batch run; tying durability to it means a later decision to log less
 # often silently multiplies the crash-loss window. Two meanings, two knobs.
 #
-# The cost model at 5000 x 2048 rows, chi width 114 (+13 latent targets), i.e. the retrain's shape:
-#     per checkpoint   50 x 2048 x 127 x 4 B          ~=  52 MB written, well under 1 s on NVMe
+# The cost model at 2048 rows per batch, chi width 122 (+13 latent targets):
+#     per checkpoint   50 x 2048 x 135 x 4 B          ~=  55 MB written, well under 1 s on NVMe
 #     overhead         against 50 batches x ~20 s     ~=  under 0.1 % of wall-clock
 #     expected loss    half an interval on a crash    ~=  8 minutes of simulation
-#     whole run        100 checkpoints                ~=  4.9 GiB on disk
+#     whole run        100 checkpoints                ~=  5.2 GiB on disk
 # Anything from 25 to 100 is defensible; 50 sits in the flat part of both curves. Checkpointing every
 # batch is 100x the write volume to buy back 8 minutes on a multi-day run, which is not a trade.
 TRAINING_CHECKPOINT_EVERY = 50
@@ -404,10 +404,10 @@ REPARAM_FISHER_POINTS = 8
 # In log coords the products kappa*x_scale (amplitude) and lambda*t_scale (timescale) become SUMS,
 # so the single linear Fisher rotation can decorrelate them across the whole prior. Only params with
 # a strictly positive lower bound are eligible (others fall back to linear with a warning). Empty
-# list = pure linear box (legacy). The chosen mask is persisted beside each posterior (<name>.rot.pt)
-# so eval reconstructs the exact training box regardless of this setting. REBUILD the ND prior after
-# changing this (the latent GMM is fit in the box's coordinate).
-REPARAM_LOG_PARAMS = []   # ALL-LINEAR box (the keeper posterior_07012026's coordinate). Log-scaling
+# list = pure linear box (legacy). The chosen mask is recorded in each posterior manifest's
+# transform block so eval reconstructs the exact training box regardless of this setting. REBUILD
+# the ND prior after changing this (the latent GMM is fit in the box's coordinate).
+REPARAM_LOG_PARAMS = []   # ALL-LINEAR box. Log-scaling
                           # f_scale (REPARAM_LOG_PARAMS=["f_scale"]) was TRIED as a fix for its mild
                           # linear-box SBC tilt (GT=10 at box-fraction 0.009 = flat sigmoid tail; see
                           # archive/scripts/diagnose_fscale.py), but the posterior trained under it was WORSE --
@@ -415,8 +415,8 @@ REPARAM_LOG_PARAMS = []   # ALL-LINEAR box (the keeper posterior_07012026's coor
                           # discarded and this was reverted to []. Keep the DEGENERACY params
                           # (k, lam, x_scale, t_scale) LINEAR too (log OVER-MIXED those in posterior_6302026).
                           # f_scale is a RESCALE param, so toggling it here does NOT rebuild the ND prior:
-                          # nd_log_mask stays all-False, and the existing linear ND prior
-                          # (prior_forcing_no_forcing.pt) + posterior_07012026 already match this box.
+                          # nd_log_mask stays all-False, and a linear ND prior already matches this
+                          # box.
 
 # === CONDITIONING REPAIR =========================================================================
 # Knots in the per-channel rank-Gaussian standardizer EmbeddedNet fits over the summary block.
@@ -460,22 +460,29 @@ CHI_FREQ_BOUNDS = (0.03, 0.3)  # log-spaced multipliers of the measured spontane
                                #     0.05x  CV 0.026     0.1x  CV 0.029     0.2x  CV 0.055   (usable)
                                #     0.3x   CV 0.22      0.5x  CV 0.21      0.7x  CV 0.47    (not)
                                #     1x / 2x / 10x: CV 0.36-0.73 at EVERY amplitude tried (0.01 .. 0.3)
-                               # and -- the decisive part -- the high-multiplier CV does NOT improve from
-                               # T_obs 5 s to 25 s. A noise-limited lock-in would fall by sqrt(5) ~ 2.2x;
-                               # it does not move. So that variability is SYSTEMATIC, not statistical:
-                               # same theta, different noise seed, genuinely different chi. Neither a
-                               # stronger drive nor a longer recording can recover those probes.
+                               # and the high-multiplier CV did NOT improve from T_obs 5 s to 25 s,
+                               # where a noise-limited lock-in would fall by sqrt(5) ~ 2.2x.
+                               # That was first read as a frequency limit -- same theta, different
+                               # noise seed, genuinely different chi -- and the reading was later
+                               # overturned: re-locking the same traces over a shorter prefix
+                               # recovers every one of those probes. The in-band failures were a
+                               # drive-cycle limit of the lock-in (a fixed 5 s slice reaches the
+                               # cycle wall soonest at the high multipliers), not a frequency limit,
+                               # and CHI_MAX_CYCLES below is the fix. The high edge 0.3 still
+                               # stands: capped, it stays marginal on phase coherence, and above it
+                               # the drive entrains the bundle.
                                #
-                               # The old (0.1, 10.0) put 8 of 10 probes at K=10 in that regime -- each
-                               # costing a full simulation per observation. That is the direct explanation
-                               # for posterior_chi_08042026 (archived): flat SBC and a clean PPC, because
-                               # the flow correctly learned those features carry nothing, while every ND
-                               # marginal stayed at the prior.
+                               # The old (0.1, 10.0) put 8 of 10 probes at K=10 above ~0.25x
+                               # Omega_0 -- each costing a full simulation per observation, and each
+                               # locked in with no cycle ceiling. That is the direct explanation for
+                               # posterior_chi_08042026 (archived): flat SBC and a clean PPC, because
+                               # the flow correctly learned those features carry nothing, while
+                               # every ND marginal stayed at the prior.
                                #
                                # OPEN: the sub-resonance branch is close to the static compliance, so it may
                                # carry chi's MAGNITUDE (x_scale/f_scale, already well identified) without the
                                # SHAPE that was supposed to separate kappa/lambda -- the shape lives near and
-                               # above resonance, which is exactly the unusable region. Check with
+                               # above resonance, which this band leaves out. Check with
                                # `python -m core identifiability jacobian` before spending another run.
 CHI_K_MAX = 24         # upper bound on CHI_K_PAD accepted by the GUI -- a CAPACITY knob. It used to
                        # bound K itself; under the set layout K is a property of an OBSERVATION and is
@@ -490,13 +497,13 @@ CHI_K_MAX = 24         # upper bound on CHI_K_PAD accepted by the GUI -- a CAPAC
 # simulated 12-probe sweep.
 #
 # CHI_K_PAD IS FROZEN INTO EVERY ARTIFACT. sbi's reshape_to_batch_event bakes condition_shape into the
-# saved posterior, so raising it later invalidates every chi posterior -- which is why the sidecar
+# saved posterior, so raising it later invalidates every chi posterior -- which is why the manifest
 # records it and the load path refuses a mismatch (a message, not a shape assert hours into a run).
 # The encoder's parameter count does NOT depend on it (phi/rho are per-element and pooled), so a
 # generous pad costs only 6*K_PAD input columns. Choose once.
-CHI_LAYOUT = 2         # layout version, written to the sidecar. 1 = the retired fixed-3K grid.
+CHI_LAYOUT = 2         # layout version, recorded in the manifest. 1 = the retired fixed-3K grid.
 CHI_ELEM_W = 6         # channels per pad slot. A LITERAL -- never derive it from the channel tuple.
-CHI_K_PAD = 12         # pad capacity -> block width 72, conditioning width 42 + 72 = 114
+CHI_K_PAD = 12         # pad capacity -> block width 72, conditioning width 49 + 1 + 72 = 122
 CHI_K_MIN_TRAIN = 2    # floor of the per-batch probe-count draw
 CHI_MIN_CYCLES = 2.0   # a probe is MASKED (never moved, never dropped) below this many drive cycles
                        # inside the segment it was locked in over. A lock-in over a fraction of a cycle
@@ -535,7 +542,7 @@ CHI_MAX_CYCLES = 20.0  # CEILING on the drive cycles a probe is locked in over. 
                        # experiment in this repo has yet priced that.
                        # It is frozen into the artifact for the same reason the band is: a posterior
                        # trained at one ceiling and evaluated at another sees different logcyc values
-                       # for the same recording. The sidecar carries it and the load path checks it.
+                       # for the same recording. The manifest carries it and the load path checks it.
 CHI_UHAT_MAX = 1.25    # band-normalised |u_hat| beyond which a probe is masked (packer) or refused
                        # (experimental path). Replaces clamping, which silently moved probes.
 # Encoder geometry. Functions of CHI_ELEM_W and design choice ONLY -- never of CHI_K_PAD, or the
@@ -579,10 +586,10 @@ CHI_F0 = 0.15                  # ND drive amplitude for every chi probe. Driving
                                # 0.15 is the largest amplitude that is still reproducible everywhere in the
                                # band while leaving the bundle running free (own peak >= 84% of undriven at
                                # every probe from 0.05x to 0.2x). FIXED BY MEASUREMENT: the Config tab
-                               # shows it read-only and every config carries this value (D11 refuses
-                               # any other), so it changes only by editing this line, deliberately,
-                               # for every future run; re-measure for a cell with a very different Q
-                               # or noise level.
+                               # shows it read-only and every config carries this value (a run
+                               # under any other is refused; there is no override), so it changes
+                               # only by editing this line, deliberately, for every future run;
+                               # re-measure for a cell with a very different Q or noise level.
 
 # Cycles of the observation's own oscillation shown in the time-domain posterior-overlay figures. The
 # window is derived per observation from its measured peak frequency, so this stays meaningful whatever

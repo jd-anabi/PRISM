@@ -61,13 +61,13 @@ def _atomic_write(path, writer: Callable[..., None], *, retries: int = 3,
 def atomic_torch_save(obj, path, *, retries: int = 3, backoff_s: float = 0.1) -> Path:
     """``torch.save`` that a crash cannot leave half-written. Mechanism: :func:`_atomic_write`.
 
-    Added for the training checkpoint (C-11), which rewrites its state file every N batches and so
-    turns "non-atomic torch.save against a cancel" from a catalogued low-priority risk into a real
-    one. It now also carries the END-OF-RUN artifacts -- ``save_mix_dist`` (the ND prior) and every
-    artifact writer's payload (a posterior's ``posterior.pt``, through ``ArtifactWriter.payload``).
-    The window there is one write rather than one every 50 batches, but what it protects is the
-    product of a multi-day run, and a torn ``.pt`` is not detectably torn: it is an unpickling error
-    hours later.
+    Added for the training checkpoint (the simulation cache), which rewrites its state file every N
+    batches and so turns "non-atomic torch.save against a cancel" from a catalogued low-priority risk
+    into a real one. It now also carries the END-OF-RUN artifacts -- ``save_mix_dist`` (the ND prior)
+    and every artifact writer's payload (a posterior's ``posterior.pt``, through
+    ``ArtifactWriter.payload``). The window there is one write rather than one every 50 batches, but
+    what it protects is the product of a multi-day run, and a torn ``.pt`` is not detectably torn: it
+    is an unpickling error hours later.
     """
     return _atomic_write(path, lambda fh: torch.save(obj, fh), retries=retries, backoff_s=backoff_s)
 
@@ -300,7 +300,7 @@ def list_dir(files_dir: str, keep: Callable[[str], bool] | None = None) -> list[
 
     It used to print a numbered tree as well, and the GUI's ArtifactPicker silenced that tree with
     ``contextlib.redirect_stdout`` -- which reassigns the PROCESS-WIDE ``sys.stdout``, the very stream
-    ``gui.streams.redirect_streams`` installs for a running worker (piece 3, spec §4.1). The
+    ``gui.streams.redirect_streams`` installs for a running worker. The
     ``return_list`` flag went with the print it was paired with: the listing is the only output.
 
     Relative paths, so subfoldered layouts (``Bounds/<model>/<cell>.txt``) resolve and same-named files
@@ -309,7 +309,7 @@ def list_dir(files_dir: str, keep: Callable[[str], bool] | None = None) -> list[
 
     :param files_dir: the directory to walk.
     :param keep: optional predicate on each relative path; only paths for which ``keep(rel)`` is True
-        are returned (e.g. a posterior picker that hides ``.rot.pt`` sidecars / ``.loss.npz`` curves).
+        are returned (e.g. a picker that hides auxiliary files).
         None keeps every file.
     """
     found = []

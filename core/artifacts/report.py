@@ -1,6 +1,6 @@
 """Two renderers over an artifact's manifest: the artifact as text, and its lineage.
 
-Piece 4, B10: "a saveable run summary" is two documents -- what the browser's detail pane shows (and
+A saveable run summary is two documents -- what the browser's detail pane shows (and
 ``python -m core artifacts show`` prints), and a lineage walk back through an artifact's parents. Both
 are FILES, never a store kind of their own, and both are pure functions of manifests the store
 already holds: nothing here writes, creates or resolves anything.
@@ -152,7 +152,7 @@ def render_manifest(m) -> str:
     Takes a ``Manifest`` (``store.get(kind, ref)``), never a path or a ref: the caller has already
     resolved and validated it, and a renderer that resolved refs of its own would be a second index.
     It therefore says nothing about the DIRECTORY -- a folder name that disagrees with
-    ``Manifest.dir_name`` is the browser's notice to give (§3.3), off ``Summary.dir_name``, because
+    ``Manifest.dir_name`` is the browser's notice to give, off ``Summary.dir_name``, because
     only a listing knows it.
     """
     out = [f"{m.kind} {m.name or '(unnamed)'}  [{m.id}]", RULE,
@@ -190,7 +190,7 @@ def _accepted(m) -> list:
 
 
 def _compared_lines(store, m) -> list:
-    """What a comparison DREW, resolved (spec §7.3).
+    """What a comparison DREW, resolved.
 
     A comparison names its sources in the body and not in ``parents``: that block is a flat
     ``{key: id}`` map read as ``m.parents.get(pk) == id_``, so it cannot carry an arbitrary number of
@@ -203,7 +203,7 @@ def _compared_lines(store, m) -> list:
     that has it null is a record of this kind that is not a comparison.
 
     Any other shape than ``{"mode": ..., "records": [{"kind", "id", "name"}, ...]}`` prints a line
-    saying WHAT is unreadable (Task 5's review fix). Only a hand-edited manifest or a writer bug gets
+    saying WHAT is unreadable. Only a hand-edited manifest or a writer bug gets
     here, but both of ``render_lineage``'s promises still hold for it. Printing nothing would make the
     comparison read as having drawn nothing. Iterating a string or a mapping would print a false
     ``MISSING fdt []`` for every character or key. Letting a ``TypeError`` out would break "the one

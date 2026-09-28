@@ -1,6 +1,6 @@
 """The simulation cache's identity: every config field a checkpoint of training rows must agree
-with before it can be resumed. Successor of ``orchestrator.training_identity`` (training-rows/1),
-which the clean break retires along with every directory it named.
+with before it can be resumed. Successor of the training-rows/1 identity, whose directories were
+deleted; ``orchestrator.training_identity`` survives as a delegate to this class.
 
 ``truncation`` is ALWAYS present (None for an amortized run) -- the old dict omitted the key so that
 existing digests would not move; there are no existing digests any more. ``feature_set_version``

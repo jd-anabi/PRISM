@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from matplotlib import pyplot as plt
 
-# The plot helpers' voice (piece 3, V4): a helper with nothing to draw says so as a warning record.
+# The plot helpers' voice: a helper with nothing to draw says so as a warning record.
 log = logging.getLogger(__name__)
 
 

@@ -74,7 +74,7 @@ class SimConfig:
     # Decorrelating Fisher rotation, carried per-config for the same reason as the chi knobs: consumers
     # used to `from .config import REPARAM_ROTATE`, which snapshots at import and cannot be toggled at
     # runtime. Reading it from the config makes a trained posterior self-describing about whether the
-    # rotation was intended (the <name>.rot.pt sidecar stores the resulting V).
+    # rotation was intended (the posterior's manifest records the resulting V).
     reparam_rotate: bool = field(default_factory=lambda: config.REPARAM_ROTATE)
 
     # Time / segmentation (legacy fallback fields; primary time setup uses dt_exp + T_obs)
@@ -537,7 +537,7 @@ class SimConfig:
 
     def copy_for_run(self) -> "SimConfig":
         """A deep copy for one run: what `core.runs.public_entry` hands every public stage,
-        composition and diagnostic in place of the caller's config (V1 of piece 3).
+        composition and diagnostic in place of the caller's config.
 
         The cached properties (_CACHED) are dropped off a SHALLOW copy before the deep copy, so the
         2.4M-point grid and the pint registry are never duplicated -- 19 ms and a transient 9.6 MB
@@ -595,18 +595,18 @@ class FDTConfig:
 
     # The files this config was built from, as paths, plus the model NAME:
     # {"cell": ..., "bounds": ..., "units": ..., "model": ...}. Filled by cli.cell_sources in the two
-    # FDT builders (make_reduction_config leaves it empty, P19); read by
+    # FDT builders (make_reduction_config leaves it empty); read by
     # core.artifacts.provenance.inputs_from_cfg, so an fdt record names its cell, its RESOLVED
-    # bounds file and its units file by path AND content hash (piece 5, §3.2).
-    # Defaulted, like `seed`: the reduction map shares this dataclass and is out of scope (§1.3).
+    # bounds file and its units file by path AND content hash.
+    # Defaulted, like `seed`: the reduction map shares this dataclass and never sets it.
     sources: dict = field(default_factory=dict)
 
-    # The seed the run used, drawn when none was supplied (E7). None means "not chosen yet".
+    # The seed the run used, drawn when none was supplied. None means "not chosen yet".
     seed: "int | None" = None
 
     # The sweep preset's NAME ("exploratory" | "production"), set by cli.make_param_sweep_config;
     # None for a single-cell run and for the reduction map. The resolved dict alone does not say
-    # which preset it was, and body.settings["preset"] must (§4.4, P72). Defaulted, for §1.3.
+    # which preset it was, and body.settings["preset"] must. Defaulted, for the reduction map.
     preset_name: "str | None" = None
 
     # --- Derived ---
@@ -652,7 +652,7 @@ class FDTConfig:
 
     def copy_for_run(self) -> "FDTConfig":
         """A private deep copy for one run: what `core.runs.public_entry` hands a public entry in
-        place of the caller's config (V1 of piece 3).
+        place of the caller's config.
 
         NOT optional, and not cosmetic: `public_entry` is duck-typed on this method
         (core/runs.py:243-247, `if hasattr(kwargs["cfg"], "copy_for_run")`), so a config class

@@ -1,21 +1,21 @@
 """The one seeding context ``smoke``, every diagnostic and the FDT measurement run inside.
 
-Here, at the top of ``core``, and not in ``core/diagnostics`` where it started (piece 2): importing ANY
+Here, at the top of ``core``, and not in ``core/diagnostics`` where it started: importing ANY
 submodule of a package runs the package's ``__init__``, and ``core/diagnostics/__init__.py`` imports
 the five diagnostics and through them ``core.orchestrator``, sbi's inference modules and
 ``pytensor``. An FDT run needs none of that, and paid about two seconds and two false pytensor "g++"
-lines on stderr for it at the head of every ``python -m core fdt`` (Task 17, fix round 1). This
-module imports only ``contextlib`` and the stdlib-only ``core.refusals``; torch and numpy are
-imported when the context is entered. ``core.diagnostics.rng`` re-exports the same object, so every
-diagnostics import keeps working.
+lines on stderr for it at the head of every ``python -m core fdt``. This module imports only
+``contextlib`` and the stdlib-only ``core.refusals``; torch and numpy are imported when the context
+is entered. ``core.diagnostics.rng`` re-exports the same object, so every diagnostics import keeps
+working.
 
-Seed ONCE and let the streams run on, exactly as ``scripts/smoke_train.py`` did. Training and
-calibration both draw their initial conditions from numpy's global RNG and their Sobol (t_scale, T)
-scramble from torch's, and on a TSNPE round -- or with the rotation off -- nothing consumes either
-stream between a seed and the pipeline. Seeding per stage would therefore start draws that must be
-independent from identical states: the calibration set would replay the training strata, and trap X5
-makes those operating points t_scale's effective SBC sample size. That is why there is a context
-here and no ``seed`` argument on any stage.
+Seed ONCE and let the streams run on, exactly as ``smoke`` does. Training and calibration both draw
+their initial conditions from numpy's global RNG and their Sobol (t_scale, T) scramble from torch's,
+and on a TSNPE round -- or with the rotation off -- nothing consumes either stream between a seed and
+the pipeline. Seeding per stage would therefore start draws that must be independent from identical
+states: the calibration set would replay the training strata, and the calibration's operating-point
+count is t_scale's effective SBC sample size. That is why there is a context here and no ``seed``
+argument on any stage.
 
 It restores what it borrowed, so an in-process ``main(argv)`` never changes the calling process's
 streams -- the tool's tests run in-process, and a leaked seed makes one test's numbers depend on
@@ -44,7 +44,7 @@ def require_seed(seed) -> int:
     ``refuse`` rather than ``require_between``, the one rule with an upper end, because that rule
     compares and prints in float: it renders both ends of this range as "1.84467e+19" ("must be
     between 0 and 1.84467e+19; got 1.84467e+19"), and ``float(2**64 - 1)`` rounds up to 2**64, so it
-    would refuse ``SEED_MAX`` itself (Task 28's ruling asked for a readable sentence).
+    would refuse ``SEED_MAX`` itself.
     """
     seed = require_at_least("seed", seed, 0)
     if seed > SEED_MAX:
@@ -65,8 +65,7 @@ def seeded(seed: int, device):
                    ``fork_rng(devices=[cpu])`` raises -- so it seeds the CPU generator ALONE: under
                    ``torch.manual_seed`` a CPU run (every FDT run is one) left each card's generator
                    pinned at its seed after the block, and two runs at one seed made the next CUDA
-                   draws identical -- the hazard core/SBI/decorrelate.py documents (spec §3.7; Task 17,
-                   fix round 1).
+                   draws identical -- the hazard core/SBI/decorrelate.py documents.
     """
     import numpy as np
     import torch

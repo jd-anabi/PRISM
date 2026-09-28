@@ -34,8 +34,8 @@ Schema history, and both migrations run IN MEMORY on every load and save (``_nor
 
 **What ``"box"`` does, and the thing it deliberately does NOT do.** ``"log"`` places that parameter's
 box bijection in log space -- it is the per-model source for ``reparam.nd_log_mask``'s ``log_params``,
-the same switch ``config.REPARAM_LOG_PARAMS`` provides globally for the built-ins, and it is persisted
-into the posterior's ``.rot.pt`` sidecar so evaluation reconstructs the exact training box. It changes
+the same switch ``config.REPARAM_LOG_PARAMS`` provides globally for the built-ins, and it is recorded
+in the posterior manifest's transform block so evaluation reconstructs the exact training box. It changes
 the COORDINATE the latent GMM is fitted in (and therefore the coordinate the flow trains in), which is
 what linearizes a multiplicative degeneracy before rotating.
 
@@ -140,12 +140,11 @@ def forcing_value_problem(var_name: str, pname: str, value: float) -> "str | Non
     PUBLIC, and a sentence rather than a raise, because it has two callers that must say the same
     thing: ``_check_schema`` raises it as a ValueError, and the model builder's Validate raises it
     as a Refusal keyed to the forcing box -- before this, Validate passed the value and only Save
-    refused it, on the status line (piece 5, Task 35). One rule, one wording.
+    refused it, on the status line. One rule, one wording.
 
     The amplitude is a magnitude (the comment above ``_POSITIVE_FORCING``) and its saved box is
     floored at 0 (``_forcing_bounds``), so a negative one saved a box that excluded its own value; it
-    is refused at Validate, at Save and at load (the whole-piece review's N18, the owner's ruling
-    R-F5). 0 stays legal: "no drive".
+    is refused at Validate, at Save and at load. 0 stays legal: "no drive".
     """
     if pname in _POSITIVE_FORCING and value <= 0:
         why = ("A drive frequency of 0 is no drive at all -- set this variable's forcing to None "

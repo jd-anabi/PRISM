@@ -1,5 +1,5 @@
-"""The artifact store: directories under one root, a manifest in each, and (from Task 4 on) the
-loaders that refuse a mismatch before anything is spent.
+"""The artifact store: directories under one root, a manifest in each, and the loaders that refuse a
+mismatch before anything is spent.
 
 Every generated artifact is ``<root>/<kind dir>/<name>__<id>/`` -- ``_unnamed__<id>`` until it is
 named -- with ``manifest.json`` written LAST, atomically, by ``ArtifactWriter``. The store indexes by
@@ -35,28 +35,28 @@ KIND_DIRS = {"prior": "priors", "simulation": "simulations", "posterior": "poste
              "diagnostic": "diagnostics",
              # NOT "crossval": core/Reduction/plots.py already writes reduction_crossval_<stamp>.png
              # into the reduction directory, and a second meaning for the word would collide with
-             # existing vocabulary (spec §2.1). Reusing the EXISTING ``fdt`` directory is chosen, not
+             # existing vocabulary. Reusing the EXISTING ``fdt`` directory is chosen, not
              # accidental: the owner's stray pictures then sit as loose files inside a kind
              # directory, which is where ``loose_files`` can reach them.
              "fdt": "fdt"}
 MANIFEST = "manifest.json"
-# The run's records, written beside the manifest by ArtifactWriter (piece 3, V4). NOT a payload: not
-# hashed, not in ``payloads``, never read by a loader. The simulation cache never gets one (§1.2).
+# The run's records, written beside the manifest by ArtifactWriter. NOT a payload: not hashed, not in
+# ``payloads``, never read by a loader. The simulation cache never gets one: it has no writer.
 LOG_FILE = "log.txt"
 # The ONE reason ``_entries`` gives a directory that carries no manifest.json AT ALL, and therefore
-# the only state a sweep may remove (piece 4 whole-piece review, R1). A directory whose manifest
+# the only state a sweep may remove. A directory whose manifest
 # EXISTS but this build will not parse, or that declares another kind, is something nobody here
 # understands -- it is reported in the listing with its own reason and left alone. Both front ends
 # read this constant to decide what to offer, so neither restates the rule.
 NO_MANIFEST_REASON = "no manifest.json (incomplete or interrupted)"
 # How recently a directory's TREE must have been touched for a removal to refuse it as possibly
-# live (R3). ``ArtifactWriter`` creates the directory first and writes the manifest LAST, so for the
+# live. ``ArtifactWriter`` creates the directory first and writes the manifest LAST, so for the
 # whole of a run a live directory looks exactly like a leftover -- and a sweep from a SECOND process
 # (`python -m core artifacts sweep` beside a training in the window) has no ``BasePanel._running`` to
 # consult. Not a cross-process lock, which is out of scope: a recency guard plus an honest report
 # cannot itself destroy anything, and it costs a just-abandoned leftover a few minutes' wait.
 RECENT_WRITE_SECONDS = 300.0
-# Kinds whose record is written PROGRESSIVELY (piece 5, E2): the directory and a first manifest
+# Kinds whose record is written PROGRESSIVELY: the directory and a first manifest
 # exist from ``__enter__``, ``refresh()`` rewrites the manifest and the log as the run proceeds, and
 # an exception KEEPS the directory instead of removing it. The training cache has the same property
 # by another mechanism -- it has no writer at all -- and for the same reason: a run that takes hours
@@ -67,14 +67,14 @@ RECENT_WRITE_SECONDS = 300.0
 #
 # One consequence, stated where the constant is: a progressive record carries a manifest from its
 # first moment, so ``remove_incomplete`` -- which removes only a directory with NO manifest at all --
-# can never remove one, finished or not. That is the right answer (spec §2.5), and it is why
-# ``__exit__`` removes the directory for a refusal raised before anything was written: an empty
-# record nothing can ever clear would otherwise accumulate.
+# can never remove one, finished or not. That is the right answer -- an interrupted run keeps its
+# folder, marked unfinished -- and it is why ``__exit__`` removes the directory for a refusal raised
+# before anything was written: an empty record nothing can ever clear would otherwise accumulate.
 PROGRESSIVE_KINDS: frozenset = frozenset({"fdt"})
 # Directories that may sit BESIDE the kind directories because an older build wrote them. A CLOSED
 # literal, never a scan: the store never walks its own root, and offering to remove whatever happens
 # to be under it is how a tidy-up destroys something nobody meant it to. ``legacy_dirs`` and
-# ``remove_legacy`` are the only way either front end can see or clear one (piece 5, E10), and
+# ``remove_legacy`` are the only way either front end can see or clear one, and
 # nothing is removed on the owner's behalf. A name here may never also be a KIND_DIRS value.
 LEGACY_DIRS: tuple = ("crossval",)
 # Which ``parents`` keys can name an artifact of a given kind.
@@ -84,7 +84,7 @@ _PARENT_KEYS = {"prior": ("prior",), "simulation": ("simulation",),
                 # Explicit, though a MISSING entry means the same thing to ``dependents``: an fdt
                 # record measures a CELL and depends on no artifact, and nothing can depend on one.
                 # A comparison names the records it drew in its BODY, not here -- ``parents`` is a
-                # flat {key: id} map read as ``m.parents.get(pk) == id_`` (spec §1.2), so it cannot
+                # flat {key: id} map read as ``m.parents.get(pk) == id_``, so it cannot
                 # carry an arbitrary number of ids without widening the contract for every kind.
                 "fdt": ()}
 
@@ -111,7 +111,7 @@ class Accept:
 class LooseFile:
     """A file sitting DIRECTLY inside a kind directory, where only artifact directories belong.
 
-    An older build wrote its output as bare files under ``Artifacts/fdt`` (spec §1), and no listing
+    An older build wrote its output as bare files under ``Artifacts/fdt``, and no listing
     can see one: ``_entries`` iterates directories only. Frozen, because it is a report about the
     disk and nothing downstream may edit it into an instruction.
     """
@@ -130,17 +130,17 @@ class Summary:
     path: Path
     # "has a valid manifest", i.e. the directory describes a real artifact -- NOT "the run finished".
     # For the kinds whose body carries ``complete`` those differ: a cache is manifested from its first
-    # batch on, an fdt record from its first moment (piece 5, E2), and ``body["complete"]`` is the
+    # batch on, an fdt record from its first moment, and ``body["complete"]`` is the
     # field that says whether the run got to the end. ``finished`` below is that honest question,
     # asked the same way for every kind -- ask it, not this one, when what you mean is "did the run
-    # get to the end" (piece 4, B3).
+    # get to the end".
     complete: bool
     reason: "str | None"
     mode: "str | None" = None
     width: "int | None" = None
     amortized: "bool | None" = None
     parents: dict = field(default_factory=dict)
-    # Piece 4 (B2): everything else a browser row shows, off the ONE manifest read ``list`` already
+    # Everything else a browser row shows, off the ONE manifest read ``list`` already
     # did. Keyword with defaults, so no positional construction anywhere breaks.
     dir_name: str = ""                      # the directory's own name, ALWAYS; remove_incomplete's handle
     finished: bool = False                  # did the RUN finish; not ``complete`` for a cache or fdt record
@@ -148,7 +148,7 @@ class Summary:
     batches_planned: "int | None" = None    # simulation only: body["identity"]["n_runs"], the PLANNED total
     rows: "tuple[int, ...] | None" = None   # simulation only: rows per batch, written at completion ONLY
     variant: "str | None" = None            # diagnostic only: body["variant"]
-    # Piece 5: fdt only. ``study`` is "single", "sweep" or "comparison"; the three counts are a
+    # fdt only. ``study`` is "single", "sweep" or "comparison"; the three counts are a
     # SWEEP's operating points (body["points"]), None for a single run and for a comparison, which
     # have none. Declared here and FILLED by ArtifactStore.list.
     study: "str | None" = None
@@ -257,13 +257,13 @@ class LoadedDiagnostic(Loaded):
 class LoadedFdt(Loaded):
     """One effective-temperature measurement, one parameter sweep, or one comparison of them.
 
-    NOT frozen (planning ruling P1): ``Loaded`` is a plain dataclass, and Python refuses
+    NOT frozen: ``Loaded`` is a plain dataclass, and Python refuses
     ``@dataclass(frozen=True)`` on a subclass of a non-frozen one (TypeError at import). Every
     other ``Loaded*`` in this module is a plain dataclass for the same reason.
 
     ``body`` is the manifest's own body, copied; ``data_path`` is ``<dir>/data.h5`` when the run got
-    as far as writing numbers and None when it did not -- which an INTERRUPTED record (E2) very
-    often has not.
+    as far as writing numbers and None when it did not -- which an INTERRUPTED record very often
+    has not.
     """
     body: dict = field(default_factory=dict)
     data_path: "Path | None" = None
@@ -312,12 +312,12 @@ def _is_link(path: Path) -> bool:
     """A symbolic link OR a Windows directory junction. ``Path.is_symlink()`` is False for a
     junction, so a guard written with it alone lets one through -- and the resolved-parent check
     beside it cannot catch a junction that points at a directory INSIDE the root, a kind directory
-    included (piece 5, E10)."""
+    included."""
     return path.is_symlink() or path.is_junction()
 
 
 def _resolves_as_itself(path: Path, name: str) -> bool:
-    """Does ``path`` RESOLVE to a directory called ``name``? (the whole-piece review's N27)
+    """Does ``path`` RESOLVE to a directory called ``name``?
 
     Windows addresses one directory by several names -- a case variant, an 8.3 short name -- and
     ``realpath`` expands them. A legacy name that is really an alias of a KIND directory passes every
@@ -342,7 +342,7 @@ class ArtifactWriter:
     and writes the manifest LAST. On ANY exception (a cancel included) the directory is removed and
     the exception re-raised, so a half-artifact never looks real.
 
-    A kind in ``PROGRESSIVE_KINDS`` is written the other way round (piece 5, E2): ``__enter__``
+    A kind in ``PROGRESSIVE_KINDS`` is written the other way round: ``__enter__``
     writes a first manifest carrying every body key with the unknown ones null, ``refresh()``
     re-writes it and the log as the run proceeds, and an exception KEEPS the directory with
     ``complete`` still False -- except a ``Refusal`` raised before the first payload or figure, which
@@ -367,7 +367,7 @@ class ArtifactWriter:
         # finished record back into an unfinished one that ``load_fdt`` never verifies again.
         self._committed = False
         # True between ``__enter__``'s first manifest and the top of ``__exit__``: the only window in
-        # which ``refresh`` may write (the whole-piece review's N3). Its manifest write creates the
+        # which ``refresh`` may write. Its manifest write creates the
         # parent folder, so a refresh before ``__enter__`` made the folder the ``with`` then refused
         # as existing, and one after a pre-spend refusal brought back the folder the refusal removed.
         self._entered = False
@@ -413,14 +413,14 @@ class ArtifactWriter:
     def __enter__(self):
         self.dir.mkdir(parents=True, exist_ok=False)
         if self.progressive:
-            # The FIRST manifest, before a single number is computed (spec §2.2 step 1). ``validate``
+            # The FIRST manifest, before a single number is computed. ``validate``
             # refuses a partial body key set, so this carries every key: what the caller set between
             # create() and here, and null for the rest.
             try:
                 self._write(hashed=False, complete=False)
             except BaseException:
                 # ``__exit__`` never runs when ``__enter__`` raises, so this is the one place that can
-                # take the folder back (fix round 1, finding 1). A first body the manifest cannot hold
+                # take the folder back. A first body the manifest cannot hold
                 # -- a NaN ``validate`` refuses, or a numpy scalar that passes it and then fails in
                 # ``json.dumps`` after the log is on disk -- would otherwise leave a manifest-less
                 # folder for a run that never started, and every refused click would add one. The
@@ -434,13 +434,13 @@ class ArtifactWriter:
         self._entered = False
         if exc_type is not None:
             if self.progressive and not (isinstance(exc, Refusal) and not self._wrote_anything):
-                # E2. The run was interrupted or it failed AFTER spending something: the folder stays,
+                # The run was interrupted or it failed AFTER spending something: the folder stays,
                 # ``complete`` stays False, and one last refresh puts the log up to the failure on
-                # disk, ending with one stamped line that names what stopped it (the whole-piece
-                # review's N1) -- the run's own records up to the failure say nothing of the
-                # exception, so without that line the log could not say why the run stopped.
+                # disk, ending with one stamped line that names what stopped it -- the run's own
+                # records up to the failure say nothing of the exception, so without that line the
+                # log could not say why the run stopped.
                 #
-                # Unless the folder is GONE (the whole-piece review's M3): a record still being written
+                # Unless the folder is GONE: a record still being written
                 # looks exactly like an interrupted one, so it can be deleted -- from the Artifacts
                 # screen, or by `artifacts rm` in another shell -- while its run is live, and that run
                 # then fails at its next write and lands here. Both writes below would rebuild the
@@ -452,7 +452,7 @@ class ArtifactWriter:
                                   f"writing it; nothing is kept", stacklevel=2)
                     return False
                 #
-                # The log FIRST, and in an attempt of its own (fix round 1, finding 3): a body the
+                # The log FIRST, and in an attempt of its own: a body the
                 # final manifest cannot validate -- a NaN the stage stored as it failed -- must not
                 # take the records since the last good refresh down with it. Neither attempt may
                 # REPLACE the exception that ended the run, so each failure is a warning.
@@ -470,7 +470,7 @@ class ArtifactWriter:
                                   stacklevel=2)
                 return False
             if self.progressive:
-                # Refused before it wrote anything, so it DOES carry its first manifest (ruling F30).
+                # Refused before it wrote anything, so it DOES carry its first manifest.
                 # Conditional, because the removal may have got as far as the manifest before it
                 # failed: what is left is then a manifest-less leftover, not an unfinished record.
                 self._remove_dir("if its manifest is still there it is listed as unfinished and can be "
@@ -498,7 +498,7 @@ class ArtifactWriter:
                           stacklevel=3)
 
     def refresh(self) -> None:
-        """Re-write the manifest and ``log.txt`` for a record still being written (spec §2.2 step 2).
+        """Re-write the manifest and ``log.txt`` for a record still being written.
 
         Called by the stage at points it chooses -- after the spontaneous campaign, after each
         operating point, after each figure -- so a browser row, a listing and the log all follow a
@@ -508,19 +508,18 @@ class ArtifactWriter:
         wrong the moment it is written, so an unfinished record lists its payloads with a null hash
         and the real hashes land at the commit. ``load_fdt`` treats a null hash as "not yet".
 
-        Refused once the record is committed (fix round 1, finding 2): for the same reason, a refresh
-        then would write ``complete: false`` and null hashes over a finished record. Refused, too,
-        outside the ``with`` block (the whole-piece review's N3): its manifest write creates the
-        folder, so a refresh before ``__enter__`` or after a pre-spend refusal would put one on disk
-        that nothing is writing.
+        Refused once the record is committed: for the same reason, a refresh then would write
+        ``complete: false`` and null hashes over a finished record. Refused, too, outside the ``with``
+        block: its manifest write creates the folder, so a refresh before ``__enter__`` or after a
+        pre-spend refusal would put one on disk that nothing is writing.
 
         A refresh the OS refuses mid-run -- a PermissionError, which is what Windows raises for a file
         another program holds open without write sharing (Explorer's preview pane, a scanner) -- is
-        WARNED and skipped (the whole-piece review's N4): the refresh is bookkeeping, the run's numbers
-        are already on disk, and ending an overnight sweep over it cost every point still to run. The
-        next refresh, or the commit, writes what this one could not; the commit and the failure path
-        stay strict. A FileNotFoundError still propagates: the folder is gone (M3), and that error is
-        what stops the run.
+        WARNED and skipped: the refresh is bookkeeping, the run's numbers are already on disk, and
+        ending an overnight sweep over it cost every point still to run. The next refresh, or the
+        commit, writes what this one could not; the commit and the failure path stay strict. A
+        FileNotFoundError still propagates: the folder was deleted while its run was writing it, and
+        that error is what stops the run.
         """
         if not self.progressive:
             raise StoreError(f"{self.kind} artifacts are written in one step, so there is nothing to "
@@ -557,10 +556,10 @@ class ArtifactWriter:
         # simulation cache (which has no writer) carries the file. Outside any entry, no file.
         #
         # ``stopped_by`` is the keep branch's exception, and the file then ENDS with one stamped line
-        # naming it (the whole-piece review's N1). Appended to the text written here and never to the
-        # run's buffer, and never as a logging record: a record would reach the tool's console and
-        # the window's pane too, beside the refusal line or box the front end already shows for the
-        # same exception (E16), and would repeat in every later record of the same run.
+        # naming it. Appended to the text written here and never to the run's buffer, and never as a
+        # logging record: a record would reach the tool's console and the window's pane too, beside
+        # the refusal line or box the front end already shows for the same exception, and would
+        # repeat in every later record of the same run.
         run_log = runs.current_run_log()
         if run_log is not None:
             text = run_log.text()
@@ -570,7 +569,7 @@ class ArtifactWriter:
                 text += f"{runs._stamp()} error stopped: {what}\n"
             # newline="\n" explicitly: write_text's default would make every record CRLF on Windows,
             # and this file is read back by read_log, shown in the browser's detail pane and saved
-            # verbatim to a report whose bytes spec §5 says both front ends must agree on.
+            # verbatim to a report whose bytes both front ends must agree on.
             (self.dir / LOG_FILE).write_text(text, encoding="utf-8", newline="\n")
 
     def _inputs(self, *, warn: bool) -> dict:
@@ -616,7 +615,7 @@ class ArtifactWriter:
             inputs=self._inputs(warn=hashed),
             config=self.config, parents=dict(self.parents), fingerprints=dict(self.fingerprints),
             payloads={f: (prov.sha256_file(self.dir / f) if hashed else None) for f in self._payloads},
-            # An UNFINISHED manifest lists only the figures on disk (the whole-piece review's N2): a
+            # An UNFINISHED manifest lists only the figures on disk: a
             # figure is recorded when its PATH is handed out, so a run stopped before the save -- a
             # Ctrl-C inside the passive check, a figure that failed to draw -- listed a picture that
             # was never written. The commit lists every one as it always has, so a finished record's
@@ -681,8 +680,8 @@ class ArtifactStore:
     def list(self, kind: str) -> list:
         """Every directory under ``kind`` as a ``Summary``: complete rows first, newest first.
 
-        Reads each manifest ONCE and KEEPS what it read, so a browser row needs no second read
-        (piece 4, B2). ``complete`` and ``finished`` are different questions -- see ``Summary``.
+        Reads each manifest ONCE and KEEPS what it read, so a browser row needs no second read.
+        ``complete`` and ``finished`` are different questions -- see ``Summary``.
         """
         out = []
         for sub, m, reason in self._entries(kind):
@@ -692,7 +691,8 @@ class ArtifactStore:
             body = m.body
             # Derived from the SCHEMA, not from a hand-written kind name: a kind whose body carries
             # a ``complete`` flag is one whose manifest exists before the run has finished (the
-            # cache, because it is resumable; an fdt record, because E2 keeps an interrupted one),
+            # cache, because it is resumable; an fdt record, because an interrupted run keeps its
+            # folder, marked unfinished),
             # and for every other kind a manifest IS the finish -- ``_commit`` writes it last. The
             # old form named "simulation" alone and would have silently called every half-written
             # fdt record finished.
@@ -709,9 +709,9 @@ class ArtifactStore:
             coerced_rows = None if row_ints is None or any(r is None for r in row_ints) else tuple(row_ints)
             # The PLANNED batch count lives only in the cache's identity -- the dict the naming digest
             # is taken over -- and a row that did not carry it could not render "3/4 batches" without
-            # reading this manifest again (piece 4, B2).
+            # reading this manifest again.
             ident = (body.get("identity") or {}) if kind == "simulation" else {}
-            # An fdt sweep's operating points, off the SAME manifest read (B2). A single run and a
+            # An fdt sweep's operating points, off the SAME manifest read. A single run and a
             # comparison carry ``points: null``, so the counts stay None and the cell stays blank --
             # "0/0" would be a claim neither ever makes. ``_as_int`` is what keeps a hand-edited or
             # partially written body from taking the whole listing down.
@@ -760,7 +760,7 @@ class ArtifactStore:
         no writer (``create`` refuses the kind), its manifest is refreshed batch by batch across
         resumes, and one cache is shared by every posterior that names it -- so no single commit holds
         one entry's records. An artifact written outside any public entry gets none either. But a run
-        that said NOTHING writes an EMPTY one: silence is a record too (piece 3, V4).
+        that said NOTHING writes an EMPTY one: silence is a record too.
 
         With ``max_bytes`` the TAIL is returned and ``truncated`` is True -- the end is where the
         failure is -- and its first line may be a partial one.
@@ -771,7 +771,7 @@ class ArtifactStore:
         front ends whoever wrote the file.
 
         THE one place that joins ``LOG_FILE``, so "is there a log, and what does it say" is answered
-        once and the cache's absence is explained here rather than in each front end (piece 4, B4).
+        once and the cache's absence is explained here rather than in each front end.
 
         Resolves with ``_find`` rather than through ``path()`` so that both refusals can carry
         ``field="artifact"``: ``path()``'s is field-less, and an inherited field-less refusal leaves
@@ -824,8 +824,8 @@ class ArtifactStore:
         unnamed artifacts. ``allow`` is the id already entitled to the name (``rename``'s own
         artifact), which is not a collision with itself.
 
-        Every refusal here carries ``field="name"`` (piece 3, V3): the message names no box and no
-        flag; each front end's table maps the key to its own control.
+        Every refusal here carries ``field="name"``: the message names no box and no flag; each front
+        end's table maps the key to its own control.
         """
         if not name:
             return
@@ -871,7 +871,7 @@ class ArtifactStore:
         return m
 
     def set_note(self, kind: str, ref: str, note: str) -> mf.Manifest:
-        """Rewrite one artifact's note. ``field="artifact"`` (piece 4, design §2.4): the front ends
+        """Rewrite one artifact's note. ``field="artifact"``: the front ends
         name the control or the flag themselves, and this was the one store mutation that named
         nothing. The key is the ARTIFACT and not the note: what is wrong is the ref, so the fix is to
         select an artifact that exists, not to edit the note box. ``field="note"`` is
@@ -923,15 +923,16 @@ class ArtifactStore:
             listed = "; ".join(f"{k} {n or '(unnamed)'} [{i}]" for k, i, n in deps)
             # The wording does not move, ``force=True`` included: core/refusals.py's own rule is that
             # a message names no box, tab, flag or button but MAY name a Python keyword -- "it is the
-            # core API's own word". No front end offers force (B6); the log's reader still needs the
-            # escape hatch's name. Both refusals take field="artifact": either is answered by picking
-            # a different artifact in the list (piece 4, P1/P20).
+            # core API's own word". No front end offers force -- each deletes one artifact at a time,
+            # never forced -- but the log's reader still needs the escape hatch's name. Both refusals
+            # take field="artifact": either is answered by picking a different artifact in the list.
             raise StoreError(
                 f"refusing to delete {kind} {m.name or m.id}: {len(deps)} artifact(s) name it as a "
                 f"parent -- {listed}. Delete those first, or pass force=True to orphan them.",
                 field="artifact")
-        # The same two guards ``remove_incomplete`` and ``sweep_incomplete`` were given in fix
-        # round 2, and this is the only one of the three that removes a REAL artifact (R7).
+        # The same two guards ``remove_incomplete`` and ``sweep_incomplete`` carry -- a failed removal
+        # is a refusal, and a removal is verified -- and this is the only one of the three that
+        # removes a REAL artifact.
         try:
             _rmtree_retry(sub)
         except OSError as e:
@@ -953,23 +954,23 @@ class ArtifactStore:
         the dependency check. This one asks ``_entries`` (the same classifier ``list`` shows) and
         removes only what came back WITHOUT a manifest. Neither call can do the other's job, which is
         the safety property: nothing can reach a leftover folder by accident, and nothing can reach a
-        real artifact without the dependency check (piece 4, B7).
+        real artifact without the dependency check.
 
         Refuses, as a StoreError with ``field="artifact"``: an unknown kind; a ``dir_name`` that is
         not a direct child (any separator, ``..``, an absolute path); a name that resolves to no
         directory at all; a directory ``_entries`` classifies as COMPLETE; a directory that carries a
-        manifest.json this build cannot use or that declares another kind (R1 -- see
+        manifest.json this build cannot use or that declares another kind (see
         ``NO_MANIFEST_REASON``); and one whose tree was written within ``RECENT_WRITE_SECONDS``, which
-        may be a run in flight in another process (R3).
+        may be a run in flight in another process.
 
-        Fix round 1 (CRITICAL): the completeness check does NOT compare ``dir_name`` as a string
+        The completeness check does NOT compare ``dir_name`` as a string
         against each entry's name. Windows addresses one directory through many spellings -- a case
         variant, an 8.3 short name, a trailing dot it silently strips -- so a string compare against
         ``d / dir_name`` could resolve to a REAL artifact's directory while failing to match that
         same artifact's name in ``_entries``'s listing, and the manifest check would then see no
         match and treat a real, possibly dependency-bearing artifact as a nameless leftover. Instead,
         every directory in ``_entries(kind)`` is checked with ``os.path.samefile`` AND a resolved-path
-        comparison against the candidate path (fix round 2): ``samefile`` catches an alias no string
+        comparison against the candidate path: ``samefile`` catches an alias no string
         compare would (its identity check is ``(st_dev, st_ino)``), but on a volume where ``st_ino``
         is 0 for every entry -- FAT/exFAT, some network shares, and the artifacts root is
         relocatable to exactly such a drive -- ``samefile`` would call EVERY entry a match, matching
@@ -985,8 +986,8 @@ class ArtifactStore:
         if (not dir_name or dir_name in (".", "..") or "/" in dir_name or "\\" in dir_name
                 or dir_name != Path(dir_name).name):
             # The separator checks are not redundant with the Path comparison: on POSIX a backslash
-            # is an ordinary character, so "sub\\x" would pass it. Necessary, but -- per the review --
-            # NOT sufficient: they reject an obvious path, not an alias of a single real name.
+            # is an ordinary character, so "sub\\x" would pass it. Necessary, but NOT sufficient: they
+            # reject an obvious path, not an alias of a single real name.
             raise StoreError(f"{dir_name!r} is not the name of a directory directly under {d}; a "
                              f"leftover is removed by its own folder name, never by a path",
                              field="artifact")
@@ -1009,11 +1010,11 @@ class ArtifactStore:
                 f"leftover; remove it with delete(), which refuses it while anything depends on it",
                 field="artifact")
         if reason != NO_MANIFEST_REASON:
-            # R1. "This build cannot parse it" is NOT "there is no artifact here": a manifest written
+            # "This build cannot parse it" is NOT "there is no artifact here": a manifest written
             # under a different SCHEMA, or by a newer build, or read through a transient Windows
             # failure (the very class _rmtree_retry retries for, one function away) all land here --
-            # a reviewer probed the old rule deleting a real calibration with its payload. A
-            # directory nobody understands is reported, never removed.
+            # and the old rule, which removed them, could delete a real calibration with its
+            # payload. A directory nobody understands is reported, never removed.
             raise StoreError(
                 f"{dir_name!r} under {d} carries a manifest.json, so it is not a leftover: {reason}. "
                 f"A sweep removes only a directory with NO manifest at all; this one keeps its row "
@@ -1021,9 +1022,9 @@ class ArtifactStore:
                 field="artifact")
         age = time.time() - _newest_mtime(sub)
         if age < RECENT_WRITE_SECONDS:
-            # R3. The manifest is written LAST, so a run in flight -- possibly in ANOTHER process,
-            # which no _running flag can see -- is indistinguishable from a leftover by content
-            # alone. Age is the one signal available without a cross-process lock.
+            # The recency guard. The manifest is written LAST, so a run in flight -- possibly in
+            # ANOTHER process, which no _running flag can see -- is indistinguishable from a leftover
+            # by content alone. Age is the one signal available without a cross-process lock.
             raise StoreError(
                 f"{dir_name!r} under {d} was written {age:.0f} s ago, so something may still be "
                 f"writing it: an artifact's manifest is written last, and a run in flight looks "
@@ -1088,7 +1089,7 @@ class ArtifactStore:
         Refuses, as a StoreError with ``field="artifact"``: an unknown kind; a name that is not a
         direct child (any separator, ``..``, an absolute path); a name that resolves to no file (a
         directory included); and one written within ``RECENT_WRITE_SECONDS``, which may be a run in
-        flight in another process -- the same guard, for the same reason (R3).
+        flight in another process -- the same recency guard, for the same reason.
         """
         if kind not in KIND_DIRS:
             raise StoreError(f"unknown artifact kind {kind!r}", field="artifact")
@@ -1133,11 +1134,11 @@ class ArtifactStore:
         """Remove EXACTLY the ``(kind, dir_name)`` pairs handed in. ``(removed, failed)``, where
         ``removed`` is ``[(kind, dir_name)]`` and ``failed`` is ``[(kind, dir_name, reason)]``.
 
-        R2: this call no longer RE-SCANS. It used to take a kind and remove whatever was incomplete
-        at the moment it ran, which meant the confirmation the operator answered did not bind the
-        action -- a reviewer probed it removing a directory created while the dialog sat open, and
-        reporting "Removed 2 of 1 leftover directories". The caller now computes the candidates,
-        shows them, and hands that list here; anything that appeared since is simply not in it.
+        This call does not RE-SCAN. It used to take a kind and remove whatever was incomplete at
+        the moment it ran, which meant the confirmation the operator answered did not bind the
+        action -- it could remove a directory created while the dialog sat open, and report
+        "Removed 2 of 1 leftover directories". The caller now computes the candidates, shows them,
+        and hands that list here; anything that appeared since is simply not in it.
 
         Each entry goes BY NAME through ``remove_incomplete``, which is the one call hardened for
         this (a Windows name alias cannot reach a real artifact, a directory that became complete
@@ -1379,9 +1380,9 @@ class ArtifactStore:
         if not body["amortized"]:
             trd = body["truncation"] or {}
             if not accept.truncated:
-                # V3: neutral. Accept(truncated=True) is the core API's own name and stays; the dialog
-                # and the flag that answer this live in the front-end tables under
-                # field="accept_truncated", so a renamed control cannot go stale here.
+                # Neutral: the message names no control. Accept(truncated=True) is the core API's own
+                # name and stays; the dialog and the flag that answer this live in the front-end tables
+                # under field="accept_truncated", so a renamed control cannot go stale here.
                 raise StoreError(
                     f"Posterior '{label}' is NOT AMORTIZED: it was trained by TSNPE on a prior truncated to a "
                     f"{trd.get('level', '?')}-HPD region along Fisher direction(s) {trd.get('dims')}, drawn around "
@@ -1394,8 +1395,8 @@ class ArtifactStore:
             region = truncate.TruncationRegion.from_dict(mf.region_from_json(trd)) if trd else None
             # The digest is refused alongside the basis and for the same class of reason: without a
             # probe the coordinate the box refers to cannot be verified, and without a digest the
-            # region does not say which observation it was drawn around -- so GUARDRAIL 2 (the G2
-            # refusal in infer_and_visualize) could never fire and the artifact would serve any
+            # region does not say which observation it was drawn around -- so the narrowed-model rule
+            # (the refusal in infer_and_visualize) could never fire and the artifact would serve any
             # observation as if it were the one it is valid near.
             if region is None:
                 _bad("declares itself NON-AMORTIZED but its manifest carries no truncation region, so "
@@ -1462,7 +1463,7 @@ class ArtifactStore:
         if int(x_obs.shape[-1]) != int(cond["width"]):
             # field= like the width Refusal twelve lines up, and for the same reason: whichever of the
             # two fires, the operator answers it by picking another observation, and each front end's
-            # table is what names that control (piece 4, §8.1).
+            # table is what names that control.
             raise StoreError(f"observation '{label}': observation.pt holds a {int(x_obs.shape[-1])}-wide "
                              f"conditioning row but its manifest declares {int(cond['width'])}; the artifact "
                              f"is inconsistent (every width guard above compared the MANIFEST, not this row)",
@@ -1496,7 +1497,7 @@ class ArtifactStore:
 
     def load_diagnostic(self, ref: str) -> LoadedDiagnostic:
         """A diagnostic is a MEASUREMENT about other artifacts, so this verifies nothing and refuses
-        nothing (D5): there is no configuration it has to match, and nothing is ever trained from it.
+        nothing: there is no configuration it has to match, and nothing is ever trained from it.
         The one failure is a ref that names no complete diagnostic.
 
         From the manifest body, like load_calibration and load_inference: the manifest is the
@@ -1516,18 +1517,18 @@ class ArtifactStore:
     def load_fdt(self, ref: str) -> LoadedFdt:
         """A measurement of a CELL, read back: its body and the path to its numbers.
 
-        Like ``load_diagnostic``, this constrains nothing (D5): an fdt record describes an
-        experiment that has already happened, there is no configuration it has to match, and nothing
-        is ever trained from it. The ONE thing it verifies is every payload's own sha256, because
-        that is the one claim the manifest makes about a file this call is about to hand out. A
-        recorded hash whose file is GONE fails that claim as surely as one that no longer matches
-        (controller ruling F29): skipping it would hand back ``data_path=None`` and pass a finished
-        record off as one that never wrote numbers.
+        Like ``load_diagnostic``, this constrains nothing: an fdt record describes an experiment
+        that has already happened, there is no configuration it has to match, and nothing is ever
+        trained from it. The ONE thing it verifies is every payload's own sha256, because that is
+        the one claim the manifest makes about a file this call is about to hand out. A recorded
+        hash whose file is GONE fails that claim as surely as one that no longer matches: skipping
+        it would hand back ``data_path=None`` and pass a finished record off as one that never wrote
+        numbers.
 
         A payload whose recorded hash is NULL is not verified, present or not. A progressive record
-        hashes at the final commit only (spec §2.2), so every unfinished record lists its payloads
-        unhashed -- and reading what an interrupted run did manage to write is exactly what E2 keeps
-        the folder for (P47).
+        hashes at the final commit only, so every unfinished record lists its payloads unhashed --
+        and reading what an interrupted run did manage to write is exactly why such a run keeps its
+        folder.
         """
         sub, m = self._find("fdt", ref)
         if m is None:

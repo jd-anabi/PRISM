@@ -68,7 +68,7 @@ def test_a_posterior_manifests_amortized_flag_must_agree_with_its_region():
     region = {"dims": [0], "lo": [-1.0], "hi": [1.0], "level": 0.99}
     for bad in (_post_body(truncation=region),                          # amortized beside a region
                 _post_body(amortized=False)):                           # truncated with none
-        with pytest.raises(mf.ManifestError, match="D3"):
+        with pytest.raises(mf.ManifestError, match="an amortized one carries none$"):
             mf.validate(_header(kind="posterior", body=bad))
     assert mf.validate(_header(kind="posterior", body=_post_body(amortized=False, truncation=region))).id
 

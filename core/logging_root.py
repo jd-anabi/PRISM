@@ -1,4 +1,4 @@
-"""THE root-logger handler, installed by both front ends at start-up (piece 4, B14, spec §7.1).
+"""THE root-logger handler, installed by both front ends at start-up.
 
 WHAT WAS WRONG. ``logging.warning(...)`` -- the module-level function, on the ROOT logger -- calls
 ``basicConfig()`` whenever the root logger has no handlers (logging/__init__.py, ``warning``), and
@@ -71,8 +71,8 @@ def render(record: logging.LogRecord) -> str:
     the trigger this handler exists for is ``logging.warning``, the module-level function, whose
     logger is the root logger, so ``record.name`` would read ``root`` and name nothing. For that one
     name the prefix falls back to ``record.module``, the basename of the file that logged -- sbi's
-    leakage warning reads ``library: rejection:`` (sbi/samplers/rejection/rejection.py), which is what
-    walkthrough row D15 expects.
+    leakage warning reads ``library: rejection:`` (sbi/samplers/rejection/rejection.py), and that is
+    the line the window's log pane shows for it.
 
     A ``core`` record reaches a sink only when no ``core`` handler was attached, and it is PRISM's own
     voice, so it takes the tool's own console shape (core/tool/logging_console.py): the bare message
