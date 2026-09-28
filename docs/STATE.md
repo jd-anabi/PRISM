@@ -1,6 +1,16 @@
 # PRISM — state
 
-**Last updated:** 2026-09-28. **Piece 6 is BRAINSTORMED and its design awaits the owner's review.**
+**Last updated:** 2026-09-28. **Piece 6 is DESIGNED AND PLANNED; execution starts in a new chat.** The owner
+approved the spec (`907098d`) on 2026-09-28. The plan is
+`docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md` (`779c73c`: 39 tasks — 1–9 the reference
+cleanup, 10–11 the help tidy, 12–19 readiness, 20–24 the probe checks, 25–26 the whole-code review and the card run,
+27–36 the documents, 37–39 the documents review, retiring the handoff and the final gates). It was drafted by nine
+parallel drafters against a controller-written skeleton that fixed every cross-task name
+(`.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/plan-skeleton.md`), then pre-flighted by five lenses
+and a judge against the code ("ready with fixes": 95 exact edits and one manual pass, all applied). The planning-time
+departures from the spec are its §11 rows 1–14. The plan's "How to run this plan" section holds the per-task loop, the
+scratch conventions and five open owner questions, each with a default.
+**Earlier the same day:** piece 6 was BRAINSTORMED and its design reviewed.
 Brainstormed with the owner 2026-09-25 in plain-language questions (decisions H1–H13, below and in the
 decisions log). Design: `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
 (`7ad6498` the draft; `907098d` after an independent review against the code — four lenses and a judge,
@@ -18,7 +28,7 @@ prior; (5) the documents (`docs/guide/`: topic pages with reading paths, the ful
 retrain runbook with its science settled), then the handoff moves to `archive/`. The read-only
 reconnaissance and the review report are in the gitignored workspace
 `.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/` (`recon/`, `spec-review.md`).
-**Next:** the owner reviews the spec; then the writing-plans skill.
+**Next:** execute the plan (subagent-driven, in a new chat), Task 1 first.
 **Piece 5, "the secondary analyses", is DONE**: commits
 `a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus the documents
 commits that close it (this file's `fec2cde`, its review fixes `6c68a22`, and a count correction), on
@@ -323,8 +333,8 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
      - ~~Rows E1–E17 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done by the
        USER, reported 2026-09-25: **all seventeen pass**, recorded in that file's last two columns and
        in the gate table below.
-   - **Piece 6** — BRAINSTORMED 2026-09-25, design `907098d` awaiting the owner's review (the
-     paragraph at the top; spec
+   - **Piece 6** — BRAINSTORMED 2026-09-25, design `907098d` approved 2026-09-28, plan `779c73c`
+     (39 tasks) ready to execute (the paragraph at the top; spec
      `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`). What was
      carried into it, and how the design meets each:
      - The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes false
