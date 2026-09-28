@@ -1,10 +1,29 @@
 # PRISM — state
 
-**Last updated:** 2026-09-25. **Piece 5, "the secondary analyses", is DONE**: commits
+**Last updated:** 2026-09-28. **Piece 6 is BRAINSTORMED and its design awaits the owner's review.**
+Brainstormed with the owner 2026-09-25 in plain-language questions (decisions H1–H13, below and in the
+decisions log). Design: `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
+(`7ad6498` the draft; `907098d` after an independent review against the code — four lenses and a judge,
+"ready with fixes", 19 must-fix and 33 corrections folded in — plus the owner's two answers of
+2026-09-28: H11 revised, H13 added). The piece grew from "the docs split and a README tool reference"
+into five parts, in this order: (1) the reference cleanup — nothing shippable (core/, tests/, the
+launchers, README, requirements, pytest.ini, the new reader pages) may cite the handoff, STATE,
+CLAUDE.md, the specs, plans or their labels, enforced by a new source-scan suite; (2) the help-text
+tidy; (3) retrain-readiness fixes (tier-1 tests, the silent Hopf force-scale fallback closed,
+temperature marked an assumed input, a calibration verdict and a repeatable calibration seed,
+eigenvalues kept across a resume, truth containment reported both ways, the tier-1 constraint recorded,
+acceptances recorded by calibrations and narrowing rounds); (4) `python -m core probes band|mask|drive`,
+a new command-line diagnostic family that re-measures the chi band, drive and masking for a cell or a
+prior; (5) the documents (`docs/guide/`: topic pages with reading paths, the full tool reference, the
+retrain runbook with its science settled), then the handoff moves to `archive/`. The read-only
+reconnaissance and the review report are in the gitignored workspace
+`.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/` (`recon/`, `spec-review.md`).
+**Next:** the owner reviews the spec; then the writing-plans skill.
+**Piece 5, "the secondary analyses", is DONE**: commits
 `a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus the documents
 commits that close it (this file's `fec2cde`, its review fixes `6c68a22`, and a count correction), on
-the local `main` branch, NOT YET PUSHED (the owner pushes) — at `6c68a22` `main` was 130 commits
-ahead of `origin/main` (`cfe261b`), pieces 4 and 5 both unpushed. The 77: `a0d85da` the
+the local `main` branch, PUSHED — `origin/main` is `8556546` (seen 2026-09-28), so pieces 4 and 5 are
+both pushed. The 77: `a0d85da` the
 design and `0c974c1` its STATE note; `e902256`+`5354e6b` the plan and its review's thirteen fixes;
 `673868d` the hand-over note; `cbc2187` the pre-flight (every ruling folded into the task it
 binds); Tasks 1–40 in 58 commits (`f6a722c`..`7b12c34`, their fix rounds and two mid-execution
@@ -48,7 +67,7 @@ table below.
 **Rows E1–E17 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen,
 reported 2026-09-25: all seventeen pass** (the gate table below).
 **Piece 4, "GUI usability and the artifact browser", is DONE**:
-commits `5902259`..`80be144` (47), on the local `main` branch, NOT YET PUSHED (the owner pushes) —
+commits `5902259`..`80be144` (47), on the local `main` branch, since pushed (the owner pushes) —
 `main` was 49 commits ahead of `origin/main` (`cfe261b`) when it closed: `691a233` (piece 3's
 C1–C11 rows recorded), the 47 of `5902259`..`80be144` (`5902259` the design, `6fc399f` the plan,
 `644dcdb` the pre-flight fixes, then the 26 tasks, then the whole-piece review's fix wave `e9318ff`,
@@ -88,7 +107,7 @@ gate, the slow set and the GPU smoke gate of record are in the table below; the 
 judged unnecessary (no line under `core/diagnostics` moves a tensor) and that judgement held.
 **Rows D1–D17 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen on
 2026-09-21: all seventeen pass** (the gate table below).
-**Piece 6 is next** ("Owed" item 7). Piece 3
+**Piece 6 is in design** ("Owed" item 7; the paragraph at the top). Piece 3
 (`3db271e`..`9e2f7ef`) is DONE and pushed, and its rows C1–C11 all pass; piece 2
 (`0016dae`..`d34997c`) is also pushed, and its rows B1–B8 all pass.
 
@@ -304,10 +323,22 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
      - ~~Rows E1–E17 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done by the
        USER, reported 2026-09-25: **all seventeen pass**, recorded in that file's last two columns and
        in the gate table below.
-   - **Piece 6.** The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes
-     false (`:49,53-54,76,190-191`), and a README reference section for the tool; and, handed on by
-     piece 5's design spec §1.3, the stale memory figures at `PRISM_HANDOFF.md:2615-2616` against
-     `:6756` (opposite status for the same two items).
+   - **Piece 6** — BRAINSTORMED 2026-09-25, design `907098d` awaiting the owner's review (the
+     paragraph at the top; spec
+     `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`). What was
+     carried into it, and how the design meets each:
+     - The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes false
+       (`:49,53-54,76,190-191`) — met by writing the reader pages fresh and archiving the file (spec
+       §1.2, §6); the map found many more false lines, none of which may reach a reader page.
+     - A README reference section for the tool — spec §6.3, §6.4 (an ~80-line summary plus a full
+       page checked by a parser-walking test), after the help tidy of §3.
+     - The stale memory figures at `PRISM_HANDOFF.md:2615-2616` against `:6756` (piece 5's design spec
+       §1.3) — `:6756` is right; half of `:2616` is still open (`core/FDT/sanity.py:291`, `:328` keep a
+       view of the whole solution) and joins the open list when the handoff is retired (spec §1.2).
+     - Piece 4's "rest of group M" of the handoff's traps — met by `rules-and-traps.md` (spec §1.2).
+     - The *Provenance* open item below (a calibration and a TSNPE child do not record
+       `--accept-truncated`; an inference on its posterior's own observation records `accepted: []`)
+       — taken into piece 6 as H13 (spec §5.11).
    - **Open, with no piece owning them yet** (the owner decides each, or where it goes):
      - *Science.* In `identifiability jacobian`, a NaN in a measurable Jacobian column makes the
        least-squares step raise `LinAlgError` after all the simulations are spent (the retired
@@ -890,3 +921,37 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
       sweep, `{'s': 0.0}` on the T_a/T sweep; the review's N7). *Cost: none; the value was only in
       `data.h5`.*
 
+
+- **2026-09-25/28** — **piece 6 (the reference cleanup, retrain readiness, the probe checks and the
+  documents): decisions H1–H13**, brainstormed with the owner in plain-language questions (spec
+  `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md` §1.1, `907098d`).
+  H1 the handoff split, a README tool reference and a new written retrain runbook — no scripted
+  runbook. H2 the handoff moves to the gitignored `archive/`; live references are cleaned, closed specs
+  and plans stay untouched. H3 topic pages with a reading path per reader, written fresh from the code.
+  **H4 nothing shippable cites the working documents or their labels** — core/, tests/, conftest.py,
+  README, requirements, pytest.ini, the launchers and the reader pages; reasons in words; a source-scan
+  suite enforces it (the owner: "I don't want the code to have any references to handoffs used for LLMs
+  in the end when the software is shippable"). H5 an ~80-line README summary plus a full reference page
+  checked by a parser-walking test, after a help-text tidy. H6 the retrain's science: the tier-1 box
+  (temperature an assumed input), 10,000 × 2,048, a 256 × 10 network from the start, 6 probes into 12
+  slots, a certification narrowing round on a simulated cell, hard calibration gates with
+  informativeness recorded as the first baseline. H7 `python -m core probes band|mask|drive`, command
+  line only, measuring only. **H8 measuring is not overriding: D11's letter is narrowed to what trains
+  and infers** — the probe checks may take their own frequency and drive grids (restated at the piece's
+  close). H9 every readiness gap fixed in code. H10 one piece, code first, documents last. H11 the
+  calibration verdict: every inferred parameter's KS p ≥ 0.05 ÷ their number — temperature included
+  (revised 2026-09-28 after the review showed temperature scales |χ| in chi mode) — and the joint
+  coverage p ≥ 0.05; a FAIL is a result, exit 0. H12 walkthrough rows F1–F5. H13 (2026-09-28)
+  calibrations and narrowing rounds record the acceptances they ran under.
+  - The spec was reviewed against the code before the owner read it (four lenses and a judge; report
+    `.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/spec-review.md`): "ready with
+    fixes", 19 must-fix and 33 corrections, all folded into `907098d`. The ones a later session would
+    otherwise re-litigate: `validate --seed` draws from a stream derived from the seed and a
+    calibration tag, so it never replays the training strata `core/rng.py` exists to protect, and
+    `seed=None` leaves the streams alone (smoke unchanged) — this widens piece 2's "only smoke and the
+    diagnostics take --seed"; the mask audit reads training through an optional observer in
+    `gen_chi_block`, committed at the batch loop's row-storing seam (row halving splits one batch into
+    several row ranges), never by monkeypatching; the production geometry code is not merged with the
+    probes' helper (the two copies differ in float32 rounding); the eigenvalue carry-over on a resume
+    keeps the fresh value as the Fisher-ran witness (V7 unchanged); the silent Hopf fallback raises
+    `RuntimeError` (a programming error), not a Refusal.
