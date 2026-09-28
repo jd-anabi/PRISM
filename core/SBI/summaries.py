@@ -37,8 +37,8 @@ def count_pathological(x: torch.Tensor, acc: dict) -> None:
         propagates a single non-finite entry across the whole reduction, so one bad draw in a
         thousand blanked the figure).
 
-    Three cheap reductions over tensors that are already resident, so this is the cheapest item in
-    the conditioning-repair programme and should have existed from the start.
+    Three cheap reductions over tensors that are already resident, so this costs almost nothing and
+    should have existed from the start.
 
     Counted per SIMULATED trajectory, so an OOM retry that re-simulates a half-batch counts those
     rows twice -- the row denominator is accumulated the same way, so the FRACTION stays honest even
@@ -49,10 +49,10 @@ def count_pathological(x: torch.Tensor, acc: dict) -> None:
     acc["rows"] += int(x.shape[0])
     # TWO REDUCTIONS AND NOTHING ELSE. The obvious spelling -- isfinite(x).all(-1), nan_to_num(x),
     # safe.abs() -- allocates three tensors the size of the trajectory block, which at the production
-    # shape is 2048 x 60000 float32 = 492 MB EACH, on a card that has already died of OOM twice
-    # (traps X6/X7). amax/amin PROPAGATE NaN and +-inf, so the row-level (rows,) reductions below
-    # answer all three questions exactly: verified equal to isfinite(x).all(-1) on NaN, +inf, -inf,
-    # constant and ordinary rows.
+    # shape is 2048 x 60000 float32 = 492 MB EACH, on a card that has already died of OOM twice.
+    # amax/amin PROPAGATE NaN and +-inf, so the row-level (rows,) reductions below answer all three
+    # questions exactly: verified equal to isfinite(x).all(-1) on NaN, +inf, -inf, constant and
+    # ordinary rows.
     mx, mn = x.amax(dim=-1), x.amin(dim=-1)
     finite = torch.isfinite(mx) & torch.isfinite(mn)
     acc["nonfinite"] += int((~finite).sum())
@@ -139,7 +139,7 @@ def gen_stats_features(*args, **kwargs) -> torch.Tensor:
     A diagnostic that standardises by a locally-measured `fnoise = max(std, 1e-9)` turns a BINARY
     channel into an amplifier the moment it steps between two operating points -- constant almost
     everywhere (harmless) and then 1/1e-9 at the one place it moves. The same defect class that
-    removed `logcyc` from the Fisher channel set (C-9/C-10): decide deliberately, for every channel
+    removed `logcyc` from the Fisher channel set: decide deliberately, for every channel
     added to gen_stats, whether each caller is a conditioning vector (wants it) or a Jacobian
     (does not); the tell is whether the result is cat-ed with log_T.
 
@@ -157,7 +157,7 @@ def winsorize_summary_block(data: torch.Tensor, n_summary: int,
 
     ⚠ THE CHI BLOCK IS NEVER TOUCHED, and that is a correctness requirement rather than a scoping
     convenience. A padded probe slot is exactly 0.0 in all six channels and is required to stay
-    BITWISE inert (section 3.6, pinned by tests/test_chi_set_encoder.py). Under chi the mask column
+    BITWISE inert (pinned by tests/test_chi_set_encoder.py). Under chi the mask column
     is ~0.28 zeros, so its 0.1th percentile is 0.0 and clipping would be a no-op there -- but
     `logmag`, `cos` and `sin` are dense over live probes, so THEIR 0.1th percentile is non-zero and
     clipping would push every pad off 0.0 and turn it into a phantom probe. That is the exact defect

@@ -60,10 +60,11 @@ def build_experiment_obs(
     :return: (obs_stats, obs_data, t_dim): the [S | log(T) | forcing] conditioning vector (1, D), the
              forced recording (1, N_obs) for the eye-test, and the dimensional time axis (1, N_obs).
     """
-    # V2 on the driven bench branch (spec §3.3), on the SI values as given and before any conversion,
-    # lock-in or summary statistic: a zero amplitude or frequency is the passive branch's job, not a
-    # drive (0 Hz used to reach the lock-in), and the phase may be any finite angle. A drive value that
-    # is absent altogether is refused by the loop below, under the same field.
+    # The driven bench branch refuses a bad drive value -- never clamps or silently defaults it -- on
+    # the SI values as given, before any conversion, lock-in or summary statistic. A zero amplitude or
+    # frequency is the passive branch's job, not a drive (0 Hz used to reach the lock-in), and the
+    # phase may be any finite angle. A drive value that is absent altogether is refused by the loop
+    # below, under the same field.
     for name, rule in (("amp", require_positive), ("freq", require_positive), ("phase", require_finite)):
         if name in cfg.force_params_dict and name in forcing_params_si:
             rule(_DRIVE_FIELD[name], forcing_params_si[name])
@@ -210,14 +211,14 @@ def build_experiment_obs_chi(
 
     :param X_spont: 1D passive recording (N_obs,), sampled at 1/cfg.dt_exp.
     :param X_forced_list: the forced recordings as ``(recording, drive_frequency_Hz)`` pairs -- every
-        driven recording states the frequency it was actually driven at (D9), and the stage above
+        driven recording states the frequency it was actually driven at, and the stage above
         refuses one that does not. Any count from 1 to ``cfg.chi_k_pad``.
     :param T_obs_s: observation duration (seconds).
     :param F0_si: physical drive amplitude used (SI force, N); converted to cell force units.
     :return: (obs_stats, obs_data=X_spont as (1,N), t_dim in seconds).
     """
-    # The physical drive amplitude, refused before anything is computed from it (spec §3.3): a blank box
-    # arrived as 0.0 and divided every lock-in by zero, inside the worker.
+    # The physical drive amplitude, refused before anything is computed from it: a blank box arrived
+    # as 0.0 and divided every lock-in by zero, inside the worker.
     F0_si = require_positive("chi_f0_si", F0_si)
     dtype = cfg.hw.dtype
     s_to_cell = cfg.get_unit_conversion_factor("s")
@@ -257,8 +258,8 @@ def build_experiment_obs_chi(
             # TRUNCATE rather than mask -- the recording is fine, only its tail is unusable, and the
             # leading prefix is exactly what training measured. Warned, not silent: the user recorded
             # that length on purpose and is entitled to know only part of it was used. Above the
-            # ceiling |chi| stops being reproducible at fixed parameters (trap CHI9) and logcyc would
-            # report a cycle count no training row ever carried.
+            # ceiling |chi| stops being reproducible at fixed parameters -- a longer lock-in is not a
+            # better one -- and logcyc would report a cycle count no training row ever carried.
             warnings.warn(f"chi probe {k}: {v.reason}.", stacklevel=2)
         elif v.action == "mask":
             # UNDER-RESOLVED IS MASKED, NOT REFUSED, and the distinction is train/eval consistency.

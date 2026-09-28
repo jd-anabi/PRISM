@@ -677,7 +677,7 @@ def test_build_truncation_region_records_the_parents_basis():
                 _lp(reparam.TransformedPosterior(_WideWithPrior(V_net), T_parent)), obs)
             raise AssertionError(f"{tag} was accepted as the parent's basis")
         except ValueError as e:
-            assert "rotation" in str(e) and "D6" in str(e), e
+            assert "rotation" in str(e) and "a transposed, missing or foreign rotation. Load" in str(e), e
     try:
         orchestrator.build_truncation_region(_lp(reparam.TransformedPosterior(_WideWithPrior(Q), box)), obs)
         raise AssertionError("an unrotated transform was accepted for a network trained rotated")

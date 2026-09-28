@@ -45,7 +45,7 @@ from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedC
                         LoadedInference, resolve_store)
 from .artifacts.provenance import inputs_from_cfg as _inputs_from_cfg
 from .artifacts.provenance import file_ref as _file_ref
-# V1: every public stage below works on a private copy of its config. RUN_BOUNDARY_FILES keeps a
+# Every public stage below works on a private copy of its config. RUN_BOUNDARY_FILES keeps a
 # stage's warnings pointing at its caller through the decorator's extra frame.
 from .runs import RUN_BOUNDARY_FILES, public_entry
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
@@ -73,8 +73,8 @@ ForcingPrior = _forcing_mod.ForcingPrior
 _product_mod = importlib.import_module("core.SBI.Priors.Product Prior.product_prior")
 ProductPrior = _product_mod.ProductPrior
 
-# Every in-stage message of this module is a record on this logger (piece 3, V4), with its level saying
-# what it is: info for banners, timings, tables and progress; warning for what the operator should act
+# Every in-stage message of this module is a record on this logger, with its level saying what it
+# is: info for banners, timings, tables and progress; warning for what the operator should act
 # on. The front ends route it -- the window's handler to the pane at that level, the tool's to stdout
 # (info) or stderr (warning, error) -- and the run buffer copies it into the artifact's log.txt. No
 # level is set here: core/runs.py sets the ``core`` family's, once, at import.
@@ -91,9 +91,10 @@ def _preflight_warn(msg: str) -> None:
 def _truth_outside_region(T_train, region, truth) -> list:
     """Per-direction messages for a truth outside a truncation region; [] when it is inside.
 
-    ONE wording, two callers: build_posterior's guardrail-5 block (which warns, once, in its own
-    words around these) and simulated_inference's region check. The latent inverse is taken under
-    no_grad and compared on the CPU in float64, which is the dtype a region's bounds are stored in.
+    ONE wording, two callers: build_posterior's truth-outside-the-region block (which warns, once, in
+    its own words around these) and simulated_inference's region check. The latent inverse is taken
+    under no_grad and compared on the CPU in float64, which is the dtype a region's bounds are stored
+    in.
     """
     with torch.no_grad():
         z = T_train.inv(truth.reshape(1, -1)).detach().cpu().to(torch.float64)
@@ -287,10 +288,11 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
     refs = []
     for p, role, f in named:
         # "is blank" for an empty path, "was not found" for a path with no file behind it: the same rule
-        # and the same sentence the Infer tab runs at the click (spec §3.3, §3.4).
+        # and the same sentence the Infer tab runs at the click.
         require_file(role_field[role], p, "recording")
-        # D9. Role-scoped on purpose: `named`'s FIRST element is the passive recording, whose frequency
-        # is None BY CONSTRUCTION, so an unscoped check would refuse every chi observation. A lock-in
+        # Every driven chi recording states the frequency it was driven at, in Hz. Role-scoped on
+        # purpose: `named`'s FIRST element is the passive recording, whose frequency is None BY
+        # CONSTRUCTION, so an unscoped check would refuse every chi observation. A lock-in
         # aimed at a guessed mult_k * Omega_0 instead of the drive the bench applied decays like a sinc
         # -- a fraction of 1/T_obs off destroys the estimate, and nothing says so.
         if cfg.observation_mode == "chi" and role == "forced" and f is None:
@@ -302,7 +304,7 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
         refs.append(r)
     X_spont = file_manager.load_experimental_data(rec.spont, dtype=cfg.hw.dtype)
     if cfg.observation_mode == "chi":
-        # Every `f` is a real frequency here: the file-check loop above refused a None one (D9).
+        # Every `f` is a real frequency here: the file-check loop above refused a None one.
         forced = [(file_manager.load_experimental_data(p, dtype=cfg.hw.dtype), float(f))
                   for p, f in rec.forced]
         obs_stats, obs_data, t_dim = build_experiment_obs_chi(cfg, X_spont, forced, rec.T_obs_s, rec.F0_si)
@@ -420,7 +422,7 @@ def fresh_run_near_misses(cfg: SimConfig, prior, *, num_runs=None, run_size_cap=
 @dataclass(frozen=True)
 class TrainingPreview:
     """What a training run at a given budget WOULD do, as build_posterior resolves it: every number the
-    budget group's three lines show, so the lines only format (V6).
+    budget group's three lines show, so the lines only format.
 
     ``width`` / ``hw_batch``: rows per batch after the cap, and the hardware batch it is capped from --
     always ints, because the hardware always resolves. ``n_fine`` / ``n_vars``: the worst-case geometry
@@ -548,8 +550,9 @@ def _near_miss_lines(ckpt_dir, near) -> str:
 
 
 def _near_miss_message(ckpt_dir, near) -> str:
-    """D7's refusal text. The spend it prevents is days of simulation, so it names the field, BOTH
-    values, and the two ways out -- continue that cache, or say explicitly that this is a new run.
+    """The near-miss cache refusal's text. The spend it prevents is days of simulation, so it names the
+    field, BOTH values, and the two ways out -- continue that cache, or say explicitly that this is a
+    new run.
     Only the keyword is named: the button and the flag come from the front-end tables
     (core/gui/fields.py, core/tool/fields.py), keyed by the Refusal's field."""
     return (f"This run would start a NEW simulation cache at {ckpt_dir} from zero, but a committed "
@@ -639,7 +642,7 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
 
     if not build_new and ref is not None:
         loaded = store.load_prior(cfg, ref)
-        # V8: a stage given no sink closes what it draws, as the build branch below does through its
+        # A stage given no sink closes what it draws, as the build branch below does through its
         # writer's sink (ArtifactWriter.fig_sink). Handing None on to visualize_dist reached its
         # bare-library plt.show(), which under the tool's Agg backend only warns "non-interactive" and
         # never closes the corner figure: one leaked figure per load for the life of the process.
@@ -654,14 +657,14 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     # (STABILITY_SWEEP_ND_UNITS) rather than the full master grid. Global sweep uses
     # half this (t_global_scale=2 inside gen_prior), local sweep uses the full t_stab.
     # THE SEVEN SWEEP AND CLUSTERING KNOBS, resolved here (None -> the config constant) and refused here,
-    # before cfg.t is sliced and before the ~9-minute sweep (spec §3.4). Four of them used to travel as
+    # before cfg.t is sliced and before the ~9-minute sweep. Four of them used to travel as
     # None and be resolved -- min_cluster_size and min_samples CLAMPED, max(2, ...) -- inside gen_prior,
     # so a 1 became a 2 nobody chose and the manifest's knobs recorded None for values the sweep did
     # use. gen_prior and the manifest now get the resolved numbers. The load branch above returned
     # before this line, so a load never reads -- and never refuses -- any of them.
     n_iter = require_at_least("num_iterations",
                               PRIOR_SWEEP_ITERATIONS if num_iterations is None else num_iterations, 1)
-    # The sweep's batch is its OWN knob (C-7), not the training batch. They were the same number,
+    # The sweep's batch is its OWN knob, not the training batch. They were the same number,
     # and because the sweep is ITERATION-bounded rather than accept-bounded, shrinking that number for
     # a cheap run made the prior worse WITHOUT making it faster -- 527 s at batch 2048 against >70 min
     # and unfinished at batch 32. PRIOR_SWEEP_BATCH = 0 keeps the historical behaviour (follow the
@@ -676,7 +679,7 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     min_samples_r = require_at_least(
         "min_samples", PRIOR_CLUSTER_MIN_SAMPLES if min_samples is None else min_samples, 1)
     # AFTER every knob rule above (and the name check and chi guard before them): a refused build must
-    # not announce a construction it never performs (Task 7 finding).
+    # not announce a construction it never performs.
     log.info("Constructing the prior from scratch.")
     sweep_batch = sweep_batch_r or cfg.hw.batch_size          # a TYPED 0 = follow the hardware batch
     n_stab_fine = int(stab_units / cfg.dt_nd_min)
@@ -815,7 +818,7 @@ def build_posterior(
     :param resume: "auto" (resume this run's own cache when it holds batches), "require" (refuse if
                      there is none) or "never" (refuse if there is one). Recorded as an OUTCOME in
                      the manifest (``training.resumed_from_batch``), not as a setting.
-    :param new_run: consent (D7). Silences the near-miss refusal below and NOTHING else -- it never
+    :param new_run: consent. Silences the near-miss refusal below and NOTHING else -- it never
                      forces a fresh start over a resumable cache of this run's own.
     :param fisher_m: ensemble per latent perturbation for the rotation; None =
                      config.REPARAM_FISHER_M.
@@ -828,15 +831,16 @@ def build_posterior(
                      put the reused rows in a different coordinate than their stored targets.
                      ⚠ So does a TRUNCATED run (``truncation=``): it reuses the region's V and never
                      runs the Fisher at all -- the box is measured in the parent's basis and is
-                     meaningless in any other (guardrail 7).
+                     meaningless in any other (the region-carries-its-basis rule).
                      Either way, and on an unrotated run, the manifest records all three as None:
-                     they are written only when the Fisher ran in this process (V7).
+                     they are written only when the Fisher ran in this process.
     :return: a LoadedPosterior; ``.posterior`` is the TransformedPosterior every downstream stage samples.
 
-    ⚠ THESE FOUR ARE WHAT A COMPLETE C-11 CHECKPOINT IS FOR. Its own docstring says a finished
-    checkpoint "is a cache of the whole simulation run, so you can retrain the flow at a different
-    capacity/learning rate without re-simulating" -- and until 2026-08-27 there was no way to do that
-    without editing config.py. Re-trying capacity costs ~46 h against ~57 h for a full run.
+    ⚠ THESE FOUR ARE WHAT A COMPLETE TRAINING CHECKPOINT (THE SIMULATION CACHE) IS FOR. Its own
+    docstring says a finished checkpoint "is a cache of the whole simulation run, so you can retrain
+    the flow at a different capacity/learning rate without re-simulating" -- and until 2026-08-27
+    there was no way to do that without editing config.py. Re-trying capacity costs ~46 h against
+    ~57 h for a full run.
     ⚠ And note the 2026-08-25 characterisation ruled out more capacity on the BROKEN conditioning
     (a clean loss plateau well before the best epoch); that verdict is worth re-testing on the
     repaired conditioning, not inherited.
@@ -863,8 +867,9 @@ def build_posterior(
     from .artifacts import Accept
     from .artifacts.manifest import conditioning_block, region_to_json, tensor_digest, tensor_to_json
     accept = accept or Accept()
-    # The observation now carries its own digest (piece 1): a separately-supplied one is no longer
-    # taken as a parameter, it is read straight off the LoadedObservation guardrail 2 records against.
+    # The observation now carries its own digest: a separately-supplied one is no longer taken as a
+    # parameter, it is read straight off the LoadedObservation a narrowed posterior records as the one
+    # it is valid near.
     x_obs_digest = observation.digest if observation is not None else None
     _t0 = time.time()
     _spread = None
@@ -888,7 +893,7 @@ def build_posterior(
     # patience or learning rate does not object at all -- it writes an untrained posterior -- and
     # decorrelate's `m or REPARAM_FISHER_M` turned a Fisher 0 into the default without a word. The
     # manifest records these same resolved names.
-    # Refused only on a call that TRAINS (spec §1.2, "a stage with a load branch"): the branch below
+    # Refused only on a call that TRAINS: the branch below
     # loads exactly when `not train_new and ref is not None`, decided from the arguments alone, and a
     # load reads none of the budget, cadence, flow or Fisher knobs. The Posterior tab sends its boxes on
     # a load too, and refusing a load over a box the load never reads is the defect the flow knobs'
@@ -907,7 +912,7 @@ def build_posterior(
     lr = TRAINING_LEARNING_RATE if learning_rate is None else float(learning_rate)
     patience = TRAINING_STOP_AFTER_EPOCHS if stop_after_epochs is None else int(stop_after_epochs)
     # The rotation's three, resolved HERE and passed down resolved; the record below names them only
-    # when the Fisher actually ran with them (V7).
+    # when the Fisher actually ran with them.
     fm = REPARAM_FISHER_M if fisher_m is None else int(fisher_m)
     fdz = REPARAM_FISHER_DZ if fisher_dz is None else float(fisher_dz)
     fp = REPARAM_FISHER_POINTS if fisher_points is None else int(fisher_points)
@@ -992,7 +997,7 @@ def build_posterior(
                 field="prior"
             )
 
-    # Pushforward the physical rescale prior through T_rescale.inv (Issue 2a).
+    # Pushforward the physical rescale prior through T_rescale.inv.
     T_rescale = build_rescale_bijection(cfg)
     latent_rescale = torch.distributions.TransformedDistribution(rescale_prior_physical, T_rescale.inv)
 
@@ -1001,7 +1006,7 @@ def build_posterior(
         dims=[len(cfg.params_dict), len(cfg.rescale_params)],
     )
 
-    # Optional decorrelating reparameterization (Track A): rotate the flow's latent coordinate
+    # Optional decorrelating reparameterization: rotate the flow's latent coordinate
     # into the simulation-based Fisher eigenbasis so the well-identified-but-correlated posterior
     # is axis-aligned and the flow can calibrate it. REPARAM_ROTATE=False => V=None => plain.
     # The Fisher rotation probes a representative drive (decorrelate reads forcing_idx["amp"/…]); a
@@ -1034,23 +1039,24 @@ def build_posterior(
                  f"{TRAINING_NUM_RUNS}) — {n_runs * run_size:,} training rows.")
 
     # UNCONDITIONAL, unlike the two announcements above, which fire only when a knob was overridden.
-    # This is guardrail 6 ("show the cost") on the command line: the GUI has a budget group, and the
-    # tool has this line. It is the one place a run states what it is about to simulate. An info
-    # record: the tool's stdout handler prints it with exactly this text (spec §4.5).
+    # This is the cost-on-screen rule on the command line: the GUI has a budget group, and the tool
+    # has this line. It is the one place a run states what it is about to simulate. An info record:
+    # the tool's stdout handler prints it with exactly this text.
     log.info(f"[budget] {n_runs:,} batches x {run_size:,} rows = {n_runs * run_size:,} training rows")
 
-    # --- training-data checkpoint (C-11): resolved BEFORE the rotation, because a resume REUSES V ---
-    # This ordering is the whole reason the resume works with rotation ON, which is how the retrain is
-    # specified to run. `build_latent_fisher_rotation` seeds its noise under fork_rng but draws its
+    # --- the training checkpoint: resolved BEFORE the rotation, because a resume REUSES V ---
+    # This ordering is the whole reason the resume works with rotation ON, which is how the retrain
+    # runs. `build_latent_fisher_rotation` seeds its noise under fork_rng but draws its
     # OPERATING POINTS from the caller's global RNG (decorrelate's z_med/z_samp), which nothing seeds
     # -- so a restarted process computes a DIFFERENT V, hence a different T_train, hence different
-    # LATENT targets for every batch after the seam, silently mixed with the pre-crash rows. Trap X10.
+    # LATENT targets for every batch after the seam, silently mixed with the pre-crash rows. The
+    # rotation is not reproducible across processes, so a resume reuses the stored one.
     # Reusing the stored V also skips the Fisher entirely on a resume, which is the single largest
     # pre-training cost.
     ckpt_dir = ckpt_resumed = None
     if ck_every and train_new:
         # The region is part of the identity (omitted for an amortized run), so a TSNPE round has its
-        # OWN directory and can never resume the amortized run's rows, nor the other way round (D3).
+        # OWN directory and can never resume the amortized run's rows, nor the other way round.
         from .artifacts.identity import SimulationIdentity
         ident = SimulationIdentity.from_cfg(cfg, prior, run_size, n_runs, truncation=truncation).to_dict()
         ckpt_dir = training_checkpoint.resolve_dir(ident, store.kind_dir("simulation"))
@@ -1062,9 +1068,10 @@ def build_posterior(
         if _st and _st.get("batches_done"):
             ckpt_resumed = training_checkpoint.read_header(ckpt_dir)
         else:
-            # D7, plus the hoisted resume='require'. HERE: after the taken-name refusal (:700) and
-            # before the truncation-branch refusals (:898-933) and the Fisher rotation (:999) -- before
-            # any simulation, and before the cache's own create() (pipeline.py:1414), so every refusal
+            # The near-miss cache refusal, plus the hoisted resume='require'. HERE: after the
+            # taken-name refusal (:700) and before the truncation-branch refusals (:898-933) and the
+            # Fisher rotation (:999) -- before any simulation, and before the cache's own create()
+            # (pipeline.py:1414), so every refusal
             # still lands before any spend. One consequence of the order: a caller who consents with
             # new_run=True can still be refused moments later by an unrelated truncation check (a
             # region with no observation digest, a rotation mismatch) -- harmless, since nothing has
@@ -1084,11 +1091,11 @@ def build_posterior(
     # not them, and an unrotated run has no Fisher at all. None is recorded honestly in the sidecar.
     fisher_evals = None
     if truncation is not None:
-        # ── TSNPE: THE BASIS COMES WITH THE REGION, AND THE FISHER IS NEVER RUN (guardrail 7) ────
+        # ── TSNPE: THE BASIS COMES WITH THE REGION, AND THE FISHER IS NEVER RUN ─────────────────────
         # The region's dims are columns of the PARENT posterior's V, and V is not reproducible across
-        # processes (trap X10: the operating points come from the unseeded global RNG). The
-        # 2026-09-02 round computed a fresh V' here and enforced the parent's box in it: 0.01% of
-        # the parent posterior survived, and the ground truth did not (Appendix A 2026-09-09, D1).
+        # processes (the operating points come from the unseeded global RNG). The 2026-09-02 round
+        # computed a fresh V' here and enforced the parent's box in it: 0.01% of the parent posterior
+        # survived, and the ground truth did not.
         # So a truncated round trains in the region's own V, refuses a checkpoint stored under any
         # other, and refuses a config whose rotation flag disagrees with the region -- a rotated
         # box has no meaning in an unrotated latent and vice versa.
@@ -1098,10 +1105,11 @@ def build_posterior(
                 f"{'WITH' if truncation.V is not None else 'WITHOUT'} a Fisher rotation. A truncated "
                 f"round trains in the parent posterior's basis: load the config the parent was trained "
                 f"with, or rebuild the region from a posterior trained under this one.")
-        # GUARDRAIL 2's binding: the region already knows which observation it was drawn around
-        # (build_truncation_region records it from the same observation artifact it checked the digest
-        # of), so the artifact's digest is that one -- a separately supplied one must agree, and None
-        # is filled in rather than recorded as "valid near observation None".
+        # What binds a narrowed posterior to its one observation: the region already knows which
+        # observation it was drawn around (build_truncation_region records it from the same observation
+        # artifact it checked the digest of), so the artifact's digest is that one -- a separately
+        # supplied one must agree, and None is filled in rather than recorded as "valid near
+        # observation None".
         if truncation.x_obs_digest is not None:
             if x_obs_digest is not None and x_obs_digest != truncation.x_obs_digest:
                 raise Refusal(
@@ -1112,13 +1120,14 @@ def build_posterior(
         # x_obs_digest is now final. Refuse HERE, before any simulation or training: a region built by
         # hand (build_truncation_region always sets the digest) that names no observation would
         # otherwise train and simulate the whole round only to have store.load_posterior refuse the
-        # finished artifact at read-back, because guardrail 2 could never fire for it.
+        # finished artifact at read-back, because a narrowed posterior that names no observation can
+        # never be checked against one.
         if x_obs_digest is None:
             raise Refusal(
                 "A non-amortized round's region must name the observation it was drawn around "
-                "(x_obs_digest is None): guardrail 2 could never fire for the posterior it would "
-                "produce, and the store would refuse to load it after the whole spend. Build the "
-                "region through build_truncation_region, or pass the observation.")
+                "(x_obs_digest is None): the posterior it would produce could never be checked against "
+                "its own observation, and the store would refuse to load it after the whole spend. "
+                "Build the region through build_truncation_region, or pass the observation.")
         # The box restricts the PARENT's training prior, and check_basis sees V and the box but not
         # the GMM: supplied another prior, the round would train that prior restricted to a box
         # nobody measured on it, with every basis check green. The region carries the parent's GMM
@@ -1142,7 +1151,7 @@ def build_posterior(
         if ckpt_resumed is not None:
             # Rows may be resumed only if they were DRAWN UNDER THIS REGION: the stored identity must
             # record it (the amortized parent's never does -- its rows are the full prior's, and
-            # resuming them is a silent no-op of the whole round, defect D3), and the stored V must
+            # resuming them is a silent no-op of the whole round), and the stored V must
             # be the region's. Both checks; the identity is what keeps the parent's own V from
             # passing the second one.
             _where = f"The training checkpoint at {ckpt_dir} ({_st['batches_done']} batches)"
@@ -1202,7 +1211,8 @@ def build_posterior(
     # is the ROTATED latent prior when the rotation is on -- so the region's axes are the flow's own
     # latent axes, i.e. V's columns, i.e. the Fisher directions. Wrapping the UNROTATED prior instead
     # would silently truncate along physical-ish axes and cut the flat directions on noise, which is
-    # exactly what guardrail 3 exists to prevent.
+    # exactly what the eigenbasis rule exists to prevent: the region is cut in the rotation's leading
+    # directions, flat ones left full width.
     #
     # No proposal correction is applied, and that is correct rather than an omission: truncation is a
     # RESTRICTION, not a reweighting, which is the property that distinguishes TSNPE from SNPE-A/B/C.
@@ -1210,12 +1220,14 @@ def build_posterior(
         _P = len(cfg.params_dict) + len(cfg.rescale_params)
         # The region's own guard: the bijection this round trains in must be the one the box was
         # measured in -- V compared directly (a probe cannot see a column permutation) and the probe
-        # for the box. Refuses; a region in the wrong basis is the whole of defect D1.
+        # for the box. Refuses: a region drawn in one rotation and enforced in another deletes support
+        # the parent never excluded.
         truncation.check_basis(T_train, dim=_P, device=cfg.hw.device)
         if cfg.has_ground_truth:
-            # GUARDRAIL 5's honest failure rate, per run: does the box even contain the loaded cell's
-            # truth? Warn, never refuse -- an experimental observation has no truth, and a simulated
-            # one's lying outside is a finding about the parent posterior, not a reason to stop.
+            # The generous-region rule's honest failure rate, per run: does the box even contain the
+            # loaded cell's truth? Warn, never refuse -- an experimental observation has no truth, and a
+            # simulated one's lying outside is a finding about the parent posterior, not a reason to
+            # stop.
             # The per-direction wording is _truth_outside_region's, shared with simulated_inference:
             # one sentence for one fact, wherever the operator meets it.
             _bad = _truth_outside_region(T_train, truncation, cfg.ground_truth_tensor)
@@ -1225,8 +1237,8 @@ def build_posterior(
                         "near the truth. Continuing, because the truth is a simulated cell's, not the "
                         "data's -- but the parent posterior disagreed with it, and this round inherits "
                         "that.")
-                # Said ONCE, as the warning (spec §4.1): the print beside it existed only because a
-                # print reached the window at info and a warning at warning. A PreflightWarning, whose
+                # Said ONCE, as the warning: the print beside it existed only because a print
+                # reached the window at info and a warning at warning. A PreflightWarning, whose
                 # "always" filter says a repeated judgement every time; a bare UserWarning is shown once
                 # per call site and text, so an identical second round in one session would be silent.
                 warnings.warn(_msg, PreflightWarning, stacklevel=2, skip_file_prefixes=RUN_BOUNDARY_FILES)
@@ -1315,15 +1327,16 @@ def build_posterior(
         batch_size=TRAINING_BATCH_SIZE, device=cfg.hw.device,
     )
 
-    # The tsnpe kept-fraction lines stay exactly as they were (guardrail 5); they run before the write.
+    # The tsnpe kept-fraction lines stay exactly as they were (they are how the generous-region rule is
+    # watched); they run before the write.
     _acc = _in = _tot = None
     if truncation is not None and hasattr(train_prior, "acceptance_rate"):
-        # GUARDRAIL 5: the fraction of prior mass this round threw away, measured rather than
-        # assumed. Deleted support is a one-way ratchet -- no later round can recover it -- so the
+        # THE GENEROUS-REGION RULE: the fraction of prior mass this round threw away, measured rather
+        # than assumed. Deleted support is a one-way ratchet -- no later round can recover it -- so the
         # number belongs in the run log next to the artifact it produced. TWO numbers, and they
         # differ: the rejection sampler's acceptance is P(A) of the draws BEFORE gen_training_data's
         # per-batch t_scale override; the recorded containment is what the training set holds after
-        # it, and only the second says how much of the set actually lies in the region (D4).
+        # it, and only the second says how much of the set actually lies in the region.
         _acc = float(train_prior.acceptance_rate)
         _in, _tot = getattr(train_prior, "recorded_counts", (0, 0))
         log.info(f"[tsnpe] the truncation accepted {_acc:.3%} of prior draws at the rejection sampler "
@@ -1337,7 +1350,7 @@ def build_posterior(
     assert isinstance(posterior_latent, DirectPosterior)
 
     keys = list(cfg.params_dict) + list(cfg.rescale_params)
-    V_rec = rotation_of(T_train)             # THE one decoder of the convention (D6); None when unrotated
+    V_rec = rotation_of(T_train)             # THE one decoder of the convention; None when unrotated
     probe = training_checkpoint.bijection_probe(T_train, len(keys), device=cfg.hw.device)
     diag = pos_diagnostics or {}
     _best = diag.get("best_validation_loss")
@@ -1361,8 +1374,8 @@ def build_posterior(
         if observation is not None:
             w.parents["observation"] = observation.id
         w.fingerprints = {"gmm": prior.fingerprint, "V": tensor_digest(V_rec), "probe": tensor_digest(probe)}
-        # V7 (spec §6.2): the three Fisher settings are recorded only when the rotation RAN in this
-        # process, and fisher_evals is its one witness (only the freshly-computed branch sets it). A
+        # The three Fisher settings are recorded only when the rotation RAN in this process, and
+        # fisher_evals is its one witness (only the freshly-computed branch sets it). A
         # resumed run reuses the checkpoint's V -- whose header carries no m, dz or points -- a truncated
         # round reuses the region's, and an unrotated run has no Fisher at all: each records None, never
         # the settings of a Fisher nobody computed. When it ran, the values are the ones it was called
@@ -1418,14 +1431,16 @@ def build_truncation_region(posterior, observation, *,
                             t_scale_idx: int | None = None):
     """The TSNPE region for the NEXT round, drawn from ``posterior`` around ``observation``.
 
-    GUARDRAIL 1 is now structural: the observation is an artifact whose payload the loader hashed
-    against its manifest, so the region can only ever be drawn around a recorded observation -- the
-    digest check below is a second, cheap look at the same payload the loader already checked, not a
-    substitute for it (an in-session ``LoadedObservation`` cannot have been tampered with in between).
-    The region also records the parent's basis (its V and a probe of its whole training transform,
-    guardrail 7) and the GMM fingerprint of the parent's TRAINING prior (the prior pickled inside the
-    posterior) -- the base prior its box restricts -- so ``build_posterior`` can refuse a round started
-    with another prior loaded; ``check_basis`` sees V and the box, not the GMM.
+    THE OBSERVATION-DIGEST RULE (a round refuses unless the stored observation matches) is now
+    structural: the observation is an artifact whose payload the loader hashed against its manifest,
+    so the region can only ever be drawn around a recorded observation -- the digest check below is a
+    second, cheap look at the same payload the loader already checked, not a substitute for it (an
+    in-session ``LoadedObservation`` cannot have been tampered with in between).
+    The region also records the parent's basis (its V and a probe of its whole training transform:
+    the region-carries-its-basis rule) and the GMM fingerprint of the parent's TRAINING prior (the
+    prior pickled inside the posterior) -- the base prior its box restricts -- so ``build_posterior``
+    can refuse a round started with another prior loaded; ``check_basis`` sees V and the box, not the
+    GMM.
 
     :param posterior: the parent LoadedPosterior. Its ``.posterior.T`` is the only carrier of the
                       latent basis the region is measured in, so a parent whose transform is missing
@@ -1435,7 +1450,7 @@ def build_truncation_region(posterior, observation, *,
                         "t_scale"]``; taken from the observation's recorded parameter order when not
                         given. REQUIRED at this level: a direction that loads on t_scale is not
                         truncated, because the per-batch t_scale override would turn its box into a
-                        reweighting (D4).
+                        reweighting.
     """
     x_obs = observation.x_obs
     if observation_digest(x_obs) != observation.digest:
@@ -1450,13 +1465,13 @@ def build_truncation_region(posterior, observation, *,
             raise Refusal(
                 "build_truncation_region needs t_scale's latent index (t_scale_idx=len(cfg.params_dict) "
                 "+ cfg.rescale_idx['t_scale']) -- a direction that loads on t_scale must not be "
-                "truncated (D4) -- and "
+                "truncated, since cutting it would turn the restriction into a reweighting -- and "
                 + ("the observation carries no param_keys to derive it from." if not keys
                    else f"its recorded parameter order {keys} contains no t_scale."))
         t_scale_idx = keys.index("t_scale")
-    # GUARDRAIL 7: the region records the PARENT's basis -- its rotation V and the bijection probe of
-    # its whole training transform -- so the retrain can reuse that V and refuse any other. Without
-    # this the box's "direction j" is a number with no coordinate attached (defect D1).
+    # THE REGION-CARRIES-ITS-BASIS RULE: the region records the PARENT's basis -- its rotation V and
+    # the bijection probe of its whole training transform -- so the retrain can reuse that V and refuse
+    # any other. Without this the box's "direction j" is a number with no coordinate attached.
     T_parent = getattr(posterior.posterior, "T", None)
     if T_parent is None:
         raise Refusal(
@@ -1466,10 +1481,11 @@ def build_truncation_region(posterior, observation, *,
             field="posterior")
     V = rotation_of(T_parent)
     latent = posterior.latent
-    # Belt and braces against D6: the parent's transform must rotate by the rotation its own network
-    # was trained under (the one pickled in its prior). A posterior loaded through build_posterior
-    # has been reconciled already; an in-session one is consistent by construction; anything else
-    # would hand the whole round a self-consistent wrong basis.
+    # Belt and braces against a rotation saved transposed: the parent's transform must rotate by the
+    # rotation its own network was trained under (the one pickled in its prior). A posterior loaded
+    # from the store has been checked already (loading refuses any disagreement); an in-session one is
+    # consistent by construction; anything else would hand the whole round a self-consistent wrong
+    # basis.
     _V_net = rotation_of_prior(getattr(latent, "prior", None))
     if _V_net is not None and (
             V is None or V.shape != _V_net.shape or not torch.allclose(
@@ -1479,9 +1495,9 @@ def build_truncation_region(posterior, observation, *,
             f"{'has no rotation' if V is None else 'does not rotate by the rotation'} "
             f"{'although' if V is None else 'that'} its network was trained under (the one inside its "
             f"training prior{'' if V is None else f', {tuple(_V_net.shape)} against {tuple(V.shape)}'}) "
-            f"-- a transposed, rotation-less or foreign sidecar (D6). Reload the posterior through "
-            f"build_posterior: it reconciles a transposed or missing sidecar rotation against the prior, "
-            f"and refuses one that is neither.", field="posterior")
+            f"-- a transposed, missing or foreign rotation. Load the posterior from the store: loading "
+            f"checks its recorded rotation against the one inside its training prior and refuses any "
+            f"disagreement.", field="posterior")
     _box = next((p for p in T_parent.parts if isinstance(p, UnitToBoxTransform)), None)
     if _box is None:
         raise Refusal("The parent posterior's transform has no parameter box; the region's probe "
@@ -1490,7 +1506,7 @@ def build_truncation_region(posterior, observation, *,
                                                 device=transform_device(T_parent))
     # The base prior the box restricts, by fingerprint; None when the parent carries no GMM (a
     # legacy or stand-in posterior), which build_posterior treats as unverifiable, not as wrong.
-    # RECORDED from the prior pickled inside the parent, exactly as before R7 -- not from
+    # RECORDED from the prior pickled inside the parent, as it always has been -- not from
     # ``posterior.fingerprint`` -- with the two compared here: for every real wrapper they are the
     # same value by construction (store.py's load_posterior computes .fingerprint by this same walk),
     # so a mismatch means the artifact on disk is not what its own loader described.
@@ -1630,8 +1646,9 @@ def _calibration_prior(cfg: SimConfig, posterior: LoadedPosterior, prior: Loaded
     ``(val_latent_prior, T, truncation)``.
 
     Factored out so ``core.diagnostics.sbc_repeats`` draws through THE SAME code. The rotation wrap,
-    the basis check and the truncation wrap ARE guardrail 8, and a second copy of them is how a
-    repeat-SBC run comes to draw theta* from the full prior while the flow was trained on the region.
+    the basis check and the truncation wrap ARE the calibrate-on-the-region rule, and a second copy of
+    them is how a repeat-SBC run comes to draw theta* from the full prior while the flow was trained
+    on the region.
     """
     post, inferred_prior = posterior.posterior, prior.prior
     truncation = post.truncation
@@ -1643,7 +1660,7 @@ def _calibration_prior(cfg: SimConfig, posterior: LoadedPosterior, prior: Loaded
     val_latent_prior = _build_latent_prior_for_validation(cfg, inferred_prior)
     # If the posterior uses a decorrelating rotation, rotate the calibration prior to match it.
     # rotation_of is the ONE decoder of parts[0].M == V^T; reading the attribute here directly is
-    # how the GUI's deferred save came to write V transposed (defect D6).
+    # how the GUI's deferred save came to write V transposed.
     _V_post = rotation_of(T)
     if _V_post is not None:
         val_latent_prior = RotatedLatentPrior(val_latent_prior, _V_post)
@@ -1731,17 +1748,17 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     (results.json, ranks.npz, the three figures, a manifest naming the posterior and prior as
     parents) inside ``store.create``, so a failure partway through leaves no half-artifact.
 
-    ⚠ FOR A TSNPE POSTERIOR THE PRIOR IS THE TRUNCATED ONE (guardrail 8). With pt = p·1_A/P(A), NPE
-    trained on pt(θ)p(x|θ) converges to pt(θ|x) = p(θ|x)·1_A(θ)/P(A|x) -- exact, but equal to p(θ|x)
-    only on the set of x whose posterior mass lies in A (which the round intends to contain x_obs and
-    does not verify). The absence of a proposal correction is a property of the LOSS and holds for
-    every x; what is x_obs-specific is only that P(A|x_obs) ≈ 1. So SBC/TARP must draw θ* from pt:
-    drawn from the full prior they measure extrapolation where the flow saw no row, and check_sbc's
-    data-averaged-posterior test reports a false miscalibration by construction. What a flat result
-    then certifies is calibration ON THE REGION; it cannot tell whether the region cut real mass at
-    x_obs. (The failure is NOT a pair of rank spikes: the ranks here are per PHYSICAL parameter, and a
-    latent box is unbounded in the untruncated directions, so ranks pile up continuously toward the
-    ends in proportion to Σ_{j<k} V[i,j]².)
+    ⚠ FOR A TSNPE POSTERIOR THE PRIOR IS THE TRUNCATED ONE (the calibrate-on-the-region rule). With
+    pt = p·1_A/P(A), NPE trained on pt(θ)p(x|θ) converges to pt(θ|x) = p(θ|x)·1_A(θ)/P(A|x) --
+    exact, but equal to p(θ|x) only on the set of x whose posterior mass lies in A (which the round
+    intends to contain x_obs and does not verify). The absence of a proposal correction is a property
+    of the LOSS and holds for every x; what is x_obs-specific is only that P(A|x_obs) ≈ 1. So SBC/TARP
+    must draw θ* from pt: drawn from the full prior they measure extrapolation where the flow saw no
+    row, and check_sbc's data-averaged-posterior test reports a false miscalibration by construction.
+    What a flat result then certifies is calibration ON THE REGION; it cannot tell whether the region
+    cut real mass at x_obs. (The failure is NOT a pair of rank spikes: the ranks here are per PHYSICAL
+    parameter, and a latent box is unbounded in the untruncated directions, so ranks pile up
+    continuously toward the ends in proportion to Σ_{j<k} V[i,j]².)
 
     THE t_scale OVERRIDE. The calibration draws pass through gen_training_data's per-batch t_scale
     override exactly as the training rows did, so the calibration proposal IS the training proposal
@@ -1760,7 +1777,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     :param n_cal: calibration datasets for SBC/TARP; None = config.SBC_N_CAL.
     :param cal_n_scales: (t_scale, T) operating points the calibration set is spread over; None =
                      config.CAL_N_SCALES.
-                     ⚠ TRAP X5: this is `t_scale`'s EFFECTIVE SAMPLE SIZE, not a speed dial. Lowering
+                     ⚠ This is `t_scale`'s EFFECTIVE SAMPLE SIZE, not a speed dial. Lowering
                      it is a DIFFERENT measurement, not a faster one -- "SBC flat on all 13" is
                      strong for 11 of them and materially weaker for `t_scale` and anything the probe
                      design controls, and this number is why.
@@ -1772,7 +1789,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     post, inferred_prior, force_prior = posterior.posterior, prior.prior, prior.force_prior
     # Resolved and refused before the calibration set is simulated: run_sbc only objects to zero draws
     # after all of it. cal_n_scales is REFUSED below 1 here, where gen_cal_data used to CLAMP it to 1:
-    # it is t_scale's effective sample size (trap X5), so a count nobody typed is a different
+    # it is t_scale's effective sample size, so a count nobody typed is a different
     # measurement, not a cheaper one. The resolved count is what the set is drawn over and what the
     # artifact records.
     n_cal_used = require_at_least("n_cal", SBC_N_CAL if n_cal is None else n_cal, 1)
@@ -1784,7 +1801,8 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
         dtype = cfg.hw.dtype
         # The draw is three helpers so that core.diagnostics.sbc_repeats runs through the same code --
         # the rotation wrap, the basis check, the truncation wrap and the reference sample's t_scale
-        # mirror are guardrail 8, and a second copy of them is how a repeat-SBC run silently inverts it.
+        # mirror are the calibrate-on-the-region rule, and a second copy of them is how a repeat-SBC
+        # run silently inverts it.
         val_latent_prior, T, truncation = _calibration_prior(cfg, posterior, prior)
         # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
         # mixture of probe counts training saw. Stratifying by count is `python -m core sbc`'s
@@ -1963,9 +1981,10 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
             f"but posterior '{posterior.name or posterior.id}' conditions on {p_body['mode']} / "
             f"{p_body['conditioning']['width']}. They do not describe the same measurement.",
             field="observation")
-    # GUARDRAIL 2 at the one place every inference passes through -- a REFUSAL now, not a warning:
-    # outside its region a truncated flow extrapolates confidently. Accept(other_observation=True)
-    # is the recorded exception (a simulated cell re-drawn with new noise is the legitimate case).
+    # THE NARROWED-MODEL RULE at the one place every inference passes through -- a REFUSAL now, not a
+    # warning: outside its region a truncated flow extrapolates confidently.
+    # Accept(other_observation=True) is the recorded exception (a simulated cell re-drawn with new
+    # noise is the legitimate case).
     _want, accepted = post.x_obs_digest, []
     if _want is not None and observation.digest != _want:
         _msg = (f"[tsnpe] this posterior is NOT AMORTIZED. TSNPE trained it on a prior restricted to a "
@@ -1977,7 +1996,7 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
             raise Refusal(_msg + " Use the recorded observation or an amortized posterior. To run anyway, "
                           "pass Accept(other_observation=True); the inference will record it.",
                           field="accept_other_observation")
-        # Said ONCE, as the warning (spec §4.1), with the sentence walkthrough row B3 reads in the pane.
+        # Said ONCE, as the warning, with the sentence the operator reads in the pane.
         # A PreflightWarning for the same reason as build_posterior's GROUND TRUTH judgement: the same
         # posterior on the same foreign observation twice in one session must be told twice.
         warnings.warn(_msg + " Running anyway (accepted).", PreflightWarning, stacklevel=2,
@@ -2157,7 +2176,7 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
                     "num_invalid": int(results["num_invalid"]),
                     "invalid_breakdown": results.get("invalid_breakdown"), "note": _note or ""},
             # A LIST of records, not a dict keyed by name: manifest JSON sorts keys, so a dict would lose
-            # the parameter order (Task 9's review; the same rule as sbc.per_param).
+            # the parameter order (the same rule as sbc.per_param).
             "posterior_summary": [{"name": k, "q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
                                   for i, k in enumerate(keys)],
             # _num like every other float in this body: the manifest refuses a non-finite number, and
@@ -2205,10 +2224,10 @@ def _refuse_no_samples(n_samples) -> None:
 
 def _t_obs_outside_training(T_obs_s: float) -> "str | None":
     """The observation length against the range training drew T from, as the judgement's sentence, or
-    None inside it. A judgement, so the compositions WARN with it (PreflightWarning, walkthrough B6)
-    and never refuse. One wording for both paths: until piece 3 only the simulated path said it, though
-    a bench recording outside the range extrapolates exactly as a simulated cell does (spec §3.3).
-    Returns the sentence rather than warning, so _preflight_warn's stacklevel is unchanged."""
+    None inside it. A judgement, so the compositions WARN with it (a PreflightWarning) and never
+    refuse. One wording for both paths: once only the simulated path said it, though a bench recording
+    outside the range extrapolates exactly as a simulated cell does. Returns the sentence rather than
+    warning, so _preflight_warn's stacklevel is unchanged."""
     if T_obs_s < T_MIN_EXP_S:
         return (f"T_obs={T_obs_s:.2f}s is below the training range minimum T_MIN_EXP_S="
                 f"{T_MIN_EXP_S:.2f}s; the posterior may extrapolate poorly.")
@@ -2243,8 +2262,8 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
     """
     from .artifacts import Accept
     store = resolve_store(store)
-    # THE PRE-SPEND BLOCK, in the order spec §3.4 fixes and the "refused before any spend" pins rely
-    # on: the numeric knobs, then the name, then the files -- all before the cell is parsed, its truth
+    # THE PRE-SPEND BLOCK, in the order the "refused before any spend" pins rely on: the numeric
+    # knobs, then the name, then the files -- all before the cell is parsed, its truth
     # injected or anything simulated.
     _refuse_no_samples(n_samples)
     # A blank or zero length used to pass here, simulate, write the observation and then die in
@@ -2259,12 +2278,12 @@ def simulated_inference(cfg: SimConfig, posterior: LoadedPosterior, T_obs_s: flo
                       "(hand-entered values in parse_values_file's shape).")
     if cell is not None:
         # The file, last: a missing cell surfaced as file_manager's bare FileNotFoundError from inside the
-        # parse. _read_lines keeps that raise for a race (spec §3.6); this is the refusal.
+        # parse. _read_lines keeps that raise for a race; this is the refusal.
         require_file("cell", cell, "cell")
     accept = accept or Accept()
-    # GUARDRAIL 2, hoisted ahead of the spend. x_obs_digest, truncation and amortized=False are written
-    # together by build_posterior and never set independently, so this predicate, the Infer tab's gate
-    # and the store's load refusal all pick out the same posteriors.
+    # THE NARROWED-MODEL RULE, hoisted ahead of the spend. x_obs_digest, truncation and
+    # amortized=False are written together by build_posterior and never set independently, so this
+    # predicate, the Infer tab's gate and the store's load refusal all pick out the same posteriors.
     if posterior.posterior.x_obs_digest is not None and not accept.other_observation:
         raise Refusal(
             f"[tsnpe] this posterior is NOT AMORTIZED: it was trained on a prior restricted to a region "
@@ -2313,7 +2332,7 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
 
     Its own checks are the inputs' alone, before any compute: the sample count, the observation length
     (a Refusal at or below 0; outside the training range the same PreflightWarning the simulated path
-    gives, spec §3.3) and the name. The recordings are checked by build_experiment_observation's file
+    gives) and the name. The recordings are checked by build_experiment_observation's file
     loop and the drive by the builder, so ``rec`` is forwarded unchecked. A recording carries no truth,
     so there is nothing to compare against the training distribution. And rebuilding the same
     recordings reproduces a region's digest, which is the LEGITIMATE match -- so the non-amortized
@@ -2321,7 +2340,7 @@ def experimental_inference(cfg: SimConfig, posterior: LoadedPosterior, rec: "Rec
     Nothing is lost by waiting: building an experimental observation costs no simulation.
     """
     store = resolve_store(store)
-    # The pre-spend block, in the order spec §3.4 fixes: the numeric knobs, then the name.
+    # The pre-spend block, in the simulated path's order: the numeric knobs, then the name.
     _refuse_no_samples(n_samples)
     T_obs_s = require_positive("t_obs", rec.T_obs_s)
     store.assert_name_free("inference", name)   # with the recordings' own file checks, before any compute
@@ -2355,7 +2374,7 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
 
     ⚠ NO FISHER KNOBS, BY DESIGN. With a region, build_posterior reuses the region's own V and never
     reaches the Fisher at all: the box is measured in the parent's basis and is meaningless in any
-    other (guardrail 7).
+    other (the region-carries-its-basis rule).
 
     :param posterior: the parent LoadedPosterior the region is drawn from.
     :param prior: the parent's own base prior. The region records that prior's GMM fingerprint and
@@ -2366,17 +2385,18 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                       observation's truth, or none for a bench recording.
     :param n_directions / level: how many of the best-constrained directions to truncate, and the
                       per-direction interval; None = ``truncate.DEFAULT_N_DIRECTIONS`` / ``DEFAULT_HPD``.
-    :param resume / new_run: the cache policy and the D7 consent, forwarded to build_posterior always.
+    :param resume / new_run: the cache policy and the consent to start a new cache beside a near miss,
+                      forwarded to build_posterior always.
     :return: the LoadedPosterior build_posterior wrote and read back. It carries its own region and
                       observation digest, so nothing here has to return them separately.
     """
     store = resolve_store(store)
     store.assert_name_free("posterior", name)      # before the region draw and before days of training
     # region_from_posterior CLAMPS both ends silently (max(1, min(n, p))). Clamping a 0 up to 1 hides a
-    # miskeyed setting; clamping down to P truncates EVERY direction, including the flat ones guardrail
-    # 3 exists to leave at full width. Both are refusals here instead, with the default in the sentence;
-    # the width's is built here because only the stage knows the width (the TSNPE tab has no posterior
-    # to measure it against at the click).
+    # miskeyed setting; clamping down to P truncates EVERY direction, including the flat ones the
+    # eigenbasis rule leaves at full width. Both are refusals here instead, with the default in the
+    # sentence; the width's is built here because only the stage knows the width (the TSNPE tab has
+    # no posterior to measure it against at the click).
     n = require_at_least("n_directions",
                          truncate.DEFAULT_N_DIRECTIONS if n_directions is None else n_directions, 1)
     P = len(cfg.params_dict) + len(cfg.rescale_params)
@@ -2391,10 +2411,11 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
         # a region that is too TIGHT is the expensive mistake, not the cheap one.
         _preflight_warn(f"HPD {q:g} is tighter than the recommended {truncate.DEFAULT_HPD:g}. Truncation "
                         f"permanently deletes prior support; no later round can recover it.")
-    # D12, WITH NO ESCAPE HATCH. A non-amortized parent is valid only near its own observation, so a
-    # region drawn from it around another one is drawn where the flow extrapolates rather than where it
-    # was trained. Reachable today by loading a round's posterior and then picking another observation;
-    # build_truncation_region checks the observation's digest against itself, not against the parent.
+    # A NARROWED PARENT AROUND ANOTHER OBSERVATION IS REFUSED, WITH NO ESCAPE HATCH. A non-amortized
+    # parent is valid only near its own observation, so a region drawn from it around another one is
+    # drawn where the flow extrapolates rather than where it was trained. Reachable today by loading a
+    # round's posterior and then picking another observation; build_truncation_region checks the
+    # observation's digest against itself, not against the parent.
     parent_digest = posterior.posterior.x_obs_digest
     if parent_digest is not None and parent_digest != observation.digest:
         raise Refusal(
@@ -2409,7 +2430,7 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
     # install sets -- the simulation identity holds no T_obs, n_obs or chi_n_freqs.
     observation.install(cfg)
     # t_scale_idx: a direction that loads on t_scale is not truncated -- the per-batch t_scale override
-    # would turn its box into a reweighting (D4) -- and the region records which ones were skipped.
+    # would turn its box into a reweighting -- and the region records which ones were skipped.
     t_scale_idx = len(cfg.params_dict) + cfg.rescale_idx["t_scale"]
     region = build_truncation_region(posterior, observation, n_directions=n, level=q,
                                      t_scale_idx=t_scale_idx)
@@ -2427,7 +2448,7 @@ def tsnpe_round(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
 
 
 # The experimental observation builders (and RecordingSet) live in SBI/observations.py; re-exported
-# here because the GUI runners and the diagnostic scripts call them as orchestrator.build_experiment_obs*
-# / orchestrator.RecordingSet.
+# here because build_experiment_observation calls them through this module's globals at CALL time,
+# which is where the suites patch them (orchestrator.build_experiment_obs_chi).
 from .SBI.observations import (build_experiment_obs, build_experiment_obs_spontaneous,  # noqa: E402
                                build_experiment_obs_chi, RecordingSet)

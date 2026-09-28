@@ -57,7 +57,8 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
         # n_max and step were INVISIBLE before 2026-08-27: n_max was the literal 175000 right here,
         # silently overriding construct_prior's own default, and `step` was not threaded at all so
         # that default always won whatever a caller asked for. Both are config constants now and both
-        # arrive as arguments -- the same fix C-7 applied to num_iterations.
+        # arrive as arguments -- the same fix that made num_iterations (and the sweep's batch) its own
+        # argument.
         prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size, segs, prior_bounds,
                                       t_global_scale=2, num_iterations=num_iterations,
                                       n_max=config.PRIOR_SWEEP_MAX_SETS if n_max is None else int(n_max),

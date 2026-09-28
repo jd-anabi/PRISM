@@ -35,10 +35,10 @@ class TrainingPlan:
     one posterior serve any probe count. It used to be threaded in and silently ignored, an
     invitation to "fix" gen_training_data into honouring it and destroy exactly that property.
 
-    ``chi_k_fixed`` is script-only: ``orchestrator.build_posterior`` never sets it; the stratified
-    SBC path does (one probe count per calibration stratum). ``checkpoint`` stays a plain dict --
-    its key set (dir/identity/probe/V/every/resume) is the resumable-checkpoint contract, and
-    ``gen_training_data``'s own signature is unchanged.
+    ``chi_k_fixed`` belongs to the ``sbc`` diagnostic: ``orchestrator.build_posterior`` never sets
+    it; the stratified SBC path does (one probe count per calibration stratum). ``checkpoint`` stays
+    a plain dict -- its key set (dir/identity/probe/V/every/resume) is the resumable-checkpoint
+    contract, and ``gen_training_data``'s own signature is unchanged.
     """
     model: str
     prior: object
@@ -130,13 +130,13 @@ def _capped_zscore_check(max_rows: int = _ZSCORE_CHECK_MAX_ROWS):
 
 
 class _NoSummary:
-    """The summary writer train_nn hands sbi by default: it discards the training curves (V9, spec §6.4).
+    """The summary writer train_nn hands sbi by default: it discards the training curves.
 
     Given no writer, sbi's trainer builds a TensorBoard ``SummaryWriter`` under
     ``<cwd>/sbi-logs/NPE_C/<timestamp>/`` when ``SNPE(...)`` is CONSTRUCTED
     (``NeuralInference._default_summary_writer`` over ``sbi.utils.io.get_log_root``). Every training
     therefore left a directory behind in whatever directory the process was started from: 1359 of
-    them at the repo root by piece 3 (1360 directories with NPE_C), none ever read. The curves PRISM
+    them had piled up at the repo root (1360 directories with NPE_C), none ever read. The curves PRISM
     keeps are the ones train_nn returns in its diagnostics, which build_posterior writes into the
     posterior artifact.
 
@@ -193,8 +193,9 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
     if num_rounds > 1 and training_params.checkpoint is not None:
         # Refused loudly rather than half-supported. Rounds >= 2 sample from a PROPOSAL -- a trained
         # DirectPosterior -- whose identity a checkpoint would have to capture and re-validate, which
-        # is a separate problem from the one C-11 solves. TRAINING_NUM_ROUNDS is 1 (amortized NPE), so
-        # this costs nothing today and closes the hole rather than leaving it to be discovered.
+        # is a separate problem from the one the training checkpoint solves. TRAINING_NUM_ROUNDS is 1
+        # (amortized NPE), so this costs nothing today and closes the hole rather than leaving it to
+        # be discovered.
         raise ValueError(
             f"Training-data checkpointing is not supported for SNPE (num_rounds={num_rounds}); the "
             f"per-round proposal is not part of the checkpoint's identity. Use num_rounds=1, or "

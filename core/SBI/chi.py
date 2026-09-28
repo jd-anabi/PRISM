@@ -54,7 +54,8 @@ _PEAK_FREQ_BATCH = 256
 #   ~2.5e-8. (That is 25x ABOVE the 1e-9 clamp, so the clamp protects nothing -- any guard for this
 #   has to be RELATIVE to the channel's own magnitude.)
 #
-#   `mask` is theta-dependent but DISCONTINUOUS -- a step of 1 over the same floor. See trap CHI2.
+#   `mask` is theta-dependent but DISCONTINUOUS -- a step of 1 over the same floor, which is also why
+#   the Fisher builds its probes without the resolution filter (gen_chi_raw's resolution_filter).
 #
 #   `logcyc` was kept here until 2026-08-10 on the grounds that it "genuinely varies with theta through
 #   f_peak". True, and insufficient: it varies EXACTLY as a row already in the feature set does. With
@@ -268,10 +269,10 @@ def resolvable_multipliers(mults: torch.Tensor, f_peak: torch.Tensor, T_obs: flo
     ceiling only makes it noisier, and gen_chi_raw's duration ceiling still truncates it afterwards.
     A hard bound belongs on the failure that loses the probe, not on the one that degrades it.
 
-    *That leaves a known limit, and it is not this function's to fix:* the duration ceiling is keyed
-    on the batch's FASTEST row, so a slow row it just rescued can still be truncated back under the
-    floor. Measured, that holds the rescue to ~47 % live. The real fix is a per-ROW lock-in duration
-    (``lock_in_batched`` takes a scalar ``T_obs`` today), which is a change to the estimator itself.
+    The duration ceiling is applied per ROW: ``gen_chi_raw`` hands ``lock_in_batched`` a per-row
+    sample count, so a slow row this placement rescued keeps the prefix its own frequency needs. When
+    the ceiling was one scalar keyed on the batch's FASTEST row, it truncated rescued slow rows back
+    under the floor and held the rescue to ~47 % live.
 
     NEVER leaves the band: every returned multiplier is within ``[lo, hi]``, so ``|u_hat| <= 1`` and
     the packer's CHI_UHAT_MAX filter cannot fire on placement alone.
@@ -500,7 +501,8 @@ def fisher_features(chi_stack: torch.Tensor) -> torch.Tensor:
     it `gen_chi_raw(...)[:2]` -- i.e. `u`, the one channel this docstring warned about -- for three
     commits, silently, because a 4-tuple sliced to 2 still unpacks into 2 names. A one-argument
     signature makes that entire class of mistake a TypeError. Do not add a second parameter back
-    without reading trap CHI10 first.
+    without reading CHI_FISHER_CHANNELS first: a near-constant channel inflates a standardised
+    Jacobian.
     """
     logmag, cos, sin = _mag_phase(chi_stack)
     feats = torch.stack([logmag, cos, sin], dim=-1)                            # (B, K, 3)

@@ -233,7 +233,7 @@ class TransformedPosterior:
         # A TSNPE posterior carries the region it was trained on and the observation that region was
         # drawn around, so calibration can restrict its prior to the same region and inference can
         # tell whether it is being asked about the observation this posterior is valid near. None
-        # for an amortized posterior -- the 2-argument construction every script uses is unchanged.
+        # for an amortized posterior -- the 2-argument construction other callers use is unchanged.
         self.truncation = truncation
         self.x_obs_digest = x_obs_digest
 
@@ -342,9 +342,8 @@ def rotation_of(transform) -> torch.Tensor | None:
     ``decorrelate.build_latent_fisher_rotation`` returns, i.e. eigenvectors in COLUMNS. Every reader
     and writer of a rotation must go through here. The GUI's deferred save read ``parts[0].M``
     directly instead and wrote ``V^T`` into every '.rot.pt' sidecar it produced (retired with the
-    old load path), which then rebuilt the inverse rotation on load (defect D6 of the TSNPE round-1
-    post-mortem, Appendix A 2026-09-09; the writer is repaired in the commit that pins the
-    orientation with a save-then-load probe test).
+    old load path), which then rebuilt the inverse rotation on load: a rotation saved transposed. The
+    writer was repaired, and a save-then-load probe test pins the orientation.
     """
     parts = getattr(transform, "parts", None)
     if parts and isinstance(parts[0], OrthogonalTransform):

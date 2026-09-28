@@ -8,7 +8,7 @@ Design (two trajectories per sample):
   * Group G describes the FORCED response and is computed by lock-in to the KNOWN drive
     (amp, freq, phase) on the separate forced trajectory.
 
-Conventions (per the spec NOTES):
+Conventions:
   * Exactly ONE mean-retaining feature (A1, the absolute mean -> x_offset); every other
     feature is computed on the demeaned signal.
   * Positive / unbounded quantities (frequencies, Q, variance, decay times, gains, ratios)
@@ -22,8 +22,8 @@ Conventions (per the spec NOTES):
 Units: x is the dimensional trajectory sampled at dt (cell time units); the drive
 (amp, freq, phase) is dimensional. f*dt and the local time axis t_j = j*dt are therefore
 dimensionless / consistent. Group G locks in against LOCAL time (sample 0 = t=0), so
-G2 = arg(R_1) - phase carries t_offset modulo the drive period, as the identifiability
-notes require.
+G2 = arg(R_1) - phase carries t_offset modulo the drive period, which is what makes t_offset
+identifiable.
 
 Two-run notes:
   * The spontaneous run is fully unforced (zero drive, including any DC force offset), so
@@ -488,8 +488,8 @@ class SummaryStatistics:
             return torch.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
 
 
-# Bumped whenever the DEFINITION of any summary feature changes (a fix like section 7.6's FWHM, a
-# new feature, a changed winsor rule). It rides in the simulation identity, so a cache of
+# Bumped whenever the DEFINITION of any summary feature changes (a fix like B1's peak-connected
+# FWHM, a new feature, a changed winsor rule). It rides in the simulation identity, so a cache of
 # conditioning rows computed under the old definition is never resumed onto: only the flag LABELS
 # were digested before, and a changed definition behind an unchanged label re-keyed nothing.
 FEATURE_SET_VERSION = 1
@@ -503,18 +503,17 @@ FEATURE_SET_VERSION = 1
 # value is not a small number -- it is log(1e-12) = -27.63, five decades below anything real. Without
 # a flag the flow cannot tell "the peak has no measurable width" from "the peak is extremely sharp",
 # and the sentinel mass drags the channel's scale with it. Measured over the 10.24M rows of training
-# checkpoint train_98aebd93ed17 (pre-piece-1 layout, deleted by the 2026-09-11 clean break; the
-# figures stand as history):
+# checkpoint train_98aebd93ed17 (an older layout, since deleted; the figures stand as history):
 #
-#     V_B1_Q            30.3% substituted     V_E1_tau_slow      8.0%
+#     V_B1_Q            69.7% substituted     V_E1_tau_slow      8.0%
 #     V_C7_slowenv      30.0%                 V_E1_tau_fast      7.5%
 #     V_B7_secondary    14.5%                 V_E2_h3            5.5%
 #     V_C6_slowenv_tau   5.1%                 V_E2_h2            2.8%
 #
-# (V_B1_Q reads 69.7% substituted, i.e. 30.3% valid -- it is the largest by a wide margin.)
+# (V_B1_Q is the largest by a wide margin.)
 #
 # NOT flagged, and each exclusion is measured rather than assumed:
-#   * C2_log_env_cv -- the addendum predicted 5.6% sentinel; measured 0 rows in 10.24M. Its wide std
+#   * C2_log_env_cv -- predicted at 5.6% sentinel; measured 0 rows in 10.24M. Its wide std
 #     is a genuine heavy tail, not a clamp.
 #   * B2, B3, C1, A4 -- 0 or ~1e-6 fire rate. A4's point masses at 0.0 and log(2) are the DISCRETENESS
 #     of an integer lag index at short correlation times, not a substitution.
@@ -554,8 +553,8 @@ def derive_valid_flags(feats: torch.Tensor, dt: float | torch.Tensor) -> torch.T
     features a 0.0 may mean "genuinely zero" OR "was NaN". A fully non-finite trajectory therefore
     arrives looking finite, and its ``_logp`` channels read 0.0 rather than the sentinel -- so their
     flags say VALID when nothing about that row is. The defence is upstream and already exists:
-    ``pipeline.count_pathological`` counts those trajectories per batch, which is precisely why item
-    1.4 is in the same phase as this one. Read the ``[patho]`` line before trusting a flag histogram.
+    ``pipeline.count_pathological`` counts those trajectories per batch. Read the ``[patho]`` line
+    before trusting a flag histogram.
     """
     x = feats
     sent = torch.log(torch.tensor(_EPS, dtype=x.dtype, device=x.device))

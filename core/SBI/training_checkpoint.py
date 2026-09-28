@@ -47,11 +47,11 @@ cache.
 
 Do not ``print()`` or log between steps 1 and 3 under the GUI: every write funnels through
 ``gui.streams._SignalStream.write`` and every record through ``gui.streams._PumpLogHandler.emit``,
-both of which call ``CancelToken.check()`` and would raise mid-commit. Since piece 4 (B15) ``save``
-runs steps 1-3 -- and the manifest refresh after them -- inside ``core.runs.cancel_deferred()``, and
-``mark_complete`` runs its state flip and manifest refresh inside one too, so both checkpoints carry
-such a line instead of raising on it -- the rule is still the rule, and the section is what enforces
-it.
+both of which call ``CancelToken.check()`` and would raise mid-commit. ``save`` now runs steps 1-3
+-- and the manifest refresh after them -- inside a deferred-cancel section
+(``core.runs.cancel_deferred()``), and ``mark_complete`` runs its state flip and manifest refresh
+inside one too, so both checkpoints carry such a line instead of raising on it -- the rule is still
+the rule, and the section is what enforces it.
 """
 import hashlib
 import json
@@ -313,7 +313,7 @@ def near_miss_siblings(identity: dict, root=None) -> list:
     ``truncation`` alone is never a near miss. A TSNPE round's identity is the amortized run's plus
     that one key, so every truncated checkpoint would otherwise be "one setting away" from every
     amortized run at its budget -- and the Posterior tab would tell the user to change a setting it
-    does not have, to continue rows an amortized run must never adopt (defect D3).
+    does not have, to continue rows an amortized run must never adopt.
     """
     out = [{"name": d.name, "batches": done, "field": diff[0],
             "mine": identity.get(diff[0]), "theirs": stored.get(diff[0])}
@@ -338,7 +338,7 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
     path = Path(path)
     (path / _SHARDS).mkdir(parents=True, exist_ok=True)
     lo, hi = from_batch * run_size, batch_k * run_size
-    # The WHOLE save is one deferred-cancel section (piece 4, B15), so a cancel cannot fire anywhere
+    # The WHOLE save is one deferred-cancel section, so a cancel cannot fire anywhere
     # inside it. Steps 1-3 because a GUI cancel landing between the shard fsync and the state replace
     # would commit a batches_done that points at data still in the page cache. _refresh_manifest too,
     # although the manifest is never the commit point: WorkerCancelled is a BaseException, so its
@@ -360,7 +360,7 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
 def mark_complete(path, batch_k: int, rows=None) -> None:
     path = Path(path)
     st = peek(path) or {}
-    # ONE deferred-cancel section around both writes (piece 4, B15), for the reason save() gives:
+    # ONE deferred-cancel section around both writes, for the reason save() gives:
     # a cancel between the state flip and the manifest refresh -- or out of anything the refresh
     # reaches, whose `except Exception` cannot stop a BaseException -- leaves every row committed and
     # the manifest still saying the cache is unfinished, so the Artifacts browser labels a finished

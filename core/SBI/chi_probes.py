@@ -1,7 +1,7 @@
 """The chi(omega) probe loop, split out of pipeline.py (which stays the public facade).
 
-Consumers -- gen_training_data's _rows closure, orchestrator's observation/PPC paths, the mask
-audit script, the test suites -- reach these as ``pipeline.gen_chi_raw`` / ``gen_chi_block`` /
+Consumers -- gen_training_data's _rows closure, orchestrator's observation and predictive-check
+paths, the test suites -- reach these as ``pipeline.gen_chi_raw`` / ``gen_chi_block`` /
 ``_subset_probe_rows`` via the facade's bottom re-import, which also keeps monkeypatching
 ``pipeline.<name>`` effective. Calls back into pipeline machinery (gen_obs, the force builder,
 the hot-loop release, the batch tag) go through the module object at call time.
@@ -199,7 +199,8 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
             # A lock-in over a fraction of a cycle returns the demeaned trace's residual drift plus
             # spontaneous 1/f content: finite, in range, and REPRODUCIBLE -- which is exactly why it
             # survived a CV screen -- but it is not a susceptibility.
-            # Against the row's OWN duration -- the whole point of C-8 is that these differ.
+            # Against the row's OWN duration -- the whole point of the per-row lock-in duration is
+            # that these differ.
             valid[:, k] &= (freq_k.double() * T_row) >= config.CHI_MIN_CYCLES
         forcing_params = torch.zeros((B, 4), dtype=dtype, device=device)
         forcing_params[:, 0] = amp_dim

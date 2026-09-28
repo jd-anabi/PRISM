@@ -136,7 +136,7 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
     :param dt_nd_min: Finest ND time step of the pre-simulated trajectory.
     :param n_cal: Number of calibration data samples to generate.
     :param cal_n_scales: (t_scale, T) operating points to spread them over; None = config.CAL_N_SCALES.
-                         TRAP X5: this is t_scale's effective sample size, not a speed dial.
+                         This is t_scale's effective sample size, not a speed dial.
     :param dt_exp: Fixed experimental sampling interval (seconds).
     :param t_min_exp: Shortest experimental recording duration (seconds).
     :param t_max_exp: Longest experimental recording duration (seconds).
@@ -157,7 +157,7 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
     # statistical power essentially free.
     # Passed, never read from the module: analysis.py does `from core.config import CAL_N_SCALES`,
     # which SNAPSHOTS it at import, so a caller assigning to config.CAL_N_SCALES changes nothing.
-    # REFUSED below 1, no longer clamped to 1 (spec §3.3): validate_calibration refuses first, and this
+    # REFUSED below 1, no longer clamped to 1: validate_calibration refuses first, and this
     # catches every other caller (core.diagnostics.sbc_repeats) before the first simulation.
     n_scales = CAL_N_SCALES if cal_n_scales is None else require_at_least("cal_n_scales", cal_n_scales, 1)
     cal_run_size = min(n_cal, max(CAL_RUN_SIZE,
@@ -212,7 +212,7 @@ def gen_cal_data(model: str, prior: torch.distributions.Distribution,
 # === INFORMATIVENESS =============================================================================
 # Every other diagnostic in this file measures CALIBRATION -- SBC, TARP, PPC coverage all ask whether
 # the posterior's stated uncertainty is honest. None of them asks whether it is USEFUL, and a
-# posterior that simply returns the prior passes all three perfectly. `posterior_08232026` is exactly
+# posterior that simply returns the prior passes all three perfectly. `posterior_08232026` was exactly
 # that: SBC flat on all 13, TARP on the diagonal, and PPC coverage 99.1% at a nominal 90% because the
 # intervals are far too wide.
 #

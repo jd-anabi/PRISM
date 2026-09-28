@@ -4,11 +4,10 @@ Prior identity (a GMM's box does not identify it -- two sweeps over one box prod
 fits), the load-side prior/posterior agreement checks, and the chi band/drive deliberateness gate.
 orchestrator re-imports every name, so the suites keep calling them as orchestrator._* and every
 existing call site is unchanged. _saved_prior_fingerprints, _assert_prior_is_saved,
-_refuse_to_orphan_a_checkpoint and _assert_prior_matches were retired with the artifact store
-(piece 1, Task 4): store.load_prior and store.delete's dependents check are their successors. The
-two functions that read a posterior's '.rot.pt' companion file for its truncation region and its
-amortization flag were retired the same way (piece 1, Task 7): store.load_posterior's Accept gate
-is their successor.
+_refuse_to_orphan_a_checkpoint and _assert_prior_matches were retired with the artifact store:
+store.load_prior and store.delete's dependents check are their successors. The two functions that
+read a posterior's '.rot.pt' companion file for its truncation region and its amortization flag
+were retired the same way: store.load_posterior's Accept gate is their successor.
 """
 import hashlib
 
@@ -131,9 +130,9 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     is reported alongside a real mismatch as context, never as the cause.
 
     :raises Refusal: (field None) on any band/drive mismatch. There is no override: a non-default band
-        or drive amplitude means editing config.py deliberately (D11). The QSettings history above is
-        history: after V5 (piece 3) the window shows config.py's band and drive read-only and neither
-        writes nor reads their keys, so the message no longer sends anyone to PRISM.ini.
+        or drive amplitude means editing config.py deliberately. The QSettings history above is
+        history: the window now shows config.py's band and drive read-only and neither writes nor
+        reads their keys, so the message no longer sends anyone to PRISM.ini.
     """
     if not cfg.chi_mode:
         return
@@ -155,7 +154,7 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         f"network is trained on:\n{detail}{k_note}\n\n"
         f"  The band and drive amplitude fix the encoder's frequency normalization and are baked into "
         f"its weights, so a run at the wrong values cannot be reinterpreted afterwards -- it has to be "
-        f"redone. This has cost a ~5-day run once already (Appendix A, 2026-08-19).\n"
+        f"redone. This has cost a ~5-day run once already.\n"
         f"  A non-default band or drive amplitude is not supported: edit config.py itself, deliberately, "
         f"for every future run.")
 

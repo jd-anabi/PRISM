@@ -1,9 +1,9 @@
-"""TSNPE: truncated sequential NPE (Deistler, Goncalves & Macke 2022). Section 11.6.
+"""TSNPE: truncated sequential NPE (Deistler, Goncalves & Macke 2022).
 
     posterior -> HPD region A -> sample theta from the PRIOR RESTRICTED TO A -> simulate -> retrain
 
-⚠⚠ THE ONE THING THAT MUST NOT BE GOT WRONG, and it is why this module exists rather than a few lines
-inside build_posterior:
+⚠⚠ THE TRUNCATED-PRIOR RULE, the one thing a narrowing round must not get wrong, and it is why this
+module exists rather than a few lines inside build_posterior:
 
     THE PROPOSAL IS THE TRUNCATED PRIOR. IT IS NEVER THE POSTERIOR.
 
@@ -18,24 +18,23 @@ Truncation is a RESTRICTION, not a REWEIGHTING, which is the property that makes
 proposal correction where SNPE-A/B/C each need one: within A the proposal IS the prior, up to the
 constant 1/P(A), so the NPE loss is unchanged there and zero outside.
 
-WHY THE REGION LIVES IN THE FISHER EIGENBASIS (guardrail 3). ``k``, ``delta_E`` and ``temp`` sit at or
-near prior on ``posterior_08232026``, and ``k`` in particular is FLAT rather than aliased -- 99.9% of
-its weight on one direction loading -1.00*k. An HPD box drawn in 13-D physical space would cut those
-axes on NOISE, and deleted support is permanent: truncation is a one-way ratchet, and a round-2 run
-cannot recover a region round 1 threw away. So the region is expressed along the flow's own latent
-axes, which under REPARAM_ROTATE *are* V's columns -- truncate directions 0..K-1, leave the flat ones
-full width. This also dissolves the clustering concern outright: in that basis the
-region is approximately axis-aligned, so there is no curved ridge to fragment and no clustering
-needed at all.
+WHY THE REGION LIVES IN THE FISHER EIGENBASIS (the eigenbasis rule). Some parameters are barely
+constrained by the data: their posteriors sit at or near the prior. An HPD box drawn in 13-D physical
+space would cut those axes on NOISE, and deleted support is permanent: truncation is a one-way
+ratchet, and a round-2 run cannot recover a region round 1 threw away. So the region is expressed
+along the flow's own latent axes, which under REPARAM_ROTATE *are* V's columns -- truncate directions
+0..K-1, leave the flat ones full width. This also dissolves the clustering concern outright: in that
+basis the region is approximately axis-aligned, so there is no curved ridge to fragment and no
+clustering needed at all.
 
-THE REGION CARRIES ITS BASIS (guardrail 7, 2026-09-09). A box over "directions 0..K-1" means nothing
-without the V those directions are columns of, and V is NOT reproducible across processes: the Fisher
-draws its operating points from the unseeded global RNG, so a retrain that recomputes it gets a
-different rotation with a different column order. The 2026-09-02 round did exactly that -- drew the
-region in the parent's basis and enforced it in a fresh one -- and the truncated prior kept 0.01% of
-the parent posterior's mass and excluded the ground truth (Appendix A 2026-09-09, defect D1). So a
-``TruncationRegion`` records the parent's V and its bijection probe, and ``build_posterior`` REUSES that
-V for a truncated round, refusing on any mismatch, rather than ever running the Fisher again.
+THE REGION CARRIES ITS BASIS. A box over "directions 0..K-1" means nothing without the V those
+directions are columns of, and V is NOT reproducible across processes: the Fisher draws its operating
+points from the unseeded global RNG, so a retrain that recomputes it gets a different rotation with a
+different column order. The 2026-09-02 round did exactly that -- drew the region in the parent's basis
+and enforced it in a fresh one -- and the truncated prior kept 0.01% of the parent posterior's mass
+and excluded the ground truth. So a ``TruncationRegion`` records the parent's V and its bijection
+probe, and ``build_posterior`` REUSES that V for a truncated round, refusing on any mismatch, rather
+than ever running the Fisher again.
 """
 import hashlib
 import logging
@@ -57,19 +56,18 @@ def t_scale_loading_max(n_latent: int) -> float:
     target, so along a direction that loads on t_scale a box is not a restriction at all: the rows
     that reach the simulator have been carried out of it, the proposal becomes the prior TILTED by
     P(A | theta_-t) (a no-op when the direction IS the t_scale axis), and NPE converges to
-    p(theta|x) * P(A|theta_-t) rather than the truncated posterior (defect D4, Appendix A 2026-09-09).
-    The round-0 rotation puts t_scale on direction 0 alone; round 1's spread it 0.66/0.75 over two.
+    p(theta|x) * P(A|theta_-t) rather than the truncated posterior. The round-0 rotation puts
+    t_scale on direction 0 alone; round 1's spread it 0.66/0.75 over two.
 
-    1/sqrt(d) is the RMS entry of a random d-dimensional rotation -- the post-mortem's 0.1 sat below
-    it and would have flagged directions that barely touch t_scale (a judgement taken with the user
-    on 2026-09-09). The governing scalar is really sum_j V[t_scale, j]^2 over the truncated
-    directions, which region_from_posterior prints.
+    1/sqrt(d) is the RMS entry of a random d-dimensional rotation -- a fixed 0.1 would sit below it
+    and flag directions that barely touch t_scale. The governing scalar is really
+    sum_j V[t_scale, j]^2 over the truncated directions, which region_from_posterior prints.
     """
     return 1.0 / math.sqrt(max(1, int(n_latent)))
 
 
-# 99.9%, not 95%: guardrail 5. The cost of an over-wide region is simulations; the cost of a narrow
-# one is deleted support that no later round can recover.
+# 99.9%, not 95%: the generous-region rule. The cost of an over-wide region is simulations; the cost
+# of a narrow one is deleted support that no later round can recover.
 DEFAULT_HPD = 0.999
 # How many of the best-constrained directions to truncate. The rest keep full prior width.
 DEFAULT_N_DIRECTIONS = 5
@@ -192,7 +190,7 @@ class TruncationRegion:
                 f"Fisher rotation, but the training bijection has "
                 f"{'none' if V_train is None else 'one'}. Its box indexes the parent posterior's "
                 f"latent directions; applying it along other axes deletes support the parent never "
-                f"excluded (defect D1, Appendix A 2026-09-09).")
+                f"excluded -- a region drawn in one rotation and enforced in another.")
         if self.V is not None:
             a = V_train.detach().cpu().to(torch.float64)
             b = self.V.to(torch.float64)
@@ -202,8 +200,8 @@ class TruncationRegion:
                     f"The training bijection rotates by a DIFFERENT V than the one the truncation region "
                     f"was measured in (max|diff| = {diff:.3g}). The box's dims index the PARENT "
                     f"posterior's Fisher directions; along any other rotation the same numbers select "
-                    f"a slab the parent never occupied -- the 2026-09-02 round kept 0.01% of the parent "
-                    f"posterior that way (defect D1). A truncated round must reuse the region's V and "
+                    f"a slab the parent never occupied -- one round run that way kept 0.01% of the "
+                    f"parent posterior. A truncated round must reuse the region's V and "
                     f"never recompute the Fisher.")
         got = _tc.bijection_probe(T_train, dim, device=device)
         if got.shape != self.probe.shape:
@@ -297,16 +295,16 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
                           max_loading: float | None = None) -> TruncationRegion:
     """Draw from the posterior at ``x_obs`` and take a per-direction HPD interval in LATENT space.
 
-    ⚠ GUARDRAIL 4: UNWEIGHTED draws. Not "the M best fits". Selecting on goodness of fit applies a
-    second, undeclared likelihood with the discrepancy metric as a hidden hyperparameter --
-    ``overlay.posterior_overlay`` takes the best 50, which is right for a figure and wrong as the seed
-    of a prior.
+    ⚠ THE UNWEIGHTED-DRAWS RULE: UNWEIGHTED draws. Not "the M best fits". Selecting on goodness of
+    fit applies a second, undeclared likelihood with the discrepancy metric as a hidden
+    hyperparameter -- ``overlay.posterior_overlay`` takes the best 50, which is right for a figure and
+    wrong as the seed of a prior.
 
     The interval is a marginal quantile range per direction, which is what makes the region a box.
     Its mass is NOT "at least the joint HPD's": for k independent directions a box of per-direction
     level q holds q^k of the posterior (0.999^5 = 0.995), and the union bound is the honest statement
     -- the box misses at most k(1 - q) of the posterior's mass. Generous by construction, then, and
-    the level is 99.9% for exactly that reason (guardrail 5).
+    the level is 99.9% for exactly that reason (the generous-region rule).
 
     ``V`` and ``probe`` are the parent posterior's basis, recorded on the region (see
     ``TruncationRegion``); ``orchestrator.build_truncation_region`` always supplies them, and
@@ -318,7 +316,7 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
     direction whose |V[t_scale_idx, j]| exceeds ``max_loading`` (default ``t_scale_loading_max``) is
     SKIPPED and the box takes the first ``n_directions`` eligible ones instead -- the per-batch
     t_scale override would carry rows out of a box along such a direction, turning the restriction
-    into a reweighting (defect D4). With V None the latent is unrotated and the only loaded
+    into a reweighting. With V None the latent is unrotated and the only loaded
     direction is t_scale's own axis. Skipped directions are recorded on the region as ``excluded``.
 
     THE DRAW IS SEEDED, from the observation and the settings, under ``fork_rng`` so the caller's
@@ -368,7 +366,7 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
             src = f"|V[t_scale, {j}]|" if V is not None else f"the t_scale axis' weight on direction {j} (unrotated latent)"
             log.warning(f"[tsnpe] direction {j} NOT truncated: {src} = {float(load[j]):.3f} > {limit:.3f}. The "
                         f"per-batch t_scale override would carry rows out of a box along it, turning the "
-                        f"restriction into a reweighting (D4).")
+                        f"restriction into a reweighting.")
         if len(dims) < k:
             log.warning(f"[tsnpe] only {len(dims)} of the requested {k} directions are eligible for truncation.")
         if dims:
@@ -467,7 +465,7 @@ class TruncatedLatentPrior:
         """Measured P(A) under the prior, at the rejection sampler -- i.e. BEFORE gen_training_data's
         per-batch t_scale override, which re-opens any t_scale-loaded direction. For what the training
         set actually contains see ``recorded_containment``. 1 - this is the fraction of prior mass the
-        region excludes along its directions (guardrail 5's honest failure rate)."""
+        region excludes along its directions (the generous-region rule's honest failure rate)."""
         return (self._accepted / self._proposed) if self._proposed else 0.0
 
     def __getattr__(self, name):

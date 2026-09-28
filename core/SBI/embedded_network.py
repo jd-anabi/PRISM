@@ -81,8 +81,7 @@ class EmbeddedNet(nn.Module):
         DirectPosterior holding an EmbeddedNet whose buffers are ``sum_mean``/``sum_std``.
         Unpickling restores THOSE buffers into an instance of THIS class, so ``forward`` dispatches
         on which buffers are present rather than assuming the new ones. Without that branch every
-        pre-2026-08-26 artifact becomes unloadable -- including ``posterior_08232026``, which is the
-        baseline every conditioning-repair gate is measured against.
+        pre-2026-08-26 artifact becomes unloadable.
         """
         super().__init__()
 

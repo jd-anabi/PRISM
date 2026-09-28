@@ -22,7 +22,7 @@ from core.runs import cancel_deferred
 from core.Simulator import bp_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics, chi, derived
 
-# This module's records (piece 3, V4): a child of the ``core`` logger, whose level core/runs.py sets
+# This module's records: a child of the ``core`` logger, whose level core/runs.py sets
 # once at import and whose handlers each front end installs for a run. Never configured here.
 log = logging.getLogger(__name__)
 
@@ -190,7 +190,7 @@ def _log_memory(device: torch.device, tag: str) -> None:
                 f"(optimistic on Windows), learned cap {cap}")
     except Exception as e:                   # noqa: BLE001 -- see the docstring
         line = f"[mem] {tag}: memory statistics unavailable ({_short_err(e, 120)})"
-    # INFORMATION, not a warning (piece 3, V4): a statistics line on a healthy run. As a stderr print
+    # INFORMATION, not a warning: a statistics line on a healthy run. As a stderr print
     # it wore the window's warning triangle every _MEM_LOG_EVERY batches; after an OOM, the notice
     # that precedes this line carries the warning on its own.
     log.info(line)
@@ -357,7 +357,7 @@ def _cancellable_wait(seconds: float, why: str) -> None:
     a multi-minute silent pause in a run that has already logged an OOM would otherwise read as a hang
     at precisely the moment the user is most likely to reach for Cancel.
 
-    The line is an information record since piece 3 (it was a stderr print, i.e. a warning row in the
+    The line is an information record (it was once a stderr print, i.e. a warning row in the
     window). The checkpoint moved with it: the window's handler checks the token before it sinks the
     record, exactly as the stream's write() did.
     """
@@ -713,7 +713,7 @@ def _gen_obs_retry(model, params, t, inits, force, n_segs, steady_idx, fixed_dic
     # with `note` never seen. A WARNING RECORD, not warnings.warn -- the "once per location" filter
     # would collapse hundreds of events into one line, and parts of gen_training_data run under
     # simplefilter("ignore"), which silences warnings but not records. The record reaches the GUI log
-    # as a WARNING row and the tool's stderr as "warning: ..." (piece 3, V4).
+    # as a WARNING row and the tool's stderr as "warning: ...".
     log.warning(f"{_batch_tag()}: OOM at simulation batch {batch_size}; retrying in chunks of "
                 f"{half}{_free_gib_note(device)}. Original: {note}")
     _release_device_memory(device)
@@ -1250,7 +1250,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                        conditional posterior estimation.
     :param state_dep_drift: Whether the model uses state-dependent drift.
     :param checkpoint: None (the default) disables checkpointing entirely -- no disk access, and the
-                       function behaves exactly as it did before C-11, which is what keeps
+                       function behaves exactly as it did before checkpointing existed, which keeps
                        analysis.gen_cal_data and every existing test call site unchanged. Otherwise a
                        dict:
                          dir       directory to write to (the caller owns naming; see
@@ -1314,8 +1314,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     # 114) and then `torch.cat` allocated another 4.35 GiB for the result while the list was still
     # referenced -- an 8.7 GiB host peak at the very END of a multi-day run, which is the worst
     # possible moment to discover it. Filling a buffer in place also makes a checkpoint shard a
-    # contiguous slice copy and a resume a slice fill rather than a list rebuild, which is what C-11
-    # needs; the checkpoint's whole memory story rests on this.
+    # contiguous slice copy and a resume a slice fill rather than a list rebuild, which is what the
+    # training checkpoint needs; its whole memory story rests on this.
     #
     # torch.empty, not zeros: every row is written before it is read, and only [0, batches_done) is
     # ever serialised or returned, so zeroing 4.35 GiB would be pure cost.
@@ -1353,7 +1353,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
         chi_gen = torch.Generator(device="cpu")
         chi_gen.manual_seed(20260805)
 
-    # --- Checkpointing (C-11): decide RESUME before anything expensive ---------------------------
+    # --- Checkpointing: decide RESUME before anything expensive ----------------------------------
     # Resolved here, above the Sobol schedule, because a resume must take that schedule from the
     # checkpoint rather than rebuild it: SobolEngine(scramble=True) consumes the torch global RNG at
     # CONSTRUCTION and _draw_and_filter's accept count depends on the geometry, so it cannot be
@@ -1413,8 +1413,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     # SKIPPED ENTIRELY on a resume: batch_t_scales/batch_Ts already came from the checkpoint header.
     # Not merely redundant -- rebuilding the engine would consume the torch global RNG (scramble=True
     # draws at construction) between here and the RNG restore, and re-deriving a schedule that the
-    # accept/reject filter makes geometry-dependent is precisely the "silently non-uniform
-    # stratification" C-11 warns is worse than crashing.
+    # accept/reject filter makes geometry-dependent would silently make the stratification
+    # non-uniform, which is worse than crashing.
     if _ck_resumed is None:
         batch_t_scales, batch_Ts = _batch_schedule(
             n_runs, t, t_scale_bounds, t_min_exp, t_max_exp, dt_exp, dt_nd_min, steady_idx)
@@ -1689,8 +1689,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 if _we_are_the_holder(device):
                     # Waiting cannot help: we are what is full. Go straight back to the retry, where
                     # the two halving ladders will shrink the work instead.
-                    # The tail names the core's own settings, never a window control (spec §3.1): the
-                    # tool has no Config tab, and the window's field writes config.SIM_VRAM_CEILING_GIB.
+                    # The tail names the core's own settings, never a window control: the tool has no
+                    # Config tab, and the window's field writes config.SIM_VRAM_CEILING_GIB.
                     log.warning(f"{_batch_tag()}: THIS process holds most of the card, so waiting cannot "
                                 f"free anything -- retrying immediately at a smaller size instead of "
                                 f"pausing {_delay:.0f}s. If this repeats, the allocator is fragmented: "
@@ -1708,7 +1708,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             if _region is not None:
                 # The POST-override target, on the CPU and outside the retry seam. The rejection
                 # sampler's acceptance describes draws before step 1's t_scale override; this is what
-                # the training set actually holds (defect D4).
+                # the training set actually holds.
                 _region_inside += int(_region.contains(_th_out).sum())
                 _region_total += int(_th_out.shape[0])
             if x_buf is None:
@@ -1780,9 +1780,9 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
         # batch_k onward -- statistically equivalent, the same licence the OOM ladders take -- while
         # a skipped write throws away hours of simulation outright.
         #
-        # INSIDE A DEFERRED-CANCEL SECTION (piece 4, B15), because TWO of the calls below can raise,
-        # not one: the log.warning is outside the inner try altogether, and the log.info is inside one
-        # whose only handler is `except Exception` while WorkerCancelled is a BaseException. Either
+        # INSIDE A DEFERRED-CANCEL SECTION, because TWO of the calls below can raise, not one: the
+        # log.warning is outside the inner try altogether, and the log.info is inside one whose only
+        # handler is `except Exception` while WorkerCancelled is a BaseException. Either
         # would raise under a cancel that is REQUESTED AND NOT YET FIRED -- Cancel pressed in the
         # moment before a crash -- skipping _tc.save and the re-raise below and losing every batch
         # since the last cadence write. The comment this replaces claimed the log was safe because the
@@ -1846,8 +1846,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                  f"posterior is saved; keeping it lets you retrain the flow without re-simulating.")
     return x_buf, th_buf
 
-# Extracted seams, re-imported so every existing consumer -- orchestrator, the scripts, the
-# test suites -- keeps reaching them as pipeline.* attributes, and so monkeypatching
+# Extracted seams, re-imported so every existing consumer -- orchestrator, the diagnostics, the
+# window and the test suites -- keeps reaching them as pipeline.* attributes, and so monkeypatching
 # pipeline.<name> still lands on the object read at call time. Bottom of the file on purpose:
 # the extracted modules call back into this one through the module object, which is fully
 # populated by this line.
