@@ -1245,5 +1245,23 @@ the handoff → final gates → STATE and CLAUDE.md → the owner's walkthrough.
 
 ## 11. Deviations (filled during execution)
 
+Rows 1–14 are planning-time departures, ruled on 2026-09-28 while the plan
+(`docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md`) was drafted and pre-flighted against the
+code. Execution rows follow from 15.
+
 | # | where | what changed | why | cost if wrong |
 |---|---|---|---|---|
+| 1 | §2.2, plan Task 1 | the `section` pattern also matches upper case (`SECTION 11.6`) and the `review` pattern matches sentence-initial "Fix round"; Task 1 also cleans `core/SBI/derived.py:127` ("SECTION 11.5"), which the recon missed | the exact patterns missed 24+ labelled lines | none: more hits to clean, all in files already listed |
+| 2 | §2.2, plan Task 1 | `ALLOW_TEST_NAME_TOKENS` (`f0`, `d0`) is part of the test-name matcher and exempt from the matches-nothing rule | no test name uses them yet; the probes' test names may | a stale exemption would go unnoticed |
+| 3 | §2.7 (c), §2.8, plan Task 9 | the scan test is renamed `test_no_scanned_file_cites_a_working_document` when the pending list is deleted | the old name describes a list that no longer exists | one extra rename in the checker's allow list |
+| 4 | §3.5, §3.6, plan Task 11 | the artifacts epilog states no note length at all (the mode help reads `NOTE_MAX_CHARS`); fdt's `--n-freqs`/`--ensemble-m` get pinned literals (60, 256) against `FDTConfig` | a sweep-worded FIELDS default is confusing on a single run | two more pinned literals |
+| 5 | §5.3, §9 F2, plan Task 14 | the unit and mark live in `SimConfig.report_labels`, not `core/Helpers/labels.py`; the Infer tab gains one info record logging the posterior summary so row F2 has a summary to check | the tab printed no summary; labels.py serves every label | one new log line per inference |
+| 6 | §5.4, plan Task 15 | a given seed seeds the whole calibration battery (the draw and the SBC, TARP and informativeness sampling), not only the draw; the Validate tab's closing line names the verdict; the tool always passes a seed, drawn when absent | verdicts must repeat, and the posterior sampling uses torch's global stream | a larger seeded block |
+| 7 | §5.5, §5.6, plan Task 16 | a containment `value` is None when not finite; the resume record about eigenvalues uses the `[checkpoint] ` prefix, never `[fisher]` | a manifest refuses non-finite numbers; `[fisher]` must mean a Fisher that ran | none |
+| 8 | §5.7, plan Task 17 | `simulated_f_scale` is recorded on any box whose simulator index has `f_scale`; `units_sha256` hashes the units file with CRLF normalised to LF | a re-checkout (autocrlf) must not re-key a cache | a units file differing only in line endings keys the same cache, by design |
+| 9 | §4.4, plan Tasks 18, 21 | `ProbeRecord` gains `n_points` and a (K,) tensor `duration_frac`; the row range reaches `gen_chi_block` through a `row_range` keyword; the batch probe tally's `add` replaces an overlapping buffered range | the floor split needs the recording length; row halving re-adds ranges | none |
+| 10 | §4.3, plan Task 22 | "the drive holds" is judged on the configured drive's in-band points only; `--cycle-caps` always includes the configured ceiling; a point with fewer than two rows below 0.9 × Nyquist is reported masked and not driven; a non-finite judged measure reads "not measured" | the spec was silent | a reader may expect other drives judged too |
+| 11 | §4.5, plan Task 24 | `--strengths` has its own default phrase ("sixteen from 0.01 to 20, plus the configured chi drive"); clarity is peak-bin ÷ median power; the own-peak window has a two-bin floor; the 0.02 default window is committed before the parity run that accepts it (the parity result goes to the owner before Task 25 if it fails) | a summed window scores white noise near the threshold; the task order needs the default before the controller's card run | a failed parity means one more commit |
+| 12 | §6.6, §8, plan Task 26 | `CLAUDE.md`'s card recipe block is made reference-free and gains `probes` at the card run, not at the handoff's retirement; the verbatim unit is the block from the `powershell` fence through "Delete `$S` afterwards." | `docs/guide/testing.md` carries it verbatim under the scan, and the block named STATE three times | the STATE pointer moves to a sentence after the block |
+| 13 | §6.6, plan Tasks 38, 39 | the archived handoff is retrieved with `git show <archiving-commit>^:PRISM_HANDOFF.md` | the archiving commit itself no longer holds the file | none |
+| 14 | §9 F3, plan Task 38 | F3 is kept: the Artifacts screen's detail pane shows the manifest error as its reason line | the plan was asked to check it | none |
