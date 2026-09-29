@@ -17,6 +17,7 @@ _CODE_SPAN = re.compile(r"`[^`\n]*`")
 _LINK = re.compile(r"\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 _REF_DEF = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*\S")
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+_DRIVE = re.compile(r"^[A-Za-z]:")     # one letter and a colon: a Windows drive, not a web scheme
 _STAMP = re.compile(r"^Checked against commit [0-9a-f]{7,40}\.$")
 
 
@@ -60,10 +61,29 @@ def _rel(path, root):
         return path.name
 
 
+def _exact_path(start, path_part):
+    """``(path, None)`` for ``path_part`` walked from ``start`` one component at a time, each name
+    required exactly as its folder lists it; ``(None, name)`` for the first component that is not
+    there. The walk is the case check: GitHub serves names case-sensitively, and on Windows both a
+    lookup and ``resolve`` find a mistyped name and hand back the disk's own spelling."""
+    cur = start
+    for part in path_part.split("/"):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            cur = cur.parent
+            continue
+        if not cur.is_dir() or part not in {p.name for p in cur.iterdir()}:
+            return None, part
+        cur = cur / part
+    return cur, None
+
+
 def _link_problems(md, root):
-    """One line per link in ``md`` that does not resolve: an absolute path, a target outside ``root``,
-    no such file (exact case), a folder with no README.md, an anchor no heading of the target carries,
-    and a reference-style definition, which the pages do not use. Links to web addresses are skipped."""
+    """One line per link in ``md`` that does not resolve: a drive-letter or absolute path, a target
+    outside ``root``, no such file (every folder and file name matched in its exact case), a folder
+    with no README.md, an anchor no heading of the target carries, and a reference-style definition,
+    which the pages do not use. Links to web addresses are skipped."""
     problems = []
     for n, line in _prose_lines(md.read_text(encoding="utf-8")):
         where = f"{_rel(md, root)}:{n}"
@@ -71,6 +91,9 @@ def _link_problems(md, root):
             problems.append(f"{where}: reference-style link definition; write the link inline")
             continue
         for target in _LINK.findall(_CODE_SPAN.sub("", line)):
+            if _DRIVE.match(target):
+                problems.append(f"{where}: {target}: a drive-letter path; write it relative to the page")
+                continue
             if _SCHEME.match(target):
                 continue
             path_part, _, anchor = target.partition("#")
@@ -81,8 +104,12 @@ def _link_problems(md, root):
             if dest != root.resolve() and root.resolve() not in dest.parents:
                 problems.append(f"{where}: {target}: points outside the repository")
                 continue
-            if not dest.exists() or dest.name not in {p.name for p in dest.parent.iterdir()}:
-                problems.append(f"{where}: {target}: no such file")
+            dest, missing = _exact_path(md.parent, path_part) if path_part else (md, None)
+            if dest is None:
+                on_disk = (md.parent / path_part).exists()
+                problems.append(f"{where}: {target}: " + (
+                    f"'{missing}' is not the name on disk, whose case differs (GitHub's names are "
+                    f"case-sensitive)" if on_disk else "no such file"))
                 continue
             if dest.is_dir():
                 dest = dest / "README.md"
@@ -105,7 +132,7 @@ def test_every_relative_link_in_the_guide_and_readme_resolves():
 
 def test_every_guide_page_opens_with_its_commit_stamp():
     bad = []
-    for name in PAGES:
+    for name in sorted(set(PAGES) | {p.name for p in GUIDE.glob("*.md")}):
         page = GUIDE / name
         lines = [l for l in page.read_text(encoding="utf-8").splitlines() if l.strip()] \
             if page.is_file() else []
@@ -116,16 +143,26 @@ def test_every_guide_page_opens_with_its_commit_stamp():
 
 
 def test_the_link_checker_catches_a_missing_file_and_a_missing_anchor(tmp_path):
+    """Also a name whose case differs from the disk's, for a file and for a folder: GitHub serves
+    names case-sensitively, while Windows finds the file either way. And a drive-letter path, which
+    is not a web address and does not exist for anyone else."""
     (tmp_path / "other.md").write_text("# Other\n\n## A section\n", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "inner.md").write_text("# Inner\n", encoding="utf-8")
     page = tmp_path / "page.md"
     page.write_text("# Page\n\n"
                     "[fine](other.md#a-section) [self](#page) [web](https://example.org)\n"
+                    "[down](sub/inner.md) [up and back](sub/../other.md#a-section)\n"
                     "[gone](missing.md) [typo](other.md#nowhere)\n"
+                    "[file case](Other.md) [folder case](Sub/inner.md) [drive](C:/x.md)\n"
                     "[ref]: other.md\n"
                     "`[in code](missing.md)`\n"
                     "```\n[in a fence](missing.md)\n```\n", encoding="utf-8")
     problems = _link_problems(page, tmp_path)
-    assert len(problems) == 3, problems
+    assert len(problems) == 6, problems
     assert any("missing.md: no such file" in p for p in problems)
     assert any("#nowhere" in p for p in problems)
     assert any("reference-style" in p for p in problems)
+    assert any(": Other.md: " in p for p in problems)
+    assert any(": Sub/inner.md: " in p for p in problems)
+    assert any("C:/x.md: a drive-letter path" in p for p in problems)

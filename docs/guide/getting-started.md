@@ -33,15 +33,20 @@ create (`biophys-env`). Activate it before you launch anything: every command be
 
 ## Inputs and records
 
-PRISM keeps what you write by hand apart from what it generates.
+PRISM keeps its inputs apart from the records its runs generate.
 
-- **Inputs** live under `Resources/`, in four folders you edit by hand: `Bounds/` (which parameters are
-  inferred, in what order and over what box), `Cells/` (one cell's initial conditions and parameter
-  values), `Units/` (the unit system a model's files are written in) and `Models/` (the definitions of
-  user-defined models). [Bringing recordings](recordings.md#input-files) describes each format.
-- **Records**, everything PRISM generates, live under `Artifacts/`, one directory per record, as
-  `Artifacts/<kind directory>/<name>__<id>/`. [The artifact store](#the-artifact-store) below
-  describes them.
+- **Inputs** live under `Resources/`, in four folders: `Bounds/` (which parameters are inferred, in
+  what order and over what box), `Cells/` (one cell's initial conditions and parameter values),
+  `Units/` (the unit system a model's files are written in) and `Models/` (the definitions of
+  user-defined models). Bounds, cell and units files are edited by hand. The window's model builder,
+  reached from Settings, writes a user model's definition into `Models/`, and a first bounds file,
+  cell file and units file for that model into the other three folders
+  (`core.Helpers.model_store.save_user_model`). [Bringing recordings](recordings.md#input-files)
+  describes each format.
+- **Records**, what every stage, diagnostic and FDT run writes, live under the records root
+  (`Artifacts/` unless overridden), one directory per record:
+  `<records root>/<kind directory>/<name>__<id>/`. [The artifact store](#the-artifact-store) below
+  describes them, and the few outputs that are not records.
 
 `core.config` resolves both roots from its own location, never from the working directory, and an
 environment variable overrides each:
@@ -161,8 +166,10 @@ named in the singular; seven have a plural directory, and `fdt` keeps its own na
 | `fdt` | `fdt/` | `fdt`, `crossval`, `compare` | the FDT Analysis screen |
 
 `smoke` writes the first six kinds into its own root; it writes a simulation cache only with
-`--checkpoint`. Two screens save outside the kinds: the Reduction Map writes plain files, with no
-manifest, under `Artifacts/reduction/`, and Simulate saves a video wherever you choose.
+`--checkpoint`. Three things are saved outside the kinds: the Reduction Map writes plain files, with
+no manifest, into `reduction/` under the records root (`core.config.artifacts_root()`); Simulate
+saves a video wherever you choose; and the model builder writes into the inputs root, as described
+under [Inputs and records](#inputs-and-records).
 
 **What a record holds.** A record's directory holds:
 
@@ -221,12 +228,19 @@ was loaded under.
 - select a record, and the detail pane shows its manifest and its run's log; **Save…** writes what is
   shown to a text file, and **Lineage report…** writes the record and its parents, back through the
   chain;
-- the Actions box sets or clears the record's note (**Set**), deletes it (**Delete…**, refused while
-  any other record depends on it), and sweeps away directories with no manifest and loose files
-  (**Sweep this kind…**, **Sweep all kinds…**).
+- the Actions box sets or clears the record's note (**Set**) and deletes it (**Delete…**, refused
+  while any other record depends on it);
+- **Sweep this kind…** removes the kind's directories that have no manifest at all and any loose file
+  inside its folder; **Sweep all kinds…** does that for every kind and also removes the legacy
+  `crossval/` directory an older build left beside the kind directories
+  (`core.artifacts.store.LEGACY_DIRS`). Each asks before it removes anything.
 
-Reading is never blocked; the actions that change the store are refused while a run is live
-(`core.gui.screens.artifact_screen.ArtifactScreen`).
+Reading is never blocked. The actions that change the store are refused while a run in the window is
+live (`core.gui.screens.artifact_screen.ArtifactScreen`). A run in another process, such as a
+command-line run, is guarded only by the sweeps' recency check: a directory or file written in the
+last five minutes is refused rather than removed (`core.artifacts.store.RECENT_WRITE_SECONDS`),
+because an ordinary record's manifest is written last and a run in flight looks like a leftover
+until then.
 
 **On the command line**, the `artifacts` family does the same against the `PRISM_ARTIFACTS` root:
 
@@ -236,7 +250,7 @@ Reading is never blocked; the actions that change the store are refused while a 
 | `python -m core artifacts show <kind> <ref>` | the record's manifest and its run's log |
 | `python -m core artifacts note <kind> <ref> --note TEXT` | sets the note; `--note ''` clears it |
 | `python -m core artifacts rm <kind> <ref>` | deletes one record; refused while anything depends on it |
-| `python -m core artifacts sweep [<kind>] [--yes]` | removes directories with no manifest and loose files; a dry run until `--yes` |
+| `python -m core artifacts sweep [<kind>] [--yes]` | removes directories with no manifest and loose files, and, with no kind, the legacy `crossval/` directory; anything written in the last five minutes is refused and named; a dry run until `--yes` |
 | `python -m core artifacts summary <kind> <ref> [--out PATH]` | the lineage report: the record, then its parents |
 
 The family loads nothing, so it cannot say whether a posterior matches your bounds file; loading it
