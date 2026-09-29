@@ -1649,3 +1649,109 @@ def test_the_diagnostic_warnings_are_records_and_the_reports_are_information(cap
 
     out, err = capsys.readouterr()
     assert out == "" and err == "", (out, err)
+
+
+def _batch_loop_geometry(cfg, t_obs_s, t_scale):
+    """(N_points_k, n_fine_total, subsample_factor) as the training batch loop computes them: its own
+    five geometry statements, lifted from gen_training_data's source and run on one (length, t_scale).
+
+    Running production's statements, rather than a copy of them written here, is what makes the check
+    below a pin: a change to the batch loop's arithmetic changes the expected values with it. Each
+    name must be assigned exactly once, and the statements may read nothing but the loop's own inputs,
+    so a reshaped loop fails here by name instead of passing against a stale restatement."""
+    import ast
+    import inspect
+    import textwrap
+    from core.SBI import pipeline
+    names = ("T_nd_k", "dt_nd_k", "subsample_factor", "N_points_k", "n_fine_total")
+    tree = ast.parse(textwrap.dedent(inspect.getsource(pipeline.gen_training_data)))
+    found = sorted((n for n in ast.walk(tree)
+                    if isinstance(n, ast.Assign) and len(n.targets) == 1
+                    and isinstance(n.targets[0], ast.Name) and n.targets[0].id in names),
+                   key=lambda n: n.lineno)
+    assert sorted(n.targets[0].id for n in found) == sorted(names), [ast.unparse(n) for n in found]
+    scope = {"T_k": t_obs_s * cfg.get_unit_conversion_factor("s"), "t_scale_k": t_scale,
+             "dt_exp": cfg.dt_exp, "dt_nd_min": cfg.dt_nd_min, "steady_idx": cfg.steady_idx}
+    exec(compile(ast.Module(body=found, type_ignores=[]), "gen_training_data", "exec"), scope)
+    return scope["N_points_k"], scope["n_fine_total"], scope["subsample_factor"]
+
+
+def test_the_recording_geometry_agrees_with_the_training_batch_formula():
+    """A probe length is sized with the training loop's own arithmetic, float truncation included, so
+    it describes the trace a training batch of that length holds. The expected values are what the
+    batch loop's own statements compute, not a restatement of them."""
+    from core.diagnostics import probe_math
+    cfg = _nad_cfg()
+    for t_obs_s, t_scale in ((1.0, 3.73), (1.0, 3.7300000190734863), (5.0, 3.73),
+                             (26.909, 3.7300000190734863), (2.5, 1.0), (7.3, 40.0)):
+        want = _batch_loop_geometry(cfg, t_obs_s, t_scale)
+        assert tuple(probe_math.recording_geometry(cfg, t_obs_s, t_scale)) == want, (t_obs_s, t_scale)
+    assert probe_math.recording_geometry(cfg, 5.0, 3.73) == probe_math.Geometry(
+        n_obs=5000, n_fine=59000, subsample=11)
+    # the truncation is training's too, and is not corrected: one second at 3.73 holds 999 samples
+    assert probe_math.recording_geometry(cfg, 1.0, 3.73).n_obs == 999
+
+
+def test_the_training_ceiling_is_the_bound_the_sobol_prefilter_enforces():
+    """The longest recording training can draw at a t_scale: the pre-filter admits it and refuses two
+    samples more."""
+    from core.diagnostics import probe_math
+    from core.SBI import pipeline
+    cfg = _nad_cfg()
+    assert probe_math.training_ceiling_s(cfg, 3.73) == pytest.approx(26.909, abs=1e-9)
+    top = probe_math.training_ceiling_s(cfg, 3.73) * cfg.get_unit_conversion_factor("s")
+    args = (cfg.dt_exp, cfg.dt_nd_min, cfg.steady_idx)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        pipeline._batch_schedule(4, cfg.t, (3.73, 3.73), top, top, *args)
+        beyond = top + 2 * cfg.dt_exp
+        with pytest.raises(ValueError, match="fine-grid ceiling"):
+            pipeline._batch_schedule(4, cfg.t, (3.73, 3.73), beyond, beyond, *args)
+
+
+def test_the_default_probe_grids_follow_the_configured_band_and_the_cells_ceiling():
+    from core import config
+    from core.diagnostics import probe_math
+    cfg = _nad_cfg()
+    assert config.CHI_FREQ_BOUNDS == (0.03, 0.3)
+    assert probe_math.default_lengths(cfg, 3.73) == [1.0, 2.27, 5.18, 11.81, 26.9]
+    assert probe_math.default_lengths(cfg, 3.73, n=2) == [1.0, 26.9]
+    assert probe_math.default_multipliers() == [0.03, 0.0646, 0.1392, 0.3, 0.6]
+
+
+def test_the_own_peak_ratio_counts_only_the_power_inside_the_window():
+    import math
+    from core.diagnostics import probe_math
+    t = torch.arange(5000, dtype=torch.float64)                 # dt 1, bins of 1/5000
+    rows = torch.linspace(0.0, 2.0, 4, dtype=torch.float64).unsqueeze(1)
+    ref = torch.sin(2 * math.pi * 0.02 * t + rows)               # bin 100
+    assert probe_math.own_peak_ratio(0.5 * ref, ref, 0.02, 0.10, 1.0) == pytest.approx(0.25, rel=1e-9)
+    near = torch.sin(2 * math.pi * 0.0216 * t + rows)            # bin 108
+    assert probe_math.own_peak_ratio(near, ref, 0.02, 0.10, 1.0) == pytest.approx(1.0, rel=1e-6)
+    assert probe_math.own_peak_ratio(near, ref, 0.02, 0.05, 1.0) < 1e-12
+    two_off = torch.sin(2 * math.pi * 0.0204 * t + rows)         # bin 102: inside the two-bin floor
+    assert probe_math.own_peak_ratio(two_off, ref, 0.02, 1e-6, 1.0) == pytest.approx(1.0, rel=1e-6)
+    assert math.isnan(probe_math.own_peak_ratio(ref, ref, float("nan"), 0.10, 1.0))
+    with pytest.raises(ValueError):
+        probe_math.own_peak_ratio(ref[:, :4000], ref, 0.02, 0.10, 1.0)
+
+
+def test_the_circular_spread_is_zero_for_one_phase_and_ignores_the_wrap():
+    import math
+    from core.diagnostics import probe_math
+    one = torch.polar(torch.ones(5, dtype=torch.float64), torch.full((5,), 1.3, dtype=torch.float64))
+    assert probe_math.circular_spread(one) == pytest.approx(0.0, abs=1e-7)
+    across = torch.polar(torch.ones(2, dtype=torch.float64),
+                         torch.tensor([math.pi - 0.05, -math.pi + 0.05], dtype=torch.float64))
+    assert probe_math.circular_spread(across) == pytest.approx(math.sqrt(-2 * math.log(math.cos(0.05))), rel=1e-9)
+    spread = torch.polar(torch.ones(4, dtype=torch.float64),
+                         torch.tensor([0.0, math.pi / 2, math.pi, 3 * math.pi / 2], dtype=torch.float64))
+    assert probe_math.circular_spread(spread) > 5.0
+
+
+def test_the_harmonic_flag_marks_a_probe_whose_low_harmonic_lands_in_the_own_peak_window():
+    from core.diagnostics import probe_math
+    assert probe_math.harmonic_flags([0.03, 0.0646, 0.1392, 0.3, 0.6], 0.10) == [False, False, False, True, False]
+    assert probe_math.harmonic_flags([0.189, 0.25, 0.5, 1.0, 1.4], 0.10) == [True, True, True, True, False]
+    assert probe_math.harmonic_flags([0.189], 0.10, max_order=4) == [False]
+    assert probe_math.harmonic_flags([1.4], 0.02) == [False]
