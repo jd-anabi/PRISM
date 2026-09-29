@@ -1769,10 +1769,14 @@ def _probe_cfg(bounds="master.txt", cell="master_spont.txt", *, chi=True):
     return cfg
 
 
-def _probe_stand_in(*, f_own=0.025, own_factor=None, gain=2.0, noise=0.01, seen=None, nan_driven=False):
+def _probe_stand_in(*, f_own=0.025, own_factor=None, gain=2.0, noise=0.01, seen=None, nan_driven=False,
+                    phase=None, background=None):
     """In place of probes._simulate, a cell of known response. Its own oscillation sits at f_own (cell
     frequency units, one value or one per row) with a random phase per row. A drive adds a response of
-    |chi| = gain in phase with it, and scales the own oscillation by own_factor(strength in model units)."""
+    |chi| = gain in phase with it, and scales the own oscillation by own_factor(strength in model units).
+    ``gain`` may also be one value per row, ``phase`` (radians, one per row) delays each row's response
+    so that arg chi = phase, and ``background`` = (frequency, amplitude) adds a fixed cosine to every
+    run, driven or not -- what the undriven lock-in then reads at that frequency."""
     import math
     own_factor = own_factor or (lambda a: torch.where(a >= 1.0, 0.1, 1.0))
 
@@ -1782,12 +1786,16 @@ def _probe_stand_in(*, f_own=0.025, own_factor=None, gain=2.0, noise=0.01, seen=
         f = torch.as_tensor(f_own, dtype=torch.float64).reshape(-1, 1)
         own = torch.sin(2 * math.pi * f * t + 2 * math.pi * torch.rand(B, 1, dtype=torch.float64))
         x = own + noise * torch.randn(B, n, dtype=torch.float64)
+        if background is not None:
+            x = x + background[1] * torch.cos(2 * math.pi * background[0] * t)
         if amp_dim is not None:
             amp = amp_dim.double().reshape(-1, 1)
             strength = amp / res_sim[:, sim_idx["f_scale"]].double().reshape(-1, 1)
             if seen is not None:
                 seen.append((strength.flatten().tolist(), freq.double().flatten().tolist()))
-            x = x + (own_factor(strength) - 1.0) * own + gain * amp * torch.cos(2 * math.pi * freq.double().reshape(-1, 1) * t)
+            g = torch.as_tensor(gain, dtype=torch.float64).reshape(-1, 1)
+            lag = torch.as_tensor(0.0 if phase is None else phase, dtype=torch.float64).reshape(-1, 1)
+            x = x + (own_factor(strength) - 1.0) * own + g * amp * torch.cos(2 * math.pi * freq.double().reshape(-1, 1) * t - lag)
             x = torch.full_like(x, float("nan")) if nan_driven else x
         return x.to(cfg.hw.dtype)
     return _sim
@@ -1842,7 +1850,8 @@ def test_probes_band_fails_a_frequency_captured_at_any_drive_and_judges_the_conf
     assert any("core/config.py" in m for m in said)
 
 
-def test_probes_band_reports_a_probe_past_the_sampling_limit_as_masked_and_never_clamps_it(store, monkeypatch):
+def test_probes_band_reports_a_probe_past_the_sampling_limit_as_masked_and_never_clamps_it(store, monkeypatch,
+                                                                                         caplog):
     from core.diagnostics import probes, probe_band
     seen = []
     monkeypatch.setattr(probes, "_simulate", _probe_stand_in(f_own=[0.2, 0.2, 0.4, 0.4], seen=seen))
@@ -1857,6 +1866,72 @@ def test_probes_band_reports_a_probe_past_the_sampling_limit_as_masked_and_never
     assert not fast["passes_capped"] and any("masked" in why for why in fast["reasons"])
     assert max(f for _, freqs in seen for f in freqs) == pytest.approx(0.6, rel=1e-6)   # driven where asked
     assert store.load_diagnostic(d.id).results == d.results
+    # a point measured over fewer runs than were simulated says so in the report a user reads
+    said = [m.getMessage() for m in caplog.records if m.name == "core.diagnostics.probes"]
+    assert any("x1.5" in m and m.endswith("2 of 4 runs masked at the sampling limit") for m in said), said
+    assert not any("x0.05" in m and "masked" in m for m in said), said
+
+
+def test_probes_band_masks_at_nine_tenths_of_the_sampling_limit_and_needs_two_runs(store, monkeypatch):
+    """The two edges of training's masking rule, where the obvious wrong rules part from it: a probe
+    between 0.9 x Nyquist and Nyquist itself is masked, and one run left below the limit is too few to
+    measure a point. At 1000 samples of 1 ms the peaks 0.1 and 0.2 cycles/ms sit on exact bins, so x2.3
+    puts one run at 0.23 (kept) and three at 0.46 -- above 0.9 x Nyquist (0.45), below Nyquist (0.5)."""
+    from core.diagnostics import probes, probe_band
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(f_own=[0.1, 0.2, 0.2, 0.2]))
+    d = probe_band(_probe_cfg(), lengths=[1.0], multipliers=[2.3], repeats=4, name="edge")
+    point, = d.results["points"]
+    assert (point["n_valid"], point["nyquist_masked"]) == (1, 3)
+    assert point["full"]["verdict"] == point["capped"]["verdict"] == "masked"
+    freq, = d.results["frequencies"]
+    assert freq["reasons"] == ["masked at the sampling limit at 1.00 s"] and not freq["passes_capped"]
+
+
+def test_probes_band_judges_the_phase_only_against_a_given_threshold(store, monkeypatch):
+    """Two runs whose response lags by 0 and pi/2 scatter in phase by sqrt(ln 2) = 0.8326 rad (the
+    circular standard deviation of two orthogonal unit vectors). Without a threshold the phase is
+    reported and not judged; a threshold below the scatter fails the point on phase, one above passes."""
+    import math
+    from core.diagnostics import probes, probe_band
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(phase=[0.0, math.pi / 2]))
+    kw = dict(lengths=[1.0], multipliers=[0.12], repeats=2)            # 3 drive cycles on an exact bin
+    free = probe_band(_probe_cfg(), name="phase_free", **kw).results["points"][0]
+    assert free["full"]["phase"] == pytest.approx(math.sqrt(math.log(2)), abs=2e-3)
+    assert free["full"]["verdict"] == free["capped"]["verdict"] == "pass"
+    tight = probe_band(_probe_cfg(), phase_max=0.5, name="phase_tight", **kw).results["points"][0]
+    assert tight["full"]["verdict"] == tight["capped"]["verdict"] == "phase"
+    loose = probe_band(_probe_cfg(), phase_max=1.0, name="phase_loose", **kw)
+    assert loose.results["points"][0]["full"]["verdict"] == "pass" and loose.settings["phase_max"] == 1.0
+
+
+def test_probes_band_measures_the_amplitude_spread_and_the_signal_over_the_floor(store, monkeypatch):
+    """The two lock-in measures by value. Runs whose |chi| is 1, 3, 1 and 3 spread by the unbiased std
+    over the mean, sqrt(4/3) / 2 = 0.5774: noisy. A fixed background cosine of amplitude 0.5 at the probe
+    frequency is what the undriven lock-in reads, so a response of 3 on top of it gives a signal over the
+    floor of (3 + 0.5) / 0.5 = 7, which passes a threshold of 3 and fails one of 10."""
+    import math
+    from core.diagnostics import probes, probe_band
+    kw = dict(lengths=[1.0], multipliers=[0.12], repeats=4)            # 3 drive cycles on an exact bin
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(gain=[1.0, 3.0, 1.0, 3.0]))
+    p = probe_band(_probe_cfg(), name="spread", **kw).results["points"][0]
+    assert p["full"]["cv"] == pytest.approx(math.sqrt(4 / 3) / 2, abs=2e-3)
+    assert p["full"]["chi_mag"] == pytest.approx(2.0, rel=1e-3) and p["full"]["verdict"] == "noisy"
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(background=(0.003, 0.5)))
+    p = probe_band(_probe_cfg(), name="floor", **kw).results["points"][0]
+    assert p["full"]["snr"] == pytest.approx(7.0, rel=1e-2) and p["full"]["verdict"] == "pass"
+    p = probe_band(_probe_cfg(), snr_min=10.0, name="floor_high", **kw).results["points"][0]
+    assert p["full"]["verdict"] == p["capped"]["verdict"] == "low signal"
+
+
+def test_probes_band_repeats_at_one_seed_and_differs_at_another(store, monkeypatch):
+    from core.diagnostics import probes, probe_band
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in())
+    kw = dict(lengths=[1.0], multipliers=[0.3], repeats=3)
+    a = probe_band(_probe_cfg(), seed=5, name="seed_a", **kw)
+    b = probe_band(_probe_cfg(), seed=5, name="seed_b", **kw)
+    c = probe_band(_probe_cfg(), seed=6, name="seed_c", **kw)
+    assert a.results == b.results and a.settings == b.settings
+    assert c.results["points"] != a.results["points"] and c.settings["seed"] == 6
 
 
 def test_probes_band_brackets_the_wall_only_when_caps_are_given(store, monkeypatch):
@@ -1872,6 +1947,9 @@ def test_probes_band_brackets_the_wall_only_when_caps_are_given(store, monkeypat
     assert all(c["n_fail"] == 0 for c in wall["caps"] if c["n_truncated"]), wall["caps"]
     assert "above 12" in wall["reading"], wall["reading"]
     assert d.results["points"][0]["full"]["cycles"] == pytest.approx(15.0)
+    # the per-run ceiling rounds DOWN, as training's does: floor(8 / 0.0075) = 1066 samples of 1 ms
+    cap8 = d.results["points"][0]["caps"][0]
+    assert cap8["cap"] == 8.0 and cap8["cycles"] == pytest.approx(7.995) and cap8["cycles"] < 8.0
 
 
 def test_the_wall_reading_brackets_the_first_failing_cap_from_below():
@@ -1963,7 +2041,9 @@ def test_a_probes_run_leaves_a_training_configuration_and_config_py_untouched(st
     constants = {k: getattr(config, k) for k in dir(config) if k.startswith("CHI_")}
     seen = []
     monkeypatch.setattr(probes, "_simulate", _probe_stand_in(seen=seen))
-    probe_band(_probe_cfg(), lengths=[1.0], multipliers=[0.05, 0.6], drives=[0.5], repeats=2, name="untouched")
+    d = probe_band(_probe_cfg(), lengths=[1.0], multipliers=[0.05, 0.6], drives=[0.5], repeats=2,
+                   name="untouched")
+    assert d.results["drive_holds"] is None            # the configured drive was not among those measured
     assert_cfg_unchanged(training, snap)
     assert {k: getattr(config, k) for k in dir(config) if k.startswith("CHI_")} == constants
     fresh = _nad_cfg(chi_mode=True)

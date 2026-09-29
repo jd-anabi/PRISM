@@ -146,8 +146,9 @@ def build_cfg(args, *, load_gt: bool = False):
     THE BUILDER NEVER SETS ``cfg.T_obs``. ``--t-obs`` travels to the one function that uses it, so a
     stage that has no business with a duration cannot inherit one nobody asked for.
 
-    ``load_gt`` injects the cell's ground-truth values here; only the identifiability modes that need
-    the truth before the stage runs ask for it. ``infer`` and ``smoke`` leave it to
+    ``load_gt`` injects the cell's ground-truth values here; only the subcommands that need the truth
+    before the stage runs ask for it -- the identifiability modes that measure at the cell, and the
+    probe checks that measure a cell. ``infer`` and ``smoke`` leave it to
     ``simulated_inference``, so the note about ignored cell values prints exactly once.
     """
     from core import cli

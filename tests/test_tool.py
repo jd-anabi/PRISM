@@ -4111,6 +4111,9 @@ def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(t
     assert band.get_default("interrupt_note") == tool_probes.PROBES_INTERRUPT_NOTE
 
     capsys.readouterr()
+    assert main(["probes"]) == 2
+    err = capsys.readouterr().err
+    assert "{band}" in err and "variant" not in err, "a bare probes names its modes, not the dest"
     assert main([*_probe_band_argv(), "--chi"]) == 2
     assert main([*_probe_band_argv(), "--sup", "0.4"]) == 2, "a prefix of --sup-min is not --sup-min"
     assert main([*_probe_band_argv(), "--cycle", "8"]) == 2, "a prefix of --cycle-caps is not --cycle-caps"

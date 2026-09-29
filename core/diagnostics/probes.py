@@ -273,6 +273,9 @@ def _measure(cfg, res_sim, sim_idx, t_scale, lengths, multipliers, drives, caps,
                 fk, ak, xdk, x0k = freq[ok], amp[ok], xd[ok], x0[ok]
                 full, _ = _lock_in(xdk, x0k, fk, ak, None, geom.n_obs, dt)
                 per_cap = {c: _lock_in(xdk, x0k, fk, ak, c, geom.n_obs, dt) for c in caps}
+                # The reference is the WHOLE undriven ensemble, not x0[ok]: the kept runs are chosen from
+                # x0's own per-run peak estimates, so x0[ok] would condition the reference on x0's noise
+                # and bias the share toward "captured". The driven draws are independent of that choice.
                 sup = orch._num(probe_math.own_peak_ratio(xdk, x0, omega0, crit.peak_window, dt))
                 capped = per_cap[configured_cap][0]
                 points.append({
@@ -416,8 +419,13 @@ def _point_line(p: dict) -> str:
         return (f"{name} {c['verdict']} (cv {_fmt(c['cv'], '.3f')}, snr {_fmt(c['snr'], '.3g')}, "
                 f"phase {_fmt(c['phase'], '.2f')}, {_fmt(c['cycles'], '.3g')} cycles)")
 
-    return (f"{where} {column('full')}  {column('capped')}  own-peak share {_fmt(p['sup'], '.3f')}"
+    line = (f"{where} {column('full')}  {column('capped')}  own-peak share {_fmt(p['sup'], '.3f')}"
             + ("  (harmonic)" if p["harmonic"] else ""))
+    if p["nyquist_masked"]:
+        # measured, but over fewer runs than were simulated: the reader is told how many
+        line += (f"  {p['nyquist_masked']} of {p['n_valid'] + p['nyquist_masked']} runs masked at the "
+                 f"sampling limit")
+    return line
 
 
 def _figure(sink, drive, lengths, multipliers, panels) -> None:

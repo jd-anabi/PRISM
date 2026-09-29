@@ -80,7 +80,8 @@ def _register_band(modes) -> None:
     _value_flag(band, "--multipliers", type=float, nargs="+", metavar="X",
                 help="probe frequencies, as multiples of each run's own peak frequency")
     _value_flag(band, "--drives", type=float, nargs="+", metavar="X",
-                help="non-dimensional drive amplitudes; only the configured one is judged for capture")
+                help="non-dimensional drive amplitudes; a probe frequency captured at any of them fails "
+                     "the band verdict, while the drive verdict judges the configured drive alone")
     _value_flag(band, "--repeats", type=int, metavar="N",
                 help="noise repeats per point, the ensemble every measure is taken over")
     _value_flag(band, "--cycle-caps", type=float, nargs="+", metavar="N",
@@ -105,6 +106,8 @@ def register(sub) -> dict:
     """``{"probes": parent}``: the family's parent parser, its modes under ``variant``."""
     text = "check the chi probe settings on a cell or a prior"
     p = sub.add_parser("probes", help=text, description=text, allow_abbrev=False)
-    modes = p.add_subparsers(dest="variant", required=True)
+    # the metavar names the modes in a bare `probes` usage error, never the internal dest; it grows with
+    # the family
+    modes = p.add_subparsers(dest="variant", required=True, metavar="{band}")
     _register_band(modes)
     return {"probes": p}
