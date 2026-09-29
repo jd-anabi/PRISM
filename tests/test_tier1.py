@@ -16,7 +16,9 @@ Cheap by design: every fast test replaces ``pipeline.gen_obs`` with ``stand_in_g
 the force scale each drive is divided by with ``force_scale_spy``; recordings are one to two seconds
 and batches are two of four rows. One slow test runs the real ``smoke`` chain on the tier-1 box.
 """
+import re
 import warnings
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -116,6 +118,23 @@ def _assert_every_drive_used_the_derived_scale(spy, f, rtol=2e-3):
         assert torch.allclose(e["f_scale"], torch.full_like(e["f_scale"], f), rtol=rtol), e["f_scale"]
 
 
+_MASKED_PROBES = re.compile(r"chi: \d+/\d+ probes masked")
+
+
+@contextmanager
+def _only_masked_probe_warnings():
+    """Capture every Python warning raised inside and check each one on exit. At one-to-two-second
+    recordings a chi batch may mask a probe too short to lock in, and it says so with a count. Whether
+    a given batch does depends on its unseeded (t_scale, T) draw, so zero or more such lines are
+    allowed, and nothing else is. Yields the captured list."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        yield caught
+    others = [f"{w.category.__name__}: {w.message}" for w in caught
+              if not (w.category is UserWarning and _MASKED_PROBES.search(str(w.message)))]
+    assert not others, others
+
+
 def test_the_tier1_box_parses_to_temperature_in_place_of_the_force_scale():
     """The tier-1 box declares T where other boxes declare f_scale, which switches the derivation on;
     the simulator's index renames T's column to f_scale, and the config carries what the relation
@@ -137,18 +156,22 @@ def test_the_tier1_box_parses_to_temperature_in_place_of_the_force_scale():
 @pytest.mark.parametrize("chi", [True, False])
 def test_training_rows_keep_temperature_while_every_simulation_gets_the_derived_force_scale(monkeypatch, chi):
     """The training target records the inferred temperature, and every drive the batch builds -- each
-    chi probe, or the forced run -- is divided by the force scale that temperature implies."""
+    chi probe, or the forced run -- is divided by the force scale that temperature implies. The only
+    warning either mode may raise is the chi batch's masked-probe count; the forced run draws no probes,
+    so it raises none."""
     cfg = with_truth(tier1_cfg(chi=chi))
     monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
     spy = force_scale_spy(monkeypatch)
-    x, theta = pipeline.gen_training_data(
-        cfg.model, _narrow_prior(cfg), orchestrator.build_forcing_prior(cfg), cfg.t, 4, 2,
-        cfg.steady_idx, cfg.dt_nd_min, len(cfg.params_dict), cfg.forcing_idx, cfg.rescale_idx,
-        dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=2 * cfg.t_min_exp,
-        t_scale_bounds=cfg.t_scale_bounds, chi_mode=chi, chi_f0=cfg.chi_f0,
-        chi_freq_bounds=cfg.chi_freq_bounds, chi_k_pad=cfg.chi_k_pad, chi_max_cycles=cfg.chi_max_cycles,
-        n_vars=3, nd_idx=cfg.tier1_args[0], k_b_cell=cfg.tier1_args[1],
-        dtype=cfg.hw.dtype, device=cfg.hw.device)
+    with _only_masked_probe_warnings() as caught:
+        x, theta = pipeline.gen_training_data(
+            cfg.model, _narrow_prior(cfg), orchestrator.build_forcing_prior(cfg), cfg.t, 4, 2,
+            cfg.steady_idx, cfg.dt_nd_min, len(cfg.params_dict), cfg.forcing_idx, cfg.rescale_idx,
+            dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=2 * cfg.t_min_exp,
+            t_scale_bounds=cfg.t_scale_bounds, chi_mode=chi, chi_f0=cfg.chi_f0,
+            chi_freq_bounds=cfg.chi_freq_bounds, chi_k_pad=cfg.chi_k_pad, chi_max_cycles=cfg.chi_max_cycles,
+            n_vars=3, nd_idx=cfg.tier1_args[0], k_b_cell=cfg.tier1_args[1],
+            dtype=cfg.hw.dtype, device=cfg.hw.device)
+    assert chi or not caught, [str(w.message) for w in caught]
     i_T = len(cfg.params_dict) + cfg.rescale_idx["T"]
     assert theta.shape[1] == 13 and theta.shape[0] > 0
     assert torch.allclose(theta[:, i_T], torch.full_like(theta[:, i_T], 300.0), rtol=1e-3)
@@ -157,13 +180,15 @@ def test_training_rows_keep_temperature_while_every_simulation_gets_the_derived_
 
 def test_the_calibration_set_simulates_at_the_derived_force_scale(monkeypatch):
     """The calibration set is drawn through the same generator as training, so its truths keep the
-    temperature and its probes are driven at the derived force scale."""
+    temperature and its probes are driven at the derived force scale. Its only warning may be the chi
+    batch's masked-probe count."""
     cfg = with_truth(tier1_cfg())
     cfg.t_max_exp = 2 * cfg.t_min_exp                      # a test config: keep the recordings short
     monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
     spy = force_scale_spy(monkeypatch)
-    x_cal, theta = orchestrator._draw_calibration_set(
-        cfg, _narrow_prior(cfg), None, orchestrator.build_forcing_prior(cfg), n_cal=8, cal_n_scales=2)
+    with _only_masked_probe_warnings():
+        x_cal, theta = orchestrator._draw_calibration_set(
+            cfg, _narrow_prior(cfg), None, orchestrator.build_forcing_prior(cfg), n_cal=8, cal_n_scales=2)
     i_T = len(cfg.params_dict) + cfg.rescale_idx["T"]
     assert torch.allclose(theta[:, i_T], torch.full_like(theta[:, i_T], 300.0), rtol=1e-3)
     _assert_every_drive_used_the_derived_scale(spy, derived_force_scale(cfg))
@@ -278,11 +303,16 @@ def test_a_prior_built_on_the_master_box_loads_under_the_tier1_box(store):
 @pytest.mark.slow
 def test_smoke_runs_every_stage_on_the_tier1_box(tmp_path, monkeypatch, capsys):
     """The real chain -- prior, training, calibration, inference -- on the tier-1 box and cell, in chi
-    mode, at tiny size; only the prior's stability sweep is bounded. It announces the derived force
-    scale and the chi drive amplitude it implies, and the posterior it writes infers T, never f_scale."""
+    mode, at tiny size; only the prior's stability sweep and the size of the rotation are bounded. It
+    announces the derived force scale and the chi drive amplitude it implies, and the posterior it
+    writes infers T, never f_scale."""
     from core.artifacts import ArtifactStore
     from core.tool import main
     monkeypatch.setattr(orchestrator.pipeline, "gen_prior", _tiny_nadrowski_gen_prior)
+    # A small rotation. The default one is most of a CPU run's cost, and the full-size rotation on this
+    # box is what the card run exercises. The training stage reads its default from these two names.
+    monkeypatch.setattr(orchestrator, "REPARAM_FISHER_M", 8)
+    monkeypatch.setattr(orchestrator, "REPARAM_FISHER_POINTS", 2)
     root = tmp_path / "tier1"
     assert main(["smoke", "--bounds", str(TIER1_BOX), "--device", "cpu", "--chi", "--cell", str(TIER1_CELL),
                  "--t-obs", "1.0", "--num-runs", "2", "--run-size", "8", "--n-cal", "20",
