@@ -326,9 +326,9 @@ def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
 
 def test_loose_files_sees_what_no_listing_can_and_removes_one_by_name(store):
     """``_entries`` iterates DIRECTORIES only, so a file sitting inside a kind directory is invisible
-    to every listing in both front ends -- and the owner has two of them, the
-    PNGs an older FDT run dropped into ``Artifacts/fdt``. This is the only route by which either
-    front end can see or clear one; nothing is removed on the owner's behalf.
+    to every listing in both front ends; an older FDT run once left two PNGs that way, in
+    ``Artifacts/fdt``. This is the only route by which either front end can see or clear one; nothing
+    is removed on the user's behalf.
 
     It can never reach a directory: the candidate is matched against ``loose_files``'s own entries,
     which are files. ``remove_incomplete`` owns the directories and refuses a non-directory, so the

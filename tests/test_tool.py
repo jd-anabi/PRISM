@@ -3602,8 +3602,7 @@ def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_d
 def test_artifacts_sweep_offers_a_loose_file_and_never_a_records_payload(browse_store, capsys):
     """The tidy-up's first category, the loose file. ``ArtifactStore._entries`` iterates DIRECTORIES
     only, so a file sitting directly inside a kind directory is invisible to every listing in both
-    front ends -- and the owner's machine has two of them, the PNGs an older build's fdt run left in
-    ``Artifacts/fdt``. They
+    front ends; an older FDT run once left two PNGs that way, in ``Artifacts/fdt``. They
     carry no record of which cell or which settings produced them and no command could reach them.
 
     The complement matters as much as the category: ``loose_files`` reads the kind directory's own
