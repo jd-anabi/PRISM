@@ -4,18 +4,21 @@
 (which now delegates here with kind="sin" -- its numerical behaviour is pinned by a golden test) to
 four carrier shapes. Every kind follows the same recipe: build F_dim on the dimensional time grid,
 then nondimensionalize as F_nd = (F_dim - f_offset) / f_scale with the identical rescale logic
-(f_scale/f_offset from the rescale block if present, else Hopf-style f_scale = x_scale / t_scale).
+(f_scale/f_offset from the rescale block if present, else Hopf-style f_scale = x_scale / t_scale). An
+index that names T and no f_scale -- a tier-1 box's inferred index -- raises RuntimeError instead
+(``require_simulator_index``).
 
 ``build_user_force_tensor`` assembles the per-variable force tensor for a user model: ONE row per
 state variable, zeros where unforced -- the UserModel adds force[:, j, t] to variable j.
 
-Kept light on purpose (torch/numpy/helpers only, no sbi import) so the GUI and headless tests can
-import it without pulling the SBI stack.
+Kept light on purpose (torch, numpy, the helpers and ``core.SBI.derived``, which imports only torch;
+no sbi import) so the GUI and headless tests can import it without pulling the SBI stack.
 """
 import numpy as np
 import torch
 
 from core.Helpers import helpers
+from core.SBI import derived as _derived
 
 FORCE_KINDS = ("sin", "step", "triangular", "exponential")
 
@@ -86,6 +89,23 @@ def n_force_channels(model: str, forcing_idx: dict | None = None, n_vars: int | 
     return n
 
 
+def require_simulator_index(rescale_idx: dict) -> None:
+    """Raise RuntimeError when ``rescale_idx`` names T and no f_scale: a tier-1 box's INFERRED index.
+
+    Temperature stands in the force scale's column there, so a builder reading that index would find
+    no f_scale and drive at the Hopf-style x_scale / t_scale -- a wrong amplitude, and no error. The
+    caller has passed the wrong index, a programming error, so this is a plain RuntimeError and never
+    a refusal, raised before anything is built or simulated. An index that names f_scale, or neither
+    name (Hopf-style), passes.
+    """
+    if _derived.uses_derived_f_scale(rescale_idx):
+        raise RuntimeError(
+            f"This rescale index names 'T' and no 'f_scale' ({dict(rescale_idx)}): temperature stands in "
+            f"the force scale's column, and the force scale must be derived as "
+            f"f_scale = N * beta * k_B * T / x_scale before a drive is built. Pass the simulator's rescale "
+            f"block and index (core.SBI.derived.for_simulation), not the inferred ones.")
+
+
 def build_nondim_force_tensor(
     forcing_params: torch.Tensor,
     t_nd: torch.Tensor,
@@ -113,14 +133,17 @@ def build_nondim_force_tensor(
                         looked up with ``name_suffix`` appended (user models name theirs amp_<var> etc.).
                         For kind="sin" with no suffix, an "amp_y" entry builds the legacy second (Hopf)
                         channel sharing freq/phase/offset.
-    :param rescale_idx: maps rescale param names to columns of rescale_params. If "f_scale" is absent,
-                        f_scale = x_scale / t_scale and f_offset = 0 (Hopf-style nondim).
+    :param rescale_idx: maps rescale param names to columns of rescale_params. If it names neither
+                        "f_scale" nor "T", f_scale = x_scale / t_scale and f_offset = 0 (Hopf-style
+                        nondim). One that names "T" and no "f_scale" raises RuntimeError
+                        (``require_simulator_index``).
     :param kind: one of FORCE_KINDS.
     :param exp_sign: +1.0 or -1.0; the exponential's grow/decay sign (spec metadata, not a parameter).
     :param name_suffix: appended to every forcing param name before the forcing_idx lookup.
     :return: non-dimensional force tensor, shape (batch, n_channels, T); n_channels = 2 only for the
              legacy un-suffixed sin + "amp_y" case, else 1.
     """
+    require_simulator_index(rescale_idx)
     if kind not in FORCE_KINDS:
         raise ValueError(f"Unknown forcing kind '{kind}'. Valid: {FORCE_KINDS}.")
 
@@ -229,10 +252,11 @@ def build_nondim_sin_force_tensor(
                         and offset with the x-channel but using its own amplitude.
     :param rescale_idx: Maps rescale param names to column indices in rescale_params,
                         e.g. {"t_scale": 3, "t_offset": 2, "f_scale": 7, "f_offset": 6}.
-                        If "f_scale" is absent (Hopf-style nondim), f_scale is derived
-                        as x_scale / t_scale and f_offset is taken as 0 — both follow
-                        algebraically from F_ND = F_dim / (l * omega_0) with l = x_scale
-                        and 1/omega_0 = t_scale.
+                        If it names neither "f_scale" nor "T" (Hopf-style nondim), f_scale
+                        is derived as x_scale / t_scale and f_offset is taken as 0 — both
+                        follow algebraically from F_ND = F_dim / (l * omega_0) with
+                        l = x_scale and 1/omega_0 = t_scale. One that names "T" and no
+                        "f_scale" raises RuntimeError (``require_simulator_index``).
     :return: Non-dimensional force tensor, shape (batch, n_force_channels, T) where
              n_force_channels = 2 if "amp_y" in forcing_idx else 1.
     """

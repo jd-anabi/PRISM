@@ -236,7 +236,7 @@ def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
     """``(features (m, n_feat) float64, x_forced, x_spont)`` at one point. The fine grid is re-derived
     from ``res`` because perturbing t_scale changes the subsample factor and the grid length."""
     from core.config import CHUNK_LEN
-    from core.SBI import pipeline
+    from core.SBI import derived, pipeline
     dtype, device = cfg.hw.dtype, cfg.hw.device
     t_scale = float(res[cfg.rescale_idx["t_scale"]])
     subs = max(1, round((cfg.dt_exp / t_scale) / cfg.dt_nd_min))
@@ -245,9 +245,14 @@ def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
     n_segs = max(1, math.ceil(n_fine / CHUNK_LEN))
     p = nd.unsqueeze(0).expand(m, -1).contiguous()
     rv = res.unsqueeze(0).expand(m, -1).contiguous()
+    # The drive gets the simulator's block: on a tier-1 box, the force scale this point's temperature
+    # implies. t_scale, x_scale and x_offset keep being read from `res`, which the substitution leaves
+    # alone, and the finite-difference arms stay in inferred coordinates, so d/dT is taken through the
+    # derived force scale.
+    rv_sim, sim_idx = derived.for_simulation(cfg, p, rv)
     fv = force.unsqueeze(0)
-    forcef = pipeline.build_nondim_sin_force_tensor(fv.expand(m, -1), t_fine, rv,
-                                                    cfg.forcing_idx, cfg.rescale_idx)
+    forcef = pipeline.build_nondim_sin_force_tensor(fv.expand(m, -1), t_fine, rv_sim,
+                                                    cfg.forcing_idx, sim_idx)
 
     def sim(f):
         return pipeline.gen_obs(model=cfg.model, params=p, t=t_fine,
@@ -484,7 +489,7 @@ def _jacobian_features(ctx, pvec, rescale_vec, m, crn):
     """``(features (m, n_feat) float64, x_for_validity, x_spont)`` at one point, in the mode's own
     feature set. The grid is re-derived from ``rescale_vec`` (perturbing t_scale changes it)."""
     from core.config import CHUNK_LEN
-    from core.SBI import chi as chi_mod, pipeline
+    from core.SBI import chi as chi_mod, derived, pipeline
     cfg = ctx.cfg
     dtype, device = cfg.hw.dtype, cfg.hw.device
     t_scale = float(rescale_vec[cfg.rescale_idx["t_scale"]])
@@ -494,6 +499,9 @@ def _jacobian_features(ctx, pvec, rescale_vec, m, crn):
     n_segs = max(1, math.ceil(n_fine / CHUNK_LEN))
     p = pvec.unsqueeze(0).expand(m, -1).contiguous()
     rv = rescale_vec.unsqueeze(0).expand(m, -1).contiguous()
+    # The probes and the drive get the simulator's block, as in _laplace_raw: on a tier-1 box the
+    # derived force scale, with d/dT taken through it; x_scale and x_offset still come from rescale_vec.
+    rv_sim, sim_idx = derived.for_simulation(cfg, p, rv)
     inits_m = cfg.inits_tensor.expand(m, -1).contiguous()
 
     def sim(f):
@@ -523,8 +531,8 @@ def _jacobian_features(ctx, pvec, rescale_vec, m, crn):
             # ALL FOUR NAMED, NOTHING RE-SLICED: gen_chi_raw returns (chi, u, logcyc, valid), and a
             # `[:2]` here once bound `logcyc_v = u`.
             chi_v, _u_v, _logcyc_v, valid_v = pipeline.gen_chi_raw(
-                model=cfg.model, params_nd=p, rescale=rv, x_spont_dim=xs_d.to(dtype),
-                t_fine=t_fine, inits=inits_m, rescale_idx=cfg.rescale_idx, n_segs=n_segs,
+                model=cfg.model, params_nd=p, rescale=rv_sim, x_spont_dim=xs_d.to(dtype),
+                t_fine=t_fine, inits=inits_m, rescale_idx=sim_idx, n_segs=n_segs,
                 steady_idx=cfg.steady_idx, subsample=subs, N_points=ctx.n_obs, dt_exp=cfg.dt_exp,
                 multipliers=ctx.mults, f0_nd=cfg.chi_f0, state_dep_drift=cfg.state_dep_drift,
                 # Ceiling ON, filter OFF -- see the note at the same call in SBI/decorrelate.feats.
@@ -540,8 +548,8 @@ def _jacobian_features(ctx, pvec, rescale_vec, m, crn):
             feats = np.concatenate([spont[:, ctx.keep_idx], chi_block.double().cpu().numpy()], axis=1)
             return feats, xs_d, xs_d
 
-        force = pipeline.build_nondim_sin_force_tensor(ctx.forcing_gt.expand(m, -1), t_fine, rv,
-                                                        cfg.forcing_idx, cfg.rescale_idx)
+        force = pipeline.build_nondim_sin_force_tensor(ctx.forcing_gt.expand(m, -1), t_fine, rv_sim,
+                                                        cfg.forcing_idx, sim_idx)
         if crn:
             torch.manual_seed(_SF)
         xf = sim(force)

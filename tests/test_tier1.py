@@ -6,15 +6,19 @@ network is trained on T, and every simulation runs at the force scale T implies,
     f_scale = n * beta * k_B * T / x_scale,
 
 which is 46.99 pN at the tier-1 cell (n=50, beta=14.1, x_scale=62.14 nm, T=300 K, with k_B in
-pN*nm/K). A drive builder handed the inferred index finds no ``f_scale`` in it and falls back to
-``x_scale / t_scale`` -- 16.66 at the same cell -- without a word, so a test that sees 16.66 has found
-that fallback. The retrain trains on this box, so every place a simulation is set up from a draw is
-pinned here: the training rows, the calibration set, the Fisher operating points, a simulated
-observation and its predictive checks, a narrowing round, and loading a prior built on the master box.
+pN*nm/K). The inferred index names ``T`` and no ``f_scale``, and a drive builder handed it raises
+``RuntimeError`` rather than build a drive; a Hopf-style index, which names neither, still falls back
+to ``x_scale / t_scale`` -- 16.66 at the same cell -- so a drive recorded without a declared force scale
+means a caller handed a builder neither name. The retrain trains on this box, so every place a
+simulation is set up from a draw is pinned here: the training rows, the calibration set, the Fisher
+operating points, a simulated observation and its predictive checks, the two simulating
+identifiability diagnostics, the Simulate panel's live runner, a narrowing round, and loading a prior
+built on the master box.
 
-Cheap by design: every fast test replaces ``pipeline.gen_obs`` with ``stand_in_gen_obs`` and records
-the force scale each drive is divided by with ``force_scale_spy``; recordings are one to two seconds
-and batches are two of four rows. One slow test runs the real ``smoke`` chain on the tier-1 box.
+Cheap by design: every fast test but the live runner's replaces ``pipeline.gen_obs`` with
+``stand_in_gen_obs`` and records the force scale each drive is divided by with ``force_scale_spy``;
+recordings are one to two seconds and batches are two of four rows. The live runner solves five
+milliseconds for real. One slow test runs the real ``smoke`` chain on the tier-1 box.
 """
 import re
 import warnings
@@ -65,6 +69,38 @@ def derived_force_scale(cfg) -> float:
     x_scale in cell force units, read by name. 46.99 at the tier-1 cell."""
     nd, rescale = cfg.params_dict, cfg.rescale_params
     return nd["n"][0] * nd["beta"][0] * cfg.k_b_cell * rescale["T"][0] / rescale["x_scale"][0]
+
+
+def twin_cfg(cfg):
+    """The master-box twin of a tier-1 config with its truth loaded: the same cell, with the force
+    scale the tier-1 relation derives declared as f_scale."""
+    twin = _nad_cfg(chi_mode=cfg.chi_mode)
+    twin.inject_ground_truth(
+        dict(cfg.inits_dict), {k: v for k, (v, _) in cfg.params_dict.items()},
+        {"x_scale": cfg.rescale_params["x_scale"][0], "t_scale": cfg.rescale_params["t_scale"][0],
+         "f_scale": derived_force_scale(cfg)},
+        {k: v for k, (v, _) in cfg.force_params_dict.items()})
+    return twin
+
+
+def _res(c):
+    """``c``'s truth rescale block, (n_rescale,), in the box's own order."""
+    return torch.tensor([v for v, _ in c.rescale_params.values()], dtype=c.hw.dtype)
+
+
+def _jac_ctx(cfg, n_obs):
+    """The identifiability jacobian's context for ``cfg``, built as ``identifiability_jacobian``
+    builds it: the probe multipliers in chi mode, the cell's own drive otherwise."""
+    from core import forcing
+    from core.diagnostics import feature_sets, identifiability
+    from core.SBI import chi
+    return identifiability._JacCtx(
+        cfg=cfg, n_obs=n_obs,
+        mults=chi.chi_multipliers_for(cfg) if cfg.chi_mode else None,
+        forcing_gt=(None if cfg.chi_mode else torch.tensor(
+            [[v for v, _ in cfg.force_params_dict.values()]], dtype=cfg.hw.dtype)),
+        keep_idx=feature_sets.summary_keep_idx(), feat_labels=feature_sets.feature_labels(cfg),
+        n_force_ch=forcing.n_force_channels(cfg.model, cfg.forcing_idx, cfg.inits_tensor.shape[-1]))
 
 
 def _narrow_prior(cfg, rel: float = 1e-4):
@@ -194,12 +230,14 @@ def test_the_calibration_set_simulates_at_the_derived_force_scale(monkeypatch):
     _assert_every_drive_used_the_derived_scale(spy, derived_force_scale(cfg))
 
 
-def test_the_fisher_operating_points_simulate_at_the_derived_force_scale(monkeypatch):
+@pytest.mark.parametrize("chi", [True, False])
+def test_the_fisher_operating_points_simulate_at_the_derived_force_scale(monkeypatch, chi):
     """The rotation's Fisher is built over the simulated experiment: its anchor is driven at the
     truth's derived force scale, and its central-difference arms, which move n, beta, x_scale and T by
-    a latent step, stay near it -- never at the fallback, and never at the temperature itself."""
+    a latent step, stay near it -- never at the fallback, and never at the temperature itself. In chi
+    mode every probe is such a drive, the anchor's first; in forced mode, the cell's own drive."""
     from core.SBI import decorrelate
-    cfg = with_truth(tier1_cfg(chi=False))
+    cfg = with_truth(tier1_cfg(chi=chi))
     cfg.T_obs = 1000.0                                      # cell units: 1 s at dt_exp = 1 ms
     monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
     spy = force_scale_spy(monkeypatch)
@@ -212,28 +250,39 @@ def test_the_fisher_operating_points_simulate_at_the_derived_force_scale(monkeyp
     assert bool(((every > 0.5 * f) & (every < 2.0 * f)).all())
 
 
-def test_a_simulated_observation_and_its_predictive_checks_use_the_derived_force_scale(store, monkeypatch):
-    """A simulated observation is driven at the truth's derived force scale, and so is every
-    simulation the inference runs from its posterior draws: the predictive-check bins and the eye
-    test's two central trajectories. The posterior is a stand-in whose every draw is the truth."""
-    cfg = with_truth(tier1_cfg(chi=False))
+@pytest.mark.parametrize("chi", [True, False])
+def test_a_simulated_observation_and_its_predictive_checks_use_the_derived_force_scale(store, monkeypatch,
+                                                                                         chi):
+    """A simulated observation is driven at the truth's derived force scale, and so is every drive
+    the inference builds from its posterior draws: the predictive-check bin's, and in forced mode the
+    eye test's two central trajectories (in chi mode those run undriven, and the bin's drives are its
+    probes). The posterior is a stand-in whose every draw is the truth. The only warning either mode may
+    raise is a chi probe set's masked-probe count."""
+    cfg = with_truth(tier1_cfg(chi=chi))
     cfg.T_obs = 1000.0                                      # cell units: 1 s at dt_exp = 1 ms
     monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
     spy = force_scale_spy(monkeypatch)
     f = derived_force_scale(cfg)
-    obs = orchestrator.generate_observations(cfg, fig_sink=_close, name="tier1_obs")
-    _assert_every_drive_used_the_derived_scale(spy, f, rtol=1e-5)
-    spy.clear()
+    with _only_masked_probe_warnings() as caught:
+        obs = orchestrator.generate_observations(cfg, fig_sink=_close, name="tier1_obs")
+        _assert_every_drive_used_the_derived_scale(spy, f, rtol=1e-5)
+        spy.clear()
 
-    gt = cfg.ground_truth_tensor
-    post = SimpleNamespace(
-        posterior=SimpleNamespace(x_obs_digest=None, truncation=None, T=None,
-                                  sample=lambda shape, x=None, **k: gt.expand(shape[0], -1).clone()),
-        manifest=SimpleNamespace(body={"mode": obs.mode, "conditioning": {"width": obs.width}}),
-        id="post", name="", accepted=[])
-    monkeypatch.setattr(orchestrator, "pairplot", lambda *a, **k: (plt.figure(), None))
-    monkeypatch.setattr(orchestrator, "_emit_overlay_figures", lambda *a, **k: None)
-    orchestrator.infer_and_visualize(cfg, post, obs, n_samples=4, fig_sink=_close)
+        gt = cfg.ground_truth_tensor
+        post = SimpleNamespace(
+            posterior=SimpleNamespace(x_obs_digest=None, truncation=None, T=None,
+                                      sample=lambda shape, x=None, **k: gt.expand(shape[0], -1).clone()),
+            manifest=SimpleNamespace(body={"mode": obs.mode, "conditioning": {"width": obs.width}}),
+            id="post", name="", accepted=[])
+        monkeypatch.setattr(orchestrator, "pairplot", lambda *a, **k: (plt.figure(), None))
+        monkeypatch.setattr(orchestrator, "_emit_overlay_figures", lambda *a, **k: None)
+        orchestrator.infer_and_visualize(cfg, post, obs, n_samples=4, fig_sink=_close)
+    assert chi or not caught, [str(w.message) for w in caught]
+    # Four draws fill one predictive-check bin (config.PPC_BIN_SIZE is 50). Forced: that bin's one
+    # drive plus one drive each for the eye test's mean and median trajectories, 1 + 2 = 3. Chi: that
+    # bin's probe set, one drive per probe at the observation's frequencies (cfg.chi_n_freqs is 6), and
+    # the eye test's trajectories run undriven, 1 * 6 + 0 = 6.
+    assert len(spy) == (6 if chi else 3), [e["index"] for e in spy]
     _assert_every_drive_used_the_derived_scale(spy, f, rtol=1e-5)
 
 
@@ -298,6 +347,99 @@ def test_a_prior_built_on_the_master_box_loads_under_the_tier1_box(store):
     draws = lp.prior.sample((64,))
     t_col = draws[:, len(cfg.params_dict) + cfg.rescale_idx["T"]]
     assert tuple(draws.shape) == (64, 13) and bool(((t_col >= 280.0) & (t_col <= 310.0)).all())
+
+
+def test_for_simulation_derives_the_force_scale_on_a_tier1_box_and_passes_every_other_box_through():
+    """On the tier-1 box the simulator's block carries the derived force scale in T's column, under an
+    index that names it f_scale, and the inferred block it came from is left as it was. On the master
+    box both come back as they went in."""
+    from core.SBI import derived
+    cfg = with_truth(tier1_cfg(chi=False))
+    res = _res(cfg).unsqueeze(0)
+    sim, idx = derived.for_simulation(cfg, cfg.params_tensor, res)
+    assert idx == {"x_scale": 0, "t_scale": 1, "f_scale": 2}
+    assert float(sim[0, 2]) == pytest.approx(derived_force_scale(cfg), rel=1e-5)
+    assert torch.equal(sim[:, :2], res[:, :2]) and float(res[0, 2]) == 300.0   # the input is not written
+    master = _nad_cfg()
+    cli.load_and_validate_gt(master, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
+    res_m = _res(master).unsqueeze(0)
+    sim_m, idx_m = derived.for_simulation(master, master.params_tensor, res_m)
+    assert sim_m is res_m and idx_m == master.rescale_idx
+
+
+def test_a_force_builder_handed_a_temperature_index_raises_before_anything_is_simulated(monkeypatch):
+    """An index that names T and no f_scale is a programming error: both builders raise RuntimeError
+    (never a refusal), naming the index and the relation, before a simulation is spent. A Hopf-style
+    index, which names neither, keeps its x_scale / t_scale form."""
+    from core import forcing
+    from core.refusals import Refusal
+    from core.SBI import chi_probes
+    idx = {"x_scale": 0, "t_scale": 1, "T": 2}
+    fp, fidx = torch.tensor([[1.0, 0.05, 0.0, 0.0]]), {"amp": 0, "freq": 1, "phase": 2, "offset": 3}
+    t, res = torch.linspace(0.0, 1.0, 16), torch.tensor([[62.14, 3.73, 300.0]])
+    relation = r"f_scale = N \* beta \* k_B \* T / x_scale"
+    with pytest.raises(RuntimeError, match=relation) as e:
+        forcing.build_nondim_sin_force_tensor(fp, t, res, fidx, idx)
+    assert "'T'" in str(e.value) and not isinstance(e.value, Refusal)
+    monkeypatch.setattr(pipeline, "gen_obs", lambda *a, **k: pytest.fail("a simulation ran"))
+    with pytest.raises(RuntimeError, match=relation):
+        chi_probes.gen_chi_raw("NADROWSKI", torch.zeros(1, 10), res, torch.zeros(1, 64), t,
+                               torch.zeros(1, 3), idx, 1, 0, 1, 64, 1.0, torch.tensor([0.1]), 0.15)
+    hopf = forcing.build_nondim_sin_force_tensor(fp, t, res[:, :2], fidx, {"x_scale": 0, "t_scale": 1})
+    assert tuple(hopf.shape) == (1, 1, 16)                  # a Hopf-style index keeps its fallback
+
+
+def test_laplace_simulates_a_tier1_box_at_its_derived_force_scale(monkeypatch):
+    """The Laplace diagnostic's features at a tier-1 point equal those of the master-box twin that
+    declares the derived force scale, and every drive of the tier-1 call is built at that scale."""
+    import numpy as np
+    from core.diagnostics import identifiability
+    cfg = with_truth(tier1_cfg(chi=False))
+    twin = twin_cfg(cfg)
+    monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
+    spy = force_scale_spy(monkeypatch)
+    force = torch.tensor([v for v, _ in cfg.force_params_dict.values()], dtype=cfg.hw.dtype)
+    got, _, _ = identifiability._laplace_raw(cfg, cfg.params_tensor[0], _res(cfg), force, 4, True, 1000)
+    n_tier1 = len(spy)
+    want, _, _ = identifiability._laplace_raw(twin, twin.params_tensor[0], _res(twin), force, 4, True, 1000)
+    assert np.allclose(got, want, rtol=1e-4, atol=1e-8, equal_nan=True)
+    _assert_every_drive_used_the_derived_scale(spy[:n_tier1], derived_force_scale(cfg), rtol=1e-5)
+
+
+@pytest.mark.parametrize("chi", [True, False])
+def test_jacobian_simulates_a_tier1_box_at_its_derived_force_scale(monkeypatch, chi):
+    """The jacobian diagnostic's features at the tier-1 truth equal those of the master-box twin that
+    declares the derived force scale -- every probe in chi mode, the cell's drive in forced mode -- and
+    every drive of the tier-1 call is built at that scale."""
+    import numpy as np
+    from core.diagnostics import identifiability
+    cfg = with_truth(tier1_cfg(chi=chi))
+    twin = twin_cfg(cfg)
+    monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
+    spy = force_scale_spy(monkeypatch)
+    got, _, _ = identifiability._jacobian_features(_jac_ctx(cfg, 1000), cfg.params_tensor[0], _res(cfg),
+                                                   4, True)
+    n_tier1 = len(spy)
+    want, _, _ = identifiability._jacobian_features(_jac_ctx(twin, 1000), twin.params_tensor[0], _res(twin),
+                                                    4, True)
+    assert np.allclose(got, want, rtol=1e-4, atol=1e-8, equal_nan=True)
+    _assert_every_drive_used_the_derived_scale(spy[:n_tier1], derived_force_scale(cfg), rtol=1e-5)
+
+
+def test_the_live_simulation_derives_the_force_scale_on_a_tier1_box(monkeypatch):
+    """The Simulate panel's live runner plans with the simulator's block and index, keeps reading the
+    length scale from the inferred block, and builds every frame's drive at the derived force scale."""
+    from core.gui.panels import simulate_runner
+    cfg = with_truth(tier1_cfg(chi=False))
+    f = derived_force_scale(cfg)
+    plan = simulate_runner.plan_stream(cfg, 0.005)
+    assert plan.rescale_idx == {"x_scale": 0, "t_scale": 1, "f_scale": 2}
+    assert float(plan.rescale_gt[0, 2]) == pytest.approx(f, rel=1e-5)
+    assert plan.x_scale == pytest.approx(62.14)
+    spy, chunks = force_scale_spy(monkeypatch), []
+    simulate_runner.run_simulation_stream(cfg, 0.005, frame_steps=500, fps=0.0, emit_chunk=chunks.append)
+    assert chunks
+    _assert_every_drive_used_the_derived_scale(spy, f, rtol=1e-5)
 
 
 @pytest.mark.slow

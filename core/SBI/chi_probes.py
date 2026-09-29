@@ -66,6 +66,8 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
 
     :param params_nd: (B, n_nd) ND params (the inferred ND block).
     :param rescale: (B, n_rescale) PHYSICAL rescale params (x_scale/t_scale/f_scale...).
+    :param rescale_idx: the SIMULATOR's rescale index (``core.SBI.derived.for_simulation``). One that
+                        names T and no f_scale raises RuntimeError before anything is simulated.
     :param x_spont_dim: (B, N_points) physical spontaneous trace -> Omega_0 per sample.
     :param t_fine: (T_full,) fine ND time grid the drive/sim use.
     :param inits: (B, n_vars) initial conditions.
@@ -102,6 +104,7 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
     :return: (chi (B,K) complex, u (B,K), logcyc (B,K), valid (B,K) bool). Use
              :func:`gen_chi_block` for the padded conditioning block.
     """
+    _forcing.require_simulator_index(rescale_idx)
     max_cycles = config.CHI_MAX_CYCLES if max_cycles is None else float(max_cycles)
     B = params_nd.shape[0]
     f_peak = chi.peak_freq(x_spont_dim, dt_exp)                         # (B,) cell freq units
@@ -109,7 +112,7 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
     x_offset = rescale[:, rescale_idx["x_offset"]].unsqueeze(1) if "x_offset" in rescale_idx else 0.0
     if "f_scale" in rescale_idx:
         f_scale_eff = rescale[:, rescale_idx["f_scale"]]                # (B,)
-    else:  # Hopf-style: build_nondim uses f_scale = x_scale / t_scale
+    else:  # Hopf-style (neither f_scale nor T; T alone raised above): the builder uses x_scale / t_scale
         f_scale_eff = rescale[:, rescale_idx["x_scale"]] / rescale[:, rescale_idx["t_scale"]]
     amp_dim = f0_nd * f_scale_eff                                       # (B,) dimensional; ND drive == f0_nd
     T_obs = N_points * dt_exp

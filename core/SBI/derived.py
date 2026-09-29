@@ -26,17 +26,18 @@ HOW IT IS WIRED, and the shape was chosen to keep the prior a product of INDEPEN
 parameter is ``T``, not ``f_scale``: the bounds file declares ``T in (lo, hi)`` in the column f_scale
 used to occupy, so the prior keeps a proper 13-D density (making f_scale a deterministic function of
 the other twelve would make that density singular, and SBC/TARP/NPE all need it non-degenerate).
-``f_scale`` is then computed from theta at the one seam where theta is split into (nd, rescale) for
-simulation, and it lands in the SAME COLUMN -- so every downstream reader of
+``f_scale`` is then computed from theta wherever theta is split into (nd, rescale) for simulation,
+and it lands in the SAME COLUMN -- so every downstream reader of
 ``rescale_idx["f_scale"]`` is untouched.
 
 ⚠ TWO HAZARDS, both real:
   1. The derived f_scale reaches ~1e4 pN, and the chi drive amplitude is ``CHI_F0 * f_scale``. Any
      feasibility guard must read the DERIVED value. This is a real change to the training
      distribution, not a relabelling.
-  2. T's posterior will be its prior, because the data says nothing on that axis. Its SBC histogram
-     will be flat and VACUOUS. Report T as a fixed input, never as an inferred quantity, or you are
-     quoting a credible interval on something you assumed.
+  2. T enters the simulation only through the derived force scale. In spontaneous mode it has no
+     effect at all; in chi mode it scales every probe's |chi|, so over its narrow prior it may be
+     weakly informed. It stays in the calibration verdict and the joint coverage test like every other
+     inferred parameter, and it is reported as an assumed input, not as a measured one.
 """
 import torch
 
@@ -103,6 +104,27 @@ def to_sim_rescale(nd: torch.Tensor, rescale: torch.Tensor, rescale_idx: dict,
     out = rescale.clone()
     out[:, rescale_idx[TEMPERATURE_PARAM]] = f_scale.to(out.dtype)
     return out
+
+
+def for_simulation(cfg, params_nd: torch.Tensor,
+                   rescale: torch.Tensor) -> tuple[torch.Tensor, dict[str, int]]:
+    """The rescale block and index to simulate with, from the inferred ones on ``cfg``'s box.
+
+    On a tier-1 box: a copy of ``rescale`` with the force scale derived in T's column, and the
+    simulator's index, which names that column f_scale. On every other box: ``rescale`` itself and a
+    copy of the inferred index. ``rescale`` is never written.
+
+    The two go to a force builder or ``gen_chi_raw`` together; both raise RuntimeError on an index
+    that names T and no f_scale. The simulating identifiability diagnostics and the Simulate panel's
+    live runner call this. Training, the observation builder, the posterior predictive check and the
+    Fisher rotation make the same substitution inline, with ``to_sim_rescale`` and
+    ``cfg.sim_rescale_idx``.
+
+    :param params_nd: (B, n_nd) physical ND parameters.
+    :param rescale: (B, n_rescale) physical rescale parameters in the box's inferred order.
+    :return: ``(rescale block, rescale index)`` for the simulator.
+    """
+    return to_sim_rescale(params_nd, rescale, cfg.rescale_idx, *cfg.tier1_args), cfg.sim_rescale_idx
 
 
 def implied_temperature(nd: torch.Tensor, rescale: torch.Tensor, rescale_idx: dict,

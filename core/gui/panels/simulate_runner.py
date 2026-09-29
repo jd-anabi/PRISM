@@ -26,7 +26,7 @@ import torch
 
 from core import cli, forcing, registry
 from core.refusals import Refusal
-from core.SBI import pipeline
+from core.SBI import derived, pipeline
 from core.Solvers import sdeint
 from core.config import BOUNDS_PATH, DT_EXP_S, VALID_LABELS, VALID_MODELS, cpu_device
 
@@ -95,9 +95,11 @@ class StreamPlan:
     x_scale: float
     x_offset: float
     forcing_gt: torch.Tensor        # (1, n_forcing)
-    rescale_gt: torch.Tensor        # (1, n_rescale)
+    # The simulator's rescale block, (1, n_rescale): a tier-1 box carries its derived force scale in
+    # T's column. x_scale and x_offset above are read from the inferred block.
+    rescale_gt: torch.Tensor
     forcing_idx: dict
-    rescale_idx: dict
+    rescale_idx: dict               # the simulator's rescale index: on a tier-1 box, T's column is f_scale
     params_tensor: torch.Tensor     # (1, n_params)
     inits_tensor: torch.Tensor      # (1, n_vars)
     user_spec: object = None        # registry.ModelSpec for user-defined models, else None
@@ -137,11 +139,15 @@ def plan_stream(cfg, t_obs_s: float) -> StreamPlan:
     user_spec = spec if (spec is not None and spec.is_user_model) else None
     n_channels = forcing.n_force_channels(cfg.model, forcing_idx, cfg.inits_tensor.shape[1])
 
+    # The drive is built from the simulator's block and index. Only a user-added sibling bounds file
+    # brings a tier-1 box here; if it has a Forcing section, the drive runs at the derived force scale.
+    rescale_sim, idx_sim = derived.for_simulation(cfg, cfg.params_tensor, rescale_gt)
+
     return StreamPlan(
         dt_nd=dt_nd_min, subsample_factor=subsample_factor, steady_steps=steady_steps, n_obs=n_obs,
         total_steps=total_steps, n_channels=n_channels,
         state_dep_drift=cfg.state_dep_drift, model=cfg.model, x_scale=x_scale, x_offset=x_offset,
-        forcing_gt=forcing_gt, rescale_gt=rescale_gt, forcing_idx=forcing_idx, rescale_idx=rescale_idx,
+        forcing_gt=forcing_gt, rescale_gt=rescale_sim, forcing_idx=forcing_idx, rescale_idx=idx_sim,
         params_tensor=cfg.params_tensor, inits_tensor=cfg.inits_tensor, user_spec=user_spec,
     )
 
