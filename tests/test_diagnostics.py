@@ -1752,7 +1752,9 @@ def test_the_recording_geometry_agrees_with_the_training_batch_formula():
         assert tuple(probe_math.recording_geometry(cfg, t_obs_s, t_scale)) == want, (t_obs_s, t_scale)
     assert probe_math.recording_geometry(cfg, 5.0, 3.73) == probe_math.Geometry(
         n_obs=5000, n_fine=59000, subsample=11)
-    # the truncation is training's too, and is not corrected: one second at 3.73 holds 999 samples
+    # the truncation is training's too, and is not corrected: one second holds 999 samples at the Python
+    # float 3.73 (1000 at float32(3.73), the precision training's schedule holds); the loop above checks
+    # that the helper and the batch loop agree at both
     assert probe_math.recording_geometry(cfg, 1.0, 3.73).n_obs == 999
 
 

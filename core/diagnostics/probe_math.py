@@ -40,7 +40,9 @@ def recording_geometry(cfg, t_obs_s: float, t_scale: float) -> Geometry:
     """The geometry of a ``t_obs_s``-second recording at ``t_scale``, computed exactly as the training
     batch loop computes a batch's: the length in cell time units over t_scale, the recording step over
     t_scale, the sample count TRUNCATED from their ratio. No clipping and no correction of that
-    truncation -- at t_scale 3.73 one second holds 999 samples, in training as here."""
+    truncation, so the count depends on t_scale's precision: one second holds 999 samples at the Python
+    float 3.73 but 1000 at float32(3.73), the precision training's schedule draws its t_scales in.
+    Handed the same t_scale, this helper and the batch loop agree."""
     t_cell = t_obs_s * cfg.get_unit_conversion_factor("s")
     t_nd = t_cell / t_scale
     dt_nd = cfg.dt_exp / t_scale
