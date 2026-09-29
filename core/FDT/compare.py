@@ -16,12 +16,14 @@ three steps -- load and check the records, interpolate onto a common grid, write
 differs only in what it draws. The modes register themselves in ``_DRAWERS``.
 
 REFUSED BEFORE THE RECORD OPENS. The record is progressive: it exists from the moment its writer is
-entered, and an exception after that KEEPS it, marked unfinished. So everything a comparison can
-refuse from what it was given is refused before ``open_record``: the mode, its settings, the arity
-and each record by ``compare`` and ``load_records``, and what the records HOLD -- whether their
-curves share a band, the constant a record was normalised with, a sweep's operating points and where
-the slice falls among them -- by the mode's pre-flight (``_PREFLIGHT``), which reads them once they
-load. A refused comparison therefore leaves nothing on disk and announces no record. Each pre-flight
+entered, and an exception after that KEEPS it, marked unfinished -- except a refusal raised before
+its first figure or payload, which removes it, though only after the record was announced. So
+everything a comparison can refuse from what it was given is refused before ``open_record``: the
+mode, its settings, the arity and each record by ``compare`` and ``load_records``, and what the
+records HOLD -- whether their curves share a band, the constant a record was normalised with, a
+sweep's operating points and where the slice falls among them -- by the mode's pre-flight
+(``_PREFLIGHT``), which reads them once they load. A refused comparison therefore leaves nothing on
+disk and announces no record. Each pre-flight
 check is a helper its drawer calls again as a backstop, so a refusal reads the same whichever route
 raises it. An interrupted comparison keeps its record, unfinished; nothing resumes it, and
 re-running draws a new one.

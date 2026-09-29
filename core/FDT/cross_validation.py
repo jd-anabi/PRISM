@@ -310,9 +310,10 @@ def run_fdt_param_sweep(
     probe blank. ``body.points`` is refreshed after every point, so the listings follow the counts
     while the sweep runs. Some points failed is a completed record carrying the count. All points
     failed is a ``Refusal`` naming the grid and the cell (field ``s_grid`` or ``t_grid``), raised
-    AFTER the record's final refresh and from inside the entered writer, so the folder and the
-    spectra it does hold stay on disk, marked unfinished. A finished sweep fills ``results`` (one
-    entry per landed point, ``_sweep_results``) and ``offgrid`` over the points that landed.
+    AFTER the record's final refresh, from inside the entered writer and after data.h5 was handed
+    out, so the folder and the spectra it does hold stay on disk, marked unfinished. A finished sweep
+    fills ``results`` (one entry per landed point, ``_sweep_results``) and ``offgrid`` over the points
+    that landed.
 
     DELIBERATELY NOT an atomic write, unlike the prior/posterior artifacts, and the reason is that
     the two situations are not alike. An atomic write buys exactly one thing: an existing good file is

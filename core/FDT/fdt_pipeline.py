@@ -369,7 +369,8 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
 
     # A spontaneous simulation that diverged is refused HERE, before the peak search (the helper says
     # why), and after the trajectory figure, which is the picture that shows the divergence and which
-    # the folder keeps: a refused run keeps its folder, marked unfinished.
+    # the folder keeps: a run refused after a figure has been handed out keeps its folder, marked
+    # unfinished.
     _refuse_a_diverged_spectrum(cfg, freqs_psd, G)
 
     # 4. Find natural frequency from the PSD peak directly (no search band).
@@ -393,12 +394,13 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
 
     # The spectrum's own picture goes to disk BEFORE the band check and the driven campaign, because
     # it is what diagnoses both refusals that can follow -- a band reaching below what the spectrum
-    # resolves (just below) and nothing measurable (below that, still before the drive) -- and a
-    # refused run keeps the folder it is written into, marked unfinished. It used to be written at
-    # the very end, where neither refusal could ever reach it. plot_psd draws the whole spectrum with
-    # the band shaded when the band holds no point of it -- the shape those refusals usually meet, but
-    # not exactly: a band straddling the first bin is refused beside the ordinary clipped figure, and
-    # a narrow band between two bins gets the whole spectrum and is not refused.
+    # resolves (just below) and nothing measurable (below that, still before the drive) -- and a run
+    # refused once this figure has been handed out keeps the folder it is written into, marked
+    # unfinished. It used to be written at the very end, where neither refusal could ever reach it.
+    # plot_psd draws the whole spectrum with the band shaded when the band holds no point of it -- the
+    # shape those refusals usually meet, but not exactly: a band straddling the first bin is refused
+    # beside the ordinary clipped figure, and a narrow band between two bins gets the whole spectrum
+    # and is not refused.
     psd_path = writer.figure_path("Spontaneous PSD")
     plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
               save_path=psd_path,
