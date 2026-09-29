@@ -220,9 +220,11 @@ def _show(args, store) -> int:
     m = store.get(args.kind, args.ref)
     print(render_manifest(m))
     sub = store.path(args.kind, args.ref)
-    if sub.name != m.dir_name:
+    if args.kind != "simulation" and sub.name != m.dir_name:
         # A rename whose directory move was refused leaves exactly this, and the browser's detail
-        # pane says so too. The manifest is what resolves an artifact, so nothing is broken.
+        # pane says so too. The manifest is what resolves an artifact, so nothing is broken. Never
+        # for a simulation cache: it is never renamed, and a cache folder placed or renamed by hand is
+        # legitimate, so the note would report a half-failed rename that never happened.
         print(f"\nthe directory is named {sub.name!r} while its manifest says {m.dir_name!r}: a "
               f"rename whose directory move was refused leaves that. The manifest is what resolves "
               f"the artifact, so nothing here is broken.")

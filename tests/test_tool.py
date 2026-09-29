@@ -3339,7 +3339,11 @@ def test_artifacts_show_states_the_two_honest_gaps(browse_store, capsys):
 def test_artifacts_show_names_a_directory_the_manifest_disagrees_with(browse_store, capsys):
     """``rename`` writes the manifest first and tolerates a refused directory move (the manifest is
     what resolves an artifact), which leaves a folder whose name disagrees with ``Manifest.dir_name``.
-    ``show`` is the first place that is visible."""
+    ``show`` is the first place that is visible.
+
+    A simulation cache is never renamed, and its manifest names no folder of its own beyond its digest,
+    so a cache folder placed or renamed by hand is legitimate and gets no such note -- the browser's
+    detail pane leaves it out for the same reason."""
     from core.artifacts import ArtifactStore
     root, ids = browse_store
     sub = ArtifactStore(root).path("calibration", ids["calibration"])
@@ -3349,6 +3353,13 @@ def test_artifacts_show_names_a_directory_the_manifest_disagrees_with(browse_sto
     assert main(["artifacts", "show", "calibration", ids["calibration"]]) == 0
     out = capsys.readouterr().out
     assert "stale__" in out and "while its manifest says" in out, out
+
+    cache = ArtifactStore(root).path("simulation", ids["simulation"])
+    cache.rename(cache.with_name("placed_by_hand"))
+    assert ArtifactStore(root).path("simulation", ids["simulation"]).name == "placed_by_hand"
+    assert main(["artifacts", "show", "simulation", ids["simulation"]]) == 0
+    out = capsys.readouterr().out
+    assert "while its manifest says" not in out, out
 
 
 def test_artifacts_show_on_a_missing_ref_exits_1_through_the_refused_rung(browse_store, capsys):
