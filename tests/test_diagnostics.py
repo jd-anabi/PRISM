@@ -1800,6 +1800,15 @@ def test_the_own_peak_ratio_counts_only_the_power_inside_the_window():
         probe_math.own_peak_ratio(ref[:, :4000], ref, 0.02, 0.10, 1.0)
 
 
+def test_the_own_peak_window_keeps_its_floor_and_stays_inside_the_spectrum():
+    """At its two edges the window is cut, never shifted. A peak on bin 1 takes the two-bin floor but
+    never the zero-frequency bin, whose power is the mean every trace has removed; a peak on the last
+    bin stops at the last bin rather than running past the spectrum."""
+    from core.diagnostics import probe_math
+    assert probe_math.own_peak_window(100, 0.01, 0.1, 1.0) == (1, 4)
+    assert probe_math.own_peak_window(100, 0.5, 0.1, 1.0) == (45, 51)
+
+
 def test_the_circular_spread_is_zero_for_one_phase_and_ignores_the_wrap():
     import math
     from core.diagnostics import probe_math
