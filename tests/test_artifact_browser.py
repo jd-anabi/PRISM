@@ -1,5 +1,5 @@
-"""The artifact browser (piece 4, §3): the Artifacts screen, its listing, its detail pane and its
-actions. The eighteenth suite. Run directly: pytest tests/test_artifact_browser.py"""
+"""The artifact browser: the Artifacts screen, its listing, its detail pane and its actions. The
+eighteenth suite. Run directly: pytest tests/test_artifact_browser.py"""
 import os
 import sys
 from pathlib import Path
@@ -38,7 +38,7 @@ def _select(screen, i: int):
 
 def _show_kind(scr, kind):
     """Point the screen at one kind and re-list it. The selector carries the kind key as its item
-    data (Task 9), so a test names a kind rather than an index."""
+    data, so a test names a kind rather than an index."""
     i = scr.kind_combo.findData(kind)
     assert i >= 0, f"the kind selector does not offer {kind!r}"
     scr.kind_combo.setCurrentIndex(i)
@@ -69,9 +69,9 @@ def _answer(monkeypatch, button):
 
 
 def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(tmp_path):
-    """B1/B2 and §3.2. Every kind in KIND_DIRS order, one kind at a time, each artifact's own row
-    named by Summary.label -- and for the prior kind, the three leftover directories after the real
-    one, each showing why it was not read instead of the kind's own columns.
+    """Every kind in KIND_DIRS order, one kind at a time, each artifact's own row named by
+    Summary.label -- and for the prior kind, the three leftover directories after the real one, each
+    showing why it was not read instead of the kind's own columns.
 
     The order is asserted off current_summary().complete rather than off the painted rows: what has
     to hold is that ArtifactStore.list's complete-first ordering survives into the table, and no
@@ -107,11 +107,11 @@ def test_the_browser_lists_the_seven_kinds_with_the_incomplete_directories_last(
 
 
 def test_every_kind_dir_has_a_selector_label(tmp_path):
-    """Checklist 13, a SILENT pin. ``ArtifactScreen.__init__`` does ``KIND_LABELS[kind]`` for every
-    key in ``KIND_DIRS``, so a kind added to the store without a label here is a KeyError AT WINDOW
-    LAUNCH -- not in a listing, not at a click, but before the app draws anything -- and nothing
-    pinned it. Closed both ways: a label for a kind the store does not have would put an entry in the
-    selector that resolves to no directory.
+    """A SILENT pin. ``ArtifactScreen.__init__`` does ``KIND_LABELS[kind]`` for every key in
+    ``KIND_DIRS``, so a kind added to the store without a label here is a KeyError AT WINDOW LAUNCH --
+    not in a listing, not at a click, but before the app draws anything -- and nothing pinned it.
+    Closed both ways: a label for a kind the store does not have would put an entry in the selector
+    that resolves to no directory.
     """
     from core.gui.screens.artifact_screen import KIND_LABELS
     assert set(KIND_LABELS) == set(KIND_DIRS), \
@@ -124,10 +124,10 @@ def test_every_kind_dir_has_a_selector_label(tmp_path):
 
 
 def test_a_kind_with_nothing_in_it_is_not_a_root_that_cannot_be_read(tmp_path):
-    """§3.2. StorePicker.refresh swallows the exception and lists nothing (artifact_picker.py:175-178),
-    so today an empty store and an unreadable one are the same picture. The browser is the one place
-    that difference has to be visible: an absent kind directory reads "nothing here yet", and a root
-    that raises puts the error, with its class, on the status line."""
+    """StorePicker.refresh swallows the exception and lists nothing, so in a picker an empty store
+    and an unreadable one are the same picture. The browser is the one place that difference has to
+    be visible: an absent kind directory reads "nothing here yet", and a root that raises puts the
+    error, with its class, on the status line."""
     import types
 
     store = ArtifactStore(tmp_path)                    # nothing written at all
@@ -147,7 +147,7 @@ def test_a_kind_with_nothing_in_it_is_not_a_root_that_cannot_be_read(tmp_path):
 
 
 def test_the_artifacts_tile_opens_the_browser_and_the_window_saves_its_state():
-    """B1's five registration points, in one real window.
+    """The screen's five registration points, in one real window.
 
     The tile is on Home and live; the screen sits AFTER the four sections and BEFORE Settings, so the
     back-arrow slide direction stays monotone with the tile order; the name maps to its stack index;
@@ -191,10 +191,10 @@ def test_the_artifacts_tile_opens_the_browser_and_the_window_saves_its_state():
 
 
 def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp_path):
-    """§3.5 / V5. The kind last viewed and the sort survive a relaunch; the SELECTED artifact
-    deliberately does not -- a remembered id that has since been deleted is exactly the dangling
-    state §3.4 removes from the pickers. A stale kind an older build left behind is ignored, not
-    restored.
+    """The kind last viewed and the sort survive a relaunch; the SELECTED artifact deliberately does
+    not -- a remembered id may name an artifact deleted since, the very dangling state the pickers
+    are re-listed after every change to avoid. A stale kind an older build left behind is ignored,
+    not restored.
 
     The sort that is saved is deliberately NOT the default one: (1, 1) is DEFAULT_SORT, so a test
     that saved it could not tell a restored sort from a screen that had simply never been sorted at
@@ -233,10 +233,10 @@ def test_the_browser_remembers_the_kind_and_the_sort_but_never_the_selection(tmp
 
 
 def test_a_sort_clicked_on_a_kind_with_no_artifacts_is_still_saved(tmp_path):
-    """§3.5. A kind with nothing in it still has a HEADER, so a sort clicked there is the user's
-    choice like any other -- and it is exactly the case a "does the table have rows" test throws
-    away. save_settings asks the table whether it has COLUMNS (i.e. whether set_rows has run), which
-    is the question it means."""
+    """A kind with nothing in it still has a HEADER, so a sort clicked there is the user's choice
+    like any other -- and it is exactly the case a "does the table have rows" test throws away.
+    save_settings asks the table whether it has COLUMNS (i.e. whether set_rows has run), which is
+    the question it means."""
     from PySide6.QtCore import Qt
     from core.gui import settings as st
 
@@ -267,11 +267,11 @@ def test_a_sort_clicked_on_a_kind_with_no_artifacts_is_still_saved(tmp_path):
 
 
 def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
-    """B8. MainWindow connects the screen's store_changed to _refresh_store_pickers, the twin of
+    """MainWindow connects the screen's store_changed to _refresh_store_pickers, the twin of
     _refresh_model_combos that a saved user model already drives. The pickers are found by TYPE, not
     by naming prior_picker / post_picker / obs_picker, so a fourth one added to a tab is covered by
     construction -- which is why what is asserted is EVERY picker the window holds, not a count. A
-    count would make a later task that adds a picker break this test instead of being covered by it.
+    count would make a later change that adds a picker break this test instead of being covered by it.
     The three kinds today are asserted as a SUBSET for the same reason."""
     from core.gui.main_window import MainWindow
     from core.gui.widgets.artifact_picker import StorePicker
@@ -291,8 +291,8 @@ def test_a_store_change_in_the_browser_re_lists_every_artifact_picker():
 
 
 def test_the_detail_pane_shows_the_manifest_and_the_run_records(tmp_path):
-    """B4 / §3.3. The manifest as Task 6 renders it, then the run's records verbatim with their
-    HH:MM:SS level stamps -- one string, which is also exactly what Save writes (B10)."""
+    """The manifest as render_manifest renders it, then the run's records verbatim with their
+    HH:MM:SS level stamps -- one string, which is also exactly what Save writes."""
     from core.artifacts import render_manifest
     from core.artifacts.store import LOG_FILE
 
@@ -314,12 +314,12 @@ def test_the_detail_pane_shows_the_manifest_and_the_run_records(tmp_path):
 
 
 def test_the_detail_pane_states_the_gaps_a_blank_pane_would_hide(tmp_path, monkeypatch):
-    """§3.3's four sentences about the records, plus the stale-folder note. A training cache keeps no
-    log BY DESIGN, an artifact written outside any run has none either, a tail announces itself, a run
-    that said nothing says so -- read_log answers "" there and None for no file at all (§2.2), and
-    piece 3's invariant is that silence is a record too -- and a folder whose name disagrees with its
-    own manifest says so, the state ArtifactStore.rename leaves when the directory move is refused
-    (store.py:520-540), which nothing has ever shown."""
+    """The pane's four sentences about the records, plus the stale-folder note. A training cache
+    keeps no log BY DESIGN, an artifact written outside any run has none either, a tail announces
+    itself, a run that said nothing says so -- read_log answers "" there and None for no file at all,
+    and silence is a record too -- and a folder whose name disagrees with its own manifest says so,
+    the state ArtifactStore.rename leaves when the directory move is refused, which nothing has ever
+    shown."""
     from core.artifacts.store import LOG_FILE
     from core.gui.screens import artifact_screen as mod
 
@@ -365,13 +365,13 @@ def test_the_detail_pane_states_the_gaps_a_blank_pane_would_hide(tmp_path, monke
 
 
 def test_a_caches_folder_name_is_never_called_stale(tmp_path):
-    """§3.3, the one exception to the stale-folder note: it is SUPPRESSED for the simulation kind.
+    """The one exception to the stale-folder note: it is SUPPRESSED for the simulation kind.
 
-    Manifest.dir_name is the bare digest for a cache (manifest.py:73-77) and
-    write_simulation_manifest writes wherever it is handed (store.py:1010-1049), so a cache directory
-    whose name is not its id is legitimate -- the note would fire on any hand-placed cache and tell
-    the operator that a rename half-failed when nothing of the sort happened. The cache's own
-    sentence about its missing log is still there, so this is a suppression and not a blank pane.
+    Manifest.dir_name is the bare digest for a cache and write_simulation_manifest writes wherever it
+    is handed, so a cache directory whose name is not its id is legitimate -- the note would fire on
+    any hand-placed cache and tell the operator that a rename half-failed when nothing of the sort
+    happened. The cache's own sentence about its missing log is still there, so this is a
+    suppression and not a blank pane.
     """
     from core.artifacts import write_simulation_manifest
     from core.SBI.training_checkpoint import identity_digest
@@ -394,8 +394,8 @@ def test_a_caches_folder_name_is_never_called_stale(tmp_path):
 
 
 def test_an_incomplete_directorys_pane_shows_its_reason_its_path_and_its_folder(tmp_path):
-    """§3.3's last line. There is no manifest to render, so what there is to say is why it was not
-    read, where it is and what it is called."""
+    """The pane's last case. There is no manifest to render, so what there is to say is why it was
+    not read, where it is and what it is called."""
     ids = build_browse_store(tmp_path)
     store = ArtifactStore(tmp_path)
     screen = artifact_screen(store)          # opens on priors, where the three leftovers are
@@ -414,8 +414,8 @@ def test_an_incomplete_directorys_pane_shows_its_reason_its_path_and_its_folder(
 
 
 def test_save_writes_exactly_what_the_pane_shows(tmp_path, monkeypatch):
-    """B10: a FILE, chosen through QFileDialog the way simulate_panel._save_video chooses one, holding
-    byte-for-byte what is on screen. Cancelling writes nothing and says nothing."""
+    """Save writes a FILE, chosen through QFileDialog the way simulate_panel._save_video chooses one,
+    holding byte-for-byte what is on screen. Cancelling writes nothing and says nothing."""
     from PySide6.QtWidgets import QFileDialog
 
     build_browse_store(tmp_path)
@@ -441,8 +441,8 @@ def test_save_writes_exactly_what_the_pane_shows(tmp_path, monkeypatch):
 
 
 def test_setting_a_note_trims_it_and_asks_nothing(store):
-    """B5: the rule is core's (require_note) and the box is the front end's. One trimmed line,
-    written through set_note; a blank clears it; nothing is asked."""
+    """The rule is core's (require_note) and the box is the front end's. One trimmed line, written
+    through set_note; a blank clears it; nothing is asked."""
     from PySide6.QtWidgets import QLabel
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -453,7 +453,7 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
     _select_ref(scr.table, p.id)
     # The control core/gui/fields.py names ("Edit it in the Note box on the Artifacts screen.") has
     # to exist, spelled that way: the table is the ONE place a control is named, and a sentence
-    # pointing at a box nobody can find is the failure mode V3 exists to stop.
+    # pointing at a box nobody can find is the failure that table exists to stop.
     assert any(lbl.text() == "Note" for lbl in scr.findChildren(QLabel)), "no 'Note' label"
     scr.note_edit.setText("   spontaneous, 4.5 s   ")
     scr._set_note()
@@ -461,7 +461,7 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
     assert SHOWN == [], "setting a note must not ask anything"
     assert "Set the note" in scr.status.text(), scr.status.text()
     # Re-select: _after_change re-lists the kind, and the screen deliberately remembers no selection
-    # (spec §3.5 -- a remembered id that has since been deleted is the dangling state B8 prevents).
+    # (a remembered id may name an artifact deleted since, the dangling state the re-list prevents).
     _select_ref(scr.table, p.id)
     scr.note_edit.setText("")
     scr._set_note()
@@ -470,8 +470,8 @@ def test_setting_a_note_trims_it_and_asks_nothing(store):
 
 
 def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
-    """V2: refused, never clamped. The box carries core's neutral sentence (both numbers) and the
-    front end's own "where to fix it" from core/gui/fields.py, and the manifest is untouched."""
+    """Refused, never clamped. The box carries core's neutral sentence (both numbers) and the front
+    end's own "where to fix it" from core/gui/fields.py, and the manifest is untouched."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -482,7 +482,7 @@ def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
     _select_ref(scr.table, p.id)
     scr.note_edit.setText("x" * 201)
     # No setMaxLength on the box, deliberately: it would truncate at 200 and the refusal could never
-    # fire, which is exactly the silent clamp B5 forbids.
+    # fire, which is exactly the silent clamp the note rule forbids.
     assert len(scr.note_edit.text()) == 201, "the Note box must not clamp what was typed"
     scr._set_note()
     box = SHOWN[-1]
@@ -495,7 +495,7 @@ def test_an_over_long_note_is_refused_with_its_fix_sentence(store):
 
 
 def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
-    """B6. No front end offers force=True, so ArtifactStore.delete refuses anything with dependents
+    """No front end offers force=True, so ArtifactStore.delete refuses anything with dependents
     -- a confirmation could only ever be followed by a failure. dependents() is therefore read
     FIRST, and the yellow box names every dependent, including the training cache that holds the
     prior only by fingerprint and names it nowhere (ArtifactStore.dependents' second pass)."""
@@ -530,14 +530,14 @@ def test_delete_refuses_an_artifact_with_dependents_and_offers_no_yes(store):
 
 
 def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store, monkeypatch):
-    """B3 + B6: a manifested cache is COMPLETE (it has a valid manifest) and not FINISHED, and the
-    batches already committed are the one thing a delete here destroys that a rerun cannot remake --
-    so the confirmation names them, and No is the default button (which is also what the session
-    dialog guard's exec()==0 reads as).
+    """A manifested cache is COMPLETE (it has a valid manifest) and not FINISHED, and the batches
+    already committed are the one thing a delete here destroys that a rerun cannot remake -- so the
+    confirmation names them, and No is the default button (which is also what the session dialog
+    guard's exec()==0 reads as).
 
     The cache is written with NO rows, because that is the only mid-run state there is: rows are
-    written by mark_complete alone and ``save`` passes none (P2), so the prompt names batches and
-    says where the row counts come from rather than printing a confident, false "0 rows"."""
+    written by mark_complete alone and ``save`` passes none, so the prompt names batches and says
+    where the row counts come from rather than printing a confident, false "0 rows"."""
     import pytest
     from core.artifacts import StoreError, store as st
     from PySide6.QtWidgets import QMessageBox
@@ -549,7 +549,7 @@ def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store
     scr = artifact_screen(store)
     _show_kind(scr, "simulation")
     s = _select_ref(scr.table, cache.id)
-    assert s.complete and not s.finished, "B3: complete is 'has a manifest', finished is 'it ended'"
+    assert s.complete and not s.finished, "complete is 'has a manifest', finished is 'it ended'"
     assert s.rows is None, "``save`` records no rows: a mid-run cache has none to name"
     scr._delete()                                     # exec() returns 0 -> not Yes
     box = SHOWN[-1]
@@ -560,7 +560,7 @@ def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store
     assert "0 rows" not in box.informativeText(), box.informativeText()
     assert store.get("simulation", cache.id).id == cache.id, "No must leave it on disk"
     assert "was not deleted" in scr.status.text(), scr.status.text()
-    # Yes deletes it, and the change is announced (B8)
+    # Yes deletes it, and the change is announced
     _answer(monkeypatch, QMessageBox.Yes)
     _select_ref(scr.table, cache.id)
     changed = []
@@ -572,13 +572,13 @@ def test_deleting_an_unfinished_cache_names_its_batches_and_defaults_to_no(store
 
 
 def test_deleting_an_unfinished_fdt_record_names_what_is_half_written(store, monkeypatch):
-    """Checklist 15. The confirmation hard-coded the ONE kind that could be unfinished, and E2 makes
-    a second one -- an fdt record whose run was cancelled or failed keeps its folder with whatever it
+    """The confirmation hard-coded the ONE kind that could be unfinished, and the fdt kind makes a
+    second one -- an fdt record whose run was cancelled or failed keeps its folder with whatever it
     measured inside. Deleting that behind a prompt that says only "this cannot be undone" throws away
     hours of measurement without saying so.
 
-    There is no resume for these runs (spec §1.3), so the sentence says that too: unlike a cache,
-    whose batches a later run continues from, this one starts again from the beginning.
+    There is no resume for these runs, so the sentence says that too: unlike a cache, whose batches
+    a later run continues from, this one starts again from the beginning.
     """
     from PySide6.QtWidgets import QMessageBox
     from core.gui.screens.artifact_screen import _delete_prompt
@@ -622,8 +622,9 @@ def test_deleting_an_unfinished_fdt_record_names_what_is_half_written(store, mon
 
 
 def _interrupted_fdt(store, name, body):
-    """An fdt record left the way E2 leaves one -- the real progressive writer, one payload written,
-    then an exception inside ``with w:`` -- returned as the Summary the listing gives it."""
+    """An fdt record left the way an interrupted run leaves one -- the real progressive writer, one
+    payload written, then an exception inside ``with w:`` -- returned as the Summary the listing gives
+    it."""
     w = store.create("fdt", None, name=name)
     w.body = body
     with pytest.raises(RuntimeError):
@@ -636,8 +637,8 @@ def _interrupted_fdt(store, name, body):
 
 
 def test_an_unfinished_fdt_record_is_described_by_what_its_study_holds(store):
-    """Checklist 15, by study. One sentence served every unfinished fdt record, and it was false for
-    several of the shapes one can take:
+    """The delete prompt, by study. One sentence served every unfinished fdt record, and it was false
+    for several of the shapes one can take:
 
     - a COMPARISON measures nothing -- it draws records already measured -- so "measuring again from
       the start" is untrue; deleting one loses no measurement, and running it again redraws it;
@@ -648,10 +649,10 @@ def test_an_unfinished_fdt_record_is_described_by_what_its_study_holds(store):
     - a sweep whose planned count is not recorded names its done count alone, as the table's Points
       cell does, never "4 of ?";
     - a record still being WRITTEN, by a run in another window or at a terminal, looks exactly like
-      an interrupted one, and nothing stops it being deleted (spec §1.3 leaves the cross-process lock
-      out) -- so "the run was interrupted or it failed" was false for it, and deleting on the
-      strength of that sentence killed the live run (the whole-piece review's M3). Every fdt branch
-      says it may still be running, and what to do first.
+      an interrupted one, and nothing stops it being deleted (there is no cross-process lock) -- so
+      "the run was interrupted or it failed" was false for it, and deleting on the strength of that
+      sentence killed the live run. Every fdt branch says it may still be running, and what to do
+      first.
     """
     from core.gui.screens.artifact_screen import _delete_prompt
 
@@ -697,14 +698,14 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
     """dependents() is read twice -- once here to avoid asking a question that could only fail, once
     inside delete() -- and the store's is the answer that counts. With the SCREEN's read stubbed
     empty the confirmation appears, and the store's own sentence is what the operator is shown, with
-    its own fix sentence under it: that refusal carries field="artifact" (Task 5), so this race path
-    shows it as it stands and invents nothing.
+    its own fix sentence under it: that refusal carries field="artifact", so this race path shows it
+    as it stands and invents nothing.
 
     The stub is a proxy over the real store, patched onto the SCREEN's _resolved_store, and not
     monkeypatch.setattr(store, "dependents", ...): ArtifactStore.delete calls self.dependents
     itself, so patching the store would blind the store too -- the delete would
     SUCCEED, the prior would be destroyed and every assertion below would be asserting the opposite
-    of what it says (Q6). The proxy lies to the screen only."""
+    of what it says. The proxy lies to the screen only."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -742,21 +743,20 @@ def test_the_stores_own_refusal_is_the_last_word_on_a_delete(store, monkeypatch)
     box = SHOWN[-1]
     assert box.windowTitle() == "Check your inputs", "the store's refusal takes the yellow box"
     assert "refusing to delete" in box.text() and w.id in box.text(), box.text()
-    # Task 5 gave delete()'s dependents refusal field="artifact", so show_refusal adds the same fix
+    # delete()'s dependents refusal carries field="artifact", so show_refusal adds the same fix
     # sentence it adds to every other fielded refusal -- the race path needs no refusal of its own.
     # The normal path still builds one, for the wording only: the store's sentence ends "pass
-    # force=True to orphan them", and no front end offers that (B6).
+    # force=True to orphan them", and no front end offers that.
     assert box.informativeText() == "Select an artifact in the list on the Artifacts screen."
     assert store.get("prior", p.id).name == "ancestor", "the artifact survives its own refusal"
 
 
 def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, monkeypatch):
-    """B7: one action per kind and one for all kinds, behind a confirmation that lists exactly the
-    rows the table calls incomplete. A directory that carries a manifest.json AT ALL is never
-    touched -- R1 narrowed this from "a usable manifest of this kind" after a reviewer probed the
-    old rule deleting a real calibration whose manifest was valid under a different schema. A
-    directory that will not delete is reported and the rest still go, and nothing to do says so
-    without asking."""
+    """One action per kind and one for all kinds, behind a confirmation that lists exactly the rows
+    the table calls incomplete. A directory that carries a manifest.json AT ALL is never touched --
+    narrowed from "a usable manifest of this kind" once the old rule was found deleting a real
+    calibration whose manifest was valid under a different schema. A directory that will not delete
+    is reported and the rest still go, and nothing to do says so without asking."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -796,10 +796,9 @@ def test_sweep_removes_only_the_leftovers_and_reports_what_it_could_not(store, m
 
 
 def test_the_screens_sweep_offers_a_loose_file_and_never_a_records_payload(store, monkeypatch):
-    """E10 through the window (spec §6.3): the two front ends stay in step, which is the property
-    piece 4 established -- the owner must not have to open a terminal to clear something the tool
-    can clear. The preview NAMES the file, as it names every leftover directory, because "Remove 3
-    items?" with no list is not a confirmation.
+    """Loose files, swept through the window: the two front ends stay in step -- the owner must not
+    have to open a terminal to clear something the tool can clear. The preview NAMES the file, as it
+    names every leftover directory, because "Remove 3 items?" with no list is not a confirmation.
 
     The payload written inside the real artifact's own folder is the complement: ``loose_files``
     reads the kind directory's files and never descends, so nothing a record owns can be offered
@@ -830,12 +829,12 @@ def test_the_screens_sweep_offers_a_loose_file_and_never_a_records_payload(store
     assert payload.is_file(), "the sweep reached inside a valid record's own folder"
     assert store.get("prior", p.id).name == "keeper"
     assert "Removed 1 of 1 loose file" in scr.status.text(), scr.status.text()
-    # F51: no directory was a candidate, so no directory count is reported at all.
+    # No directory was a candidate, so no directory count is reported at all.
     assert "leftover director" not in scr.status.text(), scr.status.text()
 
 
 def test_the_screens_legacy_directory_is_offered_by_sweep_all_kinds_only(store, monkeypatch):
-    """The window and the tool answer the same question the same way (spec §6.3). A legacy directory
+    """The window and the tool answer the same question the same way. A legacy directory
     belongs to no kind, so "Sweep this kind…" has nothing to say about one -- offering it there
     would let a sweep of Priors remove something that has nothing to do with priors. "Sweep all
     kinds…" is the form that covers the whole root, and it is the only one that offers it.
@@ -867,11 +866,11 @@ def test_the_screens_legacy_directory_is_offered_by_sweep_all_kinds_only(store, 
 
 
 def test_the_screens_sweep_claims_nothing_it_could_not_read(store, monkeypatch):
-    """The whole-piece review's N25 (L736), the window's half, in step with the tool's. "Nothing to
-    remove: every any kind's directory carries a manifest.json, and no loose file or legacy directory
-    is here either" -- ungrammatical, and still printed when the store root could not be read, beside
-    the sentence saying so. Each clause is said only where its read succeeded; the live-run refusal
-    says "leftovers" (the sweep removes files too); "Sweep all kinds…" says what it covers."""
+    """The window's half, in step with the tool's. "Nothing to remove: every any kind's directory
+    carries a manifest.json, and no loose file or legacy directory is here either" -- ungrammatical,
+    and still printed when the store root could not be read, beside the sentence saying so. Each
+    clause is said only where its read succeeded; the live-run refusal says "leftovers" (the sweep
+    removes files too); "Sweep all kinds…" says what it covers."""
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
 
@@ -896,17 +895,17 @@ def test_the_screens_sweep_claims_nothing_it_could_not_read(store, monkeypatch):
     scr._sweep(all_kinds=True)
     assert scr.status.text().endswith("before removing leftovers."), scr.status.text()
     monkeypatch.setattr(BasePanel, "_running", False)
-    # N26: a comparison is a record of this kind, and the Kind picker says so
+    # a comparison is a record of this kind, and the Kind picker says so
     assert KIND_LABELS["fdt"] == "FDT measurements, sweeps and comparisons"
     assert scr.kind_combo.findText(KIND_LABELS["fdt"]) >= 0
 
 
 def test_a_loose_file_written_moments_ago_is_offered_and_then_refused_not_removed(store, monkeypatch):
-    """R3 for the file category, through the window. ``loose_files`` lists a file by what it IS, not
-    by its age -- no listing can know whether something is still writing it -- so a file written
-    seconds ago is OFFERED, and ``remove_loose``'s own guard is what refuses it. What has to hold is
-    what already holds for a directory: the confirmation says so before it is answered, the file
-    survives, and the status line names it and says why."""
+    """The recency guard for the file category, through the window. ``loose_files`` lists a file by
+    what it IS, not by its age -- no listing can know whether something is still writing it -- so a
+    file written seconds ago is OFFERED, and ``remove_loose``'s own guard is what refuses it. What
+    has to hold is what already holds for a directory: the confirmation says so before it is
+    answered, the file survives, and the status line names it and says why."""
     from PySide6.QtWidgets import QMessageBox
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -925,12 +924,12 @@ def test_a_loose_file_written_moments_ago_is_offered_and_then_refused_not_remove
     assert fresh.is_file(), "a file something may still be writing was removed"
     assert "Removed 0 of 1 loose file" in said and fresh.name in said, said
     assert "may still be writing" in said, said
-    assert "leftover director" not in said, "F51: no directory was a candidate"
+    assert "leftover director" not in said, "no directory was a candidate"
     assert said.startswith("⚠ "), said
 
 
 def test_the_sweep_removes_exactly_what_the_confirmation_listed(store, monkeypatch):
-    """R2: the confirmation BINDS the action. It used to re-scan at removal time, so a directory
+    """The confirmation BINDS the action. It used to re-scan at removal time, so a directory
     created while the dialog sat open -- by another process, or by a run in this one -- was deleted
     although the operator never saw it, and the status line then read "Removed 2 of 1 leftover
     directories". The list that is shown is the list that is handed to the store, by name.
@@ -963,11 +962,11 @@ def test_the_sweep_removes_exactly_what_the_confirmation_listed(store, monkeypat
 
 
 def test_a_directory_whose_manifest_will_not_parse_is_listed_but_never_swept(store, monkeypatch):
-    """R1. ``_entries`` calls three shapes incomplete and they are not the same thing: no manifest at
-    all is a crash before the write, but a manifest that EXISTS and will not parse -- or that
-    declares another kind -- means "something is here I do not understand". A reviewer probed the
-    old rule deleting a real calibration with its payload, because a manifest valid under a
-    DIFFERENT SCHEMA reads as "no artifact here", and ``manifest.SCHEMA`` is expected to move.
+    """``_entries`` calls three shapes incomplete and they are not the same thing: no manifest at all
+    is a crash before the write, but a manifest that EXISTS and will not parse -- or that declares
+    another kind -- means "something is here I do not understand". The old rule was found deleting a
+    real calibration with its payload, because a manifest valid under a DIFFERENT SCHEMA reads as "no
+    artifact here", and ``manifest.SCHEMA`` is expected to move.
 
     So: those rows stay in the LISTING with their reason, the confirmation never offers them, and
     the status line says they were left alone rather than silently dropping them."""
@@ -1004,10 +1003,11 @@ def test_a_directory_whose_manifest_will_not_parse_is_listed_but_never_swept(sto
 
 
 def test_a_directory_something_may_still_be_writing_is_reported_not_removed(store, monkeypatch):
-    """R3, through the window. The manifest is written LAST, so a run in flight -- in this process or
-    another -- is indistinguishable from a leftover by content alone. A reviewer probed a sweep from
-    a second process removing a live writer's directory: the run died at its commit, and a running
-    cache lost its committed shards. The window's ``BasePanel._running`` guard is same-process only.
+    """The recency guard, through the window. The manifest is written LAST, so a run in flight -- in
+    this process or another -- is indistinguishable from a leftover by content alone. A sweep from a
+    second process was found removing a live writer's directory: the run died at its commit, and a
+    running cache lost its committed shards. The window's ``BasePanel._running`` guard is
+    same-process only.
 
     The candidate is still LISTED (the table cannot know how old it is either), so what has to hold
     is that the removal refuses it and the status line says why -- and that the confirmation says so
@@ -1032,7 +1032,7 @@ def test_a_directory_something_may_still_be_writing_is_reported_not_removed(stor
 
 
 def test_a_sweep_that_throws_is_reported_on_the_status_line_and_the_pickers_are_told(store, monkeypatch):
-    """R5: the removal call was made UNGUARDED, so a kind that could not be read threw out of the
+    """The removal call was made UNGUARDED, so a kind that could not be read threw out of the
     click AFTER earlier kinds' leftovers were already gone -- the application's last-resort red box,
     no status line, and ``store_changed`` never emitted, so the three pickers kept showing rows that
     had just been deleted. Every other entry point on this screen reports on the status line."""
@@ -1062,11 +1062,11 @@ def test_a_sweep_that_throws_is_reported_on_the_status_line_and_the_pickers_are_
 
 
 def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_not(store):
-    """B6's second half, in the window's own wording -- the model builder's "A task is running --
+    """The live-run refusal, in the window's own wording -- the model builder's "A task is running --
     wait for it to finish before validating." and "... before saving." (quoted, not cited by line
-    number, which moved; the whole-piece review's N34). Every
-    WRITE is refused while a run is live; READING never is -- which is the whole reason the browser
-    is a plain screen and not a BasePanel (B1), so nothing here is greyed out either."""
+    number, which moved). Every WRITE is refused while a run is live; READING never is -- which is the
+    whole reason the browser is a plain screen and not a BasePanel, so nothing here is greyed out
+    either."""
     from core.gui.panels.base_panel import BasePanel
     from tests._fixtures import SHOWN, artifact_screen, qt_app
     qt_app()
@@ -1102,13 +1102,13 @@ def test_note_delete_and_sweep_are_refused_while_a_run_is_live_and_reading_is_no
 
 
 def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypatch):
-    """B8. Without this a picker keeps pointing at a deleted artifact: StorePicker.restore_key
-    (artifact_picker.py:226-231) silently does nothing when the saved id has vanished, leaving
-    whatever item happens to be current selected -- deliberate for a picker, and a defect the moment
-    a browser can delete. Mirrors _refresh_model_combos: the window walks its own panels.
+    """Without this a picker keeps pointing at a deleted artifact: StorePicker.restore_key silently
+    does nothing when the saved id has vanished, leaving whatever item happens to be current selected
+    -- deliberate for a picker, and a defect the moment a browser can delete. Mirrors
+    _refresh_model_combos: the window walks its own panels.
 
-    The wiring (MainWindow._refresh_store_pickers and the store_changed connect) is the screen task's;
-    the delete that emits store_changed is this task's. This is the test of the two together."""
+    The wiring (MainWindow._refresh_store_pickers and the store_changed connect) and the delete that
+    emits store_changed are tested here together."""
     from PySide6.QtWidgets import QMessageBox
     from core.gui.main_window import MainWindow
     from core.gui.widgets.artifact_picker import StorePicker
@@ -1139,8 +1139,8 @@ def test_a_delete_in_the_browser_reaches_the_three_store_pickers(store, monkeypa
                             lambda self: seen.append(self.kind) or real(self))
         w._refresh_store_pickers()
         # A SUBSET, not an equality: the pickers are found by type, so a screen that gains one is
-        # covered by construction, and an equality would make that screen's task break this test
-        # instead. The FDT screen's saved-run picker (T25) is the first such addition.
+        # covered by construction, and an equality would make the change that adds it break this
+        # test instead. The FDT screen's saved-run picker is the first such addition.
         assert {"observation", "posterior", "prior"} <= set(seen), seen
         assert "fdt" in seen, seen
     finally:
@@ -1214,7 +1214,7 @@ def test_a_leftover_row_is_nothing_to_act_on_and_no_row_at_all_is_a_refusal(stor
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
 
-    # (a) nothing selected -- a refresh leaves no selection (§3.5), so this is the launch state
+    # (a) nothing selected -- a refresh leaves no selection, so this is the launch state
     assert scr.table.current_summary() is None
     assert not scr.btn_delete.isEnabled() and not scr.note_edit.isEnabled()
     scr._delete()
@@ -1256,8 +1256,8 @@ def test_a_read_failure_after_a_change_beats_the_actions_own_sentence(store, mon
 
     A delete that SUCCEEDS followed by a re-list that CANNOT READ the store must not report
     "Deleted ...": the table empties, and "there is nothing here" against "I could not look" is the
-    one distinction this screen exists to keep apart (§3.2) -- the same distinction Task 9 built
-    refresh()'s error branch for. A success sentence painted over it would erase it.
+    one distinction this screen exists to keep apart -- the same distinction refresh()'s error
+    branch was built for. A success sentence painted over it would erase it.
 
     _after_change owns that order: the action hands it a sentence, and it sets it only when
     refresh() could read the store. Which also makes the wrong order unrepresentable -- no caller
@@ -1376,8 +1376,8 @@ def test_an_unreadable_root_reports_on_the_status_line_instead_of_crashing_a_cli
 
 
 def test_sweeping_one_kind_leaves_another_kinds_leftover_alone(store, monkeypatch):
-    """Minor 2, behaviourally: "sweep this kind" reads self.kind(), the accessor everything else on
-    this screen reads, and only the all-kinds button passes None. While the kind travelled as a
+    """"Sweep this kind" reads self.kind(), the accessor everything else on this screen reads, and
+    only the all-kinds button passes None. While the kind travelled as a
     falsy value, "all seven" was what a falsy kind meant downstream, so a one-kind sweep could
     widen to every directory in the store."""
     from PySide6.QtWidgets import QMessageBox
@@ -1401,9 +1401,9 @@ def test_sweeping_one_kind_leaves_another_kinds_leftover_alone(store, monkeypatc
 
 
 def test_a_typed_note_survives_a_re_list_that_lands_on_the_same_artifact(store):
-    """Minor 3. A re-list clears the table's selection before a row is chosen again, so rewriting the
-    box on every selection change threw away a note typed and not yet applied even when the same
-    artifact came back. Only a change of ARTIFACT repopulates it; a leftover, which has no note at
+    """A re-list clears the table's selection before a row is chosen again, so rewriting the box on
+    every selection change threw away a note typed and not yet applied even when the same artifact
+    came back. Only a change of ARTIFACT repopulates it; a leftover, which has no note at
     all, clears it.
 
     ``a`` is deliberately the ONLY complete prior while the draft is being typed. ``_select_ref``
@@ -1450,7 +1450,7 @@ def test_a_typed_note_survives_a_re_list_that_lands_on_the_same_artifact(store):
 
 
 def test_the_lineage_report_writes_exactly_what_render_lineage_returns(store, monkeypatch, tmp_path):
-    """B10 + §5: ONE renderer, and the GUI adds nothing to it -- no header, no banner, no trailing
+    """ONE renderer, and the GUI adds nothing to it -- no header, no banner, no trailing
     newline. Asserted against render_lineage itself rather than against the tool's `artifacts
     summary`, so the two front ends cannot drift: whichever wrote the file, a reviewer gets the same
     bytes. UTF-8 with LF endings, so 'the same bytes' is true on this platform too."""
@@ -1480,8 +1480,8 @@ def test_the_lineage_report_writes_exactly_what_render_lineage_returns(store, mo
 
 
 def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatch, tmp_path):
-    """Three legs of one rule. A report is a READ, so a live run does not refuse it (B6) -- unlike
-    Task 11's note, delete and sweep. A leftover directory has no manifest and so no lineage. And a
+    """Three legs of one rule. A report is a READ, so a live run does not refuse it -- unlike the
+    note, the delete and the sweep. A leftover directory has no manifest and so no lineage. And a
     name the operator typed without an extension gets .txt rather than a file nothing opens."""
     from PySide6.QtWidgets import QFileDialog
     from core.artifacts import render_lineage
@@ -1526,12 +1526,11 @@ def test_the_lineage_report_is_a_read_and_needs_a_complete_row(store, monkeypatc
 
 
 def test_the_lineage_button_is_disabled_without_a_complete_row(store):
-    """Fix round 1: btn_lineage must track the same condition its own handler guards on, so the
-    button and the guard cannot disagree -- unlike btn_save, which is enabled off the pane's TEXT
-    (something an incomplete row also has, its reason and its path), a lineage walk needs a
-    resolvable artifact to start from. So this follows btn_delete/note_edit's rule (`live`) rather
-    than btn_save's: disabled with nothing selected, disabled on a leftover, enabled on a complete
-    row."""
+    """btn_lineage must track the same condition its own handler guards on, so the button and the
+    guard cannot disagree -- unlike btn_save, which is enabled off the pane's TEXT (something an
+    incomplete row also has, its reason and its path), a lineage walk needs a resolvable artifact to
+    start from. So this follows btn_delete/note_edit's rule (`live`) rather than btn_save's: disabled
+    with nothing selected, disabled on a leftover, enabled on a complete row."""
     from tests._fixtures import artifact_screen, qt_app
     qt_app()
     cfg = _nad_cfg()
@@ -1541,7 +1540,7 @@ def test_the_lineage_button_is_disabled_without_a_complete_row(store):
     scr = artifact_screen(store)
     _show_kind(scr, "prior")
 
-    # (a) nothing selected -- a refresh leaves no selection (§3.5), so this is the launch state
+    # (a) nothing selected -- a refresh leaves no selection, so this is the launch state
     assert scr.table.current_summary() is None
     assert not scr.btn_lineage.isEnabled()
 

@@ -86,21 +86,12 @@ READER_DOCS_DIR = "docs/guide"
 NOT_YET_CLEAN: frozenset[str] = frozenset({
     "tests/_fixtures.py",
     "tests/conftest.py",
-    "tests/test_artifact_browser.py",
-    "tests/test_artifact_consistency.py",
     "tests/test_artifact_store.py",
-    "tests/test_chi_set_encoder.py",
     "tests/test_conditioning_repair.py",
     "tests/test_diagnostics.py",
-    "tests/test_gpu_paths.py",
-    "tests/test_nav_and_gating.py",
     "tests/test_refusals.py",
-    "tests/test_settings_persistence.py",
-    "tests/test_simulate.py",
     "tests/test_user_models.py",
     "tests/test_user_sbi.py",
-    "tests/test_vt_progress.py",
-    "tests/test_worker_dispatch.py",
 })
 
 _DIRECTIVE = re.compile(r"noqa(?::[ \t]*[A-Z]+[0-9]+(?:[ \t]*,[ \t]*[A-Z]+[0-9]+)*)?"

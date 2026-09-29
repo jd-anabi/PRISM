@@ -12,7 +12,6 @@ THE BUG THESE LOCK DOWN
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
 Run:  pytest tests/test_simulate.py
-      (or just: pytest tests/test_gui_progress.py)
 """
 import os
 import tempfile
@@ -133,13 +132,11 @@ def test_simulate_plan_stream_matches_generate_observations_arithmetic():
     assert abs(plan.x_scale - x_scale_gt) <= 1e-5 * abs(x_scale_gt)
 
 def test_a_spontaneous_built_in_cell_streams_with_no_drive():
-    """The whole-piece review's N17 (L650), taken by the owner's ruling (R-F4). A built-in cell with
-    no Forcing section -- the shipped ``nadrowski/master_spont.txt`` -- has no forcing parameters, and
-    the Live simulation tab built its drive with the sinusoid builder regardless: ``KeyError: Forcing
-    parameter 'amp' missing`` in the red box, on a shipped tab and a shipped cell. With no forcing
-    parameter the drive is ZERO, in the sinusoid builder's own (batch, channels, T) shape, and the
-    stream runs: every frame it emits holds finite samples. (This departs from spec §5.6's bound;
-    Task 41 records the §12 row and strikes the §1.3 one.)"""
+    """A built-in cell with no Forcing section -- the shipped ``nadrowski/master_spont.txt`` -- has
+    no forcing parameters, and the Live simulation tab built its drive with the sinusoid builder
+    regardless: ``KeyError: Forcing parameter 'amp' missing`` in the red box, on a shipped tab and a
+    shipped cell. With no forcing parameter the drive is ZERO, in the sinusoid builder's own (batch,
+    channels, T) shape, and the stream runs: every frame it emits holds finite samples."""
     import numpy as np
     from core.config import CELL_PATH
     from core.gui.panels.simulate_runner import build_stream_config, plan_stream, run_simulation_stream
@@ -263,7 +260,7 @@ def test_export_animation_writes_a_readable_gif():
     assert frames[0].shape[0] % 2 == 0 and frames[0].shape[1] % 2 == 0, "exported frame dims must be even"
 
 def test_a_simulate_recording_round_trips_through_the_video_export(tmp_path):
-    """Every frame the panel PROMISED the operator is in the file it wrote. Spec section 5.6.
+    """Every frame the panel PROMISED the operator is in the file it wrote.
 
     ``_save_video`` prints "Exporting {n} frames" from ``estimate_frame_count(len(series),
     export_stride(1.0 / DT_EXP_S, fps))`` and then hands the concatenated recording to
@@ -273,7 +270,7 @@ def test_a_simulate_recording_round_trips_through_the_video_export(tmp_path):
 
     Half of this round trip is NOT new: test_export_animation_writes_a_readable_gif already renders a
     series to a GIF and reads it back, asking only for "at least 2" frames. What this test adds is
-    precision: the exact count the panel promises, and that the frames advance (planning ruling P59).
+    precision: the exact count the panel promises, and that the frames advance.
 
     Also asserts the frames ADVANCED: a writer that appended the same buffer every time would pass a
     frame count on its own.
@@ -290,7 +287,7 @@ def test_a_simulate_recording_round_trips_through_the_video_export(tmp_path):
     assert promised > 2, promised                    # the fixture must exercise more than the edges
 
     # pytest's own temp directory, removed with the session's: mkdtemp left one more directory
-    # and GIF in %TEMP% on every gate (the whole-piece review's N41)
+    # and GIF in %TEMP% on every gate
     path = str(tmp_path / "roundtrip.gif")
     export_animation(series, path, **kw)
 
@@ -359,9 +356,9 @@ def test_simulate_panel_records_chunks_and_gates_the_save_button():
 
 
 def test_the_stream_builders_two_likeliest_mistakes_are_refusals(monkeypatch):
-    """Spec §5.1, P29. ``build_stream_config`` raised two bare ValueErrors -- a cell no bounds file
-    governs, and a user model whose definition and bounds file list different parameters -- and the
-    Simulate panel's broad ``except`` showed both in the generic "could not be built" box. With that
+    """``build_stream_config`` raised two bare ValueErrors -- a cell no bounds file governs, and a
+    user model whose definition and bounds file list different parameters -- and the Simulate
+    panel's broad ``except`` showed both in the generic "could not be built" box. With that
     box gone a bare exception is a bug and opens the red crash box, which would have been the
     answer to the two most plausible mistakes on this screen. Both are Refusals now, with the key
     that names their fix -- the cell, then the model -- and both are still ValueErrors, so
@@ -429,20 +426,20 @@ def test_saving_mp4_without_ffmpeg_is_a_refusal_not_a_config_error(monkeypatch):
 
 
 def test_the_simulate_panel_refuses_its_blank_boxes_instead_of_clamping_them(monkeypatch, tmp_path):
-    """Spec §5.6. The panel used to dispatch ``max(1, frame_steps.value())`` and
-    ``float(max(1, fps.value()))`` and hand ``tobs.value()`` straight through. Every numeric box in
-    this window returns 0 for a BLANK (labeled_inputs.FloatField.value), so those clamps quietly
-    turned "I cleared this box" into 1 step per frame and 1 frame per second -- a run that looks
-    wedged rather than refused -- and a blank T_obs reached plan_stream, where ``n_obs`` came out 0
-    and ``run_simulation_stream`` returned at once, reporting success with nothing streamed.
+    """The panel used to dispatch ``max(1, frame_steps.value())`` and ``float(max(1, fps.value()))``
+    and hand ``tobs.value()`` straight through. Every numeric box in this window returns 0 for a
+    BLANK (labeled_inputs.FloatField.value), so those clamps quietly turned "I cleared this box" into
+    1 step per frame and 1 frame per second -- a run that looks wedged rather than refused -- and a
+    blank T_obs reached plan_stream, where ``n_obs`` came out 0 and ``run_simulation_stream``
+    returned at once, reporting success with nothing streamed.
 
     Each is now a refusal naming the setting, raised at the CLICK and before the config is built, so
     nothing is dispatched. Asserted against a blank box and not only a typed zero, because a rule
-    written as "reject below zero" would accept every blank box in the application (Review Focus 3).
+    written as "reject below zero" would accept every blank box in the application.
 
     ``t_obs`` is the shared key the Infer tab already owns, so its fix sentence now names both places
-    it appears -- E6's widening. Without that a blank length on this screen sent the operator to a
-    tab that has nothing to do with it.
+    it appears. Without that a blank length on this screen sent the operator to a tab that has
+    nothing to do with it.
     """
     import pytest
     from PySide6.QtWidgets import QMessageBox

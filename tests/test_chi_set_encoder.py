@@ -381,7 +381,7 @@ class _PlannerCfg:
 
 
 def test_probe_verdict_matches_the_experimental_paths_refuse_mask_truncate_split():
-    """The planner (C-3) and build_experiment_obs_chi share ONE predicate, so pin all four verdicts.
+    """The probe planner and build_experiment_obs_chi share ONE predicate, so pin all four verdicts.
 
     The split being pinned is not about severity -- it is about train/eval consistency. Training masks
     a sub-cycle probe and keeps the row, so the experimental path must mask it too rather than reject
@@ -429,7 +429,8 @@ def test_probe_verdict_matches_the_experimental_paths_refuse_mask_truncate_split
 def test_fisher_features_takes_one_argument_and_its_channels_are_what_they_claim():
     """The Fisher block must be (log|chi|, cos, sin) per probe, in that order, from ONE argument.
 
-    Both halves are regressions, not hypotheticals (trap CHI10):
+    Both halves are regressions, not hypotheticals (the first let a near-constant channel inflate a
+    standardised Jacobian):
 
     * `fisher_features` used to take `(chi_stack, logcyc)`, and the jacobian diagnostic passed it
       `gen_chi_raw(...)[:2]` -- so `u` arrived wearing `logcyc`'s name and nothing complained,

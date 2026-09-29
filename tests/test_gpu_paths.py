@@ -1,4 +1,4 @@
-"""GPU-only paths of the stage contract (piece 1): what the CPU suites cannot see.
+"""GPU-only paths of the stage contract: what the CPU suites cannot see.
 
 Every other suite runs on the CPU, where ``.to(device)`` is a no-op and a tensor on the wrong device
 is invisible. The 2026-09-11 GPU gate (``python -m core smoke``) failed in the infer stage with a
@@ -6,8 +6,9 @@ CUDA observation row meeting CPU simulated statistics inside the posterior predi
 prior, posterior and validate had passed. This module is the regression test for that class: the
 tiny SBITEST run of ``tests/_fixtures.build_tiny_run`` on ``config.detect_device()``.
 
-``gpu``-marked: the root conftest skips it when CUDA is absent. It does not replace the smoke run
-(``docs/STATE.md``), which exercises the real bounds/cell files and the checkpoint resume.
+``gpu``-marked: the root conftest skips it when CUDA is absent. It does not replace the smoke gate
+on the card (``python -m core smoke`` run on the GPU), which exercises the real bounds/cell files
+and the checkpoint resume.
 """
 import pytest
 

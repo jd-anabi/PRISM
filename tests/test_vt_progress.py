@@ -12,7 +12,6 @@ THE BUG THESE LOCK DOWN
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
 Run:  pytest tests/test_vt_progress.py
-      (or just: pytest tests/test_gui_progress.py)
 """
 import os
 import tempfile
@@ -494,8 +493,9 @@ def test_spinner_animates_and_then_reports_a_stall():
 def test_the_solver_step_iterator_closes_its_bar_when_the_consumer_raises():
     """`sdeint._step_iter` is a GENERATOR wrapping the tqdm bar, so it adds a frame to the cancel's tqdm-lock unwind
     path -- a cancel raises from inside a bar redraw, and tqdm's own `finally: self.close()` has to run
-    anyway or its global write lock leaks and the NEXT `tqdm.__new__` DEADLOCKS. (C1's own test hangs
-    rather than failing, which is why this cheap structural guard is worth having in front of it.)
+    anyway or its global write lock leaks and the NEXT `tqdm.__new__` DEADLOCKS.
+    (test_cancel_token_latches_and_leaves_tqdm_usable, in tests/test_worker_dispatch.py, hangs rather
+    than failing, which is why this cheap structural guard is worth having in front of it.)
 
     Not a proof that the generator changed anything -- it is a guard on the property the generator put
     at risk.
@@ -600,10 +600,10 @@ def test_leave_true_pos0_bar_is_retired_not_left_pegged_at_100():
     assert prog.overall.maximum() == 0, "the overall bar is still determinate after the bar finished"
 
 def test_the_window_handler_feeds_the_pane_at_the_records_level_and_checks_cancel():
-    """V4 in the window. Severity used to come from the CHANNEL: stdout landed at info and stderr at
-    warning (streams.py:240-241), so the memory-statistics line wore a triangle and "loaded a
-    NON-AMORTIZED posterior" did not. A record carries its own level, and the handler hands it to the
-    same pump the streams feed, so it lands in the pane IN ORDER with the prints around it.
+    """Standard logging in the window. Severity used to come from the CHANNEL: stdout landed at info
+    and stderr at warning, so the memory-statistics line wore a triangle and "loaded a NON-AMORTIZED
+    posterior" did not. A record carries its own level, and the handler hands it to the same pump the
+    streams feed, so it lands in the pane IN ORDER with the prints around it.
 
     Two more things the handler must do exactly as _SignalStream.write does. It is a CANCEL
     CHECKPOINT (a run that only logs, never prints, must still stop at its next message), with the

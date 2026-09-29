@@ -12,7 +12,6 @@ THE BUG THESE LOCK DOWN
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
 Run:  pytest tests/test_nav_and_gating.py
-      (or just: pytest tests/test_gui_progress.py)
 """
 import ast
 import inspect
@@ -47,14 +46,14 @@ _USER_ROLE = _Qt.UserRole
 
 def _prior_stub(id_="p1", name=""):
     """A LoadedPrior-shaped stub: the tabs now read ``.prior``/``.force_prior`` off session.inf_prior
-    (piece 1, Task 4) rather than carrying the physical prior and forcing prior as separate session
-    fields, so a bare ``object()`` no longer stands in wherever a dispatched call is actually reached."""
+    rather than carrying the physical prior and forcing prior as separate session fields, so a bare
+    ``object()`` no longer stands in wherever a dispatched call is actually reached."""
     return type("LoadedPriorStub", (), {"prior": object(), "force_prior": object(),
                                          "id": id_, "name": name})()
 def _posterior_stub(id_="post1", name="", truncation=None, x_obs_digest=None):
     """A LoadedPosterior-shaped stub: the tabs now read ``.posterior`` (the TransformedPosterior) off
-    session.posterior (piece 1, Task 7) rather than carrying it directly, so a bare ``object()`` no
-    longer stands in wherever a dispatched call actually reaches ``session.posterior.posterior``."""
+    session.posterior rather than carrying it directly, so a bare ``object()`` no longer stands in
+    wherever a dispatched call actually reaches ``session.posterior.posterior``."""
     post = type("Post", (), {"truncation": truncation, "x_obs_digest": x_obs_digest, "latent": object()})()
     return type("LoadedPosteriorStub", (), {"posterior": post, "id": id_, "name": name})()
 def _chi_cfg(k=3, pad=12):
@@ -227,7 +226,7 @@ def test_plot_watcher_only_reports_pngs_written_after_start():
         assert seen == [("fdt3d vs S", "fdt3d_vs_S_20260714_120301.png")], seen
 
 def test_dispatch_watches_every_directory_it_is_given(tmp_path):
-    """Spec §4.1 makes the sweep study write TWO records, so its figures land in two separate
+    """The sweep study writes TWO records, so its figures land in two separate
     ``figures/`` directories -- and NewPngWatcher globs ONE directory and does not recurse
     (core/gui/plot_watcher.py: ``self._dir.glob("*.png")``). One watcher would therefore show the S
     sweep's plot and silently lose the T sweep's, which is the half of a long study you waited
@@ -372,14 +371,15 @@ def test_tsnpe_tab_is_gated_and_never_proposes_from_the_posterior():
             f"orchestrator.tsnpe_round, and a second copy in the GUI is how the two drift apart")
 
 def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
-    """⚠ SECTION 11.6 GUARDRAIL 2, at the seam where it is easiest to lose.
+    """⚠ The narrowed-model rule -- a narrowed posterior is marked as such and never loads or infers
+    as a broad one -- at the seam where it is easiest to lose.
 
-    Every posterior is now WRITTEN at completion (piece 1, Task 7), so there is no deferred-save
-    window for a region to fall out of on the way to disk -- but the SESSION must still carry the
-    right LoadedPosterior after a TSNPE round, after its Save (a rename, which must not touch the
-    body), and after an ordinary train replaces it. Three things, and the third is the one that is
-    easy to miss: the round installs a NON-AMORTIZED posterior, the Save renames it in place, and
-    training an ordinary posterior afterwards installs an AMORTIZED one.
+    Every posterior is now WRITTEN at completion, so there is no deferred-save window for a region to
+    fall out of on the way to disk -- but the SESSION must still carry the right LoadedPosterior after
+    a TSNPE round, after its Save (a rename, which must not touch the body), and after an ordinary
+    train replaces it. Three things, and the third is the one that is easy to miss: the round
+    installs a NON-AMORTIZED posterior, the Save renames it in place, and training an ordinary
+    posterior afterwards installs an AMORTIZED one.
     """
     from core.artifacts import Accept
     from core.SBI import reparam, truncate
@@ -423,8 +423,9 @@ def test_a_tsnpe_posterior_cannot_be_saved_as_amortized(store):
 
 
 def test_a_loaded_non_amortized_posterior_carries_its_region_into_the_session(store):
-    """⚠ GUARDRAIL 8's GUI half, plus D8's question. A non-amortized artifact is loaded through the
-    Posterior tab, which now ASKS first and opts in with ``Accept(truncated=True)`` only on a yes; the
+    """⚠ The calibrate-on-the-region rule's GUI half, plus the question the Posterior tab asks before
+    it loads a stored narrowed posterior. A non-amortized artifact is loaded through the Posterior
+    tab, which now ASKS first and opts in with ``Accept(truncated=True)`` only on a yes; the
     LoadedPosterior it installs carries the region, Validate passes that wrapper straight through to
     validate_calibration (which reads the region off ``posterior.posterior.truncation`` so calibration
     draws from the truncated prior), and an amortized LoadedPosterior clears it -- and is loaded with no
@@ -625,9 +626,10 @@ def test_inference_pickers_repoint_from_draft_and_config():
     assert inf.session.draft is not None, "install_config must not wipe the draft/session"
 
 def test_chi_probe_table_is_variable_length_and_capped_by_the_posteriors_slots():
-    """Backlog C-2. The core has always accepted 1..chi_k_pad probes at arbitrary frequencies; the GUI
-    was the only thing forcing a fixed grid. Rows must be addable and removable, and the cap must be
-    chi_k_pad -- which is FROZEN into the trained artifact, so exceeding it is not a soft limit."""
+    """The probe table has variable rows. The core has always accepted 1..chi_k_pad probes at arbitrary
+    frequencies; the GUI was the only thing forcing a fixed grid. Rows must be addable and removable,
+    and the cap must be chi_k_pad -- which is FROZEN into the trained artifact, so exceeding it is not
+    a soft limit."""
     from core.gui.screens.inference_screen import InferenceScreen
 
     qt_app()
@@ -664,17 +666,18 @@ def test_chi_probe_rows_keep_each_recording_paired_with_its_own_frequency():
     assert pairs == [("/tmp/rec0.csv", 1.0), ("/tmp/rec2.csv", 3.0), ("/tmp/rec3.csv", 4.0)], pairs
 
 def test_chi_probe_table_survives_a_config_rebuild_and_rejects_a_blank_frequency(tmp_path):
-    """Two C-2 constraints in one place, because both are about data the GUI cannot regenerate.
+    """Two constraints on the probe table's variable rows in one place, because both are about data
+    the GUI cannot regenerate.
 
     PRESERVATION: rows carry hand-typed drive frequencies and browsed paths -- a record of a bench
     session that already happened. Rebuilding the config (to fix a bounds file, say) must not discard
     them, unlike the forcing rows, which ARE derivable from the config.
 
-    BLANK FREQUENCY: a SEEDED row is blank (piece 4, B16) and is said to be blank. It used to arrive
-    holding "0.0" -- FloatField's own default -- and be refused as "must be a positive number (got
-    0)", a sentence about a value nobody entered, while 0 Hz is a genuine DC probe the lock-in would
-    happily attempt. A TYPED zero keeps that sentence, because a zero somebody typed is a different
-    state from a box nobody filled.
+    BLANK FREQUENCY: a SEEDED row is blank and is said to be blank. It used to arrive holding "0.0"
+    -- FloatField's own default -- and be refused as "must be a positive number (got 0)", a sentence
+    about a value nobody entered, while 0 Hz is a genuine DC probe the lock-in would happily attempt.
+    A TYPED zero keeps that sentence, because a zero somebody typed is a different state from a box
+    nobody filled.
     """
     from core.gui.screens.inference_screen import InferenceScreen
 
@@ -755,11 +758,11 @@ def test_a_new_probe_row_starts_blank_and_floatfield_accepts_none():
 
 
 def test_the_planner_and_the_probe_row_give_a_blank_frequency_one_sentence():
-    """B16's second half. One state had two wordings a user could meet minutes apart: the tab's
-    ``probe N: drive frequency is blank`` at the click, and "Plan probes…"'s ``no frequency entered``.
-    The tab's is the one, which also makes the planner's own "Filled N blank frequency box(es)" line
-    literally true. The TYPED-ZERO sentences are deliberately untouched at both layers -- the tab's
-    "(got 0)" and chi.probe_verdict's "must be finite and positive, got 0.0 Hz".
+    """One state had two wordings a user could meet minutes apart: the tab's ``probe N: drive
+    frequency is blank`` at the click, and "Plan probes…"'s ``no frequency entered``. The tab's is the
+    one, which also makes the planner's own "Filled N blank frequency box(es)" line literally true.
+    The TYPED-ZERO sentences are deliberately untouched at both layers -- the tab's "(got 0)" and
+    chi.probe_verdict's "must be finite and positive, got 0.0 Hz".
 
     Pinned on the row's real output and on the planner's PARSED source (code_only, so the comments in
     that region cannot answer for the code). The planner's branch is defensive: the nominal-grid fill
@@ -786,17 +789,17 @@ def test_the_planner_and_the_probe_row_give_a_blank_frequency_one_sentence():
 
 
 def test_the_planner_fills_a_blank_frequency_box_and_never_a_typed_zero():
-    """R9 (whole-piece review). B16 says a typed zero is a DIFFERENT STATE from a box nobody filled,
-    and the row's own ``problems()`` keeps them apart -- but the planner's auto-fill selected the
-    rows to overwrite with ``_probe_frequency(row) is None``, which maps a NON-POSITIVE box to None
-    too. So "Plan probes…" silently replaced a typed ``0`` with a suggested grid frequency and
-    counted it among the "blank boxes filled", while the comment directly above it reads "a typed
-    frequency is a record of what the bench actually did".
+    """A typed zero is a DIFFERENT STATE from a box nobody filled, and the row's own ``problems()``
+    keeps them apart -- but the planner's auto-fill selected the rows to overwrite with
+    ``_probe_frequency(row) is None``, which maps a NON-POSITIVE box to None too. So "Plan probes…"
+    silently replaced a typed ``0`` with a suggested grid frequency and counted it among the "blank
+    boxes filled", while the comment directly above it reads "a typed frequency is a record of what
+    the bench actually did".
 
-    That was invisible while every seeded row held ``0``; making the seed blank (B16) is what turned
-    it into a user-visible divergence -- the two layers now disagreed about the same box. The
-    predicate asks the blank-aware accessor instead, so a typed zero is left alone and refused as a
-    zero, which is the decision B16 made.
+    That was invisible while every seeded row held ``0``; making the seed blank is what turned it
+    into a user-visible divergence -- the two layers now disagreed about the same box. The predicate
+    asks the blank-aware accessor instead, so a typed zero is left alone and refused as a zero, as
+    the row's own ``problems()`` refuses it.
 
     Tested on the predicate rather than through ``_plan_chi_probes``, which needs a built config and
     a measured Ω₀ from a real recording: what changed is which rows are SELECTED."""
@@ -805,7 +808,7 @@ def test_the_planner_fills_a_blank_frequency_box_and_never_a_typed_zero():
     from tests._fixtures import qt_app
 
     qt_app()
-    blank = _ChiProbeRow(lambda _row: None)                     # B16's seed: an empty box
+    blank = _ChiProbeRow(lambda _row: None)                     # a seeded row: an empty box
     typed_zero = _ChiProbeRow(lambda _row: None, 0.0)           # a DC probe, or a typo for 10
     real = _ChiProbeRow(lambda _row: None, 42.0)
     half_typed = _ChiProbeRow(lambda _row: None)
@@ -818,7 +821,7 @@ def test_the_planner_fills_a_blank_frequency_box_and_never_a_typed_zero():
     assert _blank_frequency(real) is False
     assert typed_zero.freq.value_or_none() == 0.0, "the box still holds what was typed"
 
-    # ... and the row still REFUSES that zero, which is what B16 asks for instead of a silent fill.
+    # ... and the row still REFUSES that zero, instead of a silent fill.
     assert "probe 1: drive frequency must be a positive number (got 0)" in typed_zero.problems(0)
 
 
@@ -1081,8 +1084,8 @@ def test_simulated_inference_emits_the_ground_truth_figure(tmp_path):
     the stub emits it exactly as the real stage would before handing back a LoadedObservation-shaped
     stand-in.
 
-    The GUI runner this used to exercise is gone (piece 2, T6): the tab dispatches
-    orchestrator.simulated_inference directly, so the wiring under test is the composition's."""
+    The GUI runner this used to exercise is gone: the tab dispatches orchestrator.simulated_inference
+    directly, so the wiring under test is the composition's."""
     import types
     import torch
     from core import cli, orchestrator
@@ -1090,7 +1093,7 @@ def test_simulated_inference_emits_the_ground_truth_figure(tmp_path):
     qt_app()
 
     class Cfg:
-        length_unit = "nm"                       # trace y-axis unit (round-4 labels)
+        length_unit = "nm"                       # the trace figure's y-axis unit
         sources = {}
 
         def get_unit_conversion_factor(self, _unit):
@@ -1114,9 +1117,9 @@ def test_simulated_inference_emits_the_ground_truth_figure(tmp_path):
     cell.touch()                       # require_file("cell", …) runs before the (stubbed) parse
     try:
         post = types.SimpleNamespace(posterior=types.SimpleNamespace(x_obs_digest=None, truncation=None))
-        # T_obs=0.1s is below T_MIN_EXP_S on purpose (the spec's test row): record the resulting
-        # PreflightWarning instead of leaking it -- `match=` would re-emit any warning that does not
-        # match, and this call is not asserted to emit exactly one.
+        # T_obs=0.1s is below T_MIN_EXP_S on purpose: record the resulting PreflightWarning instead
+        # of leaking it -- `match=` would re-emit any warning that does not match, and this call is
+        # not asserted to emit exactly one.
         with pytest.warns(orchestrator.PreflightWarning) as rec:
             obs, inf = orchestrator.simulated_inference(
                 Cfg(), post, 0.1, cell=str(cell), fig_sink=lambda title, fig: seen.append(title))
@@ -1154,7 +1157,7 @@ def test_the_infer_tab_dispatches_the_compositions(tmp_path):
     panel.dispatch = lambda fn, *a, **k: cap.update(fn=fn, args=a, kwargs=k)
 
     # simulated, from a cell FILE. Real (empty) files: the click now refuses a missing cell or
-    # recording before it dispatches (V2), and the dispatch is stubbed so nothing reads them.
+    # recording before it dispatches, and the dispatch is stubbed so nothing reads them.
     cell = tmp_path / "cell.txt"
     cell.touch()
     panel.infer_mode.setCurrentIndex(0)
@@ -1195,7 +1198,7 @@ def test_the_infer_tab_dispatches_the_compositions(tmp_path):
     assert rec.T_obs_s == 2.0 and cap["kwargs"]["provide_fig_sink"] is True
     assert cap["kwargs"]["accept"] is None, "an amortized posterior dispatches no Accept"
 
-    # F16: a NON-AMORTIZED posterior with the box ticked -- the consent travels on both branches
+    # a NON-AMORTIZED posterior with the box ticked -- the consent travels on both branches
     inf.session.posterior = _posterior_stub(truncation=object(), x_obs_digest="d" * 16)
     inf.refresh_gates()
     panel.other_obs.setChecked(True)
@@ -1235,7 +1238,7 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
 
     # one near miss, answered yes. monkeypatch, never a bare rebind: an assertion that fails below
     # would otherwise leave the stub installed on core.orchestrator for the rest of this
-    # single-process gate, silently disabling D7 for every later test in the run.
+    # single-process gate, silently disabling the near-miss check for every later test in the run.
     # The detector must be asked about THIS run's identity: a stub that ignored its arguments stayed
     # green through a regression that dropped run_size_cap, where the real detector looks at another
     # identity, the dialog never shows, and the stage then refuses with advice to press a button that
@@ -1278,10 +1281,11 @@ def test_a_confirmed_near_miss_dispatches_new_run(monkeypatch):
 
 
 def test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel(monkeypatch):
-    """Enter on either dialog must do the SAFE thing. Spec §5.3 makes Cancel the default: on D8 the
-    other button loads a NON-AMORTIZED posterior with Accept(truncated=True), and on D7 it starts a
-    fresh cache one setting away from a committed one, the accident D7 exists to stop. Every other test
-    replaces the _ask_* methods, so only this one sees the dialogs themselves."""
+    """Enter on either dialog must do the SAFE thing, so Cancel is the default: on the load question
+    the other button loads a NON-AMORTIZED posterior with Accept(truncated=True), and on the near-miss
+    dialog it starts a fresh cache one setting away from a committed one, the accident the near-miss
+    dialog exists to stop. Every other test replaces the _ask_* methods, so only this one sees the
+    dialogs themselves."""
     from types import SimpleNamespace
     from PySide6.QtWidgets import QMessageBox
     from core.gui.screens.inference_screen import InferenceScreen
@@ -1424,8 +1428,8 @@ def test_the_tsnpe_tab_passes_a_load_bug_to_on_error_unwrapped(monkeypatch):
 
 
 def test_the_tsnpe_new_run_box_is_not_persisted():
-    """D7's consent is per-run. Persisting it would silence the near-miss refusal for every future
-    round in every future session -- exactly the accident the refusal exists to catch."""
+    """The near-miss consent is per-run. Persisting it would silence the near-miss refusal for every
+    future round in every future session -- exactly the accident the refusal exists to catch."""
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
 
     src = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(TSNPEPanel.save_settings))))
@@ -1435,10 +1439,11 @@ def test_the_tsnpe_new_run_box_is_not_persisted():
 
 
 def test_the_infer_tab_other_observation_box():
-    """D8 on the Infer tab. The box is the GUI's only way to say "yes, run this TSNPE posterior on a
-    different observation" -- and it must be UNREACHABLE for an amortized posterior, where it would mean
-    nothing, and must never survive a change of posterior or a restart: a stale tick would silence
-    guardrail 2 for a posterior the user never answered the question about."""
+    """The narrowed-posterior consent on the Infer tab. The box is the GUI's only way to say "yes, run
+    this TSNPE posterior on a different observation" -- and it must be UNREACHABLE for an amortized
+    posterior, where it would mean nothing, and must never survive a change of posterior or a restart:
+    a stale tick would silence the narrowed-model rule for a posterior the user never answered the
+    question about."""
     from core.artifacts import Accept
     from core.gui.screens.inference_screen import InferenceScreen
     from core.gui.session import SbiSession
@@ -1476,10 +1481,10 @@ def test_the_infer_tab_other_observation_box():
 
 
 def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
-    """V3's window half. A Refusal names its field by a key and never a box, tab, button or flag;
-    the yellow "Check your inputs" box gets its "how to fix here" line from ONE table, and the
-    inference tabs build their static rows from the same table's labels (label(key)), so a control
-    is named in one place and a renamed one cannot leave a stale sentence behind.
+    """The window's half of the refusal contract. A Refusal names its field by a key and never a box,
+    tab, button or flag; the yellow "Check your inputs" box gets its "how to fix here" line from ONE
+    table, and the inference tabs build their static rows from the same table's labels (label(key)),
+    so a control is named in one place and a renamed one cannot leave a stale sentence behind.
 
     (a) the table knows every registry key and no other -- an unmapped key would show a refusal
         with no way out, and an entry nobody raises is a sentence that can go stale unseen;
@@ -1487,15 +1492,15 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         SCREENS, a non-empty label, and renders the box sentence; a sentence entry is
         returned verbatim and has no label; a None entry says nothing and has no label; and none
         of the three ever raises from fix_sentence, which runs while a refusal is being shown;
-    (c) the sentences the walkthrough rows C2 and C3 read, and the consents, verbatim -- each
-        quotes the control's own text (posterior_tab.py:195, tsnpe_tab.py:88, infer_tab.py:112);
+    (c) the T_obs and direction-count sentences a user reads on the real screen, and the consents,
+        verbatim -- the consents quote their controls' own text (posterior_tab.py:232,
+        tsnpe_tab.py:102, infer_tab.py:150);
     (d) the keys with no window control are exactly the six the window never exposes, the eleven
-        tool-only diagnostics knobs, and the five FDT settings neither front end exposes (P2), so a
+        tool-only diagnostics knobs, and the five FDT settings neither front end exposes, so a
         tool-only key renders no window sentence;
     (e) the three drive labels are built exactly as the Infer tab builds its rows
         (_rebuild_forcing_fields: labels.gui_forcing_label with config.FORCING_DISPLAY_UNITS, which
-        cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built Infer tab (Task 15)
-        can find them.
+        cli.INFERENCE_PROMPT_UNITS aliases), so the read-back over the built Infer tab can find them.
     """
     from core import config
     import core.gui.fields as gui_fields
@@ -1509,7 +1514,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 
     # (b) the three shapes, against the tab titles of EVERY section plus the two screens.
     # Read off the built window, not off a list written here: a renamed tab must fail this, and an
-    # entry that names the FDT analysis tab is as real as one that names the Infer tab (E6).
+    # entry that names the FDT analysis tab is as real as one that names the Infer tab.
     qt_app()
     from core.gui.main_window import MainWindow
     window = MainWindow()
@@ -1530,9 +1535,8 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
             assert names and all(t in places for t in names), f"{key}: {tab!r} is not a place"
             assert isinstance(text, str) and text, f"{key}: empty label"
             assert gui_fields.label(key) == text
-            # the place phrase through _where itself, pinned verbatim below (the mixed tab+screen
-            # case included): one noun for the whole tuple would be a false red on the first mixed
-            # entry (the whole-piece review's N33)
+            # the place phrase through _where itself, pinned verbatim below (the mixed tab+screen case
+            # included): one noun for the whole tuple would be a false red on the first mixed entry
             assert gui_fields.fix_sentence(key) == \
                 f"Set it in the '{text}' box on {gui_fields._where(tab)}."
         elif isinstance(entry, str):
@@ -1550,7 +1554,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     with pytest.raises(KeyError):
         gui_fields.label("no_such_key")
 
-    # (c) verbatim: the walkthrough sentences and the consents
+    # (c) verbatim: the sentences a user reads on the real screen, and the consents
     assert gui_fields.fix_sentence("t_obs") == \
         "Set it in the 'T_obs (s)' box on the Infer or Live simulation tab."
     assert gui_fields.fix_sentence("n_directions") == \
@@ -1575,7 +1579,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
     assert gui_fields.CONTROL["num_runs"] == (("Posterior", "TSNPE"), "Batches")
     assert gui_fields.fix_sentence("run_size_cap") == \
         "Set it in the 'Max rows per batch (0 = auto)' box on the Posterior or TSNPE tab."
-    # E6: an input that appears in several places lists them ALL. The cell picker is on five of
+    # An input that appears in several places lists them ALL. The cell picker is on five of
     # them, and a bad cell chosen on the measurement screen used to send the owner to the Infer tab.
     assert gui_fields.fix_sentence("cell") == (
         "Set it in the 'Cell' box on the Infer or FDT analysis or Sweep study cross-validation or "
@@ -1584,20 +1588,20 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "Set it in the 'Model' box on the Config or FDT analysis or Live simulation tab.")
     assert gui_fields.fix_sentence("n_freqs") == (
         "Set it in the 'n_freqs' box on the FDT analysis or Sweep study cross-validation tab.")
-    # the whole-piece review's N23: the label is the word the row SHOWS, and the row renders it
+    # the label is the word the row SHOWS, and the row renders it
     assert gui_fields.fix_sentence("ensemble_m") == (
         "Set it in the 'M_ensemble' box on the FDT analysis or Sweep study cross-validation tab.")
     assert labels.pretty_gui(gui_fields.label("ensemble_m")) == "M<sub>ensemble</sub>"
     assert gui_fields.label("freqs_per_batch") == "freqs / batch" == \
         labels.pretty_gui(gui_fields.label("freqs_per_batch"))
     assert gui_fields.label("s_grid") == "S grid  (T_a/T = 1)", \
-        "a box on a SCREEN still has a label, so a row and its hint cannot drift apart (§5.2)"
-    # the screen noun, exercised on a place no key claims yet: Task 22's model-builder keys will.
+        "a box on a SCREEN still has a label, so a row and its hint cannot drift apart"
+    # the screen noun, on its own and beside a tab
     assert gui_fields._where(("Model Builder",)) == "the Model Builder screen"
     assert gui_fields._where(("Artifacts", "Model Builder")) == "the Artifacts or Model Builder screen"
     assert gui_fields._where(("Infer", "Model Builder")) == "the Infer tab or the Model Builder screen"
     assert gui_fields._where("Posterior") == "the Posterior tab"
-    # piece 4's two, on the Artifacts screen rather than a tab (B5, design §2.5)
+    # the Artifacts screen's two, on a screen rather than a tab
     assert gui_fields.fix_sentence("artifact") == "Select an artifact in the list on the Artifacts screen."
     assert gui_fields.fix_sentence("note") == (
         "Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
@@ -1608,7 +1612,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "checkpoint_every", "resume", "device", "n_samples", "num_posterior_samples", "max_num_epochs",
         "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
         "n_sweep", "chi_k_fixed",
-        # piece 5 (P2, P75): the five FDT settings neither front end exposes
+        # the five FDT settings neither front end exposes
         "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd"}
 
     # (e) the drive labels, as the Infer tab builds them
@@ -1622,12 +1626,12 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
 
 def test_a_rename_failure_reads_as_a_name_refusal(monkeypatch):
     """Save on the Prior and Posterior tabs is a rename, and a bad or taken name is a StoreError -- a
-    Refusal with field="name" since piece 3 -- so it opens the yellow box with the core's sentence
-    as its text and this front end's fix ``fix_sentence("name")``, which starts "Choose another name
-    in the Save box" and goes on to the record and comparison name boxes, under it. It used
-    to go through _config_error, whose box read "The configuration could not be built." over a
-    sentence about a name: a lie for a rename. A rename that fails for any other reason is a bug and
-    stays red, with its traceback. Either way the loaded artifact keeps its old name."""
+    Refusal with field="name" -- so it opens the yellow box with the core's sentence as its text and
+    this front end's fix ``fix_sentence("name")``, which starts "Choose another name in the Save box"
+    and goes on to the record and comparison name boxes, under it. It used to go through
+    _config_error, whose box read "The configuration could not be built." over a sentence about a
+    name: a lie for a rename. A rename that fails for any other reason is a bug and stays red, with
+    its traceback. Either way the loaded artifact keeps its old name."""
     import types
     from PySide6.QtWidgets import QMessageBox
     from core.artifacts import StoreError
@@ -1689,9 +1693,9 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     installed on the session and nothing is dispatched either way.
 
     And a source pin, because the routing is a rule for all five inference tabs: none of
-    core/gui/panels/inference/*.py calls _config_error any more. Piece 5 retired that method
-    altogether once the four section panels were converted; the pin stays, because the scan is what
-    stops a new tab reintroducing the call."""
+    core/gui/panels/inference/*.py calls _config_error any more. That method was retired altogether
+    once the four section panels were converted; the pin stays, because the scan is what stops a new
+    tab reintroducing the call."""
     import types
     from PySide6.QtWidgets import QMessageBox
     import core.gui.panels.inference as inference_pkg
@@ -1736,8 +1740,8 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
     assert reached == [] and pane.lines[-1] == ("error", "division by zero")
 
     # A bounds file that vanished between the picker's refresh and the click, through the REAL
-    # builder: cli.make_sim_config refuses it by the input kind (§3.3), so it is the yellow box naming
-    # the Bounds picker -- not the parser's FileNotFoundError in the red one.
+    # builder: cli.make_sim_config refuses it by the input kind, so it is the yellow box naming the
+    # Bounds picker -- not the parser's FileNotFoundError in the red one.
     from core import cli, registry
     from core.config import VALID_LABELS, VALID_MODELS
     gone = str(tmp_path / "gone.txt")
@@ -1763,27 +1767,26 @@ def test_the_inference_tabs_route_builder_failures_by_kind_and_no_longer_call_co
 
 
 def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch, tmp_path):
-    """Spec §5.1. The FDT, CrossVal, Reduction and Simulate panels used to wrap their builder in a
-    broad ``except`` ending at ``BasePanel._config_error``, whose box read "The configuration could
-    not be built." over whatever sentence it had caught -- one box for a blank number and for a bug
-    in the parser alike, and no way to tell which you were looking at. They now do what the six
-    inference tabs have done since piece 3: a ``Refusal`` opens the yellow "Check your inputs" box
-    with the CORE's own sentence as its text and this front end's "where to fix it" under it, and
-    anything else is a bug and keeps the red box with its traceback behind Details. Nothing is
-    dispatched either way.
+    """The FDT, CrossVal, Reduction and Simulate panels used to wrap their builder in a broad
+    ``except`` ending at ``BasePanel._config_error``, whose box read "The configuration could not be
+    built." over whatever sentence it had caught -- one box for a blank number and for a bug in the
+    parser alike, and no way to tell which you were looking at. They now do what the six inference
+    tabs already did: a ``Refusal`` opens the yellow "Check your inputs" box with the CORE's own
+    sentence as its text and this front end's "where to fix it" under it, and anything else is a bug
+    and keeps the red box with its traceback behind Details. Nothing is dispatched either way.
 
     This REPLACES test_the_secondary_panels_still_show_a_bad_cell_as_check_your_inputs, which pinned
     the unconverted behaviour across both exception shapes on purpose: a half-converted state cannot
-    be expressed in it, so it is rewritten rather than extended (spec §5.1).
+    be expressed in it, so it is rewritten rather than extended.
 
     The Reduction panel's builder is stubbed like the other three, and the stub is enough: the real
     cli.make_reduction_config refuses through cli.parse_cell -- a cell missing a value the bounds file
     declares, and a legacy cell with no time unit -- and both are Refusal(field="cell"), so the stub's
     Refusal takes exactly their path through the panel, whose arm is chosen by the exception's type
-    and never by its words (F42). What the stub cannot stand in for is the one check the panel makes
+    and never by its words. What the stub cannot stand in for is the one check the panel makes
     itself: its F0 box is read at the click, before the builder, because a blank box reads as 0 and
-    make_reduction_config takes F0 as given (F15). That case is asserted against a BLANK box and not
-    only a typed zero (Review Focus 3).
+    make_reduction_config takes F0 as given. That case is asserted against a BLANK box and not only a
+    typed zero.
 
     The source pin at the end is the point of the section: ``_config_error`` is gone from BasePanel
     and no module under core/gui names it, so no later panel can quietly route a failure back into a
@@ -1848,7 +1851,7 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
         assert box.text() == "the parser fell over", name
         assert "RuntimeError" in box.detailedText(), name
 
-    # (c) the Reduction panel's F0 box, checked at the click and before the builder (F15): a blank
+    # (c) the Reduction panel's F0 box, checked at the click and before the builder: a blank
     #     box -- which value() would have read as 0 -- and a typed 0 are both the yellow box naming
     #     the setting, and the builder is never reached
     monkeypatch.setattr(cli, "make_reduction_config",
@@ -1866,10 +1869,10 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
         assert box.informativeText() == gui_fields.fix_sentence("f0"), typed
         assert "NWK → Hopf reduction map" in box.informativeText(), box.informativeText()
 
-    # (d) the whole-piece review's N16 (L630): a cell deleted after it was picked. The panel checks
-    #     the file itself, beside the F0 check (P19: make_reduction_config stays untouched), so it is
-    #     one yellow box naming the cell -- not a FileNotFoundError out of the parser in the red one,
-    #     the regression removing _config_error caused. The builder is never reached.
+    # (d) a cell deleted after it was picked. The panel checks the file itself, beside the F0 check
+    #     (make_reduction_config stays untouched), so it is one yellow box naming the cell -- not a
+    #     FileNotFoundError out of the parser in the red one, the regression removing _config_error
+    #     caused. The builder is never reached.
     gone = tmp_path / "deleted_after_the_pick.txt"
     reduction.cell_picker.selected_path = lambda: str(gone)
     reduction.f0.setText("0.05")
@@ -1881,7 +1884,7 @@ def test_the_four_secondary_panels_route_a_refusal_apart_from_a_bug(monkeypatch,
     assert box.windowTitle() == "Check your inputs" and "was not found" in box.text(), box.text()
     assert box.informativeText() == gui_fields.fix_sentence("cell"), box.informativeText()
 
-    # (d) the generic box is gone, and nothing under core/gui reaches for it
+    # (e) the generic box is gone, and nothing under core/gui reaches for it
     assert not hasattr(BasePanel, "_config_error")
     gui_root = Path(sim_mod.__file__).resolve().parents[1]
     for path in sorted(gui_root.rglob("*.py")):
@@ -1925,14 +1928,14 @@ def test_the_fdt_panel_leaves_an_unsupported_model_to_the_builders_refusal(monke
 
 
 def test_the_fdt_panel_offers_only_single_cell_records(monkeypatch):
-    """Spec §5.4. One kind holds three studies (E3), so the FDT screen's picker must filter to its
-    own: a sweep record has no single-cell ratio curve to draw and a comparison is a picture of other
-    records, and offering either would hand T27's viewer a body whose ``grid`` is null by design.
+    """One kind holds three studies, so the FDT screen's picker must filter to its own: a sweep
+    record has no single-cell ratio curve to draw and a comparison is a picture of other records, and
+    offering either would hand the panel's record viewer a body whose ``grid`` is null by design.
 
-    The filter is the picker's row predicate (T24), applied to the ``Summary`` rows, so nothing about
-    the kind's other studies has to be known here.
+    The filter is the picker's row predicate, applied to the ``Summary`` rows, so nothing about the
+    kind's other studies has to be known here.
 
-    The tail pins the rows' labels (P34): the seven registered rows are built from label(key), and the
+    The tail pins the rows' labels: the seven registered rows are built from label(key), and the
     two literal ones -- "Record name" and "Note", whose keys are sentence entries with no label() --
     are read back off the form and must be the words the ``name`` and ``note`` fix sentences quote,
     because the control-table read-back skips sentence entries and nothing else would catch a drift."""
@@ -1958,7 +1961,7 @@ def test_the_fdt_panel_offers_only_single_cell_records(monkeypatch):
     from tests._fixtures import code_only
     src = code_only(FdtPanel._build_controls)
     for key in ("model", "cell", "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "seed"):
-        assert f"label({key!r})" in src, f"the FDT panel must build its {key} row from label({key!r}) (P34)"
+        assert f"label({key!r})" in src, f"the FDT panel must build its {key} row from label({key!r})"
 
     shown = []
     for form in panel.findChildren(QFormLayout):
@@ -1975,11 +1978,11 @@ def test_the_fdt_panel_offers_only_single_cell_records(monkeypatch):
 
 
 def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path, monkeypatch):
-    """Spec §1.2 and §5.4, forced by V4. The panel must know the record's directory BEFORE the run
-    starts, because that directory is what the figure watcher is pointed at -- and it must not enter
-    the writer itself, because ``log.txt`` is written from ``runs.current_run_log()``, which is
-    thread-local and is only populated inside ``capture_run()`` on the WORKER thread. A writer entered
-    on the window's thread would write no log at all.
+    """Forced by the ``log.txt`` every committed record carries. The panel must know the record's
+    directory BEFORE the run starts, because that directory is what the figure watcher is pointed at
+    -- and it must not enter the writer itself, because ``log.txt`` is written from
+    ``runs.current_run_log()``, which is thread-local and is only populated inside ``capture_run()``
+    on the WORKER thread. A writer entered on the window's thread would write no log at all.
 
     So: the front end CREATES (the id is minted and the name claimed, and nothing is on disk yet) and
     the stage ENTERS. This pins all four halves of that -- the writer travels as a keyword, the first
@@ -1987,7 +1990,7 @@ def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path, monkeyp
     ``create`` has written nothing, since ``__enter__`` is what does the mkdir.
 
     The Seed box is read ONCE and the same value reaches both halves: the builder (``cfg.seed``) and
-    the run (the ``seed`` keyword). A BLANK box is the E7 case and the reason the box is read with
+    the run (the ``seed`` keyword). A BLANK box means no seed, and is the reason the box is read with
     value_or_none(): None reaches both halves -- value() would have sent a seed of 0 nobody typed --
     and the stage then draws one and records it. That last leg drives the dispatched call through the
     real run_fdt with only the measurement stubbed; the draw comes from a seeded Random patched in as
@@ -2043,15 +2046,15 @@ def test_the_fdt_panel_creates_the_record_before_it_dispatches(tmp_path, monkeyp
 
 
 def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
-    """Review Focus 2. A progressive record occupies its name from its first moment (spec §2.2), and
-    ``create`` runs ``assert_name_free``, so a second run started while an unfinished record of the
-    same name sits on disk is refused BEFORE it spends anything -- rather than colliding hours later
-    at a commit, which is how a finished run gets thrown away.
+    """A progressive record occupies its name from its first moment, and ``create`` runs
+    ``assert_name_free``, so a second run started while an unfinished record of the same name sits on
+    disk is refused BEFORE it spends anything -- rather than colliding hours later at a commit, which
+    is how a finished run gets thrown away.
 
     The refusal is a StoreError, a Refusal subclass carrying ``field="name"``, so it belongs in the
     yellow "Check your inputs" box like every other input refusal on this screen. Raised out of the
     clicked slot instead, it would reach app.py's last-resort excepthook as a raw traceback with
-    nothing in the panel's own log -- the defect BasePanel._config_error's docstring describes."""
+    nothing in the panel's own log."""
     from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.fdt_panel import FdtPanel
@@ -2083,15 +2086,14 @@ def test_a_taken_fdt_record_name_is_refused_at_the_click(tmp_path):
 @pytest.mark.parametrize("panel_name", ["fdt", "crossval"])
 def test_a_blank_knob_box_is_refused_as_blank_on_both_measurement_tabs(tmp_path, monkeypatch,
                                                                        panel_name, key):
-    """The whole-piece review's N21 (FE5, T4, S5's click half). Both tabs read their four knob boxes
-    with value(), which turns a blank into 0: the FDT tab then said "must be at least 1; got 0" about
-    a value nobody typed, where the Reduction tab says the same key "is blank". And the CrossVal
-    builder reads None as "use the preset", so reading the boxes with value_or_none() alone -- the
-    "consistency" edit the grid rows invite -- would have run the preset's value in silence. The FDT
-    tab hands the builder the blank (value_or_none), and the CrossVal tab refuses the blank itself
-    before the builder (require_given): one yellow box, "is blank", the fix line naming the box, and
-    nothing dispatched or minted. The fix line is read through ``fix_sentence`` (ruling R-F11), never
-    a copy of the box's label."""
+    """Both tabs read their four knob boxes with value(), which turns a blank into 0: the FDT tab
+    then said "must be at least 1; got 0" about a value nobody typed, where the Reduction tab says the
+    same key "is blank". And the CrossVal builder reads None as "use the preset", so reading the boxes
+    with value_or_none() alone -- the "consistency" edit the grid rows invite -- would have run the
+    preset's value in silence. The FDT tab hands the builder the blank (value_or_none), and the
+    CrossVal tab refuses the blank itself before the builder (require_given): one yellow box, "is
+    blank", the fix line naming the box, and nothing dispatched or minted. The fix line is read
+    through ``fix_sentence``, never a copy of the box's label."""
     from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
@@ -2119,12 +2121,12 @@ def test_a_blank_knob_box_is_refused_as_blank_on_both_measurement_tabs(tmp_path,
 
 @pytest.mark.parametrize("how", ["too_long", "two_lines"])
 def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
-    """Fix round 1 (T25). The store does not judge a note's text -- ``ArtifactStore.set_note``'s
-    docstring says so -- and every front end runs ``core.refusals.require_note`` before it writes one:
-    ONE line, at most NOTE_MAX_CHARS. The FDT panel passed its Note box straight to ``create``, so a
-    201-character note or a pasted two-line one was stored as typed, and the Artifacts screen then
-    showed a note its own Set button refuses to write back -- while ``fix_sentence("note")`` named
-    this box for a refusal nothing here could raise.
+    """The store does not judge a note's text -- ``ArtifactStore.set_note``'s docstring says so --
+    and every front end runs ``core.refusals.require_note`` before it writes one: ONE line, at most
+    NOTE_MAX_CHARS. The FDT panel passed its Note box straight to ``create``, so a 201-character note
+    or a pasted two-line one was stored as typed, and the Artifacts screen then showed a note its own
+    Set button refuses to write back -- while ``fix_sentence("note")`` named this box for a refusal
+    nothing here could raise.
 
     A line edit DOES hold a line break: ``insert`` (and a real paste) keeps it, so the two-line case
     is asserted to have one before the click, or this would pass on a note that never had it. The
@@ -2165,10 +2167,10 @@ def test_an_fdt_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
 
 
 def test_the_fdt_panel_names_the_record_its_run_wrote(tmp_path):
-    """Spec §8.2 and E1. run_fdt used to return None, so a finished run left the operator to find its
-    output by hand; it now returns the LoadedFdt it wrote, and the panel's result slot must say which
-    record that was -- by name AND id, since an unnamed record has only the id -- and move the
-    saved-run picker onto it, so the selection matches the figures already in the stack.
+    """run_fdt used to return None, so a finished run left the operator to find its output by hand;
+    it now returns the LoadedFdt it wrote, and the panel's result slot must say which record that was
+    -- by name AND id, since an unnamed record has only the id -- and move the saved-run picker onto
+    it, so the selection matches the figures already in the stack.
 
     The record is written AFTER the panel is built, so the picker's first listing cannot hold it: a
     picker that ends up on it proves the slot re-listed the store rather than restoring a key into a
@@ -2198,23 +2200,23 @@ def test_the_fdt_panel_names_the_record_its_run_wrote(tmp_path):
 
 
 def test_the_crossval_panel_creates_one_writer_per_swept_parameter(tmp_path):
-    """Spec §4.1 and E4. The study sweeps two parameters and now writes a record for each, so the
-    panel creates TWO writers and hands them over keyed by the same names ``run_fdt_param_sweep``
-    already uses for ``sweep_param`` -- "s" and "temp". One record would put an all-failed activity
-    sweep and a good temperature sweep in one folder with one ``points`` block, which is precisely the
-    coupling E4 removes: before piece 5 an all-failed S sweep raised before the T sweep even started.
+    """The study sweeps two parameters and now writes a record for each, so the panel creates TWO
+    writers and hands them over keyed by the same names ``run_fdt_param_sweep`` already uses for
+    ``sweep_param`` -- "s" and "temp". One record would put an all-failed activity sweep and a good
+    temperature sweep in one folder with one ``points`` block, which is precisely the coupling two
+    records remove: an all-failed S sweep used to raise before the T sweep even started.
 
-    The base name is suffixed per parameter (``-s``, ``-temp``, P31), because two records cannot hold
-    one name: a name is claimed at create() and a progressive record holds it from its first moment
-    (spec §2.2) -- and ``assert_name_free`` reads only the disk, so two creates of ONE name before
-    either is entered would both pass; the distinct suffixes are what keep that unreachable from the
-    window. Both ``figures/`` directories are watched (one watcher each), and neither directory
-    exists yet -- __enter__ on the worker thread is what creates them.
+    The base name is suffixed per parameter (``-s``, ``-temp``), because two records cannot hold one
+    name: a name is claimed at create() and a progressive record holds it from its first moment --
+    and ``assert_name_free`` reads only the disk, so two creates of ONE name before either is entered
+    would both pass; the distinct suffixes are what keep that unreachable from the window. Both
+    ``figures/`` directories are watched (one watcher each), and neither directory exists yet --
+    __enter__ on the worker thread is what creates them.
 
     The Seed box is read ONCE and the same value reaches the builder (``cfg.seed``), the run and both
-    first bodies; a BLANK box is None in all three (E7), never a seed of 0 nobody typed. A blank name
-    gives two unnamed records, which must still be two ids and two folders (F4: back-to-back creates
-    used to mint one id, so the temperature sweep's folder collided after the whole activity sweep)."""
+    first bodies; a BLANK box is None in all three, never a seed of 0 nobody typed. A blank name
+    gives two unnamed records, which must still be two ids and two folders (back-to-back creates used
+    to mint one id, so the temperature sweep's folder collided after the whole activity sweep)."""
     from core.artifacts import ArtifactStore, use_store
     from core.FDT.cross_validation import run_param_study_cli
     from core.gui.panels.crossval_panel import CrossValPanel
@@ -2236,24 +2238,24 @@ def test_the_crossval_panel_creates_one_writer_per_swept_parameter(tmp_path):
     writers = cap["kwargs"]["writers"]
     assert sorted(writers) == ["s", "temp"], sorted(writers)
     assert [writers[k].name for k in ("s", "temp")] == ["study_one-s", "study_one-temp"]
-    assert writers["s"].id != writers["temp"].id, "two records minted one id (F4)"
+    assert writers["s"].id != writers["temp"].id, "two records minted one id"
     assert all(w.kind == "fdt" and w.note == "both halves" for w in writers.values())
     assert cap["kwargs"]["seed"] == 99
     cfg = cap["args"][0]
     assert cfg.seed == 99, "the builder's half: the dispatched config carries the seed"
     assert cfg.preset_name == panel.preset_combo.currentText(), \
-        "the preset's NAME must reach the record's settings (T11, P72)"
+        "the preset's NAME must reach the record's settings"
     assert all(w.body["study"] == "sweep" and w.body["seed"] == 99 for w in writers.values())
     assert all(w.body["complete"] is False and w.body["notices"] == [] for w in writers.values())
     assert all(w.body[k] is None for w in writers.values()
                for k in ("settings", "grid", "points", "offgrid", "compared", "results")), \
-        "the stage fills the rest (P15)"
+        "the stage fills the rest"
     assert cap["kwargs"]["watch_dir"] == [writers["s"].dir / "figures",
                                           writers["temp"].dir / "figures"]
     assert not any(w.dir.exists() for w in writers.values()), \
         "create() must not touch the disk; the stage's __enter__ does the mkdir"
     assert "s_grid" in cap["kwargs"] and "t_grid" in cap["kwargs"], \
-        f"the grids travel as keywords now (T19's signature): {sorted(cap['kwargs'])}"
+        f"the grids travel as keywords now: {sorted(cap['kwargs'])}"
 
     # A blank name and a blank Seed box: two unnamed records in two folders, and None everywhere
     cap.clear()
@@ -2264,7 +2266,7 @@ def test_the_crossval_panel_creates_one_writer_per_swept_parameter(tmp_path):
     blank = cap["kwargs"]["writers"]
     assert [blank[k].name for k in ("s", "temp")] == ["", ""]
     assert blank["s"].id != blank["temp"].id and blank["s"].dir != blank["temp"].dir, \
-        "two unnamed records share one folder (F4)"
+        "two unnamed records share one folder"
     assert cap["kwargs"]["seed"] is None, "a blank box must not reach the run as a seed of 0"
     assert cap["args"][0].seed is None, "a blank box must not reach the builder as a seed of 0"
     assert all(w.body["seed"] is None for w in blank.values()), \
@@ -2272,11 +2274,11 @@ def test_the_crossval_panel_creates_one_writer_per_swept_parameter(tmp_path):
 
 
 def test_a_taken_crossval_record_name_is_refused_at_the_click(tmp_path):
-    """Review Focus 2, for the study's SECOND name. The two creates sit inside the builder's ``try``,
-    so a taken name -- here only the temperature sweep's, ``<base>-temp`` -- is the StoreError
-    (field "name") of the yellow box rather than a raw traceback out of the clicked slot, and it is
-    raised before anything is dispatched. The activity sweep's writer was already created by then,
-    but create() writes nothing, so the refused click leaves no folder behind."""
+    """The taken-name refusal, for the study's SECOND name. The two creates sit inside the builder's
+    ``try``, so a taken name -- here only the temperature sweep's, ``<base>-temp`` -- is the
+    StoreError (field "name") of the yellow box rather than a raw traceback out of the clicked slot,
+    and it is raised before anything is dispatched. The activity sweep's writer was already created
+    by then, but create() writes nothing, so the refused click leaves no folder behind."""
     from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
@@ -2309,18 +2311,18 @@ def test_a_taken_crossval_record_name_is_refused_at_the_click(tmp_path):
 @pytest.mark.parametrize("grid", ["s_grid", "t_grid"])
 @pytest.mark.parametrize("box", ["lo", "hi", "points"])
 def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, monkeypatch, grid, box):
-    """Review Focus 3, carried from Task 8's review. The grid row used to read its three boxes with
-    value(), which turns a blank into 0 -- and 0 is a legal END of a sweep, so no rule the builder
-    could write refuses it: a blank min under a positive max arrived as (0.0, 1.5, n) and passed
-    "min below max", running a sweep nobody typed (for the temperature grid, one starting below the
-    bounds' own 0.05 floor). Each box is now read through value_or_none(), so a blank end reaches
-    cli._check_grid as None and is refused as blank, and a blank count as fewer than 2 points --
-    either way the yellow box, the refusal naming THAT grid, and nothing dispatched or minted.
+    """The grid row used to read its three boxes with value(), which turns a blank into 0 -- and 0 is
+    a legal END of a sweep, so no rule the builder could write refuses it: a blank min under a
+    positive max arrived as (0.0, 1.5, n) and passed "min below max", running a sweep nobody typed
+    (for the temperature grid, one starting below the bounds' own 0.05 floor). Each box is now read
+    through value_or_none(), so a blank end reaches cli._check_grid as None and is refused as blank,
+    and a blank count as fewer than 2 points -- either way the yellow box, the refusal naming THAT
+    grid, and nothing dispatched or minted.
 
-    The whole-piece review's N20 (L684): a blank COUNT used to read "needs at least 2 points; got 0",
-    a typed 0 nobody typed, against the house rule that a blank is refused as a blank; and every blank
-    part is now named -- its minimum, its maximum or its point count. "Nothing minted" is asserted by
-    ``create`` failing the test: a folder check could not fail, because ``create`` writes nothing."""
+    A blank COUNT used to read "needs at least 2 points; got 0", a typed 0 nobody typed, against the
+    house rule that a blank is refused as a blank; and every blank part is now named -- its minimum,
+    its maximum or its point count. "Nothing minted" is asserted by ``create`` failing the test: a
+    folder check could not fail, because ``create`` writes nothing."""
     from PySide6.QtWidgets import QMessageBox
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
@@ -2352,12 +2354,11 @@ def test_a_blank_crossval_grid_box_is_refused_naming_its_grid(tmp_path, monkeypa
 
 
 def test_the_crossval_panel_fills_each_grid_in_ascending_order(tmp_path):
-    """Carried from Task 8's review. Each sweep runs from its FDT-restoring limit to the cell's own
-    value, and the panel used to fill the ends in THAT order: the temperature grid as lo=1, hi=the
-    cell's T_a/T. The bounds allow T_a/T anywhere in (0.05, 10), so for a cell below 1 the panel's own
-    untouched default was descending and "min below max" (spec §4.4) refused it -- a cell nobody could
-    sweep without retyping two boxes. The ends are now filled in ascending order; the sweep covers
-    the same points either way.
+    """Each sweep runs from its FDT-restoring limit to the cell's own value, and the panel used to
+    fill the ends in THAT order: the temperature grid as lo=1, hi=the cell's T_a/T. The bounds allow
+    T_a/T anywhere in (0.05, 10), so for a cell below 1 the panel's own untouched default was
+    descending and "min below max" refused it -- a cell nobody could sweep without retyping two
+    boxes. The ends are now filled in ascending order; the sweep covers the same points either way.
 
     The cell is a copy of a real one with only T_a/T changed, written into this test's own directory
     (never into Resources/); a cell outside the model folder resolves the model's master bounds file,
@@ -2394,11 +2395,10 @@ def test_the_crossval_panel_fills_each_grid_in_ascending_order(tmp_path):
 
 @pytest.mark.parametrize("how", ["too_long", "two_lines"])
 def test_a_crossval_record_note_is_judged_at_the_click(tmp_path, monkeypatch, how):
-    """Carried from Task 25's fix round. The store does not judge a note's text
-    (``ArtifactStore.set_note``'s docstring) and every front end runs ``core.refusals.require_note``
-    before it writes one: ONE line, at most NOTE_MAX_CHARS. The CrossVal panel writes its note onto
-    BOTH records, so an unjudged one would put two notes on disk that the Artifacts screen's own Set
-    button refuses to write back.
+    """The store does not judge a note's text (``ArtifactStore.set_note``'s docstring) and every
+    front end runs ``core.refusals.require_note`` before it writes one: ONE line, at most
+    NOTE_MAX_CHARS. The CrossVal panel writes its note onto BOTH records, so an unjudged one would put
+    two notes on disk that the Artifacts screen's own Set button refuses to write back.
 
     The refusal is an input refusal: the yellow box, the rule's own sentence, the fix line naming the
     'Note' box on this tab, nothing dispatched and no id minted -- the note is judged before either
@@ -2440,20 +2440,20 @@ def test_a_crossval_record_note_is_judged_at_the_click(tmp_path, monkeypatch, ho
 @pytest.mark.parametrize("s_refused", [False, True], ids=["both_finish", "s_measured_nothing"])
 def test_the_crossval_window_shows_both_records_figures_and_names_them(tmp_path, monkeypatch,
                                                                        s_refused):
-    """F18, carried from Task 19's and Task 20's reviews, and F46. The study writes two records, and
-    each sweep plots itself into its OWN record's ``figures/`` when it finishes (spec §4.1) -- so a
-    panel that watched one directory showed the S sweep's figure and never the T sweep's, the half of
-    a long study that arrives last. One watcher per record is how both reach the figure stack, with no
-    worker-to-window signal (F18).
+    """The study writes two records, and each sweep plots itself into its OWN record's ``figures/``
+    when it finishes -- so a panel that watched one directory showed the S sweep's figure and never
+    the T sweep's, the half of a long study that arrives last. One watcher per record is how both
+    reach the figure stack, with no worker-to-window signal.
 
-    The second case is the study E4 exists for: the activity sweep measured nothing and refused, its
-    record kept unfinished (E2), and the temperature sweep finished. The window then shows T's figure
-    -- the S directory lists nothing -- and no box, because the study itself did not fail.
+    The second case is the study two records exist for: the activity sweep measured nothing and
+    refused, its record kept unfinished (a refusal after a figure or payload was handed out keeps the
+    record), and the temperature sweep finished. The window then shows T's figure -- the S directory
+    lists nothing -- and no box, because the study itself did not fail.
 
     Driven through the real dispatch, the real watchers and the real ``run_param_study_cli`` on the
     worker thread; only the per-sweep physics (``run_fdt_param_sweep``) is stood in for, by a stage
     that keeps its contract: it enters its writer on the worker thread and plots into the record's
-    own ``figures/``. The panel must then NAME what the study wrote (F46) -- by name and id, since an
+    own ``figures/``. The panel must then NAME what the study wrote -- by name and id, since an
     unnamed record has only the id -- and move the saved-sweep picker onto the last finished record."""
     from pathlib import Path
     from core.artifacts import ArtifactStore, use_store
@@ -2525,15 +2525,15 @@ def test_the_crossval_window_shows_both_records_figures_and_names_them(tmp_path,
 
 
 def test_record_summary_names_the_cell_the_settings_the_seed_and_the_notices():
-    """Spec §5.4. A saved run is only usable if you can see what produced it, and §1 measured that the
-    old flat output "carries no record of which cell or which settings produced it". The four facts
-    the spec names are the four this renders, in that order, off the manifest alone.
+    """A saved run is only usable if you can see what produced it, and the old flat output carried no
+    record of which cell or which settings produced it. Its cell, its settings, its seed and its
+    notices are the four facts this renders, off the manifest alone.
 
     A record with no cell file -- the legacy inline-bounds branch records ``None``
     (core/artifacts/provenance.py) -- must say so rather than raise: this feeds a read-only label, and
     a formatter that raises inside a currentIndexChanged slot takes the panel down with it. The
-    notices are E5's "too thin to trust" sentences, and they are shown because a record that is a
-    quick look must SAY it is a quick look wherever it is read."""
+    notices are the recorded "too thin to trust" sentences, and they are shown because a record that
+    is a quick look must SAY it is a quick look wherever it is read."""
     from core.gui.panels.record_view import record_summary
     from core.artifacts.manifest import Manifest
 
@@ -2554,30 +2554,30 @@ def test_record_summary_names_the_cell_the_settings_the_seed_and_the_notices():
     assert "2026-09-22T12:00:00" in text and "seed 4242" in text, text
     assert "Resources/Cells/nadrowski/x.txt" in text, text
     assert "F0=0.05" in text and "n_freqs=8" in text, text
-    assert "quick look" in text, "a notice must survive to the screen (E5)"
+    assert "quick look" in text, "a notice must survive to the screen"
     assert "did not finish" not in text
 
     body = dict(_m().body, complete=False, seed=None, settings=None, notices=[])
     bare = record_summary(_m(inputs={"cell": None, "bounds": None, "units": None, "model": None},
                              body=body))
     assert "no cell file" in bare, bare
-    assert "did not finish" in bare, "an unfinished record must say so wherever it is read (E2)"
+    assert "did not finish" in bare, "an unfinished record must say so wherever it is read"
 
 
 def test_record_summary_reads_a_finished_sweep_and_survives_a_hand_edited_body():
-    """The CrossVal half of spec §5.4, and the "never raises" half of record_view's contract.
+    """The CrossVal half of the saved-run summary, and the "never raises" half of record_view's
+    contract.
 
     A SWEEP's blank count is over every probe of every operating point it measured on its common
-    grid (the whole-piece review's M2), so the line must say so -- "5 of 240 probe frequencies came
-    back blank" alone reads as one grid of 240 -- and its points block is the study's own progress,
-    failures included.
+    grid, so the line must say so -- "5 of 240 probe frequencies came back blank" alone reads as one
+    grid of 240 -- and its points block is the study's own progress, failures included.
 
     A HAND-EDITED body reaches this formatter: ``manifest.validate`` checks the body's key set and
     nothing inside it, so any value may be any JSON. Each shape below raised, or rendered garbage, in
     the formatter as first drafted -- a number where the notices list belongs was iterated, a bare
     string was iterated character by character, a non-dict body was asked for ``.get`` -- and this
-    runs from each panel's __init__ at every launch (F47), where one raise stops the application
-    launching at all."""
+    runs from each panel's __init__ at every launch, where one raise stops the application launching
+    at all."""
     import types
     from core.gui.panels.record_view import record_summary
 
@@ -2617,8 +2617,8 @@ def test_record_figures_lists_a_records_pictures_by_the_watchers_own_title(tmp_p
     read off a saved record is a different thing from the one you watched land. Both go through
     plot_watcher._title, which is why record_view imports it rather than restating it.
 
-    A record with no figures/ -- a run cancelled before it drew one, which E2 says keeps its folder --
-    is an empty list. It is not an error, and it must not be one: the folder surviving is the point."""
+    A record with no figures/ -- a run cancelled before it drew one, which keeps its folder -- is an
+    empty list. It is not an error, and it must not be one: the folder surviving is the point."""
     from core.gui.panels.record_view import record_figures
 
     rec = tmp_path / "cell_a__20260922T120000"
@@ -2634,17 +2634,17 @@ def test_record_figures_lists_a_records_pictures_by_the_watchers_own_title(tmp_p
 
 
 def test_selecting_a_saved_run_describes_it_and_re_opens_its_figures(tmp_path):
-    """Spec §5.4 and E1, on both screens that carry a picker. Selecting a record shows its cell,
-    settings, seed and notices, and re-opens its figures from the record's own figures/ -- which is
-    what makes a saved run readable at all, and what §1 measured the old flat output could not do.
+    """On both screens that carry a picker, selecting a record shows its cell, settings, seed and
+    notices, and re-opens its figures from the record's own figures/ -- which is what makes a saved
+    run readable at all, and what the old flat output could not do.
 
     Two guards are pinned with it, and both are defects rather than niceties. (1) The slot must not
     touch the figure stack while a run is live: the stack then holds the figures the watcher is
     landing, and clearing it would delete the live run's output to show an older run's. (2) A record
     the store cannot read must degrade to a line in the label, never raise -- this slot runs inside
-    __init__ at every launch (F47), and an exception there escapes CrossValPanel() -> MainWindow()
-    -> build_app() before app.py has installed its excepthook, so a single unreadable record would
-    leave the application unable to launch at all."""
+    __init__ at every launch, and an exception there escapes CrossValPanel() -> MainWindow() ->
+    build_app() before app.py has installed its excepthook, so a single unreadable record would leave
+    the application unable to launch at all."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.panels.fdt_panel import FdtPanel
@@ -2726,20 +2726,21 @@ def _settle(app):
 
 @pytest.mark.parametrize("which", ["fdt", "crossval"])
 def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_tabs(tmp_path, which):
-    """Rulings F47 and F48 on both screens, and the one thing that opens figures: a USER's pick.
+    """The saved-run viewer's two rules on both screens, and the one thing that opens figures: a
+    USER's pick.
 
-    F47: a launch fills the saved-run LINE for the restored selection and opens NONE of its figures.
-    The saved run is deliberately not the first row, so restoring it CHANGES the combo's index.
+    A launch fills the saved-run LINE for the restored selection and opens NONE of its figures. The
+    saved run is deliberately not the first row, so restoring it CHANGES the combo's index.
 
     Only a pick opens figures. Qt emits ``activated`` for the keyboard and the popup and never for
     a programmatic index change; the keyboard leg below goes through Qt's own key handling, so the
     wiring is proved against Qt and not only against _choose. A programmatic move that SETTLES on
     another record closes the viewer's tabs -- they would describe a record no longer selected.
 
-    F48: a pick closes only the tabs the viewer itself opened. Anything else on the stack -- a
-    comparison drawn there (Task 40), a run's figures -- survives, and a tab the user already closed
-    by hand is skipped rather than touched after Qt deleted it. A PNG another tab already shows is
-    not opened a second time when its record is picked."""
+    A pick closes only the tabs the viewer itself opened. Anything else on the stack -- a comparison
+    drawn there, a run's figures -- survives, and a tab the user already closed by hand is skipped
+    rather than touched after Qt deleted it. A PNG another tab already shows is not opened a second
+    time when its record is picked."""
     import shiboken6
     from PySide6.QtCore import QCoreApplication, QEvent, Qt
     from PySide6.QtTest import QTest
@@ -2767,7 +2768,7 @@ def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_ta
         qs.endGroup()
         qs.sync()
 
-        # F47: the restored run is described, and nothing is opened
+        # a launch: the restored run is described, and nothing is opened
         panel = cls()
         combo = panel.record_picker.combo
         assert panel.record_picker.key() == second and combo.currentIndex() == 1
@@ -2784,7 +2785,7 @@ def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_ta
         QTest.keyClick(combo, Qt.Key_Down)
         assert combo.currentIndex() == 1 and _tabs(panel) == facts[second][1], _tabs(panel)
 
-        # F48: a tab the viewer did not open survives every pick
+        # a tab the viewer did not open survives every pick
         panel.figure_stack.add_figure("comparison", b"")
         _choose(combo, 0)
         assert _tabs(panel) == ["comparison", *facts[first][1]], _tabs(panel)
@@ -2819,13 +2820,13 @@ def test_the_saved_run_viewer_opens_nothing_at_launch_and_closes_only_its_own_ta
 
 @pytest.mark.parametrize("how", ["store_changed", "rescan"])
 def test_a_picker_refresh_reopens_no_figure_and_moves_no_tab(tmp_path, how):
-    """Fix round 1 of T27, finding 1. ``StorePicker.refresh`` -- run by MainWindow on every change the
-    Artifacts screen makes (a note, a rename, a delete, a sweep) and by the picker's own Rescan button
-    -- passes THREE index changes on its way back to the same selection: ``clear()`` to -1, the first
-    ``addItem`` to row 0, and ``restore_key`` to the record. A viewer that took each for a choice
-    opened row 0's figures (a record nobody chose), re-opened the tabs the user had closed, and moved
-    the current tab -- all for a note set on another record. None of the three is a choice, and the
-    selection settles where it was, so nothing on the figure stack may change.
+    """``StorePicker.refresh`` -- run by MainWindow on every change the Artifacts screen makes (a
+    note, a rename, a delete, a sweep) and by the picker's own Rescan button -- passes THREE index
+    changes on its way back to the same selection: ``clear()`` to -1, the first ``addItem`` to row 0,
+    and ``restore_key`` to the record. A viewer that took each for a choice opened row 0's figures (a
+    record nobody chose), re-opened the tabs the user had closed, and moved the current tab -- all for
+    a note set on another record. None of the three is a choice, and the selection settles where it
+    was, so nothing on the figure stack may change.
 
     Driven through the real window: ``store_changed`` reaches ``MainWindow._refresh_store_pickers``,
     and Rescan is the picker's own button."""
@@ -2864,10 +2865,11 @@ def test_a_picker_refresh_reopens_no_figure_and_moves_no_tab(tmp_path, how):
 
 
 def test_a_relaunch_opens_no_figure_even_after_an_unrelated_note_is_set(tmp_path):
-    """Fix round 1 of T27, finding 1, the F47 half. A launch fills the saved run's LINE and opens none
-    of its figures -- and that must survive the window's own wiring: the first change anyone makes in
-    the Artifacts screen refreshes every picker, and a viewer that treated the refresh's passing
-    index changes as a choice opened the restored run's figures then, undoing F47 one note set later."""
+    """The launch half of the refresh rule. A launch fills the saved run's LINE and opens none of its
+    figures -- and that must survive the window's own wiring: the first change anyone makes in the
+    Artifacts screen refreshes every picker, and a viewer that treated the refresh's passing index
+    changes as a choice opened the restored run's figures then, undoing the launch rule one note set
+    later."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui import settings as st
     from core.gui.main_window import MainWindow
@@ -2903,13 +2905,12 @@ def test_a_relaunch_opens_no_figure_even_after_an_unrelated_note_is_set(tmp_path
 
 @pytest.mark.parametrize("which", ["fdt", "crossval"])
 def test_after_a_run_only_the_runs_own_figures_remain(tmp_path, monkeypatch, which):
-    """Fix round 1 of T27, finding 2. The user had picked an earlier record, so its figures were open;
-    then they ran the analysis. The run's watcher puts the new figures up as they land, and the result
-    slot moves the picker onto the new record -- after which the stack held BOTH records' figures,
-    under IDENTICAL titles (every run of one analysis draws the same figures), while the line
-    described only the new one. When a run finishes the viewer closes its own tabs, and the move
-    onto the new record opens nothing, because the watcher already shows its figures: what remains is
-    the run's own figures, each once.
+    """The user had picked an earlier record, so its figures were open; then they ran the analysis.
+    The run's watcher puts the new figures up as they land, and the result slot moves the picker onto
+    the new record -- after which the stack held BOTH records' figures, under IDENTICAL titles (every
+    run of one analysis draws the same figures), while the line described only the new one. When a
+    run finishes the viewer closes its own tabs, and the move onto the new record opens nothing,
+    because the watcher already shows its figures: what remains is the run's own figures, each once.
 
     Driven through the real dispatch, watchers and result slot; only the measurement is stood in for,
     by stages that keep their contract (enter the writer on the worker thread, plot into the record's
@@ -2964,12 +2965,12 @@ def test_after_a_run_only_the_runs_own_figures_remain(tmp_path, monkeypatch, whi
 
 
 def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch):
-    """Fix round 1 of T27, finding 2, on the path where the picker does NOT move. A run that fails
-    hands back no record, so the selection stays on the earlier record and nothing about the picker
-    says the run happened -- yet its figures landed through the watcher under the same titles as the
-    earlier record's. The viewer's tabs close when the run finishes, whatever the outcome, so what
-    remains is the failed run's own partial figures; the line still describes the selection, which
-    is what the picker shows."""
+    """Only the run's own figures remain, on the path where the picker does NOT move. A run that
+    fails hands back no record, so the selection stays on the earlier record and nothing about the
+    picker says the run happened -- yet its figures landed through the watcher under the same titles
+    as the earlier record's. The viewer's tabs close when the run finishes, whatever the outcome, so
+    what remains is the failed run's own partial figures; the line still describes the selection,
+    which is what the picker shows."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels import fdt_panel
     from tests._fixtures import SHOWN, qt_app
@@ -3002,12 +3003,12 @@ def test_after_a_failed_run_only_its_own_figures_remain(tmp_path, monkeypatch):
 
 
 def test_record_summary_never_prints_none():
-    """Fix round 1 of T27, finding 3. A null in a record means "not recorded" or "does not apply", and
-    the line must say nothing rather than print Python's ``None``. A real SWEEP's settings carry two
-    nulls on every record -- ``skip_sanity`` and ``confirm_production`` are run_fdt's arguments, which
-    a sweep does not take (``_settings_block``'s docstring) -- so they printed on every sweep. A body
-    written part way can hold a count that is not known yet, and a count line with a missing count
-    ("3 of None probe frequencies") is a sentence that is not true.
+    """A null in a record means "not recorded" or "does not apply", and the line must say nothing
+    rather than print Python's ``None``. A real SWEEP's settings carry two nulls on every record --
+    ``skip_sanity`` and ``confirm_production`` are run_fdt's arguments, which a sweep does not take
+    (``_settings_block``'s docstring) -- so they printed on every sweep. A body written part way can
+    hold a count that is not known yet, and a count line with a missing count ("3 of None probe
+    frequencies") is a sentence that is not true.
 
     The settings block below is built by the REAL ``_settings_block``, the one the sweep stage calls,
     so a change to what it records nulls for is seen here."""
@@ -3046,12 +3047,12 @@ def test_record_summary_never_prints_none():
 
 
 def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
-    """V5 §5.2. The χ drive amplitude and band are MEASUREMENTS (config.py:541-573), not per-run
-    choices: since D11 any other value is refused by build_prior seconds after Apply, so a box that
-    accepts one only manufactures that refusal. The boxes stay as displays of config.py under a
-    caption saying so; the draft carries None for both, so make_sim_config takes config.py's values
-    exactly as the command-line tool does; and the "Model applied" line reports config.py, not the
-    boxes. The help and the config.py comment stop inviting the edit.
+    """The χ drive amplitude and band are MEASUREMENTS (config.py's CHI_F0 and CHI_FREQ_BOUNDS), not
+    per-run choices: there is no chi override, so build_prior refuses any other value seconds after
+    Apply, and a box that accepts one only manufactures that refusal. The boxes stay as displays of
+    config.py under a caption saying so; the draft carries None for both, so make_sim_config takes
+    config.py's values exactly as the command-line tool does; and the "Model applied" line reports
+    config.py, not the boxes. The help and the config.py comment stop inviting the edit.
 
     The proof is not the read-only flag (setText bypasses it, and so would a restore) but the draft:
     even after a programmatic write into the boxes, the config built from the draft passes the chi
@@ -3104,8 +3105,8 @@ def test_the_chi_drive_and_band_are_read_only_and_the_draft_carries_config():
     assert "TUNABLE per config in the Config tab" not in src, "config.py's CHI_F0 comment is stale"
 
 def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
-    """V2/V3 at Apply. Every bad box is a Refusal naming its field, shown through _refusal (the yellow
-    box), and the session is left exactly as it was: no new draft, no re-gate. A BLANK box is refused,
+    """At Apply, every bad box is a Refusal naming its field, shown through _refusal (the yellow box),
+    and the session is left exactly as it was: no new draft, no re-gate. A BLANK box is refused,
     never read as zero -- IntField.value() gave 0 for "" and the old chain refused it only because
     0 < 2, while the pad was not checked here at all and surfaced one tab later as "The
     configuration could not be built." with a traceback. With χ mode off the three χ boxes are not
@@ -3191,19 +3192,19 @@ def test_the_config_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
 
 
 def test_the_prior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
-    """V2 on the Prior tab. A blank, half-typed or out-of-rule knob box is REFUSED at the click --
-    the yellow box, through _refusal -- and nothing is dispatched, the config is not built and the
-    session's downstream is not reset. Until piece 3 the tab clamped (max(2, cluster_size.value()))
-    and defaulted (walk_step or config.PRIOR_SWEEP_STEP), so a blank "Min cluster size" silently
-    built a prior with a floor of 2 that nobody typed, and a blank "Random-walk step" one with the
-    default that nobody chose.
+    """On the Prior tab, a blank, half-typed or out-of-rule knob box is REFUSED at the click -- the
+    yellow box, through _refusal -- and nothing is dispatched, the config is not built and the
+    session's downstream is not reset. The tab used to clamp (max(2, cluster_size.value())) and
+    default (walk_step or config.PRIOR_SWEEP_STEP), so a blank "Min cluster size" silently built a
+    prior with a floor of 2 that nobody typed, and a blank "Random-walk step" one with the default
+    that nobody chose.
 
-    Three more things the same click must get right, because the stage does (spec §1.2, "a stage
-    with a load branch"): a LOAD click reads none of the seven knobs, so a blank box does not stop
-    it and no knob is forwarded (the stage resolves None to its default); a typed 0 in "Candidates
-    per round" is the automatic value, not a blank; and the live sweep note under the boxes renders
-    a bad box as "<label> is blank." / "<label> must be <rule>." from the SAME rule the click runs,
-    so the note and the refusal can never name different limits."""
+    Three more things the same click must get right, because the stage, which has a load branch,
+    does: a LOAD click reads none of the seven knobs, so a blank box does not stop it and no knob is
+    forwarded (the stage resolves None to its default); a typed 0 in "Candidates per round" is the
+    automatic value, not a blank; and the live sweep note under the boxes renders a bad box as
+    "<label> is blank." / "<label> must be <rule>." from the SAME rule the click runs, so the note and
+    the refusal can never name different limits."""
     from core import orchestrator
     from core.gui.fields import label
     from core.gui.screens.inference_screen import InferenceScreen
@@ -3330,9 +3331,10 @@ def test_the_prior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
 def test_the_prior_tab_rows_are_labelled_from_the_control_table():
     """Every registered field's row on the Prior tab takes its label from core.gui.fields.label(key),
     so the name in the yellow box ("Set it in the '<label>' box on the Prior tab.") and the name on
-    the tab are ONE string (spec §3.2). A literal at an add_help_row call is the defect: the row can
-    be renamed while the refusal keeps naming the old label. Task 15's read-back pin checks the
-    rendered QLabels over every tab; this is the source-level half for this tab."""
+    the tab are ONE string. A literal at an add_help_row call is the defect: the row can be renamed
+    while the refusal keeps naming the old label. The control table's read-back pin
+    (test_the_gui_control_table_matches_the_tabs_labels) checks the rendered QLabels over every tab;
+    this is the source-level half for this tab."""
     import re
     from core.gui.fields import CONTROL, label
     from core.gui.panels.inference.prior_tab import PriorPanel
@@ -3350,7 +3352,7 @@ def test_the_prior_tab_rows_are_labelled_from_the_control_table():
 
 
 def test_the_posterior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
-    """V2 at the Posterior tab's click. Every knob the TRAIN branch reads is validated before any
+    """At the Posterior tab's click, every knob the TRAIN branch reads is validated before any
     worker starts, through the shared rules, and the refusal carries the box's field key so the
     yellow box can say where to fix it. Three shapes used to pass silently: a blank box read as 0
     and was clamped to 1 (`max(1, ...)`), a 0 in a `... or default` box became the default, and a
@@ -3432,13 +3434,13 @@ def test_the_posterior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing
 
 
 def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
-    """V2 on the Validate tab. Both boxes were clamped with max(1, ...) at the click, so a blank or a 0
+    """On the Validate tab, both boxes were clamped with max(1, ...) at the click, so a blank or a 0
     became a 1 nobody typed -- and for the operating points a 1 is a DIFFERENT measurement, not a
-    smaller one: cal_n_scales is t_scale's effective sample size (trap X5), which is why the stage now
-    refuses it instead of clamping (spec 3.3). A refused box is the yellow box (stubbed here as
-    _refusal) naming the box, the Validate tab and the default, and NOTHING is dispatched; a typed
-    value in rule reaches validate_calibration as an int, and 1 operating point is allowed -- it is a
-    choice, not a typo."""
+    smaller one: the calibration's operating-point count, cal_n_scales, is t_scale's effective sample
+    size, which is why the stage now refuses it instead of clamping. A refused box is the yellow box
+    (stubbed here as _refusal) naming the box, the Validate tab and the default, and NOTHING is
+    dispatched; a typed value in rule reaches validate_calibration as an int, and 1 operating point is
+    allowed -- it is a choice, not a typo."""
     from core import config, orchestrator
     from core.gui import fields as gui_fields
     from core.gui.screens.inference_screen import InferenceScreen
@@ -3484,16 +3486,16 @@ def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(
 
 
 def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(monkeypatch):
-    """V2 on the TSNPE tab, and walkthrough row C3 offscreen. A blank HPD box used to reach the stage
-    as 0.0 (FloatField.value()) and a blank direction box as 0, and the stage refused each with a
-    sentence naming neither the box nor the default; the batch count was clamped to 1 and a blank
-    rows-per-batch became a 0 nobody typed. Now the click reads every box through the shared rules
-    BEFORE the observation is re-hashed (a refused box must cost nothing), shows a refusal as the
-    yellow box (stubbed here as _refusal) naming the box, the TSNPE tab and the default, and dispatches
-    nothing. A TYPED 0 in the rows-per-batch box still means automatic. The latent-width ceiling on
-    the direction count stays the STAGE's -- the click has no posterior to measure it against -- so an
-    oversized count is dispatched, and tsnpe_round refuses it with the width and the default in the
-    sentence (T7's pin)."""
+    """On the TSNPE tab, offscreen, the refusals a user reads on the real screen. A blank HPD box used
+    to reach the stage as 0.0 (FloatField.value()) and a blank direction box as 0, and the stage
+    refused each with a sentence naming neither the box nor the default; the batch count was clamped
+    to 1 and a blank rows-per-batch became a 0 nobody typed. Now the click reads every box through
+    the shared rules BEFORE the observation is re-hashed (a refused box must cost nothing), shows a
+    refusal as the yellow box (stubbed here as _refusal) naming the box, the TSNPE tab and the
+    default, and dispatches nothing. A TYPED 0 in the rows-per-batch box still means automatic. The
+    latent-width ceiling on the direction count stays the STAGE's -- the click has no posterior to
+    measure it against -- so an oversized count is dispatched, and tsnpe_round refuses it with the
+    width and the default in the sentence."""
     import types
     from core import config, orchestrator
     from core.gui import fields as gui_fields
@@ -3563,8 +3565,9 @@ def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(mon
 def test_the_validate_and_tsnpe_rows_are_named_from_the_control_table():
     """The rows' names are the CONTROL table's, through label(key), so the refusal's "Set it in the
     '<label>' box on the <tab> tab" and the row on screen can never disagree: renaming a control is
-    one edit in core/gui/fields.py, and T15's read-back pins the rendered text. A literal here would be
-    a second copy of the name -- the kind that goes stale the day the first one moves."""
+    one edit in core/gui/fields.py, and the control table's read-back pins the rendered text. A
+    literal here would be a second copy of the name -- the kind that goes stale the day the first one
+    moves."""
     from core.gui import fields as gui_fields
     from core.gui.panels.inference.tsnpe_tab import TSNPEPanel
     from core.gui.panels.inference.validate_tab import ValidatePanel
@@ -3583,9 +3586,9 @@ def test_the_validate_and_tsnpe_rows_are_named_from_the_control_table():
 
 
 def test_a_blank_t_obs_is_refused_on_all_three_infer_branches(tmp_path):
-    """V2 on the three observation-length boxes. Today FloatField.value() turns a blank or half-typed
-    box into 0.0 and every branch forwards it: the simulated one spends the simulation and then dies
-    in math.log(0.0) (statistics.py), the bench ones build a zero-length observation. Now the click
+    """The three observation-length boxes. FloatField.value() turns a blank or half-typed box into
+    0.0, and every branch used to forward it: the simulated one spent the simulation and then died in
+    math.log(0.0) (statistics.py), the bench ones built a zero-length observation. Now the click
     reads the box through value_or_none() and require_positive("t_obs", ...): a blank, a lone "-" and
     a typed 0 are each refused through _refusal (the yellow box) with field "t_obs", and NOTHING is
     dispatched. One box per page: sim_tobs, exp_tobs (the passive and driven branches share it) and
@@ -3858,9 +3861,9 @@ def test_the_simulated_branch_refuses_a_missing_or_misfitting_cell_at_the_click(
 
 
 def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path):
-    """"Plan probes…" is a click, so it is refused like one (V2): a blank or non-positive T_obs and a
+    """"Plan probes…" is a click, so it is refused like one: a blank or non-positive T_obs and a
     blank or missing passive recording go to _refusal with their field, BEFORE the recording is
-    loaded. Today a blank T_obs read as 0.0 and the planner ran on a one-sample window, and a blank
+    loaded. A blank T_obs used to read as 0.0 and the planner ran on a one-sample window, and a blank
     recording was a warning line. A complete click passes the rules and goes on to load the
     recording; the stub config has no hardware, so on this test's path that load fails inside the
     planner's own guarded step, and its "Could not measure Ω₀" error line is the evidence the rules
@@ -3908,20 +3911,20 @@ def test_the_probe_planner_refuses_a_blank_t_obs_through_the_yellow_box(tmp_path
 
 
 def test_the_gui_control_table_matches_the_tabs_labels():
-    """§3.2's pin. fields.CONTROL is where a refusal learns which box to name ("Set it in the
-    'T_obs (s)' box on the Infer or Live simulation tab."), and the tabs build their rows FROM it
-    (label(key)), so the two cannot drift -- this reads every tab's form rows back and checks that
-    each (tab, label) entry is a label that tab actually shows. The rows are read the way Qt holds
-    them: the QLabel inside each help_label holder (help_badge.py), or the plain QLabel of a row
-    added without help text, compared against labels.pretty_gui(label), which is what the holder was
-    given. The Infer tab is read after install_config with a FORCED stub config so its three drive
-    rows exist; a chi config would build none (no force_params_dict) and the drive entries would
-    pass vacuously. Since piece 5 the places are every section's tabs and the two screens (E6), read
-    off a built MainWindow -- the model builder with one variable declared and its parameter
-    detected, because four of the boxes it names exist only then (Task 22).
+    """The control table's pin. fields.CONTROL is where a refusal learns which box to name ("Set it
+    in the 'T_obs (s)' box on the Infer or Live simulation tab."), and the tabs build their rows
+    FROM it (label(key)), so the two cannot drift -- this reads every tab's form rows back and checks
+    that each (tab, label) entry is a label that tab actually shows. The rows are read the way Qt
+    holds them: the QLabel inside each help_label holder (help_badge.py), or the plain QLabel of a
+    row added without help text, compared against labels.pretty_gui(label), which is what the holder
+    was given. The Infer tab is read after install_config with a FORCED stub config so its three
+    drive rows exist; a chi config would build none (no force_params_dict) and the drive entries
+    would pass vacuously. The places are every section's tabs and the two screens, read off a built
+    MainWindow -- the model builder with one variable declared and its parameter detected, because
+    four of the boxes it names exist only then.
 
-    The second half is this task's own: the Infer tab's registered rows are built from label(key),
-    not from a literal that happens to match today."""
+    The second half: the Infer tab's registered rows are built from label(key), not from a literal
+    that happens to match today."""
     from PySide6.QtWidgets import QFormLayout, QLabel
     from core.gui import fields as gui_fields
     from core.gui.panels.inference.infer_tab import InferPanel
@@ -3949,8 +3952,8 @@ def test_the_gui_control_table_matches_the_tabs_labels():
                     out.append(lab.text())
         return out
 
-    # E6 (piece 5): a place may be any section's tab or one of the two screens, so read them all back
-    # off a built window rather than the six inference tabs alone.
+    # A place may be any section's tab or one of the two screens, so read them all back off a built
+    # window rather than the six inference tabs alone.
     from core.gui.main_window import MainWindow
     window = MainWindow()
     for section in (window.reduction_screen, window.fdt_screen, window.simulate_screen):
@@ -3959,9 +3962,10 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     tabs["Artifacts"] = window.artifact_screen
     tabs["Model Builder"] = window.model_builder_screen
     # The model builder's init row exists once per declared variable and its value/min/max boxes once
-    # per detected parameter (Task 22 names all four), so a freshly built screen shows none of them:
-    # declare one variable and detect its parameter before reading the screen back. The parameter
-    # row's boxes are captioned inside a LabeledFieldRow, not a form row, so read those captions too.
+    # per detected parameter (the control table names all four), so a freshly built screen shows
+    # none of them: declare one variable and detect its parameter before reading the screen back. The
+    # parameter row's boxes are captioned inside a LabeledFieldRow, not a form row, so read those
+    # captions too.
     mb = window.model_builder_screen
     mb.vars_edit.setText("x")
     mb._set_variables()
@@ -3974,9 +3978,8 @@ def test_the_gui_control_table_matches_the_tabs_labels():
     assert tuples, "the control table has no (tab, label) entries"
     for key in ("drive_amplitude", "drive_frequency", "drive_phase"):
         assert key in tuples, f"{key} must be a (tab, label) entry so the read-back covers the drive rows"
-    # No exemptions: the two Seed rows Task 9 named before their panels had them were built by T25
-    # (FDT analysis) and T26 (Sweep study cross-validation), each deleting its _NOT_BUILT_YET line,
-    # and with both gone every entry is read back off its tab.
+    # No exemptions: every entry is read back off its tab, the Seed rows of the FDT analysis and
+    # Sweep study cross-validation tabs included.
     missing = []
     for key, (tab, text) in tuples.items():
         for name in (tab if isinstance(tab, tuple) else (tab,)):   # the budget boxes name two tabs
@@ -4019,11 +4022,12 @@ def _wait_for_run(app, panel, limit: float = 300.0) -> None:
 
 
 def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monkeypatch):
-    """V1 at the window, on the FAILURE path: the composition injects the cell's truth, records the
-    cell and sets T_obs on the config it holds, then the run dies inside generate_observations. Until
-    piece 3 all three writes stayed on the session, so the NEXT training anchored its Fisher rotation on
-    that cell and the next manifest named it as an input. The error reaches the red box (a bug, not a
-    Refusal), and the session's config is untouched.
+    """A composition works on a private copy of the configuration and changes nothing it was handed
+    -- pinned here at the window, on the FAILURE path: the composition injects the cell's truth,
+    records the cell and sets T_obs on the config it holds, then the run dies inside
+    generate_observations. All three writes used to stay on the session, so the NEXT training
+    anchored its Fisher rotation on that cell and the next manifest named it as an input. The error
+    reaches the red box (a bug, not a Refusal), and the session's config is untouched.
 
     (a) makes the pin non-vacuous: with SimConfig.copy_for_run switched off (public_entry then hands the
     composition the caller's own object), the same click leaves the truth on a throwaway session
@@ -4069,12 +4073,12 @@ def test_a_failed_inference_leaves_the_session_config_pristine(screen_run, monke
 
 
 def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
-    """V1 at the window, on the SUCCESS path, with nothing stubbed: a real simulated inference on the
-    tiny posterior, dispatched by this tab through the worker, writes its observation and inference
-    and hands them to the session -- and leaves the session's config exactly as install_config set
-    it: no truth, no cell among its sources, the T_obs it had (1.0 s from the fixture) although the
-    run was typed 1.5 s. The box value differs from the session's on purpose, so the T_obs clause is
-    not satisfied by coincidence."""
+    """The private copy at the window, on the SUCCESS path, with nothing stubbed: a real simulated
+    inference on the tiny posterior, dispatched by this tab through the worker, writes its
+    observation and inference and hands them to the session -- and leaves the session's config
+    exactly as install_config set it: no truth, no cell among its sources, the T_obs it had (1.0 s
+    from the fixture) although the run was typed 1.5 s. The box value differs from the session's on
+    purpose, so the T_obs clause is not satisfied by coincidence."""
     from tests._fixtures import SHOWN, assert_cfg_unchanged, qt_app, snapshot_cfg
 
     app = qt_app()
@@ -4096,7 +4100,7 @@ def test_a_dispatched_inference_leaves_the_session_config_pristine(screen_run):
     assert cfg.T_obs == before_t_obs
 
 
-# ── piece 4: a live run is visible app-wide (spec §6.1, B11) ─────────────────────────────────────
+# ── a live run is visible app-wide ───────────────────────────────────────────────────────────────
 def test_run_state_publishes_the_running_panel_and_none_on_idle():
     """The app-wide broadcast. `_set_busy` already sets the class flag every panel's controls hang
     off; it now also says WHICH panel, so the shell can name it. A module-level singleton, for the
@@ -4158,10 +4162,9 @@ def test_the_running_banner_is_a_pure_clock():
 def test_the_shells_run_slot_starts_empty_and_is_the_only_styled_writer():
     """The slot is built EMPTY and hidden: no icon load, no timer, no store read. The 2026-09-11
     taskbar-icon incident was ~150 ms of layout between the native show and the first idle turn, and
-    this button sits on that path (spec §1.2, walkthrough row D16). `set_running` is the only writer:
-    a string shows it, None hides and clears it. The objectName is what the global QSS keys on, so
-    the two are pinned against each other here -- a renamed button would otherwise silently lose its
-    styling."""
+    this button sits on that path. `set_running` is the only writer: a string shows it, None hides
+    and clears it. The objectName is what the global QSS keys on, so the two are pinned against each
+    other here -- a renamed button would otherwise silently lose its styling."""
     from core.gui import design
     from core.gui.screens.nav_shell import NavShell
     from tests._fixtures import code_only, qt_app
@@ -4186,11 +4189,12 @@ def test_the_shells_run_slot_starts_empty_and_is_the_only_styled_writer():
 
 
 def test_the_window_fills_the_run_slot_while_a_panel_runs_and_clears_it_after():
-    """The window's half of B11: the header says what is running and for how long, and stops saying
-    it the moment the run ends. And LAUNCH IS QUIET -- the slot is empty, no clock is ticking and no
-    panel is named until something actually runs. The QTimer is constructed in __init__ and never
-    started there: an unstarted QTimer registers nothing with the OS, which is what keeps the 150 ms
-    of layout the 2026-09-11 taskbar-icon incident was made of off the launch path (spec §1.2)."""
+    """The window's half of the run banner: the header says what is running and for how long, and
+    stops saying it the moment the run ends. And LAUNCH IS QUIET -- the slot is empty, no clock is
+    ticking and no panel is named until something actually runs. The QTimer is constructed in
+    __init__ and never started there: an unstarted QTimer registers nothing with the OS, which is
+    what keeps the 150 ms of layout the 2026-09-11 taskbar-icon incident was made of off the launch
+    path."""
     from core.gui.main_window import MainWindow
     from core.gui.panels.crossval_panel import CrossValPanel
     from core.gui.screens.nav_shell import running_banner
@@ -4273,7 +4277,7 @@ def test_clicking_the_run_slot_opens_the_running_panel_and_an_unknown_one_goes_n
 
 
 def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled():
-    """B11's markers. The running section's Home tile takes a suffix and the running tab a leading
+    """The run markers. The running section's Home tile takes a suffix and the running tab a leading
     mark, both cleared the moment the run ends -- and both rewritten from the labels the screens were
     BUILT with, so marking is idempotent and a cleared label is byte-identical to the original (the
     tab titles are read back verbatim by test_every_field_key_has_a_window_control..., which asserts
@@ -4282,7 +4286,7 @@ def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled
     And nothing is disabled: the app-wide controls lock stands on its own, the Home tiles stay live,
     every tab stays selectable, and the marker survives refresh_gates -- which rewrites tab tooltips
     and enabled states after every stage, and would be running while a marked run is live. You must
-    be able to look at another tab while a twenty-minute train runs (spec §6.1)."""
+    be able to look at another tab while a twenty-minute train runs."""
     from core.gui.main_window import MainWindow
     from core.gui.panels.base_panel import BasePanel
     from core.gui.panels.crossval_panel import CrossValPanel
@@ -4345,8 +4349,8 @@ def test_the_running_section_tile_and_tab_carry_a_marker_and_nothing_is_disabled
 
 
 def test_the_config_tab_says_what_the_session_holds():
-    """B12's first half (spec §6.2). ONE describer, ``InferenceScreen.session_contents()``, answers
-    "what would a new draft throw away" -- in pipeline order, in plain phrases with no code
+    """Apply's session line, the first half. ONE describer, ``InferenceScreen.session_contents()``,
+    answers "what would a new draft throw away" -- in pipeline order, in plain phrases with no code
     identifiers in them -- and the Config tab shows it as a permanent read-only line refreshed from
     ``refresh_local_gates``, which ``refresh_gates`` already calls on every panel after every stage.
 
@@ -4401,17 +4405,17 @@ def test_the_config_tab_says_what_the_session_holds():
 
 
 def test_apply_confirms_before_it_discards_the_session(monkeypatch):
-    """B12's second half (spec §6.2). Apply is the destructive one of the screen's two entry points,
-    so it asks -- but ONLY when there is something to lose.
+    """Apply's confirmation, the second half. Apply is the destructive one of the screen's two entry
+    points, so it asks -- but ONLY when there is something to lose.
 
     Four legs, and the first is the one that keeps the guard tolerable: an empty session is replaced
     in silence, with SHOWN empty, so nothing about the first Apply of a sitting changes. A non-empty
     one raises an INSTANCE QMessageBox (never QMessageBox.question -- the statics are C++ and escape
     tests/conftest.py's dialog guard, so a static call STALLS the offscreen suite instead of failing
     it) that lists exactly what ``session_contents()`` reports, says those artifacts stay on disk,
-    and has "Keep this session" as its default BY NAME -- the D7/D8 lesson at
-    tests/test_nav_and_gating.py:1175, where buttons() orders by role and Enter landed on the
-    destructive button. Anything but the destructive button leaves the session object identical.
+    and has "Keep this session" as its default BY NAME -- the lesson of the near-miss dialog and the
+    load question, where buttons() orders by role and Enter landed on the destructive button.
+    Anything but the destructive button leaves the session object identical.
     """
     from PySide6.QtWidgets import QMessageBox
     from core.gui.screens.inference_screen import InferenceScreen
@@ -4478,7 +4482,7 @@ def test_apply_confirms_before_it_discards_the_session(monkeypatch):
 
 
 def test_the_store_pickers_say_what_they_hold(monkeypatch):
-    """B13 (spec §6.3), and the FIRST test of any kind on what a picker renders.
+    """The FIRST test of any kind on what a picker renders.
 
     Three things. The visible item text marks the EXCEPTION only -- a posterior with
     ``amortized is False`` reads "<label>  —  narrowed (TSNPE)", and amortized, being the norm,
@@ -4486,15 +4490,15 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
     combo sized to its first show). The per-item TOOLTIP keeps every fact it carried, and words the
     one fact it shares with the item text the SAME way: "narrowed (TSNPE)", in place of the old
     "NON-AMORTIZED (TSNPE)" -- one wording for one fact, in the item, the tooltip and the line. No
-    test in the repository pinned either string before this one (spec §6.3). And each of
-    the three tabs that owns a StorePicker carries a read-only line beneath it, spelling the current
-    selection out through ``selection_summary()`` -- refreshed on ``currentIndexChanged`` AND on
-    ``refresh()``, because a stage that writes the store rescans the picker without anyone clicking.
+    test in the repository pinned either string before this one. And each of the three tabs that
+    owns a StorePicker carries a read-only line beneath it, spelling the current selection out
+    through ``selection_summary()`` -- refreshed on ``currentIndexChanged`` AND on ``refresh()``,
+    because a stage that writes the store rescans the picker without anyone clicking.
 
     The store is stubbed at the picker's one seam, ``_resolved_store``, the way
-    tests/test_settings_persistence.py:1070 already stubs it; each row carries exactly the
-    ``Summary`` fields refresh() reads and no more, so the test cannot pass on a field the real
-    listing does not fill.
+    tests/test_settings_persistence.py already stubs it; each row carries exactly the ``Summary``
+    fields refresh() reads and no more, so the test cannot pass on a field the real listing does not
+    fill.
     """
     import types
     from PySide6.QtCore import Qt
@@ -4576,18 +4580,18 @@ def test_the_store_pickers_say_what_they_hold(monkeypatch):
 
 
 def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(monkeypatch):
-    """Spec §5.4, checklist item 19. ``StorePicker`` skipped rows whose ``complete`` was false, and
-    ``complete`` means "has a valid manifest" -- NOT "the run finished" (store.Summary). For the six
-    ordinary kinds the two coincide, because ``ArtifactWriter._commit`` writes the manifest last. For
-    the two kinds written PROGRESSIVELY -- the training cache, and piece 5's ``fdt`` -- they do not:
-    a record carries a manifest from its first moment, so the picker would have offered a run that
-    is still going, or one a cancel left half written, as if it were a result. It filters on
-    ``finished`` instead, which is the same answer for every kind that is not progressive.
+    """``StorePicker`` skipped rows whose ``complete`` was false, and ``complete`` means "has a valid
+    manifest" -- NOT "the run finished" (store.Summary). For the six ordinary kinds the two coincide,
+    because ``ArtifactWriter._commit`` writes the manifest last. For the two kinds written
+    PROGRESSIVELY -- the training cache, and ``fdt`` -- they do not: a record carries a manifest from
+    its first moment, so the picker would have offered a run that is still going, or one a cancel
+    left half written, as if it were a result. It filters on ``finished`` instead, which is the same
+    answer for every kind that is not progressive.
 
     And ``refresh`` listed every row of the kind with no hook, so the FDT and CrossVal screens could
-    not show only their own study out of the one ``fdt`` kind (E3 puts both analyses and their
-    comparisons in it). An optional row predicate is the whole addition -- no new widget, because
-    every fact the picker shows is already a ``Summary`` field.
+    not show only their own study out of the one ``fdt`` kind (both analyses and their comparisons
+    live in it). An optional row predicate is the whole addition -- no new widget, because every
+    fact the picker shows is already a ``Summary`` field.
 
     The store is stubbed at the picker's one seam, ``_resolved_store``, as the picker tests already
     stub it; each row carries exactly the ``Summary`` fields ``refresh()`` reads and no more, so the
@@ -4631,27 +4635,26 @@ def test_the_store_picker_offers_finished_rows_only_and_honours_a_row_filter(mon
     # (d) the default is no predicate at all, so every existing caller is unchanged: the sentinel +
     # the THREE finished rows, because (c) appended one. BOUND to a name: a temporary picker can be
     # collected before .count() runs -- "Internal C++ object already deleted" in plain Python -- so
-    # the one-liner passed only because pytest's assertion rewrite held it (the whole-piece review's
-    # N35)
+    # the one-liner passed only because pytest's assertion rewrite held it
     default = StorePicker("fdt", allow_new=True)
     assert default.combo.count() == 4
 
 
-# ── piece 6: the panel/tab counts, stale since the TSNPE tab arrived ─────────────────────────────
+# ── the panel/tab counts, stale since the TSNPE tab arrived ──────────────────────────────────────
 def test_the_panel_docstrings_no_longer_count_nine_panels_or_five_tabs():
     """Four sentences in base_panel.py and one in inference/base.py counted nine panels and five
     inference tabs, both stale from before the TSNPE tab: there are TEN BasePanel subclasses (the four
     section panels plus six inference tabs) and NINE save_settings overrides (ValidatePanel is the one
     subclass that does not override it). The Artifacts screen is not a panel at all -- it is a plain
-    QWidget, so a run elsewhere cannot grey it out (piece 4, B1).
+    QWidget, so a run elsewhere cannot grey it out.
 
     Phrases, not a subclass count: the suites own throwaway BasePanel subclasses persist for the life
-    of the process, so counting __subclasses__() would assert on test order (ledger P37).
+    of the process, so counting __subclasses__() would assert on test order.
 
     The source is whitespace-NORMALISED before every check. Two of these phrases are wrapped across a
     newline in the file ("there are nine independent / splitters"), so against raw source the literal
     would never appear, the assertion would pass before AND after the edit, and the stale sentence
-    would survive behind a green test -- which is the one failure this test exists to prevent (Q16).
+    would survive behind a green test -- which is the one failure this test exists to prevent.
     """
     import core.gui.panels.base_panel as bp
     from core.gui.panels.inference import base as inf_base
@@ -4677,7 +4680,7 @@ def test_main_window_stops_claiming_it_owns_the_only_settings_write():
 
     Whitespace-NORMALISED, for the same reason as the test above: the claim is wrapped as "the only
     QSettings / WRITE site" in the file, so against raw source this first assertion could never fail
-    and would pass before and after the rewrite (Q16)."""
+    and would pass before and after the rewrite."""
     from core.gui import main_window as mw
 
     src = " ".join(inspect.getsource(mw.MainWindow).split())
@@ -4686,10 +4689,10 @@ def test_main_window_stops_claiming_it_owns_the_only_settings_write():
 
 
 def test_the_comparison_list_appends_from_the_single_selection_picker():
-    """Spec §7.1: StorePicker is single-selection, so the comparison controls hold a LIST the picker
-    appends to and no multi-select widget is built. Adding the same record twice is not an error and
-    is not a second entry -- a curve drawn twice is a curve drawn once with a fatter line -- and the
-    order the list keeps is the order the legend will read."""
+    """StorePicker is single-selection, so the comparison controls hold a LIST the picker appends to
+    and no multi-select widget is built. Adding the same record twice is not an error and is not a
+    second entry -- a curve drawn twice is a curve drawn once with a fatter line -- and the order the
+    list keeps is the order the legend will read."""
     from core.gui.widgets.compare_list import CompareList
     from tests._fixtures import qt_app
 
@@ -4720,8 +4723,8 @@ def test_the_comparison_list_appends_from_the_single_selection_picker():
 
 
 def test_the_fdt_and_crossval_screens_dispatch_their_comparison_modes():
-    """Spec §7.1: the FDT screen carries cells, repeats and renormalise over its own picker, the
-    CrossVal screen carries sweeps. Each button dispatches the ONE public entry with the mode, the
+    """The FDT screen carries cells, repeats and renormalise over its own picker, the CrossVal
+    screen carries sweeps. Each button dispatches the ONE public entry with the mode, the
     ids the list holds and the mode's own setting -- the panel reimplements nothing, so the arity,
     the study and the unfinished-record refusals are the stage's and reach the yellow box through
     _on_error. The renormalise box is read with value_or_none(), so a BLANK box is refused as blank
@@ -4778,18 +4781,18 @@ def test_the_fdt_and_crossval_screens_dispatch_their_comparison_modes():
 
 
 def test_a_comparison_from_the_screen_names_its_record_and_outlives_the_next_pick(tmp_path):
-    """Spec §7.1 and ruling F48, end to end on the FDT screen. Two saved runs are chosen the way every
-    record in the window is chosen -- a user's pick in the picker, which also opens that run's
-    figures -- and Add puts each on the list; the button runs the REAL comparison on a worker. Its
-    figure reaches the stack through the dispatch's fig sink, and the pane names the record it wrote
-    (E1: a comparison says what it wrote, as a run does).
+    """A comparison, end to end on the FDT screen. Two saved runs are chosen the way every record in
+    the window is chosen -- a user's pick in the picker, which also opens that run's figures -- and
+    Add puts each on the list; the button runs the REAL comparison on a worker. Its figure reaches
+    the stack through the dispatch's fig sink, and the pane names the record it wrote (a comparison
+    says what it wrote, as a run does).
 
     Then the figure SURVIVES the next pick. Choosing the next record for another comparison is the
     very next thing a user does, and the saved-run viewer answers every pick by closing tabs -- only
-    its own (F48), which is what keeps the comparison just drawn on the stack.
+    its own, which is what keeps the comparison just drawn on the stack.
 
     The normalisation constant is read by one mode, so its box is live in that mode alone. None of
-    the controls is persisted (V5): a remembered list would name records a later session may have
+    the controls is persisted: a remembered list would name records a later session may have
     deleted, and a remembered constant would renormalise by a number nobody typed this time."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui.panels.crossval_panel import CrossValPanel
@@ -4843,17 +4846,17 @@ def test_a_comparison_from_the_screen_names_its_record_and_outlives_the_next_pic
 
 def test_a_comparison_from_either_screen_is_named_and_noted_and_a_taken_name_names_its_box(
         tmp_path, monkeypatch):
-    """The whole-piece review's M4, the window's half (ruling R-F3). Both "Compare saved ..." groups
-    dispatched their comparison with neither a name nor a note, and nothing renames an fdt record
-    afterwards -- so every comparison the window drew was "(unnamed)" for good, while the tool's
-    ``compare`` took ``--name``. Each group now has a Comparison name and a Comparison note row of its
-    own (the run's Record name box names the RUN), passed to the comparison.
+    """The window's half of naming a comparison. Both "Compare saved ..." groups dispatched their
+    comparison with neither a name nor a note, and nothing renames an fdt record afterwards -- so
+    every comparison the window drew was "(unnamed)" for good, while the tool's ``compare`` took
+    ``--name``. Each group now has a Comparison name and a Comparison note row of its own (the run's
+    Record name box names the RUN), passed to the comparison.
 
     The note is judged at the click by the house rule (one line, at most NOTE_MAX_CHARS): a refused
     note is one yellow box and no dispatch. A taken name is the stage's refusal, raised on the worker
     by ``store.create``; its yellow box must name THIS box, so the ``name`` and ``note`` sentences
-    list the comparison's boxes beside the run's. Neither box is ever written to PRISM.ini (plan
-    ruling P30: a remembered name is refused as taken at the next launch) -- the pin is in
+    list the comparison's boxes beside the run's. Neither box is ever written to PRISM.ini (a
+    remembered name would be refused as taken at the next launch) -- the pin is in
     test_a_comparison_from_the_screen_names_its_record_and_outlives_the_next_pick."""
     import pytest
     from PySide6.QtWidgets import QListWidgetItem
@@ -4911,12 +4914,12 @@ def test_a_comparison_from_either_screen_is_named_and_noted_and_a_taken_name_nam
 
 
 def test_a_half_typed_number_is_refused_never_read_as_blank(tmp_path, monkeypatch):
-    """The whole-piece review's N22 (L839). A numeric box's validator accepts '-', '1e', '.' and '+'
-    as text still being typed, and value_or_none() reads each as None -- which each of these boxes
-    takes as "blank": the Slice at box then sliced at the MIDDLE of the shared range, a Seed box DREW
-    a seed, and the renormalise constant was refused as "blank" although the box was not. Text that
-    is not empty and does not parse is refused at the click, naming the box's setting: one yellow
-    box, and nothing dispatched or written. The two list rows' help names the picker by its row."""
+    """A numeric box's validator accepts '-', '1e', '.' and '+' as text still being typed, and
+    value_or_none() reads each as None -- which each of these boxes takes as "blank": the Slice at
+    box then sliced at the MIDDLE of the shared range, a Seed box DREW a seed, and the renormalise
+    constant was refused as "blank" although the box was not. Text that is not empty and does not
+    parse is refused at the click, naming the box's setting: one yellow box, and nothing dispatched
+    or written. The two list rows' help names the picker by its row."""
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
     from core.gui.panels import crossval_panel as xv_mod
@@ -4954,16 +4957,16 @@ def test_a_half_typed_number_is_refused_never_read_as_blank(tmp_path, monkeypatc
 
 
 def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_path):
-    """Spec §7.1 and V3. Every refusal a comparison can make from what it was given is the STAGE's,
-    raised on the worker -- the panel checks nothing -- and it must still reach the yellow "Check your
-    inputs" box through BasePanel._on_error, with the line under it naming the control that answers
-    it: the list for a choice of runs, the 'Normalisation constant' box, the 'Slice at' box. Driven
-    through the real button, dispatch and worker, over every refusal of the per-mode pre-flight
+    """Every refusal a comparison can make from what it was given is the STAGE's, raised on the
+    worker -- the panel checks nothing -- and it must still reach the yellow "Check your inputs" box
+    through BasePanel._on_error, with the line under it naming the control that answers it: the list
+    for a choice of runs, the 'Normalisation constant' box, the 'Slice at' box. Driven through the
+    real button, dispatch and worker, over every refusal of the per-mode pre-flight
     (``compare_preflight_refusals``) plus the two a screen reaches first: one run where two are
     needed, and a blank constant. None of them may leave a comparison record behind.
 
     The three sentences are pinned verbatim. ``prefactor`` and ``slice_at`` became (place, label)
-    entries when this task built their boxes, and the words the box shows did not change."""
+    entries when their boxes were built, and the words the box shows did not change."""
     from PySide6.QtWidgets import QListWidgetItem
     from core.artifacts import ArtifactStore, use_store
     from core.gui import fields as gui_fields
@@ -4972,8 +4975,8 @@ def test_every_comparison_refusal_reaches_the_yellow_box_naming_its_control(tmp_
     from tests._fixtures import SHOWN, build_fdt_record, compare_preflight_refusals, qt_app
 
     fixes = {
-        # the whole-piece review's N22: the list quoted by its own row, and "Choose" -- the fix
-        # for "at most 2" or "named twice" is a removal, never an "Add"
+        # the list quoted by its own row, and "Choose" -- the fix for "at most 2" or "named twice"
+        # is a removal, never an "Add"
         "compare_records": ("Choose the records in the 'Runs to compare' list on the FDT analysis "
                             "tab, or in the 'Sweeps to compare' list on the Sweep study "
                             "cross-validation tab."),

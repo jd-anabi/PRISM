@@ -121,8 +121,8 @@ def test_bounds_resolution_prefers_a_sibling_then_falls_back_to_master():
 
 
 def test_cell_sources_records_the_bounds_file_that_actually_resolved():
-    """Review Focus 4. Three Nadrowski cells share one box and one does not: master_spont.txt has a
-    same-named sibling in Bounds/, master_weak.txt falls back to the folder's master.txt
+    """Three Nadrowski cells share one box and one does not: master_spont.txt has a same-named
+    sibling in Bounds/, master_weak.txt falls back to the folder's master.txt
     (cli.resolve_bounds_for_cell). Only one of the two is the box a result was measured under, and a
     record that names the WRONG bounds file is worse than one that names none -- on the decoupled
     path "the bounds file defines the param set + order" (cli.parse_cell's docstring), so the
@@ -270,8 +270,8 @@ def test_atomic_savez_round_trips_and_cannot_be_torn(tmp_path):
 # ── the chi band/drive preflight (2026-08-19 regression) ─────────────────────────────────────────
 def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(monkeypatch):
     """A ~5-day retrain was spent at the RETIRED band (0.1, 10.0) because QSettings restored a value
-    saved before C-5 changed it. ``store.load_posterior`` catches that disagreement only when a
-    posterior is LOADED, i.e. after the days are gone.
+    saved before the probe band was retargeted below resonance. ``store.load_posterior`` catches that
+    disagreement only when a posterior is LOADED, i.e. after the days are gone.
 
     The subtle half is the LOAD path: it compares the posterior against cfg, so a stale cfg loading
     the posterior trained under that same stale cfg agrees with itself and stays silent. This guard
@@ -294,7 +294,7 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
         except Refusal as e:
             assert field in str(e), f"the message must name {field}, got: {e}"
             assert e.field is None, "two knobs and a science file; no single control answers it"
-            # After V5 no front end can produce the mismatch: the Config tab shows config.py's band
+            # No front end can produce the mismatch any more: the Config tab shows config.py's band
             # and drive read-only, and the keys are neither written nor read. Sending an operator to
             # PRISM.ini or the Config tab would send them to a cause that no longer exists.
             for banned in ("PRISM.ini", "QSettings", "Config tab"):
@@ -312,7 +312,7 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
     spont.chi_freq_bounds = (0.1, 10.0)
     orchestrator._assert_chi_config_is_deliberate(spont)        # must not raise
 
-    # THERE IS NO ESCAPE HATCH ANY MORE (D11). PRISM_CHI_OVERRIDE=1 used to let a deliberate band
+    # THERE IS NO ESCAPE HATCH ANY MORE. PRISM_CHI_OVERRIDE=1 used to let a deliberate band
     # sweep through; its one sanctioned caller is archived, every knob now travels as an argument,
     # and a non-default band means editing config.py deliberately. The refusal must not advertise a
     # variable that does nothing -- an operator who sets it and sees the run proceed learns the wrong
@@ -332,12 +332,13 @@ def test_a_chi_run_at_a_non_default_band_is_refused_before_the_simulation_spend(
 
 
 def test_config_build_refusals_name_their_field():
-    """V3 at the config build, the first thing every subcommand and the Prior tab do. Each refusal a
-    bad input can provoke there is a Refusal carrying the key of the ONE control that answers it --
-    the chi knob, the cell, the units -- or None for the exactly-one-of check, which is a caller's
-    mistake with no control behind it. The texts are unchanged (the pins on them elsewhere hold);
-    what changes is the class and the key, so T10's worker can route each to the yellow box and the
-    tool can append the flag from its own table instead of the message naming one."""
+    """The field keys at the config build, the first thing every subcommand and the Prior tab do.
+    Each refusal a bad input can provoke there is a Refusal carrying the key of the ONE control that
+    answers it -- the chi knob, the cell, the units -- or None for the exactly-one-of check, which is
+    a caller's mistake with no control behind it. The texts are unchanged (the pins on them
+    elsewhere hold); what changes is the class and the key, so the window's worker can route each to
+    the yellow box and the tool can append the flag from its own table instead of the message naming
+    one."""
     import dataclasses
     cfg = _cfg(chi_mode=True, chi_n_freqs=4)
     for kw, key in ((dict(chi_k_pad=1), "chi_k_pad"),
@@ -353,7 +354,7 @@ def test_config_build_refusals_name_their_field():
     with pytest.raises(Refusal, match="exactly one of") as e:
         cli.make_sim_config("NADROWSKI", _LABELS, registry.state_dep_drift("NADROWSKI"))
     assert e.value.field is None
-    # the bounds FILE itself (§3.3): a path that names no file is refused by the input kind at the
+    # the bounds FILE itself: a path that names no file is refused by the input kind at the
     # build, never the parser's bare "File not found" from inside file_manager
     with pytest.raises(Refusal, match="The bounds file was not found") as e:
         _cfg("no_such_bounds.txt")

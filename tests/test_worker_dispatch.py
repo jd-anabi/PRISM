@@ -12,7 +12,6 @@ THE BUG THESE LOCK DOWN
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
 Run:  pytest tests/test_worker_dispatch.py
-      (or just: pytest tests/test_gui_progress.py)
 """
 import os
 import tempfile
@@ -332,7 +331,7 @@ def test_on_error_puts_the_traceback_in_details_not_the_body():
     assert "Traceback" not in captured["text"], "the traceback leaked into the body"
 
 
-# ── piece 3: the session dialog guard and the pane recorder ──────────────────────────────────────
+# ── the session dialog guard and the pane recorder ───────────────────────────────────────────────
 def test_an_unexpected_modal_is_recorded_in_shown_and_returns_zero(monkeypatch):
     """Offscreen, QMessageBox.exec() spins a nested event loop that nothing ever closes: a box a test
     did not fake itself was a STALL past the ten-minute tool-call limit (no timeout plugin is
@@ -394,11 +393,11 @@ def test_pane_capture_records_level_and_text_and_the_pane_stays_blank():
 
 
 def test_pane_capture_sees_the_pumps_batch_channel_through_a_dispatch():
-    """B17 end to end, through the machinery the helper exists for. ``BasePanel.dispatch`` resolves
-    ``self.log_pane.append_line`` AND ``self.log_pane.append_lines`` at CONNECT time
-    (base_panel.py:219-220), so a capture installed before the dispatch sees both; the batch channel is
-    the only way a print, a retired tqdm bar, a ``core`` record or a Python warning from the WORKER
-    reaches the pane, and before this task it went to the widget and nowhere a test could read it.
+    """End to end, through the machinery the helper exists for. ``BasePanel.dispatch`` resolves
+    ``self.log_pane.append_line`` AND ``self.log_pane.append_lines`` at CONNECT time, so a capture
+    installed before the dispatch sees both; the batch channel is the only way a print, a retired
+    tqdm bar, a ``core`` record or a Python warning from the WORKER reaches the pane, and it used to
+    go to the widget and nowhere a test could read it.
 
     A batch is published by the pump's daemon thread at 15 Hz as a QUEUED cross-thread signal, so the
     Qt loop has to be driven before asserting -- ``pump(app)``, as every other worker test here does.
@@ -496,9 +495,10 @@ def test_a_refusal_opens_the_yellow_box_without_a_traceback_and_a_bug_the_red_on
     """End to end through dispatch(): the exception OBJECT crosses the worker thread on the error
     signal, so the panel can route by type. Worker.run used to flatten every failure to
     (str(e), traceback) and the panel had nothing left to route on -- a refusal raised inside a
-    stage (the direction count, a near miss, D12, a load mismatch) opened the same red Critical box,
-    traceback and all, as a genuine crash. Read off the conftest's SHOWN record, which is what the
-    class-level QMessageBox.exec guard leaves behind instead of a modal that would stall offscreen."""
+    stage (the direction count, a near miss, a narrowed parent's round on a foreign observation, a
+    load mismatch) opened the same red Critical box, traceback and all, as a genuine crash. Read off
+    the conftest's SHOWN record, which is what the class-level QMessageBox.exec guard leaves behind
+    instead of a modal that would stall offscreen."""
     from PySide6.QtWidgets import QMessageBox
     from core.refusals import Refusal
     from tests._fixtures import SHOWN, PaneCapture, pump, qt_app
@@ -597,8 +597,8 @@ def test_list_dir_returns_and_the_picker_no_longer_swaps_stdout(tmp_path, capsys
 def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
     """One yellow box, two callers. BasePanel._refusal keeps its signature and its log-pane line, but
     the box itself is core/gui/widgets/refusal_box.show_refusal(parent, exc) -- so the Artifacts
-    screen, which is a plain QWidget and NOT a BasePanel on purpose (piece 4, B1: a BasePanel enrols
-    in _instances, and a run in any panel would then grey out the browser while you were reading a
+    screen, which is a plain QWidget and NOT a BasePanel on purpose (a BasePanel enrols in
+    _instances, and a run in any panel would then grey out the browser while you were reading a
     log), shows the same title, icon, text, fix sentence and single OK button instead of a lookalike
     that drifts from this one.
 
@@ -658,9 +658,9 @@ def test_the_panel_and_a_plain_widget_show_one_shared_refusal_box(monkeypatch):
         "the log-pane line is the panel's own (a plain QWidget has no pane) and must stay"
 
 
-# ── the artifact browser's table (piece 4, design §3.2) ──────────────────────────────────────────
-# NOTHING BELOW READS A STORE. columns_for/cells_for are pure over a Summary (B2: a row needs no
-# second manifest read), so every formatting leg builds by hand the Summary it wants, including the
+# ── the artifact browser's table ─────────────────────────────────────────────────────────────────
+# NOTHING BELOW READS A STORE. columns_for/cells_for are pure over a Summary (a row needs no second
+# manifest read), so every formatting leg builds by hand the Summary it wants, including the
 # shapes a real store is slow or awkward to produce -- a cache mid-run, a posterior whose manifest
 # records no amortization, a directory with no manifest at all.
 
@@ -690,9 +690,9 @@ def _bad_row(kind, **over):
 
 
 def test_columns_for_names_all_seven_kinds_after_name_and_created():
-    """Every kind's header row, verbatim (design §3.2's table), and the set of kinds is CLOSED against
-    KIND_DIRS: a new kind added to the store must gain a column list here or fail this, rather
-    than reaching the browser as a KeyError at the click. "Name" and "Created" lead every kind and
+    """Every kind's header row, verbatim, and the set of kinds is CLOSED against KIND_DIRS: a new
+    kind added to the store must gain a column list here or fail this, rather than reaching the
+    browser as a KeyError at the click. "Name" and "Created" lead every kind and
     "Note" ends every kind; what differs in between is what only that kind has."""
     import pytest
 
@@ -714,7 +714,7 @@ def test_columns_for_names_all_seven_kinds_after_name_and_created():
 
 def test_cells_for_renders_each_kind_from_the_summary_alone():
     """One cell per column, every one a string, and the same length as the header. The values come off
-    the Summary and nothing else -- no store, no manifest, no disk (B2)."""
+    the Summary and nothing else -- no store, no manifest, no disk."""
     for kind in KIND_DIRS:
         s = _row(kind)
         cells = cells_for(kind, s)
@@ -736,9 +736,8 @@ def test_cells_for_renders_each_kind_from_the_summary_alone():
 
 
 def test_a_numeric_column_sorts_by_its_number_and_not_as_text():
-    """Spec §1.2. ``Progress`` and ``Points`` are cells like "10/12 batches" and "9/12", and a text
-    sort puts 10 before 9 -- the carry-forward docs/STATE.md recorded from piece 4, which this piece
-    would have doubled by adding a second column of exactly that shape.
+    """``Progress`` and ``Points`` are cells like "10/12 batches" and "9/12", and a text sort puts 10
+    before 9, so both columns sort by their number.
 
     The completeness rank still comes FIRST and still survives a descending sort (that is _Row's own
     property, pinned beside this), so what is asserted here is only the order WITHIN the complete
@@ -769,13 +768,13 @@ def test_a_numeric_column_sorts_by_its_number_and_not_as_text():
 
 
 def test_a_caches_progress_and_whether_it_finished_come_apart():
-    """B3. ``complete`` means "has a valid manifest" and a cache is manifested from its first batch on,
+    """``complete`` means "has a valid manifest" and a cache is manifested from its first batch on,
     so a row must say BOTH: the progress, and whether the run finished. Both halves of the fraction
     are on the Summary -- ``batches_done`` and ``batches_planned``, the latter lifted from
-    ``body["identity"]["n_runs"]`` by the store task -- so the cell reads "3/4 batches" and an
-    operator can see how far a running cache has to go. The rows-per-batch list is different: it is
-    written only by ``mark_complete`` (core/SBI/training_checkpoint.py:346), so a running cache has no
-    row count and the cell adds one only once it exists."""
+    ``body["identity"]["n_runs"]`` by the store -- so the cell reads "3/4 batches" and an operator can
+    see how far a running cache has to go. The rows-per-batch list is different: it is written only
+    by ``mark_complete`` (core/SBI/training_checkpoint.py), so a running cache has no row count and
+    the cell adds one only once it exists."""
     running = _row("simulation", name="", batches_done=3, batches_planned=4, rows=None, finished=False)
     done = _row("simulation", name="", batches_done=4, batches_planned=4, rows=(24, 24, 24, 24),
                 finished=True)
@@ -801,10 +800,10 @@ def test_a_caches_progress_and_whether_it_finished_come_apart():
 
 
 def test_an_fdt_rows_points_are_a_sweeps_fraction_and_blank_for_anything_else():
-    """Piece 5 (E4). The Points cell is a SWEEP's operating points as a fraction, with the failures
-    named when there are any. A single run and a comparison carry no points (``body["points"]`` is
-    null, so ``points_done`` is None), and their cell is blank rather than "0/0", which would claim
-    a fact. Finished is ``finished``, never ``complete``, exactly as for a cache (E2)."""
+    """The Points cell is a SWEEP's operating points as a fraction, with the failures named when
+    there are any. A single run and a comparison carry no points (``body["points"]`` is null, so
+    ``points_done`` is None), and their cell is blank rather than "0/0", which would claim a fact.
+    Finished is ``finished``, never ``complete``, exactly as for a cache."""
     sweep = _row("fdt", study="sweep", points_done=10, points_planned=12, points_failed=0)
     assert cells_for("fdt", sweep)[2:5] == ("sweep", "10/12", "yes")
     assert cells_for("fdt", _row("fdt", study="sweep", points_done=10, points_planned=12,
@@ -815,7 +814,7 @@ def test_an_fdt_rows_points_are_a_sweeps_fraction_and_blank_for_anything_else():
 
 
 def test_a_posteriors_amortization_is_spelled_out_and_the_norm_is_named_too():
-    """The column, unlike the picker's item text (§6.3, which suffixes the exception only), names both
+    """The column, unlike the picker's item text (which suffixes the exception only), names both
     states: a table column that is blank for the common case reads as missing data."""
     assert cells_for("posterior", _row("posterior", mode="chi", width=18, amortized=True)) == (
         "run-a", "2026-09-14T10:22:31", "chi", "18", "amortized", "a note")
@@ -853,7 +852,7 @@ def test_the_table_is_flat_read_only_and_selects_whole_rows():
     SettingsScreen.refresh_models' row-building idiom neither sorts nor scales, and the store can hold
     hundreds of rows. No expander column in front of "Name", no in-place editing (a note is edited in
     its own box, so a double-click must not turn a cell into a line edit), one row at a time because
-    delete is one artifact at a time (B6)."""
+    delete is one artifact at a time."""
     from PySide6.QtWidgets import QAbstractItemView
 
     qt_app()
@@ -909,8 +908,8 @@ def test_the_default_sort_is_newest_first_with_the_incomplete_rows_last():
 
 
 def test_an_incomplete_row_sorts_last_under_every_column_and_either_order():
-    """Incomplete rows sort last is a PROPERTY of the table (design §3.2), not a side effect of an
-    incomplete row's blank `created`. Three of the four sorts below break the accident: sorted by
+    """Incomplete rows sort last is a PROPERTY of the table, not a side effect of an incomplete row's
+    blank `created`. Three of the four sorts below break the accident: sorted by
     Name, "halfwritten" lands BETWEEN "alpha" and "newer" in either direction, and sorted by Created
     ASCENDING its blank cell floats to the very top -- only the default, Created descending, is right
     on its own. So _Row.__lt__ ranks on completeness before the column's own value, and flips that
@@ -942,7 +941,7 @@ def test_an_incomplete_row_sorts_last_under_every_column_and_either_order():
 
 
 def test_the_sort_state_round_trips_and_a_narrower_kind_falls_back():
-    """What the screen remembers is the kind and the sort (§3.5) -- two PLAIN ints, because QSettings
+    """What the screen remembers is the kind and the sort -- two PLAIN ints, because QSettings
     stores ints and a Qt enum does not survive the round trip. Plain both ways, and not as a
     convenience: `int(Qt.SortOrder)` raises `TypeError` in PySide6 6.9.3, so the order is read as
     `header().sortIndicatorOrder().value` inside the widget and no caller ever holds a Qt enum. The
@@ -984,8 +983,8 @@ def test_the_sort_state_round_trips_and_a_narrower_kind_falls_back():
 def test_selection_changed_fires_on_a_selection_and_a_refresh_drops_it():
     """One signal, so the detail pane, the Note box and the two buttons are driven from one place. A
     refresh clears the table, so the selection goes with it and the pane must tolerate a None -- the
-    alternative, remembering an id across a refresh, is exactly the dangling state §3.4 protects the
-    pickers from."""
+    alternative, remembering an id across a refresh, is exactly the dangling state the pickers are
+    re-listed to avoid."""
     qt_app()
     table = ArtifactTable()
     fired = []
@@ -1006,8 +1005,8 @@ def test_selection_changed_fires_on_a_selection_and_a_refresh_drops_it():
 
 
 def test_the_stylesheet_paints_the_item_view_in_both_themes():
-    """core/gui/design.py styled NO item view before this piece: its one QAbstractItemView rule is the
-    combo popup's (design.py:237). So a QTreeWidget would have rendered in the Fusion default -- a
+    """core/gui/design.py styled NO item view before the browser: its one QAbstractItemView rule is
+    the combo popup's (design.py:237). So a QTreeWidget would have rendered in the Fusion default -- a
     white grid in dark mode under a header matching nothing else. The rules go in design.py, in the
     same token vocabulary as the rest, so a theme flip recolours them for free (theming.Appearance
     re-applies build_qss on every change).
@@ -1035,11 +1034,11 @@ def test_the_stylesheet_paints_the_item_view_in_both_themes():
 
 
 def test_a_sort_applied_before_the_first_fill_is_held_and_not_lost():
-    """The screen restores its remembered sort from settings (§3.5), and nothing says it must do so
-    AFTER its first refresh. Before a fill there is no header, so the sort cannot be applied then and
-    there -- it is held and spent by the next set_rows, which makes "the sort survives a relaunch"
-    true whichever order the screen calls the two in, rather than a sequencing rule the next task has
-    to read a docstring to obey. Held, not stored: once spent it cannot come back over a sort the
+    """The screen restores its remembered sort from settings, and nothing says it must do so AFTER
+    its first refresh. Before a fill there is no header, so the sort cannot be applied then and there
+    -- it is held and spent by the next set_rows, which makes "the sort survives a relaunch" true
+    whichever order the screen calls the two in, rather than a sequencing rule the next change has to
+    read a docstring to obey. Held, not stored: once spent it cannot come back over a sort the
     user has since chosen."""
     qt_app()
     rows = [_row("prior", name="newer", created="2026-09-14T10:22:31"),
@@ -1076,7 +1075,7 @@ def test_a_sort_applied_before_the_first_fill_is_held_and_not_lost():
     assert other.sort_state() == at.DEFAULT_SORT, "a spent sort came back on a wider kind"
 
 
-# ── piece 4, B14: the window's root sink ─────────────────────────────────────────────────────────
+# ── the window's root sink ───────────────────────────────────────────────────────────────────────
 def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream_late(capsys):
     """Below WARNING to ``sys.stdout``, at WARNING and above to ``sys.stderr``, BOTH RESOLVED AT EMIT
     TIME, as ``library: <logger name>: <message>``.
@@ -1096,13 +1095,13 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
     leakage warnings at sbi/samplers/rejection/rejection.py:336,359 are that call -- and its logger
     name is ``root``, which names nothing. So for that ONE name the prefix falls back to
     ``record.module``, the basename of the file that logged: ``library: rejection:`` under sbi, and
-    this test file's own stem here. Walkthrough row D15 expects that module name. A library's
-    ``log.exception`` keeps its traceback, with the prefix on the first line only.
+    this test file's own stem here; that module name is what a user reads on the real screen. A
+    library's ``log.exception`` keeps its traceback, with the prefix on the first line only.
 
-    Fix round 1 -- PRISM's own records. BETWEEN RUNS no handler sits on ``core``, so a ``core``
-    warning reaches this sink rather than vanishing, and it is written in the tool's own shape
-    (``warning: ...``), never ``library:``. DURING A RUN the pump's handler on ``core`` has already
-    emitted it, so it lands in the pane exactly once, at its own level, and the sink stays silent.
+    PRISM's own records. BETWEEN RUNS no handler sits on ``core``, so a ``core`` warning reaches this
+    sink rather than vanishing, and it is written in the tool's own shape (``warning: ...``), never
+    ``library:``. DURING A RUN the pump's handler on ``core`` has already emitted it, so it lands in
+    the pane exactly once, at its own level, and the sink stays silent.
     """
     import logging
 
@@ -1160,14 +1159,14 @@ def test_the_windows_root_sink_prefixes_a_library_record_and_resolves_its_stream
         lib.setLevel(logging.NOTSET)
 
 
-# ── piece 4, B15: the deferred-cancel critical section ───────────────────────────────────────────
+# ── the deferred-cancel critical section ─────────────────────────────────────────────────────────
 def test_cancel_deferred_defers_a_cancel_and_never_discards_it():
     """Inside the section neither cancel checkpoint fires -- ``_SignalStream.write`` (every print and
     every tqdm redraw) and ``_PumpLogHandler.emit`` (every ``core`` record) -- and the records still
     flow. What must NOT happen is the cancel being lost: the token stays REQUESTED, its latch stays
     unfired, and the very next check OUTSIDE the block raises exactly as it would have.
 
-    Re-entrant, because the section nests: Task 22 puts the pipeline's rescue block inside one and the
+    Re-entrant, because the section nests: the pipeline's rescue block sits inside one and the
     ``training_checkpoint.save`` it calls opens another, so a plain boolean would be cleared by the
     inner block's exit and leave the rest of the outer block unprotected."""
     import logging
@@ -1217,8 +1216,8 @@ def test_the_checkpoint_commit_runs_inside_the_deferred_cancel_section(tmp_path,
     """Steps 1-3 of a checkpoint save -- the shard writes, the state.prev copy and the atomic replace
     of state.pt -- are the two-writes-that-must-both-happen case the section exists for: a record
     emitted between the shard fsync and the state replace would raise mid-commit and leave a
-    checkpoint pointing at data still in the page cache. The rule in CLAUDE.md and in
-    training_checkpoint's module docstring stays, and so does the source-reading test that polices it
+    checkpoint pointing at data still in the page cache. The rule in training_checkpoint's module
+    docstring stays, and so does the source-reading test that polices it
     (tests/test_user_sbi.py::test_nothing_prints_or_logs_inside_a_checkpoint_commit): the section is
     the guard, that test is the proof the guard is where it is claimed to be.
 
@@ -1475,7 +1474,7 @@ def test_cancel_deferred_applies_only_to_the_thread_that_entered_it():
     assert token.fired is True
 
 
-# ── piece 4, B15 fix round 1: a cancel waits out an exception handler; a crash stays a crash ──────
+# ── a cancel waits out an exception handler; a crash stays a crash ───────────────────────────────
 def test_a_cancel_waits_out_an_exception_handler_and_never_waits_in_normal_flow():
     """The raise-time deferral at the unit level (``core.runs.cancel_is_deferred``), on both cancel
     checkpoints -- ``_SignalStream.write`` (every print and tqdm redraw) and ``_PumpLogHandler.emit``
@@ -1776,18 +1775,18 @@ def test_a_cancel_never_reports_a_failure_as_a_clean_stop():
 
 
 def test_a_cancel_that_arrived_too_late_is_said_and_the_run_still_reports_success():
-    """R6 (whole-piece review). ``cancel_is_deferred()`` defers a checkpoint while this thread is
-    handling an exception, and the token stays REQUESTED so "the next check outside raises" -- which
-    is true only if there IS a next check. ``Worker.run`` asked the token nothing on the SUCCESS
-    path, so a Cancel that arrived inside a deferral window nothing re-checked (a stage whose last
-    write happens in a ``finally`` an exception entered -- ``core/Solvers/sdeint.py``'s bar teardown
-    is on the graphed solver path) left the run reported as a clean, completed success. The person
-    who pressed Cancel was told nothing at all.
+    """``cancel_is_deferred()`` defers a checkpoint while this thread is handling an exception, and
+    the token stays REQUESTED so "the next check outside raises" -- which is true only if there IS a
+    next check. ``Worker.run`` asked the token nothing on the SUCCESS path, so a Cancel that arrived
+    inside a deferral window nothing re-checked (a stage whose last write happens in a ``finally`` an
+    exception entered -- ``core/Solvers/sdeint.py``'s bar teardown is on the graphed solver path) left
+    the run reported as a clean, completed success. The person who pressed Cancel was told nothing at
+    all.
 
     The run really DID finish, so it must not be reported as cancelled: nothing on disk is wrong and
     the payload is correct. It is reported as a SUCCESS with the fact said out loud -- the missing
-    counterpart of the failure path's "A cancel was requested before the run failed." (B15's fix
-    round 1), which the window has had since.
+    counterpart of the failure path's "A cancel was requested before the run failed.", which the
+    window already had.
 
     A run that finishes with NO cancel pending says nothing extra: the sentence has to be the answer
     to a question somebody asked."""

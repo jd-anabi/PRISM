@@ -12,7 +12,6 @@ THE BUG THESE LOCK DOWN
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
 Run:  pytest tests/test_settings_persistence.py
-      (or just: pytest tests/test_gui_progress.py)
 """
 import os
 import tempfile
@@ -63,9 +62,8 @@ def _budget_cfg():
     return Cfg()
 def _prior_stub():
     """A LoadedPrior-shaped stub: the Posterior tab now reads ``.prior``/``.force_prior`` off
-    session.inf_prior (piece 1, Task 4) rather than carrying the physical prior and forcing prior as
-    separate session fields, so a bare ``object()`` no longer stands in where a dispatched call is
-    actually reached."""
+    session.inf_prior rather than carrying the physical prior and forcing prior as separate session
+    fields, so a bare ``object()`` no longer stands in where a dispatched call is actually reached."""
     return type("LoadedPriorStub", (), {"prior": object(), "force_prior": object()})()
 def _budget_panel(cfg=None, prior=None):
     from core.gui.screens.inference_screen import InferenceScreen
@@ -193,12 +191,12 @@ def test_the_budget_lines_never_raise_on_a_config_they_do_not_understand(monkeyp
     """_sync_budget runs from refresh_gates(), so an exception in a STATUS LINE would take down the
     whole tab. The gate tests set session.cfg to a bare object(); so could any future stub.
 
-    Since piece 3 (V6) the tab no longer swaps such a config for None: it goes into
-    orchestrator.training_preview as it is, so this pins the preview's FAIL-SOFT branch. A config the
-    preview cannot read lands in estimate_error and checkpoint_error, and the lines say "unavailable"
-    with the error. The session's cadence is 0 (tests/conftest.py rebinds orchestrator's copy), which
-    keeps the checkpoint line at "off" and the word "config"; checkpointing is turned on here to reach
-    the identity at all. With no config the checkpoint line still carries the word "config"."""
+    The tab no longer swaps such a config for None: it goes into orchestrator.training_preview as it
+    is, so this pins the preview's FAIL-SOFT branch. A config the preview cannot read lands in
+    estimate_error and checkpoint_error, and the lines say "unavailable" with the error. The session's
+    cadence is 0 (tests/conftest.py rebinds orchestrator's copy), which keeps the checkpoint line at
+    "off" and the word "config"; checkpointing is turned on here to reach the identity at all. With no
+    config the checkpoint line still carries the word "config"."""
     from core import orchestrator
 
     inf, panel = _budget_panel(cfg=object(), prior=object())
@@ -226,8 +224,8 @@ def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
     max(1, ...) / max(0, ...) the result, so a blank Batches box showed the budget for ONE batch and
     a negative cap showed the hardware width, both as if someone had typed them. A live line cannot
     pop a dialog, so it says which box is wrong, in the box's own label, and shows no number until
-    it is fixed: no clamp, no default, no raise (V2 for a live line). The memory and checkpoint
-    lines go empty with it -- an estimate for a width nobody asked for is the same lie in GiB."""
+    it is fixed: no clamp, no default, no raise. The memory and checkpoint lines go empty with it --
+    an estimate for a width nobody asked for is the same lie in GiB."""
     from core.gui.fields import label
 
     _inf, panel = _budget_panel(cfg=object(), prior=object())
@@ -250,8 +248,9 @@ def test_the_budget_lines_name_a_blank_or_half_typed_box_and_nothing_raises():
     assert panel.budget_ckpt.text(), "the checkpoint line must come back once both boxes pass"
 
 def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint(monkeypatch):
-    """D3's user-facing face. The TSNPE tab shares the Posterior tab's budget group, whose
-    checkpoint line is computed from the AMORTIZED identity -- so at the parent's budget it read
+    """The user-facing face of the rule that the region belongs to the simulation cache's identity.
+    The TSNPE tab shares the Posterior tab's budget group, whose checkpoint line is computed from the
+    AMORTIZED identity -- so at the parent's budget it read
     "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely", which is exactly what a
     round at that budget did before the region became part of the identity. The region is drawn
     when the round starts, so the tab cannot resolve a directory in advance; it states the rule.
@@ -278,7 +277,7 @@ def test_the_tsnpe_tab_never_claims_it_will_resume_the_amortized_checkpoint(monk
 
 
 def test_the_budget_lines_only_format_the_preview(monkeypatch):
-    """V6. The three lines under the training budget used to DERIVE what they showed: the width
+    """The three lines under the training budget used to DERIVE what they showed: the width
     (_effective_width), the memory geometry (_budget_memory's own n_fine / n_vars / steady), the cache
     directory (resolve_dir under the process-default root) and the cadence (config's LIVE copy of
     TRAINING_CHECKPOINT_EVERY, which the training stage never reads). Four places for the line and the
@@ -406,12 +405,14 @@ def test_the_budget_lines_only_format_the_preview(monkeypatch):
     assert not (override & {"config", "TRAINING_CHECKPOINT_EVERY", "orchestrator"}), sorted(override)
 
 def test_the_training_budget_round_trips_through_settings():
-    """"I have to retype it every launch" is the complaint L1 already answered for splitters.
+    """"I have to retype it every launch" is the complaint the remembered splitter layout already
+    answered for splitters.
 
-    The budget stays REMEMBERED under V5, and is saved as the boxes' TEXT (spec §5.1). The old save
-    wrote value(), which reads a blank box as 0, so a Batches box left empty at close came back on
-    the next launch as a 0 nobody typed -- a run that simulates nothing, caught only at the next
-    click. Saved as "", get_int falls back to config.py's default exactly as for a missing key.
+    The budget stays REMEMBERED -- the inference tabs remember their selections and the training
+    budget, and nothing else -- and is saved as the boxes' TEXT. The old save wrote value(), which
+    reads a blank box as 0, so a Batches box left empty at close came back on the next launch as a 0
+    nobody typed -- a run that simulates nothing, caught only at the next click. Saved as "", get_int
+    falls back to config.py's default exactly as for a missing key.
     """
     from core import config
     from core.gui import settings as st
@@ -469,21 +470,22 @@ def test_settings_round_trip_reduction_and_fdt():
     assert red2.f0.value() == 0.123
     assert red2.cell_picker.key() == want_cell
     assert fdt2.n_freqs.value() == 77
-    # The two FDT boxes are consents (V5, spec §1.2): saved flipped, they still open at the
-    # construction defaults -- the sanity checks run, and the production sweep follows them.
+    # The two FDT boxes are consents, and a consent is never remembered: saved flipped, they still
+    # open at the construction defaults -- the sanity checks run, and the production sweep follows
+    # them.
     assert fdt2.skip_sanity.isChecked() is False
     assert fdt2.confirm_production.isChecked() is True
 
 def test_the_fdt_panel_remembers_its_saved_run_pick_and_never_its_seed(monkeypatch):
-    """E7 and spec §5.5. The record picker is a SELECTION and is restored at construction, like the
-    cell picker beside it; the Seed box is not, and neither are the record's name and note.
+    """The record picker is a SELECTION and is restored at construction, like the cell picker beside
+    it; the Seed box is not, and neither are the record's name and note.
 
     A remembered seed is the defect this pins: the box is how a run is made a deliberate repeat of an
     earlier one, so a value carried over from the last session would silently turn every later run
-    into that repeat, and the spread across repeats -- which E8 calls the measurement error -- would
-    collapse to zero without anyone touching the box. A remembered NAME is the same defect wearing a
-    different hat: a progressive record occupies its name from its first moment (spec §2.2), so the
-    next launch's first click would be refused by ``assert_name_free`` for a name nobody typed.
+    into that repeat, and the spread across repeats -- the measurement error -- would collapse to
+    zero without anyone touching the box. A remembered NAME is the same defect wearing a different
+    hat: a progressive record occupies its name from its first moment, so the next launch's first
+    click would be refused by ``assert_name_free`` for a name nobody typed.
     """
     import types
     from core.gui import settings as st
@@ -515,7 +517,7 @@ def test_the_fdt_panel_remembers_its_saved_run_pick_and_never_its_seed(monkeypat
 
     again = FdtPanel()
     assert again.record_picker.key() == "20260922T130000", "the saved run pick is a selection"
-    assert again.n_freqs.text() == "77", "the campaign knobs are still remembered (V5)"
+    assert again.n_freqs.text() == "77", "the campaign knobs are still remembered"
     assert again.seed.text() == "", "a remembered seed repeats the last run in silence"
     assert again.record_name.text() == "" and again.record_note.text() == ""
 
@@ -563,13 +565,14 @@ def test_crossval_does_not_persist_cell_derived_bounds():
     assert xv2.s_grid.hi.text() == derived_hi, "the grid bound must be RE-DERIVED, not restored"
 
 def test_the_crossval_panel_remembers_its_saved_sweep_pick_and_never_its_seed(monkeypatch):
-    """The CrossVal half of E7 and spec §5.5, with the same reasoning as the FDT panel's: the picker
-    is a selection and is restored, the study's one seed is not. Here the cost of a remembered seed is
-    larger -- one seed is recorded on BOTH of the study's records (spec §4.1), so a carried-over value
-    would make every later study a bitwise repeat of the last one at every operating point, and the
-    two sweeps would agree for a reason that has nothing to do with the physics.
+    """The CrossVal half of the never-remembered seed, with the same reasoning as the FDT panel's:
+    the picker is a selection and is restored, the study's one seed is not. Here the cost of a
+    remembered seed is larger -- one seed is recorded on BOTH of the study's records, so a
+    carried-over value would make every later study a bitwise repeat of the last one at every
+    operating point, and the two sweeps would agree for a reason that has nothing to do with the
+    physics.
 
-    The tail pins the rows' labels (P34): the nine registered rows are built from label(key), and the
+    The tail pins the rows' labels: the nine registered rows are built from label(key), and the
     two literal ones -- "Record name" and "Note", whose keys are sentence entries with no label() --
     are read back off the form and must be the words the ``name`` and ``note`` fix sentences quote,
     because the control-table read-back skips sentence entries and nothing else would catch a drift."""
@@ -607,14 +610,14 @@ def test_the_crossval_panel_remembers_its_saved_sweep_pick_and_never_its_seed(mo
 
     again = CrossValPanel()
     assert again.record_picker.key() == "t_run"
-    assert again.f0.value() == 0.077, "the free knobs are still remembered (V5)"
+    assert again.f0.value() == 0.077, "the free knobs are still remembered"
     assert again.seed.text() == "" and again.record_name.text() == ""
 
     from tests._fixtures import code_only
     src = code_only(CrossValPanel._build_controls)
     for key in ("cell", "preset", "s_grid", "t_grid", "n_freqs", "ensemble_m", "freqs_per_batch",
                 "f0", "seed"):
-        assert f"label({key!r})" in src, f"the CrossVal panel must build its {key} row from label({key!r}) (P34)"
+        assert f"label({key!r})" in src, f"the CrossVal panel must build its {key} row from label({key!r})"
 
     shown = []
     for form in again.findChildren(QFormLayout):
@@ -865,10 +868,10 @@ def test_the_confirmation_is_reached_and_can_refuse():
     for banned in ("near_miss_siblings", "resolve_dir", "peek"):
         assert banned not in body, (
             f"_confirm_fresh_run reimplements '{banned}' -- the GUI's own identity derivation is the "
-            f"defect D7 removed (it resolved run_size as `cap or hw`, not `min(hw, cap)`)")
+            f"defect this pin keeps out (it resolved run_size as `cap or hw`, not `min(hw, cap)`)")
 
 
-# ── piece 3: the shared test helpers ─────────────────────────────────────────────────────────────
+# ── the shared test helpers ──────────────────────────────────────────────────────────────────────
 def test_code_only_strips_docstrings_and_comments_at_every_depth_and_accepts_a_module():
     """The AST pins forbid words that the docstrings EXPLAINING the rule necessarily contain, so the
     helper must drop every docstring -- nested functions and classes too, not only the outermost one
@@ -902,10 +905,10 @@ def test_code_only_strips_docstrings_and_comments_at_every_depth_and_accepts_a_m
 
 @pytest.fixture(scope="module")
 def _panel_built_at_module_scope(tmp_path_factory):
-    """A panel built at MODULE scope, the way tiny_run builds its run and screen_run (spec §8.1) will
-    build its screen. pytest sets module fixtures up before the function-scoped ones, so this runs
-    with whatever settings path the SESSION left -- the case a function-only isolation misses. It
-    returns the path it saw, the panel, and the session's temp root for the test to check against."""
+    """A panel built at MODULE scope, the way tiny_run builds its run and screen_run builds its
+    screen. pytest sets module fixtures up before the function-scoped ones, so this runs with
+    whatever settings path the SESSION left -- the case a function-only isolation misses. It returns
+    the path it saw, the panel, and the session's temp root for the test to check against."""
     from core.gui import settings as st
     from core.gui.panels.reduction_panel import ReductionPanel
     qt_app()
@@ -915,8 +918,8 @@ def _panel_built_at_module_scope(tmp_path_factory):
 
 
 def test_a_module_scoped_fixture_reads_the_session_ini_and_never_the_real_one(_panel_built_at_module_scope):
-    """Spec §5.4: the settings location is never the real PRISM.ini during a test process, AT ANY
-    FIXTURE SCOPE. The old per-test redirect (_temp_settings) covered a test body only; a panel built
+    """The settings location is never the real PRISM.ini during a test process, AT ANY FIXTURE
+    SCOPE. The old per-test redirect (_temp_settings) covered a test body only; a panel built
     by a module fixture was set up before it and read the developer's last session -- the same
     restore-wins-over-config mechanism that cost a ~5-day run on 2026-08-19, now with the answer
     depending on which test ran first. Two paths are asserted: the one the module fixture saw (the
@@ -949,11 +952,11 @@ def test_no_suite_points_the_settings_back_at_the_real_ini():
 
 
 def test_int_field_value_or_none_tells_a_blank_from_a_zero():
-    """``IntField.value()`` returns 0 for "" and for "-" mid-typing (labeled_inputs.py:45-49), and 0
-    is a legal value for the two "0 = automatic" boxes (the rows-per-batch cap, the candidates per
-    sweep round), so a tab that refuses a blank rather than reading it as zero (piece 3, V2) needs
-    the FloatField twin: None for anything that does not parse, the int otherwise, whitespace
-    tolerated. ``value()`` keeps its old contract for the callers that still use it."""
+    """``IntField.value()`` returns 0 for "" and for "-" mid-typing, and 0 is a legal value for the
+    two "0 = automatic" boxes (the rows-per-batch cap, the candidates per sweep round), so a tab that
+    refuses a blank rather than reading it as zero needs the FloatField twin: None for anything that
+    does not parse, the int otherwise, whitespace tolerated. ``value()`` keeps its old contract for
+    the callers that still use it."""
     from core.gui.widgets.labeled_inputs import IntField
     from tests._fixtures import qt_app
 
@@ -968,20 +971,21 @@ def test_int_field_value_or_none_tells_a_blank_from_a_zero():
 
 
 def test_the_config_tab_science_knobs_open_at_config_and_are_not_written():
-    """V5 on the Config tab: the χ probe count, probe slots and lock-in ceiling open at config.py's
+    """On the Config tab, the χ probe count, probe slots and lock-in ceiling open at config.py's
     values on EVERY launch, and the drive amplitude and band are never saved or read at all.
 
     The seed-then-restore pattern is what trained the 2026-08-19 retrain on the retired band: the tab
     seeded the boxes from config.CHI_* and then restored whatever the last session had saved, so a
-    value written before config.py changed won silently on every launch afterwards. Since D11 a
-    non-default band or amplitude is refused seconds into the prior build, so restoring one only
-    manufactures that refusal; the slots and the ceiling are frozen into every posterior trained
-    with them, so a stale one silently trains a different network. A stale key in an old PRISM.ini
-    is IGNORED, never migrated.
+    value written before config.py changed won silently on every launch afterwards. There is no chi
+    override, so a non-default band or amplitude is refused seconds into the prior build, and
+    restoring one only manufactures that refusal; the slots and the ceiling are frozen into every
+    posterior trained with them, so a stale one silently trains a different network. A stale key in
+    an old PRISM.ini is IGNORED, never migrated.
 
     Two launches: from an empty file, and from a file holding every old key one step from the
     defaults. Both must show config.py, while the selections (model, χ-mode tick) are still
-    remembered. Task 20 pins the Prior, Posterior, Validate and TSNPE tabs the same way.
+    remembered. test_science_knobs_open_at_config_and_are_not_written pins the Prior, Posterior,
+    Validate and TSNPE tabs the same way.
     """
     from core import config
     from core.gui import settings as st
@@ -1043,10 +1047,11 @@ def test_the_config_tab_science_knobs_open_at_config_and_are_not_written():
 
 
 def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
-    """V5 on the Prior, Posterior, Validate and TSNPE tabs (Task 11 pins the Config tab the same way):
-    every SCIENCE KNOB opens at config.py's value -- the truncate module's, for the HPD level and the
-    direction count -- on EVERY launch, and its key is neither written nor read. A stale key an older
-    build left in PRISM.ini is IGNORED, never migrated.
+    """On the Prior, Posterior, Validate and TSNPE tabs (the Config tab is pinned the same way by
+    test_the_config_tab_science_knobs_open_at_config_and_are_not_written), every SCIENCE KNOB opens at
+    config.py's value -- the truncate module's, for the HPD level and the direction count -- on EVERY
+    launch, and its key is neither written nor read. A stale key an older build left in PRISM.ini is
+    IGNORED, never migrated.
 
     Why: each of these boxes was seeded from config.py and then overwritten from QSettings, so a value
     typed once won silently over config.py on every later launch. The sweep and clustering boxes
@@ -1118,7 +1123,7 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
     assert relaunched.prior_panel._saved_bounds_key == "stale_bounds.txt", "the bounds file is a selection"
     assert relaunched.prior_panel.bounds_source.is_direct() is False
     assert relaunched.posterior_panel.num_runs.text() == "1234", "the Posterior budget is remembered"
-    assert relaunched.tsnpe_panel.num_runs.text() == "4321", "the TSNPE budget is remembered (spec §5.3)"
+    assert relaunched.tsnpe_panel.num_runs.text() == "4321", "the TSNPE budget is remembered"
 
     # (c) nothing writes them: every knob box edited, the four panels saved into a file of their own
     for _group, attr, keys in knobs:
@@ -1141,7 +1146,7 @@ def test_science_knobs_open_at_config_and_are_not_written(tmp_path):
 
 
 def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
-    """Spec §5.3. The TSNPE tab's restore_settings was complete and NEVER CALLED: its __init__ was born
+    """The TSNPE tab's restore_settings was complete and NEVER CALLED: its __init__ was born
     without the `self.restore_settings(settings.settings())` line every other panel ends with, and
     nothing else calls it (MainWindow._save_state calls only save_settings). Every launch showed
     config.py's budget and the store's first observation while PRISM.ini held the last session's,
@@ -1149,8 +1154,8 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
 
     Now the tab restores its SELECTION (the observation) and its BUDGET (batches, rows-per-batch) and
     nothing else: the HPD level and the direction count are science knobs and open at the truncate
-    module's defaults (V5). The budget is saved as the boxes' TEXT, so a box left blank at close opens
-    at config.py's default; the old save wrote value(), which turns "" into a 0 nobody typed.
+    module's defaults. The budget is saved as the boxes' TEXT, so a box left blank at close opens at
+    config.py's default; the old save wrote value(), which turns "" into a 0 nobody typed.
 
     The last leg pins the defect class, not the instance: every panel with a restore_settings of its
     own calls it from its own __init__.
@@ -1240,18 +1245,19 @@ def test_the_tsnpe_tab_restores_its_observation_and_budget_only(monkeypatch):
                 f"{cls.__name__} defines restore_settings and its __init__ never calls it"
     assert "restore_settings" in vars(TSNPEPanel)
     assert "restore_settings" not in vars(ValidatePanel), \
-        "the Validate tab restores nothing (V5), so it carries no restore_settings to forget to call"
+        "the Validate tab restores nothing, so it carries no restore_settings to forget to call"
 
 
 def test_consents_are_never_persisted(tmp_path):
-    """V5: a CONSENT is answered per run and never remembered -- all four of them. The TSNPE tab's
-    "Start a new simulation even if a cache one setting away exists" (D7) and the Infer tab's "Run on
-    a different observation" (D8) were already unpersisted; the FDT panel's "Skip sanity checks" and
-    "Proceed to the production sweep after sanity" were saved and restored like campaign knobs, so one
-    session's "skip the checks" silently dropped them from every later session. Every consent now
-    opens at its construction default. For the FDT pair that is skip UNTICKED and proceed TICKED, not
-    both unticked (spec §1.2): unticking proceed would make a default click stop after the sanity
-    checks, where today and on the command line (--no-production is opt-in) it runs the sweep.
+    """A CONSENT is answered per run and never remembered -- all four of them. The TSNPE tab's "Start
+    a new simulation even if a cache one setting away exists" (the near-miss consent) and the Infer
+    tab's "Run on a different observation" (the narrowed-posterior consent) were already unpersisted;
+    the FDT panel's "Skip sanity checks" and "Proceed to the production sweep after sanity" were saved
+    and restored like campaign knobs, so one session's "skip the checks" silently dropped them from
+    every later session. Every consent now opens at its construction default. For the FDT pair that
+    is skip UNTICKED and proceed TICKED, not both unticked: unticking proceed would make a default
+    click stop after the sanity checks, where today and on the command line (--no-production is
+    opt-in) it runs the sweep.
 
     Three legs: no save_settings or restore_settings names a consent; a save after all four were
     flipped writes none of them; an old PRISM.ini that holds all four answers opens at the defaults.
@@ -1311,7 +1317,7 @@ def test_get_bool_falls_back_on_an_unparseable_value():
     hand-edited value ("maybe", "2") restored as False whatever the caller's default said. For the
     remembered boolean with a True default that is the Fisher rotation silently OFF (the Config tab's
     reparam_rotate, config.REPARAM_ROTATE). get_int already fell back to its default on text it
-    cannot parse; get_bool now does the same (spec §5.1)."""
+    cannot parse; get_bool now does the same."""
     from core import config
     from core.gui import settings as st
     from core.gui.panels import inference_tabs as it

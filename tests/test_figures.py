@@ -12,7 +12,6 @@ THE BUG THESE LOCK DOWN
     core/Simulator/simulator.py:50 -> core/Solvers/sdeint.py:15), so this fired constantly.
 
 Run:  pytest tests/test_figures.py
-      (or just: pytest tests/test_gui_progress.py)
 """
 import os
 import tempfile
@@ -245,7 +244,7 @@ def test_a_popped_out_figure_survives_a_worker_plt_close_all():
     pump(app, 0.1)
     plt.close("all")
 
-# ── Labels + units (round 4) ─────────────────────────────────────────────────────────────────────
+# ── Labels + units ───────────────────────────────────────────────────────────────────────────────
 def test_labels_axis_and_rescale_render_latex_with_units():
     from core.Helpers import labels as L
     assert L.axis_label("x", "nm") == "$x$ (nm)"
@@ -435,7 +434,7 @@ def test_mpl_theme_follows_the_appearance_signal():
 
 def test_plot_ppc_summary_box_follows_the_dark_theme():
     """The two PPC summary boxes read plt.rcParams, so under a dark theme they are NOT the old hardcoded
-    white -- locks the B-c hardcoded-white regression."""
+    white -- a regression back to that hardcoded white fails here."""
     import numpy as np
     import matplotlib.pyplot as plt
     from core.gui import mpl_theme
