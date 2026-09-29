@@ -1720,8 +1720,133 @@ def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(ti
     assert np.load(cal.path / "ranks.npz")["ranks"].shape[0] == 8
     assert json.loads((cal.path / "results.json").read_text(encoding="utf-8"))["tarp"] == res["tarp"]
     assert r.store.load_calibration(cal.id).results == res
+    assert res["seed"] is None and res["verdict"]["threshold"] == pytest.approx(0.05 / len(keys)) and \
+        [p["name"] for p in res["verdict"]["parameters"]] == keys
     with pytest.raises(ValueError, match="not the one this posterior was trained with"):
         orchestrator.validate_calibration(r.cfg, r.posterior, r.other_prior(), fig_sink=r.sink, n_cal=4, cal_n_scales=1)
+
+
+NAMES = ["k", "lam", "f_max", "tau", "tau_c", "s", "delta_E", "beta", "n", "temp", "x_scale", "t_scale", "T"]
+
+
+def test_the_calibration_verdict_judges_every_parameter_at_a_family_wise_threshold():
+    """The verdict's rule: every parameter's rank test at KS p >= 0.05 / (the number of parameters),
+    so that thirteen tests share one 5 % false-alarm rate, an assumed parameter counted like the rest;
+    and the joint coverage test at KS p >= 0.05. A p exactly at a threshold passes. A missing or
+    non-finite p fails, and is recorded as None because a manifest refuses NaN. Handing it a p-value
+    list that does not match the names is a programming error, not a refusal."""
+    from core.orchestrator import calibration_verdict
+    ok = [0.5] * 13
+    v = calibration_verdict(ok, NAMES, ("T",), 0.3)
+    assert v["passed"] is True and v["alpha"] == 0.05 and v["threshold"] == pytest.approx(0.05 / 13)
+    assert [p["name"] for p in v["parameters"]] == NAMES
+    assert [p["assumed"] for p in v["parameters"]] == [False] * 12 + [True]
+    assert v["tarp"] == {"ks_p": 0.3, "passed": True} and "operating points" in v["caveat"]
+    assumed_fails = ok[:12] + [0.0038]                      # under 0.05/13: the assumed one counts
+    assert calibration_verdict(assumed_fails, NAMES, ("T",), 0.3)["passed"] is False
+    assert calibration_verdict([0.05 / 13] + ok[1:], NAMES, ("T",), 0.3)["passed"] is True   # >= passes
+    assert calibration_verdict([0.004] * 13, NAMES, (), 0.3)["passed"] is True               # corrected, not 0.05
+    tarp_fails = calibration_verdict(ok, NAMES, ("T",), 0.049)
+    assert tarp_fails["passed"] is False and all(p["passed"] for p in tarp_fails["parameters"])
+    assert calibration_verdict(ok, NAMES, ("T",), 0.05)["passed"] is True
+    nan = calibration_verdict(ok[:3] + [float("nan")] + ok[4:], NAMES, (), 0.3)
+    assert nan["passed"] is False
+    assert nan["parameters"][3] == {"name": "tau", "ks_p": None, "passed": False, "assumed": False}
+    assert calibration_verdict(ok, NAMES, (), float("nan"))["tarp"] == {"ks_p": None, "passed": False}
+    with pytest.raises(ValueError):
+        calibration_verdict(ok[:12], NAMES, (), 0.3)
+
+
+def test_validate_ends_on_one_verdict_record_and_a_failing_verdict_still_writes_the_calibration(store, monkeypatch, caplog):
+    """A failing verdict is a result: the calibration is written with the verdict in it and the stage
+    returns. The verdict is said once, as the stage's last record, so the window's log ends on it. A
+    bad seed is refused before anything is written."""
+    from core import orchestrator
+    from tests._fixtures import stub_calibration_battery
+    seen = stub_calibration_battery(monkeypatch, ks_pvals=[0.5] * 12 + [0.003], tarp_ks_p=0.2)
+    caplog.set_level("INFO", logger="core")
+    cal = orchestrator.validate_calibration(_nad_cfg(), seen["posterior"], seen["prior"], n_cal=8,
+                                            cal_n_scales=2, seed=3, fig_sink=_close, store=store,
+                                            name="failing")
+    v = cal.results["verdict"]
+    assert v["passed"] is False and [p["passed"] for p in v["parameters"]] == [True] * 12 + [False]
+    assert v["tarp"] == {"ks_p": 0.2, "passed": True} and cal.results["seed"] == 3
+    assert store.get("calibration", "failing").body["results"]["verdict"] == v
+    msgs = [r.getMessage() for r in caplog.records if r.name == "core.orchestrator"]
+    verdicts = [m for m in msgs if m.startswith("[verdict] ")]
+    assert len(verdicts) == 1 and msgs[-1] == verdicts[0]
+    head, *rows = verdicts[0].splitlines()
+    assert head == ("[verdict] FAIL: every parameter's rank test at KS p >= 0.05/13 = 0.003846 and "
+                    "the joint coverage test at KS p >= 0.05 (calibration seed 3)")
+    assert [r for r in rows if r.split()[:1] == ["f_scale"]][0].rstrip().endswith("FAIL")
+    assert v["caveat"] in verdicts[0] and "2 operating points for 8 datasets" in verdicts[0]
+    with pytest.raises(Refusal) as e:
+        orchestrator.validate_calibration(_nad_cfg(), seen["posterior"], seen["prior"], seed=-1, store=store)
+    assert e.value.field == "seed" and len(store.list("calibration")) == 1
+
+
+def test_the_same_validate_seed_draws_the_same_set_and_reaches_the_same_verdict(store, monkeypatch):
+    """A seed makes a calibration repeatable: the same seed draws the same set and, because the rank
+    and coverage tests sample the posterior from the same seeded stream, reaches the same verdict. A
+    different seed draws a different set."""
+    from core import orchestrator
+    from tests._fixtures import stub_calibration_battery
+    seen = stub_calibration_battery(monkeypatch)            # KS p-values drawn from torch's stream
+    cfg = _nad_cfg()
+    run = lambda s: orchestrator.validate_calibration(cfg, seen["posterior"], seen["prior"], n_cal=8,
+                                                      cal_n_scales=2, seed=s, fig_sink=_close, store=store)
+    a, b = run(7), run(7)
+    assert torch.equal(seen["x_cal"][0], seen["x_cal"][1])
+    assert a.results["verdict"] == b.results["verdict"] and a.results["sbc"] == b.results["sbc"]
+    assert a.results["seed"] == b.results["seed"] == 7
+    run(8)
+    assert not torch.equal(seen["x_cal"][2], seen["x_cal"][0])
+
+
+def test_a_seeded_calibration_never_replays_the_stream_a_training_run_with_that_seed_starts(store, monkeypatch):
+    """A calibration seeded with S draws from a stream derived from S and a fixed calibration tag, not
+    from S itself: a training run seeded with S starts at S, and a calibration set that replayed its
+    strata would not be independent of the rows the network was trained on."""
+    from core import orchestrator
+    from core.rng import SEED_MAX, calibration_seed, seeded
+    from tests._fixtures import stub_calibration_battery
+    assert calibration_seed(7) == calibration_seed(7) != 7 and calibration_seed(7) != calibration_seed(8)
+    assert all(isinstance(calibration_seed(s), int) and 0 <= calibration_seed(s) <= SEED_MAX
+               for s in (0, 1, SEED_MAX))
+    seen = stub_calibration_battery(monkeypatch)
+    cfg = _nad_cfg()
+    orchestrator.validate_calibration(cfg, seen["posterior"], seen["prior"], n_cal=8, cal_n_scales=2,
+                                      seed=7, fig_sink=_close, store=store)
+    drawn = seen["x_cal"][0]
+    with seeded(7, cfg.hw.device):
+        assert not torch.equal(torch.randn(drawn.shape), drawn), "the set replayed a training run's stream"
+    with seeded(calibration_seed(7), cfg.hw.device):
+        assert torch.equal(torch.randn(drawn.shape), drawn)
+
+
+def test_validate_without_a_seed_runs_on_in_the_callers_stream(store, monkeypatch):
+    """With no seed the calibration seeds nothing: it draws where the caller's streams stand and
+    leaves them advanced, so one seed given to a whole chain of stages covers its calibration too."""
+    import numpy as np
+    from core import orchestrator
+    from core.rng import seeded
+    from tests._fixtures import stub_calibration_battery
+    seen = stub_calibration_battery(monkeypatch)
+    monkeypatch.setattr(orchestrator, "seeded",
+                        lambda *a, **k: pytest.fail("a calibration with no seed entered a seeded block"))
+    cfg = _nad_cfg()
+    with seeded(5, cfg.hw.device):                          # the caller's one stream, and its next draws
+        numpy_next = np.random.get_state()[1].copy()
+        torch_next = torch.randn(8, 5)
+    with seeded(5, cfg.hw.device):
+        fresh = torch.randn(3)
+    with seeded(5, cfg.hw.device):
+        cal = orchestrator.validate_calibration(cfg, seen["posterior"], seen["prior"], n_cal=8,
+                                                cal_n_scales=2, fig_sink=_close, store=store)
+        after = torch.randn(3)
+    assert torch.equal(seen["x_cal"][0], torch_next) and np.array_equal(seen["numpy_at_draw"][0], numpy_next)
+    assert not torch.equal(after, fresh), "the caller's stream was handed back rather than run on"
+    assert cal.results["seed"] is None
 
 
 def test_inference_records_ppc_summary_and_ground_truth(tiny_run):

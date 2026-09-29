@@ -1,3 +1,5 @@
+import random
+
 from PySide6.QtWidgets import (QGroupBox, QLabel, QPushButton, QVBoxLayout)
 
 from core import config, orchestrator
@@ -20,9 +22,11 @@ class ValidatePanel(_StagePanel):
     every no-forcing model and once made this tab permanently unreachable for exactly those.
 
     Persists: nothing. Its two boxes are science knobs: the calibration's dataset count and its
-    (t_scale, T) operating points open at config.py's SBC_N_CAL and CAL_N_SCALES on every launch, and
-    a `cal_n` / `cal_scales` key an older build left in PRISM.ini is ignored. With nothing to restore,
-    the tab has no save_settings / restore_settings of its own (BasePanel's are no-ops).
+    (t_scale, T_obs) operating points open at config.py's SBC_N_CAL and CAL_N_SCALES on every launch,
+    and a `cal_n` / `cal_scales` key an older build left in PRISM.ini is ignored. Each run draws its
+    seed afresh and the calibration record keeps it, so any calibration can be repeated from the
+    command line; there is no Seed box, and nothing about the seed is remembered. With nothing to
+    restore, the tab has no save_settings / restore_settings of its own (BasePanel's are no-ops).
     """
     def __init__(self, screen, parent=None):
         super().__init__(screen, parent)
@@ -66,15 +70,19 @@ class ValidatePanel(_StagePanel):
         # the region (a TSNPE posterior calibrates on the prior RESTRICTED to it -- the
         # calibrate-on-the-region rule) comes off s.posterior.posterior.truncation inside
         # validate_calibration; None for an amortized one leaves the battery exactly as it was.
+        # A seed drawn afresh on every run, from Python's own stream: the record keeps it, so the
+        # calibration can be repeated, and nothing here remembers it.
         self.dispatch(orchestrator.validate_calibration, s.cfg, s.posterior, s.inf_prior, provide_fig_sink=True,
-                      n_cal=v["n_cal"], cal_n_scales=v["cal_n_scales"],
+                      n_cal=v["n_cal"], cal_n_scales=v["cal_n_scales"], seed=random.randrange(2 ** 31),
                       on_result=self._on_calibration)
 
     def _on_calibration(self, payload):
         res = payload.results
         info = res.get("informativeness") or {}
+        passed = (res.get("verdict") or {}).get("passed")
         self.log_pane.append_line(
-            f"Calibration recorded as {payload.name or '(unnamed, id ' + payload.id + ')'}: TARP ATC="
+            f"Calibration verdict {'PASS' if passed else 'FAIL'} (seed {res.get('seed')}), recorded as "
+            f"{payload.name or '(unnamed, id ' + payload.id + ')'}: TARP ATC="
             f"{res['tarp']['atc']}, KS p={res['tarp']['ks_p']}"
             + (f"; informativeness {info['total_nats']:.2f} nats" if info.get("total_nats") is not None else ""))
 

@@ -1,9 +1,13 @@
 """The stage subcommands of ``python -m core``: one thin handler per orchestrator stage.
 
 A handler resolves nothing of its own. Every value flag defaults to None and is forwarded only when it
-was given, so the stage's own default -- read from config.py, in one place -- is the default. The heavy
-imports live inside the handlers, so building the parser costs no torch.
+was given, so the stage's own default -- read from config.py, in one place -- is the default. The one
+exception is ``validate``'s ``--seed``: without it the handler draws a seed and passes it, because the
+calibration record must name the seed it ran with, so that any calibration the tool writes can be
+repeated. The heavy imports live inside the handlers, so building the parser costs no torch.
 """
+import random
+
 from core.refusals import default_clause
 
 from .config_args import (UsageError, accept_from, add_accept_flags, add_config_flags, add_name_flags,
@@ -78,6 +82,10 @@ def register(subparsers) -> dict:
                    metavar="N",
                    help="posterior draws per calibration dataset"
                         + default_clause("num_posterior_samples"))
+    p.add_argument("--seed", type=int, default=None, metavar="N",
+                   help="the calibration set's random seed: the same seed draws the same set and "
+                        "reaches the same verdict, and never replays the stream a training run with "
+                        "that seed used" + default_clause("seed"))
     add_accept_flags(p)
     p.set_defaults(handler=_validate)
     out["validate"] = p
@@ -160,8 +168,11 @@ def _validate(args, store) -> int:
     from core import orchestrator
     cfg, _ = build_cfg(args)
     posterior, prior = load_posterior_and_prior(cfg, args.posterior, accept_from(args), store)
+    # Always a seed, drawn from Python's own stream when none was given: the record names the seed
+    # the calibration ran with, so every calibration the tool writes can be repeated.
+    seed = args.seed if args.seed is not None else random.randrange(2 ** 31)
     cal = orchestrator.validate_calibration(cfg, posterior, prior, name=args.name, note=args.note,
-                                            fig_sink=close_sink, store=store,
+                                            fig_sink=close_sink, store=store, seed=seed,
                                             **knobs(args, *VALIDATE_KNOBS))
     report(cal)
     return 0

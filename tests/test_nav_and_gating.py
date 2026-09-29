@@ -3483,6 +3483,28 @@ def test_the_validate_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(
     click("2000", "1")
     assert refused == [] and sent["fn"] is orchestrator.validate_calibration, (refused, sent)
     assert sent["kwargs"]["n_cal"] == 2000 and sent["kwargs"]["cal_n_scales"] == 1, sent["kwargs"]
+    seed = sent["kwargs"]["seed"]
+    assert type(seed) is int and 0 <= seed < 2 ** 31
+
+
+def test_the_validate_tab_summary_names_the_verdict_and_the_seed():
+    """The tab's closing line leads with the calibration verdict and the seed the run drew, so the
+    log pane says whether the posterior passed and how to repeat the calibration."""
+    from types import SimpleNamespace
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    inf.session = SbiSession(cfg=object(), inf_prior=_prior_stub(), posterior=_posterior_stub())
+    vp = inf.validate_panel
+    lines = []
+    vp.log_pane.append_line = lines.append
+    vp._on_calibration(SimpleNamespace(name="c1", id="x", results={
+        "tarp": {"atc": 0.01, "ks_p": 0.4}, "informativeness": None, "verdict": {"passed": False},
+        "seed": 11}))
+    assert lines[-1].startswith("Calibration verdict FAIL (seed 11), recorded as c1: TARP ATC=0.01, KS p=0.4")
 
 
 def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(monkeypatch):

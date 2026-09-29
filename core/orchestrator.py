@@ -4,6 +4,7 @@ Pipeline orchestration for the SBI pipeline.
 No input() anywhere; the front ends (core/gui, core/tool) call these stages.
 This module owns the pipeline flow: observe -> prior -> posterior -> validate.
 """
+import contextlib
 import importlib
 import json
 import logging
@@ -40,6 +41,7 @@ from . import cli, config, forcing
 # same class, re-exported here for every caller and test that names it through this module.
 from .refusals import (PreflightWarning, Refusal, require_at_least, require_between, require_choice,
                        require_file, require_positive)
+from .rng import calibration_seed, require_seed, seeded
 from .Helpers import helpers, visualizers, file_manager, labels
 from .Helpers.visualizers import thin_ticks as _thin_ticks
 from .artifacts import (LoadedPrior, LoadedPosterior, LoadedObservation, LoadedCalibration,
@@ -1736,18 +1738,84 @@ def _sbc_reference_sample(cfg: SimConfig, val_latent_prior, T, truncation, infer
     return _ref
 
 
+_VERDICT_CAVEAT = ("t_scale's rank test rests on the calibration's (t_scale, T_obs) operating points, not "
+                   "on its datasets, so it has less power than the other parameters' tests.")
+
+
+def calibration_verdict(ks_pvals: Sequence[float], names: Sequence[str], assumed: Sequence[str],
+                        tarp_ks_p: float, *, alpha: float = 0.05) -> dict:
+    """Whether a calibration passes, by one fixed rule. PASS when both hold:
+
+    - every parameter's rank-uniformity test has KS p >= ``alpha / len(names)``, so that all of them
+      together keep one ``alpha`` false-alarm rate. An assumed input is judged like every other
+      parameter: its test is valid, and a mis-modelled assumed value is a real flaw;
+    - the joint coverage test (TARP) has KS p >= ``alpha``.
+
+    A p exactly at its threshold passes. A None or non-finite p fails, and is recorded as None (a
+    manifest refuses NaN). A FAIL is a result for the caller to record, never an exception.
+
+    :param ks_pvals: the rank tests' KS p-values, one per name, in the same order.
+    :param names: the parameter keys, ``list(params_dict) + list(rescale_params)``.
+    :param assumed: the keys reported as assumed inputs (``SimConfig.assumed_params``); each entry of
+                    ``parameters`` says whether its key is one.
+    :param tarp_ks_p: the joint coverage test's KS p-value.
+    :param alpha: the family-wise false-alarm rate.
+    :return: ``{"passed", "alpha", "threshold", "parameters": [{"name", "ks_p", "passed", "assumed"}],
+             "tarp": {"ks_p", "passed"}, "caveat"}``.
+    :raises ValueError: when ``ks_pvals`` and ``names`` differ in length, or ``names`` is empty -- a
+                    caller's programming error, not a refusal.
+    """
+    ks, names, assumed = list(ks_pvals), list(names), set(assumed)
+    if not names or len(ks) != len(names):
+        raise ValueError(f"calibration_verdict needs one rank-test p-value per parameter; got {len(ks)} "
+                         f"p-values for {len(names)} parameters")
+    threshold = alpha / len(names)
+    parameters = []
+    for name, p in zip(names, ks):
+        p = _num(p)
+        parameters.append({"name": name, "ks_p": p, "passed": p is not None and p >= threshold,
+                           "assumed": name in assumed})
+    t = _num(tarp_ks_p)
+    tarp = {"ks_p": t, "passed": t is not None and t >= alpha}
+    return {"passed": all(p["passed"] for p in parameters) and tarp["passed"], "alpha": alpha,
+            "threshold": threshold, "parameters": parameters, "tarp": tarp, "caveat": _VERDICT_CAVEAT}
+
+
+def _verdict_message(verdict: dict, seed: "int | None", n_scales: int, n_cal: int) -> str:
+    """The verdict as one multi-line record: the rule and the result, one row per parameter (an
+    assumed input marked), the joint coverage row, and the caveat with this calibration's counts."""
+    head = (f"[verdict] {'PASS' if verdict['passed'] else 'FAIL'}: every parameter's rank test at KS p >= "
+            f"{verdict['alpha']:g}/{len(verdict['parameters'])} = {verdict['threshold']:.4g} and the joint "
+            f"coverage test at KS p >= {verdict['alpha']:g}"
+            + ("" if seed is None else f" (calibration seed {seed})"))
+
+    def row(label, p, ok):
+        return f"  {label:<20s} KS p {'n/a' if p is None else f'{p:.4g}':<8s} {'pass' if ok else 'FAIL'}"
+
+    lines = [head] + [row(p["name"] + (" (assumed input)" if p["assumed"] else ""), p["ks_p"], p["passed"])
+                      for p in verdict["parameters"]]
+    lines += [row("joint coverage", verdict["tarp"]["ks_p"], verdict["tarp"]["passed"]),
+              f"  {verdict['caveat']} This calibration: {n_scales} operating points for {n_cal} datasets."]
+    return "\n".join(lines)
+
+
 # ── Step 4a: Calibration diagnostics (data-free — no chosen observation) ─────
 @public_entry
 def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: LoadedPrior,
                          *, name: str = "", note: str = "", fig_sink=None, store=None,
                          n_cal: int | None = None, cal_n_scales: int | None = None,
-                         num_posterior_samples: int = 1000) -> LoadedCalibration:
+                         num_posterior_samples: int = 1000, seed: int | None = None) -> LoadedCalibration:
     """
     Data-free posterior calibration: SBC (Talts 2018, marginals) + expected coverage (TARP, Lemos
     2023). Both draw their calibration set from the PRIOR (theta_star ~ prior, x_cal simulated), so
     this runs right after training with no chosen observation. WRITES a calibration artifact
     (results.json, ranks.npz, the three figures, a manifest naming the posterior and prior as
     parents) inside ``store.create``, so a failure partway through leaves no half-artifact.
+
+    It ends on ONE verdict (``calibration_verdict``), recorded in ``results["verdict"]`` and said as
+    the stage's last record: PASS when every parameter's rank test reaches KS p >= 0.05 / (their
+    number), an assumed input included, and the joint coverage test reaches KS p >= 0.05. A FAIL is a
+    result: the calibration is still written and returned.
 
     ⚠ FOR A TSNPE POSTERIOR THE PRIOR IS THE TRUNCATED ONE (the calibrate-on-the-region rule). With
     pt = p·1_A/P(A), NPE trained on pt(θ)p(x|θ) converges to pt(θ|x) = p(θ|x)·1_A(θ)/P(A|x) --
@@ -1776,7 +1844,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     :param posterior / prior: the LoadedPosterior and the LoadedPrior it was trained from; the region
                      comes off the posterior.
     :param n_cal: calibration datasets for SBC/TARP; None = config.SBC_N_CAL.
-    :param cal_n_scales: (t_scale, T) operating points the calibration set is spread over; None =
+    :param cal_n_scales: (t_scale, T_obs) operating points the calibration set is spread over; None =
                      config.CAL_N_SCALES.
                      ⚠ This is `t_scale`'s EFFECTIVE SAMPLE SIZE, not a speed dial. Lowering
                      it is a DIFFERENT measurement, not a faster one -- "SBC flat on all 13" is
@@ -1784,6 +1852,15 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
                      design controls, and this number is why.
     :param num_posterior_samples: draws per calibration point for SBC and TARP (1000 = the historical
                      constant).
+    :param seed: None (the default) seeds nothing: the calibration draws on in the caller's streams,
+                     so a caller that seeded a whole chain of stages once covers its calibration too.
+                     A whole number from 0 makes the calibration repeatable: every draw -- the set,
+                     the rank test's posterior draws and reference sample, the coverage test's draws
+                     and the informativeness estimate -- runs on a stream derived from it and a fixed
+                     calibration tag (``core.rng.calibration_seed``), so the same seed gives the same
+                     set and the same verdict, and never replays the stream a training run seeded
+                     with the same number started on. Refused before anything is written when out of
+                     range; recorded in ``results["seed"]``.
     """
     store = resolve_store(store)
     store.assert_name_free("calibration", name)   # before the calibration set is simulated
@@ -1796,109 +1873,117 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     n_cal_used = require_at_least("n_cal", SBC_N_CAL if n_cal is None else n_cal, 1)
     nps = require_at_least("num_posterior_samples", num_posterior_samples, 1)
     n_scales_used = require_at_least("cal_n_scales", CAL_N_SCALES if cal_n_scales is None else cal_n_scales, 1)
+    seed_used = None if seed is None else require_seed(seed)
     _assert_prior_used_matches_posterior(post, inferred_prior, "SBC/TARP calibration")
     with store.create("calibration", cfg, name=name, note=note) as w:
         device = cfg.hw.device
         dtype = cfg.hw.dtype
-        # The draw is three helpers so that core.diagnostics.sbc_repeats runs through the same code --
-        # the rotation wrap, the basis check, the truncation wrap and the reference sample's t_scale
-        # mirror are the calibrate-on-the-region rule, and a second copy of them is how a repeat-SBC
-        # run silently inverts it.
-        val_latent_prior, T, truncation = _calibration_prior(cfg, posterior, prior)
-        # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
-        # mixture of probe counts training saw. Stratifying by count is `python -m core sbc`'s
-        # --chi-k-fixed (core.diagnostics.sbc_repeats), run per stratum -- a pooled SBC over a mixture
-        # of counts can be flat while each count is miscalibrated in compensating directions.
-        x_cal, theta_star = _draw_calibration_set(cfg, val_latent_prior, T, force_prior,
-                                                  n_cal=n_cal_used, cal_n_scales=n_scales_used,
-                                                  chi_k_fixed=None)
-        x_cal_dev = x_cal.to(device)
-        theta_star_dev = theta_star.to(device)
+        # Everything that draws runs in ONE block: the set, the rank test's posterior draws and its
+        # reference sample, the coverage test's draws and the informativeness estimate. With a seed it
+        # is the calibration's own stream, so the same seed gives the same set AND the same verdict;
+        # with none it is a no-op and the draws run on in the caller's streams.
+        with (contextlib.nullcontext() if seed_used is None
+              else seeded(calibration_seed(seed_used), cfg.hw.device)):
+            # The draw is three helpers so that core.diagnostics.sbc_repeats runs through the same code --
+            # the rotation wrap, the basis check, the truncation wrap and the reference sample's t_scale
+            # mirror are the calibrate-on-the-region rule, and a second copy of them is how a repeat-SBC
+            # run silently inverts it.
+            val_latent_prior, T, truncation = _calibration_prior(cfg, posterior, prior)
+            # chi_k_fixed stays None here: validate_calibration's SBC is the POOLED one, over the same
+            # mixture of probe counts training saw. Stratifying by count is `python -m core sbc`'s
+            # --chi-k-fixed (core.diagnostics.sbc_repeats), run per stratum -- a pooled SBC over a mixture
+            # of counts can be flat while each count is miscalibrated in compensating directions.
+            x_cal, theta_star = _draw_calibration_set(cfg, val_latent_prior, T, force_prior,
+                                                      n_cal=n_cal_used, cal_n_scales=n_scales_used,
+                                                      chi_k_fixed=None)
+            x_cal_dev = x_cal.to(device)
+            theta_star_dev = theta_star.to(device)
 
-        # --- SBC (Talts 2018, marginals) via sbi.diagnostics ---
-        ranks, dap_samples = run_sbc(
-            thetas=theta_star_dev, xs=x_cal_dev, posterior=post,
-            num_posterior_samples=nps, reduce_fns="marginals",
-            use_batched_sampling=True, show_progress_bar=True,
-        )
-        prior_samples = _sbc_reference_sample(cfg, val_latent_prior, T, truncation, inferred_prior,
-                                              theta_star)
-        sbc_stats = check_sbc(
-            ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
-            num_posterior_samples=nps,
-        )
-        log.info("SBC uniformity checks:")
-        # Report labels: an assumed input stays in the table and is marked, with its unit.
-        for j, label in enumerate(cfg.report_labels):
-            log.info(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
-                     f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
-                     f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
-        if truncation is not None:
-            _acc = val_latent_prior.acceptance_rate
-            _rec = val_latent_prior.recorded_containment
-            log.info(f"[tsnpe] kept fraction: the region accepted {_acc:.3%} of prior draws at the rejection "
-                     f"sampler (P(A), before the per-batch t_scale override, which re-opens any t_scale-loaded "
-                     f"direction); {'' if _rec is None else f'{_rec:.3%} of the recorded calibration targets lie inside it after the override. '}"
-                     f"The JOINT KL in the informativeness block below is measured against the "
-                     f"FULL prior, so for this truncated posterior it is inflated by -log P(A) = "
-                     f"{-math.log(max(_acc, 1e-300)):.2f} nats; its per-parameter entropy reductions are "
-                     f"against the full prior too, each by its own offset.")
+            # --- SBC (Talts 2018, marginals) via sbi.diagnostics ---
+            ranks, dap_samples = run_sbc(
+                thetas=theta_star_dev, xs=x_cal_dev, posterior=post,
+                num_posterior_samples=nps, reduce_fns="marginals",
+                use_batched_sampling=True, show_progress_bar=True,
+            )
+            prior_samples = _sbc_reference_sample(cfg, val_latent_prior, T, truncation, inferred_prior,
+                                                  theta_star)
+            sbc_stats = check_sbc(
+                ranks=ranks.cpu(), prior_samples=prior_samples, dap_samples=dap_samples.cpu(),
+                num_posterior_samples=nps,
+            )
+            log.info("SBC uniformity checks:")
+            # Report labels: an assumed input stays in the table and is marked, with its unit.
+            for j, label in enumerate(cfg.report_labels):
+                log.info(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
+                         f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
+                         f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
+            if truncation is not None:
+                _acc = val_latent_prior.acceptance_rate
+                _rec = val_latent_prior.recorded_containment
+                log.info(f"[tsnpe] kept fraction: the region accepted {_acc:.3%} of prior draws at the rejection "
+                         f"sampler (P(A), before the per-batch t_scale override, which re-opens any t_scale-loaded "
+                         f"direction); {'' if _rec is None else f'{_rec:.3%} of the recorded calibration targets lie inside it after the override. '}"
+                         f"The JOINT KL in the informativeness block below is measured against the "
+                         f"FULL prior, so for this truncated posterior it is inflated by -log P(A) = "
+                         f"{-math.log(max(_acc, 1e-300)):.2f} nats; its per-parameter entropy reductions are "
+                         f"against the full prior too, each by its own offset.")
 
-        # Both SBC figures are grids of small panels, so give each ROW enough height for its own x-label --
-        # at the previous 2.75 in/row the per-panel "posterior rank <param>" label was clipped by the row
-        # beneath it -- and add explicit vertical spacing rather than relying on tight_layout alone.
-        n_sbc_rows = math.ceil(len(cfg.inferred_labels) / 4)
-        # sbc_rank_plot's own default is num_sbc_runs // 20 (Talts et al.'s recommendation) -- 0 for a
-        # calibration set smaller than 20 (a tiny test run), which numpy/matplotlib then refuse outright.
-        # Passed explicitly so it floors at 1 and is otherwise IDENTICAL to sbi's default at any
-        # n_cal >= 20 (every real run: SBC_N_CAL defaults to 2000).
-        num_bins = max(1, n_cal_used // 20)
-        f_cdf, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=nps, plot_type="cdf", num_bins=num_bins,
-                                 parameter_labels=cfg.report_labels, figsize=(16, 3.4 * n_sbc_rows))
-        f_cdf.subplots_adjust(hspace=0.75, wspace=0.3)
-        _thin_ticks(f_cdf, max_ticks=4, rotation=0)
-        f_hist, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=nps, plot_type="hist", num_bins=num_bins,
-                                  parameter_labels=cfg.report_labels, figsize=(16, 3.4 * n_sbc_rows))
-        f_hist.subplots_adjust(hspace=0.75, wspace=0.3)
-        _thin_ticks(f_hist, max_ticks=4, rotation=0)
-        sink = w.fig_sink(fig_sink)
-        sink("SBC ranks (CDF)", f_cdf)
-        sink("SBC ranks (histogram)", f_hist)
+            # Both SBC figures are grids of small panels, so give each ROW enough height for its own x-label --
+            # at the previous 2.75 in/row the per-panel "posterior rank <param>" label was clipped by the row
+            # beneath it -- and add explicit vertical spacing rather than relying on tight_layout alone.
+            n_sbc_rows = math.ceil(len(cfg.inferred_labels) / 4)
+            # sbc_rank_plot's own default is num_sbc_runs // 20 (Talts et al.'s recommendation) -- 0 for a
+            # calibration set smaller than 20 (a tiny test run), which numpy/matplotlib then refuse outright.
+            # Passed explicitly so it floors at 1 and is otherwise IDENTICAL to sbi's default at any
+            # n_cal >= 20 (every real run: SBC_N_CAL defaults to 2000).
+            num_bins = max(1, n_cal_used // 20)
+            f_cdf, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=nps, plot_type="cdf", num_bins=num_bins,
+                                     parameter_labels=cfg.report_labels, figsize=(16, 3.4 * n_sbc_rows))
+            f_cdf.subplots_adjust(hspace=0.75, wspace=0.3)
+            _thin_ticks(f_cdf, max_ticks=4, rotation=0)
+            f_hist, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=nps, plot_type="hist", num_bins=num_bins,
+                                      parameter_labels=cfg.report_labels, figsize=(16, 3.4 * n_sbc_rows))
+            f_hist.subplots_adjust(hspace=0.75, wspace=0.3)
+            _thin_ticks(f_hist, max_ticks=4, rotation=0)
+            sink = w.fig_sink(fig_sink)
+            sink("SBC ranks (CDF)", f_cdf)
+            sink("SBC ranks (histogram)", f_hist)
 
-        # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
-        ecp, alpha_grid = run_tarp(
-            thetas=theta_star_dev, xs=x_cal_dev, posterior=post,
-            num_posterior_samples=nps, use_batched_sampling=True,
-            z_score_theta=True, show_progress_bar=True,
-        )
-        atc, tarp_kspval = check_tarp(ecp.cpu(), alpha_grid.cpu())
-        log.info(f"TARP: ATC={atc:.3f}  KS p={tarp_kspval:.3f}")
-        plot_tarp(ecp.cpu(), alpha_grid.cpu(),
-                  title=f"TARP (ATC={atc:.3f}, KS p={tarp_kspval:.3f})")
-        sink("TARP coverage", plt.gcf())
+            # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
+            ecp, alpha_grid = run_tarp(
+                thetas=theta_star_dev, xs=x_cal_dev, posterior=post,
+                num_posterior_samples=nps, use_batched_sampling=True,
+                z_score_theta=True, show_progress_bar=True,
+            )
+            atc, tarp_kspval = check_tarp(ecp.cpu(), alpha_grid.cpu())
+            log.info(f"TARP: ATC={atc:.3f}  KS p={tarp_kspval:.3f}")
+            plot_tarp(ecp.cpu(), alpha_grid.cpu(),
+                      title=f"TARP (ATC={atc:.3f}, KS p={tarp_kspval:.3f})")
+            sink("TARP coverage", plt.gcf())
 
-        # --- Informativeness --------------------------------------------------------------------------
-        # Everything above measures CALIBRATION, and a posterior that simply returns the prior passes all
-        # of it. This is the scalar that says whether the run learned anything, on the calibration set
-        # just simulated, so it costs nothing extra. Reported alongside rather than instead: a run wants
-        # both numbers, and the pair is what distinguishes "honest and useful" from "honest and vacuous".
-        try:
-            info = analysis.informativeness(
-                post, theta_star_dev, x_cal_dev, inferred_prior,
-                param_names=list(cfg.params_dict) + list(cfg.rescale_params))
-            log.info(analysis.describe_informativeness(info, assumed=cfg.assumed_params))
-        except Exception as _e:                      # noqa: BLE001 -- a diagnostic must never lose a multi-day run's other results
-            # A diagnostic must never be the thing that loses a multi-day run's other results. The
-            # sample-based decomposition in particular reaches into the posterior's transform stack.
-            warnings.warn(f"informativeness could not be computed ({type(_e).__name__}: {_e}); the "
-                          f"calibration results above are unaffected.", stacklevel=2,
-                          skip_file_prefixes=RUN_BOUNDARY_FILES)
-            info = None
+            # --- Informativeness --------------------------------------------------------------------------
+            # Everything above measures CALIBRATION, and a posterior that simply returns the prior passes all
+            # of it. This is the scalar that says whether the run learned anything, on the calibration set
+            # just simulated, so it costs nothing extra. Reported alongside rather than instead: a run wants
+            # both numbers, and the pair is what distinguishes "honest and useful" from "honest and vacuous".
+            try:
+                info = analysis.informativeness(
+                    post, theta_star_dev, x_cal_dev, inferred_prior,
+                    param_names=list(cfg.params_dict) + list(cfg.rescale_params))
+                log.info(analysis.describe_informativeness(info, assumed=cfg.assumed_params))
+            except Exception as _e:                      # noqa: BLE001 -- a diagnostic must never lose a multi-day run's other results
+                # A diagnostic must never be the thing that loses a multi-day run's other results. The
+                # sample-based decomposition in particular reaches into the posterior's transform stack.
+                warnings.warn(f"informativeness could not be computed ({type(_e).__name__}: {_e}); the "
+                              f"calibration results above are unaffected.", stacklevel=2,
+                              skip_file_prefixes=RUN_BOUNDARY_FILES)
+                info = None
 
         file_manager.atomic_savez(w.payload("ranks.npz"), {
             "ranks": ranks.detach().cpu().numpy(), "theta_star": theta_star.detach().cpu().numpy(),
             "ecp": ecp.detach().cpu().numpy(), "alpha_grid": alpha_grid.detach().cpu().numpy()})
         keys = list(cfg.params_dict) + list(cfg.rescale_params)
+        verdict = calibration_verdict(sbc_stats["ks_pvals"], keys, cfg.assumed_params, tarp_kspval)
         results = {
             "sbc": {"per_param": [{"name": k, "ks_p": _num(sbc_stats["ks_pvals"][j]),
                                    "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
@@ -1915,7 +2000,10 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
                 "containment": _num(val_latent_prior.recorded_containment)},
             "n_cal": int(n_cal_used), "cal_n_scales": n_scales_used,
             "num_posterior_samples": nps,
+            "verdict": verdict, "seed": seed_used,
         }
+        # The stage's LAST record, so the window's log ends on the verdict.
+        log.info(_verdict_message(verdict, seed_used, n_scales_used, n_cal_used))
         _write_results_json(w.payload("results.json"), results)
         w.parents = {"posterior": posterior.id, "prior": prior.id}
         w.fingerprints["gmm"] = prior.fingerprint

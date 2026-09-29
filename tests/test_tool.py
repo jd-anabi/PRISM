@@ -654,6 +654,22 @@ def test_validate_and_simulated_infer(tool_run):
     assert inf.body["results"]["accepted"] == []
 
 
+def test_validate_takes_a_seed_and_a_failing_verdict_still_exits_zero(tool_run, monkeypatch, capsys):
+    """A failing calibration verdict is a result, not an error: the command prints the verdict, names
+    the seed it ran with, writes the calibration with both in it and exits 0."""
+    from core.artifacts import ArtifactStore
+    from tests._fixtures import stub_calibration_battery
+    bounds, cell, root = tool_run
+    stub_calibration_battery(monkeypatch, ks_pvals=[0.5, 0.5, 0.5, 0.001])   # the test model infers four
+    capsys.readouterr()
+    assert main(["validate", *_cfg(bounds), "--posterior", "tpost", "--seed", "3", "--n-cal", "8",
+                 "--name", "failing_cal"]) == 0
+    out = capsys.readouterr().out
+    assert "[verdict] FAIL" in out and "(calibration seed 3)" in out, out
+    res = ArtifactStore(root).get("calibration", "failing_cal").body["results"]
+    assert res["seed"] == 3 and res["verdict"]["passed"] is False
+
+
 def test_near_miss_is_refused_before_simulation(tool_run, capsys):
     """A committed cache one setting away is refused before any simulation, on the command line. A
     second run once silently started a new cache under an identity one field away from the first
@@ -801,13 +817,18 @@ def test_every_validate_infer_and_tsnpe_flag_reaches_its_stage_as_a_keyword(tool
     monkeypatch.setattr(orchestrator, "experimental_inference", e)
     monkeypatch.setattr(orchestrator, "tsnpe_round", t)
 
-    # validate: every VALIDATE_KNOBS flag, a distinct value each.
+    # validate: every VALIDATE_KNOBS flag, a distinct value each, and the seed.
     assert main(["validate", *_cfg(bounds), "--posterior", "tpost", "--n-cal", "7",
-                 "--cal-n-scales", "3", "--posterior-samples", "11"]) == 0
+                 "--cal-n-scales", "3", "--posterior-samples", "11", "--seed", "5"]) == 0
     (_cfg1, _post1, _prior1), kw = v.calls[0]
     assert set(kw) == {"name", "note", "fig_sink", "store", "n_cal", "cal_n_scales",
-                       "num_posterior_samples"}
+                       "num_posterior_samples", "seed"}
     assert (kw["n_cal"], kw["cal_n_scales"], kw["num_posterior_samples"]) == (7, 3, 11)
+    assert kw["seed"] == 5
+    # No --seed: the tool draws one and passes it, so the record always names the seed it ran with.
+    assert main(["validate", *_cfg(bounds), "--posterior", "tpost"]) == 0
+    drawn = v.calls[1][1]["seed"]
+    assert type(drawn) is int and 0 <= drawn < 2 ** 31
 
     # infer --cell: the simulated composition's full keyword set.
     assert main(["infer", *_cfg(bounds), "--posterior", "tpost", "--cell", cell,

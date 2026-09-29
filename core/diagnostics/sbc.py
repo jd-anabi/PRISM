@@ -138,8 +138,10 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     orch._assert_prior_used_matches_posterior(posterior.posterior, prior.prior, "SBC")
 
     labels = list(cfg.params_dict) + list(cfg.rescale_params)
-    # Keys reported as assumed inputs: they stay in the table, the figure and the records, marked.
+    # Keys reported as assumed inputs: they stay in the table, the figure, the records and the rank
+    # verdict, marked. The shown names carry the mark, built once for the table and the figure.
     assumed = set(cfg.assumed_params)
+    shown = [f"{k} (assumed input)" if k in assumed else k for k in labels]
     inferred_prior, force_prior = prior.prior, prior.force_prior
     # ONCE, and before create(): it can refuse (check_basis on a region measured in another basis),
     # and a refusal must not leave a directory behind. Its "PRIOR RESTRICTED" line announces the
@@ -195,17 +197,26 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
                               "frac_ks_below_05": orch._num(frac),
                               "c2st_ranks_median": orch._num(_col(c2st_ranks[:, j])[0]),
                               "assumed": key in assumed})
-        for rec in sorted(per_param, key=lambda p: (p["ks_p_median"] is None, p["ks_p_median"])):
-            shown = rec["name"] + (" (assumed input)" if rec["assumed"] else "")
-            log.info(f"{shown:18s} {_cell(rec['ks_p_median'], '8.2e')} {_cell(rec['ks_p_min'], '8.2e')} "
+        for j in sorted(range(len(labels)),
+                        key=lambda j: (per_param[j]["ks_p_median"] is None, per_param[j]["ks_p_median"])):
+            rec = per_param[j]
+            log.info(f"{shown[j]:18s} {_cell(rec['ks_p_median'], '8.2e')} {_cell(rec['ks_p_min'], '8.2e')} "
                      f"{_cell(rec['frac_ks_below_05'], '9.3f')}")
+
+        # The rank half of the calibration verdict, by the verdict's own rule: a repeat passes when
+        # every parameter's KS p reaches 0.05 / (their number). No joint coverage test runs here, so
+        # the coverage half is left to the calibration stage and the record says which half this is.
+        per_repeat = [all(p["passed"] for p in orch.calibration_verdict(
+            ks[r].tolist(), labels, cfg.assumed_params, float("nan"))["parameters"]) for r in range(repeats)]
+        n_pass = sum(per_repeat)
+        log.info(f"[sbc] rank-uniformity half of the calibration verdict (every parameter's KS p >= "
+                 f"0.05/{len(labels)}): {n_pass}/{repeats} repeats pass; the joint coverage half is the "
+                 f"calibration stage's")
 
         n_rows = int(np.ceil(len(labels) / 4))
         num_bins = _rank_hist_bins(pooled.shape[0], nps)
         fig, _ = orch.sbc_rank_plot(ranks=torch.as_tensor(pooled), num_posterior_samples=nps,
-                                    plot_type="hist", num_bins=num_bins,
-                                    parameter_labels=[f"{k} (assumed input)" if k in assumed else k
-                                                      for k in labels],
+                                    plot_type="hist", num_bins=num_bins, parameter_labels=shown,
                                     figsize=(16, 3.4 * n_rows))
         fig.subplots_adjust(hspace=0.75, wspace=0.3)
         w.fig_sink(fig_sink)("SBC ranks pooled over repeats (histogram)", fig)
@@ -225,7 +236,9 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
             "labels": np.array([str(s) for s in labels]), "nps": np.asarray(nps)})
         results = {"per_param": per_param, "n_valid": n_valid, "stratum": stratum,
                    "kept_fraction": kept,
-                   "accepted": list(getattr(posterior, "accepted", []))}
+                   "accepted": list(getattr(posterior, "accepted", [])),
+                   "rank_verdict": {"per_repeat": per_repeat, "fraction_passed": n_pass / repeats,
+                                    "scope": "rank-uniformity half only"}}
         w.parents = {"posterior": posterior.id, "prior": prior.id}
         w.fingerprints["gmm"] = prior.fingerprint
         w.config.update(settings)

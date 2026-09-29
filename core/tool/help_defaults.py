@@ -14,8 +14,8 @@ Each flag that takes a value is in exactly one of three classes.
 
 WHY A PINNED LITERAL OUTRANKS THE REGISTRY. The registry's default is the one a refusal line prints,
 and a few of its keys are worded for another subcommand: the seed's reads "none: one is drawn and
-recorded", which is what the FDT analyses do, while the diagnostics seed with 0; and the FDT
-resolution knobs' carry the sweep preset's clause, which reads wrongly on a single run. A literal
+recorded", which is what the FDT analyses and validate do, while the diagnostics seed with 0; and
+the FDT resolution knobs' carry the sweep preset's clause, which reads wrongly on a single run. A literal
 pinned here says what THIS subcommand does, and tests/test_tool.py checks each one against the
 signature or constant that owns it.
 
@@ -64,7 +64,7 @@ _PER_LEAF = {
                        "--stability-units", "--min-cluster-size", "--min-samples")},
     "train": {**_CONFIG, **_NAMES, **_none("--prior"), **_TRAINING, **_FISHER, **_RESUME},
     "validate": {**_CONFIG, **_NAMES, **_none("--posterior"),
-                 **_value("--n-cal", "--cal-n-scales", "--posterior-samples")},
+                 **_value("--n-cal", "--cal-n-scales", "--posterior-samples"), "--seed": (VALUE, None)},
     "infer": {**_CONFIG, **_NAMES,
               **_none("--posterior", "--cell", "--spont", "--t-obs", "--forced", "--drive",
                       "--f0-si"),

@@ -1,4 +1,5 @@
-"""The one seeding context ``smoke``, every diagnostic and the FDT measurement run inside.
+"""The one seeding context ``smoke``, every diagnostic, the FDT measurement and a seeded calibration
+run inside.
 
 Here, at the top of ``core``, and not in ``core/diagnostics`` where it started: importing ANY
 submodule of a package runs the package's ``__init__``, and ``core/diagnostics/__init__.py`` imports
@@ -6,8 +7,8 @@ the five diagnostics and through them ``core.orchestrator``, sbi's inference mod
 ``pytensor``. An FDT run needs none of that, and paid about two seconds and two false pytensor "g++"
 lines on stderr for it at the head of every ``python -m core fdt``. This module imports only
 ``contextlib`` and the stdlib-only ``core.refusals``; torch and numpy are imported when the context
-is entered. ``core.diagnostics.rng`` re-exports the same object, so every diagnostics import keeps
-working.
+is entered, and numpy when ``calibration_seed`` is called. ``core.diagnostics.rng`` re-exports the
+same object, so every diagnostics import keeps working.
 
 Seed ONCE and let the streams run on, exactly as ``smoke`` does. Training and calibration both draw
 their initial conditions from numpy's global RNG and their Sobol (t_scale, T) scramble from torch's,
@@ -15,7 +16,13 @@ and on a TSNPE round -- or with the rotation off -- nothing consumes either stre
 the pipeline. Seeding per stage would therefore start draws that must be independent from identical
 states: the calibration set would replay the training strata, and the calibration's operating-point
 count is t_scale's effective SBC sample size. That is why there is a context here and no ``seed``
-argument on any stage.
+argument on any stage but one.
+
+``validate`` with a seed is the one stage that seeds itself. It draws from a stream derived from the
+seed and a fixed calibration tag (``calibration_seed``), so it never starts where a training run
+seeded with the same number started, and its calibration set cannot replay that run's strata. With
+no seed it takes none, and runs on in the caller's streams, so one seed given to a whole chain of
+stages still covers its calibration.
 
 It restores what it borrowed, so an in-process ``main(argv)`` never changes the calling process's
 streams -- the tool's tests run in-process, and a leaked seed makes one test's numbers depend on
@@ -33,11 +40,25 @@ from core.refusals import describe, refuse, require_at_least
 #: from inside the block -- that is, after an FDT run has opened its record.
 SEED_MAX = 2 ** 64 - 1
 
+#: The fixed tag a calibration's stream is derived with: the ASCII bytes of "CAL".
+CALIBRATION_TAG = 0x43414C
+
+
+def calibration_seed(seed: int) -> int:
+    """The seed a calibration seeded with ``seed`` actually runs at: one 32-bit word of numpy's
+    ``SeedSequence([seed, CALIBRATION_TAG])``, so it is never ``seed`` itself and a calibration never
+    starts on the stream a training run seeded with ``seed`` started on. The same ``seed`` always
+    gives the same number, from 0 to 2**32 - 1, inside ``SEED_MAX``. numpy is imported here, not at
+    the top, so importing this module stays free of numpy and torch."""
+    import numpy as np
+    return int(np.random.SeedSequence([int(seed), CALIBRATION_TAG]).generate_state(1)[0])
+
 
 def require_seed(seed) -> int:
-    """The one rule for a seed an FDT run is handed: a whole number from 0 to ``SEED_MAX``, refused
-    under the field key ``seed`` before anything is spent. Both FDT builders, the sweep study and
-    each sweep apply it, so the four cannot disagree; ``--seed`` is ``type=int`` and takes any integer.
+    """The one rule for a seed an FDT run or a calibration is handed: a whole number from 0 to
+    ``SEED_MAX``, refused under the field key ``seed`` before anything is spent. Both FDT builders,
+    the sweep study, each sweep and a seeded calibration apply it, so the five cannot disagree;
+    ``--seed`` is ``type=int`` and takes any integer.
 
     The floor is ``require_at_least``'s, sentence and all: 0 is ``SeedSequence``'s floor, and the
     sweep derives every per-point stream through one. The ceiling is its own sentence through

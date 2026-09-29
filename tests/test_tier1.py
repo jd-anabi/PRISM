@@ -527,6 +527,24 @@ def test_the_calibration_table_plots_and_informativeness_mark_the_assumed_parame
     assert "(assumed input)" in cal.results["informativeness"]["description"]
 
 
+def test_the_calibration_verdict_judges_temperature_and_marks_it_assumed(store, monkeypatch, caplog):
+    """Temperature stays in the verdict: its rank test failing fails the calibration. The verdict's
+    record marks it as an assumed input, by its key, in the stored parameters and in its one row of
+    the logged verdict."""
+    seen = stub_calibration_battery(monkeypatch, ks_pvals=[0.5] * 12 + [0.001])
+    caplog.set_level("INFO", logger="core")
+    cal = orchestrator.validate_calibration(tier1_cfg(), seen["posterior"], seen["prior"], n_cal=8,
+                                            cal_n_scales=2, seed=1, fig_sink=_close, store=store)
+    v = cal.results["verdict"]
+    assert v["passed"] is False
+    assert v["parameters"][-1] == {"name": "T", "ks_p": 0.001, "passed": False, "assumed": True}
+    said = [r.getMessage() for r in caplog.records if r.name == "core.orchestrator"]
+    verdict = [m for m in said if m.startswith("[verdict] ")]
+    assert len(verdict) == 1, said
+    rows = [line for line in verdict[0].splitlines() if line.strip().startswith("T (assumed input)")]
+    assert len(rows) == 1 and rows[0].rstrip().endswith("FAIL"), verdict[0]
+
+
 def test_sbc_marks_the_assumed_parameter_in_its_table_and_its_records(store, monkeypatch, caplog):
     """The repeated SBC marks temperature in its KS table, in its pooled figure and in each
     per-parameter record, and keeps it in all three."""

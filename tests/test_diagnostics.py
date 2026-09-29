@@ -338,6 +338,25 @@ def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(stor
         "the plain branch must not mirror theta*'s t_scale column -- there is no region to mirror it against"
 
 
+def test_sbc_records_the_rank_uniformity_half_of_the_verdict_per_repeat(store, monkeypatch, caplog):
+    """The repeated SBC computes no joint coverage, so it can judge only the rank half of the
+    calibration verdict: per repeat, whether every parameter's KS p reaches 0.05 / (the number of
+    parameters), a p exactly at the threshold passing; and the fraction of repeats that pass. The
+    record and its line say it is that half only."""
+    from matplotlib import pyplot as plt
+    from core.diagnostics import sbc_repeats
+    from tests._fixtures import stub_calibration_battery
+    good, bad, edge = [0.5] * 13, [0.5] * 12 + [0.003], [0.05 / 13] * 13
+    seen = stub_calibration_battery(monkeypatch, ks_pvals=[good, bad, good, edge])
+    caplog.set_level("INFO", logger="core")
+    d = sbc_repeats(_nad_cfg(), seen["posterior"], seen["prior"], repeats=4, n_cal=8,
+                    num_posterior_samples=10, fig_sink=lambda t, f: plt.close(f), store=store)
+    assert d.results["rank_verdict"] == {"per_repeat": [True, False, True, True], "fraction_passed": 0.75,
+                                         "scope": "rank-uniformity half only"}
+    lines = [r.getMessage() for r in caplog.records if r.name == "core.diagnostics.sbc"]
+    assert any("rank-uniformity half" in m and "3/4 repeats pass" in m for m in lines), lines
+
+
 def test_sbc_writes_one_diagnostic_naming_its_posterior_and_prior(tiny_run):
     """The repeat study is one artifact: K x n_cal calibration sets, the per-repeat KS/C2ST tables in a
     payload, one pooled figure, and a manifest naming the posterior and the prior it was trained from.
