@@ -55,9 +55,11 @@ def build_parser() -> argparse.ArgumentParser:
 def _smoke_interrupt_advice(args, root) -> str:
     """The Ctrl-C hint for a resumable cache. Every OTHER subcommand's own command line, re-issued
     with --resume require, IS the resumable one -- that is what the generic message says. smoke keys
-    its store on --store-root rather than on PRISM_ARTIFACTS, so re-issuing run 1's
-    OWN command line instead re-BUILDS the prior (refused by name under --save, or a fresh, different
-    fit otherwise); the resumable form names --prior and --stages explicitly, as the drill does.
+    its store on --store-root rather than on PRISM_ARTIFACTS, so re-issuing the OWN command line of
+    the first run, which builds the prior and saves it by name, instead re-BUILDS the prior (refused
+    by name under --save, or a fresh, different fit otherwise); the resumable form names --prior and
+    --stages explicitly, as the resume run does (same store, same --num-runs, the prior loaded by
+    name).
 
     The prior to name is the one this run used: the one it loaded (--prior), else smoke_prior when
     --save named what it built, else the unnamed one it built, whose id only its directory carries.

@@ -1355,8 +1355,9 @@ def test_a_missing_cell_is_refused_at_the_read_naming_the_flag(tool_env, capsys)
 
 def test_smoke_ctrl_c_advice_depends_on_store_root():
     """Smoke keys its store on --store-root, not PRISM_ARTIFACTS, so the generic
-    "the same command with --resume require continues them" advice is wrong for it -- re-issuing run
-    1's own command line just re-BUILDS the prior. Unit-tested directly against the extracted helper
+    "the same command with --resume require continues them" advice is wrong for it -- re-issuing the
+    own command line of the first run, which builds the prior and saves it by name, just re-BUILDS
+    the prior. Unit-tested directly against the extracted helper
     (rather than only by driving a real KeyboardInterrupt through a real smoke run, as the existing
     Ctrl-C test does for train against a prior/posterior already on disk) because smoke's own
     prior/posterior build is the expensive real chain this subcommand exists to exercise.
@@ -1430,6 +1431,8 @@ def test_smoke_refuses_a_bad_cell_and_an_impossible_resume_before_the_prior(tool
     and the calibration; a mistyped one then exited 1 and left orphans. And a --resume that can never
     work (no --checkpoint, or require without --prior, whose fresh fit has a new prior_fingerprint)
     was refused only after the prior, by an orchestrator message naming a flag smoke does not have."""
+    import re
+
     from core import orchestrator
     from core.tool import main
 
@@ -1455,6 +1458,7 @@ def test_smoke_refuses_a_bad_cell_and_an_impossible_resume_before_the_prior(tool
                  "--resume", "require", "--checkpoint"]) == 2
     err = capsys.readouterr().err
     assert "--prior" in err, err
+    assert "an earlier --save run" in err and not re.search(r"\bruns? \d", err), err
     assert rec.calls == [], "an impossible --resume was refused only after the prior"
 
 
@@ -2986,10 +2990,11 @@ def _calls_carrying(module_name: str, needle: str) -> list[str]:
 
 
 def test_the_gate_lines_keep_their_text_and_stream(capsys):
-    """The GPU smoke gate is read BY EYE off the console: run 2 must show
-    "Reusing the Fisher rotation stored with the training checkpoint" and "[checkpoint] resuming at
-    batch 4/4", run 2b no "[fisher]" line, runs 1 and 3 no OOM line and their masked-probe counts, and
-    the smoke driver frames every stage with "=== <stage> ===", "[ok] <stage> in Xs" and "[smoke] ALL
+    """The GPU smoke gate is read BY EYE off the console: the resume run (same store, same
+    --num-runs, the prior loaded by name) must show "Reusing the Fisher rotation stored with the
+    training checkpoint" and "[checkpoint] resuming at batch 4/4", the run one setting away no
+    "[fisher]" line, the chi and forced runs no OOM line and the masked-probe run total, and the smoke
+    driver frames every stage with "=== <stage> ===", "[ok] <stage> in Xs" and "[smoke] ALL
     STAGES COMPLETED". No suite assertion read most of these before, so the conversion to
     logging could have reworded one, or demoted an OOM notice to information on stdout, with every
     suite green and the gate silently unreadable.

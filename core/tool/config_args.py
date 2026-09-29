@@ -82,7 +82,8 @@ def add_training_flags(p, *, fisher: bool) -> None:
     copy carried no help at all. ``tsnpe`` passes ``fisher=False``: a narrowing round reuses its
     parent's rotation and never computes a Fisher of its own, so a Fisher flag there would be
     silently ignored. ``smoke`` does not use this helper: its defaults are its own literals, the
-    drill's sizes, and its ``--checkpoint`` is an on/off switch rather than a count of batches.
+    smoke gate's small sizes, and its ``--checkpoint`` is an on/off switch rather than a count of
+    batches.
     """
     p.add_argument("--num-runs", type=int, default=None, metavar="N",
                    help="training batches to simulate" + default_clause("num_runs"))

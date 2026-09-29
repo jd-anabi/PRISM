@@ -73,8 +73,8 @@ def _stages_type(value: str) -> str:
 
 
 def register(subparsers):
-    """The ``smoke`` subcommand. Its defaults are the drill's sizes, and they are the ONE place in
-    the tool that restates a literal (every other subcommand leaves defaults to its stage)."""
+    """The ``smoke`` subcommand. Its defaults are the smoke gate's small sizes, and they are the ONE
+    place in the tool that restates a literal (every other subcommand leaves defaults to its stage)."""
     from core.refusals import default_clause, default_text
     from core.tool.config_args import add_config_flags, add_resume_flags
     text = ("every stage end to end at tiny sizes; run it on the card after changing code\n"
@@ -134,7 +134,8 @@ def register(subparsers):
 
 def run_smoke(args, store):
     """The stage sequence. A composition of its own, not a chain of ``main`` calls: one process, one
-    store, one cfg -- run 2 loads its prior into that cfg and --stages can stop early."""
+    store, one cfg -- the resume run (same store, same --num-runs, the prior loaded by name) loads its
+    prior into that cfg, and --stages can stop early."""
     from core import cli, config, orchestrator
     from core.diagnostics.rng import seeded
     from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH, VALID_FLAG_LABELS
@@ -152,9 +153,9 @@ def run_smoke(args, store):
             raise UsageError(f"--resume {args.resume} needs --checkpoint: without it no simulation "
                              f"cache is read or written, so the policy has nothing to act on.")
         if args.resume == "require" and args.prior is None:
-            raise UsageError("--resume require needs --prior <the prior run 1 built>: without it this "
-                             "run fits a new prior, whose fingerprint is part of the cache identity, "
-                             "so no cache can match.")
+            raise UsageError("--resume require needs --prior <the prior an earlier --save run built, by "
+                             "name or id>: without it this run fits a new prior, whose fingerprint is "
+                             "part of the cache identity, so no cache can match.")
 
     # load_gt=False: the truth is injected by simulated_inference, so the note about ignored cell
     # values prints once, at the stage that uses them.
