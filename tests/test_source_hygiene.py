@@ -191,14 +191,30 @@ def _test_definitions() -> tuple[tuple[str, int, str], ...]:
     return tuple(out)
 
 
+def _sparing_lists(family: str) -> str:
+    """The allowlists that can spare a hit of ``family``: the token lists are consulted for the id
+    family alone, while a shape is blanked before every family is matched."""
+    return "ALLOW_TOKENS, ALLOW_PER_FILE or ALLOW_SHAPES" if family == "id" else "ALLOW_SHAPES"
+
+
 def _failure_message(hits: list[Hit]) -> str:
-    listing = "\n  ".join(f"{h.path}:{h.line} {h.family} {h.match!r}" for h in hits)
+    listing = "\n  ".join(f"{h.path}:{h.line} {h.family} {h.match!r} -> {_sparing_lists(h.family)}"
+                          for h in hits)
     return (f"{len(hits)} reference(s) to a working document or one of its labels:\n  {listing}\n"
             "State the reason in words instead of pointing at a document. If a match is a legitimate "
             "token shaped like a label (a physics name, a new feature id, a published paper's section "
-            "number), add the narrowest entry that spares it to tests/test_source_hygiene.py -- "
-            "ALLOW_TOKENS (one token, everywhere), ALLOW_PER_FILE (one token, one file) or ALLOW_SHAPES "
-            "(a pattern) -- in the commit that introduces it.")
+            "number), add the narrowest entry that spares it to tests/test_source_hygiene.py, from the "
+            "lists named after its line -- ALLOW_TOKENS (one token, everywhere) and ALLOW_PER_FILE (one "
+            "token, one file) spare the id family only; ALLOW_SHAPES (a pattern) spares any family -- in "
+            "the commit that introduces it.")
+
+
+def _test_name_failure_message(offenders: list[tuple[str, int, str]]) -> str:
+    """The failure for test names carrying a label, each offender given as (path, line, name)."""
+    listing = "\n  ".join(f"{path}:{line} {name} {_test_name_labels(name)}" for path, line, name in offenders)
+    return ("test names carrying a label -- rename each so the name states the behaviour:\n  " + listing + "\n"
+            "A legitimate name goes in ALLOW_TEST_NAMES (one name) in tests/test_source_hygiene.py; a "
+            "physics token that any test name may carry goes in ALLOW_TEST_NAME_TOKENS there.")
 
 
 def test_no_scanned_file_cites_a_working_document():
@@ -307,16 +323,17 @@ def test_every_allowlist_entry_still_matches_something():
 
 def test_no_test_name_carries_a_process_label():
     """A test's name is what a failing run prints, so it states the behaviour, never a label."""
-    offenders = [f"{path}:{line} {name} {_test_name_labels(name)}" for path, line, name in _test_definitions()
+    offenders = [(path, line, name) for path, line, name in _test_definitions()
                  if name not in ALLOW_TEST_NAMES and _test_name_labels(name)]
-    assert not offenders, ("test names carrying a label -- rename each so the name states the behaviour; "
-                           "a legitimate name goes in ALLOW_TEST_NAMES:\n  " + "\n  ".join(offenders))
+    assert not offenders, _test_name_failure_message(offenders)
 
 
 def test_a_failure_names_the_file_line_family_and_the_allowlist(tmp_path):
     """A legitimate new token shaped like a label -- a future feature id, a published paper's section
     number -- fails with everything needed to act on it: where, which family, what matched, and the
-    allowlist to extend."""
+    allowlists that can spare it. Each hit names only the lists that can: the token lists spare the id
+    family alone, and a shape spares any family. A test name that carries a label fails the same way,
+    naming the name, the label and the list that can spare it."""
     module = tmp_path / "new_feature.py"
     new_id = "Q" + "7"
     module.write_text('"""A new module."""\n\nDRIFT = 1  # the ' + new_id + " channel\n"
@@ -329,3 +346,14 @@ def test_a_failure_names_the_file_line_family_and_the_allowlist(tmp_path):
     assert f"{where}:4 section 'Sec" + "tion 4.2'" in message
     for entry in ("ALLOW_TOKENS", "ALLOW_PER_FILE", "ALLOW_SHAPES", "tests/test_source_hygiene.py"):
         assert entry in message, entry
+    lines = message.splitlines()
+    id_line = next(ln for ln in lines if f"{where}:3 id" in ln)
+    section_line = next(ln for ln in lines if f"{where}:4 section" in ln)
+    assert id_line.endswith("-> ALLOW_TOKENS, ALLOW_PER_FILE or ALLOW_SHAPES"), id_line
+    assert section_line.endswith("-> ALLOW_SHAPES") and "ALLOW_TOKENS" not in section_line, section_line
+
+    name = "test_the_" + "H" + "1_channel_is_finite"
+    named = _test_name_failure_message([("tests/x.py", 12, name)])
+    for entry in ("tests/x.py:12", name, "'h" + "1'", "ALLOW_TEST_NAMES", "ALLOW_TEST_NAME_TOKENS",
+                  "tests/test_source_hygiene.py"):
+        assert entry in named, (entry, named)
