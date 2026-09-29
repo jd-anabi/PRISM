@@ -1849,6 +1849,42 @@ def test_the_same_validate_seed_draws_the_same_set_and_reaches_the_same_verdict(
     assert not torch.equal(seen["x_cal"][2], seen["x_cal"][0])
 
 
+# The calls in validate_calibration that draw from a random stream: the set, the rank test's posterior
+# draws, its reference sample and its uniform baseline, the coverage test's draws and the
+# informativeness estimate.
+_CALIBRATION_DRAWS = ("_draw_calibration_set", "run_sbc", "_sbc_reference_sample", "check_sbc",
+                      "run_tarp", "analysis.informativeness")
+
+
+def _draws_outside_the_seeded_block(source: str) -> list:
+    """The names in ``_CALIBRATION_DRAWS`` that ``source`` (validate_calibration's text) calls
+    anywhere but inside its one ``with`` whose context calls ``seeded``, or never calls there."""
+    import ast
+    import textwrap
+    tree = ast.parse(textwrap.dedent(source))
+
+    def called(node):
+        return [ast.unparse(n.func) for n in ast.walk(node) if isinstance(n, ast.Call)]
+
+    blocks = [n for n in ast.walk(tree) if isinstance(n, ast.With)
+              and any("seeded" in called(item.context_expr) for item in n.items)]
+    assert len(blocks) == 1, f"validate_calibration should enter one seeded block, found {len(blocks)}"
+    inside = [c for stmt in blocks[0].body for c in called(stmt)]
+    everywhere = called(tree)
+    return [name for name in _CALIBRATION_DRAWS
+            if name not in inside or everywhere.count(name) != inside.count(name)]
+
+
+def test_a_seeded_calibration_runs_every_draw_of_its_battery_inside_the_seeded_block():
+    """The same seed gives the same calibration only if every call that draws runs inside the one
+    block the seed enters. A draw moved out of it would run on in the caller's stream, and the
+    same-seed comparison above would not notice: the coverage test's and the informativeness
+    estimate's stand-ins return fixed numbers."""
+    import inspect
+    from core import orchestrator
+    assert _draws_outside_the_seeded_block(inspect.getsource(orchestrator.validate_calibration)) == []
+
+
 def test_a_seeded_calibration_never_replays_the_stream_a_training_run_with_that_seed_starts(store, monkeypatch):
     """A calibration seeded with S draws from a stream derived from S and a fixed calibration tag, not
     from S itself: a training run seeded with S starts at S, and a calibration set that replayed its
