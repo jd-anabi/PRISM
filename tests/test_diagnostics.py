@@ -600,9 +600,11 @@ def test_identifiability_rotation_decomposes_a_stored_basis(store):
 def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_absent_rotation(store, caplog):
     """Eigenvalues absent is a REPORT: a rotation whose eigenvalues never reached the record -- a run
     resumed from a checkpoint written before they were kept beside the rotation, or a narrowing round
-    that inherited none -- still has loadings that answer "which direction is worst", and the warning
-    ends on the one thing that can still supply the scale. V absent is a REFUSAL: there is no basis
-    to decompose at all."""
+    that inherited none -- still has loadings that answer "which direction is worst". The warning
+    names the records that can share the rotation and still hold the scale (a narrowing round's
+    amortized ancestor, the posterior of the run that started a resumed run's simulation cache), and
+    ends on what is left when none does: a new amortized run computes a rotation of its own. V
+    absent is a REFUSAL: there is no basis to decompose at all."""
     import pytest
     import torch
     from core.diagnostics import identifiability_rotation
@@ -612,12 +614,13 @@ def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_abse
     d = identifiability_rotation(cfg, store.load_posterior(cfg, w.id), name="rot_noev")
     assert d.results["eigenvalues"] is None and len(d.results["directions"]) == P
     assert d.results["directions"][0]["eigenvalue"] is None
-    # A WARNING, said once: the six explanatory lines travel in one record, so the pane's triangle and
+    # A WARNING, said once: the explanatory lines travel in one record, so the pane's triangle and
     # the tool's "warning: " prefix mark the block once and log.txt stamps it once.
     warned = [r.getMessage() for r in caplog.records
               if r.name == "core.diagnostics.identifiability" and r.levelname == "WARNING"]
     assert len(warned) == 1 and warned[0].startswith("[eigenvalues] NOT STORED for this artifact.\n"), warned
-    assert warned[0].endswith("\n  and only a new training run that computes its own rotation records any."), warned
+    assert warned[0].endswith("\n  amortized training run that does not resume a cache computes a rotation, with\n"
+                              "  eigenvalues of its own."), warned
     flat = _posterior_artifact(store, cfg, name="norot", V=None)
     with pytest.raises(Refusal, match="records no Fisher rotation") as e:
         identifiability_rotation(cfg, store.load_posterior(cfg, flat.id), name="rot_none")

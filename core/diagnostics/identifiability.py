@@ -101,10 +101,14 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
         # did not reach this record. Training records the eigenvalues it computed, the ones a resumed
         # checkpoint's header holds, or, for a narrowing round, its parent posterior's; so None comes
         # from a resume of a checkpoint written before the header kept them, or from a narrowing round
-        # trained before rounds inherited them or whose parent held none. A narrowing round reuses the
-        # rotation of the amortized posterior it descends from, so that record answers when it has
-        # them. Otherwise no stored record holds them: V is not reproducible, so a new training run
-        # computes a new rotation, and only its eigenvalues get recorded.
+        # trained before rounds inherited them, built with no parent posterior, or whose parent held
+        # none. The same rotation can still be recorded elsewhere. A narrowing round reuses its
+        # amortized ancestor's. A resume reuses the V in the cache header, which only the run that
+        # started the cache writes; that run's posterior names the same cache as its simulation
+        # parent, and records the eigenvalues when that run computed the rotation (it was not itself
+        # a narrowing round) and finished. When none of those records them, nothing does: V is not
+        # reproducible, and a resume reuses it, so only a new amortized run that resumes no cache
+        # computes a rotation -- a new one, with eigenvalues of its own.
         # ONE warning record for all the lines: the pane's triangle and the tool's "warning: " prefix
         # mark the block once, and log.txt puts one timestamp over it.
         log.warning("[eigenvalues] NOT STORED for this artifact.\n"
@@ -112,11 +116,16 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
                     "  and what it is made of -- but NOT how much worse it is. That scale is the question:\n"
                     "  a 3x spread means the experiment measures everything tolerably; 1e6 means it\n"
                     "  measures a handful of directions and returns the prior for the rest.\n"
-                    "  They go unrecorded when training resumed a checkpoint written before they were kept beside\n"
-                    "  the rotation, and on a narrowing round trained before rounds inherited them or whose parent\n"
-                    "  held none. For a narrowing round, the amortized posterior it descends from shares its\n"
-                    "  rotation: if that posterior records them, run this diagnostic on it. Otherwise no record has them,\n"
-                    "  and only a new training run that computes its own rotation records any.")
+                    "  They go unrecorded when training resumed a checkpoint written before they were kept\n"
+                    "  beside the rotation, and on a narrowing round trained before rounds inherited them,\n"
+                    "  built with no parent posterior, or whose parent held none. Other records can share\n"
+                    "  this rotation: a narrowing round has the rotation of the amortized posterior it\n"
+                    "  descends from, and a resumed run has the rotation of the run that started its\n"
+                    "  simulation cache, whose posterior (it names the same cache as its simulation parent)\n"
+                    "  records them if that run computed the rotation and finished. Run this diagnostic on\n"
+                    "  whichever of those records them. If none does, no record holds them, and only a new\n"
+                    "  amortized training run that does not resume a cache computes a rotation, with\n"
+                    "  eigenvalues of its own.")
         ev_a = None
     else:
         ev_a = np.asarray(ev, dtype=float)
