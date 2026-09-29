@@ -307,6 +307,14 @@ def test_the_matchers_catch_each_family_and_spare_the_allowed_tokens(tmp_path):
     assert _test_name_labels("test_the_f0_d7_case") == ["d7"]
 
 
+def test_every_reader_page_is_scanned():
+    pages = sorted((_REPO / READER_DOCS_DIR).glob("*.md"))
+    assert len(pages) >= 10, f"expected the ten reader pages under {READER_DOCS_DIR}, found {len(pages)}"
+    scanned = {p.resolve() for p in scanned_files()}
+    missing = [p.name for p in pages if p.resolve() not in scanned]
+    assert not missing, f"reader pages the reference scan does not read: {missing}"
+
+
 def test_every_allowlist_entry_still_matches_something():
     """An entry that spares nothing is stale, and would hide the next real reference of its shape.
     Only uses outside this module count: its own literals would otherwise keep every entry alive.

@@ -2,6 +2,8 @@
 
 Research for running GFDT theory and experiments on a simulated biophysical model of the inner-ear hair-cell bundles. The application (**PRISM**) is a PySide6 desktop GUI.
 
+Start with the guide in [docs/guide/](docs/guide/): it explains how to use, run and maintain PRISM, with a reading path for each kind of reader.
+
 ## Installation
 
 ### Requirements
