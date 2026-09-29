@@ -157,7 +157,8 @@ def _register_band(modes) -> None:
                 help="smallest share of the cell's own peak power that must survive the drive, in "
                      "(0, 1]; below it the probe captured the cell")
     _value_flag(band, _BAND, "--peak-window", type=float, metavar="X",
-                help="half-width of the own-peak window, as a fraction of the peak frequency, in (0, 1)")
+                help="half-width of the own-peak window, as a fraction of the peak frequency, in (0, 1); "
+                     "never narrower than two frequency bins either side")
     _value_flag(band, _BAND, "--seed", type=int, metavar="N", help="the random seed for the whole run")
     band.set_defaults(handler=_band, chi_mode=True, chi_n_freqs=None, interrupt_note=PROBES_INTERRUPT_NOTE)
 

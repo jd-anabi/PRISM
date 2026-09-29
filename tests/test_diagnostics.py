@@ -1850,6 +1850,30 @@ def test_probes_band_fails_a_frequency_captured_at_any_drive_and_judges_the_conf
     assert any("core/config.py" in m for m in said)
 
 
+def test_probes_band_flags_a_harmonic_against_the_own_peak_window_it_measured(store, monkeypatch):
+    """The capture share sums the own-peak window as measured at each length, never narrower than two
+    frequency bins either side, so the harmonic flag asks the same question of that window, the way
+    the drive check does. A 5 Hz peak over 1 s sits on bin 5: the window is bins 3 to 7, 0.6 to 1.4
+    times the peak, and the x0.6 probe's own tone on bin 3 lands inside it, though it is far outside
+    the nominal +/-10 %. Over 10 s the peak sits on bin 50 and the window is 10 % wide, clear of it."""
+    import argparse
+
+    from core.diagnostics import probes, probe_band
+    from core.tool import build_parser
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(f_own=0.005))
+    r = probe_band(_probe_cfg(), lengths=[1.0, 10.0], multipliers=[0.6], repeats=4, name="slow_peak").results
+    by_length = {p["length_s"]: p for p in r["points"]}
+    assert by_length[1.0]["harmonic"] is True, by_length[1.0]
+    assert by_length[10.0]["harmonic"] is False, by_length[10.0]
+    assert r["frequencies"][0]["harmonic"] is True
+    assert r["lengths"][0]["own_peak_window_x"] == pytest.approx([0.6, 1.4])
+    assert r["lengths"][1]["own_peak_window_x"] == pytest.approx([0.9, 1.1])
+    p = build_parser().subcommands["probes"]
+    band = next(sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
+                for name, sub in a.choices.items() if name == "band")
+    assert "never narrower than two frequency bins" in band._option_string_actions["--peak-window"].help
+
+
 def test_probes_band_reports_a_probe_past_the_sampling_limit_as_masked_and_never_clamps_it(store, monkeypatch,
                                                                                          caplog):
     from core.diagnostics import probes, probe_band

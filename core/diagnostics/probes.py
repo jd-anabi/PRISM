@@ -86,8 +86,9 @@ _REL_TOL = 1e-9
 CAVEATS = (
     "The amplitude-spread, signal-over-floor and phase thresholds are conventions; only capture -- the "
     "drive taking over the cell's own oscillation -- is physical evidence against a probe.",
-    "A probe whose low harmonic (up to the fifth) lands inside the own-peak window is marked harmonic: "
-    "harmonic power there inflates the not-captured measure and can hide capture.",
+    "A probe whose low harmonic (up to the fifth) lands within a bin of the own-peak window as measured "
+    "at that length is marked harmonic: harmonic power there inflates the not-captured measure and can "
+    "hide capture.",
 )
 
 
@@ -258,7 +259,7 @@ def _measure(cfg, res_sim, sim_idx, t_scale, lengths, multipliers, drives, caps,
     rs = res_sim.expand(repeats, -1).contiguous()
     inits = cfg.inits_tensor.expand(repeats, -1).contiguous()
     f_eff = _force_scale(rs, sim_idx)
-    harmonic = probe_math.harmonic_flags(multipliers, crit.peak_window)
+    nominal = probe_math.harmonic_flags(multipliers, crit.peak_window)
     n_grid = cfg.t.shape[0]
     n_max = min(config.N_ND_MAX, n_grid)
     ceiling_s = probe_math.training_ceiling_s(cfg, t_scale)
@@ -283,20 +284,34 @@ def _measure(cfg, res_sim, sim_idx, t_scale, lengths, multipliers, drives, caps,
         omega0 = float(axis[1:][power[1:].argmax()]) if power.shape[0] > 1 else float("nan")
         median_hz = float(torch.quantile(f_peak, 0.5)) * per_s
         spread_hz = float(f_peak.std()) * per_s
+        # The window the capture share sums at this length, never narrower than two bins either side:
+        # on a slow peak or a short recording it is much wider than the nominal fraction, so a probe
+        # tone or harmonic is checked against it, as the drive check checks its drive.
+        lo = hi = df = None
+        if math.isfinite(omega0) and omega0 > 0:
+            lo, hi = probe_math.own_peak_window(geom.n_obs, omega0, crit.peak_window, dt)
+            df = 1.0 / (geom.n_obs * dt)
+            if lo >= hi:
+                lo = hi = df = None
         length_rows.append({
             "length_s": length, "achieved_s": achieved, "n_obs": geom.n_obs, "n_fine": geom.n_fine,
             "beyond_ceiling": beyond, "clipped": clipped, "omega0_cell": orch._num(omega0),
             "omega0_hz": orch._num(omega0 * per_s), "peak_median_hz": orch._num(median_hz),
-            "peak_spread_hz": orch._num(spread_hz)})
+            "peak_spread_hz": orch._num(spread_hz),
+            "own_peak_window_x": (None if lo is None else
+                                  [orch._num(lo * df / omega0), orch._num((hi - 1) * df / omega0)])})
         log.info(f"[band] {length:g} s ({geom.n_obs} samples): the ensemble's own peak is at "
                  f"{omega0 * per_s:.3f} Hz; per run, median {median_hz:.3f} Hz, spread {spread_hz:.3f} Hz")
         for j, m in enumerate(multipliers):
             freq = m * f_peak
             ok = torch.isfinite(freq) & (freq > 0) & (freq < _NYQUIST_SHARE * nyq)
             n_valid = int(ok.sum())
+            # the probe itself (k = 1) and its harmonics up to the fifth
+            harmonic = nominal[j] or (lo is not None and any(
+                _reaches(k * m * omega0, lo, hi, df) for k in range(1, 6)))
             for drive in drives:
                 base = {"length_s": length, "multiplier": m, "drive": drive, "n_valid": n_valid,
-                        "nyquist_masked": repeats - n_valid, "harmonic": harmonic[j]}
+                        "nyquist_masked": repeats - n_valid, "harmonic": harmonic}
                 if n_valid < 2:
                     points.append(_masked_point(base, caps))
                     shortened.append({c: False for c in caps})
@@ -322,9 +337,10 @@ def _measure(cfg, res_sim, sim_idx, t_scale, lengths, multipliers, drives, caps,
     return length_rows, points, shortened
 
 
-def _frequencies(points, n_l, n_m, n_d, multipliers, harmonic, band):
+def _frequencies(points, n_l, n_m, n_d, multipliers, band):
     """Per probe frequency: it passes only if it passes at every length and every drive, full length
-    and capped judged apart, with a reason for each point that does not."""
+    and capped judged apart, with a reason for each point that does not. It is marked harmonic when
+    any of its points is, at any length."""
     out = []
     for j, m in enumerate(multipliers):
         own = [points[(i * n_m + j) * n_d + k] for i in range(n_l) for k in range(n_d)]
@@ -339,7 +355,7 @@ def _frequencies(points, n_l, n_m, n_d, multipliers, harmonic, band):
                 reasons.append(f"{p['capped']['verdict']} {where}, drive {p['drive']:g}")
             elif p["full"]["verdict"] != "pass":
                 reasons.append(f"{p['full']['verdict']} {where} uncapped, drive {p['drive']:g}")
-        out.append({"multiplier": m, "in_band": _inside(m, *band), "harmonic": harmonic[j],
+        out.append({"multiplier": m, "in_band": _inside(m, *band), "harmonic": any(p["harmonic"] for p in own),
                     "passes_full": all(p["full"]["verdict"] == "pass" for p in own),
                     "passes_capped": all(p["capped"]["verdict"] == "pass" for p in own),
                     "reasons": reasons})
@@ -506,8 +522,10 @@ def probe_band(cfg, *, lengths=None, multipliers=None, drives=None, repeats: int
     per point and column: the amplitude spread (unbiased std of |chi| over its mean, at most
     ``cv_max``), the phase scatter (circular spread, judged only against ``phase_max``), the signal over
     the floor (mean |chi| driven over the same lock-in on the undriven runs, at least ``snr_min``), and
-    capture (the driven runs' power within ``peak_window`` of the undriven ensemble's peak, over the
-    undriven power there, at least ``sup_min``). The cycle floor is reported per point, never judged.
+    capture (the driven runs' power within ``peak_window`` of the undriven ensemble's peak, never
+    narrower than two frequency bins either side, over the undriven power there, at least
+    ``sup_min``). The cycle floor is reported per point, never judged. A probe whose tone or low
+    harmonic lands within a bin of that window, as measured at its length, is marked harmonic.
 
     A frequency passes only if it passes at every length and every drive. The band holds when every
     frequency inside it passes under the ceiling; the drive holds when no in-band point at the
@@ -587,7 +605,6 @@ def probe_band(cfg, *, lengths=None, multipliers=None, drives=None, repeats: int
         with seeded(seed, device):
             length_rows, points, shortened = _measure(cfg, res_sim, sim_idx, t_scale, lengths, multipliers,
                                                       drives, caps, repeats, crit)
-        harmonic = probe_math.harmonic_flags(multipliers, peak_window)
         for p in points:
             log.info(f"[band] {_point_line(p)}")
         masked = sorted({(p["length_s"], p["multiplier"]) for p in points
@@ -597,7 +614,7 @@ def probe_band(cfg, *, lengths=None, multipliers=None, drives=None, repeats: int
                         "0.9 x Nyquist, so it was reported and not driven:\n"
                         + "\n".join(f"  {length:g} s, x{m:g}" for length, m in masked))
 
-        frequencies = _frequencies(points, n_l, n_m, n_d, multipliers, harmonic, band)
+        frequencies = _frequencies(points, n_l, n_m, n_d, multipliers, band)
         in_band = [f for f in frequencies if f["in_band"]]
         band_holds = None if not in_band else all(f["passes_capped"] for f in in_band)
         drive_rows, drive_holds = _drive_rows(points, drives, n_d, band, configured["chi_f0"], sup_min)
