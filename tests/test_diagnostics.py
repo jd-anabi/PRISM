@@ -2162,6 +2162,15 @@ def _mask_record(tag, lo, hi, kinds=("full", "short", "slow", "packer"), *, k_pa
                        dt_exp=_MASK_DT, n_points=_MASK_POINTS)
 
 
+def test_a_probe_record_compares_by_identity():
+    """A record's fields are mostly tensors, and a field-by-field comparison of tensors has no single
+    truth value: the generated ``==`` raised on any two records. A record is equal to itself and to no
+    copy of it, and the comparison always gives a plain bool."""
+    import dataclasses
+    r = _mask_record("b0", 0, 4)
+    assert r == r and (r == dataclasses.replace(r)) is False
+
+
 def _mask_generator(script, calls):
     """In place of pipeline.gen_training_data: per batch, the warnings an abandoned attempt left, then
     each committed range's own masked-probe warning, then the records, handed over at commit. Each call's
