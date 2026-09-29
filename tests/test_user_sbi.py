@@ -1815,6 +1815,100 @@ def _gen_td(mode, *, seed=0, n_runs=3, run_size=4, prior=None, **over):
         force_prior, t, **kw)
 
 
+@pytest.mark.parametrize("mode", ["chi", "forced", "spontaneous"])
+def test_a_probe_observer_leaves_seeded_training_rows_byte_identical(mode, monkeypatch):
+    """Watching the probes changes nothing about the rows produced, and with no observer no record
+    is even built. Forced and spontaneous rows never reach the observer."""
+    from core.SBI import chi_probes
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+
+    def _never(*a, **k):
+        raise AssertionError("a probe record was built with no observer attached")
+
+    with monkeypatch.context() as m:
+        m.setattr(chi_probes, "ProbeRecord", _never)
+        x0, th0 = _gen_td(mode, n_runs=2, run_size=2)
+    seen = []
+    x1, th1 = _gen_td(mode, n_runs=2, run_size=2, probe_observer=lambda rec: None)
+    x2, th2 = _gen_td(mode, n_runs=2, run_size=2, probe_observer=seen.append)
+    assert torch.equal(x0, x1) and torch.equal(th0, th1)
+    assert torch.equal(x0, x2) and torch.equal(th0, th2)
+    assert bool(seen) == (mode == "chi"), len(seen)
+
+
+def test_the_probe_observer_sees_each_committed_row_range_once_under_a_row_halving(monkeypatch):
+    from core.SBI.chi_probes import ProbeRecord
+    from core.Simulator.simulator import SimulationError
+    from tests._fixtures import stand_in_gen_obs
+    run_size, real_subset = 4, pipeline_mod._subset_probe_rows
+
+    def _flaky(block, mask, k_pad, generator):          # fails AFTER the probes were packed and added
+        if block.shape[0] > run_size // 2:
+            try:
+                raise torch.AcceleratorError("CUDA error: out of memory")
+            except RuntimeError as e:
+                raise SimulationError("subset: AcceleratorError: CUDA error: out of memory") from e
+        return real_subset(block, mask, k_pad, generator)
+
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    # the out-of-memory path teaches the learned budget; put it back afterwards
+    monkeypatch.setattr(pipeline_mod, "_BUDGET_CAP_ELEMENTS", pipeline_mod._BUDGET_CAP_ELEMENTS)
+    monkeypatch.setattr(pipeline_mod, "_budget_clean_runs", pipeline_mod._budget_clean_runs)
+    monkeypatch.setattr(pipeline_mod, "_subset_probe_rows", _flaky)
+    monkeypatch.setattr(pipeline_mod, "_MIN_SIM_CHUNK", 1)
+    seen = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        x, _ = _gen_td("chi", n_runs=2, run_size=run_size, probe_observer=seen.append)
+    assert x.shape[0] == 2 * run_size
+    ranges = {}
+    for rec in seen:
+        assert isinstance(rec, ProbeRecord)
+        rows = rec.hi - rec.lo
+        assert rec.f_peak.shape == (rows,) and rec.valid.shape == rec.u.shape == rec.logcyc.shape == (rows, rec.k)
+        assert rec.packed_mask.shape[0] == rows and rec.duration_frac.shape == (rec.k,)
+        assert rec.dt_exp == pytest.approx(_td_cfg().dt_exp) and rec.n_points > 0
+        ranges.setdefault(rec.batch_tag, []).append((rec.lo, rec.hi))
+    assert len(ranges) == 2 and all(r == [(0, 2), (2, 4)] for r in ranges.values()), ranges
+
+
+def test_the_ledger_hands_records_to_the_observer_only_at_commit():
+    seen = []
+    ledger = pipeline_mod._BatchProbeLedger(observer=seen.append)
+    ledger.add(0, 4, 1, 8, record="abandoned attempt")
+    ledger.discard()
+    ledger.add(0, 4, 2, 8, record="superseded range")
+    ledger.add(0, 2, 1, 4, record="first half")
+    ledger.add(2, 4, 0, 4, record="second half")
+    assert seen == []
+    ledger.commit(0)
+    assert seen == ["first half", "second half"]
+    ledger.add(0, 4, 0, 8, record=None)
+    ledger.commit(1)
+    assert seen == ["first half", "second half"]
+    assert ledger.committed == [(1, 8), (0, 8)]
+
+
+def test_an_exception_raised_by_the_probe_observer_propagates(monkeypatch):
+    """A broken audit fails loudly: the observer's own exception leaves the training generator
+    unchanged, and the batch probe tally is cleared on the way out."""
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+
+    class _Broken(Exception):
+        pass
+
+    def _observer(rec):
+        raise _Broken("the audit failed")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(_Broken, match="the audit failed"):
+            _gen_td("chi", n_runs=1, run_size=2, probe_observer=_observer)
+    assert pipeline_mod._ACTIVE_LEDGER is None
+
+
 def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override(caplog):
     """⚠ MADE VISIBLE: a direction loaded on t_scale turns the restriction into a reweighting. The
     rejection sampler accepts a row BEFORE gen_training_data overwrites its t_scale with the batch's
@@ -2253,6 +2347,7 @@ def test_the_masked_probe_total_covers_every_committed_batch_across_a_resume(cap
             _gen_td("chi", seed=11, n_runs=n_runs, run_size=4,
                     checkpoint=_ck(tmp / "a", every=3, resume="never"))
         monkeypatch.setattr(pipeline_mod, "gen_stats", real)
+        assert pipeline_mod._ACTIVE_LEDGER is None, "a killed run left its batch probe tally active"
         assert tc.peek(tmp / "a")["chi_masked"] == ref[:2]
 
         caplog.clear()
@@ -2285,6 +2380,7 @@ def test_a_resume_from_a_cache_without_per_batch_counts_says_the_total_covers_on
             _gen_td("chi", seed=11, n_runs=4, run_size=4,
                     checkpoint=_ck(tmp / "old", every=1, resume="never"))
         monkeypatch.setattr(pipeline_mod, "gen_stats", real)
+    assert pipeline_mod._ACTIVE_LEDGER is None, "a killed run left its batch probe tally active"
     for name in ("state.pt", "state.prev.pt"):
         path = tmp / "old" / name
         if path.exists():

@@ -6,6 +6,7 @@ import shutil
 import time
 import warnings
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch
 import numpy as np
@@ -21,6 +22,10 @@ from core.refusals import Refusal
 from core.runs import cancel_deferred
 from core.Simulator import bp_simulator, nadrowski_simulator, hopf_simulator
 from core.SBI import statistics, chi, derived
+
+if TYPE_CHECKING:        # annotations only: chi_probes imports this module, so never at run time
+    from collections.abc import Callable
+    from core.SBI.chi_probes import ProbeRecord
 
 # This module's records: a child of the ``core`` logger, whose level core/runs.py sets
 # once at import and whose handlers each front end installs for a run. Never configured here.
@@ -179,31 +184,41 @@ class _BatchProbeLedger:
     ``committed`` may be restored from a simulation cache, whose first ``len(committed)`` batches it
     then describes. ``first_batch`` is the first batch this tally counts: 0 when it covers the whole
     run, or the resume point when the cache holds no per-batch counts for the batches before it.
-    Draws no random numbers and touches no tensor.
+    ``observer``, when given, is called at each ``commit`` with every record of the committed ranges,
+    in ascending row order, after the counts are committed; a discarded or replaced range's record
+    never reaches it, and an exception it raises propagates. The tally itself draws no random numbers
+    and touches no tensor.
     """
 
-    def __init__(self, committed=(), first_batch: int = 0):
+    def __init__(self, committed=(), first_batch: int = 0, *, observer=None):
         self.committed: list[tuple[int, int]] = [(int(m), int(t)) for m, t in committed]
         self.first_batch = int(first_batch)
+        self.observer = observer
         self._pending: list[tuple[int, int, int, int, object]] = []
 
     def add(self, lo: int, hi: int, masked: int, total: int, record=None) -> None:
-        """Hold one row range's counts until its batch commits, replacing any pending range it overlaps."""
+        """Hold one row range's counts, and its record if any, until its batch commits, replacing any
+        pending range it overlaps."""
         self._pending = [p for p in self._pending if not (p[0] < hi and lo < p[1])]
         self._pending.append((int(lo), int(hi), int(masked), int(total), record))
 
     def discard(self) -> None:
-        """Drop every pending count: the attempt that reported them is being re-run."""
+        """Drop every pending count and record: the attempt that reported them is being re-run."""
         self._pending = []
 
     def commit(self, batch_k: int) -> None:
-        """Commit the pending counts as batch ``batch_k``'s, which must be the next batch in order."""
+        """Commit the pending counts as batch ``batch_k``'s, which must be the next batch in order, then
+        hand the observer the committed ranges' records in ascending row order."""
         expected = self.first_batch + len(self.committed)
         if batch_k != expected:
             raise RuntimeError(f"the batch probe tally was asked to commit batch {batch_k}, but the next "
                                f"batch in order is {expected}")
-        self.committed.append((sum(p[2] for p in self._pending), sum(p[3] for p in self._pending)))
-        self._pending = []
+        pending, self._pending = sorted(self._pending, key=lambda p: p[0]), []
+        self.committed.append((sum(p[2] for p in pending), sum(p[3] for p in pending)))
+        if self.observer is not None:
+            for p in pending:
+                if p[4] is not None:
+                    self.observer(p[4])
 
     def summary_line(self, scope: str) -> str:
         """The run-total record: masked of simulated probes over the committed batches, and the spread
@@ -1294,7 +1309,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                       chi_k_fixed: int | None = None, chi_max_cycles: float | None = None,
                       n_vars: int | None = None, checkpoint: dict | None = None,
                       nd_idx: dict | None = None, k_b_cell: float | None = None,
-                      dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> tuple:
+                      dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu'),
+                      *, probe_observer: "Callable[[ProbeRecord], None] | None" = None) -> tuple:
     """
     Generate synthetic training data for the SBI posterior using batch-by-scale strategy.
 
@@ -1380,6 +1396,12 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     :param k_b_cell: Boltzmann's constant in cell units (``SimConfig.k_b_cell``). Same condition.
     :param dtype: Tensor data type. Defaults to torch.float32.
     :param device: Computation device. Defaults to CPU.
+    :param probe_observer: receives one ``chi_probes.ProbeRecord`` per committed chi row range, in
+                           batch order; None changes nothing. A batch's records arrive only after its
+                           rows are stored, in ascending row order: a range re-run in halves is seen
+                           as its halves, and an attempt the batch-level retry abandons is never seen.
+                           Chi mode only -- forced and spontaneous runs never call it. It sees the
+                           rows, it cannot change them, and an exception it raises propagates.
     :return: Tuple of (training_data, thetas) where training_data has shape
              (n_runs * run_size, n_stats + n_forcing + 1) and thetas has shape
              (n_runs * run_size, nd_dim + rescale_dim).
@@ -1546,8 +1568,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     _ledger = None
     if chi_mode:
         _stored = _state.get("chi_masked", []) if _ck_resumed is not None else []
-        _ledger = (_BatchProbeLedger(committed=_stored) if len(_stored) == _start_k
-                   else _BatchProbeLedger(first_batch=_start_k))
+        _ledger = (_BatchProbeLedger(committed=_stored, observer=probe_observer) if len(_stored) == _start_k
+                   else _BatchProbeLedger(first_batch=_start_k, observer=probe_observer))
 
     global _BATCH_TAG, _ACTIVE_LEDGER
     _patho = dict.fromkeys(("rows", "nonfinite", "constant", "overflow"), 0)
@@ -1826,7 +1848,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             x_buf[_lo:_hi] = _rows_out
             th_buf[_lo:_hi] = _th_out
             if _ledger is not None:
-                _ledger.commit(batch_k)      # the rows are stored, so their probe counts count
+                _ledger.commit(batch_k)      # the rows are stored: count their probes, hand out their records
             del _rows_out, _th_out
             # plans ON: cuFFT caches a plan per distinct transform SHAPE, outside PyTorch's
             # caching allocator -- so empty_cache() cannot touch it and it surfaces as a RAW driver

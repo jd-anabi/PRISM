@@ -6,8 +6,10 @@ paths, the test suites -- reach these as ``pipeline.gen_chi_raw`` / ``gen_chi_bl
 ``pipeline.<name>`` effective. Calls back into pipeline machinery (gen_obs, the force builder,
 the hot-loop release, the batch tag) go through the module object at call time.
 """
+import inspect
 import math
 import warnings
+from dataclasses import dataclass
 
 import torch
 
@@ -16,6 +18,49 @@ from core import forcing as _forcing
 from core.Helpers import helpers
 from core.SBI import chi
 from core.SBI import pipeline as _pipeline
+
+
+@dataclass(frozen=True)
+class ProbeRecord:
+    """What one ``gen_chi_block`` call inside the training generator measured, for a probe observer
+    (``pipeline.gen_training_data``'s ``probe_observer``). Built only while an observer is attached,
+    and handed to it only once the batch's rows are stored. Every tensor is detached, on the CPU and
+    a copy of its own, so nothing the observer does can touch the batch.
+
+    :param batch_tag: the batch the rows belong to, as the generator's messages name it.
+    :param lo: first row of this call's range within its training batch.
+    :param hi: one past the range's last row; ``hi - lo`` rows.
+    :param f_peak: (rows,) each row's own passive peak frequency, in cell frequency units:
+                   ``chi.peak_freq`` of the spontaneous trace the probes were placed against.
+    :param duration_frac: (K,) the per-probe fractions of the recording ``gen_chi_raw`` was handed to
+                          lock each probe in over, before the cycle ceiling shortens them; None when it
+                          was handed none (every probe over the full length).
+    :param k: the number of probes simulated for every row, K.
+    :param u: (rows, K) ``gen_chi_raw``'s returned log of each probe's frequency over ``f_peak``.
+    :param logcyc: (rows, K) ``gen_chi_raw``'s returned log of the drive cycles each probe was
+                   actually locked in over.
+    :param valid: (rows, K) ``gen_chi_raw``'s returned verdict per probe.
+    :param packed_mask: (rows, k_pad) the packer's mask, in slot order, before the per-row subsetting.
+    :param dt_exp: the sampling interval of the recording, in cell time units.
+    :param n_points: the full recording length in samples, of which ``duration_frac`` takes its
+                     fractions; with ``dt_exp`` it gives the longest lock-in any probe could have had.
+
+    ``gen_chi_raw`` returns only ``valid``, so an audit that wants to know WHY a probe failed
+    recomputes the non-finite and Nyquist predicates itself, from the driven frequency
+    ``f_peak * exp(u)`` and ``dt_exp``.
+    """
+    batch_tag: str
+    lo: int
+    hi: int
+    f_peak: torch.Tensor
+    duration_frac: torch.Tensor | None
+    k: int
+    u: torch.Tensor
+    logcyc: torch.Tensor
+    valid: torch.Tensor
+    packed_mask: torch.Tensor
+    dt_exp: float
+    n_points: int
 
 
 def _subset_probe_rows(block: torch.Tensor, mask: torch.Tensor, k_pad: int, generator) -> torch.Tensor:
@@ -259,8 +304,9 @@ def gen_chi_block(*args, k_pad: int = None, bounds: tuple = None,
 
     :param row_range: the rows' [lo, hi) within their training batch. Given only by the training
                       generator; with it, and while a batch probe tally is active, this call's masked
-                      and simulated probe counts are reported to that tally under the range. Never
-                      forwarded to ``gen_chi_raw``.
+                      and simulated probe counts are reported to that tally under the range -- with a
+                      :class:`ProbeRecord` when the tally has a probe observer, and nothing built
+                      otherwise. Never forwarded to ``gen_chi_raw``.
     :return: ((B, CHI_ELEM_W*k_pad) block, (B, k_pad) bool mask).
     """
     # `bounds` goes to BOTH: the packer normalises u_hat by it, and adapt_placement compresses into
@@ -270,8 +316,13 @@ def gen_chi_block(*args, k_pad: int = None, bounds: tuple = None,
     block, mask = chi.pack_probe_block(chi_stack, u, logcyc, valid, k_pad=k_pad, bounds=bounds)
     B, K = chi_stack.shape
     dropped = int((~mask[:, :K]).sum())
-    if row_range is not None and _pipeline._ACTIVE_LEDGER is not None:
-        _pipeline._ACTIVE_LEDGER.add(int(row_range[0]), int(row_range[1]), dropped, B * K)
+    tally = _pipeline._ACTIVE_LEDGER
+    if row_range is not None and tally is not None:
+        lo, hi = int(row_range[0]), int(row_range[1])
+        record = None
+        if tally.observer is not None:
+            record = _probe_record(args, kwargs, bounds, lo, hi, K, u, logcyc, valid, mask)
+        tally.add(lo, hi, dropped, B * K, record=record)
     if dropped:
         # Silent attrition is what made the first chi posterior inexplicable. Make it a number.
         warnings.warn(
@@ -279,4 +330,27 @@ def gen_chi_block(*args, k_pad: int = None, bounds: tuple = None,
             f"(below {config.CHI_MIN_CYCLES} drive cycles, "
             f"at/above Nyquist, out of band, or a non-finite lock-in).", stacklevel=2)
     return block, mask
+
+
+def _cpu_copy(t: torch.Tensor) -> torch.Tensor:
+    """A detached CPU tensor with storage of its own, whatever device ``t`` is on."""
+    return t.detach().to(device="cpu", copy=True)
+
+
+def _probe_record(args: tuple, kwargs: dict, bounds, lo: int, hi: int, k: int, u: torch.Tensor,
+                  logcyc: torch.Tensor, valid: torch.Tensor, mask: torch.Tensor) -> ProbeRecord:
+    """The :class:`ProbeRecord` of one ``gen_chi_block`` call: what it handed ``gen_chi_raw`` and what
+    came back. The training generator passes the trace, the sampling interval and the recording
+    length POSITIONALLY, so they are read by binding the call to ``gen_chi_raw``'s own signature,
+    never by position. Draws no random numbers: the peak frequency is recomputed with the same
+    deterministic estimator ``gen_chi_raw`` used on the same trace."""
+    bound = inspect.signature(gen_chi_raw).bind(*args, bounds=bounds, **kwargs).arguments
+    dt_exp = float(bound["dt_exp"])
+    dfrac = bound.get("duration_frac")
+    return ProbeRecord(
+        batch_tag=_pipeline._batch_tag(), lo=lo, hi=hi,
+        f_peak=_cpu_copy(chi.peak_freq(bound["x_spont_dim"], dt_exp)),
+        duration_frac=None if dfrac is None else _cpu_copy(torch.as_tensor(dfrac)),
+        k=int(k), u=_cpu_copy(u), logcyc=_cpu_copy(logcyc), valid=_cpu_copy(valid),
+        packed_mask=_cpu_copy(mask), dt_exp=dt_exp, n_points=int(bound["N_points"]))
 
