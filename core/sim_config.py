@@ -331,6 +331,32 @@ class SimConfig:
         return self.labels + rescale_labels
 
     @property
+    def assumed_params(self) -> tuple[str, ...]:
+        """The inferred parameters reported as ASSUMED INPUTS, by key (never by plotting label):
+        ``("T",)`` on a box that declares temperature in place of the force scale, ``()`` on every
+        other box. Read off the box through core/SBI/derived.py, which owns the rule.
+
+        Temperature enters the simulation only through the derived force scale, so it is reported as
+        an input the analysis assumed rather than one it measured. It is still inferred, and it stays
+        in every calibration test and every total; the reports only mark it. A consumer matches these
+        keys by index through ``list(params_dict) + list(rescale_params)``."""
+        from core.SBI import derived
+        return (derived.TEMPERATURE_PARAM,) if derived.uses_derived_f_scale(self.rescale_idx) else ()
+
+    @property
+    def report_labels(self) -> list[str]:
+        """``inferred_labels`` for the reports: an assumed parameter's label gains its unit and the
+        mark, ``" (assumed input, K)"`` -- temperature, the only parameter ever assumed, is in kelvin
+        (``k_b_cell`` is per kelvin). Every other label is the plotting label unchanged, so on a box
+        that assumes nothing this is ``inferred_labels`` itself."""
+        labels, assumed = self.inferred_labels, self.assumed_params
+        if not assumed:
+            return labels
+        keys = list(self.params_dict) + list(self.rescale_params)
+        return [f"{label} (assumed input, K)" if key in assumed else label
+                for key, label in zip(keys, labels, strict=True)]
+
+    @property
     def has_forcing(self) -> bool:
         """Whether this model carries any external forcing parameters. False for a spontaneous model
         (a no-forcing user model, or BP whose bounds file has no forcing section). The SBI pipeline

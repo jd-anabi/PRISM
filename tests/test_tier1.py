@@ -35,7 +35,8 @@ from core.SBI import pipeline, reparam, truncate
 from core.SBI import training_checkpoint as tc
 from core.SBI.run_guards import _log_params_for
 from core.sim_config import SimConfig
-from tests._fixtures import _FakeDP, _nad_cfg, _prior_artifact, _tiny_nadrowski_gen_prior
+from tests._fixtures import (_FakeDP, _nad_cfg, _prior_artifact, _tiny_nadrowski_gen_prior,
+                             stub_calibration_battery)
 
 TIER1_BOX = config.BOUNDS_PATH / "nadrowski" / "master_tier1.txt"
 TIER1_CELL = config.CELL_PATH / "nadrowski" / "master_spont_tier1.txt"
@@ -161,7 +162,7 @@ _MASKED_PROBES = re.compile(r"chi: \d+/\d+ probes masked")
 def _only_masked_probe_warnings():
     """Capture every Python warning raised inside and check each one on exit. At one-to-two-second
     recordings a chi batch may mask a probe too short to lock in, and it says so with a count. Whether
-    a given batch does depends on its unseeded (t_scale, T) draw, so zero or more such lines are
+    a given batch does depends on its unseeded (t_scale, T_obs) draw, so zero or more such lines are
     allowed, and nothing else is. Yields the captured list."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
@@ -369,11 +370,12 @@ def test_for_simulation_derives_the_force_scale_on_a_tier1_box_and_passes_every_
 
 def test_a_force_builder_handed_a_temperature_index_raises_before_anything_is_simulated(monkeypatch):
     """An index that names T and no f_scale is a programming error: both builders raise RuntimeError
-    (never a refusal), naming the index and the relation, before a simulation is spent. A Hopf-style
-    index, which names neither, keeps its x_scale / t_scale form."""
+    (never a refusal), naming the index and the relation, before a simulation is spent. The probe
+    builder's own guard fires first, before its peak search, so the drive builder it calls later is
+    never what raises. A Hopf-style index, which names neither, keeps its x_scale / t_scale form."""
     from core import forcing
     from core.refusals import Refusal
-    from core.SBI import chi_probes
+    from core.SBI import chi, chi_probes
     idx = {"x_scale": 0, "t_scale": 1, "T": 2}
     fp, fidx = torch.tensor([[1.0, 0.05, 0.0, 0.0]]), {"amp": 0, "freq": 1, "phase": 2, "offset": 3}
     t, res = torch.linspace(0.0, 1.0, 16), torch.tensor([[62.14, 3.73, 300.0]])
@@ -382,6 +384,7 @@ def test_a_force_builder_handed_a_temperature_index_raises_before_anything_is_si
         forcing.build_nondim_sin_force_tensor(fp, t, res, fidx, idx)
     assert "'T'" in str(e.value) and not isinstance(e.value, Refusal)
     monkeypatch.setattr(pipeline, "gen_obs", lambda *a, **k: pytest.fail("a simulation ran"))
+    monkeypatch.setattr(chi, "peak_freq", lambda *a, **k: pytest.fail("the peak search ran before the guard"))
     with pytest.raises(RuntimeError, match=relation):
         chi_probes.gen_chi_raw("NADROWSKI", torch.zeros(1, 10), res, torch.zeros(1, 64), t,
                                torch.zeros(1, 3), idx, 1, 0, 1, 64, 1.0, torch.tensor([0.1]), 0.15)
@@ -440,6 +443,102 @@ def test_the_live_simulation_derives_the_force_scale_on_a_tier1_box(monkeypatch)
     simulate_runner.run_simulation_stream(cfg, 0.005, frame_steps=500, fps=0.0, emit_chunk=chunks.append)
     assert chunks
     _assert_every_drive_used_the_derived_scale(spy, f, rtol=1e-5)
+
+
+def test_temperature_is_the_one_assumed_parameter_and_reports_carry_its_unit_and_mark():
+    """On the tier-1 box temperature is the one assumed input, named by its key, and the labels the
+    reports print carry its unit and the mark; every other label is the plotting label unchanged. The
+    master box assumes nothing, so its report labels are its plotting labels."""
+    cfg = tier1_cfg()
+    keys = list(cfg.params_dict) + list(cfg.rescale_params)
+    i_T = keys.index("T")
+    assert cfg.assumed_params == ("T",) and len(cfg.report_labels) == len(keys) == 13
+    assert cfg.report_labels[i_T] == cfg.inferred_labels[i_T] + " (assumed input, K)" == "$T$ (assumed input, K)"
+    assert [lab for i, lab in enumerate(cfg.report_labels) if i != i_T] == \
+           [lab for i, lab in enumerate(cfg.inferred_labels) if i != i_T]
+    master = _nad_cfg()
+    assert master.assumed_params == () and master.report_labels == master.inferred_labels
+
+
+def test_the_posterior_summary_marks_the_assumed_parameter_and_the_corner_uses_the_report_labels():
+    """Each summary entry says whether its parameter is an assumed input, beside the same three
+    quantiles as before; the inference hands the summary the config's assumed keys and labels its
+    corner plot with the report labels."""
+    import ast, inspect, textwrap
+    keys = list(tier1_cfg().params_dict) + ["x_scale", "t_scale", "T"]
+    samples = torch.arange(3 * 13, dtype=torch.float32).reshape(3, 13)
+    out = orchestrator._posterior_summary(samples, keys, ("T",))
+    assert [e["name"] for e in out] == keys and [e["assumed"] for e in out] == [False] * 12 + [True]
+    assert set(out[0]) == {"name", "q05", "median", "q95", "assumed"}
+    assert out[0]["median"] == 13.0 and out[0]["q05"] == pytest.approx(1.3)
+    tree = ast.parse(textwrap.dedent(inspect.getsource(orchestrator.infer_and_visualize)))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+    pair = [c for c in calls if c.func.id == "pairplot"]
+    assert len(pair) == 1
+    assert ast.unparse({k.arg: k.value for k in pair[0].keywords}["labels"]) == "cfg.report_labels"
+    assert [ast.unparse(c.args[2]) for c in calls if c.func.id == "_posterior_summary"] == ["cfg.assumed_params"]
+    # The summary is also said once, as one info record, so the Infer tab's log pane carries it.
+    described = [c for c in calls if c.func.id == "_describe_posterior_summary"]
+    logged = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "log.info"
+              and any(a is d for a in n.args for d in described)]
+    assert len(described) == 1 and len(logged) == 1, ast.unparse(tree)
+
+
+def test_the_posterior_summary_text_marks_the_assumed_parameter():
+    """The logged summary: a head line naming the three quantiles, then one row per parameter named
+    by its key, and only temperature's row carries the mark and its unit."""
+    keys = list(tier1_cfg().params_dict) + ["x_scale", "t_scale", "T"]
+    samples = torch.arange(3 * 13, dtype=torch.float32).reshape(3, 13)
+    text = orchestrator._describe_posterior_summary(orchestrator._posterior_summary(samples, keys, ("T",)))
+    lines = text.splitlines()
+    assert lines[0] == "[infer] posterior summary (5 % / median / 95 %):"
+    assert [line.split()[0] for line in lines[1:]] == keys, text
+    marked = [line for line in lines if "(assumed input" in line]
+    assert len(marked) == 1 and marked[0].split()[0] == "T" and "(assumed input, K)" in marked[0], text
+
+
+def test_describe_informativeness_marks_only_what_it_is_told_is_assumed():
+    """The per-parameter line of an assumed parameter carries the mark, and nothing else changes: the
+    joint total's head line is the same with or without it."""
+    from core.SBI import analysis
+    info = {"total_nats": 1.0, "sem_nats": 0.1, "n_used": 8, "n_dropped": 0, "param_names": ["k", "T"],
+            "per_param": [0.2, 0.01], "per_direction": None, "n_decompose": 8}
+    marked, plain = analysis.describe_informativeness(info, assumed=("T",)), analysis.describe_informativeness(info)
+    assert "T +0.0100  (assumed input)" in marked and marked.count("(assumed input)") == 1
+    assert "(assumed input)" not in plain and marked.splitlines()[0] == plain.splitlines()[0]
+
+
+def test_the_calibration_table_plots_and_informativeness_mark_the_assumed_parameter(store, monkeypatch, caplog):
+    """Temperature stays in the calibration's rank table, in both rank figures and in the
+    informativeness block, each time marked as an assumed input: the table and the figures through the
+    report labels, the informativeness block on temperature's own line only."""
+    cfg = tier1_cfg()
+    seen = stub_calibration_battery(monkeypatch, ks_pvals=[0.5] * 13)
+    caplog.set_level("INFO", logger="core")
+    cal = orchestrator.validate_calibration(cfg, seen["posterior"], seen["prior"], n_cal=8, cal_n_scales=2,
+                                            fig_sink=_close, store=store)
+    said = [r.getMessage() for r in caplog.records if r.name == "core.orchestrator"]
+    assert said.count("  $T$ (assumed input, K): KS p=0.500  c2st_ranks=0.500  c2st_dap=0.500") == 1, said
+    assert seen["rank_plot_labels"] == [cfg.report_labels, cfg.report_labels]
+    info = [m for m in said if m.startswith("Informativeness")]
+    assert len(info) == 1, said
+    marked = [line for line in info[0].splitlines() if "(assumed input)" in line]
+    assert len(marked) == 1 and marked[0].split()[0] == "T", info[0]
+    assert "(assumed input)" in cal.results["informativeness"]["description"]
+
+
+def test_sbc_marks_the_assumed_parameter_in_its_table_and_its_records(store, monkeypatch, caplog):
+    """The repeated SBC marks temperature in its KS table, in its pooled figure and in each
+    per-parameter record, and keeps it in all three."""
+    from core.diagnostics import sbc_repeats
+    seen = stub_calibration_battery(monkeypatch, ks_pvals=[0.5] * 13)
+    caplog.set_level("INFO", logger="core")
+    d = sbc_repeats(tier1_cfg(), seen["posterior"], seen["prior"], repeats=2, n_cal=8, num_posterior_samples=10,
+                    fig_sink=_close, store=store)
+    assert [p["assumed"] for p in d.results["per_param"]] == [False] * 12 + [True]
+    rows = [r.getMessage() for r in caplog.records if r.name == "core.diagnostics.sbc"]
+    assert sum(m.startswith("T (assumed input)") for m in rows) == 1, rows
+    assert seen["rank_plot_labels"][-1][-1] == "T (assumed input)"
 
 
 @pytest.mark.slow

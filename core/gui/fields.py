@@ -67,7 +67,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "observation": ("TSNPE", "Observation"),
     # calibration and inference sizes
     "n_cal": ("Validate", "Calibration datasets"),
-    "cal_n_scales": ("Validate", "(t_scale, T) operating points"),
+    "cal_n_scales": ("Validate", "(t_scale, T_obs) operating points"),
     "num_posterior_samples": None,
     "n_samples": None,
     # the prior sweep

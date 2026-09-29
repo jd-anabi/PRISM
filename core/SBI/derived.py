@@ -35,9 +35,13 @@ and it lands in the SAME COLUMN -- so every downstream reader of
      feasibility guard must read the DERIVED value. This is a real change to the training
      distribution, not a relabelling.
   2. T enters the simulation only through the derived force scale. In spontaneous mode it has no
-     effect at all; in chi mode it scales every probe's |chi|, so over its narrow prior it may be
-     weakly informed. It stays in the calibration verdict and the joint coverage test like every other
-     inferred parameter, and it is reported as an assumed input, not as a measured one.
+     effect at all. In forced mode it sets the non-dimensional drive amplitude -- the drive's physical
+     amplitude, a conditioning input, divided by the derived force scale -- so the driven trace
+     depends on it and the data inform it. In chi mode each probe is driven at a fixed
+     non-dimensional amplitude, and T scales every probe's |chi| through the same force scale. In
+     either driven mode its prior is narrow, so it may be only weakly informed. It stays in the
+     calibration verdict and the joint coverage test like every other inferred parameter, and it is
+     reported as an assumed input, not as a measured one.
 """
 import torch
 

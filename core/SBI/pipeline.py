@@ -1180,9 +1180,9 @@ def _batch_schedule(n_runs: int, t: torch.Tensor, t_scale_bounds, t_min_exp, t_m
         more_t_scales, more_Ts = _draw_and_filter(n_runs * oversample)
         if more_t_scales.numel() == 0:
             raise ValueError(
-                f"No (t_scale, T) pair in the declared bounds fits the fine-grid ceiling of "
-                f"{n_fine_max} steps (steady_idx={steady_idx}, dt_exp={dt_exp}, "
-                f"dt_nd_min={dt_nd_min}, t_scale in {t_scale_bounds}, T in "
+                f"No (t_scale, T_obs) pair in the t_scale bounds and recording range fits the "
+                f"fine-grid ceiling of {n_fine_max} steps (steady_idx={steady_idx}, dt_exp={dt_exp}, "
+                f"dt_nd_min={dt_nd_min}, t_scale in {t_scale_bounds}, T_obs in "
                 f"[{t_min_exp}, {t_max_exp}]). Shorten the recording range, widen t_scale, or "
                 f"raise N_ND_MAX / the model's t_nd_max.")
         valid_t_scales = torch.cat([valid_t_scales, more_t_scales])

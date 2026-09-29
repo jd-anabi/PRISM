@@ -105,7 +105,7 @@ def test_the_training_budget_shows_the_simulation_count_and_the_cap_trade():
     assert f"{config.TRAINING_NUM_RUNS * width:,} simulations" in panel.budget_total.text(), \
         panel.budget_total.text()
     assert "diversity" in panel.budget_total.text(), \
-        "the line must say batch COUNT is the (t_scale, T) diversity, not just a budget"
+        "the line must say batch COUNT is the (t_scale, T_obs) diversity, not just a budget"
 
     panel.run_size_cap.setText(str(width // 4))
     assert f"{config.TRAINING_NUM_RUNS * (width // 4):,} simulations" in panel.budget_total.text()
@@ -336,7 +336,7 @@ def test_the_budget_lines_only_format_the_preview(monkeypatch):
 
     # the total line: the PREVIEW's width (700), never the box's 512
     assert total == ("2,100 simulations = 3 batches x 700 rows (capped from 2,048).\nBatches is also the "
-                     "(t_scale, T) diversity count: every row in a batch shares one operating point, so "
+                     "(t_scale, T_obs) diversity count: every row in a batch shares one operating point, so "
                      "batch COUNT is the statistics and batch WIDTH is not."), total
     assert "capped from" not in lines(panel, dataclasses.replace(base, width=2048))[0]
 

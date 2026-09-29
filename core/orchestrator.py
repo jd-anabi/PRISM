@@ -10,6 +10,7 @@ import logging
 import math
 import time
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import torch
@@ -131,9 +132,9 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     rescale_gt = torch.tensor([[val for val, _ in cfg.rescale_params.values()]], dtype=cfg.hw.dtype, device=cfg.hw.device)
     # TIER 1 (a box that declares T instead of f_scale): substitute the DERIVED f_scale into T's column before anything
     # simulates. A no-op for a box that declares f_scale. `sim_rescale_idx` is what the force
-    # builders and gen_chi_raw must then be given -- handed the INFERRED index they would not
-    # find 'f_scale', would fall into the Hopf-style x_scale/t_scale branch, and would drive
-    # at a silently wrong amplitude.
+    # builders and gen_chi_raw must then be given -- handed the INFERRED index, which names T and
+    # no f_scale, each raises RuntimeError (core.forcing.require_simulator_index) before it builds
+    # a drive or simulates anything.
     rescale_gt = derived.to_sim_rescale(cfg.params_tensor, rescale_gt, cfg.rescale_idx,
                                        *cfg.tier1_args)
 
@@ -1827,7 +1828,8 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             num_posterior_samples=nps,
         )
         log.info("SBC uniformity checks:")
-        for j, label in enumerate(cfg.inferred_labels):
+        # Report labels: an assumed input stays in the table and is marked, with its unit.
+        for j, label in enumerate(cfg.report_labels):
             log.info(f"  {label}: KS p={sbc_stats['ks_pvals'][j]:.3f}  "
                      f"c2st_ranks={sbc_stats['c2st_ranks'][j]:.3f}  "
                      f"c2st_dap={sbc_stats['c2st_dap'][j]:.3f}")
@@ -1852,11 +1854,11 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
         # n_cal >= 20 (every real run: SBC_N_CAL defaults to 2000).
         num_bins = max(1, n_cal_used // 20)
         f_cdf, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=nps, plot_type="cdf", num_bins=num_bins,
-                                 parameter_labels=cfg.inferred_labels, figsize=(16, 3.4 * n_sbc_rows))
+                                 parameter_labels=cfg.report_labels, figsize=(16, 3.4 * n_sbc_rows))
         f_cdf.subplots_adjust(hspace=0.75, wspace=0.3)
         _thin_ticks(f_cdf, max_ticks=4, rotation=0)
         f_hist, _ = sbc_rank_plot(ranks=ranks, num_posterior_samples=nps, plot_type="hist", num_bins=num_bins,
-                                  parameter_labels=cfg.inferred_labels, figsize=(16, 3.4 * n_sbc_rows))
+                                  parameter_labels=cfg.report_labels, figsize=(16, 3.4 * n_sbc_rows))
         f_hist.subplots_adjust(hspace=0.75, wspace=0.3)
         _thin_ticks(f_hist, max_ticks=4, rotation=0)
         sink = w.fig_sink(fig_sink)
@@ -1884,7 +1886,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             info = analysis.informativeness(
                 post, theta_star_dev, x_cal_dev, inferred_prior,
                 param_names=list(cfg.params_dict) + list(cfg.rescale_params))
-            log.info(analysis.describe_informativeness(info))
+            log.info(analysis.describe_informativeness(info, assumed=cfg.assumed_params))
         except Exception as _e:                      # noqa: BLE001 -- a diagnostic must never lose a multi-day run's other results
             # A diagnostic must never be the thing that loses a multi-day run's other results. The
             # sample-based decomposition in particular reaches into the posterior's transform stack.
@@ -1907,7 +1909,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
                 "per_param": None if info["per_param"] is None else [_num(v) for v in info["per_param"]],
                 "per_direction": None if info["per_direction"] is None else [_num(v) for v in info["per_direction"]],
                 "n_used": int(info["n_used"]), "n_dropped": int(info["n_dropped"]),
-                "description": analysis.describe_informativeness(info)},
+                "description": analysis.describe_informativeness(info, assumed=cfg.assumed_params)},
             "kept_fraction": None if truncation is None else {
                 "acceptance": _num(val_latent_prior.acceptance_rate),
                 "containment": _num(val_latent_prior.recorded_containment)},
@@ -1941,6 +1943,35 @@ def _num(x):
     except (TypeError, ValueError):
         return None
     return v if math.isfinite(v) else None
+
+
+def _posterior_summary(samples: torch.Tensor, keys: list[str], assumed: Sequence[str]) -> list[dict]:
+    """An inference's ``posterior_summary``: per parameter, in ``keys`` order, the 5 %, 50 % and 95 %
+    quantiles of ``samples`` (float64 on the CPU, each through ``_num``) and whether the parameter is
+    an assumed input (``SimConfig.assumed_params``).
+
+    :param samples: (n, P) posterior draws, columns in ``keys`` order.
+    :param keys: the P parameter keys, ``list(params_dict) + list(rescale_params)``.
+    :param assumed: the keys reported as assumed inputs.
+    """
+    q = torch.quantile(samples.detach().cpu().to(torch.float64),
+                       torch.tensor([0.05, 0.5, 0.95], dtype=torch.float64), dim=0)
+    return [{"name": k, "q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i]),
+             "assumed": k in assumed}
+            for i, k in enumerate(keys)]
+
+
+def _describe_posterior_summary(entries: list[dict]) -> str:
+    """The text of one ``posterior_summary``, for the inference's log: a head line, then one row per
+    entry named by its key, with "(assumed input, K)" after an assumed parameter's name (temperature,
+    the only one, is in kelvin). A quantile ``_num`` turned into None prints "-"."""
+    def fmt(v):
+        return "-" if v is None else f"{v:.4g}"
+    names = [e["name"] + (" (assumed input, K)" if e["assumed"] else "") for e in entries]
+    width = max((len(n) for n in names), default=0)
+    rows = [f"  {n:<{width}s}  {fmt(e['q05'])} / {fmt(e['median'])} / {fmt(e['q95'])}"
+            for n, e in zip(names, entries)]
+    return "\n".join(["[infer] posterior summary (5 % / median / 95 %):", *rows])
 
 
 # ── Step 4b: Inference visualization (requires a chosen observation) ─────────
@@ -2025,7 +2056,7 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         fig, ax = pairplot(
             samples.cpu().numpy(),
             points=(np.array([cfg.ground_truth]) if show_truth else None),
-            labels=cfg.inferred_labels,
+            labels=cfg.report_labels,
             figsize=(min(24, max(8, 1.35 * n_p)), min(24, max(8, 1.35 * n_p))),
         )
         _thin_ticks(fig)
@@ -2039,9 +2070,9 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         samples_rescale = samples[:, nd_dim:]
         # TIER 1 (a box that declares T instead of f_scale): substitute the DERIVED f_scale into T's column before anything
         # simulates. A no-op for a box that declares f_scale. `sim_rescale_idx` is what the force
-        # builders and gen_chi_raw must then be given -- handed the INFERRED index they would not
-        # find 'f_scale', would fall into the Hopf-style x_scale/t_scale branch, and would drive
-        # at a silently wrong amplitude.
+        # builders and gen_chi_raw must then be given -- handed the INFERRED index, which names T and
+        # no f_scale, each raises RuntimeError (core.forcing.require_simulator_index) before it
+        # builds a drive or simulates anything.
         samples_rescale = derived.to_sim_rescale(samples_nd, samples_rescale, cfg.rescale_idx,
                                                 *cfg.tier1_args)
         n_drawn = samples.shape[0]
@@ -2168,8 +2199,8 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         sink("Eye test", fig)
 
         file_manager.atomic_torch_save(samples.detach().cpu(), w.payload("samples.pt"))
-        q = torch.quantile(samples.detach().cpu().to(torch.float64),
-                           torch.tensor([0.05, 0.5, 0.95], dtype=torch.float64), dim=0)
+        summary = _posterior_summary(samples, keys, cfg.assumed_params)
+        log.info(_describe_posterior_summary(summary))
         out = {
             "ppc": {"mean_abs_z": _num(results["mean_abs_z"]), "max_abs_z": _num(results["max_abs_z"]),
                     "coverage_90": _num(results["coverage_90"]), "num_outside": int(results["num_outside"]),
@@ -2177,8 +2208,7 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
                     "invalid_breakdown": results.get("invalid_breakdown"), "note": _note or ""},
             # A LIST of records, not a dict keyed by name: manifest JSON sorts keys, so a dict would lose
             # the parameter order (the same rule as sbc.per_param).
-            "posterior_summary": [{"name": k, "q05": _num(q[0, i]), "median": _num(q[1, i]), "q95": _num(q[2, i])}
-                                  for i, k in enumerate(keys)],
+            "posterior_summary": summary,
             # _num like every other float in this body: the manifest refuses a non-finite number, and
             # a cell file is hand-edited -- a bare float() would make the WRITE the place that fails.
             "ground_truth": {k: _num(v) for k, v in zip(keys, cfg.ground_truth)} if show_truth else None,

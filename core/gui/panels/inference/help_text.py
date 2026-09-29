@@ -85,13 +85,13 @@ HELP = {
     "flow_patience": "Early-stopping patience in epochs. One measured run stopped at epoch 130 "
                      "on a patience of 20, with its best validation loss at epoch 110.",
     "cal_n": "Calibration datasets drawn for SBC/TARP.",
-    "cal_scales": "(t_scale, T) operating points those datasets are spread over. ⚠ This is "
+    "cal_scales": "(t_scale, T_obs) operating points those datasets are spread over. ⚠ This is "
                   "t_scale's EFFECTIVE SAMPLE SIZE, not a speed dial: lowering it is a DIFFERENT "
                   "measurement, not a faster one. 'SBC flat on all 13' is strong for 11 of them and "
                   "materially weaker for t_scale, and this number is why: every row in a "
                   "calibration batch shares that batch's t_scale, so their ranks are not "
                   "independent samples of it.",
-    "num_runs": "How many training BATCHES to simulate. Each batch is one Sobol (t_scale, T) "
+    "num_runs": "How many training BATCHES to simulate. Each batch is one Sobol (t_scale, T_obs) "
                 "operating point that every row in it shares — so this is the data budget AND the "
                 "timescale/duration diversity of the training set, and it is what wall-clock scales "
                 "with. Raising it is the honest way to buy a better posterior. ⚠ It is part of the "

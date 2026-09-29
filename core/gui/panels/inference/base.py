@@ -152,7 +152,7 @@ class _TrainingBudgetMixin:
             chi = (f"\nIn chi mode each row costs 1+K solver passes, K up to "
                    f"{getattr(cfg, 'chi_k_pad', '?')}.")
         return (f"{p.n_runs * p.width:,} simulations = {p.n_runs:,} batches x {p.width:,} rows{capped}."
-                f"\nBatches is also the (t_scale, T) diversity count: every row in a batch shares one "
+                f"\nBatches is also the (t_scale, T_obs) diversity count: every row in a batch shares one "
                 f"operating point, so batch COUNT is the statistics and batch WIDTH is not.{chi}")
 
     def _budget_memory(self, preview, cfg) -> str:

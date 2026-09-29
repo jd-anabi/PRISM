@@ -1733,7 +1733,7 @@ def test_inference_records_ppc_summary_and_ground_truth(tiny_run):
     keys = list(r.cfg.params_dict) + list(r.cfg.rescale_params)
     assert m.parents == {"posterior": r.posterior.id, "observation": obs.id} and res["n_samples"] == 50
     assert res["accepted"] == [] and [r["name"] for r in res["posterior_summary"]] == keys
-    assert set(res["posterior_summary"][0]) == {"name", "q05", "median", "q95"}
+    assert set(res["posterior_summary"][0]) == {"name", "q05", "median", "q95", "assumed"}
     assert res["ground_truth"] == {k: float(v) for k, v in zip(keys, r.cfg.ground_truth)}
     assert {"mean_abs_z", "max_abs_z", "coverage_90", "num_outside", "num_invalid"} <= set(res["ppc"])
     assert {"figures/posterior_corner.png", "figures/posterior_predictive_check.png", "figures/eye_test.png"} <= set(m.figures)

@@ -391,6 +391,68 @@ def build_tiny_run(store, hw=None):
                            other_prior=other_prior, teardown=teardown)
 
 
+def stub_calibration_battery(monkeypatch, *, ks_pvals=None, tarp_ks_p=0.5) -> dict:
+    """Stand in for everything validate_calibration and sbc_repeats simulate or sample. The
+    stand-ins draw from torch's and numpy's global streams as the real calls do, so a seed is
+    observable and nothing is simulated.
+
+    ks_pvals: None draws each rank test's KS p-values from torch's stream; a flat list is returned
+    by every rank test; a list of lists is consumed one list per rank test, in order. Returns a dict
+    with the posterior and prior stand-ins and what the stand-ins saw: "x_cal" (each calibration set
+    drawn), "numpy_at_draw" (numpy's state vector at each draw), "rank_plot_labels" (each rank
+    figure's parameter labels)."""
+    import numpy as np
+    from types import SimpleNamespace
+    from matplotlib import pyplot as plt
+    from core import orchestrator as orch
+    seen = {"x_cal": [], "numpy_at_draw": [], "rank_plot_labels": [],
+            "posterior": SimpleNamespace(posterior=SimpleNamespace(truncation=None, x_obs_digest=None),
+                                         id="post", name="", accepted=[]),
+            "prior": SimpleNamespace(prior=None, force_prior=None, id="prior", name="", fingerprint=None)}
+    queue = list(ks_pvals) if ks_pvals and isinstance(ks_pvals[0], (list, tuple)) else None
+
+    def draw(cfg, vlp, T, force_prior, *, n_cal, cal_n_scales, chi_k_fixed=None):
+        P = len(cfg.params_dict) + len(cfg.rescale_params)
+        seen["numpy_at_draw"].append(np.random.get_state()[1].copy())
+        x = torch.randn(n_cal, 5)
+        seen["x_cal"].append(x.clone())
+        theta = torch.rand(n_cal, P) + torch.as_tensor(np.random.standard_normal((n_cal, P)),
+                                                       dtype=torch.float32)
+        return x, theta
+
+    def check_sbc(ranks, prior_samples, dap_samples, num_posterior_samples):
+        P = prior_samples.shape[1]
+        ks = (queue.pop(0) if queue is not None
+              else list(ks_pvals) if ks_pvals is not None else torch.rand(P).tolist())
+        return {"ks_pvals": ks, "c2st_ranks": [0.5] * P, "c2st_dap": [0.5] * P}
+
+    def rank_plot(**k):
+        seen["rank_plot_labels"].append(list(k.get("parameter_labels") or []))
+        return plt.figure(), None
+
+    def informativeness(post, theta_star, x_cal, prior, *, param_names=None, **k):
+        n, P = theta_star.shape
+        return {"total_nats": 1.0, "sem_nats": 0.1, "n_used": n, "n_dropped": 0,
+                "param_names": param_names, "per_param": [0.1] * P, "per_direction": None,
+                "n_decompose": n}
+
+    for name, fn in {
+        "_calibration_prior": lambda cfg, posterior, prior: (None, None, None),
+        "_assert_prior_used_matches_posterior": lambda *a, **k: None,
+        "_draw_calibration_set": draw,
+        "run_sbc": lambda thetas, xs, posterior, num_posterior_samples, **k: (
+            torch.randint(0, num_posterior_samples + 1, tuple(thetas.shape)), torch.zeros(tuple(thetas.shape))),
+        "_sbc_reference_sample": lambda cfg, vlp, T, truncation, prior, theta_star: torch.zeros_like(theta_star),
+        "check_sbc": check_sbc, "sbc_rank_plot": rank_plot,
+        "run_tarp": lambda thetas, xs, posterior, **k: (torch.linspace(0, 1, 5), torch.linspace(0, 1, 5)),
+        "check_tarp": lambda ecp, alpha: (0.0, tarp_ks_p),
+        "plot_tarp": lambda *a, **k: plt.figure(),
+    }.items():
+        monkeypatch.setattr(orch, name, fn)
+    monkeypatch.setattr(orch.analysis, "informativeness", informativeness)
+    return seen
+
+
 def build_browse_store(root):
     """One artifact of each of the EIGHT kinds plus the three bad-directory shapes, in a store at
     ``root``. Returns ``{kind: id, ..., "bad": (dir_name, dir_name, dir_name)}``.

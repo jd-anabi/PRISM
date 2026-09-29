@@ -3585,6 +3585,18 @@ def test_the_validate_and_tsnpe_rows_are_named_from_the_control_table():
                 f"{gui_fields.label(key)!r}")
 
 
+def test_the_window_says_t_obs_where_it_means_the_recording_length():
+    """On the tier-1 box T is also temperature, so the window's text names the recording length
+    T_obs wherever it pairs it with t_scale: the calibration's operating-point row and both
+    tooltips that describe those operating points."""
+    from core.gui import fields as gui_fields
+    from core.gui.panels.inference.help_text import HELP
+    assert gui_fields.label("cal_n_scales") == "(t_scale, T_obs) operating points"
+    assert HELP["cal_scales"].startswith("(t_scale, T_obs) operating points")
+    assert "(t_scale, T_obs)" in HELP["num_runs"]
+    assert "(t_scale, T)" not in HELP["cal_scales"] + HELP["num_runs"]
+
+
 def test_a_blank_t_obs_is_refused_on_all_three_infer_branches(tmp_path):
     """The three observation-length boxes. FloatField.value() turns a blank or half-typed box into
     0.0, and every branch used to forward it: the simulated one spent the simulation and then died in

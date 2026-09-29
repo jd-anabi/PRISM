@@ -361,7 +361,7 @@ def test_sbc_writes_one_diagnostic_naming_its_posterior_and_prior(tiny_run):
     assert m.config["repeats"] == 2 and m.config["n_cal"] == 8 and m.config["seed"] == 0
     assert [p["name"] for p in d.results["per_param"]] == keys
     assert set(d.results["per_param"][0]) == {"name", "ks_p_median", "ks_p_min", "frac_ks_below_05",
-                                              "c2st_ranks_median"}
+                                              "c2st_ranks_median", "assumed"}
     # n_cal is an UPPER bound: gen_cal_data drops rows whose simulation was invalid, which is why the
     # diagnostic records n_valid at all. Assert the invariant, not the count.
     assert len(d.results["n_valid"]) == 2 and all(0 < n <= 8 for n in d.results["n_valid"])

@@ -1,5 +1,6 @@
 import math
 import warnings
+from collections.abc import Sequence
 
 import torch
 from torch.distributions.transforms import Transform
@@ -364,8 +365,13 @@ def informativeness(posterior, theta_star: torch.Tensor, x_cal: torch.Tensor,
     return out
 
 
-def describe_informativeness(info: dict) -> str:
-    """The report block, for validate_calibration's stdout and the run log."""
+def describe_informativeness(info: dict, *, assumed: Sequence[str] = ()) -> str:
+    """The report block, for validate_calibration's stdout and the run log.
+
+    :param assumed: parameter keys reported as assumed inputs (``SimConfig.assumed_params``). Each
+        one's per-parameter line is marked "(assumed input)"; the joint total above them is unchanged,
+        because it is one log-density ratio over every parameter together.
+    """
     if not info:
         return ""
     lines = [f"Informativeness (expected prior->posterior KL): "
@@ -378,7 +384,8 @@ def describe_informativeness(info: dict) -> str:
     if pp:
         lines.append(f"  per parameter (nats, marginal, n={info.get('n_decompose')}):")
         for j, v in sorted(enumerate(pp), key=lambda kv: -kv[1]):
-            lines.append(f"    {(names[j] if names else f'p{j}'):>10s} {v:+.4f}")
+            mark = "  (assumed input)" if names and names[j] in assumed else ""
+            lines.append(f"    {(names[j] if names else f'p{j}'):>10s} {v:+.4f}{mark}")
     if pd:
         lines.append("  per Fisher direction (best-constrained first, same order as V's columns):")
         lines.append("    " + "  ".join(f"{j}:{v:+.3f}" for j, v in enumerate(pd)))

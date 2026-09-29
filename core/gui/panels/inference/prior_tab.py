@@ -230,7 +230,7 @@ class PriorPanel(_StagePanel):
             self.log_pane.append_line(
                 f"χ(ω) mode: {cfg.chi_n_freqs} drive frequencies over {lo:g}–{hi:g}×Ω₀ at ND amplitude "
                 f"{cfg.chi_f0:g}, each locked in over at most {cfg.chi_max_cycles:g} drive cycles; "
-                f"conditioning is [S(41) | log T | χ({orchestrator.expected_forcing_dim(cfg)})] over "
+                f"conditioning is [S(49) | log T_obs | χ({orchestrator.expected_forcing_dim(cfg)})] over "
                 f"{cfg.chi_k_pad} probe slots. Train a NEW posterior (the width differs from a non-χ one).")
 
         # Passed, never written to config: orchestrator does `from .config import

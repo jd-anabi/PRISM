@@ -138,6 +138,8 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     orch._assert_prior_used_matches_posterior(posterior.posterior, prior.prior, "SBC")
 
     labels = list(cfg.params_dict) + list(cfg.rescale_params)
+    # Keys reported as assumed inputs: they stay in the table, the figure and the records, marked.
+    assumed = set(cfg.assumed_params)
     inferred_prior, force_prior = prior.prior, prior.force_prior
     # ONCE, and before create(): it can refuse (check_basis on a region measured in another basis),
     # and a refusal must not leave a directory behind. Its "PRIOR RESTRICTED" line announces the
@@ -185,22 +187,26 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
 
         pooled = np.concatenate(ranks_all, axis=0)
         log.info("=== KS p-value distribution over repeats (sorted by median; low = miscalibrated) ===")
-        log.info(f"{'param':16s} {'median':>8s} {'min':>8s} {'frac<.05':>9s}")
+        log.info(f"{'param':18s} {'median':>8s} {'min':>8s} {'frac<.05':>9s}")
         per_param = []
         for j, key in enumerate(labels):
             med, lo, frac = _col(ks[:, j])
             per_param.append({"name": key, "ks_p_median": orch._num(med), "ks_p_min": orch._num(lo),
                               "frac_ks_below_05": orch._num(frac),
-                              "c2st_ranks_median": orch._num(_col(c2st_ranks[:, j])[0])})
+                              "c2st_ranks_median": orch._num(_col(c2st_ranks[:, j])[0]),
+                              "assumed": key in assumed})
         for rec in sorted(per_param, key=lambda p: (p["ks_p_median"] is None, p["ks_p_median"])):
-            log.info(f"{rec['name']:16s} {_cell(rec['ks_p_median'], '8.2e')} {_cell(rec['ks_p_min'], '8.2e')} "
+            shown = rec["name"] + (" (assumed input)" if rec["assumed"] else "")
+            log.info(f"{shown:18s} {_cell(rec['ks_p_median'], '8.2e')} {_cell(rec['ks_p_min'], '8.2e')} "
                      f"{_cell(rec['frac_ks_below_05'], '9.3f')}")
 
         n_rows = int(np.ceil(len(labels) / 4))
         num_bins = _rank_hist_bins(pooled.shape[0], nps)
         fig, _ = orch.sbc_rank_plot(ranks=torch.as_tensor(pooled), num_posterior_samples=nps,
                                     plot_type="hist", num_bins=num_bins,
-                                    parameter_labels=labels, figsize=(16, 3.4 * n_rows))
+                                    parameter_labels=[f"{k} (assumed input)" if k in assumed else k
+                                                      for k in labels],
+                                    figsize=(16, 3.4 * n_rows))
         fig.subplots_adjust(hspace=0.75, wspace=0.3)
         w.fig_sink(fig_sink)("SBC ranks pooled over repeats (histogram)", fig)
 
