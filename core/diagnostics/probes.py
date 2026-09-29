@@ -726,7 +726,7 @@ _READINGS = {
     "too_slow_at_band_top": ("too slow even at the band's top", "the lever is the prior's "
                              "peak-frequency range"),
     "shortened_by_duration_draw": ("shortened by the duration draw", "the lever is the duration draw"),
-    "non_finite_lock_in": ("a non-finite lock-in", "no setting is its lever: probes that cleared the "
+    "non_finite_lock_in": ("a non-finite or zero lock-in", "no setting is its lever: probes that cleared the "
                            "floor came back from the lock-in non-finite or zero, which points at the "
                            "simulated traces"),
 }
@@ -778,14 +778,15 @@ def _tally(cfg, records) -> _Tally:
     Otherwise a probe the generator marked invalid failed the cycle floor: too slow even at the
     band's top over the full recording when its ROW's peak times the full length times the band's top
     falls short of the floor, else shortened below it by the duration draw. The packer then drops
-    valid probes outside the band, and those whose lock-in is non-finite or zero (a non-finite lock-in,
-    here); ``packed_mask`` is in slot order, so it is compared with ``valid`` only through per-row
+    valid probes outside the band, and those whose lock-in is non-finite or zero (a non-finite or zero
+    lock-in, here); ``packed_mask`` is in slot order, so it is compared with ``valid`` only through per-row
     counts of its first ``k`` columns.
 
     The labels are checked against the record: a probe labelled below the floor must have been locked
     in over fewer cycles than the floor, and one labelled shortened by the duration draw must have been
     handed less than the full recording. A probe that fails either was masked by a rule the audit does
-    not know, and is counted as such rather than reported as the floor."""
+    not know: it is still counted under the floor, and again in the record's attribution block, which
+    the report warns about."""
     from core import config
     from core.SBI import chi
     top = float(cfg.chi_freq_bounds[1])
