@@ -20,9 +20,9 @@ from .base import _StagePanel, _TrainingBudgetMixin
 from .help_text import HELP
 
 
-# THE SEVEN KNOB BOXES, in the order the stage checks them (build_prior's resolution block, spec
-# §3.4): the field key (which is also build_prior's keyword name), the attribute holding the box, and
-# the rule's floor -- an int for require_at_least, None for require_positive. ONE table, read by
+# THE SEVEN KNOB BOXES, in the order the stage checks them (build_prior's resolution block): the
+# field key (which is also build_prior's keyword name), the attribute holding the box, and the
+# rule's floor -- an int for require_at_least, None for require_positive. ONE table, read by
 # _read_inputs at the click and by _sync_sweep on every keystroke, so the note under the boxes and
 # the refusal at the button can never name different limits.
 _KNOB_RULES = (
@@ -74,7 +74,7 @@ class PriorPanel(_StagePanel):
         add_help_row(form, label("bounds"), self.bounds_source, HELP["bounds_source"])
         self.prior_picker = StorePicker("prior", allow_new=True)
         add_help_row(form, label("prior"), self.prior_picker, HELP["prior"])
-        # What the picked prior actually IS, directly beneath the combo (B13): the closed combo shows
+        # What the picked prior actually IS, directly beneath the combo: the closed combo shows
         # a name and nothing else, and a name is not enough to tell two priors apart. Created before
         # the connect below, because restore_settings at the end of __init__ re-selects a saved id
         # and that fires currentIndexChanged into this slot.
@@ -173,10 +173,11 @@ class PriorPanel(_StagePanel):
         if draft is None:
             return
         entry, is_new = self.prior_picker.selected()
-        # THE CLICK-TIME HALF OF V2, before the config is built and before the session's downstream
-        # is reset: a refused click leaves the session exactly as it found it. What is read depends
-        # on the branch the stage will take (_read_inputs). The stage runs the same rules again at
-        # its entry; this is the early, cheap copy that names the box.
+        # THE CLICK-TIME HALF OF THE INPUT RULES (a bad input is refused at the click, and a blank
+        # box is a refusal, never a zero), before the config is built and before the session's
+        # downstream is reset: a refused click leaves the session exactly as it found it. What is
+        # read depends on the branch the stage will take (_read_inputs). The stage runs the same
+        # rules again at its entry; this is the early, cheap copy that names the box.
         try:
             knobs = self._read_inputs(is_new)
         except Refusal as e:
@@ -241,9 +242,9 @@ class PriorPanel(_StagePanel):
                       provide_fig_sink=True, on_result=self._on_prior, **knobs)
 
     def _read_inputs(self, is_new: bool) -> dict:
-        """The click-time half of V2 for this tab: every knob box the chosen branch will read, read
-        through value_or_none() and the shared rules (core.refusals), as a dict of build_prior's
-        keyword arguments. Raises the FIRST Refusal, before any config is built.
+        """The click-time half of the input rules for this tab: every knob box the chosen branch
+        will read, read through value_or_none() and the shared rules (core.refusals), as a dict of
+        build_prior's keyword arguments. Raises the FIRST Refusal, before any config is built.
 
         The branch is decided as the stage decides it: build_prior takes its load branch on
         ``not build_new and ref is not None`` and never reads a sweep or clustering knob there, so a
@@ -280,9 +281,9 @@ class PriorPanel(_StagePanel):
         never be able to raise into refresh_gates and take the tab down.
 
         A blank, half-typed or out-of-rule box renders as "<label> is blank." or "<label> must be
-        <rule>." and nothing else (spec §1.2, the live lines): no clamp, no default, no dialog. A
-        number computed from a value the user did not type is a lie about the run, and a live line
-        cannot open a dialog mid-typing -- "blank is a refusal" is the click's rule, not the note's.
+        <rule>." and nothing else: no clamp, no default, no dialog. A number computed from a value
+        the user did not type is a lie about the run, and a live line cannot open a dialog
+        mid-typing -- "blank is a refusal" is the click's rule, not the note's.
         """
         try:
             problem = self._sweep_problem()
@@ -334,7 +335,7 @@ class PriorPanel(_StagePanel):
         self.log_pane.append_line(f"Prior named '{name}'.")
 
     def _sync_prior_line(self) -> None:
-        """The read-only line under the prior picker (B13).
+        """The read-only line under the prior picker.
 
         Driven by ``currentIndexChanged``, which ``StorePicker.refresh`` also fires -- it clears the
         combo and repopulates it, and its final ``restore_key`` is the last signal of the batch, so
@@ -350,7 +351,7 @@ class PriorPanel(_StagePanel):
         self._sync_prior_line()
 
     def save_settings(self, qs):
-        """The two SELECTIONS only (V5): the prior and the bounds file. The seven sweep and clustering
+        """The two SELECTIONS only: the prior and the bounds file. The seven sweep and clustering
         boxes are science knobs -- they decide which prior gets built -- so they open at config.py's
         values on every launch, and a stale key an older build left in PRISM.ini is ignored. The
         bounds SOURCE was written and never read back, so it is not written either."""

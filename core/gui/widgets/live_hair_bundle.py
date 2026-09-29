@@ -1,10 +1,11 @@
 """The live view for the Simulate section: a scrolling hair-bundle-displacement trace over a
 "top-down hair bundle" 2D intensity-field heatmap, both rendered with pyqtgraph.
 
-WHY pyqtgraph AND WHY THE GUI THREAD. GOTCHA #2 (a matplotlib Figure built on a worker thread must
-never be painted by a live canvas -- it deadlocks on matplotlib's global lock) is matplotlib-specific.
-pyqtgraph items are ordinary GUI-thread-owned Qt widgets, so the worker emits raw numpy frames over the
-`chunk` signal and THIS widget updates on the GUI thread -- no worker-built drawable is ever painted.
+WHY pyqtgraph AND WHY THE GUI THREAD. The rule that a matplotlib Figure built on a worker thread
+must never be painted by a live canvas (it deadlocks on matplotlib's global lock) is
+matplotlib-specific. pyqtgraph items are ordinary GUI-thread-owned Qt widgets, so the worker emits
+raw numpy frames over the `chunk` signal and THIS widget updates on the GUI thread -- no
+worker-built drawable is ever painted.
 
 THE HEATMAP is an anisotropic Gaussian -- an ellipse -- whose center tracks the instantaneous
 displacement x0 (normalized against the visible trace window). The bundle deflects along one axis and is

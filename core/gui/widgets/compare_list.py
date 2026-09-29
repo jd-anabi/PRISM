@@ -1,7 +1,7 @@
 """The comparison list: what the comparison controls hold instead of a multi-select picker.
 
-``StorePicker`` is single-selection (one combo, one id), and spec §7.1 settles what to do about it:
-the comparison controls hold a LIST the picker APPENDS to, and no multi-select widget is built. So a
+``StorePicker`` is single-selection (one combo, one id), and this is what is done about it: the
+comparison controls hold a LIST the picker APPENDS to, and no multi-select widget is built. So a
 record is chosen the way every other record in the application is chosen -- in the picker, with its
 tooltip and its summary line -- and Add puts that choice on the list.
 

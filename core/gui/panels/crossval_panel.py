@@ -86,14 +86,14 @@ class CrossValPanel(BasePanel):
     each running from the FDT-restoring limit to the selected cell's own value.
 
     Persists (group "crossval"): the cell picker, the saved-sweep picker, the preset, the free knobs
-    (n_freqs, ensemble_M, freqs_per_batch, F0) and each grid's point COUNT. Deliberately NOT the
-    grids' lo/hi: those are re-derived from the cell, so a value saved against a different cell would
-    be a stale bound. Deliberately NOT the seed, the record name or the note either (E7, spec §5.5):
-    one seed is recorded on both of the study's records, so a remembered one would make every later
-    study a repeat of the last at every operating point, and a remembered name would be refused by
-    assert_name_free at the next launch's first click. Nor are the comparison controls (spec §7.1): a
-    remembered list would name records a later session may have deleted, and the comparison's own
-    name and note are the study's twins (plan ruling P30, the whole-piece review's R-F3).
+    (freqs_per_batch, F0) and each grid's point COUNT. Deliberately NOT n_freqs and ensemble_M: the
+    preset re-derives them. Deliberately NOT the grids' lo/hi: those are re-derived from the cell,
+    so a value saved against a different cell would be a stale bound. Deliberately NOT the seed, the
+    record name or the note either: one seed is recorded on both of the study's records, so a
+    remembered one would make every later study a repeat of the last at every operating point, and a
+    remembered name would be refused by assert_name_free at the next launch's first click. Nor are
+    the comparison controls: a remembered list would name records a later session may have deleted,
+    and the comparison's own name and note are the study's twins.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -102,7 +102,7 @@ class CrossValPanel(BasePanel):
         self._on_cell_changed()
         self.restore_settings(settings.settings())
         # The saved-sweep viewer, built AFTER the restore so a launch fills the line and opens no
-        # figures (F47) -- FdtPanel.__init__ gives the reason.
+        # figures -- FdtPanel.__init__ gives the reason.
         self._viewer = record_view.RecordViewer(self.record_picker, self.record_line,
                                                 self.figure_stack, busy=lambda: self._busy)
 
@@ -128,8 +128,8 @@ class CrossValPanel(BasePanel):
         self.ensemble_m = IntField(256)
         self.freqs_per_batch = IntField(1)
         self.f0 = FloatField(0.05)
-        # ONE seed for the study, recorded on BOTH records (spec §4.1); blank draws one. Never
-        # restored -- see the class docstring.
+        # ONE seed for the study, recorded on BOTH records; blank draws one. Never restored -- see
+        # the class docstring.
         self.seed = IntField(0)
         self.seed.clear()
         self.record_name = QLineEdit()
@@ -137,15 +137,14 @@ class CrossValPanel(BasePanel):
         self.record_note = QLineEdit()
         self.record_note.setPlaceholderText("a note to keep with both (optional)…")
         # Earlier sweeps: filtered to this screen's own study by the row predicate -- the kind also
-        # holds single-cell runs and comparisons (spec §5.4) -- and to finished records by StorePicker
-        # itself (T24).
+        # holds single-cell runs and comparisons -- and to finished records by StorePicker itself.
         self.record_picker = StorePicker("fdt", row_filter=lambda s: s.study == "sweep")
 
         self.btn_run = QPushButton("Run sweep study")
         self.btn_run.setProperty("accent", True)          # primary CTA (Fluent accent)
         self.btn_run.clicked.connect(self._run)
 
-        # Row labels come from core/gui/fields.py (P34), so a row and the fix sentence a refusal prints
+        # Row labels come from core/gui/fields.py, so a row and the fix sentence a refusal prints
         # for it cannot drift apart. "Cell values", "Record name", "Note" and "Saved sweep" stay
         # literal: the first is an output, `name` and `note` are sentence entries (label() raises
         # KeyError for them) and the saved-sweep picker is not a refusal field.
@@ -164,8 +163,8 @@ class CrossValPanel(BasePanel):
         add_help_row(form, "Record name", self.record_name, HELP["record_name"])
         add_help_row(form, "Note", self.record_note, HELP["record_note"])
         add_help_row(form, "Saved sweep", self.record_picker, HELP["record"])
-        # What the selected sweep says, under its picker (spec §5.4). The viewer that fills it is
-        # built in __init__, after restore_settings (F47).
+        # What the selected sweep says, under its picker. The viewer that fills it is built in
+        # __init__, after restore_settings.
         self.record_line = record_view.details_label()
         form.addRow("", self.record_line)
         form.addRow(self.btn_run)
@@ -174,22 +173,22 @@ class CrossValPanel(BasePanel):
         self.controls_layout.addWidget(self._build_compare())
 
     def _build_compare(self):
-        """The fourth comparison mode (spec §7.1): two sweep records together, and a slice of both at
-        one operating point. A blank slice point means the middle of the range the two sweeps share,
+        """The fourth comparison mode: two sweep records together, and a slice of both at one
+        operating point. A blank slice point means the middle of the range the two sweeps share,
         which is what the stage does with no `at` at all."""
         box = QGroupBox("Compare saved sweeps")
         form = make_form(box)
         self.compare_list = CompareList(self.record_picker)
         self.slice_at = FloatField(None)
-        # The comparison's OWN name and note (the whole-piece review's M4, ruling R-F3), never the
-        # study's Record name box. Never persisted (the class docstring).
+        # The comparison's OWN name and note, never the study's Record name box. Never persisted
+        # (the class docstring).
         self.compare_name = QLineEdit()
         self.compare_name.setPlaceholderText("name for the comparison's record (optional)…")
         self.compare_note = QLineEdit()
         self.compare_note.setPlaceholderText("a note to keep with it (optional)…")
         self.btn_compare = QPushButton("Compare saved sweeps")
         self.btn_compare.clicked.connect(self._compare)
-        # The slice point's row is labelled from core/gui/fields.py (P34); "Sweeps to compare" stays
+        # The slice point's row is labelled from core/gui/fields.py; "Sweeps to compare" stays
         # literal, because a refusal about the list is `compare_records`, a sentence entry naming it,
         # and so do "Comparison name" and "Comparison note" (`name` and `note` are sentence entries).
         add_help_row(form, "Sweeps to compare", self.compare_list, HELP["compare_list"])
@@ -202,14 +201,14 @@ class CrossValPanel(BasePanel):
     def _compare(self):
         """Dispatch the sweeps comparison, under the name and the note typed for it. The NOTE is
         judged at the click (every front end runs require_note; the store does not), and so is a
-        half-typed slice point (N22). Everything else is the stage's: a slice point outside the range
+        half-typed slice point. Everything else is the stage's: a slice point outside the range
         the sweeps share, two sweeps of different parameters, an unfinished record and a taken name
         are its refusals, and reach the yellow box through BasePanel._on_error."""
         options = {}
         try:
             note = require_note("note", self.compare_note.text())
             # A blank slice point means the middle of the shared range; half-typed text ('-') is not
-            # blank, and is refused rather than sliced at the middle in silence (N22).
+            # blank, and is refused rather than sliced at the middle in silence.
             at = number_or_blank(self.slice_at, "slice_at")
         except Refusal as e:
             self._refusal(e)
@@ -228,7 +227,7 @@ class CrossValPanel(BasePanel):
             f"Comparison record written: {record.name or '(unnamed)'} [{record.id}].")
 
     def _show_record(self, *, figures: bool = True) -> None:
-        """Spec §5.4: the selected sweep's line and, with ``figures``, its figures (RecordViewer)."""
+        """The selected sweep's line and, with ``figures``, its figures (RecordViewer)."""
         self._viewer.show_record(figures=figures)
 
     # ── prefill from the cell file: the values cli.make_param_sweep_config then consumes ─────────
@@ -253,7 +252,7 @@ class CrossValPanel(BasePanel):
         # Each sweep spans the FDT-restoring limit (S = 0, T_a/T = 1) and the cell's own value, filled
         # in ASCENDING order: the bounds allow T_a/T anywhere in (0.05, 10), so "limit first" made the
         # untouched default descending for any cell below 1, and the builder refuses a grid whose
-        # min is not below its max (spec §4.4). The sweep covers the same points either way.
+        # min is not below its max. The sweep covers the same points either way.
         for row, limit, value in ((self.s_grid, 0.0, cell_s), (self.t_grid, 1.0, cell_temp)):
             row.lo.setText(f"{min(limit, value):g}")
             row.hi.setText(f"{max(limit, value):g}")
@@ -274,14 +273,14 @@ class CrossValPanel(BasePanel):
         preset = dict(cli.SWEEP_PRESETS[preset_name])
         base = self.record_name.text().strip()
         try:
-            # The four knob boxes are refused HERE when blank (the whole-piece review's N21): the
-            # builder reads None as "use the preset", so a blank passed on would run the preset's
-            # value in silence, and one read through value() was refused as "got 0", a value nobody
-            # typed. The grid rows and the seed arrive as None when blank too -- 0 is a legal sweep END
-            # and a legal seed -- a grid end then refused as blank (spec_or_none), and a blank seed
-            # meaning "draw one" (E7), which is why half-typed seed text is refused rather than read
-            # as blank (number_or_blank, N22). The seed is read ONCE and the same value goes to the
-            # builder, the run and both first bodies.
+            # The four knob boxes are refused HERE when blank: the builder reads None as "use the
+            # preset", so a blank passed on would run the preset's value in silence, and one read
+            # through value() was refused as "got 0", a value nobody typed. The grid rows and the
+            # seed arrive as None when blank too -- 0 is a legal sweep END and a legal seed -- a
+            # grid end then refused as blank (spec_or_none), and a blank seed meaning "draw one",
+            # which is why half-typed seed text is refused rather than read as blank
+            # (number_or_blank). The seed is read ONCE and the same value goes to the builder, the
+            # run and both first bodies.
             knobs = {kw: require_given(key, box.value_or_none())
                      for kw, key, box in (("n_freqs", "n_freqs", self.n_freqs),
                                           ("ensemble_M", "ensemble_m", self.ensemble_m),
@@ -297,13 +296,12 @@ class CrossValPanel(BasePanel):
             # NOTE_MAX_CHARS -- so this box cannot put a note on both records that the Artifacts screen
             # would refuse to write back. It trims the text itself; a blank box comes back "".
             note = require_note("note", self.record_note.text())
-            # ONE RECORD PER SWEPT PARAMETER (spec §4.1), keyed by the names run_fdt_param_sweep
-            # already uses as sweep_param. Two records cannot share one name -- and assert_name_free
-            # reads only the disk, so two creates of one name would both pass -- hence the distinct
-            # suffixes (P31). Both names are claimed here, before anything is spent, inside this try so
-            # a taken one reaches the yellow box; ONE store object mints both ids, so they differ
-            # (F4); and neither directory exists until the stage's __enter__ on the worker thread
-            # (spec §1.2).
+            # ONE RECORD PER SWEPT PARAMETER, keyed by the names run_fdt_param_sweep already uses as
+            # sweep_param. Two records cannot share one name -- and assert_name_free reads only the
+            # disk, so two creates of one name would both pass -- hence the distinct suffixes. Both
+            # names are claimed here, before anything is spent, inside this try so a taken one
+            # reaches the yellow box; ONE store object mints both ids, so they differ; and neither
+            # directory exists until the stage's __enter__ on the worker thread.
             store = default_store()
             writers = {key: store.create("fdt", cfg, name=f"{base}-{key}" if base else "", note=note)
                        for key in ("s", "temp")}
@@ -317,14 +315,14 @@ class CrossValPanel(BasePanel):
         for w in writers.values():
             # The facts the panel knows. The STAGE fills `settings`, `points`, `offgrid` and
             # `results` and updates this dict in place -- replacing it would drop the study and the
-            # seed before the first manifest is written (spec §2.2, §2.3). `points.param` is the
-            # stage's too: the swept parameter is recorded once, there.
+            # seed before the first manifest is written. `points.param` is the stage's too: the
+            # swept parameter is recorded once, there.
             w.body = {"study": "sweep", "settings": None, "seed": seed, "grid": None,
                       "points": None, "offgrid": None, "notices": [], "compared": None,
                       "complete": False, "results": None}
         # run_param_study_cli returns the records it FINISHED, not the figures -- each sweep plots
         # itself into its own record's figures/ when it ends (the S sweep's at the study's midpoint),
-        # and the plots arrive through ONE WATCHER PER RECORD (F18): the watcher globs one directory
+        # and the plots arrive through ONE WATCHER PER RECORD: the watcher globs one directory
         # and does not recurse, so both folders are handed over. A folder the T sweep never reached
         # simply lists nothing.
         # on_finished: whatever the outcome, the viewer closes the tabs it opened for an earlier sweep,
@@ -335,13 +333,13 @@ class CrossValPanel(BasePanel):
                       on_result=self._on_result, on_finished=self._viewer.close_figures)
 
     def _on_result(self, records):
-        """The ``LoadedFdt`` records the study FINISHED, S first (E1: it used to return two loose
-        HDF5 paths). A sweep that measured nothing is left out of the list -- its unfinished record
-        stays on disk and the study has already logged it at error (P77, spec §4.3) -- and a None, were
-        one ever handed back, is dropped rather than named. The picker is re-listed and moved onto the
+        """The ``LoadedFdt`` records the study FINISHED, S first (it used to return two loose HDF5
+        paths). A sweep that measured nothing is left out of the list -- its unfinished record stays
+        on disk and the study has already logged it at error -- and a None, were one ever handed
+        back, is dropped rather than named. The picker is re-listed and moved onto the
         LAST record, so the panel's selection is the one whose figures finished the run; the move is
         programmatic, so the viewer describes it and opens nothing (FdtPanel._on_record)."""
-        records = [r for r in (records or []) if r is not None]   # P77: one sweep may have refused
+        records = [r for r in (records or []) if r is not None]   # one sweep may have refused
         if not records:
             return
         for record in records:
@@ -355,7 +353,7 @@ class CrossValPanel(BasePanel):
         qs.setValue("preset", self.preset_combo.currentText())
         qs.setValue("cell", self.cell_picker.key())
         qs.setValue("record", self.record_picker.key())
-        # The seed, the record name and the note belong to ONE study and are never written (E7).
+        # The seed, the record name and the note belong to ONE study and are never written.
         settings.save_field(qs, "f0", self.f0)
         settings.save_field(qs, "freqs_per_batch", self.freqs_per_batch)
         settings.save_field(qs, "s_points", self.s_grid.points)

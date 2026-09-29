@@ -1,15 +1,15 @@
 """The artifact browser's table: the ONE formatter for a store row, and the flat sortable tree that
-shows it (piece 4, B2, design §3.2).
+shows it.
 
 ``columns_for`` and ``cells_for`` are pure functions over a ``core.artifacts.store.Summary`` and read
-NOTHING -- no store, no manifest, no disk. That is what B2 buys: ``Summary`` carries every fact a row
-shows, so a listing costs one directory scan and a row costs nothing. It is also why the pickers'
-selection line (§6.3) is built from these and not from a second reader: what must not happen is two
-surfaces disagreeing about whether a cache is finished (§1.2).
+NOTHING -- no store, no manifest, no disk. ``Summary`` carries every fact a row shows, so a listing
+costs one directory scan and a row costs nothing. It is also why the pickers' selection line is
+built from these and not from a second reader: what must not happen is two surfaces disagreeing
+about whether a cache is finished.
 
-There was no item view anywhere in the repository before this piece and ``core/gui/design.py`` styled
-none, so the QSS for ``QTreeView``/``QTreeView::item``/``QHeaderView::section`` lands there in the
-same commit as this file.
+There was no item view anywhere in the repository before this table and ``core/gui/design.py``
+styled none, so the QSS for ``QTreeView``/``QTreeView::item``/``QHeaderView::section`` was added
+there with this file.
 """
 import re
 
@@ -19,10 +19,10 @@ from PySide6.QtWidgets import QAbstractItemView, QTreeWidget, QTreeWidgetItem
 # Every kind leads with these two.
 _LEADING = ("Name", "Created")
 
-# Per kind, the columns BETWEEN "Created" and "Note" -- what only that kind has (design §3.2's
-# table). CLOSED against store.KIND_DIRS by the tests: a new kind must appear here or fail there.
-# A diagnostic shows `variant` and not `mode`, deliberately: it records its kind under `variant` and
-# has no conditioning geometry, so a mode column could only ever be blank for it (§1.3).
+# Per kind, the columns BETWEEN "Created" and "Note" -- what only that kind has. CLOSED against
+# store.KIND_DIRS by the tests: a new kind must appear here or fail there. A diagnostic shows
+# `variant` and not `mode`, deliberately: it records its kind under `variant` and has no
+# conditioning geometry, so a mode column could only ever be blank for it.
 _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
     "prior": (),
     "simulation": ("Progress", "Finished"),
@@ -32,8 +32,9 @@ _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
     "inference": (),
     "diagnostic": ("Variant",),
     # An fdt record shows WHICH of the three studies it is, a sweep's operating points, and whether
-    # the run finished -- ``finished`` is a real question for this kind (E2: an interrupted record
-    # keeps its folder), which is why it has the cache's column and the other six do not.
+    # the run finished -- ``finished`` is a real question for this kind (an interrupted run keeps
+    # its folder, marked unfinished), which is why it has the cache's column and the other six do
+    # not.
     "fdt": ("Study", "Points", "Finished"),
 }
 
@@ -44,11 +45,11 @@ _EXTRA_COLUMNS: dict[str, tuple[str, ...]] = {
 # ArtifactTable.sort_state.
 DEFAULT_SORT = (1, 1)
 
-# The columns whose cell STARTS with a number and must sort by that number. Sorting them as text is
-# the defect piece 4 handed forward ("10/12 batches" above "9/12"), and this piece adds "Points", a
-# column of exactly that shape -- so the key lives here, named by column title, rather than in a
-# per-kind branch that the next numeric column would have to remember to join. "Width" is here for
-# the same reason: "100" sorts before "50" as text.
+# The columns whose cell STARTS with a number and must sort by that number. Sorting them as text
+# puts "10/12 batches" above "9/12", and "Points" is a column of exactly that shape -- so the key
+# lives here, named by column title, rather than in a per-kind branch that the next numeric column
+# would have to remember to join. "Width" is here for the same reason: "100" sorts before "50" as
+# text.
 NUMERIC_COLUMNS: frozenset = frozenset({"Progress", "Points", "Width"})
 
 _LEADING_NUMBER = re.compile(r"^\s*(-?\d+(?:\.\d+)?)")
@@ -86,14 +87,14 @@ def columns_for(kind: str) -> tuple[str, ...]:
 def _progress(s) -> str:
     """A cache's progress: ``"3/4 batches"`` while it runs, ``"4/4 batches · 96 rows"`` when done.
 
-    The fraction, as in design §3.2's example, and it still costs no second read: BOTH halves are on
-    the Summary, because the store task carries the planned total across as ``batches_planned`` (from
+    The fraction, and it still costs no second read: BOTH halves are on the Summary, because the
+    store carries the planned total across as ``batches_planned`` (from
     ``body["identity"]["n_runs"]``, ``core/artifacts/identity.py:54``) beside ``batches_done``. A
     manifest that records no planned count -- nothing writes one without it today, but a hand-edited
     or an older manifest can -- falls back to the count alone rather than printing "3/None".
 
     The ROW count is a separate matter: ``rows`` is written only by ``mark_complete``
-    (``core/SBI/training_checkpoint.py:346``), so a running cache does not know how many rows it has
+    (``core/SBI/training_checkpoint.py``), so a running cache does not know how many rows it has
     and the cell adds them only once they exist. The cell says what it knows and no more.
     """
     if s.batches_done is None:
@@ -111,7 +112,7 @@ def _progress(s) -> str:
 def _amortization(s) -> str:
     """``amortized`` or ``narrowed (TSNPE)``; blank when the manifest records neither.
 
-    A column names BOTH states, unlike the picker's visible item text (§6.3), which suffixes the
+    A column names BOTH states, unlike the picker's visible item text, which suffixes the
     exception only: a column that is blank for the common case reads as missing data, whereas a
     dropdown entry that is silent reads as the norm.
     """
@@ -121,7 +122,7 @@ def _amortization(s) -> str:
 
 
 def _points(s) -> str:
-    """A sweep's operating points: ``"10/12"``, or ``"10/12 · 2 failed"`` when some failed (E4).
+    """A sweep's operating points: ``"10/12"``, or ``"10/12 · 2 failed"`` when some failed.
 
     Blank for a single run and for a comparison, which have no points at all -- ``points`` is null in
     their bodies, so ``points_done`` is None and the cell says nothing rather than "0/0". A planned
@@ -172,9 +173,9 @@ class _Row(QTreeWidgetItem):
     completeness BEFORE the column's own value, so a sort by Name cannot float a leftover directory
     ("halfwritten") above a real artifact ("newer"); and Qt inverts the whole comparison for a
     descending sort, which would put the incomplete rows on top, so the completeness bit is flipped
-    with the order and comes out the same way round either way. Design §3.2 states "incomplete rows
-    sort last" as a property of the table -- this is where it is a property and not an accident of an
-    incomplete row's blank ``created``.
+    with the order and comes out the same way round either way. "Incomplete rows sort last" is a
+    property of the table, and this is where it is a property and not an accident of an incomplete
+    row's blank ``created``.
 
     The item carries the row's INDEX into ``ArtifactTable._rows``, not the Summary itself: Qt item
     data is a QVariant and only PySide6's wrapping makes an arbitrary object survive it, while
@@ -189,7 +190,7 @@ class _Row(QTreeWidgetItem):
     def _key(self, col: int, descending: bool, column: str = ""):
         """``(rank, cell_key(column, text))``. ``!= descending`` is the XOR that cancels Qt's
         reversal, so the incomplete rows sit at the bottom under an ascending and a descending sort
-        alike; ``cell_key`` is what makes a numeric column sort by its number (§1.2)."""
+        alike; ``cell_key`` is what makes a numeric column sort by its number."""
         return ((not self._complete) != descending, cell_key(column, self.text(col)))
 
     def __lt__(self, other):
@@ -219,7 +220,7 @@ class ArtifactTable(QTreeWidget):
     ``selection_changed`` is the one signal the screen listens to. Selecting a row emits it, and so
     does a refresh, which clears the table and therefore the selection -- ``current_summary()`` is
     None until something is selected again. That is deliberate: remembering an id across a refresh is
-    the dangling state design §3.4 protects the store pickers from.
+    the dangling state the store pickers are protected from.
     """
     selection_changed = Signal()
 
@@ -240,7 +241,7 @@ class ArtifactTable(QTreeWidget):
         self.setUniformRowHeights(True)
         self.setAlternatingRowColors(True)
         self.setAllColumnsShowFocus(True)
-        # A note is edited in its own box, with require_note run at the click (B5), so a double-click
+        # A note is edited in its own box, with require_note run at the click, so a double-click
         # on a cell must not open an editor that writes nothing and refuses nothing.
         self.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -262,7 +263,7 @@ class ArtifactTable(QTreeWidget):
 
         WHICH sort is re-applied: a sort ``apply_sort_state`` was given before there was a header to
         apply it to is spent HERE, on the first fill, and cleared; after that it is whatever sort is
-        in effect. So a screen that restores its remembered sort (§3.5) before its first fill and one
+        in effect. So a screen that restores its remembered sort before its first fill and one
         that restores it after get the same table, and a spent value cannot resurrect over a sort the
         user has since chosen.
 
@@ -294,7 +295,7 @@ class ArtifactTable(QTreeWidget):
         i = chosen[0].data(0, Qt.UserRole)
         return self._rows[i] if isinstance(i, int) and 0 <= i < len(self._rows) else None
 
-    # ── what the screen remembers (§3.5: the kind and the sort, never the selection) ─────────────
+    # ── what the screen remembers (the kind and the sort, never the selection) ───────────────────
     def sort_state(self) -> tuple[int, int]:
         """``(column, order)`` as PLAIN ints -- 0 ascending, 1 descending.
 
@@ -325,7 +326,7 @@ class ArtifactTable(QTreeWidget):
 
         BEFORE THE FIRST FILL there is no header, so the sort is HELD and the next ``set_rows``
         applies it in place of ``DEFAULT_SORT``, then clears it. That is not a nicety: the screen
-        restores its remembered sort from settings (§3.5) and must not have to know whether it does
+        restores its remembered sort from settings and must not have to know whether it does
         so before or after its first refresh -- a remembered sort that silently does nothing is the
         failure this removes. A held sort naming a column that kind turns out not to have falls back
         to ``DEFAULT_SORT`` at that fill, like any other, and is spent either way.

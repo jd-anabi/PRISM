@@ -14,8 +14,8 @@ stage completes.
 """
 # THE IMPORT SURFACE, kept deliberately: settings_screen reads this module's HELP and docstring BY
 # STRING PATH ("core.gui.panels.inference_tabs"), inference_screen imports the six panels from here,
-# and the test suites reach _ChiProbeRow and _nvidia_smi_free_gib through it. The GUI runners are gone
-# (piece 2): each tab dispatches an orchestrator composition directly.
+# and the test suites reach _ChiProbeRow and _nvidia_smi_free_gib through it. The GUI runners are
+# gone: each tab dispatches an orchestrator composition directly.
 # The implementations live in the inference/ package, one module per tab plus the shared matter.
 from .inference.help_text import HELP  # noqa: F401
 from .inference.rows import _ChiRangeRow, _ChiProbeRow  # noqa: F401

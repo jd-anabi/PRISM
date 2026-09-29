@@ -48,11 +48,12 @@ def _probe_frequency(row) -> "float | None":
 def _blank_frequency(row) -> bool:
     """True only for a box NOBODY FILLED: empty, or holding something that parses as no number.
 
-    Not ``_probe_frequency(row) is None`` (R9): that also answers None for a typed ``0``, so the
+    Not ``_probe_frequency(row) is None``: that also answers None for a typed ``0``, so the
     planner's auto-fill overwrote a zero somebody typed with a suggested grid frequency and counted
     it among the "blank boxes filled" -- while the row's own ``problems()`` kept the two states
-    apart, which is exactly the disagreement B16 exists to remove. A typed zero is a record of what
-    the bench did (or a typo for 10): it is left alone here and refused as a zero there."""
+    apart, and the planner and the tab must never disagree about what a blank frequency is. A typed
+    zero is a record of what the bench did (or a typo for 10): it is left alone here and refused as
+    a zero there."""
     return row.freq.value_or_none() is None
 
 
@@ -142,9 +143,10 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         self.infer_stack.addWidget(chi_w)
         v.addWidget(self.infer_stack)
 
-        # D8: the GUI's only way to run a TSNPE posterior on an observation other than its region's.
-        # Enabled only when the session's posterior IS non-amortized -- on an amortized one it would
-        # mean nothing -- and cleared whenever the posterior changes.
+        # The window's way to accept another observation: its only way to run a TSNPE posterior on
+        # an observation other than its region's. Enabled only when the session's posterior IS
+        # non-amortized -- on an amortized one it would mean nothing -- and cleared whenever the
+        # posterior changes.
         self.other_obs = QCheckBox("Run on a different observation")
         v.addWidget(with_badge(self.other_obs, HELP["infer_other_obs"]))
 
@@ -223,10 +225,10 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         self.infer_stack.setCurrentIndex(2 if mode == "chi" else 1)
 
     def _add_chi_probe(self, freq_hz: "float | None" = None):
-        """Append one probe row, up to the posterior's slot capacity. The frequency box starts BLANK
-        (piece 4, B16): the frequency is entered, never derived, so a seeded number would be a claim
-        about the bench that nobody made. "Plan probes…" fills the blanks with a nominal in-band grid
-        on request, and says they are suggestions."""
+        """Append one probe row, up to the posterior's slot capacity. The frequency box starts
+        BLANK: the frequency is entered, never derived, so a seeded number would be a claim about
+        the bench that nobody made. "Plan probes…" fills the blanks with a nominal in-band grid on
+        request, and says they are suggestions."""
         cfg = self.session.cfg
         cap = cfg.chi_k_pad if cfg is not None and cfg.chi_mode else config.CHI_K_PAD
         if len(self._chi_forced_fields) >= cap:
@@ -281,7 +283,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
                 self._add_chi_probe()
 
     def _plan_chi_probes(self):
-        """Backlog C-3: say what is in band for THIS cell, and how long each probe must be recorded.
+        """Say what is in band for THIS cell, and how long each probe must be recorded.
 
         Every predicate comes from chi.probe_verdict, the same function build_experiment_obs_chi
         refuses and masks on -- so this cannot tell the user one thing and the run another. That is
@@ -291,8 +293,8 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         The band is RELATIVE to the cell's own Ω₀, so nothing useful can be said until a passive
         recording exists. Measuring it needs one load and one FFT, which is why this is a button
         rather than something recomputed on every keystroke. A button is a click, and a click is
-        refused like one (V2): a blank or non-positive T_obs and a blank or missing passive recording
-        go to the yellow box through _refusal before anything is loaded.
+        refused like one: a blank or non-positive T_obs and a blank or missing passive recording go
+        to the yellow box through _refusal before anything is loaded.
         """
         cfg = self.session.cfg
         if cfg is None or not cfg.chi_mode:
@@ -324,7 +326,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
             f"{cfg.chi_max_cycles:g}-cycle ceiling (which is fine — only the tail is dropped).")
         # Fill blank frequency boxes with the nominal in-band grid so the table is usable immediately.
         # Only BLANK ones: a typed frequency is a record of what the bench actually did -- a typed
-        # ZERO included, which is why the predicate is _blank_frequency and not _probe_frequency (R9).
+        # ZERO included, which is why the predicate is _blank_frequency and not _probe_frequency.
         blanks = [r for r in self._chi_forced_fields if _blank_frequency(r)]
         if blanks:
             grid = _chi.chi_multipliers(n_freqs=len(blanks), bounds=cfg.chi_freq_bounds).tolist()
@@ -338,7 +340,7 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         for i, row in enumerate(self._chi_forced_fields):
             f = _probe_frequency(row)
             if f is None:
-                # The TAB's sentence, verbatim (piece 4, B16): the same state the click refuses with
+                # The TAB's sentence, verbatim: the same state the click refuses with
                 # ``probe N: drive frequency is blank`` must not be described differently here.
                 self.log_pane.append_line(f"  probe {i + 1}: drive frequency is blank.", "warning")
                 continue
@@ -379,8 +381,8 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
 
     def _read_inputs(self) -> dict:
         """Every box the chosen branch will read, through core.refusals' rules; the first bad one
-        raises Refusal and the click dispatches nothing (V2). Numbers first, then files, in the
-        stage's own order.
+        raises Refusal and the click dispatches nothing. Numbers first, then files, in the stage's
+        own order.
 
         Keys are the field keys. ``cell`` is the picked file's path or, in direct entry, the
         hand-entered value dicts (the two sides of the one Cell row); ``recording_probe`` is the χ
@@ -484,8 +486,9 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
     def _accept(self):
         """The Accept this run opts in with, or None for the default (refuse everything).
 
-        Reads the BOX, and only while it is enabled: a tick left behind by a posterior that has since
-        been replaced must never silence guardrail 2 for the new one.
+        Reads the BOX, and only while it is enabled: a tick left behind by a posterior that has
+        since been replaced must never silence the narrowed-model rule for the new one: a narrowed
+        posterior never infers on another observation unasked.
         """
         if self.other_obs.isEnabled() and self.other_obs.isChecked():
             return Accept(other_observation=True)

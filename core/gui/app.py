@@ -36,7 +36,7 @@ def _install_excepthook(parent_getter):
 
 def _library_record_sink(record) -> None:
     """One record no handler below the root has emitted, on the console, as ``logging_root.render``
-    writes it (B14): a library's named by its logger, a ``core`` record -- which reaches here only
+    writes it: a library's named by its logger, a ``core`` record -- which reaches here only
     when no ``core`` handler is attached, i.e. between runs -- in the tool's own console shape.
 
     The stream is resolved AT EMIT TIME, never at construction, and that is the fix rather than the
@@ -59,11 +59,11 @@ def _library_record_sink(record) -> None:
 
 
 def build_app(argv=None):
-    # THE root-logger handler, before anything else in this process can log (B14, spec §7.1). A
-    # handler on the root FROM START-UP is what stops a library's logging.warning from calling
-    # basicConfig and installing a second one -- after which every ``core`` record would be emitted
-    # twice, the second copy into whatever stream that handler captured at construction. Never
-    # removed: the window owns the process for as long as it lives.
+    # THE root-logger handler, before anything else in this process can log. A handler on the root
+    # FROM START-UP is what stops a library's logging.warning from calling basicConfig and
+    # installing a second one -- after which every ``core`` record would be emitted twice, the
+    # second copy into whatever stream that handler captured at construction. Never removed: the
+    # window owns the process for as long as it lives.
     logging_root.install(_library_record_sink)
 
     # Quiet the per-time-segment bar: it wraps segs in {1,2,3} and nests a whole level under the

@@ -87,7 +87,7 @@ class _TrainingBudgetMixin:
         value_or_none(), never value(): value() reads "" and a lone "-" as 0, and 0 is a legal cap
         (automatic) but a refusal for the batch count, so the two must be told apart. Neither a
         clamp nor a default -- the click refuses a None through the shared rules, and the live lines
-        name the box (V2)."""
+        name the box."""
         return self.num_runs.value_or_none(), self.run_size_cap.value_or_none()
 
     def _budget_problem(self) -> "str | None":
@@ -115,7 +115,7 @@ class _TrainingBudgetMixin:
         it is fixed; the memory and checkpoint lines go empty with it, because an estimate for a
         width nobody asked for is the same lie in GiB. No clamp, no default, no raise.
 
-        ONLY FORMATS (V6). The width, the memory geometry, the cache directory and the cadence are
+        ONLY FORMATS. The width, the memory geometry, the cache directory and the cadence are
         orchestrator.training_preview's, which resolves them as build_posterior does -- this used to
         derive each of them itself, and the cadence from config's live copy, which a run never reads.
 

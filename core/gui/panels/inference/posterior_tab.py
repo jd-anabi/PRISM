@@ -41,8 +41,8 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.post_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_train_button())
         add_help_row(form, label("posterior"), self.post_picker, HELP["posterior"])
         # AMORTIZATION SPELLED OUT, under the one picker where it decides what the artifact is good
-        # for (B13). The item text marks a narrowed posterior; this line says so in words, next to
-        # the mode, the conditioning width and when it was trained.
+        # for. The item text marks a narrowed posterior; this line says so in words, next to the
+        # mode, the conditioning width and when it was trained.
         self.post_line = self._derived_label()
         form.addRow("", self.post_line)
         self.post_picker.combo.currentIndexChanged.connect(lambda _i: self._sync_post_line())
@@ -279,7 +279,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
             "  • A further TSNPE round can only be drawn around this posterior's own observation — "
             "there is no override for that one.")
         load = box.addButton("Load it", QMessageBox.DestructiveRole)
-        cancel = box.addButton("Cancel", QMessageBox.RejectRole)      # the default by name (spec §5.3)
+        cancel = box.addButton("Cancel", QMessageBox.RejectRole)      # the default by name
         box.setDefaultButton(cancel)
         box.exec()
         return box.clickedButton() is load
@@ -317,7 +317,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self.log_pane.append_line(f"Posterior named '{name}'.")
 
     def _sync_post_line(self) -> None:
-        """The read-only line under the posterior picker (B13). See PriorPanel._sync_prior_line for
+        """The read-only line under the posterior picker. See PriorPanel._sync_prior_line for
         why ``currentIndexChanged`` also covers ``refresh()``."""
         self.post_line.setText(self.post_picker.selection_summary())
 
@@ -338,7 +338,7 @@ class PosteriorPanel(_TrainingBudgetMixin, _StagePanel):
         self._sync_budget()
 
     def save_settings(self, qs):
-        """The selection and the budget only (V5). The budget is written as the boxes' TEXT, so a box
+        """The selection and the budget only. The budget is written as the boxes' TEXT, so a box
         left blank at close opens at config.py's default on the next launch instead of as the 0 that
         value() reads a blank as. The network and Fisher boxes are science knobs: they open at
         config.py on every launch and a stale key an older build left in PRISM.ini is ignored -- a

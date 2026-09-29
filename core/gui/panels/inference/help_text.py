@@ -82,8 +82,8 @@ HELP = {
                    "~57 h for a full run) — that is what the checkpoint is a cache for.",
     "flow_transforms": "Flow depth: number of spline transforms. Same re-try economics as the width.",
     "flow_lr": "Adam learning rate for the density estimator.",
-    "flow_patience": "Early-stopping patience in epochs. The 2026-08-25 run stopped at 130 on a "
-                     "patience of 20, with its best validation loss at epoch 110.",
+    "flow_patience": "Early-stopping patience in epochs. One measured run stopped at epoch 130 "
+                     "on a patience of 20, with its best validation loss at epoch 110.",
     "cal_n": "Calibration datasets drawn for SBC/TARP.",
     "cal_scales": "(t_scale, T) operating points those datasets are spread over. ⚠ This is "
                   "t_scale's EFFECTIVE SAMPLE SIZE, not a speed dial: lowering it is a DIFFERENT "

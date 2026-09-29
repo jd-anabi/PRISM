@@ -21,10 +21,10 @@ from ..widgets.progress_pane import ProgressPane
 from ..widgets.refusal_box import show_refusal
 from ..worker import Worker
 
-# "The cancel noted" (piece 4, B15 fix round 1): shown alongside an ordinary crash report when the
-# cancel token had already been REQUESTED at the moment the failure was caught. It never claims the
-# cancel caused the failure (the two are independent: the run crashed, and separately someone had
-# clicked Cancel) -- only that both are true, which the person who clicked Cancel is owed.
+# "The cancel noted": shown alongside an ordinary crash report when the cancel token had already
+# been REQUESTED at the moment the failure was caught. It never claims the cancel caused the
+# failure (the two are independent: the run crashed, and separately someone had clicked Cancel) --
+# only that both are true, which the person who clicked Cancel is owed.
 CANCEL_NOTED_TEXT = "A cancel was requested before the run failed."
 
 
@@ -80,7 +80,7 @@ class _RunState(QObject):
 
 
 # The one broadcaster. BasePanel._set_busy publishes here and nothing else may; core/gui/main_window.py
-# listens and fills the shell's run slot (piece 4, B11).
+# listens and fills the shell's run slot, so the live run is shown app-wide.
 RUN_STATE = _RunState()
 
 
@@ -90,8 +90,8 @@ class BasePanel(QWidget):
 
     Ten of these exist (Reduction, FDT, CrossVal, Simulate + the six inference tabs: Config, Prior,
     Posterior, Validate, Infer, TSNPE). The Artifacts screen is NOT one -- it is a plain QWidget on
-    purpose, because a BasePanel enrols in _instances and every run anywhere would grey it out (piece
-    4, B1). Three class attributes carry app-wide state and are class-level ON PURPOSE -- see their
+    purpose, because a BasePanel enrols in _instances and every run anywhere would grey it out.
+    Three class attributes carry app-wide state and are class-level ON PURPOSE -- see their
     comments: ``_running`` (only one panel may run at a time, because stream redirection is
     process-wide), ``_active_cancel`` and ``_instances``.
 
@@ -210,13 +210,13 @@ class BasePanel(QWidget):
         the figure stack; the return value goes to ``on_result``.
 
         ONE TASK AT A TIME APP-WIDE, not merely per panel -- redirect_streams swaps sys.stdout/stderr
-        process-wide, so two concurrent runs would fight over the console (see GOTCHA #4).
+        process-wide, so two concurrent runs would fight over the console (see ``_running``).
 
         ``watch_dir`` is for the FDT / Reduction / CrossVal runners, which save their figures to disk
         instead of handing them back: any PNG appearing there during the run is picked up and shown
         (see core/gui/plot_watcher.py). It is one path, or a SEQUENCE of them -- the sweep study
-        writes two records and its figures land in two ``figures/`` directories (spec §4.1) -- and
-        every watcher feeds the same figure stack, in the order the files land.
+        writes two records and its figures land in two ``figures/`` directories -- and every watcher
+        feeds the same figure stack, in the order the files land.
         """
         if BasePanel._running:
             where = "in this tab" if self._busy else "in another tab"
@@ -224,9 +224,9 @@ class BasePanel(QWidget):
                 f"A task is already running ({where}); please wait for it to finish.", "warning")
             return
 
-        # ONE watcher per directory. NewPngWatcher globs a single directory and does not recurse, and
-        # the sweep study writes into TWO records (spec §4.1), so a sequence is a real shape here --
-        # a lone path stays a lone path, which is what every other caller passes.
+        # ONE watcher per directory. NewPngWatcher globs a single directory and does not recurse,
+        # and the sweep study writes into TWO records, so a sequence is a real shape here -- a lone
+        # path stays a lone path, which is what every other caller passes.
         watchers = []
         for one_dir in ([] if watch_dir is None else
                         [watch_dir] if isinstance(watch_dir, (str, Path)) else list(watch_dir)):
@@ -316,8 +316,8 @@ class BasePanel(QWidget):
         for panel in list(BasePanel._instances):
             panel.set_controls_enabled(not busy)
         # Publish app-wide, LAST: every panel's controls are in their final state before anything
-        # listening can look at them. The shell's run slot is filled from this (piece 4, B11), and it
-        # is the only thing that knows WHICH panel -- _running is a bare bool.
+        # listening can look at them. The shell's run slot is filled from this, and it is the only
+        # thing that knows WHICH panel -- _running is a bare bool.
         RUN_STATE.changed.emit(self if busy else None)
 
     def set_controls_enabled(self, enabled: bool):
@@ -328,7 +328,7 @@ class BasePanel(QWidget):
         ._on_model_changed) while the worker is still reporting against the selection it started
         from. The stdout hazard this used to name is gone: file_manager.list_dir returns its listing
         and prints nothing, so ArtifactPicker.refresh() no longer swaps the process-wide sys.stdout
-        under redirect_streams (piece 3, spec §4.1).
+        under redirect_streams.
         """
         self.controls.setEnabled(enabled)
         if enabled:
@@ -416,10 +416,10 @@ class BasePanel(QWidget):
         (_on_error). The same sentence goes to the log pane at warning, so it outlives the click that
         dismisses the box.
 
-        THE BOX ITSELF lives in ../widgets/refusal_box.py, shared with the Artifacts screen (piece 4,
-        design §3.1), which shows the same refusals and is deliberately not a BasePanel. What stays
-        here is the log-pane line, because only a panel has a pane -- the browser records the sentence
-        on its own status line instead.
+        THE BOX ITSELF lives in ../widgets/refusal_box.py, shared with the Artifacts screen, which
+        shows the same refusals and is deliberately not a BasePanel. What stays here is the log-pane
+        line, because only a panel has a pane -- the browser records the sentence on its own status
+        line instead.
         """
         fix = gui_fields.fix_sentence(exc.field)
         self.log_pane.append_line(f"{exc.message} {fix}".rstrip(), "warning")
@@ -434,12 +434,12 @@ class BasePanel(QWidget):
         ``cancel_noted``, which defaults to False -- a GUI-thread click has no worker cancel token to
         ask). A plain string is still accepted and is still a bug.
 
-        ``cancel_noted`` (piece 4, B15 fix round 1): true when the cancel token had already been
-        REQUESTED at the moment ``Worker.run`` caught this failure -- a coincidence, never a cause
-        (the crash is reported as a crash regardless; see core/gui/worker.py). Shown as an extra line
-        in both places a crash is reported, appended AFTER the crash itself: the box's informative
-        text (below the one-line summary, above Details) and the pane, at warning, after the error
-        line. Never shown for a Refusal -- that box is about fixing an input, not about a run.
+        ``cancel_noted``: true when the cancel token had already been REQUESTED at the moment
+        ``Worker.run`` caught this failure -- a coincidence, never a cause (the crash is reported as
+        a crash regardless; see core/gui/worker.py). Shown as an extra line in both places a crash
+        is reported, appended AFTER the crash itself: the box's informative text (below the one-line
+        summary, above Details) and the pane, at warning, after the error line. Never shown for a
+        Refusal -- that box is about fixing an input, not about a run.
         """
         if isinstance(exc_or_message, Refusal):
             return self._refusal(exc_or_message)

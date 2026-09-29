@@ -7,7 +7,7 @@ already save PNGs to disk.
 Each tab carries a "Pop out" button that re-opens the figure in its own window where it CAN be zoomed,
 panned and saved (core/gui/widgets/figure_window.py):
   * SBI-panel figures also arrive as a pickled Figure -> a true interactive matplotlib window,
-    reconstructed on the GUI thread (never painting the worker's original -- see GOTCHA #2).
+    reconstructed on the GUI thread (never painting the worker's original -- see above).
   * disk-PNG figures (and any figure whose pickle is missing / unloadable) -> a pan/zoom image viewer.
 """
 from PySide6.QtCore import Qt

@@ -19,7 +19,7 @@ class ValidatePanel(_StagePanel):
     Gated on a posterior AND ``inf_prior`` -- deliberately not on ``force_prior``, which is None for
     every no-forcing model and once made this tab permanently unreachable for exactly those.
 
-    Persists: nothing. Its two boxes are science knobs (V5): the calibration's dataset count and its
+    Persists: nothing. Its two boxes are science knobs: the calibration's dataset count and its
     (t_scale, T) operating points open at config.py's SBC_N_CAL and CAL_N_SCALES on every launch, and
     a `cal_n` / `cal_scales` key an older build left in PRISM.ini is ignored. With nothing to restore,
     the tab has no save_settings / restore_settings of its own (BasePanel's are no-ops).
@@ -46,8 +46,8 @@ class ValidatePanel(_StagePanel):
 
         Both were clamped with max(1, ...), which turned a blank or a 0 into a 1 nobody typed -- and
         for the operating points a 1 is a DIFFERENT measurement, not a smaller one: cal_n_scales is
-        t_scale's effective sample size (trap X5). The stage runs the same rules again at entry; this
-        copy is what makes the refusal a click-time dialog naming the box instead of a worker error.
+        t_scale's effective sample size. The stage runs the same rules again at entry; this copy is
+        what makes the refusal a click-time dialog naming the box instead of a worker error.
         """
         return {
             "n_cal": require_at_least("n_cal", self.cal_n.value_or_none(), 1),
@@ -63,9 +63,9 @@ class ValidatePanel(_StagePanel):
         except Refusal as e:
             self._refusal(e)
             return
-        # the region (a TSNPE posterior calibrates on the prior RESTRICTED to it -- guardrail 8) comes
-        # off s.posterior.posterior.truncation inside validate_calibration; None for an amortized one
-        # leaves the battery exactly as it was.
+        # the region (a TSNPE posterior calibrates on the prior RESTRICTED to it -- the
+        # calibrate-on-the-region rule) comes off s.posterior.posterior.truncation inside
+        # validate_calibration; None for an amortized one leaves the battery exactly as it was.
         self.dispatch(orchestrator.validate_calibration, s.cfg, s.posterior, s.inf_prior, provide_fig_sink=True,
                       n_cal=v["n_cal"], cal_n_scales=v["cal_n_scales"],
                       on_result=self._on_calibration)

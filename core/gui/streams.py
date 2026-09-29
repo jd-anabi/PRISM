@@ -5,8 +5,8 @@ progress/log widgets instead of a console.
 Three layers:
   * core.gui.vt.StreamRouter turns each write() chunk into structured events (a progress row upsert,
     a row retirement, or a completed log line). It is Qt-free and does no I/O.
-  * _PumpLogHandler feeds the ``core`` logger's records to the same sink at the record's OWN level
-    (piece 3, V4): a print is what a library says, a record is what the pipeline says.
+  * _PumpLogHandler feeds the ``core`` logger's records to the same sink at the record's OWN level:
+    a print is what a library says, a record is what the pipeline says.
   * _Pump coalesces those events on a daemon thread and emits them to Qt at PUMP_HZ.
 
 The pump is load-bearing, not a nicety. tqdm's own `mininterval` does NOT bound the redraw rate here:
@@ -21,7 +21,7 @@ import time
 import warnings
 from contextlib import contextmanager
 
-from core import runs  # also sets the ``core`` logger to INFO at import (spec §1.2)
+from core import runs  # also sets the ``core`` logger to INFO at import
 
 from .vt import StreamRouter
 
@@ -29,7 +29,7 @@ PUMP_HZ = 15.0
 _TICK = 1.0 / PUMP_HZ
 
 # redirect_streams swaps sys.stdout/stderr PROCESS-WIDE. BasePanel._busy only guards one panel, and
-# Phase 2 adds more tabs onto the same QThreadPool -- two concurrent redirects would nest, and the
+# every tab dispatches onto the same QThreadPool -- two concurrent redirects would nest, and the
 # inner one's restore would leave sys.stdout pointing at the outer worker's dead stream forever.
 # Second and later redirects decline and let their output go to the real console.
 _REDIRECT = threading.Lock()
@@ -196,11 +196,11 @@ class _SignalStream:
         # -- a cancel is not a "parser broke" degradation. Every print() and every tqdm redraw funnels
         # through here, so this is the pipeline's cancellation checkpoint, reaching even inside sbi's
         # fit loop (it prints an epoch counter every epoch).
-        # ...except inside a runs.cancel_deferred() section (piece 4, B15), where raising would land
-        # between two writes that must both happen, OR while this thread is handling an exception
-        # (piece 4, B15 fix round 1: runs.cancel_is_deferred() also reads sys.exc_info()), where
-        # raising would REPLACE whatever is unwinding with a false "Run cancelled.". The token is NOT
-        # cleared either way: it stays requested and the next write in normal flow raises.
+        # ...except inside a runs.cancel_deferred() section, where raising would land between two
+        # writes that must both happen, OR while this thread is handling an exception
+        # (runs.cancel_is_deferred() also reads sys.exc_info()), where raising would REPLACE
+        # whatever is unwinding with a false "Run cancelled.". The token is NOT cleared either way:
+        # it stays requested and the next write in normal flow raises.
         if self._cancel is not None and not runs.cancel_is_deferred():
             self._cancel.check()
         if self._broken:                      # degraded: dumb line split, but never lose output
@@ -227,20 +227,20 @@ class _PumpLogHandler(logging.Handler):
     """The ``core`` logger's handler for one run: a record lands in the log pane at ITS level.
 
     BESIDE the two _SignalStreams, not instead of them: the streams keep carrying the library's own
-    prints, the progress bars and sbi's epoch counter; a record is the pipeline's own voice (piece 3,
-    V4). Both feed the same pump, so records and prints stay in the order they happened.
+    prints, the progress bars and sbi's epoch counter; a record is the pipeline's own voice. Both
+    feed the same pump, so records and prints stay in the order they happened.
 
     It is the cancel checkpoint too, exactly as _SignalStream.write is -- a run that only logs must
     still stop at its next message, and the token's latch (one raise, then quiet) holds here as
     well. That is why training_checkpoint's ordering rule reads "do not print() or log between steps
-    1 and 3". Since piece 4 (B15) that rule is also a MECHANISM: the commit runs inside
-    runs.cancel_deferred(), and both checkpoints consult it before raising, so a record emitted
-    between a shard's fsync and the state replace is carried rather than fatal. Since B15 fix round 1,
-    a record reached while this thread is handling an exception (any ``except``, any ``finally`` or
-    ``__exit__`` an exception entered, any generator teardown) is carried the same way, with no
-    section needed -- see runs.cancel_is_deferred -- so a crash unwinding through a record-emitting
-    ``finally`` (core/Solvers/sdeint.py's bar teardown, notably) reaches Worker.run as the crash it is
-    rather than being replaced by a cancel.
+    1 and 3". That rule is also a MECHANISM: the commit runs inside runs.cancel_deferred(), a
+    deferred-cancel section, and both checkpoints consult it before raising, so a record emitted
+    between a shard's fsync and the state replace is carried rather than fatal. And a record reached
+    while this thread is handling an exception (any ``except``, any ``finally`` or ``__exit__`` an
+    exception entered, any generator teardown) is carried the same way, with no section needed --
+    see runs.cancel_is_deferred -- so a crash unwinding through a record-emitting ``finally``
+    (core/Solvers/sdeint.py's bar teardown, notably) reaches Worker.run as the crash it is rather
+    than being replaced by a cancel.
     """
 
     def __init__(self, pump, cancel: "CancelToken | None"):
@@ -261,7 +261,7 @@ class _PumpLogHandler(logging.Handler):
 @contextmanager
 def redirect_streams(signals, cancel: "CancelToken | None" = None):
     """Swap sys.stdout/stderr for signal-emitting streams, route warnings.warn to the log, and feed the
-    ``core`` logger's records to the same pane at their own level (piece 3, V4).
+    ``core`` logger's records to the same pane at their own level.
 
     `cancel`, when given, is shared by both streams AND the logging handler: a set-and-not-yet-fired
     token makes the next write() (i.e. the next print or tqdm redraw) or the next record raise

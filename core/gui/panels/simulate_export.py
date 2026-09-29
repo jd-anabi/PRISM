@@ -9,8 +9,8 @@ the widget per chunk would give a ~10-frame choppy video. Sweeping the fine disp
 fps (``export_stride``) yields a smooth, real-time animation. The render is matplotlib-styled, so it is
 not pixel-identical to the pyqtgraph live view (and animates smoother) -- intended.
 
-Agg rendering on a worker thread is safe: GOTCHA #2 only forbids painting a worker-built figure in a
-LIVE canvas; here we render to an Agg buffer and hand bytes to imageio.
+Agg rendering on a worker thread is safe: what deadlocks on matplotlib's global lock is painting a
+worker-built figure in a LIVE canvas; here we render to an Agg buffer and hand bytes to imageio.
 """
 from __future__ import annotations
 

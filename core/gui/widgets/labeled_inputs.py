@@ -14,9 +14,10 @@ from ..design import FIELD_MIN_W, PATH_FIELD_MIN_W
 
 class FloatField(QLineEdit):
     def __init__(self, default: "float | None" = 0.0, parent=None):
-        # None is an EMPTY box, not the text "None": a seeded value nobody typed is a different state
-        # from a blank one, and value_or_none() is what tells them apart (piece 4, B16). Several
-        # callers hand this a pre-formatted string instead of a float, which str() leaves alone.
+        # None is an EMPTY box, not the text "None": a seeded value nobody typed is a different
+        # state from a blank one, and value_or_none() is what tells them apart (a new probe row's
+        # frequency box starts blank this way). Several callers hand this a pre-formatted string
+        # instead of a float, which str() leaves alone.
         super().__init__("" if default is None else str(default), parent)
         self.setValidator(QDoubleValidator())
         self.setMinimumWidth(FIELD_MIN_W)
@@ -48,7 +49,7 @@ def number_or_blank(field, key: str):
     A numeric validator lets '-', '1e', '.' and '+' stand in a box as text still being typed, and
     value_or_none() reads each as None. For the boxes this serves, None MEANS something -- the middle
     of the range two sweeps share, "draw a seed", "the constant is blank" -- so a half-typed number
-    silently became that (the whole-piece review's N22). Only a truly empty box is blank."""
+    silently became that. Only a truly empty box is blank."""
     value = field.value_or_none()
     text = field.text().strip()
     if value is None and text:
@@ -75,7 +76,8 @@ class IntField(QLineEdit):
         ``value()`` returns 0 for "" and for "-" mid-typing, and 0 is a legal value for the two
         "0 = automatic" boxes (the rows-per-batch cap, the candidates per sweep round), so a tab
         that wants to refuse a blank instead of reading it as zero has to ask this. The inference
-        tabs read every integer box through it at the click (piece 3, V2).
+        tabs read every integer box through it at the click, where a blank box is a refusal, never a
+        zero.
         """
         try:
             return int(self.text().strip())

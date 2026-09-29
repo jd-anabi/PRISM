@@ -1,4 +1,4 @@
-"""The window's half of V3 (piece 3 spec §3.2): which control answers each refusal field.
+"""The window's half of the refusal-naming rule: which control answers each refusal field.
 
 A ``Refusal`` names the setting at fault by a key from ``core.refusals.FIELDS`` and never a box,
 tab, button or flag. ``BasePanel._refusal`` puts ``fix_sentence(exc.field)`` under the message in
@@ -15,14 +15,14 @@ Three shapes of entry:
   -- the six inference tabs (Config, Prior, Posterior, Validate, Infer, TSNPE), "FDT analysis",
   "Sweep study cross-validation", "NWK → Hopf reduction map", "Live simulation" -- or one of
   ``SCREENS``, and the label is the row as the panel passes it to ``add_help_row``. A tuple of
-  places is how one input names every place it appears (E6): the cell picker is on five of them.
+  places is how one input names every place it appears: the cell picker is on five of them.
 * one sentence, for a consent, a dialog, a table, the name box, a value fixed by measurement, a
   control on the Artifacts screen, whose list and Note box are not form rows, or the model builder's
   forcing fields, whose rows are labelled by parameter name; the sentence quotes the control's own
   text ("Run on a different observation").
 * ``None`` for a key the window has no control for: the tool-only diagnostics knobs, and the six
   settings the window never exposes (the checkpoint cadence, the resume policy, the device, the
-  two sample counts, the epoch ceiling), and the five FDT settings neither front end exposes (P2).
+  two sample counts, the epoch ceiling), and the five FDT settings neither front end exposes.
 
 ``num_runs`` and ``run_size_cap`` sit on both the Posterior and TSNPE tabs with the same label, so
 their tab slot is a tuple of both and the sentence names both: one tab would send a user refused on
@@ -41,7 +41,7 @@ from core.refusals import FIELDS
 #: screen" for these and "on the <place> tab" for everything else. The Artifacts browser and the
 #: model builder are whole screens with no tab widget; the tab titles outside Parameter Inference --
 #: "NWK → Hopf reduction map", "FDT analysis", "Sweep study cross-validation", "Live simulation" --
-#: are ORDINARY tab entries, because those sections do host a tab widget (E6, piece 5 §5.2).
+#: are ORDINARY tab entries, because those sections do host a tab widget.
 SCREENS: frozenset = frozenset({"Artifacts", "Model Builder"})
 
 _FIXED = "Fixed by measurement: change it in config.py, deliberately."
@@ -54,7 +54,7 @@ def _drive(name: str) -> str:
 
 CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # the observation and the training budget
-    "t_obs": (("Infer", "Live simulation"), "T_obs (s)"),   # E6/P33: the Simulate panel's box too
+    "t_obs": (("Infer", "Live simulation"), "T_obs (s)"),   # the Simulate panel's box too
     "num_runs": (("Posterior", "TSNPE"), "Batches"),
     "run_size_cap": (("Posterior", "TSNPE"), "Max rows per batch (0 = auto)"),
     "checkpoint_every": None,
@@ -91,29 +91,29 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "accept_truncated": "Confirm the load in the dialog on the Posterior tab.",
     "accept_other_observation": "Tick 'Run on a different observation' on the Infer tab.",
     # A name and a note are typed in several boxes, and each sentence lists them all: a run's record
-    # and a comparison's are named in boxes of their own on the same two tabs (the whole-piece
-    # review's M4), so a taken comparison name is sent to the 'Comparison name' box, not the run's.
+    # and a comparison's are named in boxes of their own on the same two tabs, so a taken
+    # comparison name is sent to the 'Comparison name' box, not the run's.
     "name": ("Choose another name in the Save box, or in the 'Record name' or 'Comparison name' box "
              "on the FDT analysis or Sweep study cross-validation tab."),
-    # the artifact browser (piece 4). Sentences, not (place, label), although the Artifacts screen is
-    # a place since E6: the list is not a box, and the Note box sits in the screen's action row, not
-    # in a form row the read-back pin reads.
+    # the artifact browser. Sentences, not (place, label), although the Artifacts screen is a place
+    # in SCREENS: the list is not a box, and the Note box sits in the screen's action row, not in a
+    # form row the read-back pin reads.
     "artifact": "Select an artifact in the list on the Artifacts screen.",
     "note": ("Edit it in the Note box on the Artifacts screen, or in the 'Note' or 'Comparison note' "
              "box on the FDT analysis or Sweep study cross-validation tab."),
     # A sentence and not a (place, label) pair: the comparison list is one control that appears on
     # two tabs of the FDT section, under a different row on each. Both rows are quoted, and the verb
     # is "Choose", not "Add": a mode's ceiling ("at most 2") and a run named twice are fixed by
-    # REMOVING one (the whole-piece review's N22).
+    # REMOVING one.
     "compare_records": ("Choose the records in the 'Runs to compare' list on the FDT analysis tab, or "
                         "in the 'Sweeps to compare' list on the Sweep study cross-validation tab."),
-    # The two mode settings, each a box the comparison controls build (Task 40): the renormalise
-    # mode's constant on the FDT analysis tab, the sweeps mode's slice point on the cross-validation
-    # tab. Sentences until those boxes existed; the words fix_sentence renders did not change.
+    # The two mode settings, each a box the comparison controls build: the renormalise mode's
+    # constant on the FDT analysis tab, the sweeps mode's slice point on the cross-validation tab.
+    # Sentences until those boxes existed; the words fix_sentence renders did not change.
     "prefactor": ("FDT analysis", "Normalisation constant"),
     "slice_at": ("Sweep study cross-validation", "Slice at"),
     # inputs. The cell picker and the model combo appear on several places at once and each entry
-    # names them ALL (E6): a bad cell chosen on the FDT analysis tab used to be answered with "the
+    # names them ALL: a bad cell chosen on the FDT analysis tab used to be answered with "the
     # Infer tab". ``units`` is NOT widened -- one units control exists in the whole application (the
     # Config tab's toggle); everywhere else the units file is resolved from the model and there is
     # no control to name.
@@ -140,13 +140,13 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "chi_max_cycles": ("Config", "χ lock-in ceiling (cycles)"),
     "chi_f0": _FIXED,
     "chi_freq_bounds": _FIXED,
-    # the two secondary analyses (piece 5, §5.3). Ordinary tuple entries now that a place may be any
-    # section's tab title: the label is the row the panel builds, so label(key) keeps a box and its
-    # hint sentence from drifting apart. The Seed rows arrive with the panels (Tasks 25, 26).
-    # The two labels are the words the rows SHOW (the whole-piece review's N23): the raw forms
-    # "ensemble_M" and "freqs_per_batch" rendered as "M_ensemble" and "freqs / batch", so the fix
-    # sentence named a box the tab does not show. pretty_gui still renders "M_ensemble" with its
-    # subscript; no QSettings key is a label (each panel writes its own literal key names).
+    # the two secondary analyses. Ordinary tuple entries now that a place may be any section's tab
+    # title: the label is the row the panel builds, so label(key) keeps a box and its hint sentence
+    # from drifting apart; the Seed rows too are built from label("seed") on both panels.
+    # The two labels are the words the rows SHOW: the raw forms "ensemble_M" and "freqs_per_batch"
+    # rendered as "M_ensemble" and "freqs / batch", so the fix sentence named a box the tab does not
+    # show. pretty_gui still renders "M_ensemble" with its subscript; no QSettings key is a label
+    # (each panel writes its own literal key names).
     "n_freqs": (("FDT analysis", "Sweep study cross-validation"), "n_freqs"),
     "ensemble_m": (("FDT analysis", "Sweep study cross-validation"), "M_ensemble"),
     "freqs_per_batch": (("FDT analysis", "Sweep study cross-validation"), "freqs / batch"),
@@ -156,10 +156,10 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "s_grid": ("Sweep study cross-validation", "S grid  (T_a/T = 1)"),
     "t_grid": ("Sweep study cross-validation", "T_a/T grid  (S = 0)"),
     "seed": (("FDT analysis", "Sweep study cross-validation"), "Seed"),
-    # the five FDT settings NEITHER front end exposes (§1.2, P2, P75): no control, so fix_sentence
-    # returns "" and the refusal names the setting and offers no fix
+    # the five FDT settings NEITHER front end exposes: no control, so fix_sentence returns "" and
+    # the refusal names the setting and offers no fix
     "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
-    # the model builder (piece 5, §5.3). A SCREEN, not an inference tab -- fix_sentence renders
+    # the model builder. A SCREEN, not an inference tab -- fix_sentence renders
     # "on the Model Builder screen" for a place in SCREENS. The parameter rows repeat per parameter,
     # so the label is the row's own ("value" / "min" / "max") and the message names which parameter.
     "param_value": ("Model Builder", "value"),
@@ -168,11 +168,11 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "init": ("Model Builder", "init"),
     "x_scale": ("Model Builder", "x_scale (nm)"),
     "t_scale": ("Model Builder", "t_scale (s)"),
-    # ONE key for every forcing field (P36): the forcing rows' labels are the parameter NAMES (amp,
-    # freq, tau, ...), built per kind, so there is no one label(key) to build a row from.
+    # ONE key for every forcing field: the forcing rows' labels are the parameter NAMES (amp, freq,
+    # tau, ...), built per kind, so there is no one label(key) to build a row from.
     "forcing_value": ("Set it in the forcing parameter's own box, beneath the variable's 'forcing' "
                       "choice, on the Model Builder screen."),
-    # the live simulation (piece 5, §5.6)
+    # the live simulation
     "frame_steps": ("Live simulation", "Steps / frame"),
     "fps": ("Live simulation", "Max FPS"),
     # tool-only: the diagnostics' knobs; no window sentence
@@ -199,10 +199,10 @@ def _where(place) -> str:
     """The place phrase: ``"the Infer tab"``, ``"the Posterior or TSNPE tab"``, ``"the Artifacts
     screen"``, and for a mixed tuple ``"the Infer tab or the Model Builder screen"``.
 
-    An all-tab or all-screen tuple shares ONE noun, which is what keeps the sentences the
-    walkthrough quotes byte-identical ("on the Posterior or TSNPE tab"); only a tuple that genuinely
-    mixes the two spells the noun out per place, because "the Infer or Model Builder tab" would be
-    a lie about one of them."""
+    An all-tab or all-screen tuple shares ONE noun, which keeps the sentences byte-identical
+    wherever they are quoted ("on the Posterior or TSNPE tab"); only a tuple that genuinely mixes
+    the two spells the noun out per place, because "the Infer or Model Builder tab" would be a lie
+    about one of them."""
     names = place if isinstance(place, tuple) else (place,)
     screens = [n in SCREENS for n in names]
     if all(screens):

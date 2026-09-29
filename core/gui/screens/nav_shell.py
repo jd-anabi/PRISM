@@ -5,8 +5,8 @@ arrow always returns Home. The "PRISM" title stays in the top-left AT ALL TIMES;
 just below it and is hidden on Home.
 
 The header row also carries the app-wide RUN SLOT (``btn_running``): a flat button naming what is
-running, where and for how long, hidden whenever nothing is (piece 4, B11). MainWindow owns what it
-says and when -- this module owns only the widget and the wording.
+running, where and for how long, hidden whenever nothing is, so the live run is shown app-wide.
+MainWindow owns what it says and when -- this module owns only the widget and the wording.
 """
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QStackedWidget, QToolButton, QVBoxLayout, QWidget
@@ -29,7 +29,7 @@ def running_banner(panel_title: str, seconds: int) -> str:
     ``m:ss``; from an hour it grows an hours field (``h:mm:ss``) rather than counting to 90 minutes.
     Seconds below zero read as 0 -- a wall-clock jump must not print a negative age -- and a blank
     title reads "a task", which is what a panel MainWindow's destination map does not know shows: the
-    banner still says something is running, it just cannot say where (spec §6.1).
+    banner still says something is running, it just cannot say where.
     """
     secs = max(0, int(seconds))
     hours, rest = divmod(secs, 3600)
@@ -70,7 +70,7 @@ class NavShell(QWidget):
 
         # The app-wide run slot. Created EMPTY and hidden: no icon load, no timer, no store read.
         # The 2026-09-11 taskbar-icon incident was ~150 ms of layout between the native show and the
-        # first idle turn, and this button is on that path, so it does nothing at launch (spec §1.2).
+        # first idle turn, and this button is on that path, so it does nothing at launch.
         # MainWindow fills it from base_panel.RUN_STATE and starts the 1 s clock.
         self.btn_running = QToolButton()
         self.btn_running.setObjectName("navRunning")     # -> QToolButton#navRunning in the global QSS

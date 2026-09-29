@@ -100,12 +100,13 @@ class ArtifactPicker(QWidget):
             self.restore_key(restore_key)
 
 
-# The visible item text marks the EXCEPTION, never the norm (piece 4, B13). Nearly every posterior is
-# amortized, so an "amortized" suffix on almost every row would carry no information at all and would
-# push the name itself out of a combo that AdjustToContentsOnFirstShow sized to its first listing. A
-# TSNPE round's result is the rare row -- valid near ONE observation, and the one you must not pick by
-# accident -- so it is the one that gets a suffix. Plain text, no icon: see ArtifactPicker.NEW_LABEL
-# for why a combo ITEM cannot carry the bundled icon font.
+# The visible item text marks the EXCEPTION, never the norm: a narrowed posterior is marked in the
+# picker text, an amortized one is not. Nearly every posterior is amortized, so an "amortized"
+# suffix on almost every row would carry no information at all and would push the name itself out of
+# a combo that AdjustToContentsOnFirstShow sized to its first listing. A TSNPE round's result is the
+# rare row -- valid near ONE observation, and the one you must not pick by accident -- so it is the
+# one that gets a suffix. Plain text, no icon: see ArtifactPicker.NEW_LABEL for why a combo ITEM
+# cannot carry the bundled icon font.
 NARROWED_SUFFIX = "  —  narrowed (TSNPE)"
 
 
@@ -117,7 +118,7 @@ def _summary_line(s) -> str:
     facts three ways -- and the tooltip now words amortization the same way this does, "narrowed
     (TSNPE)", which is also what the item text's suffix says: one fact, one wording, wherever it is
     shown. The per-item TOOLTIP is still not BUILT from this function: it leads with the id and keeps
-    every fact it carried (B13), while the line needs no id, because the picker's own text already
+    every fact it carried, while the line needs no id, because the picker's own text already
     says which item it is describing.
 
     ``getattr`` throughout, because this is handed ``Summary`` in production and a row stub in the
@@ -143,7 +144,7 @@ class StorePicker(QWidget):
     tooltip; ``userData`` is the id, which is what ``key()`` persists and ``selected()`` returns.
 
     ``row_filter`` narrows the listing further -- one kind can hold several things a screen offers
-    separately (spec §5.4).
+    separately.
     """
     NEW_LABEL = ArtifactPicker.NEW_LABEL
 
@@ -153,9 +154,9 @@ class StorePicker(QWidget):
         self.kind, self._allow_new, self._store = kind, allow_new, store
         # ``Summary -> bool``, or None for "every row of the kind". One kind can hold several things
         # a screen wants to offer separately: the ``fdt`` kind holds single-cell measurements, sweeps
-        # and comparisons, told apart by ``body["study"]`` (spec §2.1), and the FDT and CrossVal
-        # screens each offer one of them. Applied AFTER the finished rule. Before ``parent`` (spec
-        # §5.4, P9); no caller passes ``parent`` positionally.
+        # and comparisons, told apart by ``body["study"]``, and the FDT and CrossVal screens each
+        # offer one of them. Applied AFTER the finished rule. Before ``parent``; no caller passes
+        # ``parent`` positionally.
         self._row_filter = row_filter
         # id -> the line selection_summary() returns, recorded by refresh(). BEFORE refresh() below,
         # which fills it.
@@ -189,10 +190,10 @@ class StorePicker(QWidget):
             rows = []
         for s in rows:
             # FINISHED, not ``complete``. ``complete`` means "has a valid manifest"; for the two
-            # kinds written progressively (the training cache, and piece 5's ``fdt``) a record
-            # carries one from its first moment, so ``complete`` would offer a run still going, or
-            # one a cancel left half written, as a result (spec §5.4). For every other kind the two
-            # are the same fact, because _commit writes the manifest last.
+            # kinds written progressively (the training cache, and ``fdt``) a record carries one
+            # from its first moment, so ``complete`` would offer a run still going, or one a cancel
+            # left half written, as a result. For every other kind the two are the same fact,
+            # because _commit writes the manifest last.
             if not s.finished:
                 continue
             if self._row_filter is not None and not self._row_filter(s):
@@ -209,7 +210,7 @@ class StorePicker(QWidget):
             if s.width:
                 tip += f" · width {s.width}"
             if s.amortized is not None:
-                # ONE WORDING FOR ONE FACT (B13): the same "narrowed (TSNPE)" the item
+                # ONE WORDING FOR ONE FACT: the same "narrowed (TSNPE)" the item
                 # suffix and the line under the picker use, so nobody has to learn that a
                 # shouted "NON-AMORTIZED" here and a quiet "narrowed" there are the same
                 # thing. The tooltip keeps everything else it carried.

@@ -107,7 +107,7 @@ class SimulatePanel(BasePanel):
         try:
             # The boxes FIRST, and through value_or_none: every numeric box here returns 0 for a
             # blank, so a blank T_obs used to reach plan_stream (n_obs 0, an instant "complete") and
-            # the two below were clamped with max(1, ...) to a value nobody typed (spec §5.6).
+            # the two below were clamped with max(1, ...) to a value nobody typed.
             t_obs = require_positive("t_obs", self.tobs.value_or_none())
             frame_steps = require_at_least("frame_steps", self.frame_steps.value_or_none(), 1)
             fps = require_positive("fps", self.fps.value_or_none())

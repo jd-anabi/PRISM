@@ -31,7 +31,7 @@ class _ChiProbeRow(QWidget):
     The frequency is entered, never derived. The frequencies a bench can actually achieve are not
     exactly ``mult_k * Omega_0``, and even aiming for them your Omega_0 estimate is not
     ``chi.peak_freq``'s -- different trace length, windowing, bin resolution. See
-    orchestrator.build_experiment_obs_chi, which stopped guessing them for the same reason.
+    core.SBI.observations.build_experiment_obs_chi, which stopped guessing them for the same reason.
     """
 
     def __init__(self, on_remove, freq_hz: "float | None" = None, parent=None):
@@ -62,11 +62,11 @@ class _ChiProbeRow(QWidget):
         out = []
         if not self.path.value():
             out.append(f"probe {index + 1}: no recording selected")
-        # A row the table SEEDED has an empty box (piece 4, B16, FloatField(None)) -- and 0 Hz is a
-        # genuine DC probe the lock-in would happily attempt, so the two states must not share a
-        # sentence. Read through value_or_none() (V2): a blank box is said to be blank, and only a
-        # zero somebody typed is reported as "got 0". This is the check that stops a typo becoming a
-        # measurement.
+        # A row the table SEEDED has an empty box (FloatField(None): a new probe row's frequency box
+        # starts blank) -- and 0 Hz is a genuine DC probe the lock-in would happily attempt, so the
+        # two states must not share a sentence. Read through value_or_none(): a blank box is said to
+        # be blank, and only a zero somebody typed is reported as "got 0". This is the check that
+        # stops a typo becoming a measurement.
         f = self.freq.value_or_none()
         if f is None:
             out.append(f"probe {index + 1}: drive frequency is blank")

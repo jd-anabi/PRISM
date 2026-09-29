@@ -1,12 +1,12 @@
 """Pick up PNGs that a runner saved to disk and show them in the panel's FigureStack.
 
 WHY NOT just take them from the runner's return value: it arrives only when the run has ended.
-run_fdt returns the LoadedFdt of the record it wrote and run_param_study_cli one per sweep (piece 5,
-E1), each keeping its PNGs in the record's own figures/ folder -- the folder the panel, which creates
-the record before dispatching the run, points this watcher at (spec §5.4) -- and run_reduction_map
-returns a ReductionRecord. While a run is going, the figures are only reported as text: log records
-naming the file or the record's folder in FDT.fdt_pipeline.run_fdt and
-FDT.cross_validation.run_param_study_cli (piece 3), a print() in Reduction.sweep.
+run_fdt returns the LoadedFdt of the record it wrote and run_param_study_cli one per sweep, each
+keeping its PNGs in the record's own figures/ folder -- the folder the panel, which creates the
+record before dispatching the run, points this watcher at -- and run_reduction_map returns a
+ReductionRecord. While a run is going, the figures are only reported as text: log records naming the
+file or the record's folder in FDT.fdt_pipeline.run_fdt and
+FDT.cross_validation.run_param_study_cli, a print() in Reduction.sweep.
 
 WHY NOT scrape those messages: several modules, several formats, and it would weld the GUI to message
 text inside core.
@@ -26,8 +26,8 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 _POLL_MS = 1200
 _SETTLE_S = 1.0                                     # savefig may still be writing; let the file age
-# The ..._20260714_120301 suffix the pre-piece-5 writers put on every figure. A record's figures are
-# figures/<slug>.png and carry none (the whole-piece review's N29): the stamp is stripped from the
+# The ..._20260714_120301 suffix the older writers put on every figure, before the analyses wrote
+# records. A record's figures are figures/<slug>.png and carry none: the stamp is stripped from the
 # LEGACY names alone -- a loose figure an older build left, the Reduction map's own PNG -- and a
 # record's name passes through unchanged but for its underscores.
 _STAMP = re.compile(r"_\d{8}_\d{6}$")

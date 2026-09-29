@@ -1,21 +1,21 @@
-"""The Artifacts screen: read the artifact store from inside the app (piece 4, §3; B1, B2).
+"""The Artifacts screen: read the artifact store from inside the app.
 
 A fifth Home tile and a PLAIN QWidget -- deliberately NOT a BasePanel. A BasePanel enrols itself in
 ``BasePanel._instances`` and ``_set_busy`` disables every instance's controls column while ANY run is
 live, so a browser built on one would grey out the moment a training started and you could not read
 the log of the thing you were waiting for. Reading is never blocked here; the actions that CHANGE the
-store check ``BasePanel._running`` for themselves (§3.4).
+store check ``BasePanel._running`` for themselves.
 
 The store is reached through ``_resolved_store()`` -- ``store or the process default``, the same seam
 ``StorePicker`` uses -- so a test hands one in and no process default is swapped.
 
-Remembered (V5, §3.5): the kind last viewed, and the sort column and order. NOT the selected
-artifact: a remembered id that has since been deleted is exactly the dangling selection §3.4 removes
-from the pickers.
+Remembered: the kind last viewed, and the sort column and order -- selections only. NOT the selected
+artifact: a remembered id that has since been deleted is exactly the dangling selection that
+re-listing the pickers after every change removes from them.
 
-The detail pane is TEXT ONLY (B4): no figure rendering, no open-the-folder button, no "use this" jump
-into a stage tab. All three were considered and declined on 2026-09-17 (§1.3) and are additive on top
-of ``_detail_text`` if they are ever wanted.
+The detail pane is TEXT ONLY: no figure rendering, no open-the-folder button, no "use this" jump
+into a stage tab. All three were considered and declined on 2026-09-17 and are additive on top of
+``_detail_text`` if they are ever wanted.
 """
 from pathlib import Path
 
@@ -45,19 +45,20 @@ KIND_LABELS = {
     "calibration": "Calibrations",
     "inference": "Inferences",
     "diagnostic": "Diagnostics",
-    # comparisons too (the whole-piece review's N26): a comparison is a record of this kind, and both
-    # measurement panels send the owner here to find one
+    # comparisons too: a comparison is a record of this kind, and both measurement panels send the
+    # owner here to find one
     "fdt": "FDT measurements, sweeps and comparisons",
 }
 
-# The tail of a run's records the pane shows (§3.3). A ceiling, not a budget: a training run's log is
+# The tail of a run's records the pane shows. A ceiling, not a budget: a training run's log is
 # unbounded and the pane is a text box.
 LOG_MAX_BYTES = 1 << 20
 
-# read_log answers None (no file at all) and "" (a run that said nothing) differently, deliberately
-# (§2.2), and the pane states BOTH: piece 3's invariant is that silence is a record too, and a blank
-# pane under a Records heading reads as a bug rather than as an answer. None has two causes, and the
-# cache's is its own -- it has no writer, so no log.txt is ever written beside it.
+# read_log answers None (no file at all) and "" (a run that said nothing) differently, deliberately,
+# and the pane states BOTH: silence is a record too -- a run that said nothing still writes an empty
+# log.txt -- and a blank pane under a Records heading reads as a bug rather than as an answer. None
+# has two causes, and the cache's is its own -- it has no writer, so no log.txt is ever written
+# beside it.
 _CACHE_NO_LOG = ("a training cache keeps no log: it is written batch by batch across resumes and "
                  "shared by every posterior that names it")
 _NO_RUN_LOG = "written outside a run"
@@ -72,11 +73,11 @@ _FINGERPRINT_DEPENDENT = ("a training cache was generated against this prior and
 
 
 def _stale_folder_note(actual: str, expected: str) -> str:
-    """Said when Summary.dir_name disagrees with the manifest's own dir_name (§3.3).
+    """Said when Summary.dir_name disagrees with the manifest's own dir_name.
 
     ArtifactStore.rename writes the manifest FIRST and moves the directory SECOND, and tolerates a
-    PermissionError on the move (store.py:520-540) because the manifest is what resolves an artifact.
-    Nothing is lost when that happens and nothing has ever said it happened.
+    PermissionError on the move because the manifest is what resolves an artifact. Nothing is lost
+    when that happens and nothing has ever said it happened.
 
     Never said for the simulation kind -- ``_detail_text`` guards the call, and the reason is there.
     """
@@ -93,12 +94,12 @@ _STUDY_PHRASES = {"single": "single-cell measurement", "sweep": "sweep", "compar
 def _unfinished_note(s) -> str:
     """The one sentence that says what deleting an UNFINISHED record of this kind destroys.
 
-    TWO kinds can be unfinished, not one (piece 5, E2): a training cache, whose manifest exists from
-    its first batch because it is resumable, and an fdt record, whose folder survives a cancel or a
-    crash so that what it measured is still readable. The old form named the cache by hand and would
+    TWO kinds can be unfinished, not one: a training cache, whose manifest exists from its first
+    batch because it is resumable, and an fdt record, whose folder survives a cancel or a crash so
+    that what it measured is still readable. The old form named the cache by hand and would
     have deleted a half-measured sweep behind a prompt that said nothing about it.
 
-    The cache names its committed BATCHES and not its rows, deliberately (P2): ``rows`` is written by
+    The cache names its committed BATCHES and not its rows, deliberately: ``rows`` is written by
     ``mark_complete`` alone -- ``training_checkpoint.save`` passes none -- so every real mid-run
     cache has ``rows is None``, and a ``sum(())`` here would print a confident, false "0 rows".
 
@@ -108,21 +109,21 @@ def _unfinished_note(s) -> str:
     - a MEASUREMENT (a single-cell run or a sweep) names its operating points where it has them --
       the done count alone when the planned total is not recorded, as the table's Points cell does,
       never "4 of ?" -- and says there is no resume: unlike a cache, whose batches a later run
-      continues from, it is measured again from the beginning (spec §1.3). Its figures and log are
+      continues from, it is measured again from the beginning. Its figures and log are
       "any it had written": a single-cell run cancelled during its spontaneous campaign has no
       figure yet.
     - a COMPARISON measures nothing -- it draws records already measured -- so deleting one loses no
       measurement, and running it again redraws it (an interrupted one stays on disk and a re-run
-      writes a new one, Task 36's F56). "Measuring again from the start" would be false for it.
+      writes a new one). "Measuring again from the start" would be false for it.
 
     The study is named as a phrase, not as the body's bare word: "This single record" reads as "this
     one record". A null or unrecognised study is a "measurement", which claims nothing it cannot back.
 
     An fdt record still being WRITTEN -- by a run in another window or at a terminal -- looks exactly
-    like an interrupted one until it finishes, and nothing stops it being deleted (spec §1.3 leaves the
-    cross-process lock out; ``_refuse_while_running`` sees only this process). A flat "the run was
-    interrupted or it failed" was false for it, and deleting on the strength of it killed the live run
-    (the whole-piece review's M3), so every fdt branch says so and says what to do first.
+    like an interrupted one until it finishes, and nothing stops it being deleted (there is no
+    cross-process lock; ``_refuse_while_running`` sees only this process). A flat "the run was
+    interrupted or it failed" was false for it, and deleting on the strength of it killed the live
+    run, so every fdt branch says so and says what to do first.
     """
     if s.kind == "simulation":
         return (f"This training cache is UNFINISHED: {s.batches_done} committed batch(es). "
@@ -154,14 +155,14 @@ def _delete_prompt(s) -> tuple:
     """``(text, informative)`` for the confirmation: what goes, and what cannot come back.
 
     An UNFINISHED artifact names what is half-written, whichever kind it is -- ``finished`` is not
-    ``complete`` (B3), and what a half-written record holds is the only thing deleting it destroys
+    ``complete``, and what a half-written record holds is the only thing deleting it destroys
     that a later run could not simply remake. ``_unfinished_note`` is where each kind's sentence is.
 
     ``s.complete and not s.finished`` rather than ``not s.finished`` alone: an INCOMPLETE row (a
     directory with no usable manifest) is not an artifact at all and ``finished`` is False for it. It
     never reaches this button (``_sync_actions`` enables Delete on complete rows only); the leftover
     sweep removes one only when it has no manifest file at all, and leaves one whose manifest this
-    build cannot read for the operator (``ArtifactStore.remove_incomplete``, R1).
+    build cannot read for the operator (``ArtifactStore.remove_incomplete``).
     """
     lines = [f"id {s.id}"]
     if s.complete and not s.finished:
@@ -174,7 +175,7 @@ class ArtifactScreen(QWidget):
     """The artifact browser: one kind at a time in a sortable table, over a status line.
 
     Emits ``store_changed`` after any change it makes to the store; MainWindow connects that to
-    ``_refresh_store_pickers`` (B8), because ``StorePicker.restore_key`` silently keeps whatever is
+    ``_refresh_store_pickers``, because ``StorePicker.restore_key`` silently keeps whatever is
     current when the saved id has vanished -- deliberate for a picker, and a defect the moment
     something can delete.
     """
@@ -210,12 +211,12 @@ class ArtifactScreen(QWidget):
 
         self.table = ArtifactTable()
 
-        # One child today; the detail pane joins it beside the table (§3.3).
+        # One child today; the detail pane joins it beside the table.
         self.split = QSplitter(Qt.Horizontal)
         self.split.setChildrenCollapsible(False)
         self.split.addWidget(self.table)
 
-        # Read-only, text only (B4): the manifest rendered, then the run's records. A fixed-pitch
+        # Read-only, text only: the manifest rendered, then the run's records. A fixed-pitch
         # face, because the manifest is rendered in aligned columns and the records carry HH:MM:SS
         # stamps -- both ragged out in a proportional font. No wrapping, for the same reason.
         self.detail = QPlainTextEdit()
@@ -228,9 +229,9 @@ class ArtifactScreen(QWidget):
         self.btn_save.setEnabled(False)
         self.btn_save.clicked.connect(self._save_shown)
 
-        # The pane's button row, kept as an attribute rather than a local: Task 12's "Lineage
-        # report…" button mounts into THIS layout, beside Save, because both write a file about the
-        # selected artifact.
+        # The pane's button row, kept as an attribute rather than a local: the "Lineage report…"
+        # button mounts into THIS layout, beside Save, because both write a file about the selected
+        # artifact.
         self.detail_actions = QHBoxLayout()
         self.detail_actions.addStretch(1)
         self.detail_actions.addWidget(self.btn_save)
@@ -265,12 +266,12 @@ class ArtifactScreen(QWidget):
         self._sync_actions()
 
         # Restore BEFORE connecting currentIndexChanged: setCurrentIndex fires it, and a refresh()
-        # during __init__ would read the store at launch -- the start-up work §1.2 keeps off that
-        # path. Same construction-never-fires rule the Settings screen's radios follow.
+        # during __init__ would read the store at launch -- start-up work kept off that path (see
+        # showEvent). Same construction-never-fires rule the Settings screen's radios follow.
         self.restore_settings(settings.settings())
         self.kind_combo.currentIndexChanged.connect(lambda _i: self.refresh())
 
-    # ── the listing (§3.2) ────────────────────────────────────────────────────
+    # ── the listing ───────────────────────────────────────────────────────────
     def kind(self) -> str:
         """The kind key currently selected."""
         return str(self.kind_combo.currentData())
@@ -278,7 +279,7 @@ class ArtifactScreen(QWidget):
     def showEvent(self, event):
         """List on every visit, so an artifact written since the last look is there. NOT from
         __init__: MainWindow builds this screen at launch, and a directory scan per launch is exactly
-        the start-up cost that lost the taskbar icon on 2026-09-11 (§1.2)."""
+        the start-up cost that lost the taskbar icon on 2026-09-11."""
         super().showEvent(event)
         self.refresh()
 
@@ -318,7 +319,7 @@ class ArtifactScreen(QWidget):
             rows = self._resolved_store().list(kind)
         except Exception as e:                 # noqa: BLE001 -- REPORTED, never swallowed
             # StorePicker.refresh lists nothing on an unreadable root, which makes "there is nothing
-            # here" and "I could not look" identical. The browser must tell them apart (§3.2), so the
+            # here" and "I could not look" identical. The browser must tell them apart, so the
             # error and its class go on the status line and the table is emptied.
             self.table.set_rows(kind, [])
             self._on_selection_changed()
@@ -339,13 +340,13 @@ class ArtifactScreen(QWidget):
 
     def _apply_sort(self, kind: str) -> None:
         """Re-apply the remembered sort after a rebuild, clamped to THIS kind's column count: the
-        columns differ per kind (§3.2), so a column remembered while viewing posteriors can be past
+        columns differ per kind, so a column remembered while viewing posteriors can be past
         the end of a calibration's."""
         col, order = self._sort
         if 0 <= col < len(columns_for(kind)):
             self.table.apply_sort_state(col, order)
 
-    # ── the detail view (§3.3, B4) ────────────────────────────────────────────
+    # ── the detail view ───────────────────────────────────────────────────────
     def _on_selection_changed(self) -> None:
         """Re-render the pane for whatever is selected now (nothing -> an empty pane)."""
         s = self.table.current_summary()
@@ -360,12 +361,12 @@ class ArtifactScreen(QWidget):
         self.btn_save.setEnabled(bool(self.detail.toPlainText()))
 
     def _detail_text(self, s) -> str:
-        """Everything the pane shows for one row, as one string -- which is what Save writes (B10).
+        """Everything the pane shows for one row, as one string -- which is what Save writes.
 
-        Text only (B4): the manifest rendered by the ONE renderer both front ends use
+        Text only: the manifest rendered by the ONE renderer both front ends use
         (core/artifacts/report.py), the stale-folder note when there is one, then the run's records
         verbatim with their HH:MM:SS level stamps -- or, when there are none, WHICH kind of none it
-        is (§3.3). Two store reads and no other side effect.
+        is. Two store reads and no other side effect.
         """
         if s is None:
             return ""
@@ -393,7 +394,7 @@ class ArtifactScreen(QWidget):
             parts.append(f"(only the last {LOG_MAX_BYTES} bytes are shown; the file is longer)")
             parts.append(text)
         elif not text:
-            # read_log says "" for a run that said nothing and None for no file at all (§2.2).
+            # read_log says "" for a run that said nothing and None for no file at all.
             # Silence is a record too, so the pane says so rather than leave the heading bare.
             parts.append(_EMPTY_LOG)
         else:
@@ -401,7 +402,7 @@ class ArtifactScreen(QWidget):
         return "\n".join(parts)
 
     def _save_shown(self) -> None:
-        """B10's first half: what is on screen, to a file the operator picks.
+        """One half of the saveable run summary: what is on screen, to a file the operator picks.
 
         A FILE, never a store kind of its own -- a report DESCRIBES the store and must not be mistaken
         for something the store holds. The dialog is QFileDialog.getSaveFileName, the same call
@@ -426,15 +427,16 @@ class ArtifactScreen(QWidget):
         self._set_status(f"Saved what is shown to {Path(path).name}.")
 
     def _lineage_report(self) -> None:
-        """B10: write the selected artifact's lineage to a file the operator names.
+        """The other half of the run summary: write the selected artifact's lineage to a file the
+        operator names.
 
-        A report DESCRIBES the store and is never a kind of its own in it (§5): nothing here writes
+        A report DESCRIBES the store and is never a kind of its own in it: nothing here writes
         into the artifact root -- ``render_lineage`` reads manifests and this writes its text
         wherever the operator says. UTF-8 with LF endings, which is byte for byte what
         ``python -m core artifacts summary --out`` writes, so the document cannot say which front end
         made it.
 
-        NOT guarded by ``BasePanel._running``: this is a read, and reading is never refused (B6).
+        NOT guarded by ``BasePanel._running``: this is a read, and reading is never refused.
 
         The two checks below duplicate what keeps ``btn_lineage`` disabled in ``_sync_actions``
         (nothing selected, or a leftover with no manifest) -- deliberately: a disabled button is a
@@ -472,7 +474,7 @@ class ArtifactScreen(QWidget):
             return
         self._set_status(f"Wrote the lineage report for {s.kind} {s.label} to {path}.")
 
-    # ── the actions (§3.4; B5, B6, B7, B8) ────────────────────────────────────
+    # ── the actions ───────────────────────────────────────────────────────────
     def _build_actions(self) -> QWidget:
         """The Note box and the Delete/Sweep buttons: one row under the listing.
 
@@ -487,8 +489,9 @@ class ArtifactScreen(QWidget):
         self.note_edit = QLineEdit()
         self.note_edit.setPlaceholderText(
             f"one line, at most {NOTE_MAX_CHARS} characters; empty clears it")
-        # NO setMaxLength: B5 REFUSES an over-long note and names both numbers. A maxLength would
-        # silently truncate it instead, which is the clamp V2 exists to forbid.
+        # NO setMaxLength: the note rule REFUSES an over-long note and names both numbers. A
+        # maxLength would silently truncate it instead -- a clamp, where a bad input is refused at
+        # the click and never repaired.
         self.btn_note = QPushButton("Set")
         self.btn_note.clicked.connect(self._set_note)
         self.btn_delete = QPushButton("Delete…")
@@ -550,7 +553,7 @@ class ArtifactScreen(QWidget):
             self._noted = ref
 
     def _after_change(self, said: str, error: bool = False) -> None:
-        """Re-list the kind, tell the rest of the app (B8), and THEN say what the action did.
+        """Re-list the kind, tell the rest of the app, and THEN say what the action did.
 
         The action hands its sentence here instead of writing the status line itself, which is what
         makes the wrong order unrepresentable. Two ways to get it wrong, both closed here:
@@ -561,7 +564,7 @@ class ArtifactScreen(QWidget):
           cannot read the store, ``refresh`` has already put ``Could not read the <kind> artifacts:
           ...`` on the line, and THAT message wins. The action did succeed -- the store is the record
           of that -- but "there is nothing here" and "I could not look" are the one distinction this
-          screen exists to keep apart (§3.2), and a cheerful "Deleted ..." over an emptied table
+          screen exists to keep apart, and a cheerful "Deleted ..." over an emptied table
           would erase it.
 
         So: the success sentence is set only when the re-list could read the store. The three
@@ -575,11 +578,11 @@ class ArtifactScreen(QWidget):
             self._set_status(said, error=error)
 
     def _refuse_while_running(self, doing: str) -> bool:
-        """True when a run is live: the status line says so and the caller returns (B6).
+        """True when a run is live: the status line says so and the caller returns.
 
         Every WRITE goes through this and nothing that only READS does. The wording is the window's
-        own, from the two model-builder sites (model_builder_screen.py:371, :447); the status line is
-        this screen's surface, so there is no dialog to dismiss either.
+        own, from the two model-builder sites (ModelBuilderScreen._validate and _save); the status
+        line is this screen's surface, so there is no dialog to dismiss either.
         """
         if BasePanel._running:
             self._set_status(f"A task is running -- wait for it to finish before {doing}.", error=True)
@@ -605,7 +608,7 @@ class ArtifactScreen(QWidget):
         return s
 
     def _set_note(self) -> None:
-        """B5: one trimmed line, at most NOTE_MAX_CHARS; blank clears it.
+        """The note rule: one trimmed line, at most NOTE_MAX_CHARS; blank clears it.
 
         The rule is ``core.refusals.require_note`` and it runs at the click, so the command-line
         tool's own note flag (the ``"note"`` row of ``core/tool/fields.py``) refuses the same note
@@ -620,7 +623,7 @@ class ArtifactScreen(QWidget):
             note = require_note("note", self.note_edit.text())
             self._resolved_store().set_note(s.kind, s.id, note)
         except Refusal as exc:      # StoreError is one: the row can have gone since it was listed,
-            show_refusal(self, exc)  # and since Task 2 that refusal carries field="note" too
+            show_refusal(self, exc)  # and that refusal carries field="note" too
             self._set_status(exc.message, error=True)
             return
         except Exception as e:      # noqa: BLE001 -- reported, never raised out of a click
@@ -641,10 +644,10 @@ class ArtifactScreen(QWidget):
         that depends on it WITH WHY.
 
         ``field="artifact"`` sends the operator to the list to delete the children first -- the same
-        key the store's own dependents refusal carries since Task 5. This one exists for the WORDING
-        alone: the store's message ends "pass force=True to orphan them", which no front end offers
-        (B6), and a bare list of ids cannot say which dependent named this artifact and which the
-        store found by fingerprint.
+        key the store's own dependents refusal carries. This one exists for the WORDING alone: the
+        store's message ends "pass force=True to orphan them", which no front end offers, and a bare
+        list of ids cannot say which dependent named this artifact and which the store found by
+        fingerprint.
         """
         parents = {}
         for kind in sorted({k for k, _, _ in deps}):
@@ -666,7 +669,7 @@ class ArtifactScreen(QWidget):
             + "\nDelete those first. Nothing here can orphan them.", field="artifact")
 
     def _delete(self) -> None:
-        """One artifact, no force, TWO outcomes (B6).
+        """One artifact, no force, TWO outcomes.
 
         ``dependents`` is read here, before anything is asked, because ``store.delete`` refuses
         anything with dependents and no front end offers ``force=True``: a confirmation for such an
@@ -709,7 +712,7 @@ class ArtifactScreen(QWidget):
             self._set_status(f"{s.kind} {s.label} was not deleted.")
             return
         try:
-            store.delete(s.kind, s.id)              # never force, from either front end (B6)
+            store.delete(s.kind, s.id)              # never force, from either front end
         # A row that went, or dependents that arrived, since the list -- shown as the store wrote
         # it, fix sentence and all (its refusals are fielded).
         except Refusal as exc:
@@ -727,11 +730,11 @@ class ArtifactScreen(QWidget):
     def _incomplete(self, store, kind) -> tuple:
         """``(candidates, kept, problems)``: what a sweep would remove, what it will LEAVE ALONE
         although the table calls it incomplete, and any kind that could not be read at all -- an
-        unreadable directory is not an empty one (§3.2). The first two are
-        ``[(kind, dir_name, reason)]``, the third is ``[str]``.
+        unreadable directory is not an empty one. The first two are ``[(kind, dir_name, reason)]``,
+        the third is ``[str]``.
 
         Read off ``list``, so the confirmation shows exactly the rows the table calls incomplete --
-        narrowed (R1) to the ONE reason a sweep may act on: no manifest.json at all. A manifest that
+        narrowed to the ONE reason a sweep may act on: no manifest.json at all. A manifest that
         exists and will not parse, or that declares another kind, is something nobody here
         understands; those rows stay in the listing and are named on the status line instead, which
         is why they are returned rather than silently dropped.
@@ -740,12 +743,12 @@ class ArtifactScreen(QWidget):
         truthiness test here is how a one-kind sweep could have widened to every kind.
         """
         out, kept, problems = [], [], []
-        for k in (list(KIND_DIRS) if kind is None else [kind]):   # Task 9's import; in order
+        for k in (list(KIND_DIRS) if kind is None else [kind]):   # every kind, in KIND_DIRS order
             try:
                 rows = store.list(k)
             except Exception as e:      # noqa: BLE001 -- an unreadable kind is reported, not fatal
                 # With a next step, like every other sentence on this screen: an unreadable kind is
-                # not an empty one (§3.2), and the operator can act on it.
+                # not an empty one, and the operator can act on it.
                 problems.append(f"The {k} directory could not be read ({type(e).__name__}: {e}), so "
                                 f"no {k} leftover can be swept; check that folder's permissions on "
                                 f"disk and sweep again.")
@@ -758,14 +761,14 @@ class ArtifactScreen(QWidget):
         return out, kept, problems
 
     def _loose_and_legacy(self, store, kind) -> tuple:
-        """``(loose, legacy, loose_problems, legacy_problems)``: E10's two categories, beside
-        ``_incomplete``'s directories, and each category's unreadable parts APART, so a "nothing to
-        remove" line claims only what was read (the whole-piece review's N25).
+        """``(loose, legacy, loose_problems, legacy_problems)``: the two categories no listing
+        shows, loose files and legacy directories, beside ``_incomplete``'s directories, and each
+        category's unreadable parts APART, so a "nothing to remove" line claims only what was read.
 
         ``loose`` is ``[(kind, LooseFile)]`` -- a FILE sitting directly inside a kind directory,
         which no artifact accounts for. ``_entries`` iterates directories only (store.py's
         ``for sub in ... if p.is_dir()``), so such a file is invisible to every listing and no front
-        end could see or clear one before piece 5; the owner's machine has two, left in
+        end could see or clear one until the sweeps learned to; the owner's machine has two, left in
         ``Artifacts/fdt`` by a run stamped 20260915_153042. ``loose_files`` reads the kind
         directory's own files and NEVER DESCENDS, so nothing inside a record's folder is reachable
         from here -- the same complement rule ``remove_incomplete`` has against ``delete``.
@@ -775,7 +778,7 @@ class ArtifactScreen(QWidget):
         about one. ``kind is None`` means all kinds, EXPLICITLY, exactly as ``_incomplete`` reads it.
 
         Both reads are guarded per kind: an unreadable directory is reported and does not stop the
-        others (§3.2 -- an unreadable kind is not an empty one).
+        others (an unreadable kind is not an empty one).
         """
         loose, legacy, loose_problems, legacy_problems = [], [], [], []
         for k in (list(KIND_DIRS) if kind is None else [kind]):
@@ -796,33 +799,32 @@ class ArtifactScreen(QWidget):
         return loose, legacy, loose_problems, legacy_problems
 
     def _sweep(self, *, all_kinds: bool) -> None:
-        """B7: remove every directory of this kind -- or of all kinds -- that has NO manifest at all,
+        """Remove every directory of this kind -- or of all kinds -- that has NO manifest at all,
         and the two categories ``_loose_and_legacy`` reads.
 
-        TWO MORE CATEGORIES (spec §6.3, E10), so this screen can clear what the tool's
-        ``artifacts sweep`` can clear, by the same rules: a loose FILE directly inside a kind
-        directory, and -- from "Sweep all kinds…" ALONE -- a legacy directory beside the kind
-        directories. Each is named in the confirmation and removed from the list that confirmation
-        showed, one call per item through ``remove_loose`` / ``remove_legacy``, each of which
-        applies R3's recency guard itself.
+        TWO MORE CATEGORIES, so this screen can clear what the tool's ``artifacts sweep`` can clear,
+        by the same rules: a loose FILE directly inside a kind directory, and -- from "Sweep all
+        kinds…" ALONE -- a legacy directory beside the kind directories. Each is named in the
+        confirmation and removed from the list that confirmation showed, one call per item through
+        ``remove_loose`` / ``remove_legacy``, each of which applies the recency guard itself.
 
         The candidates are listed BEFORE anything is removed, and THAT LIST is what is removed: each
         entry goes by name through ``remove_incomplete``, the call that can only ever touch a
         directory ``_entries`` classifies as manifest-less -- the complement of ``delete``, which can
         only ever touch a real artifact.
 
-        R2: the removal used to re-scan, so the confirmation did not bind it -- a directory created
+        The removal used to re-scan, so the confirmation did not bind it -- a directory created
         while the dialog sat open was removed although the operator never saw it ("Removed 2 of 1
         leftover directories", probed). Anything that appeared since is simply not in the list, and
         the count sentence is true by construction.
 
-        R5: the removal is GUARDED, like every other entry point on this screen. Unguarded, a kind
+        The removal is GUARDED, like every other entry point on this screen. Unguarded, a kind
         that could not be read threw out of the click after earlier kinds' leftovers were already
         gone: the application's red box, no status line, and ``store_changed`` never emitted, so the
         three pickers went on showing rows that had just been deleted.
         """
         # "leftovers", not "leftover directories": the sweep removes loose files and the legacy
-        # directory too (the whole-piece review's N25).
+        # directory too.
         if self._refuse_while_running("removing leftovers"):
             return
         store = self._resolved_store()
@@ -841,11 +843,11 @@ class ArtifactScreen(QWidget):
                      "never removed: "
                      + "; ".join(f"{k}/{d} ({why})" for k, d, why in kept) + ".")
         if not cands and not loose and not legacy:
-            # Each clause only where its read SUCCEEDED (the whole-piece review's N25): the problems
-            # in the tail say what could not be read, and "none here" beside "could not be read"
-            # contradicted itself. The legacy clause only where the store root was READ: a per-kind
-            # sweep never looks beside the kind directories, so "no legacy directory" would claim what
-            # nobody checked -- and a crossval/ may well sit there. The tool's sentence does the same.
+            # Each clause only where its read SUCCEEDED: the problems in the tail say what could not
+            # be read, and "none here" beside "could not be read" contradicted itself. The legacy
+            # clause only where the store root was READ: a per-kind sweep never looks beside the
+            # kind directories, so "no legacy directory" would claim what nobody checked -- and a
+            # crossval/ may well sit there. The tool's sentence does the same.
             said = [text for ok, text in (
                 (not dir_problems, ("every directory of every kind carries a manifest.json"
                                     if kind is None else
@@ -884,11 +886,11 @@ class ArtifactScreen(QWidget):
         files_gone, files_failed, legacy_gone, legacy_failed = [], [], [], []
         try:
             removed, failed = store.sweep_incomplete([(k, d) for k, d, _ in cands])
-            # R2 for the two new categories too: `loose` and `legacy` were read BEFORE the dialog
-            # and THOSE LISTS are walked, so anything that appeared while it sat open is simply not
-            # in them. One call per item, because neither remover has a batch form -- each carries
-            # its own refusal (the recency guard among them), which is reported and never stops the
-            # rest, exactly as sweep_incomplete does for directories.
+            # The confirmation binds the two new categories too: `loose` and `legacy` were read
+            # BEFORE the dialog and THOSE LISTS are walked, so anything that appeared while it sat
+            # open is simply not in them. One call per item, because neither remover has a batch
+            # form -- each carries its own refusal (the recency guard among them), which is reported
+            # and never stops the rest, exactly as sweep_incomplete does for directories.
             for k, f in loose:
                 try:
                     store.remove_loose(k, f.name)
@@ -908,7 +910,7 @@ class ArtifactScreen(QWidget):
             self._after_change(f"The sweep stopped part-way: {type(e).__name__}: {e}. Refresh to see "
                                f"what is left." + tail, error=True)
             return
-        # One count per category that HAD candidates (F51): a sweep that found only a loose file
+        # One count per category that HAD candidates: a sweep that found only a loose file
         # does not report "Removed 0 of 0 leftover directories" before saying what it did.
         said = []
         if cands:
@@ -935,12 +937,12 @@ class ArtifactScreen(QWidget):
         from core.artifacts import resolve_store
         return resolve_store(self._store)
 
-    # ── persistence (§3.5) ────────────────────────────────────────────────────
+    # ── persistence ───────────────────────────────────────────────────────────
     def save_settings(self, qs) -> None:
         """The kind and the sort, and nothing else.
 
         MainWindow._save_state calls this BY NAME: ``_all_panels()`` is panel-typed and this screen is
-        a QWidget (B1), so it gets no sweep for free -- which is also what keeps it out of
+        a QWidget, so it gets no sweep for free -- which is also what keeps it out of
         ``_refresh_model_combos``.
 
         A table that HAS BEEN FILLED is the sort, whether or not that fill produced any rows: a kind

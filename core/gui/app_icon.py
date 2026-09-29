@@ -54,16 +54,16 @@ def set_windows_app_user_model_id() -> None:
 def set_windows_class_icon(window) -> bool:
     """Make PRISM's mark the icon of Qt's Win32 WINDOW CLASS, so the taskbar's fallback is ours.
 
-    HOW THE TASKBAR PICKS A BUTTON'S ICON (measured on Windows 11 26200, 2026-09-11, the display
-    walkthrough's row 1): when the native window first shows, the shell asks it for its icon with a
-    short timeout; if the window's thread does not answer in time it falls back to the window CLASS
-    icon and caches that for the button's lifetime. Qt registers its class with the stock generic
-    "application" glyph because the host executable, python.exe, carries no IDI_ICON1 resource.
-    PRISM's first show keeps the GUI thread busy for ~150 ms AFTER the native show (Qt lays out the
-    whole widget tree), the query times out, and the generic glyph is what the user saw -- while a
-    minimal window, idle right after showing, got the mark, and the same minimal window blocked for
-    4 s after showing got the glyph. setWindowIcon is not the lever: the title bar and Alt-Tab were
-    right all along. With the class icon set, even the 4 s block showed the mark.
+    HOW THE TASKBAR PICKS A BUTTON'S ICON (measured on Windows 11 26200, 2026-09-11): when the
+    native window first shows, the shell asks it for its icon with a short timeout; if the window's
+    thread does not answer in time it falls back to the window CLASS icon and caches that for the
+    button's lifetime. Qt registers its class with the stock generic "application" glyph because the
+    host executable, python.exe, carries no IDI_ICON1 resource. PRISM's first show keeps the GUI
+    thread busy for ~150 ms AFTER the native show (Qt lays out the whole widget tree), the query
+    times out, and the generic glyph is what the user saw -- while a minimal window, idle right
+    after showing, got the mark, and the same minimal window blocked for 4 s after showing got the
+    glyph. setWindowIcon is not the lever: the title bar and Alt-Tab were right all along. With the
+    class icon set, even the 4 s block showed the mark.
 
     Must run BEFORE the first show; ``winId()`` creates the HWND hidden, which is all the class
     needs. The class is shared by every Qt top-level window in the process, so dialogs inherit it.

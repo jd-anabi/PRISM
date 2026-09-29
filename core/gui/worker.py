@@ -7,7 +7,7 @@ from PySide6.QtCore import QObject, QRunnable, Signal, Slot
 
 from .streams import WorkerCancelled, redirect_streams
 
-# Said, at warning, when a run RETURNS with the cancel token requested but never fired (R6). The
+# Said, at warning, when a run RETURNS with the cancel token requested but never fired. The
 # counterpart of ``base_panel.CANCEL_NOTED_TEXT``, which the failure path carries: there the run
 # crashed, here it finished. Kept here rather than in base_panel because this module must not import
 # a panel, and it is the worker that knows the token's final state.
@@ -37,21 +37,21 @@ def _pending_failure(cancel: BaseException) -> "BaseException | None":
     exception still exists once the cancel has replaced it.
 
     It is looked up to be LOGGED, never to decide the run's verdict. The chain cannot tell a failure
-    that was still propagating from one the code had already dealt with: a cancel raised (explicitly,
-    not through a checkpoint -- see below) inside a RECOVERED ``except`` block carries the handled
-    exception as its context, so treating a chained exception as THE failure would open a red box for
-    something the run had already survived. Since piece 4's B15 fix round 1
-    (``core.runs.cancel_is_deferred``), a checkpoint reached while this thread is handling an
-    exception is DEFERRED rather than fired, so this function no longer covers the OOM ladders or the
-    collision: those now reach here with nothing chained (see the ``WorkerCancelled`` branch below).
-    What is left is explicit: a bare ``raise WorkerCancelled()`` written inside a handler, which no
+    that was still propagating from one the code had already dealt with: a cancel raised
+    (explicitly, not through a checkpoint -- see below) inside a RECOVERED ``except`` block carries
+    the handled exception as its context, so treating a chained exception as THE failure would open
+    a red box for something the run had already survived. Since ``core.runs.cancel_is_deferred``
+    reads ``sys.exc_info()``, a checkpoint reached while this thread is handling an exception is
+    DEFERRED rather than fired, so this function no longer covers the OOM ladders or the collision:
+    those now reach here with nothing chained (see the ``WorkerCancelled`` branch below). What is
+    left is explicit: a bare ``raise WorkerCancelled()`` written inside a handler, which no
     checkpoint in this codebase does any more, but which the fallback still must not misreport. THE
     OOM LADDERS DO NOT LOG FROM INSIDE THEIR RECOVERED ``except`` -- an earlier version of this
-    docstring claimed they did. They log AFTER it has closed (core/SBI/pipeline.py:707, 797, 909,
-    1659); the guards that genuinely log from inside a recovered handler, and so are the real
-    false-positive risk for the fallback, are the three best-effort ones: ``_release_device_memory``'s
-    ``_try`` (pipeline.py:309-311), ``_try_rng_snapshot`` (:413-415) and ``_try_rng_restore``
-    (:443-445).
+    docstring claimed they did. They log AFTER it has closed (core/SBI/pipeline.py's
+    ``_gen_obs_retry``, ``_rows_with_oom_retry``, ``retry_on_oom`` and the per-batch retry in
+    ``gen_training_data``); the guards that genuinely log from inside a recovered handler, and so
+    are the real false-positive risk for the fallback, are the three best-effort ones:
+    ``_release_device_memory``'s ``_try``, ``_try_rng_snapshot`` and ``_try_rng_restore``.
 
     ``__cause__`` first (an explicit ``raise ... from``), then ``__context__``. A chain can loop, so
     each link is visited once.
@@ -74,8 +74,8 @@ class WorkerSignals(QObject):
     result = Signal(object)         # the callable's return value
     error = Signal(object, str, bool)  # (exception, traceback, cancel_noted) -- base_panel._on_error
                                         # routes by type; cancel_noted says whether the cancel token had
-                                        # been requested when this failure was caught (piece 4, B15 fix
-                                        # round 1) -- a coincidence to mention, never a cause to claim.
+                                        # been requested when this failure was caught -- a
+                                        # coincidence to mention, never a cause to claim.
     cancelled = Signal()            # the user cancelled: a stop, not a failure -- no error dialog
     finished = Signal()
 
@@ -112,18 +112,18 @@ class Worker(QRunnable):
                     # A cooperative cancel -- caught by name (BaseException, so it skipped the generic
                     # handler below). ALWAYS reported as a cancel: no traceback, no error dialog.
                     #
-                    # THE COLLISION AND THE RESIDUAL RACE ARE BOTH HANDLED BEFORE THIS BRANCH RUNS, by
-                    # runs.cancel_is_deferred() (piece 4, B15; the raise-time half is fix round 1): a
-                    # checkpoint reached while this thread is handling an exception -- any `except`,
-                    # any `finally` or `__exit__` an exception entered, any generator teardown (a
-                    # `leave=True` tqdm bar's closing write included) -- is deferred rather than fired.
-                    # So a crash unwinding through the pipeline's rescue save (inside its own explicit
-                    # section) OR through an ordinary `finally` that logs (core/Solvers/sdeint.py's bar
-                    # teardown, the likeliest GPU crash site) keeps propagating as itself and reaches
-                    # the generic handler below, which reports it like any other crash -- with the
-                    # cancel NOTED rather than substituted (the `except Exception` branch below reads
-                    # the same token for that; nothing here needs it, because a run THIS branch reports
-                    # is, by definition, a cancel and never reaches that branch).
+                    # THE COLLISION AND THE RESIDUAL RACE ARE BOTH HANDLED BEFORE THIS BRANCH RUNS,
+                    # by runs.cancel_is_deferred(): a checkpoint reached while this thread is
+                    # handling an exception -- any `except`, any `finally` or `__exit__` an
+                    # exception entered, any generator teardown (a `leave=True` tqdm bar's closing
+                    # write included) -- is deferred rather than fired. So a crash unwinding through
+                    # the pipeline's rescue save (inside its own explicit section) OR through an
+                    # ordinary `finally` that logs (core/Solvers/sdeint.py's bar teardown, the
+                    # likeliest GPU crash site) keeps propagating as itself and reaches the generic
+                    # handler below, which reports it like any other crash -- with the cancel NOTED
+                    # rather than substituted (the `except Exception` branch below reads the same
+                    # token for that; nothing here needs it, because a run THIS branch reports is,
+                    # by definition, a cancel and never reaches that branch).
                     #
                     # What reaches THIS branch now is only a WorkerCancelled that a checkpoint raised in
                     # NORMAL flow (a plain cancel, __context__ empty) or one written EXPLICITLY inside a
@@ -148,12 +148,12 @@ class Worker(QRunnable):
                     # box for a Refusal and the red one with the traceback for anything else, and
                     # it can only tell the two apart if the object itself crosses the thread.
                     failure = (e, traceback.format_exc())
-                    # "The cancel noted" (piece 4, B15 fix round 1): the cancel checkpoint that would
-                    # have raised here was deferred instead (see the WorkerCancelled branch above), so
-                    # a REQUESTED-but-never-fired token is exactly what a crash mid-unwind of a pending
-                    # Cancel leaves behind. Read here, before anything below clears it, and carried to
-                    # the panel alongside the failure -- never as a cause, only as a fact worth telling
-                    # the person who clicked Cancel.
+                    # "The cancel noted": the cancel checkpoint that would have raised here was
+                    # deferred instead (see the WorkerCancelled branch above), so a
+                    # REQUESTED-but-never-fired token is exactly what a crash mid-unwind of a
+                    # pending Cancel leaves behind. Read here, before anything below clears it, and
+                    # carried to the panel alongside the failure -- never as a cause, only as a fact
+                    # worth telling the person who clicked Cancel.
                     cancel_noted = self.cancel is not None and self.cancel.requested.is_set()
                     # ...but not its traceback. The traceback owns every frame of the failed run
                     # (the stage's host buffers, the prior, CUDA tensors), and this frame heads it
@@ -190,14 +190,14 @@ class Worker(QRunnable):
                     self.signals.log.emit(in_flight, "error")
                 self.signals.cancelled.emit()
             elif failure is None:
-                # THE CANCEL THAT ARRIVED TOO LATE (piece 4 whole-piece review, R6). A cancel taken
-                # inside a deferral window is deferred, not discarded -- "the next check outside
-                # raises" -- and that is true only if there IS a next check. A stage whose last write
-                # happens while an exception is unwinding (core/Solvers/sdeint.py's bar teardown is
-                # on the graphed solver path) can finish with the token requested and never fired.
-                # The run really did finish, so it is NOT reported as cancelled: the payload is
-                # correct and nothing on disk is wrong. It is reported as the success it is, with the
-                # fact said -- the counterpart of cancel_noted on the failure path above.
+                # THE CANCEL THAT ARRIVED TOO LATE. A cancel taken inside a deferral window is
+                # deferred, not discarded -- "the next check outside raises" -- and that is true
+                # only if there IS a next check. A stage whose last write happens while an exception
+                # is unwinding (core/Solvers/sdeint.py's bar teardown is on the graphed solver path)
+                # can finish with the token requested and never fired. The run really did finish, so
+                # it is NOT reported as cancelled: the payload is correct and nothing on disk is
+                # wrong. It is reported as the success it is, with the fact said -- the counterpart
+                # of cancel_noted on the failure path above.
                 if self.cancel is not None and self.cancel.requested.is_set():
                     self.signals.log.emit(CANCEL_TOO_LATE_TEXT, "warning")
                 self.signals.result.emit(payload)

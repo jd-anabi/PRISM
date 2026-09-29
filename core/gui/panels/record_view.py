@@ -1,10 +1,10 @@
 """Reading an ``fdt`` record back onto a panel: what it says, and where its pictures are.
 
-TWO SCREENS, ONE VIEWER. The FDT and CrossVal panels both show an earlier run (spec §5.4) and both
-must show it the same way, so the wording (``record_summary``), the listing (``record_figures``) and
-the viewer itself -- what the line describes, when figures open, which tabs close (``RecordViewer``)
--- live here once, and each panel keeps a one-line ``_show_record``. Nothing here touches the store's
-load path: a selection change is a combo event, and ``load_fdt`` verifies the payload hash -- on a
+TWO SCREENS, ONE VIEWER. The FDT and CrossVal panels both show an earlier run and both must show it
+the same way, so the wording (``record_summary``), the listing (``record_figures``) and the viewer
+itself -- what the line describes, when figures open, which tabs close (``RecordViewer``) -- live
+here once, and each panel keeps a one-line ``_show_record``. Nothing here touches the store's load
+path: a selection change is a combo event, and ``load_fdt`` verifies the payload hash -- on a
 sweep's ``data.h5`` that is the whole study re-read for one keystroke. The line needs the manifest
 (``store.get``) and the figures the directory (``store.path``), both answered from manifests alone.
 
@@ -43,8 +43,9 @@ def details_label() -> QLabel:
 
 
 def record_summary(m) -> str:
-    """The four facts spec §5.4 names, off an ``fdt`` manifest: when it was written and under which
-    seed, its cell, its settings, and its notices -- plus a line when the run did not finish.
+    """The four facts that describe a saved run, off an ``fdt`` manifest: when it was written and
+    under which seed, its cell, its settings, and its notices -- plus a line when the run did not
+    finish.
 
     Written to be unraisable on a manifest that is missing anything: ``manifest.validate`` checks
     body KEY SETS and top-level types only, so every value below can legitimately be null and a
@@ -76,17 +77,16 @@ def record_summary(m) -> str:
     offgrid = body.get("offgrid")
     offgrid = offgrid if isinstance(offgrid, dict) else {}
     if offgrid.get("blanks") is not None and offgrid.get("of") is not None:
-        # A sweep's count is over every probe of every point it MEASURED on its common grid (the
-        # whole-piece review's M2), so a bare "of N probe frequencies" would read as one grid's size
-        # when it is the whole study's.
+        # A sweep's count is over every probe of every point it MEASURED on its common grid, so a
+        # bare "of N probe frequencies" would read as one grid's size when it is the whole study's.
         where = " across the operating points it measured" if points is not None else ""
         lines.append(f"{offgrid['blanks']} of {offgrid['of']} probe frequencies{where} came back "
                      f"blank.")
     if points is not None and points.get("done") is not None and points.get("planned") is not None:
         failed, param = points.get("failed"), points.get("param")
         # The sweep by the name both front ends give it ("the T_a/T sweep"), never its parameter key
-        # ("temp" appears on no screen; the whole-piece review's N9). An unknown key -- a hand-edited
-        # body -- is shown as it is rather than raising (the module docstring).
+        # ("temp" appears on no screen). An unknown key -- a hand-edited body -- is shown as it is
+        # rather than raising (the module docstring).
         sweep = SWEEP_LABELS.get(param, param) if isinstance(param, str) else param
         lines.append(f"{points['done']} of {points['planned']} operating points"
                      + (f" of the {sweep} sweep" if sweep is not None else "") + " measured"
@@ -108,7 +108,8 @@ def record_figures(record_dir) -> list:
     ``figures/`` is the artifact directory's one subdirectory and holds only PNGs
     (``core/artifacts/store.py``), so a glob is the whole listing -- ``data.h5`` and the rest are
     payloads and sit directly in the record directory, not here. A record with no figures -- a run
-    that was cancelled before it drew one, whose folder E2 keeps -- is an empty list, never an error.
+    cancelled before it drew one, whose folder is kept, marked unfinished -- is an empty list, never
+    an error.
     """
     figs = Path(record_dir) / "figures"
     if not figs.is_dir():
@@ -134,16 +135,16 @@ class RecordViewer(QObject):
     the Rescan button runs -- passes three index changes on its way back to the same record (-1, row
     0, the record). Taking those for choices opened a record nobody chose, re-opened tabs the user
     had closed and moved the current tab. ``StorePicker`` itself is left alone: the inference tabs
-    rely on ``currentIndexChanged`` covering ``refresh()``. A launch opens nothing (F47): the viewer
-    is built after restore_settings, fills the line once, and nothing emits ``activated`` there.
+    rely on ``currentIndexChanged`` covering ``refresh()``. A launch opens nothing: the viewer is
+    built after restore_settings, fills the line once, and nothing emits ``activated`` there.
 
-    ITS OWN TABS CLOSE when the SETTLED selection is no longer the record they show -- a delete in the
-    Artifacts screen, a run's result slot moving the picker -- and when a run finishes
-    (``close_figures``, which each panel hands its dispatch). "Settled" is judged one event-loop turn
-    after an index change, by one coalesced ``QTimer.singleShot(0, ...)`` comparing the picker's key
-    with the key whose figures are open, so a refresh's passing states are never taken for a move.
-    Only the viewer's own tabs ever go (F48, never ``clear_all()``): a comparison drawn on the stack
-    (Task 40) and a run's figures survive every pick.
+    ITS OWN TABS CLOSE when the SETTLED selection is no longer the record they show -- a delete in
+    the Artifacts screen, a run's result slot moving the picker -- and when a run finishes
+    (``close_figures``, which each panel hands its dispatch). "Settled" is judged one event-loop
+    turn after an index change, by one coalesced ``QTimer.singleShot(0, ...)`` comparing the
+    picker's key with the key whose figures are open, so a refresh's passing states are never taken
+    for a move. Only the viewer's own tabs ever go (never ``clear_all()``): a comparison drawn on
+    the stack and a run's figures survive every pick.
 
     NO FILE IS OPENED TWICE. A PNG another tab already shows -- a run's watcher put it up -- is left to
     that tab. A page is recorded only if the stack actually grew, so a stubbed ``add_png`` never gets
@@ -157,10 +158,10 @@ class RecordViewer(QObject):
         # Parented to the picker, so the coalesced timer dies with the widget it reads.
         super().__init__(picker)
         self._picker, self._label, self._stack, self._busy = picker, label, stack, busy
-        self._opened: list = []              # the pages this viewer opened and may close (F48)
+        self._opened: list = []              # the pages this viewer opened and may close
         self._open_key = None                # the record those pages show, or None
         self._settle_queued = False
-        self.show_record(figures=False)      # F47: the restored selection's line, no figures
+        self.show_record(figures=False)      # the restored selection's line, no figures
         picker.combo.currentIndexChanged.connect(self._on_index_changed)
         picker.combo.activated.connect(self._on_activated)
 

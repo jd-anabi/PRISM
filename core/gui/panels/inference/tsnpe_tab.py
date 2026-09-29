@@ -29,15 +29,15 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
     The rule lives in ``core/SBI/truncate.py`` and is pinned by ``tests/test_conditioning_repair.py``.
 
     Gated on a posterior, the prior it was trained against, AND a persisted observation.
-    An amortized posterior has no observation at SAVE time (``default_x`` is None on
-    posterior_08232026), so the Infer tab records one at INFERENCE time and this tab keys on that.
+    An amortized posterior has no observation at SAVE time (its ``default_x`` is None), so the Infer
+    tab records one at INFERENCE time and this tab keys on that.
 
     The budget group is the Posterior tab's, through ``_TrainingBudgetMixin``: a round is a simulation
     campaign, not a click, and the number belongs on screen before the button.
 
     Persists (group "inference_tsnpe"): the observation and the two budget fields. The HPD level and
-    the direction count open at ``truncate.DEFAULT_HPD`` and ``DEFAULT_N_DIRECTIONS`` on every launch
-    (V5), and the new-simulation box is a per-round consent that is never persisted.
+    the direction count open at ``truncate.DEFAULT_HPD`` and ``DEFAULT_N_DIRECTIONS`` on every
+    launch, and the new-simulation box is a per-round consent that is never persisted.
     """
 
     def __init__(self, screen, parent=None):
@@ -57,7 +57,7 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         form = make_form()
         self.obs_picker = StorePicker("observation")
         add_help_row(form, label("observation"), self.obs_picker, HELP["tsnpe_obs"])
-        # The observation's own mode and conditioning width, beneath the combo (B13). This is the one
+        # The observation's own mode and conditioning width, beneath the combo. This is the one
         # picker whose selection is loaded on the GUI thread and checked against the session's config
         # (_round), so seeing the geometry before the click is what turns that refusal into a
         # non-event.
@@ -93,11 +93,12 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
             bv.addWidget(lab)
         for fld in (self.num_runs, self.run_size_cap):
             fld.textChanged.connect(lambda _t: self._sync_budget())
-        # D7's consent, per run and never persisted. It is needed on THIS tab because a near miss fires
-        # for rounds too -- a 2-batch test round and a 5000-batch round on the same parent differ only in
-        # the batch count -- and the region is drawn inside the worker, so an up-front dialog like the
-        # Posterior tab's is impossible: the refusal arrives from the stage, seconds in, and this is how
-        # the user answers it.
+        # The near-miss consent, per run and never persisted: a cache one setting away is refused
+        # before any simulation unless the operator asks for a new run. It is needed on THIS tab
+        # because a near miss fires for rounds too -- a 2-batch test round and a 5000-batch round on
+        # the same parent differ only in the batch count -- and the region is drawn inside the
+        # worker, so an up-front dialog like the Posterior tab's is impossible: the refusal arrives
+        # from the stage, seconds in, and this is how the user answers it.
         self.new_run = QCheckBox("Start a new simulation even if a cache one setting away exists")
         bv.addWidget(with_badge(self.new_run, HELP["tsnpe_new_run"]))
         self.controls_layout.addWidget(budget)
@@ -105,8 +106,8 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         # LAST, like every other panel's __init__ (BasePanel.restore_settings): the budget boxes'
         # textChanged is wired above, so a restored budget redraws the three lines, and the picker
         # listed the store at construction, so a saved observation id resolves. This line was missing
-        # from the tab's first commit until piece 3 (spec §5.3): every launch showed config.py's
-        # budget and the first observation while PRISM.ini held the last session's.
+        # from the tab's first commit: every launch showed config.py's budget and the first
+        # observation while PRISM.ini held the last session's.
         self.restore_settings(settings.settings())
 
     def _read_inputs(self) -> dict:
@@ -179,7 +180,7 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         """The mixin's line is computed from the AMORTIZED identity, and on this tab it used to say
         "Resumes a COMPLETE checkpoint ... simulation will be skipped entirely" whenever the budget
         matched the parent's -- and that is what a round at that budget did before the region became
-        part of the identity (D3). The region is drawn when the round starts, so nothing here can be
+        part of the identity. The region is drawn when the round starts, so nothing here can be
         resolved in advance; the honest line is the rule.
 
         Whether there is a checkpoint AT ALL is the preview's answer (``preview.checkpoint``), which
@@ -197,7 +198,7 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
                 "else simulates the full budget from zero.")
 
     def _sync_obs_line(self) -> None:
-        """The read-only line under the observation picker (B13). See PriorPanel._sync_prior_line for
+        """The read-only line under the observation picker. See PriorPanel._sync_prior_line for
         why ``currentIndexChanged`` also covers ``refresh()``."""
         self.obs_line.setText(self.obs_picker.selection_summary())
 
@@ -210,10 +211,10 @@ class TSNPEPanel(_TrainingBudgetMixin, _StagePanel):
         self._sync_budget()
 
     def save_settings(self, qs):
-        """The observation and the budget only (V5, spec §5.3), the budget as the boxes' TEXT so a box
-        left blank at close opens at config.py's default. The HPD level and the direction count are
-        science knobs and open at the truncate module's defaults on every launch; the consent box
-        under the budget is answered per round and is never written."""
+        """The observation and the budget only, the budget as the boxes' TEXT so a box left blank at
+        close opens at config.py's default. The HPD level and the direction count are science knobs
+        and open at the truncate module's defaults on every launch; the consent box under the budget
+        is answered per round and is never written."""
         qs.beginGroup("inference_tsnpe")
         qs.setValue("observation", self.obs_picker.key())
         settings.save_field(qs, "num_runs", self.num_runs)

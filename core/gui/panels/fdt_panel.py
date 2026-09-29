@@ -4,8 +4,8 @@ Mirrors cli.make_fdt_config with widgets, then runs FDT.fdt_pipeline.run_fdt on 
 worker.
 
 The two checkboxes are load-bearing. run_fdt's `skip_sanity` / `confirm_production` are REQUIRED
-keyword booleans (D1 deleted the prompts they used to fall back to), and these boxes are where a user
-answers them -- a worker thread has no terminal to be asked at.
+keyword booleans (the interactive prompts they used to fall back to were retired), and these boxes
+are where a user answers them -- a worker thread has no terminal to be asked at.
 """
 import traceback
 
@@ -92,16 +92,15 @@ class FdtPanel(BasePanel):
     order matters -- model FIRST, then the pickers, or the model's refresh() wipes the restored
     picker.
 
-    The Seed box, the record name and the note are NOT persisted (E7, spec §5.5). The seed is how a
-    run is made a deliberate repeat of an earlier one, so a remembered value would turn every later
-    run into that repeat in silence and collapse the spread E8 measures; a remembered NAME would be
-    refused by assert_name_free at the next launch's first click, for a name nobody typed; and a note
-    describes one run. Nor are the comparison controls (spec §7.1): a remembered list would name
-    records a later session may have deleted, a remembered constant would renormalise by a number
-    nobody typed this time, and the comparison's own name and note are the run's twins (plan ruling
-    P30, the whole-piece review's R-F3).
+    The Seed box, the record name and the note are NOT persisted. The seed is how a run is made a
+    deliberate repeat of an earlier one, so a remembered value would turn every later run into that
+    repeat in silence and collapse the spread a repeats comparison measures; a remembered NAME would
+    be refused by assert_name_free at the next launch's first click, for a name nobody typed; and a
+    note describes one run. Nor are the comparison controls: a remembered list would name records a
+    later session may have deleted, a remembered constant would renormalise by a number nobody typed
+    this time, and the comparison's own name and note are the run's twins.
 
-    The two checkboxes are CONSENTS and are never persisted (V5): every launch opens at the
+    The two checkboxes are CONSENTS and are never persisted: every launch opens at the
     construction defaults, sanity checks on and the production sweep after them -- the run
     ``python -m core fdt`` makes without --skip-sanity or --no-production. A remembered "skip" would
     silently drop the checks from every later session.
@@ -111,8 +110,8 @@ class FdtPanel(BasePanel):
         self._build_controls()
         self.restore_settings(settings.settings())
         # The saved-run viewer, built AFTER the restore: it fills the line for the restored selection
-        # and opens none of its figures (ruling F47) -- re-opening an old run's pictures on every start
-        # is behaviour nobody asked for. Figures open only on a user's pick (record_view.RecordViewer).
+        # and opens none of its figures -- re-opening an old run's pictures on every start is
+        # behaviour nobody asked for. Figures open only on a user's pick (record_view.RecordViewer).
         self._viewer = record_view.RecordViewer(self.record_picker, self.record_line,
                                                 self.figure_stack, busy=lambda: self._busy)
 
@@ -131,7 +130,7 @@ class FdtPanel(BasePanel):
         self.freqs_per_batch = IntField(1)
         self.f0 = FloatField(0.05)
         # Blank on purpose (IntField(None) is not a thing, so the text is cleared): blank means "draw
-        # one and record it" (E7). Never restored -- see the class docstring.
+        # one and record it". Never restored -- see the class docstring.
         self.seed = IntField(0)
         self.seed.clear()
         self.record_name = QLineEdit()
@@ -139,8 +138,7 @@ class FdtPanel(BasePanel):
         self.record_note = QLineEdit()
         self.record_note.setPlaceholderText("a note to keep with it (optional)…")
         # Earlier runs of THIS analysis: filtered to its own study by the row predicate -- the kind
-        # also holds sweeps and comparisons (spec §5.4) -- and to finished records by StorePicker
-        # itself (T24).
+        # also holds sweeps and comparisons -- and to finished records by StorePicker itself.
         self.record_picker = StorePicker("fdt", row_filter=lambda s: s.study == "single")
 
         self.skip_sanity = QCheckBox("Skip sanity checks")
@@ -153,7 +151,7 @@ class FdtPanel(BasePanel):
         self.btn_run.setProperty("accent", True)          # primary CTA (Fluent accent)
         self.btn_run.clicked.connect(self._run)
 
-        # Row labels come from core/gui/fields.py (P34), so a row and the fix sentence a refusal prints
+        # Row labels come from core/gui/fields.py, so a row and the fix sentence a refusal prints
         # for it cannot drift apart. "Record name", "Note" and "Saved run" stay literal: `name` and
         # `note` are sentence entries (label() raises KeyError for them) and the saved-run picker is
         # not a refusal field.
@@ -168,8 +166,8 @@ class FdtPanel(BasePanel):
         add_help_row(form, "Record name", self.record_name, HELP["record_name"])
         add_help_row(form, "Note", self.record_note, HELP["record_note"])
         add_help_row(form, "Saved run", self.record_picker, HELP["record"])
-        # What the selected run says, under its picker (spec §5.4). The viewer that fills it is built
-        # in __init__, after restore_settings (F47).
+        # What the selected run says, under its picker. The viewer that fills it is built in
+        # __init__, after restore_settings.
         self.record_line = record_view.details_label()
         form.addRow("", self.record_line)
         form.addRow(with_badge(self.skip_sanity, HELP["skip_sanity"]))
@@ -180,9 +178,9 @@ class FdtPanel(BasePanel):
         self.controls_layout.addWidget(self._build_compare())
 
     def _build_compare(self):
-        """The comparison controls (spec §7.1, E8): the first three modes, over this screen's own
-        record picker. The list is what the single-selection picker appends to; the normalisation
-        constant is read only by the renormalise mode, so its box is enabled only there."""
+        """The comparison controls: the first three modes, over this screen's own record picker. The
+        list is what the single-selection picker appends to; the normalisation constant is read only
+        by the renormalise mode, so its box is enabled only there."""
         box = QGroupBox("Compare saved runs")
         form = make_form(box)
         self.compare_list = CompareList(self.record_picker)
@@ -193,16 +191,15 @@ class FdtPanel(BasePanel):
         self.compare_mode.addItems(["cells", "repeats", "renormalise"])
         self.compare_mode.currentTextChanged.connect(
             lambda mode: self.renorm_prefactor.setEnabled(mode == "renormalise"))
-        # The comparison's OWN name and note (the whole-piece review's M4, ruling R-F3): the run's
-        # Record name box names the run, and a comparison is a record of its own. Never persisted
-        # (the class docstring).
+        # The comparison's OWN name and note: the run's Record name box names the run, and a
+        # comparison is a record of its own. Never persisted (the class docstring).
         self.compare_name = QLineEdit()
         self.compare_name.setPlaceholderText("name for the comparison's record (optional)…")
         self.compare_note = QLineEdit()
         self.compare_note.setPlaceholderText("a note to keep with it (optional)…")
         self.btn_compare = QPushButton("Compare saved runs")
         self.btn_compare.clicked.connect(self._compare)
-        # The constant's row is labelled from core/gui/fields.py (P34), like every registered box on
+        # The constant's row is labelled from core/gui/fields.py, like every registered box on
         # this screen. "Runs to compare" and "Comparison" stay literal: neither answers a registered
         # key -- a refusal about the list is `compare_records`, a sentence entry naming it. So do
         # "Comparison name" and "Comparison note": `name` and `note` are sentence entries, which name
@@ -219,7 +216,7 @@ class FdtPanel(BasePanel):
         """Dispatch one comparison, under the name and the note typed for it. Two things are judged
         here, at the click: the NOTE, because the store does not judge it (ArtifactStore.set_note) and
         every front end runs require_note, and a half-typed constant, which only this box can tell from
-        a blank (N22). Everything else is the stage's: the arity, the study, the unfinished-record and
+        a blank. Everything else is the stage's: the arity, the study, the unfinished-record and
         the taken-name refusals belong to it (one wording for both front ends), and a Refusal from the
         worker reaches the yellow box through BasePanel._on_error."""
         mode = self.compare_mode.currentText()
@@ -229,7 +226,7 @@ class FdtPanel(BasePanel):
             if mode == "renormalise":
                 # Never value(): a blank box returns 0.0 from it, and 0 is refused with a sentence
                 # about a value nobody typed instead of "it is blank". A blank travels as None and the
-                # stage refuses it as blank; half-typed text ('1e') is refused here (N22).
+                # stage refuses it as blank; half-typed text ('1e') is refused here.
                 options["prefactor"] = number_or_blank(self.renorm_prefactor, "prefactor")
         except Refusal as e:
             self._refusal(e)
@@ -246,13 +243,13 @@ class FdtPanel(BasePanel):
             f"Comparison record written: {record.name or '(unnamed)'} [{record.id}].")
 
     def _show_record(self, *, figures: bool = True) -> None:
-        """Spec §5.4: the selected run's line and, with ``figures``, its figures (RecordViewer)."""
+        """The selected run's line and, with ``figures``, its figures (RecordViewer)."""
         self._viewer.show_record(figures=figures)
 
     def _on_run_finished(self) -> None:
         """A run has ended, whatever its outcome. The viewer closes the tabs it opened for an earlier
         record, so the stack holds this run's own figures alone -- every run of this analysis draws
-        the same titles, and a mix of two runs' tabs cannot be read (fix round 1 of T27)."""
+        the same titles, and a mix of two runs' tabs cannot be read."""
         self.log_pane.append_line("FDT run finished.")
         self._viewer.close_figures()
 
@@ -280,17 +277,17 @@ class FdtPanel(BasePanel):
         try:
             # Every box through value_or_none(): a blank reaches the builder as None and is refused
             # AS BLANK, where value() turned it into a 0 the builder refused as "got 0" -- a value
-            # nobody typed (the whole-piece review's N21; the Reduction tab already said "is blank").
-            # The seed's blank means "draw one and record it" (E7), so half-typed text there ('-')
-            # is refused rather than read as blank (number_or_blank, N22). It is read ONCE and the
-            # same value goes to the builder, the run and the first body.
+            # nobody typed (the Reduction tab already said "is blank"). The seed's blank means "draw
+            # one and record it", so half-typed text there ('-') is refused rather than read as
+            # blank (number_or_blank). It is read ONCE and the same value goes to the builder, the
+            # run and the first body.
             seed = number_or_blank(self.seed, "seed")
             cfg = cli.make_fdt_config(
                 model, registry.state_dep_drift(model), cell,
                 n_freqs=self.n_freqs.value_or_none(), ensemble_M=self.ensemble_m.value_or_none(),
                 freqs_per_batch=self.freqs_per_batch.value_or_none(), F0=self.f0.value_or_none(),
                 seed=seed)
-            # THE FRONT END CREATES, THE STAGE ENTERS (spec §1.2). create() mints the id and claims
+            # THE FRONT END CREATES, THE STAGE ENTERS. create() mints the id and claims
             # the name -- assert_name_free runs here, before a single trajectory is integrated -- and
             # fills writer.dir WITHOUT creating it; run_fdt does `with writer:` on the worker thread,
             # where runs.current_run_log() is populated and log.txt can therefore be written. It is
@@ -312,12 +309,12 @@ class FdtPanel(BasePanel):
 
         # The facts the panel knows. The STAGE fills `settings` from its own private copy of cfg
         # before __enter__ writes the first manifest, and updates this dict in place -- replacing it
-        # would drop the study and the seed (spec §2.2, §2.3).
+        # would drop the study and the seed.
         writer.body = {"study": "single", "settings": None, "seed": seed, "grid": None,
                        "points": None, "offgrid": None, "notices": [], "compared": None,
                        "complete": False, "results": None}
         # Explicit bools, never None -- see the module docstring. The watcher is pointed at the
-        # record's own figures/ (spec §5.4); it globs ONE directory and does not recurse, which is
+        # record's own figures/; it globs ONE directory and does not recurse, which is
         # exactly that shape, and a directory that does not exist yet lists nothing.
         self.dispatch(_run_fdt_guarded, cfg, writer=writer, seed=seed,
                       watch_dir=writer.dir / "figures",
@@ -327,7 +324,7 @@ class FdtPanel(BasePanel):
                       on_finished=self._on_run_finished)
 
     def _on_record(self, record):
-        """The ``LoadedFdt`` run_fdt returned (E1: the run now says what it wrote, where it used to
+        """The ``LoadedFdt`` run_fdt returned (the run now says what it wrote, where it used to
         return None). The picker is re-listed and moved onto it, so the run that just finished is the
         panel's current selection. The move is programmatic, so the viewer describes the record on
         the line and opens nothing: the run's watcher already put its figures up."""
@@ -347,7 +344,7 @@ class FdtPanel(BasePanel):
                           ("freqs_per_batch", self.freqs_per_batch), ("f0", self.f0)):
             settings.save_field(qs, name, fld)
         # The two checkboxes are not written: they are consents (see the class docstring). Neither
-        # are the seed, the record name and the note -- all three belong to ONE run (E7, §5.5).
+        # are the seed, the record name and the note -- all three belong to ONE run.
         qs.endGroup()
 
     def restore_settings(self, qs):

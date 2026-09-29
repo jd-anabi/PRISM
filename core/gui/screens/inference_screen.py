@@ -111,8 +111,8 @@ class InferenceScreen(QWidget):
 
         THE DRAFT IS DELIBERATELY NOT IN THE LIST. ``new_draft`` replaces the draft, and replacing it
         is the entire point of pressing Apply: a list that named it would make every deliberate model
-        change look like a loss, and the guard built on this list (B12) would then interrupt every
-        one of them. What Apply discards that nobody asked it to discard is the work DOWNSTREAM of
+        change look like a loss, and the guard built on this list would then interrupt every one of
+        them. What Apply discards that nobody asked it to discard is the work DOWNSTREAM of
         the draft -- the built config, the prior, the posterior and the recorded observation -- which
         is exactly ``SbiSession.reset_downstream``'s subject and exactly this list.
 
@@ -140,7 +140,7 @@ class InferenceScreen(QWidget):
         return held
 
     def set_running_tab(self, index: "int | None") -> None:
-        """Mark the tab at ``index`` as the one with a live run; None clears every mark (B11). Tab
+        """Mark the tab at ``index`` as the one with a live run; None clears every mark. Tab
         TEXT only: refresh_gates owns each tab's enabled state and tooltip and runs after every
         stage, so a marker written there would be wiped seconds later."""
         mark_tabs(self.tabs, self._tab_labels, index)
@@ -149,11 +149,12 @@ class InferenceScreen(QWidget):
         """Config applied: replace the WHOLE session (a different model or unit system invalidates
         every artifact) and repoint the Prior tab's bounds picker at the new model's folder.
 
-        THE DESTRUCTIVE ONE OF THE SCREEN'S TWO ENTRY POINTS, AND THE CONFIRMATION IS NOW THE GUARD
-        (piece 4, B12). The Config tab asks before it calls here whenever ``session_contents()`` is
-        non-empty, defaulting to keeping the session, so a mis-aimed Apply can no longer drop a
-        prior, a posterior and a recorded observation in silence -- which is the half of the
-        handoff's trap M1b that a reader could not defend themselves against.
+        THE DESTRUCTIVE ONE OF THE SCREEN'S TWO ENTRY POINTS, AND THE CONFIRMATION IS NOW THE GUARD.
+        The Config tab asks before it calls here whenever ``session_contents()`` is non-empty,
+        defaulting to keeping the session, so a mis-aimed Apply can no longer drop a prior, a
+        posterior and a recorded observation in silence -- which is the half of the difference
+        between replacing the session's configuration and installing into it that a reader could not
+        defend themselves against.
 
         Nothing is deleted either way: every stage writes its artifact at completion, so what this
         drops is the session's HANDLES, and the artifacts stay on disk to be selected again. Its
@@ -171,9 +172,9 @@ class InferenceScreen(QWidget):
         Prior stage installs the config as the first step of building the prior, so a new session
         here would wipe the draft that built this config and the artifact the stage is about to
         store -- mid-stage, with nothing to confirm against, because the operator pressed a button
-        that promised to build a prior and not to start over. That asymmetry is the whole of the
-        handoff's trap M1b: its destructive twin ``new_draft`` is the one the Config tab now
-        confirms (B12), and this one is never confirmed at all.
+        that promised to build a prior and not to start over. That asymmetry is the difference
+        between replacing the session's configuration and installing into it: its destructive twin
+        ``new_draft`` is the one the Config tab confirms, and this one is never confirmed at all.
         """
         self.session.cfg = cfg
         self.infer_panel.on_config_built(cfg)

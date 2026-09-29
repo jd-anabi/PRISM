@@ -114,7 +114,7 @@ class _VarRow(QGroupBox):
 
         ``values()`` reads these through ``FloatField.value()``, which returns 0.0 for a blank box --
         so a cleared "freq" used to be saved as a real frequency of zero nobody typed. The screen
-        checks them through this accessor before assembling the document (spec §5.3).
+        checks them through this accessor before assembling the document.
         """
         kind = _FORCE_KINDS[self.force_kind.currentIndex()][0]
         return dict(self._force_fields[kind]) if kind else {}
@@ -381,10 +381,10 @@ class ModelBuilderScreen(QWidget):
     def _validate(self):
         """Parse + compile + a short batch-1 smoke integration. Returns the doc, or None (status set).
 
-        A problem with one numeric box RAISES a ``Refusal`` keyed to that box (spec §5.1, §5.3), which
-        the two click entries route to ``_refusal``; the problems no one box answers -- a task
-        running, no variables, a bad name, a parse or integration failure -- stay status-line
-        sentences and return None."""
+        A problem with one numeric box RAISES a ``Refusal`` keyed to that box, which the two click
+        entries route to ``_refusal``; the problems no one box answers -- a task running, no
+        variables, a bad name, a parse or integration failure -- stay status-line sentences and
+        return None."""
         if BasePanel._running:
             # The smoke integration's tqdm writes to the process-wide redirected streams while a
             # worker runs -- it would interleave into that run's progress pane. Refuse instead.
@@ -400,12 +400,12 @@ class ModelBuilderScreen(QWidget):
             return None
         # Read the numeric boxes through value_or_none BEFORE assembling the document: value()
         # returns 0.0 for a blank, so a check written against the assembled doc would judge a blank
-        # box as a typed zero (Review Focus 3).
+        # box as a typed zero.
         require_positive("x_scale", self.x_scale.value_or_none())
         # The transient budget and the positive forcing values are model_store's own save-time rules,
         # asked here in its words: the smoke integration below runs with the forcing off and at any
         # t_scale, so without these Validate passed a form that Save then refused on the status line
-        # alone, naming no box (spec §5.6, Task 35).
+        # alone, naming no box.
         budget = model_store.t_scale_problem(require_positive("t_scale", self.t_scale.value_or_none()))
         if budget:
             refuse("t_scale", budget)
@@ -440,9 +440,9 @@ class ModelBuilderScreen(QWidget):
             # None means the field did not parse -- a blank box, or "-" mid-typing. Refused here so
             # it is a message about THAT parameter rather than model_store rejecting a 0.0 the user
             # never typed. The parameter's NAME is in every sentence because these rows repeat: one
-            # key names the kind of field, the sentence names which row (spec §5.3). The value is
-            # read off its box through value_or_none, not off e["value"]: spec() reads it through
-            # value(), which turns a cleared box into a 0.0 this check could never refuse (F16).
+            # key names the kind of field, the sentence names which row. The value is read off its
+            # box through value_or_none, not off e["value"]: spec() reads it through value(), which
+            # turns a cleared box into a 0.0 this check could never refuse.
             for key, which, v in (("param_value", "value", self._param_fields[p].value.value_or_none()),
                                   ("param_min", "minimum", e["lo"]),
                                   ("param_max", "maximum", e["hi"])):
@@ -462,7 +462,7 @@ class ModelBuilderScreen(QWidget):
                 if self._param_fields[p].auto.isChecked():
                     # The automatic box starts at or below 0 for EVERY value (nd_bounds pads by at
                     # least |v|), so "raise the minimum" named a box 'auto' has disabled; the fix is to
-                    # leave the automatic bounds first (the whole-piece review's N19).
+                    # leave the automatic bounds first.
                     refuse("param_min", f"Parameter '{p}': a log coordinate needs a minimum above 0, "
                                         f"and its automatic bounds always start at or below 0 (here "
                                         f"{e['lo']:g}); turn the automatic bounds off and raise the "
@@ -567,10 +567,10 @@ class ModelBuilderScreen(QWidget):
         the core's neutral sentence and this front end's "where to fix it" under it.
 
         Through ``refusal_box.show_refusal`` rather than ``BasePanel._refusal`` because this screen
-        is a plain QWidget (spec §1.2): a BasePanel enrols in ``BasePanel._instances``, and a run in
-        any panel would then grey out the builder's own controls. It has no log pane either, so the
-        status line is this screen's record of the sentence -- the same role the pane plays for a
-        panel and the status line plays for the Artifacts screen.
+        is a plain QWidget: a BasePanel enrols in ``BasePanel._instances``, and a run in any panel
+        would then grey out the builder's own controls. It has no log pane either, so the status
+        line is this screen's record of the sentence -- the same role the pane plays for a panel and
+        the status line plays for the Artifacts screen.
         """
         self._set_status(f"{exc.message} {gui_fields.fix_sentence(exc.field)}".rstrip(), error=True)
         show_refusal(self, exc)

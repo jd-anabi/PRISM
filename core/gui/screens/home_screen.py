@@ -11,8 +11,8 @@ from PySide6.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 from .nav_shell import RUNNING_MARK
 
 # The five sections, in display order. All five are live; MainWindow passes them all in
-# live_sections. "Artifacts" is the artifact browser (piece 4, B1) -- a peer of the four stage
-# sections, and a plain screen rather than a panel.
+# live_sections. "Artifacts" is the artifact browser -- a peer of the four stage sections, and a
+# plain screen rather than a panel.
 SECTIONS = ("Reduction Map", "FDT Analysis", "Parameter Inference", "Simulate", "Artifacts")
 
 
@@ -47,8 +47,8 @@ class HomeScreen(QWidget):
         layout.addWidget(self.greeting_label)
         layout.addSpacing(10)
 
-        # Kept on self: the running section's tile takes a marker (piece 4, B11), and a tile that was
-        # only ever added to a layout cannot be found again.
+        # Kept on self: the running section's tile takes a marker, so the live run is shown
+        # app-wide, and a tile that was only ever added to a layout cannot be found again.
         self.tiles: dict = {}
         for name in SECTIONS:
             btn = QPushButton(name)
@@ -72,7 +72,7 @@ class HomeScreen(QWidget):
         """Mark one section's tile as the one with a live run; None (or an unknown name) clears every
         mark. A SUFFIX on the tile's own label, rewritten from the section name rather than edited in
         place, so marking is idempotent and a cleared tile reads exactly as it was built. Nothing is
-        disabled -- every tile stays clickable while a run is live (piece 4, B11)."""
+        disabled -- every tile stays clickable while a run is live."""
         running = name if name in self.tiles else None
         for section, btn in self.tiles.items():
             text = f"{section}  {RUNNING_MARK}" if section == running else section

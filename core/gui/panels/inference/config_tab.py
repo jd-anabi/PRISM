@@ -30,8 +30,8 @@ class ConfigPanel(_StagePanel):
     boxes at Apply through ``_read_inputs`` (2 <= K <= pad <= CHI_K_MAX, ceiling > CHI_MIN_CYCLES,
     typed units resolvable), since this is where they are entered; a bad box is a ``Refusal`` shown
     as the yellow "Check your inputs" box, and the session is left untouched. The chi drive
-    amplitude and band are READ-ONLY displays of config.py (piece 3, V5): the draft carries None for
-    both, so every config built from it carries config.py's values, as the command-line tool's does.
+    amplitude and band are READ-ONLY displays of config.py: the draft carries None for both, so
+    every config built from it carries config.py's values, as the command-line tool's does.
 
     Persists (group "inference_config"): model, units source/text, the chi-mode tick and the
     rotation tick -- the selections. The chi probe count, slots and lock-in ceiling open at
@@ -64,9 +64,10 @@ class ConfigPanel(_StagePanel):
         self.chi_check = QCheckBox("Multi-frequency χ(ω) conditioning")
         self.chi_k = IntField(config.CHI_N_FREQS)
         # The drive amplitude and band are MEASUREMENTS (config.py's CHI_F0 record), not per-run
-        # choices: since D11 build_prior refuses any other value, so a box that accepted one only
-        # manufactured that refusal seconds after Apply. Read-only displays; the draft never reads
-        # them (see _build_config), so every config built here carries config.py's values.
+        # choices: there is no chi override -- build_prior refuses any band or amplitude but
+        # config.py's -- so a box that accepted one only manufactured that refusal seconds after
+        # Apply. Read-only displays; the draft never reads them (see _build_config), so every config
+        # built here carries config.py's values.
         self.chi_f0 = FloatField(config.CHI_F0)
         self.chi_f0.setReadOnly(True)
         self.chi_range = _ChiRangeRow(*config.CHI_FREQ_BOUNDS)
@@ -89,7 +90,7 @@ class ConfigPanel(_StagePanel):
         form.addRow(with_badge(self.rot_check, HELP["reparam_rotate"]))
 
         form.addRow(self.btn_config)
-        # WHAT APPLY WOULD REPLACE, stated permanently and not only in the dialog (B12). The
+        # WHAT APPLY WOULD REPLACE, stated permanently and not only in the dialog. The
         # confirmation Apply raises is answered and gone; this line is what lets someone see, before
         # they reach for the button, that this session is holding a prior and a posterior. Same
         # word-wrapped PlainText label as every other derived line in this section, for the same
@@ -133,12 +134,13 @@ class ConfigPanel(_StagePanel):
         is read LIVE -- `pipeline.vram_ceiling_gib()` does a `getattr` on the module every time the
         planner asks -- so a plain assignment reaches every stage that simulates, with no plumbing.
 
-        NOT PERSISTED, ON PURPOSE, and it is the only field on this tab that is not. Stale QSettings
-        have already cost this project a ~5-day run (the 2026-08-19 retrain trained on the retired
-        band because a saved value silently won over config.py). A ceiling fails the same way but
-        more quietly: a forgotten 2 GiB would not error, it would just make every future run split
-        from batch 0 and take several times longer, with nothing in the log to explain it. Starting
-        each session from config.py's 0.0 means the throttle is always a decision someone just made.
+        NOT PERSISTED, ON PURPOSE, like every science knob on this tab: the chi probe count, slots
+        and lock-in ceiling open at config.py on every launch too. Stale QSettings have already cost
+        this project a ~5-day run (the 2026-08-19 retrain trained on the retired band because a
+        saved value silently won over config.py). A ceiling fails the same way but more quietly: a
+        forgotten 2 GiB would not error, it would just make every future run split from batch 0 and
+        take several times longer, with nothing in the log to explain it. Starting each session from
+        config.py's 0.0 means the throttle is always a decision someone just made.
 
         The env override still wins if it is set -- said out loud here rather than left to puzzle
         over, because a field that silently does nothing is worse than no field.
@@ -212,7 +214,7 @@ class ConfigPanel(_StagePanel):
 
     def _read_inputs(self) -> dict:
         """Every box Apply will read, through ``value_or_none()`` and the shared rules; the first bad
-        one raises ``Refusal`` (spec §3.4). The keys are the field keys of ``core.refusals.FIELDS``.
+        one raises ``Refusal``. The keys are the field keys of ``core.refusals.FIELDS``.
 
         The χ boxes are read only while χ mode is on: off, they are disabled and the draft carries
         None for them, so ``make_sim_config`` takes config.py's values -- the tool's behaviour. A
@@ -259,7 +261,7 @@ class ConfigPanel(_StagePanel):
         return out
 
     def _confirm_replace_session(self) -> bool:
-        """Ask before Apply throws this session's work away (B12). True = go ahead.
+        """Ask before Apply throws this session's work away. True = go ahead.
 
         SILENT WHEN THERE IS NOTHING TO LOSE. An empty ``session_contents()`` shows no dialog at all,
         so the first Apply of a sitting -- and every Apply made before a prior exists -- behaves
@@ -273,7 +275,7 @@ class ConfigPanel(_StagePanel):
 
         "Keep this session" is the default BY NAME, not by index: ``QMessageBox.buttons()`` orders by
         role (Reject before Destructive), so ``buttons()[-1]`` is the destructive one -- that is how
-        Enter once started the very run the Posterior tab's D7 dialog exists to stop
+        Enter once started the very run the Posterior tab's fresh-cache dialog exists to stop
         (posterior_tab._ask_new_run). And it is an INSTANCE ``QMessageBox`` shown with ``.exec()``:
         tests/conftest.py patches the instance method only, so ``QMessageBox.question`` would hang
         the offscreen suite rather than fail it.
@@ -390,7 +392,7 @@ class ConfigPanel(_StagePanel):
         self._sync_session_line()
 
     def save_settings(self, qs):
-        """The SELECTIONS only (V5). The chi probe count, slots and lock-in ceiling are science knobs
+        """The SELECTIONS only. The chi probe count, slots and lock-in ceiling are science knobs
         that open at config.py on every launch, and the amplitude and band are read-only displays:
         none of the six is written, and a stale `chi_k` / `chi_k_pad` / `chi_f0` / `chi_lo` /
         `chi_hi` / `chi_max_cycles` key in an old PRISM.ini is ignored by restore_settings. Seeding

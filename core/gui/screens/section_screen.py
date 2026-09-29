@@ -46,5 +46,5 @@ class SectionScreen(QWidget):
         return [self.tabs.widget(i) for i in range(self.tabs.count())]
 
     def set_running_tab(self, index: "int | None") -> None:
-        """Mark the tab at ``index`` as the one with a live run; None clears every mark (B11)."""
+        """Mark the tab at ``index`` as the one with a live run; None clears every mark."""
         mark_tabs(self.tabs, self._tab_labels, index)

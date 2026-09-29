@@ -225,8 +225,7 @@ def run_simulation_stream(cfg, t_obs_s: float, frame_steps: int = 2000, fps: flo
                 # ships that way -- is undriven: a ZERO drive in the sinusoid builder's own (batch,
                 # channels, T) shape, on the device and dtype already in scope (this path is
                 # CPU-pinned by build_stream_config). The sinusoid builder raised KeyError 'amp' here,
-                # a red box on a shipped cell (the whole-piece review's N17; the owner's ruling R-F4,
-                # which departs from spec §5.6's bound).
+                # a red box on a shipped cell.
                 force_chunk = torch.zeros((plan.inits_tensor.shape[0], plan.n_channels,
                                            t_chunk.numel()), dtype=dtype, device=device)
             else:

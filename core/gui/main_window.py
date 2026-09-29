@@ -77,7 +77,7 @@ class MainWindow(QMainWindow):
 
     Always opens on Home -- the last screen is deliberately not restored. Owns the QSettings write
     that runs at quit (``_save_state``, reached from closeEvent): panel selections, and the Artifacts
-    screen's own (piece 4, B1, which is called by name because _all_panels() is panel-typed). Two
+    screen's own (called by name, because _all_panels() is panel-typed and that screen is not). Two
     other write sites exist on purpose: BasePanel._persist_layout writes a splitter position on a
     1500 ms debounce (save-on-clean-quit lost the drag -- see base_panel.py), and appearance settings
     are written eagerly, as they are applied immediately.
@@ -118,7 +118,7 @@ class MainWindow(QMainWindow):
 
         # The artifact browser: AFTER the four sections and BEFORE the Settings screen, so the
         # back-arrow slide direction stays monotone with the Home tile order. A plain QWidget, not a
-        # BasePanel (B1) -- a run anywhere must not grey out the log you are reading.
+        # BasePanel -- a run anywhere must not grey out the log you are reading.
         self.artifact_screen = ArtifactScreen()
         idx_artifacts = self.nav.add_screen(self.artifact_screen)
         self.artifact_screen.store_changed.connect(self._refresh_store_pickers)
@@ -168,8 +168,8 @@ class MainWindow(QMainWindow):
                 self._panel_home[screen.tabs.widget(tab_index)] = (
                     name, screen.tabs.tabText(tab_index), self._section_index[name], tab_index)
 
-        # The run slot, EMPTY at launch (spec §1.2): the timer is constructed here but never started,
-        # and an unstarted QTimer registers nothing with the OS, so nothing on the launch path ticks.
+        # The run slot, EMPTY at launch: the timer is constructed here but never started, and an
+        # unstarted QTimer registers nothing with the OS, so nothing on the launch path ticks.
         self._running_panel = None
         self._run_title = ""
         self._run_started = 0.0
@@ -329,7 +329,7 @@ class MainWindow(QMainWindow):
                     handler(combo.currentText())
 
     def _refresh_store_pickers(self):
-        """Re-list every artifact picker after the browser changed the store (B8) -- the twin of
+        """Re-list every artifact picker after the browser changed the store -- the twin of
         _refresh_model_combos, which a saved or deleted user model already drives.
 
         Found by TYPE rather than by naming the three attributes (prior_picker, post_picker,
@@ -347,7 +347,7 @@ class MainWindow(QMainWindow):
         return (self.reduction_screen.panels() + self.fdt_screen.panels()
                 + self.inference_screen.panels() + self.simulate_screen.panels())
 
-    # ── the live run, visible app-wide (piece 4, B11) ─────────────────────────
+    # ── the live run, visible app-wide ────────────────────────────────────────
     def _on_run_state(self, panel) -> None:
         """A run started (``panel``) or ended (None): fill or clear the shell's run slot.
 
@@ -400,7 +400,7 @@ class MainWindow(QMainWindow):
         screens is nothing, and the bookkeeping version is what leaves a stale marker behind when a
         run ends on a window that was navigated in between. Nothing is DISABLED here: the app-wide
         control lock (BasePanel._set_busy) already stands and navigation stays free -- you must be
-        able to look at another tab while a twenty-minute train runs (spec §6.1, B11).
+        able to look at another tab while a twenty-minute train runs.
         """
         where = self._panel_home.get(panel)
         name = where[0] if where is not None else None
@@ -450,7 +450,7 @@ class MainWindow(QMainWindow):
         qs.setValue("window/geometry", self.saveGeometry())
         for panel in self._all_panels():
             panel.save_settings(qs)
-        # BY NAME (B1): the browser is a QWidget, not a BasePanel, so it is not in _all_panels() and
+        # BY NAME: the browser is a QWidget, not a BasePanel, so it is not in _all_panels() and
         # gets no sweep for free -- which is also what keeps it out of _refresh_model_combos.
         self.artifact_screen.save_settings(qs)
         qs.sync()
