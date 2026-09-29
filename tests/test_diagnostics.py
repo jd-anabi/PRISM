@@ -1651,6 +1651,52 @@ def test_the_diagnostic_warnings_are_records_and_the_reports_are_information(cap
     assert out == "" and err == "", (out, err)
 
 
+_GEOMETRY_NAMES = ("T_nd_k", "dt_nd_k", "subsample_factor", "N_points_k", "n_fine_total")
+
+
+def _geometry_bindings(source: str) -> list:
+    """The five geometry statements of a function's ``source``, in line order.
+
+    Every binding of the five names anywhere in the function is counted: assignment targets, including
+    names nested in tuple and list targets, augmented and annotated assignments, walrus expressions,
+    loop targets and ``with ... as`` targets. Each name must be bound exactly once, by a plain
+    single-target assignment; any other binding means the statement run here is not the value the
+    loop goes on to use, so the name is refused rather than trusted."""
+    import ast
+    import textwrap
+
+    def bound(target):
+        if isinstance(target, ast.Name):
+            yield target.id
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                yield from bound(element)
+        elif isinstance(target, ast.Starred):
+            yield from bound(target.value)
+
+    binders = {name: [] for name in _GEOMETRY_NAMES}
+    for node in ast.walk(ast.parse(textwrap.dedent(source))):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign, ast.NamedExpr, ast.For, ast.AsyncFor)):
+            targets = [node.target]
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            targets = [node.optional_vars]
+        else:
+            continue
+        for target in targets:
+            for name in bound(target):
+                if name in binders:
+                    binders[name].append(node)
+    refused = [f"{name}: bound {len(nodes)} time(s) -- " + "; ".join(ast.unparse(n).splitlines()[0] for n in nodes)
+               for name, nodes in binders.items()
+               if not (len(nodes) == 1 and isinstance(nodes[0], ast.Assign) and len(nodes[0].targets) == 1
+                       and isinstance(nodes[0].targets[0], ast.Name))]
+    assert not refused, ("each geometry name must be bound exactly once, by a plain single-target assignment:\n"
+                         + "\n".join(refused))
+    return sorted((nodes[0] for nodes in binders.values()), key=lambda n: n.lineno)
+
+
 def _batch_loop_geometry(cfg, t_obs_s, t_scale):
     """(N_points_k, n_fine_total, subsample_factor) as the training batch loop computes them: its own
     five geometry statements, lifted from gen_training_data's source and run on one (length, t_scale).
@@ -1661,19 +1707,37 @@ def _batch_loop_geometry(cfg, t_obs_s, t_scale):
     so a reshaped loop fails here by name instead of passing against a stale restatement."""
     import ast
     import inspect
-    import textwrap
     from core.SBI import pipeline
-    names = ("T_nd_k", "dt_nd_k", "subsample_factor", "N_points_k", "n_fine_total")
-    tree = ast.parse(textwrap.dedent(inspect.getsource(pipeline.gen_training_data)))
-    found = sorted((n for n in ast.walk(tree)
-                    if isinstance(n, ast.Assign) and len(n.targets) == 1
-                    and isinstance(n.targets[0], ast.Name) and n.targets[0].id in names),
-                   key=lambda n: n.lineno)
-    assert sorted(n.targets[0].id for n in found) == sorted(names), [ast.unparse(n) for n in found]
+    found = _geometry_bindings(inspect.getsource(pipeline.gen_training_data))
     scope = {"T_k": t_obs_s * cfg.get_unit_conversion_factor("s"), "t_scale_k": t_scale,
              "dt_exp": cfg.dt_exp, "dt_nd_min": cfg.dt_nd_min, "steady_idx": cfg.steady_idx}
     exec(compile(ast.Module(body=found, type_ignores=[]), "gen_training_data", "exec"), scope)
     return scope["N_points_k"], scope["n_fine_total"], scope["subsample_factor"]
+
+
+_GEOMETRY_SOURCE = """
+def gen(T_k, t_scale_k, dt_exp, dt_nd_min, steady_idx):
+    T_nd_k = T_k / t_scale_k
+    dt_nd_k = dt_exp / t_scale_k
+    subsample_factor = max(1, int(dt_nd_k / dt_nd_min))
+    N_points_k = int(T_nd_k / dt_nd_k)
+    n_fine_total = steady_idx + N_points_k * subsample_factor
+"""
+
+
+@pytest.mark.parametrize("rebinding", ["N_points_k += 0", "N_points_k: int = 0", "print(N_points_k := 0)",
+                                       "N_points_k, _ = 0, 0", "[N_points_k] = [0]",
+                                       "for N_points_k in ():\n        pass"])
+def test_the_geometry_pin_refuses_a_name_bound_twice_or_not_plainly(rebinding):
+    """The geometry pin runs the batch loop's own statements, so it holds only while each of the five
+    names is bound once, by a plain assignment. Any other binding -- augmented, annotated, a walrus, a
+    tuple or list target, a loop target -- would leave the pin running a statement whose value the loop
+    then changes, and passing against a stale one. The pin names the name it refuses."""
+    assert [ast_node.targets[0].id for ast_node in _geometry_bindings(_GEOMETRY_SOURCE)] == [
+        "T_nd_k", "dt_nd_k", "subsample_factor", "N_points_k", "n_fine_total"]
+    with pytest.raises(AssertionError, match="N_points_k"):
+        _geometry_bindings(_GEOMETRY_SOURCE.replace("    n_fine_total",
+                                                    f"    {rebinding}\n    n_fine_total"))
 
 
 def test_the_recording_geometry_agrees_with_the_training_batch_formula():
