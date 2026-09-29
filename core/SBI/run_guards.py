@@ -165,8 +165,8 @@ def _assert_user_model_in_sync(cfg: SimConfig) -> None:
 
     The simulators bind parameter columns by position (``torch.unbind``), so a hand-edited definition
     over a stale bounds file would simulate every row with its values in the wrong places, silently.
-    A built-in model passes. Run before anything is simulated by every stage that loads a prior to
-    simulate from it: loading a prior for training and the probe checks' mask audit.
+    A built-in model passes. Run before anything is simulated by every stage that simulates from a
+    prior: the prior stage, whether it builds the prior or loads it, and the probe checks' mask audit.
 
     :raises Refusal: (field None) naming both orders. The fix is a re-save in the model builder, which
         no inference control or flag names.
