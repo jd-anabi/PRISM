@@ -1041,7 +1041,7 @@ _IDENTITY_KEYS = {
     "rescale_highs", "log_params", "reparam_rotate", "run_size", "n_runs", "steady_idx", "dt_nd_min",
     "dt_exp", "t_min_exp", "t_max_exp", "t_scale_bounds", "n_grid", "spontaneous_only", "summary_flags",
     "feature_set_version", "chi_mode", "chi_layout", "chi_k_pad", "chi_elem_w", "chi_f0", "chi_freq_bounds",
-    "chi_max_cycles", "device", "dtype", "truncation"}
+    "chi_max_cycles", "device", "dtype", "truncation", "units_sha256"}
 
 
 def test_identity_carries_truncation_always_and_feature_set_version_rekeys(monkeypatch):
@@ -1068,6 +1068,27 @@ def test_identity_carries_truncation_always_and_feature_set_version_rekeys(monke
     class _LoadedLike:                       # a LoadedPrior supplies its fingerprint outright
         fingerprint = "f" * 16
     assert SimulationIdentity.from_cfg(cfg, _LoadedLike(), 2048, 5000).to_dict()["prior_fingerprint"] == "f" * 16
+
+
+def test_the_simulation_identity_fingerprints_the_units_file_it_was_built_with(tmp_path):
+    """The derived force scale depends on Boltzmann's constant in the cell's units, so the cache identity
+    carries the units file's fingerprint: line endings do not change it, an edit does, and a config with
+    no units source fails open to None."""
+    import hashlib
+    from core.artifacts.identity import FORMAT, SimulationIdentity
+    cfg = _nad_cfg()
+    lf = Path(cfg.sources["units"]).read_bytes().replace(b"\r\n", b"\n")
+    ident = SimulationIdentity.from_cfg(cfg, None, 4, 2).to_dict()
+    assert FORMAT == "training-rows/3" and ident["format"] == FORMAT
+    assert ident["units_sha256"] == hashlib.sha256(lf).hexdigest()
+    crlf, edited = tmp_path / "crlf.txt", tmp_path / "edited.txt"
+    crlf.write_bytes(lf.replace(b"\n", b"\r\n"))
+    edited.write_bytes(lf + b"# a declared change\n")
+    assert SimulationIdentity.from_cfg(_nad_cfg(units_override=str(crlf)), None, 4, 2).to_dict()["units_sha256"] == ident["units_sha256"]
+    assert SimulationIdentity.from_cfg(_nad_cfg(units_override=str(edited)), None, 4, 2).to_dict()["units_sha256"] != ident["units_sha256"]
+    bare = _nad_cfg()
+    bare.sources = {}
+    assert SimulationIdentity.from_cfg(bare, None, 4, 2).to_dict()["units_sha256"] is None
 
 
 def test_simulation_directories_live_under_the_store_without_a_prefix(store):

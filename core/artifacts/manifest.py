@@ -255,12 +255,20 @@ def config_from_cfg(cfg) -> dict:
     ``omega_0`` is deliberately absent, because the writer computes this block at ``create()`` time
     from the caller's object while the run refines the resonance on its own private copy, and the
     refined value belongs in ``body.grid``.
+
+    On a box that declares temperature in place of the force scale, the block also carries ``tier1``
+    -- the relation the force scale is derived by, Boltzmann's constant in the cell's units and the
+    temperature's range -- and ``assumed_params``, the parameters reported as assumed inputs. A reader
+    of the record then knows what every simulation behind it was driven at without the bounds file.
+    Both keys are absent on every other box. ``k_b_cell`` is read only on such a box, because it
+    raises for a units file with no force unit.
     """
     if not hasattr(cfg, "observation_mode"):
         return _fdt_config_from_cfg(cfg)
+    from core.SBI import derived
     from core.SBI.reparam import resolved_log_params
     from core.SBI.run_guards import _log_params_for
-    return {
+    block = {
         "model": cfg.model,
         "mode": cfg.observation_mode,
         "param_keys": list(cfg.params_dict) + list(cfg.rescale_params),
@@ -283,3 +291,9 @@ def config_from_cfg(cfg) -> dict:
         "units": list(cfg.units_dict) if isinstance(cfg.units_dict, (list, tuple)) else None,
         "device": cfg.hw.device.type, "dtype": str(cfg.hw.dtype),
     }
+    if derived.uses_derived_f_scale(cfg.rescale_idx):
+        _, (t_lo, t_hi) = cfg.rescale_params[derived.TEMPERATURE_PARAM]
+        block["tier1"] = {"relation": "f_scale = N * beta * k_B * T / x_scale",
+                          "k_b_cell": float(cfg.k_b_cell), "T_range": [float(t_lo), float(t_hi)]}
+        block["assumed_params"] = list(cfg.assumed_params)
+    return block

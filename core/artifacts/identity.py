@@ -13,12 +13,38 @@ the naming circular. A resumed run reuses the stored V precisely because V is no
 across processes (its operating points come from the unseeded global RNG), so the identity must be
 computable without it. The region a TSNPE round trains under DOES enter (``truncation``): it
 carries the PARENT's V, copied and never recomputed, so its digest is stable by construction.
+
+``units_sha256`` is the units file's fingerprint, and it is what moved the format from
+training-rows/2 to training-rows/3. On a box that declares temperature in place of the force scale,
+every simulation is driven at a force scale derived through Boltzmann's constant in the cell's
+units, so the same bounds read under another units file simulate other rows. It hashes the FILE,
+never ``cfg.units_dict``, whose token order is not stable between processes, and it hashes the bytes
+with CRLF read as LF, so a checkout that rewrites line endings does not re-key a cache. It fails
+open to None for a config with no units source or a file that is gone, as the GUI's pre-Train status
+line computes identities from stand-ins. A cache written under the older format keys a different
+directory, so it is never found for a resume, and a directory moved into place by hand is refused
+field by field (``training_checkpoint.verify``).
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 
-FORMAT = "training-rows/2"
+FORMAT = "training-rows/3"
+
+
+def _units_sha256(cfg) -> str | None:
+    """sha256 hex of the units file ``cfg.sources["units"]`` names, over its bytes with CRLF replaced
+    by LF; None when the config has no sources, no units entry, or the file cannot be read."""
+    path = (getattr(cfg, "sources", None) or {}).get("units")
+    if not path:
+        return None
+    try:
+        data = Path(path).read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -72,6 +98,7 @@ class SimulationIdentity:
             "device": cfg.hw.device.type,
             "dtype": str(cfg.hw.dtype),
             "truncation": None if truncation is None else truncation.identity_fields(),
+            "units_sha256": _units_sha256(cfg),
         }
         return cls(vals)
 

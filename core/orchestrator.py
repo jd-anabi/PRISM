@@ -148,6 +148,10 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     # a drive or simulates anything.
     rescale_gt = derived.to_sim_rescale(cfg.params_tensor, rescale_gt, cfg.rescale_idx,
                                        *cfg.tier1_args)
+    # The force scale this observation is really simulated at, for its record: derived on the tier-1
+    # box, the cell's declared one otherwise, and none on a box whose simulator has no force scale.
+    sim_f_idx = cfg.sim_rescale_idx.get("f_scale")
+    simulated_f_scale = None if sim_f_idx is None else float(rescale_gt[0, sim_f_idx])
 
     # Ground-truth t_scale for this observation
     t_scale_gt = rescale_gt[:, cfg.rescale_idx["t_scale"]].item()
@@ -280,7 +284,8 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     forcing_vals = ({k: float(v) for k, (v, _) in cfg.force_params_dict.items()}
                     if (cfg.has_forcing and not cfg.chi_mode) else {})
     return _write_observation(store, cfg, name, note, fig_sink, obs_stats, x_dim, t_dim,
-                              title="Ground-truth trace", source=source, forcing_vals=forcing_vals)
+                              title="Ground-truth trace", source=source, forcing_vals=forcing_vals,
+                              simulated_f_scale=simulated_f_scale)
 
 
 @public_entry
@@ -352,13 +357,19 @@ def build_experiment_observation(cfg: SimConfig, rec: "RecordingSet", *, name: s
                               title="Observed trace", source=source, forcing_vals=forcing_vals)
 
 
-def _write_observation(store, cfg, name, note, fig_sink, x_obs, obs_data, t_dim, *, title, source, forcing_vals):
+def _write_observation(store, cfg, name, note, fig_sink, x_obs, obs_data, t_dim, *, title, source, forcing_vals,
+                       simulated_f_scale: float | None = None):
     """The one write site for both observation stages: the payload, the trace figure, and the manifest
     carrying the mode, the conditioning geometry, the digest, the context and the source. Read back
-    through the loader, exactly as a later load would verify it."""
+    through the loader, exactly as a later load would verify it.
+
+    ``simulated_f_scale`` is the force scale a simulated observation was really simulated at; when
+    given, the record's ``config`` carries it. A recording passes none."""
     from .artifacts.manifest import conditioning_block, tensor_digest, tensor_to_json
     digest = tensor_digest(x_obs)
     with store.create("observation", cfg, name=name, note=note) as w:
+        if simulated_f_scale is not None:
+            w.config["simulated_f_scale"] = float(simulated_f_scale)
         file_manager.atomic_torch_save({"x_obs": x_obs.detach().cpu(), "obs_data": obs_data.detach().cpu(),
                                         "t_dim": t_dim.detach().cpu()}, w.payload("observation.pt"))
         visualizers.plot(t_dim.squeeze(0).cpu().detach().numpy(), obs_data[0, :].cpu().detach().numpy(),

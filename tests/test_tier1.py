@@ -13,7 +13,8 @@ means a caller handed a builder neither name. The retrain trains on this box, so
 simulation is set up from a draw is pinned here: the training rows, the calibration set, the Fisher
 operating points, a simulated observation and its predictive checks, the two simulating
 identifiability diagnostics, the Simulate panel's live runner, a narrowing round, and loading a prior
-built on the master box.
+built on the master box. So is what the records say about it: the relation and the assumed parameters
+in every record's config, and the force scale a simulated observation ran at.
 
 Cheap by design: every fast test but the live runner's replaces ``pipeline.gen_obs`` with
 ``stand_in_gen_obs`` and records the force scale each drive is divided by with ``force_scale_spy``;
@@ -593,6 +594,57 @@ def test_sbc_marks_the_assumed_parameter_in_its_table_and_its_records(store, mon
     rows = [r.getMessage() for r in caplog.records if r.name == "core.diagnostics.sbc"]
     assert sum(m.startswith("T (assumed input)") for m in rows) == 1, rows
     assert seen["rank_plot_labels"][-1][-1] == "T (assumed input)"
+
+
+def test_a_tier1_record_carries_the_constraint_and_the_assumed_parameters(store):
+    """Every record written from a tier-1 config states the relation that derives the force scale, k_B in
+    the cell's units, the temperature range and the assumed parameters; a record without tier 1 has none."""
+    from core.artifacts import manifest as mf
+    cfg = tier1_cfg()
+    block = mf.config_from_cfg(cfg)
+    assert block["tier1"] == {"relation": "f_scale = N * beta * k_B * T / x_scale",
+                              "k_b_cell": cfg.k_b_cell, "T_range": [280.0, 310.0]}
+    assert block["assumed_params"] == ["T"]
+    m = store.get("prior", _prior_artifact(store, cfg, name="t1").id)
+    assert m.config["tier1"] == block["tier1"] and m.config["assumed_params"] == ["T"]
+    plain = mf.config_from_cfg(_nad_cfg())
+    assert "tier1" not in plain and "assumed_params" not in plain
+
+
+def test_a_simulated_tier1_observation_records_the_force_scale_it_ran_at(store, monkeypatch):
+    """A simulated observation on the tier-1 box records the force scale it was really simulated at: the
+    one the relation derives from its truth, which is also the one every drive it built was divided by."""
+    from core.SBI import derived
+    cfg = with_truth(tier1_cfg(chi=False))
+    cfg.T_obs = 1000.0                                      # cell units: 1 s at dt_exp = 1 ms
+    monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
+    spy = force_scale_spy(monkeypatch)
+    obs = orchestrator.generate_observations(cfg, fig_sink=_close, store=store)
+    expected = derived.to_sim_rescale(cfg.params_tensor, _res(cfg).unsqueeze(0), cfg.rescale_idx,
+                                      *cfg.tier1_args)[0, cfg.sim_rescale_idx["f_scale"]]
+    got = obs.manifest.config["simulated_f_scale"]
+    assert got == pytest.approx(float(expected), rel=1e-6) and 46.5 < got < 47.5   # n*beta*k_B*T/x_scale = 47.0 pN
+    _assert_every_drive_used_the_derived_scale(spy, got, rtol=1e-6)
+
+
+def test_a_simulated_observation_records_a_declared_force_scale_and_none_on_a_box_without_one(store, monkeypatch):
+    """Off the tier-1 box the force scale a simulated observation ran at is the one the cell declares, and
+    it is recorded all the same; a box whose simulator has no force scale at all records none."""
+    monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
+    master = _nad_cfg(chi_mode=False)
+    cli.load_and_validate_gt(master, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
+    master.T_obs = 1000.0
+    obs = orchestrator.generate_observations(master, fig_sink=_close, store=store)
+    assert obs.manifest.config["simulated_f_scale"] == 10.0
+    labels = config.VALID_LABELS[config.VALID_MODELS.index("NADROWSKI")]
+    spont = cli.make_sim_config("NADROWSKI", labels, registry.state_dep_drift("NADROWSKI"),
+                                str(config.BOUNDS_PATH / "nadrowski" / "master_spont.txt"), chi_mode=False,
+                                hw=config.cpu_device())
+    cli.load_and_validate_gt(spont, str(config.CELL_PATH / "nadrowski" / "master_spont.txt"))
+    spont.T_obs = 1000.0
+    assert "f_scale" not in spont.sim_rescale_idx
+    obs = orchestrator.generate_observations(spont, fig_sink=_close, store=store)
+    assert "simulated_f_scale" not in obs.manifest.config
 
 
 @pytest.mark.slow
