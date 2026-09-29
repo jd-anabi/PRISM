@@ -527,6 +527,36 @@ def test_the_calibration_table_plots_and_informativeness_mark_the_assumed_parame
     assert "(assumed input)" in cal.results["informativeness"]["description"]
 
 
+def test_the_predictive_check_and_the_best_fit_tables_mark_the_assumed_parameter(monkeypatch):
+    """The predictive check's truth table and the two best-fit figures' parameter tables print the
+    report labels, so temperature reads as an assumed input there as it does in every other report;
+    the best-fit tables show a posterior estimate of it. A box that assumes nothing prints its
+    plotting labels exactly as before."""
+    import ast, inspect, textwrap
+    from core.SBI import overlay
+    tree = ast.parse(textwrap.dedent(inspect.getsource(orchestrator.infer_and_visualize)))
+    ppc = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and ast.unparse(n.func) == "visualizers.plot_ppc"]
+    assert len(ppc) == 1
+    assert ast.unparse({k.arg: k.value for k in ppc[0].keywords}["param_names"]) == "cfg.report_labels"
+
+    tables = []
+
+    def best_fit(*a, param_labels=None, **k):
+        tables.append(list(param_labels))
+        return plt.figure()
+
+    monkeypatch.setattr(overlay.visualizers, "plot_best_fit_overlay", best_fit)
+    tier1, master = tier1_cfg(), _nad_cfg()
+    for cfg in (tier1, master):
+        g = torch.Generator().manual_seed(0)
+        stats = torch.randn(6, 8, generator=g)
+        overlay.emit_overlay_figures(cfg, torch.randn(1, 512, generator=g), torch.randn(6, 512, generator=g),
+                                     stats, stats[0], torch.rand(6, len(cfg.inferred_labels), generator=g),
+                                     False, _close)
+    assert tables == [tier1.report_labels] * 2 + [master.inferred_labels] * 2, tables
+    assert tables[0][-1] == "$T$ (assumed input, K)"
+
+
 def test_the_calibration_verdict_judges_temperature_and_marks_it_assumed(store, monkeypatch, caplog):
     """Temperature stays in the verdict: its rank test failing fails the calibration. The verdict's
     record marks it as an assumed input, by its key, in the stored parameters and in its one row of

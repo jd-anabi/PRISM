@@ -2221,7 +2221,7 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         fig_ppc = visualizers.plot_ppc(
             results,
             ground_truth=(cfg.ground_truth if show_truth else None),
-            param_names=cfg.inferred_labels,
+            param_names=cfg.report_labels,          # an assumed input's truth is marked as one
             n_samples=n_drawn,
         )
         sink("Posterior predictive check", fig_ppc)

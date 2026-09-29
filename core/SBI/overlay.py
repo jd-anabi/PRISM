@@ -297,7 +297,7 @@ def emit_overlay_figures(cfg, obs_data, x_samples, sim_stats, obs_stats, samples
             )
             return
         dt_s = 1.0 / cfg.get_unit_conversion_factor("s") * cfg.dt_exp    # sample spacing in SECONDS
-        labels_ = cfg.inferred_labels
+        labels_ = cfg.report_labels                  # an assumed input's estimate is marked as one
         truth = cfg.ground_truth if show_truth else None
         xlab, ylab = labels.axis_label("t", "s"), labels.axis_label("x", cfg.length_unit)
 

@@ -1174,8 +1174,8 @@ def _batch_schedule(n_runs: int, t: torch.Tensor, t_scale_bounds, t_min_exp, t_m
     oversample = 3
     valid_t_scales, valid_Ts = _draw_and_filter(n_runs * oversample)
     # Fallback: keep drawing more candidates until we have enough valid ones. A whole draw coming
-    # back empty means NO (t_scale, T) in the declared bounds fits the grid, so redrawing would
-    # spin forever -- say what is wrong instead of hanging.
+    # back empty means NO (t_scale, T_obs) in the t_scale bounds and recording range fits the grid,
+    # so redrawing would spin forever -- say what is wrong instead of hanging.
     while valid_t_scales.shape[0] < n_runs:
         more_t_scales, more_Ts = _draw_and_filter(n_runs * oversample)
         if more_t_scales.numel() == 0:
