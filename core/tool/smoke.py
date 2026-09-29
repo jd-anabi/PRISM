@@ -10,8 +10,14 @@ until the card sees it.
 
 WHAT TO WATCH, beyond "it finished":
 
-  * ``chi: N/M probes masked`` -- the COUNT, not the presence. Some masking is by design (a probe
-    under CHI_MIN_CYCLES on a short recording). The reference is ~37 % of TRAINING probes.
+  * ``[chi] masked probes: M of N (P%) over n batches, <scope>`` -- the masked-probe number to read:
+    one information line when the training rows are done, the run total over every committed batch
+    of the simulation cache, resumed batches included, with the per-batch spread beside it. The
+    COUNT matters, not the presence. Some masking is by design (a probe under CHI_MIN_CYCLES on a
+    short recording). The reference is ~37 % of TRAINING probes. The per-call ``chi: N/M probes
+    masked`` warnings remain, one per probe block, but the run total replaces summing them by hand.
+    The calibration draw prints a line of its own, scoped "this process only (no simulation cache)";
+    it is not the training figure.
     THE RUN-LEVEL FIGURE IS NOISY, AND BY MUCH MORE THAN IT LOOKS: all rows in a batch share one
     (t_scale, T) stratum AND one probe set, so the effective n is the BATCH COUNT, not the probe
     count. Measured per-batch fractions span 13.5-57.3 % (SD 12.2 pp over 12 batches). Compare the
@@ -69,7 +75,7 @@ def _stages_type(value: str) -> str:
 def register(subparsers):
     """The ``smoke`` subcommand. Its defaults are the drill's sizes, and they are the ONE place in
     the tool that restates a literal (every other subcommand leaves defaults to its stage)."""
-    from core.refusals import default_text
+    from core.refusals import default_clause, default_text
     from core.tool.config_args import add_config_flags, add_resume_flags
     text = ("every stage end to end at tiny sizes; run it on the card after changing code\n"
             "that moves tensors")
@@ -97,6 +103,11 @@ def register(subparsers):
                    help="calibration datasets to simulate" + default_text("%(default)s"))
     p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=5, metavar="N",
                    help="hard ceiling on training epochs" + default_text("%(default)s"))
+    # No default here: an absent flag forwards nothing, so the stage keeps its own network size.
+    p.add_argument("--hidden-features", dest="hidden_features", type=int, default=None, metavar="N",
+                   help="flow width per transform" + default_clause("hidden_features"))
+    p.add_argument("--num-transforms", dest="num_transforms", type=int, default=None, metavar="N",
+                   help="flow depth" + default_clause("num_transforms"))
     p.add_argument("--checkpoint", action="store_true",
                    help="checkpoint the training rows every max(1, num_runs // 2) batches; OFF by "
                         "default so a second run of one config re-runs the simulation path this "
@@ -205,7 +216,7 @@ def run_smoke(args, store):
             name="smoke_posterior" if args.save else "",
             num_runs=args.num_runs, run_size_cap=args.run_size_cap,
             max_num_epochs=args.max_num_epochs, checkpoint_every=ck_every,
-            new_run=args.new_run, **knobs(args, "resume")))
+            new_run=args.new_run, **knobs(args, "resume", "hidden_features", "num_transforms")))
         if post is None:
             print("\n[smoke] prior only; stopping before training.")
             return 0

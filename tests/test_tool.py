@@ -1219,6 +1219,7 @@ def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, tmp_path, mon
     assert main(["smoke", *_cfg(bounds), "--cell", cell, "--num-runs", "3", "--run-size", "9",
                  "--n-cal", "17", "--max-epochs", "6", "--checkpoint", "--new-run",
                  "--resume", "require", "--t-obs", "2.5", "--seed", "5", "--prior", "smoke_prior",
+                 "--hidden-features", "11", "--num-transforms", "3",
                  "--save", "--store-root", str(tmp_path / "smoke")]) == 0
 
     (cfg1, ref1, build_new1), kw1 = prior_rec.calls[0]
@@ -1231,7 +1232,8 @@ def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, tmp_path, mon
     assert prior2 is loaded_prior and ref2 is None and train_new2 is True
     assert kw2["name"] == "smoke_posterior"
     assert set(kw2) == {"fig_sink", "store", "name", "num_runs", "run_size_cap", "max_num_epochs",
-                        "checkpoint_every", "new_run", "resume"}
+                        "checkpoint_every", "new_run", "resume", "hidden_features", "num_transforms"}
+    assert kw2["hidden_features"] == 11 and kw2["num_transforms"] == 3
     assert kw2["num_runs"] == 3
     assert kw2["run_size_cap"] == 9
     assert kw2["max_num_epochs"] == 6
@@ -1248,6 +1250,11 @@ def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, tmp_path, mon
     assert post4 is loaded_post and t_obs4 == 2.5
     assert set(kw4) == {"cell", "prior", "fig_sink", "store"}
     assert kw4["cell"] == cell and kw4["prior"] is loaded_prior
+
+    # Without the network flags nothing is forwarded, so the stage keeps its own defaults.
+    assert main(["smoke", *_cfg(bounds), "--cell", cell, "--stages", "prior,posterior",
+                 "--store-root", str(tmp_path / "smoke2")]) == 0
+    assert "hidden_features" not in post_rec.calls[-1][1] and "num_transforms" not in post_rec.calls[-1][1]
 
 
 def test_smoke_rejects_an_unknown_stage_at_parse_time(tool_env, monkeypatch, capsys):
