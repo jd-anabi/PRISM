@@ -1208,9 +1208,9 @@ DRIVE_NOTES = (
 _FEW_CYCLES = 30.0
 
 #: What a record with so few cycles adds to its notes.
-FEW_CYCLES_NOTE = ("This recording fits fewer than 30 cycles of the peak, so the drive lies only a few "
-                   "frequency bins from the own-peak window: unless it falls on a bin, its leakage into the "
-                   "window can make a captured cell read in between or free-running.")
+FEW_CYCLES_NOTE = (f"This recording fits fewer than {_FEW_CYCLES:g} cycles of the peak, so the drive lies only "
+                   "a few frequency bins from the own-peak window: unless it falls on a bin, its leakage into "
+                   "the window can make a captured cell read in between or free-running.")
 
 #: The drive's harmonics checked against the own-peak window, as the band check checks its probes'.
 _HARMONIC_ORDERS = (2, 3, 4, 5)
@@ -1357,10 +1357,11 @@ def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float =
     from the weakest up; the weakest captured strength is the first captured one. Both are reported in
     model units and in the cell's force unit, with suggested Forcing lines and a bounds box for a cell
     file, logged and recorded, never written. Three things are known only after the undriven spend, and
-    each is a result -- recorded with every verdict null and one warning, and nothing driven: no clear
-    oscillation (a clarity below ``clarity_min``), a drive at or above 0.9 x Nyquist, and a drive less
-    than one frequency bin from the own-peak window, which is never narrower than two bins either side
-    and so can reach past the detune on a short recording.
+    each is a result -- recorded with every verdict null and a warning of its own (with fewer than about
+    12 runs at the default clarity threshold, the noise-clarity warning joins it), and nothing driven:
+    no clear oscillation (a clarity below ``clarity_min``), a drive at or above 0.9 x Nyquist, and a
+    drive less than one frequency bin from the own-peak window, which is never narrower than two bins
+    either side and so can reach past the detune on a short recording.
 
     Three more are warned and recorded while the strengths are still judged. The clarity pure noise
     reaches with this many runs and samples is computed before the spend and recorded, and a
