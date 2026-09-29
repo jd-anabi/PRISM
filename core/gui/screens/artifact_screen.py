@@ -46,7 +46,7 @@ KIND_LABELS = {
     "inference": "Inferences",
     "diagnostic": "Diagnostics",
     # comparisons too: a comparison is a record of this kind, and both measurement panels send the
-    # owner here to find one
+    # operator here to find one
     "fdt": "FDT measurements, sweeps and comparisons",
 }
 
@@ -490,8 +490,8 @@ class ArtifactScreen(QWidget):
         self.note_edit.setPlaceholderText(
             f"one line, at most {NOTE_MAX_CHARS} characters; empty clears it")
         # NO setMaxLength: the note rule REFUSES an over-long note and names both numbers. A
-        # maxLength would silently truncate it instead -- a clamp, where a bad input is refused at
-        # the click and never repaired.
+        # maxLength would silently truncate it instead -- a clamp; a bad input is refused at the
+        # click, never repaired.
         self.btn_note = QPushButton("Set")
         self.btn_note.clicked.connect(self._set_note)
         self.btn_delete = QPushButton("Delete…")
@@ -622,8 +622,9 @@ class ArtifactScreen(QWidget):
         try:
             note = require_note("note", self.note_edit.text())
             self._resolved_store().set_note(s.kind, s.id, note)
-        except Refusal as exc:      # StoreError is one: the row can have gone since it was listed,
-            show_refusal(self, exc)  # and that refusal carries field="note" too
+        except Refusal as exc:      # a refused note text (field="note"), or the store's refusal
+            show_refusal(self, exc)  # for a row gone since it was listed -- field="artifact", so
+                                     # the box names the list, not the note box
             self._set_status(exc.message, error=True)
             return
         except Exception as e:      # noqa: BLE001 -- reported, never raised out of a click
@@ -768,10 +769,10 @@ class ArtifactScreen(QWidget):
         ``loose`` is ``[(kind, LooseFile)]`` -- a FILE sitting directly inside a kind directory,
         which no artifact accounts for. ``_entries`` iterates directories only (store.py's
         ``for sub in ... if p.is_dir()``), so such a file is invisible to every listing and no front
-        end could see or clear one until the sweeps learned to; the owner's machine has two, left in
-        ``Artifacts/fdt`` by a run stamped 20260915_153042. ``loose_files`` reads the kind
-        directory's own files and NEVER DESCENDS, so nothing inside a record's folder is reachable
-        from here -- the same complement rule ``remove_incomplete`` has against ``delete``.
+        end could see or clear one until the sweeps learned to (a run stamped 20260915_153042 once
+        left two in ``Artifacts/fdt``). ``loose_files`` reads the kind directory's own files and
+        NEVER DESCENDS, so nothing inside a record's folder is reachable from here -- the same
+        complement rule ``remove_incomplete`` has against ``delete``.
 
         ``legacy`` is ``[name]`` and is filled for the ALL-KINDS sweep alone: a legacy directory
         sits BESIDE the kind directories, under no kind, so the per-kind button has nothing to say

@@ -152,9 +152,9 @@ class InferenceScreen(QWidget):
         THE DESTRUCTIVE ONE OF THE SCREEN'S TWO ENTRY POINTS, AND THE CONFIRMATION IS NOW THE GUARD.
         The Config tab asks before it calls here whenever ``session_contents()`` is non-empty,
         defaulting to keeping the session, so a mis-aimed Apply can no longer drop a prior, a
-        posterior and a recorded observation in silence -- which is the half of the difference
-        between replacing the session's configuration and installing into it that a reader could not
-        defend themselves against.
+        posterior and a recorded observation in silence -- which is the half of mixing up replacing
+        the session's configuration and installing into it that an operator could not defend
+        against.
 
         Nothing is deleted either way: every stage writes its artifact at completion, so what this
         drops is the session's HANDLES, and the artifacts stay on disk to be selected again. Its

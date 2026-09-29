@@ -416,10 +416,10 @@ class BasePanel(QWidget):
         (_on_error). The same sentence goes to the log pane at warning, so it outlives the click that
         dismisses the box.
 
-        THE BOX ITSELF lives in ../widgets/refusal_box.py, shared with the Artifacts screen, which
-        shows the same refusals and is deliberately not a BasePanel. What stays here is the log-pane
-        line, because only a panel has a pane -- the browser records the sentence on its own status
-        line instead.
+        THE BOX ITSELF lives in ../widgets/refusal_box.py, shared with the Artifacts screen and the
+        model builder, which show the same box and are deliberately not BasePanels. What stays here
+        is the log-pane line, because only a panel has a pane -- those two screens record the
+        sentence on their own status lines instead.
         """
         fix = gui_fields.fix_sentence(exc.field)
         self.log_pane.append_line(f"{exc.message} {fix}".rstrip(), "warning")
