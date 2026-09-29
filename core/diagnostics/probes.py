@@ -710,8 +710,9 @@ def probe_band(cfg, *, lengths=None, multipliers=None, drives=None, repeats: int
 _MASKED_WARNING = re.compile(r"(?P<tag>.+?): chi: (?P<masked>\d+)/(?P<total>\d+) probes masked")
 
 #: What a mask record says about its seed.
-PROBE_LAYOUT = ("the probe count, placement and duration draw come from training's own fixed "
-                "probe-generator seed, so they do not change with the seed")
+PROBE_LAYOUT = ("the probe count, the drawn multipliers and the duration draw come from training's own fixed "
+                "probe-generator seed, so they do not change with the seed; the placement each row's own "
+                "peak and recording length give them does")
 
 #: The three causes a masked probe is attributed to, in the order a tie between them is broken. The
 #: cycle floor is the sum of the first two.
