@@ -11,13 +11,15 @@ until the card sees it.
 WHAT TO WATCH, beyond "it finished":
 
   * ``[chi] masked probes: M of N (P%) over n batches, <scope>`` -- the masked-probe number to read:
-    one information line when the training rows are done, the run total over every committed batch
-    of the simulation cache, resumed batches included, with the per-batch spread beside it. The
-    COUNT matters, not the presence. Some masking is by design (a probe under CHI_MIN_CYCLES on a
-    short recording). The reference is ~37 % of TRAINING probes. The per-call ``chi: N/M probes
-    masked`` warnings remain, one per probe block, but the run total replaces summing them by hand.
-    The calibration draw prints a line of its own, scoped "this process only (no simulation cache)";
-    it is not the training figure.
+    one information line when the training rows are done, with the per-batch spread beside it. With
+    --checkpoint it is the run total over every committed batch of the simulation cache, resumed
+    batches included, and the calibration draw's own line, scoped "this process only (no simulation
+    cache)", is not the training figure. Without --checkpoint, smoke's default, there is no cache:
+    both lines are scoped "this process only (no simulation cache)", and the training line is the
+    first of them. The COUNT matters, not the presence. Some masking is by design (a probe under
+    CHI_MIN_CYCLES on a short recording). The reference is ~37 % of TRAINING probes. The per-call
+    ``chi: N/M probes masked`` warnings remain, one per probe block, but the run total replaces
+    summing them by hand.
     THE RUN-LEVEL FIGURE IS NOISY, AND BY MUCH MORE THAN IT LOOKS: all rows in a batch share one
     (t_scale, T) stratum AND one probe set, so the effective n is the BATCH COUNT, not the probe
     count. Measured per-batch fractions span 13.5-57.3 % (SD 12.2 pp over 12 batches). Compare the
