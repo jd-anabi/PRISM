@@ -1892,6 +1892,18 @@ def test_the_ledger_hands_records_to_the_observer_only_at_commit():
     assert ledger.committed == [(1, 8), (0, 8)]
 
 
+def test_the_ledger_hands_the_observer_its_records_in_ascending_row_order():
+    """Ranges may report out of row order -- a halved batch's later half can land first -- and the
+    observer still meets them in ascending row order, the order its records describe the batch in."""
+    seen = []
+    L = pipeline_mod._BatchProbeLedger(observer=seen.append)
+    L.add(16, 32, 3, 48, record="b")
+    L.add(0, 16, 2, 48, record="a")
+    L.commit(0)
+    assert seen == ["a", "b"]
+    assert L.committed == [(2 + 3, 48 + 48)]
+
+
 def test_an_exception_raised_by_the_probe_observer_propagates(monkeypatch):
     """A broken audit fails loudly: the observer's own exception leaves the training generator
     unchanged, and the batch probe tally is cleared on the way out."""
