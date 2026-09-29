@@ -2,9 +2,9 @@
 
 Each subcommand builds the config ``core/cli.py`` builds prompt-free (``make_fdt_config`` /
 ``make_param_sweep_config``, the same functions the GUI panels call) and hands it to the same
-pipeline. Since piece 5 both write an ``fdt`` artifact RECORD -- progressively, so an interrupted
-run keeps its folder marked unfinished -- into ``--store-root``, or into the PRISM_ARTIFACTS root
-when that flag is not given.
+pipeline. Both write an ``fdt`` artifact RECORD -- progressively, so an interrupted run keeps its
+folder marked unfinished -- into ``--store-root``, or into the PRISM_ARTIFACTS root when that flag
+is not given.
 
 Neither takes the SBI config flags: no prior is built and no training runs, so there is no
 observation mode and no ``--bounds``. A bounds file is not ABSENT, though: ``cli.parse_cell``
@@ -46,30 +46,29 @@ psd_T_obs_nd) and supplies the defaults for --n-freqs and --ensemble-m. Each swe
 readable answer before the T sweep starts.
 """
 
-# I2, fix round 1, rewritten for piece 5 (E2): fdt/crossval keep no cache and take no --resume, so
-# main's generic Ctrl-C advice -- "if a [checkpoint] line above says batches were saved, ...
-# --resume require" -- is simply wrong for them. What changed is WHAT SURVIVES. These runs write
-# their record PROGRESSIVELY, so an interrupt leaves a real artifact behind -- its directory, its
-# manifest marked unfinished, its data file and its figures, and the run's own log.txt -- listed
-# like any other and removable by id. Each note therefore says where to find that record and how
-# to clear it, and repeats that re-running starts over: an unfinished record is evidence, not a
-# resume point (spec §1.3, "Resuming an interrupted sweep": not asked for, and none is added).
+# fdt/crossval keep no cache and take no --resume, so main's generic Ctrl-C advice -- "if a
+# [checkpoint] line above says batches were saved, ... --resume require" -- is simply wrong for them.
+# What differs is WHAT SURVIVES. These runs write their record PROGRESSIVELY, so an interrupt leaves
+# a real artifact behind -- its directory, its manifest marked unfinished, its data file and its
+# figures, and the run's own log.txt -- listed like any other and removable by id. Each note
+# therefore says where to find that record and how to clear it, and repeats that re-running starts
+# over: an unfinished record is evidence, not a resume point. The folder survives so its data can be
+# read, not so a later run can continue it, and no resume exists.
 #
-# A note is fixed text, set once through set_defaults, so it cannot carry the record's id. Ruling
-# F20: the handler prints each record's id and directory -- the `writing record` line -- the moment
+# A note is fixed text, set once through set_defaults, so it cannot carry the record's id. Instead
+# the handler prints each record's id and directory -- the `writing record` line -- the moment
 # store.create mints it, before anything is spent, and the note points back at that line. NOT before
 # anything can be interrupted: a Ctrl-C during the handler's imports or the config build comes
 # before any record, and one between that line and the stage's `with writer:` comes before its
-# folder exists -- so each note says that then there is nothing to clear (the whole-piece review's
-# N24). And because the `artifacts` family reads only PRISM_ARTIFACTS (it has no --store-root,
+# folder exists -- so each note says that then there is nothing to clear. And because the
+# `artifacts` family reads only PRISM_ARTIFACTS (it has no --store-root,
 # core/tool/browse.py), a run given --store-root must be followed by pointing the variable there, or
 # the listing looks in the wrong root and finds nothing.
 _STORE_ROOT_ADVICE = ("If this run was given --store-root, set PRISM_ARTIFACTS to that root first: "
                       "the `artifacts` commands read only the environment.")
 #
-# A kept record keeps its NAME (the whole-piece review's M4): a re-run given the same --name is
-# refused as taken until the unfinished record is removed, so each note says so, in
-# COMPARE_INTERRUPT_NOTE's words.
+# A kept record keeps its NAME: a re-run given the same --name is refused as taken until the
+# unfinished record is removed, so each note says so, in COMPARE_INTERRUPT_NOTE's words.
 FDT_INTERRUPT_NOTE = (
     "the record named by the `writing record` line above is KEPT and marked unfinished, holding "
     "what it had written so far -- unless the run was stopped in its first moments, before its "
@@ -77,8 +76,8 @@ FDT_INTERRUPT_NOTE = (
     f"and `python -m core artifacts rm fdt <id>` removes it. {_STORE_ROOT_ADVICE} fdt keeps no cache and nothing "
     "resumes, so re-running the same command starts the analysis from scratch (given --name, only "
     "once the unfinished record is removed, because it keeps the name).")
-# Two records, three possible states (spec §4.1): the sweeps run S first, then T, each entering its
-# own record only when it starts. So an interrupt during S leaves S's record unfinished and T's never
+# Two records, three possible states: the sweeps run S first, then T, each entering its own record
+# only when it starts. So an interrupt during S leaves S's record unfinished and T's never
 # written, and one during T leaves S's finished (or, had S measured nothing, unfinished) beside T's
 # unfinished one. The note says exactly that rather than promising two records on disk.
 CROSSVAL_INTERRUPT_NOTE = (
@@ -126,7 +125,7 @@ def _grid(flag: str, triple) -> tuple:
 
 
 def _add_store_root(p) -> None:
-    """``--store-root`` for an analysis that writes an ``fdt`` record (E11, spec §6.1).
+    """``--store-root`` for an analysis that writes an ``fdt`` record.
 
     DECLARING it changes nothing else by itself. ``main`` used to key three behaviours on whether a
     subcommand declared this flag -- a throwaway ``mkdtemp`` root, the removal of an empty
@@ -144,8 +143,9 @@ def _add_store_root(p) -> None:
 def _add_fdt_knobs(p) -> None:
     """The four resolution knobs both subcommands share, and the seed. Each defaults to None and
     travels only when set; the dest is the builder's keyword, capital M and F0 included. ``--seed``
-    is E7's command-line half (P79): a seed a record carries must be one the operator can supply
-    back. Unset, the run draws one from [0, 2**31) and records it (P12, P13)."""
+    is the command-line half of the rule that every run records the seed it used: a seed a record
+    carries must be one the operator can supply back. Unset, the run draws one from [0, 2**31) and
+    records it."""
     p.add_argument("--n-freqs", dest="n_freqs", type=int, default=None,
                    help="drive frequencies in Campaign 2")
     p.add_argument("--ensemble-m", dest="ensemble_M", type=int, default=None,
@@ -194,7 +194,7 @@ def register(subparsers):
 
 def run_fdt_cmd(args, store):
     """One ``fdt`` record per run. The record is created HERE -- ``store.create`` mints the id and runs
-    ``assert_name_free`` before anything is spent -- and ENTERED by ``run_fdt`` (spec §1.2)."""
+    ``assert_name_free`` before anything is spent -- and ENTERED by ``run_fdt``."""
     from core import cli, registry
     from core.FDT import fdt_pipeline
     if args.skip_sanity and args.no_production:
@@ -206,22 +206,22 @@ def run_fdt_cmd(args, store):
     model = model_for_cell(args)
     ok, reason = registry.fdt_support(model)
     if not ok:
-        # M1, fix round 1, now as V3's one line (spec §6.2): a Refusal with a field key, so the
-        # ladder prints `refused: <reason> (<where the name came from>.) (--model)` instead of
-        # `refused: ValueError: ... [raised at fdt.py:139]`. The FLAG is fix_sentence's to add, from
+        # The refusal-naming rule's one line: a Refusal with a field key, so the ladder prints
+        # `refused: <reason> (<where the name came from>.) (--model)` instead of
+        # `refused: ValueError: ... [raised at fdt.py:<line>]`. The FLAG is fix_sentence's to add, from
         # core/tool/fields.py; what the hint still carries is what the flag cannot -- WHERE the name
         # came from, because --model and a cell's parent folder are two different mistakes.
-        # cli.make_fdt_config refuses the same model since Task 10, with fdt_support's reason alone;
-        # this gate stays first because only a front end knows where the name came from.
+        # cli.make_fdt_config refuses the same model too, with fdt_support's reason alone; this gate
+        # stays first because only a front end knows where the name came from.
         hint = ("--model named it" if args.model else
                 "the cell's parent folder named it; pass --model to override that")
         raise Refusal(f"{reason} ({hint}.)", field="model")
     cfg = cli.make_fdt_config(model, registry.state_dep_drift(model), args.cell,
                               **knobs(args, "n_freqs", "ensemble_M", "freqs_per_batch", "F0", "seed"))
-    # The name and the note as the window's Record name and Note boxes give them (the whole-piece
-    # review's M4). The note was judged by main before this handler ran.
+    # The name and the note as the window's Record name and Note boxes give them. The note was
+    # judged by main before this handler ran.
     writer = store.create("fdt", cfg, name=args.name, note=args.note)
-    # F20: on screen BEFORE anything is spent, so a Ctrl-C finds the record's id already printed --
+    # On screen BEFORE anything is spent, so a Ctrl-C finds the record's id already printed --
     # FDT_INTERRUPT_NOTE points back at this line, being fixed text that cannot carry the id itself.
     print(f"[prism fdt] writing record {writer.id} at {writer.dir}", flush=True)
     rec = fdt_pipeline.run_fdt(cfg, skip_sanity=args.skip_sanity,
@@ -231,9 +231,9 @@ def run_fdt_cmd(args, store):
 
 
 def run_crossval(args, store):
-    """Two ``fdt`` records per study, one per swept parameter (spec §4.1). Both are created HERE --
-    ``store.create`` mints each id and runs ``assert_name_free`` before anything is spent -- and each
-    is ENTERED by its own sweep (spec §1.2)."""
+    """Two ``fdt`` records per study, one per swept parameter. Both are created HERE -- ``store.create``
+    mints each id and runs ``assert_name_free`` before anything is spent -- and each is ENTERED by its
+    own sweep."""
     from core import cli
     from core.FDT import cross_validation
     preset = dict(cli.SWEEP_PRESETS[args.preset])
@@ -248,7 +248,7 @@ def run_crossval(args, store):
     writers = {key: store.create("fdt", cfg, name=f"{args.name}-{key}" if args.name else "",
                                  note=args.note)
                for key in ("s", "temp")}
-    # F20: one line per record, before either sweep spends anything -- CROSSVAL_INTERRUPT_NOTE points
+    # One line per record, before either sweep spends anything -- CROSSVAL_INTERRUPT_NOTE points
     # back at these two lines, being fixed text that cannot carry the ids itself.
     for key, label in (("s", "S"), ("temp", "T_a/T")):
         print(f"[prism crossval] writing record {writers[key].id} at {writers[key].dir} "
@@ -282,9 +282,9 @@ _COMPARE_MODES = (
     ("sweeps", "two sweep records together, and a slice of both at one operating point"),
 )
 
-# F56: main's generic Ctrl-C advice ("the artifact being written was removed ... --resume require")
-# is wrong here twice over -- a comparison's record is progressive, so an interrupt KEEPS it (E2),
-# and nothing resumes it. What survives is that one record, named by the `Writing comparison record`
+# main's generic Ctrl-C advice ("the artifact being written was removed ... --resume require") is
+# wrong here twice over -- a comparison's record is progressive, so an interrupt KEEPS it, and
+# nothing resumes it. What survives is that one record, named by the `Writing comparison record`
 # line core.FDT.compare logs the moment it opens (a static note cannot carry the id). A comparison
 # refused before it opened, or interrupted while it was still loading, left nothing. There is no
 # --store-root here, so no advice about PRISM_ARTIFACTS is needed: the record is already in the root

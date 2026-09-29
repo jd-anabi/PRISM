@@ -1,6 +1,6 @@
 """Which conditioning channels can the flow actually SEE? Reads the artifacts; simulates nothing.
 
-Folded from ``scripts/channel_ablation.py`` (piece 2).
+Folded from the retired ``scripts/channel_ablation.py``.
 
 THE TEST HAD TO BE CORRECTED BEFORE IT WOULD ANSWER. "Replace channel i with its fitted mean and
 expect exactly zero change from a dead channel" gives 5.2e-5 for A1_mean and 4.6e-4 for
@@ -25,8 +25,8 @@ from core.artifacts import resolve_store
 from core.refusals import require_at_least
 from core.runs import public_entry
 
-# The report is information records (piece 3, V4): the window shows them plain, the tool prints them on
-# stdout, and the diagnostic's log.txt keeps them beside its manifest.
+# The report is information records: the window shows them plain, the tool prints them on stdout,
+# and the diagnostic's log.txt keeps them beside its manifest.
 log = logging.getLogger(__name__)
 
 FLOAT32_EPS = 1.1920929e-07
@@ -168,9 +168,9 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
                 # A NaN/Inf displacement compares False against every numeric test below (< and >
                 # with NaN are always False), so it used to fall all the way through to "healthy" --
                 # the opposite of what happened: the perturbation broke the network numerically, it did
-                # not confirm the channel is fine. §4.1 also refuses to write a non-finite float into a
-                # manifest (allow_nan=False), so this verdict has to exist before results is built,
-                # not merely be caught there.
+                # not confirm the channel is fine. The manifest writer also refuses a non-finite float
+                # (allow_nan=False), so this verdict has to exist before results is built, not merely
+                # be caught there.
                 verdict = "NON-FINITE -- this perturbation drove the network to a NaN/Inf output"
                 n_nonfinite += 1
             elif d < FLOAT32_EPS or (med and d < med * 1e-4):
@@ -186,9 +186,9 @@ def channel_ablation(cfg, posterior, *, rows: int = 200_000, n_sweep: int = 33,
             else:
                 verdict = "healthy"
             rel = (d / med) if med else None
-            # S1 (spec 4.1): every float here goes through orch._num, so a non-finite value becomes
-            # None instead of reaching the manifest writer (which refuses NaN/inf outright, after the
-            # whole sweep has already run).
+            # Every float here goes through orch._num, so a non-finite value becomes None instead of
+            # reaching the manifest writer (which refuses NaN/inf outright, after the whole sweep has
+            # already run).
             channels.append({"label": lab, "max_disp": orch._num(d), "rel_median": orch._num(rel),
                              "p1": orch._num(lo), "p99": orch._num(hi), "verdict": verdict})
             log.info(f"{lab:<24} {d:12.4g} {(f'{rel:.3g}x' if rel is not None else '-'):>10}   "

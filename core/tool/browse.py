@@ -1,17 +1,17 @@
 """``python -m core artifacts <mode>``: read, annotate and tidy the artifact store.
 
-The command-line twin of the Artifacts screen (piece 4, B9; design §4). ONE subcommand with a
-positional mode -- the ``identifiability {rotation,laplace,jacobian}`` precedent
-(core/tool/diagnostics.py:60-105), where each mode is a parser of its own, so a flag that means
-nothing to a mode is an argparse error rather than a setting that is silently ignored.
+The command-line twin of the Artifacts screen. ONE subcommand with a positional mode -- the
+``identifiability {rotation,laplace,jacobian}`` precedent (``_register_identifiability`` in
+core/tool/diagnostics.py), where each mode is a parser of its own, so a flag that means nothing to a
+mode is an argparse error rather than a setting that is silently ignored.
 
 WHY THIS MODULE IS NOT ``artifacts.py``. ``core/tool/__init__.py`` does ``from . import ...``, so a
 sibling of that name would sit one mistaken relative import away from shadowing the
 ``core.artifacts`` package this module is a front end for.
 
-NO CONFIGURATION FLAGS. ``add_config_flags`` is deliberately NOT called (design §4.1): a listing must
-not be able to fail on a bounds file it does not need, and ``python -m core artifacts --help`` must
-stay torch-free. The consequence is stated in EPILOG: this family cannot say "this posterior does not
+NO CONFIGURATION FLAGS. ``add_config_flags`` is deliberately NOT called: a listing must not be able
+to fail on a bounds file it does not need, and ``python -m core artifacts --help`` must stay
+torch-free. The consequence is stated in EPILOG: this family cannot say "this posterior does not
 match your bounds file" -- that is what LOADING it does. ``fdt``/``crossval`` are the precedent for a
 subcommand that builds no SimConfig.
 
@@ -23,16 +23,16 @@ subcommand's), spends nothing a Ctrl-C could abandon, and reads the one root the
 The flag is no longer a proxy for anything else, either. It used to be: ``main`` keyed three of
 smoke's behaviours on ``hasattr(args, "store_root")`` -- the throwaway ``mkdtemp`` root, the removal
 of an auto-created root left empty by a failure, and the Ctrl-C advice -- so declaring the name here
-would have changed all three for a root this family does not want. Piece 5 gave ``fdt`` and
-``crossval`` a ``--store-root`` of their own and reworked those three deliberately rather than
-letting them flip (piece-5 spec §6.1, E11): the throwaway root, its cleanup and smoke's Ctrl-C
-advice are now keyed on ``temp_store_root``, a property only ``smoke``'s parser sets
-(``set_defaults(temp_store_root=True)``), never on the flag's presence; ``fdt``, ``crossval`` and
-``compare`` print their own ``interrupt_note``, which ``main`` checks first. The absence here is now
-what it says on the face of it -- this family wants one root, the environment's.
+would have changed all three for a root this family does not want. ``fdt`` and ``crossval`` take a
+``--store-root`` of their own now, and those three behaviours were reworked deliberately rather
+than left to flip: the throwaway root, its cleanup and smoke's Ctrl-C advice are now keyed on
+``temp_store_root``, a property only ``smoke``'s parser sets (``set_defaults(temp_store_root=True)``),
+never on the flag's presence; ``fdt``, ``crossval`` and ``compare`` print their own
+``interrupt_note``, which ``main`` checks first. The absence here is now what it says on the face of
+it -- this family wants one root, the environment's.
 
 (No line numbers into ``core/tool/__init__.py`` on purpose: the four this paragraph used to carry
-had gone stale before piece 5 moved them again.)
+went stale as that file changed.)
 
 OUTPUT IS ``print``. The tool's framing prints are deliberately outside the no-print pin -- "The
 tool's framing prints (core/tool) stay prints and are deliberately outside this set"
@@ -60,9 +60,9 @@ from core.refusals import NOTE_MAX_CHARS, Refusal
 KINDS = ("prior", "simulation", "posterior", "observation", "calibration", "inference", "diagnostic",
          "fdt")
 
-# The columns each kind shows, exactly design §3.2's table: the browser's own tuples
-# (core/gui/widgets/artifact_table.columns_for), LOWER-CASED (P11). A SECOND literal on purpose --
-# that module is a Qt module, and importing it here would pull PySide6 into `python -m core --help`.
+# The columns each kind shows: the browser's own tuples (core/gui/widgets/artifact_table.columns_for),
+# LOWER-CASED. A SECOND literal on purpose -- that module is a Qt module, and importing it here
+# would pull PySide6 into `python -m core --help`.
 # So this module imports NOTHING from core/gui, and the two column sets are kept in step by a test
 # that imports both and lower-cases the GUI's (tests/test_tool.py).
 COLUMNS = {
@@ -82,11 +82,11 @@ COLUMNS = {
 # end bounds its own surface -- a terminal and a text box are not the same screenful.
 LOG_TAIL_BYTES = 1 << 20
 
-# The one dependent that names nothing (fix round 1, IMPORTANT 1). A SECOND literal on purpose, the
-# same shape as COLUMNS above: core/gui/screens/artifact_screen.py's own _FINGERPRINT_DEPENDENT,
-# restated here because this module imports NOTHING from core/gui. A cache's directory is keyed on
-# the prior's GMM, so ArtifactStore.dependents reports it whether or not the manifest records the
-# parent link, and a bare id gives an operator no way to tell that one from a child that named it.
+# The one dependent that names nothing. A SECOND literal on purpose, the same shape as COLUMNS
+# above: core/gui/screens/artifact_screen.py's own _FINGERPRINT_DEPENDENT, restated here because this
+# module imports NOTHING from core/gui. A cache's directory is keyed on the prior's GMM, so
+# ArtifactStore.dependents reports it whether or not the manifest records the parent link, and a
+# bare id gives an operator no way to tell that one from a child that named it.
 _FINGERPRINT_DEPENDENT = ("a training cache was generated against this prior and its rows are "
                           "meaningless without it")
 
@@ -132,11 +132,11 @@ def _width(s) -> str:
 
 def _progress(s) -> str:
     """"3/4 batches" while a cache runs, "4/4 batches, 96 rows" once it has finished -- from
-    ``Summary`` ALONE (B2: a row needs no second manifest read). The total is ``batches_planned``, off
-    the body's ``identity["n_runs"]`` (spec §12 row 2), so the cell is a FRACTION. The row count is
-    written only by ``mark_complete`` -- ``save`` passes none -- so a cache mid-run has no rows-so-far
-    to show and the cell stops at the batches. The separate ``finished`` column still answers whether
-    the batches are all there (B3): a manifest marked complete is what makes 4/4 mean finished.
+    ``Summary`` ALONE: a row needs no second manifest read. The total is ``batches_planned``, off the
+    body's ``identity["n_runs"]``, so the cell is a FRACTION. The row count is written only by
+    ``mark_complete`` -- ``save`` passes none -- so a cache mid-run has no rows-so-far to show and the
+    cell stops at the batches. The separate ``finished`` column still answers whether the batches are
+    all there: a manifest marked complete is what makes 4/4 mean finished.
     A comma and plain ASCII, not the browser's middle dot: a script may read this line."""
     done = "?" if s.batches_done is None else str(s.batches_done)
     planned = "?" if s.batches_planned is None else str(s.batches_planned)
@@ -167,8 +167,8 @@ def _cells(kind: str, s) -> tuple:
     if kind == "simulation":
         return head + (_progress(s), "yes" if s.finished else "no", _flat(s.note))
     if kind == "posterior":
-        # The exception is what is worth a word: amortized is the norm (B13's rule for the pickers,
-        # applied to the table's own cell).
+        # The pickers' words for the same fact, "amortized" or "narrowed (TSNPE)", so the tool and
+        # the window never word amortization two ways; "?" when the manifest records neither.
         amortized = "amortized" if s.amortized else ("narrowed (TSNPE)" if s.amortized is False
                                                      else "?")
         return head + (_flat(s.mode), _width(s), amortized, _flat(s.note))
@@ -176,7 +176,7 @@ def _cells(kind: str, s) -> tuple:
         return head + (_flat(s.mode), _width(s), _flat(s.note))
     if kind == "diagnostic":
         # A diagnostic records its kind under ``variant``, never ``mode``: the mode column would
-        # otherwise report a conditioning geometry that does not exist (design §1.3).
+        # otherwise report a conditioning geometry that does not exist.
         return head + (_flat(s.variant) or "-", _flat(s.note))
     if kind == "fdt":
         return head + (_flat(s.study) or "-", _fdt_points(s), "yes" if s.finished else "no",
@@ -199,13 +199,13 @@ def _print_kind(kind: str, rows) -> None:
             print("  " + "  ".join(v.ljust(w) for v, w in zip(row, widths)).rstrip())
     for s in broken:
         # LAST, with the reason in place of the kind's own columns, and identified by the directory
-        # name -- the handle ``sweep`` takes (B7). ``list`` already sorts them last; this split is
+        # name -- the handle ``sweep`` takes. ``list`` already sorts them last; this split is
         # what keeps the table above aligned on real rows only.
         print(f"  incomplete  {_flat(s.dir_name)}  -- {_flat(s.reason)}")
 
 
 def _list(args, store) -> int:
-    """``list [<kind>]``. An empty listing is EXIT 0 with a line saying so (§4.3); an unknown kind is
+    """``list [<kind>]``. An empty listing is EXIT 0 with a line saying so; an unknown kind is
     the store's own refusal, through the ladder's ``refused:`` rung at exit 1. With no kind, all eight
     are walked and a kind with nothing in it is NAMED in a trailing line rather than silently
     skipped, so "I did not look" and "there is nothing" stay distinguishable."""
@@ -225,18 +225,18 @@ def _list(args, store) -> int:
 
 
 def _show(args, store) -> int:
-    """``show <kind> <ref>``: the manifest as design §3.3 renders it, then the run's records, then the
-    same honest gaps the browser's detail pane states. A ref that names no complete artifact is the
-    store's own refusal (exit 1); its message already quotes the ref, which is why
-    core/tool/fields.py maps the ``artifact`` key to None -- the tool names the artifact
-    positionally, so there is no option string to print."""
+    """``show <kind> <ref>``: the manifest as the browser's detail pane renders it (the shared
+    ``render_manifest``), then the run's records, then the same honest gaps the browser's detail
+    pane states. A ref that names no complete artifact is the store's own refusal (exit 1); its
+    message already quotes the ref, which is why core/tool/fields.py maps the ``artifact`` key to
+    None -- the tool names the artifact positionally, so there is no option string to print."""
     from core.artifacts import render_manifest
     m = store.get(args.kind, args.ref)
     print(render_manifest(m))
     sub = store.path(args.kind, args.ref)
     if sub.name != m.dir_name:
-        # A rename whose directory move was refused leaves exactly this, and no front end has ever
-        # shown it (design §3.3). The manifest is what resolves an artifact, so nothing is broken.
+        # A rename whose directory move was refused leaves exactly this, and the browser's detail
+        # pane says so too. The manifest is what resolves an artifact, so nothing is broken.
         print(f"\nthe directory is named {sub.name!r} while its manifest says {m.dir_name!r}: a "
               f"rename whose directory move was refused leaves that. The manifest is what resolves "
               f"the artifact, so nothing here is broken.")
@@ -263,7 +263,7 @@ def _show(args, store) -> int:
 
 def _leftover_hint(store, kind: str, ref: str) -> str:
     """``""`` ordinarily, or a suffix naming ``sweep`` when ``ref`` is exactly the ``dir_name`` of
-    one of ``kind``'s own incomplete directories (fix round 1, IMPORTANT 3).
+    one of ``kind``'s own incomplete directories.
 
     ``note`` and ``rm`` resolve through ``_find``, which never returns a manifest-less entry, so a
     ref copied straight off ``list``'s own "incomplete ..." row cannot resolve there -- and the
@@ -276,7 +276,7 @@ def _leftover_hint(store, kind: str, ref: str) -> str:
 
     It opens with a FULL STOP because it is appended to a refusal that has already ended a sentence
     -- and one that ends with this very ref, so without the break the operator read
-    ``...named or id'd 'x' 'x' is one of the leftovers...`` (probed by three reviewers)."""
+    ``...named or id'd 'x' 'x' is one of the leftovers...``."""
     try:
         rows = store.list(kind)
     except Exception:                              # noqa: BLE001 -- the hint is a courtesy, not a check
@@ -288,12 +288,12 @@ def _leftover_hint(store, kind: str, ref: str) -> str:
 
 
 def _rm_refusal(store, kind: str, m, deps) -> "Refusal":
-    """The reworded dependents refusal (fix round 1, IMPORTANT 1): the store's own sentence ends
-    "pass force=True to orphan them", a step nothing in either front end offers (B6), so its raw
-    wording must never reach an operator. Same shape as the window's own reword
-    (core/gui/screens/artifact_screen.py's ``_dependents_refusal``, which exists for the WORDING
-    alone) -- every dependent, WITH WHY, then what to do -- flattened to this tool's one-line
-    convention rather than the window's multi-line box."""
+    """The reworded dependents refusal: the store's own sentence ends "pass force=True to orphan
+    them", a step nothing in either front end offers, so its raw wording must never reach an
+    operator. Same shape as the window's own reword (core/gui/screens/artifact_screen.py's
+    ``_dependents_refusal``, which exists for the WORDING alone) -- every dependent, WITH WHY, then
+    what to do -- flattened to this tool's one-line convention rather than the window's multi-line
+    box."""
     from core.refusals import Refusal
     parents = {}
     for k in sorted({k for k, _, _ in deps}):
@@ -314,15 +314,16 @@ def _rm_refusal(store, kind: str, m, deps) -> "Refusal":
 
 
 def _note(args, store) -> int:
-    """``note <kind> <ref> --note TEXT``. B5's rule runs BEFORE the store is touched, so a bad note
-    rewrites no manifest; ``""`` clears the note, which is why ``--note`` is required rather than
-    defaulted -- a note must never be cleared by leaving a flag off.
+    """``note <kind> <ref> --note TEXT``. The note rule (``require_note``: one line, at most
+    ``NOTE_MAX_CHARS`` characters, refused rather than trimmed to fit) runs BEFORE the store is
+    touched, so a bad note rewrites no manifest; ``""`` clears the note, which is why ``--note`` is
+    required rather than defaulted -- a note must never be cleared by leaving a flag off.
 
     Two refusals, two field keys, both from elsewhere: ``require_note``'s (the over-long note, the
     newline) carries field="note", so the ladder prints ``(--note)``, while ``set_note``'s "no
     complete artifact" carries field="artifact", whose entry in core/tool/fields.py is None -- the
     tool names the artifact positionally -- so that line simply ends at the message. When the ref
-    names a leftover directory, ``_leftover_hint`` appends the missing next step (IMPORTANT 3)."""
+    names a leftover directory, ``_leftover_hint`` appends the missing next step."""
     from core.refusals import Refusal, require_note
     text = require_note("note", args.note)
     try:
@@ -341,11 +342,11 @@ def _note(args, store) -> int:
 
 
 def _rm(args, store) -> int:
-    """``rm <kind> <ref>``. NO ``--force`` (B6): dependents are read BEFORE anything is deleted and
-    refused in this tool's own words, never the store's raw "pass force=True to orphan them" (fix
-    round 1, IMPORTANT 1 -- no front end offers that). A missing ref that names a leftover directory
-    gets ``sweep`` as its next step (IMPORTANT 3). ``delete`` still reads dependents again and stays
-    the last word for a race between the two reads -- the window's own precedent."""
+    """``rm <kind> <ref>``. NO ``--force``: dependents are read BEFORE anything is deleted and
+    refused in this tool's own words, never the store's raw "pass force=True to orphan them" (no
+    front end offers that). A missing ref that names a leftover directory gets ``sweep`` as its next
+    step. ``delete`` still reads dependents again and stays the last word for a race between the two
+    reads -- the window's own precedent."""
     from core.refusals import Refusal
     try:
         m = store.get(args.kind, args.ref)
@@ -373,39 +374,40 @@ def _joined(clauses: list) -> str:
 
 def _sweep(args, store) -> int:
     """``sweep [<kind>] [--yes]``: remove every directory of a kind (or of all eight) that has NO
-    manifest at all, and the two categories below. §4.3: nothing to remove is 0; anything that would
+    manifest at all, and the two categories below. Nothing to remove is exit 0; anything that would
     not delete is 1, naming each. A failure never stops the sweep -- ``sweep_incomplete`` finishes
     the rest and reports it, and the two loops below follow the same rule.
 
-    TWO MORE CATEGORIES (spec §6.3, E10), each read through its own store call and never through
-    ``list``: a loose FILE sitting directly inside a kind directory (``loose_files``, which never
-    descends, so nothing inside a record's own folder -- an unfinished fdt record's measurement
-    included -- can be offered), and, in the all-kinds form ALONE, a LEGACY DIRECTORY beside the
-    kind directories (``legacy_dirs``, which skips a link or a junction because ``remove_legacy``
-    refuses one). Nothing is deleted on the owner's behalf: both appear in the dry run and both
-    wait for ``--yes``, and each remover applies R3's recency guard itself.
+    TWO MORE CATEGORIES, each read through its own store call and never through ``list``: a loose
+    FILE sitting directly inside a kind directory (``loose_files``, which never descends, so nothing
+    inside a record's own folder -- an unfinished fdt record's measurement included -- can be
+    offered), and, in the all-kinds form ALONE, a LEGACY DIRECTORY beside the kind directories
+    (``legacy_dirs``, which skips a link or a junction because ``remove_legacy`` refuses one).
+    Nothing is deleted on the owner's behalf: both appear in the dry run and both wait for
+    ``--yes``, and each remover applies the store's recency guard itself -- a directory or file
+    written within ``store.RECENT_WRITE_SECONDS`` may be a run in flight, so it is refused.
 
-    A DRY RUN BY DEFAULT (R4). The window asks before it removes and this did not: no preview, no
-    confirmation, and a reviewer's probe deleted two directories and printed their reasons
+    A DRY RUN BY DEFAULT. The window asks before it removes and this did not: no preview, no
+    confirmation, and a trial run deleted two directories and printed their reasons only
     afterwards. So the default prints exactly what it WOULD remove and removes nothing, and ``--yes``
-    performs it. That is a confirmation, not an override -- B6 stands, there is no ``--force`` here
-    and no way to reach a real artifact from this mode -- so it needs no refusal key of its own: a
-    dry run refuses nothing.
+    performs it. That is a confirmation, not an override -- there is still no ``--force`` here and
+    no way to reach a real artifact from this mode -- so it needs no refusal key of its own: a dry
+    run refuses nothing.
 
-    WHAT MAY GO (R1): only a directory whose reason is ``NO_MANIFEST_REASON``. One that carries a
+    WHAT MAY GO: only a directory whose reason is ``NO_MANIFEST_REASON``. One that carries a
     manifest.json this build cannot parse, or that declares another kind, is something nobody here
     understands -- it is named as KEPT and left where it is, because a manifest valid under a
-    different SCHEMA reads to this build as "no artifact here", and removing one cost a reviewer's
-    probe a real calibration with its payload.
+    different SCHEMA reads to this build as "no artifact here", and removing one once cost a trial
+    run a real calibration with its payload.
 
     The candidates and their reasons are read off ``list`` BEFORE the removal -- the same rows the
-    table calls incomplete -- and THAT LIST is what is removed, by name (R2). An unknown kind raises
+    table calls incomplete -- and THAT LIST is what is removed, by name. An unknown kind raises
     ``list``'s own refusal, which the ladder turns into exit 1; a kind that cannot be READ is
     reported and does not stop the others."""
     from core.artifacts.store import NO_MANIFEST_REASON
     cands, kept, problems, loose, legacy = [], [], [], [], []
     # Which of the three reads SUCCEEDED: a "nothing to sweep" clause may claim only what was read
-    # (the whole-piece review's N25) -- an unreadable kind is not an empty one (§3.2).
+    # -- an unreadable kind is not an empty one.
     read_dirs = read_loose = read_legacy = True
     # ONE test for "the all-kinds form", here and at the legacy read below: with a truthiness test
     # here, `sweep ""` swept every kind while skipping the legacy read. Now it is `list`'s refusal.
@@ -424,9 +426,9 @@ def _sweep(args, store) -> int:
             (cands if row.reason == NO_MANIFEST_REASON else kept).append(
                 (kind, row.dir_name, row.reason))
     for kind in kinds:
-        # E10's first category. `list` reports DIRECTORIES (store._entries iterates directories
-        # only), so a FILE sitting directly inside a kind directory is invisible to every listing in
-        # both front ends -- and the owner has two, left in Artifacts/fdt by a pre-piece-5 run.
+        # The first of the two categories. `list` reports DIRECTORIES (store._entries iterates
+        # directories only), so a FILE sitting directly inside a kind directory is invisible to every
+        # listing in both front ends -- and an older build left such files in Artifacts/fdt.
         # loose_files never descends, so an artifact's own payload cannot be reached from here.
         try:
             loose += [(kind, f) for f in store.loose_files(kind)]
@@ -435,7 +437,7 @@ def _sweep(args, store) -> int:
                             f"({type(e).__name__}: {e}), so no {kind} loose file was swept")
             read_loose = False
     if args.kind is None:
-        # E10's second category, and the ALL-KINDS form ALONE: `sweep` takes the kind positionally
+        # The second category, and the ALL-KINDS form ALONE: `sweep` takes the kind positionally
         # and a legacy directory sits BESIDE the kind directories, under no kind at all, so there is
         # no per-kind form that could name one.
         try:
@@ -451,7 +453,7 @@ def _sweep(args, store) -> int:
     for line in problems:
         print(line, file=sys.stderr)
     if not cands and not loose and not legacy:
-        # Each clause only where its read SUCCEEDED (N25): the problems above say what was not read.
+        # Each clause only where its read SUCCEEDED: the problems above say what was not read.
         # No legacy clause for a per-kind sweep at all: it never reads the store root, so it would
         # be claiming what nobody checked -- and a `crossval/` may well sit there.
         where = "a kind directory" if args.kind is None else f"the {args.kind} directory"
@@ -477,7 +479,7 @@ def _sweep(args, store) -> int:
         # The listing cannot tell a run in flight from a leftover -- the manifest is written LAST --
         # so a preview taken beside a live training names that training's own directory. The removal
         # refuses it; say so here, where the operator is deciding whether to pass --yes. For every
-        # category the preview can hold (N25): each remover applies the recency guard, and the
+        # category the preview can hold: each remover applies the recency guard, and the
         # window's own dialog already said "a recently written directory or file is refused".
         print("[prism] anything still being written -- a leftover directory, a loose file, the legacy "
               "directory -- is refused at removal, not swept: an artifact's manifest is written last, "
@@ -492,7 +494,7 @@ def _sweep(args, store) -> int:
         print(f"prism artifacts: could not remove {kind} leftover {dir_name}: {reason}",
               file=sys.stderr)
     lost = list(failed)
-    # R2 for the two new categories as well: `loose` and `legacy` were read BEFORE anything was
+    # The same rule for the other two categories: `loose` and `legacy` were read BEFORE anything was
     # removed and THOSE LISTS are what is walked, so a file that appeared since is simply not in
     # them. Each remover carries its own refusal (the recency guard among them), which is reported
     # per item and never stops the rest -- sweep_incomplete's rule, applied by hand because these
@@ -522,17 +524,17 @@ def _sweep(args, store) -> int:
 
 def _summary(args, store) -> int:
     """``summary <kind> <ref> [--out PATH]``: the lineage report -- the artifact, then its parents
-    transitively, a parent absent from the store printed as MISSING rather than skipped (design §5).
-    A file or stdout, never a store kind of its own (B10).
+    transitively, a parent absent from the store printed as MISSING rather than skipped. A file or
+    stdout, never a store kind of its own.
 
-    newline="\\n" explicitly (P23): write_text's default newline=None translates every "\\n" to
-    "\\r\\n" on Windows, and the browser's own Lineage report button writes the same text with
-    newline="\\n" -- so without it §5's "the same bytes whichever front end made it" is quietly
-    false.
+    newline="\\n" explicitly: write_text's default newline=None translates every "\\n" to "\\r\\n" on
+    Windows, and the browser's own Lineage report button writes the same text with newline="\\n" --
+    so without it the promise that the report is the same bytes whichever front end made it would be
+    quietly false.
 
     ``--out`` naming a directory, or a read-only file, is an ``OSError`` the window's identical write
     (``artifact_screen._lineage_report``) catches and reports -- an operator's typo must not escape
-    as an unhandled traceback here either (fix round 1, IMPORTANT 2)."""
+    as an unhandled traceback here either."""
     from core.artifacts import render_lineage
     from core.refusals import Refusal
     text = render_lineage(store, args.kind, args.ref)
@@ -554,7 +556,7 @@ _REF = "the artifact's name, or its id"
 
 def register(subparsers) -> dict:
     """``{name: subparser}`` -- the contract ``build_parser``'s ``p.subcommands.update(...)`` loop
-    needs. One subcommand, six modes; Task 14 adds four of them."""
+    needs. One subcommand, six modes."""
     p = subparsers.add_parser(
         "artifacts", help="read, annotate and tidy the artifact store (loads nothing, simulates "
                           "nothing)",

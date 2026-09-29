@@ -5,8 +5,8 @@
 # sanction but tolerates at runtime). So `pip install -r requirements.txt` bumps ONLY sbi (0.25.0 ->
 # 0.26.1); torch is already 2.9.0+cu130. After the bump, re-verify: (1) sbi still prints its per-epoch
 # counter (the GUI cancel checkpoint -- grep sbi for _maybe_show_progress / "Epochs trained");
-# (2) the calibration numbers (0.26's TARP changes make them non-comparable to the pre-upgrade
-# handoff). See PRISM_HANDOFF.md section 1.2 (Environment / version drift).
+# (2) the calibration numbers (0.26's TARP changes make them non-comparable to numbers recorded
+# before the upgrade).
 
 --extra-index-url https://download.pytorch.org/whl/cu130
 
@@ -41,5 +41,5 @@ pyqtgraph==0.13.7
 # package (resolved by imageio-ffmpeg under Library\bin), NOT this wheel.
 imageio==2.37.0
 imageio-ffmpeg==0.6.0
-# Test runner (piece 0 of the 2026-09-10 hardening programme). Fast gate: pytest -m "not slow"; full: pytest.
+# Test runner. Fast gate: pytest -m "not slow"; full: pytest.
 pytest==9.1.1

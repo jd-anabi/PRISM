@@ -49,9 +49,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _smoke_interrupt_advice(args, root) -> str:
-    """K5, fix round 1: the Ctrl-C hint for a resumable cache. Every OTHER subcommand's own command
-    line, re-issued with --resume require, IS the resumable one -- that is what the generic message
-    says. smoke keys its store on --store-root rather than on PRISM_ARTIFACTS, so re-issuing run 1's
+    """The Ctrl-C hint for a resumable cache. Every OTHER subcommand's own command line, re-issued
+    with --resume require, IS the resumable one -- that is what the generic message says. smoke keys
+    its store on --store-root rather than on PRISM_ARTIFACTS, so re-issuing run 1's
     OWN command line instead re-BUILDS the prior (refused by name under --save, or a fresh, different
     fit otherwise); the resumable form names --prior and --stages explicitly, as the drill does.
 
@@ -68,9 +68,9 @@ def _smoke_interrupt_advice(args, root) -> str:
 
 
 def _remove_if_still_empty(root: Path) -> None:
-    """K3, fix round 1: ``main`` calls this only for a root IT created via ``mkdtemp`` (never a
-    user-named ``--store-root``, never PRISM_ARTIFACTS), and only when the run did not succeed. A bad
-    ``--bounds`` used to leave an empty ``%TEMP%\\prism_smoke_*`` behind forever, its path never
+    """``main`` calls this only for a root IT created via ``mkdtemp`` (never a user-named
+    ``--store-root``, never PRISM_ARTIFACTS), and only when the run did not succeed. A bad ``--bounds``
+    used to leave an empty ``%TEMP%\\prism_smoke_*`` behind forever, its path never
     printed anywhere an operator would think to look. ``rmdir`` is the whole safety property: it
     raises (caught and ignored) the moment the directory holds anything at all, so a root that
     reached even one write -- a partial prior, a committed checkpoint batch -- is never touched."""
@@ -81,7 +81,7 @@ def _remove_if_still_empty(root: Path) -> None:
 
 
 def _library_record_sink(record) -> None:
-    """One record no handler below the root has emitted, as ``logging_root.render`` writes it (B14).
+    """One record no handler below the root has emitted, as ``logging_root.render`` writes it.
 
     A LIBRARY's record goes to STDERR, whatever its level, and never stdout: this tool's stdout
     carries results a script reads, so a library's chatter may not land there. A ``core`` record
@@ -111,11 +111,11 @@ def main(argv=None) -> int:
     registry.load_user_models()                # idempotent; AFTER parsing, so --help stays torch-free
     # smoke is the one subcommand with its own root: a fresh store per run unless one is named, so
     # two runs never share a cache by accident and a named one can be resumed. Keyed on smoke's OWN
-    # PROPERTY (piece 5, E11), never on the FLAG's presence and never on the subcommand name: `fdt`
-    # and `crossval` declare --store-root too since piece 5, and all three of the behaviours below
-    # are wrong for them. An unnamed root must be the operator's PRISM_ARTIFACTS; `auto_root` must
-    # stay false, or a failed run would call rmdir on that real root; and _smoke_interrupt_advice
-    # reads args.prior/args.save, which neither of them has.
+    # PROPERTY, never on the FLAG's presence and never on the subcommand name: `fdt` and `crossval`
+    # take --store-root too, and all three of the behaviours below are wrong for them. An unnamed
+    # root must be the operator's PRISM_ARTIFACTS; `auto_root` must stay false, or a failed run would
+    # call rmdir on that real root; and _smoke_interrupt_advice reads args.prior/args.save, which
+    # neither of them has.
     temp_store_root = bool(getattr(args, "temp_store_root", False))   # set by smoke's parser alone
     named_root = getattr(args, "store_root", None)
     auto_root = temp_store_root and not named_root             # True only for smoke's own mkdtemp
@@ -126,18 +126,18 @@ def main(argv=None) -> int:
     else:
         root = config.artifacts_root()
     rc = 1
-    # THE root-logger handler for this process (piece 4, B14, spec §7.1). Because a handler exists
-    # from here on, a library's ``logging.warning`` can no longer call ``basicConfig`` and install a
-    # second one, which would emit every ``core`` record a second time. AFTER the parse, so ``--help``
-    # stays torch-free; REMOVED IN THE FINALLY below, because ``main`` runs repeatedly in one process
-    # under the suite and a handler left behind would repeat every later run's library records.
+    # THE root-logger handler for this process. Because a handler exists from here on, a library's
+    # ``logging.warning`` can no longer call ``basicConfig`` and install a second one, which would
+    # emit every ``core`` record a second time. AFTER the parse, so ``--help`` stays torch-free;
+    # REMOVED IN THE FINALLY below, because ``main`` runs repeatedly in one process under the suite
+    # and a handler left behind would repeat every later run's library records.
     logging_root.install(_library_record_sink)
     try:
-        # The note rule, judged ONCE here for every subcommand whose parser has a --note (piece 5,
-        # Task 29). Piece 4's store contract leaves the rule to each FRONT END -- ArtifactStore.set_note
-        # says "require_note is that rule, and both front ends run it" -- and create() stores a note
-        # exactly as given, so a stage's --note (config_args.add_name_flags) used to reach the manifest
-        # unchecked: an over-long or multi-line note the tool's own `artifacts note` refuses to write.
+        # The note rule, judged ONCE here for every subcommand whose parser has a --note. The store's
+        # contract leaves the rule to each FRONT END -- ArtifactStore.set_note says "require_note is
+        # that rule, and both front ends run it" -- and create() stores a note exactly as given, so a
+        # stage's --note (config_args.add_name_flags) used to reach the manifest unchecked: an
+        # over-long or multi-line note the tool's own `artifacts note` refuses to write.
         # First in the try, so a refusal takes the Refusal rung below -- exit 1, `(--note)` -- before
         # the mkdir just after it and before the handler builds anything (smoke's throwaway root,
         # made above, is still removed by the auto_root cleanup). `artifacts note` is judged here
@@ -152,15 +152,15 @@ def main(argv=None) -> int:
         # reaches for it, the keyword makes each stage independent of the default. set_default_store
         # is never called -- that was scripts/smoke_train.py's leak.
         # The console handlers live exactly as long as the handler call: information to stdout,
-        # warning/error to stderr with a prefix (spec §4.3). The tool's own framing prints ([prism],
-        # [cfg], [smoke], this ladder) stay prints and never pass through them.
+        # warning/error to stderr with a prefix. The tool's own framing prints ([prism], [cfg],
+        # [smoke], this ladder) stay prints and never pass through them.
         with use_store(ArtifactStore(root)) as store, console_handlers():
             rc = int(args.handler(args, store) or 0)
     except KeyboardInterrupt:
-        # I2, fix round 1: fdt/crossval set their own `interrupt_note` (core/tool/fdt.py) through
-        # set_defaults -- they keep no cache and take no --resume, so the generic advice below
-        # (written for a checkpointed training cache) would be flatly wrong for them. Every other
-        # subcommand leaves interrupt_note unset, so getattr's default keeps their message as is.
+        # fdt/crossval set their own `interrupt_note` (core/tool/fdt.py) through set_defaults --
+        # they keep no cache and take no --resume, so the generic advice below (written for a
+        # checkpointed training cache) would be flatly wrong for them. Every other subcommand leaves
+        # interrupt_note unset, so getattr's default keeps their message as is.
         note = getattr(args, "interrupt_note", None)
         if note is not None:
             print(f"prism {args.cmd}: interrupted: {note}", file=sys.stderr)
@@ -171,24 +171,24 @@ def main(argv=None) -> int:
                   f"[checkpoint] line above says batches were saved, {advice}", file=sys.stderr)
         rc = 130
     except UsageError as e:
-        # A Refusal too since piece 3, caught FIRST so a bad flag combination keeps exit 2.
+        # A UsageError is a Refusal too; caught FIRST so a bad flag combination keeps exit 2.
         print(f"prism {args.cmd}: usage: {e}", file=sys.stderr)
         rc = 2
     except Refusal as e:
-        # V3: one operator line -- the message, then the flag that answers its field, from
-        # core/tool/fields.py. fix_sentence owns the parentheses and is empty for field=None or a
-        # key with no flag, so the line then ends at the message. No class name and no
-        # [raised at ...]: those were hedges for a bug disguised as a ValueError, which a dedicated
-        # class no longer needs.
+        # The refusal-naming rule: one operator line -- the message, then the flag that answers its
+        # field, from core/tool/fields.py. fix_sentence owns the parentheses and is empty for
+        # field=None or a key with no flag, so the line then ends at the message. No class name and
+        # no [raised at ...]: those were hedges for a bug disguised as a ValueError, which a
+        # dedicated class no longer needs.
         fix = fix_sentence(e.field)
         sfx = (" " + fix) if fix else ""
         print(f"prism {args.cmd}: refused: {e.message}{sfx}", file=sys.stderr)
         rc = 1
     except (ValueError, FileNotFoundError) as e:
-        # An UNCONVERTED refusal -- a bare ValueError from a site piece 3 has not reached yet -- or a
-        # missing file. No traceback -- the message is written for an operator -- but the class and
-        # the innermost frame are named, so a genuine bug that happens to raise ValueError still says
-        # where it came from.
+        # An UNCONVERTED refusal -- a bare ValueError from a site not yet converted to a Refusal --
+        # or a missing file. No traceback -- the message is written for an operator -- but the class
+        # and the innermost frame are named, so a genuine bug that happens to raise ValueError still
+        # says where it came from.
         tb = e.__traceback__
         while tb is not None and tb.tb_next is not None:
             tb = tb.tb_next

@@ -1,10 +1,10 @@
 """Diagnostics: measurements ABOUT a trained posterior, each writing one ``diagnostic`` artifact.
 
-Moved out of ``scripts/`` in piece 2 of the 2026-09-11 one-flow design, where they were driven by
-environment variables, could not be tested, and wrote nothing the store could describe. The five
-functions -- ``sbc_repeats``, ``identifiability_rotation``, ``identifiability_laplace``,
-``identifiability_jacobian`` and ``channel_ablation`` -- arrive with T16-T18 and are re-exported from
-here then. This module lands the two pieces all of them share.
+Moved out of the retired ``scripts/`` directory, where they were driven by environment variables,
+could not be tested, and wrote nothing the store could describe. The five functions --
+``sbc_repeats``, ``identifiability_rotation``, ``identifiability_laplace``,
+``identifiability_jacobian`` and ``channel_ablation`` -- are re-exported from here, beside the two
+submodules all of them share.
 
 ``feature_sets`` answers "which features does THIS config's posterior actually condition on", which
 is what makes a Jacobian diagnostic a statement about the experiment that was run rather than about

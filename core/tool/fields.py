@@ -1,4 +1,4 @@
-"""The command-line tool's half of V3 (piece 3 spec §3.2): which flag answers each refusal field.
+"""The command-line tool's half of the refusal-naming rule: which flag answers each refusal field.
 
 A ``Refusal`` names the setting at fault by a key from ``core.refusals.FIELDS`` and says nothing
 about any front end. ``main``'s ladder (``core/tool/__init__.py``) appends ``fix_sentence(e.field)``
@@ -70,14 +70,14 @@ FLAG: dict[str, str | None] = {
     "compare_records": "--record",
     "prefactor": "--prefactor",
     "slice_at": "--at",
-    # the model builder (piece 5): a window-only screen, so no option string answers any of these
+    # the model builder: a window-only screen, so no option string answers any of these
     "param_value": None, "param_min": None, "param_max": None, "init": None,
     "x_scale": None, "t_scale": None, "forcing_value": None,
-    # the live simulation (piece 5): a window-only panel; the tool has no streaming subcommand
+    # the live simulation: a window-only panel; the tool has no streaming subcommand
     "frame_steps": None, "fps": None,
-    # the two secondary analyses (piece 5): `fdt` and `crossval` share the four resolution knobs,
-    # and the grids and the preset are the sweep's alone. --seed exists on smoke and the
-    # diagnostics today; piece 5 adds it to these two as well (E7).
+    # the two secondary analyses: `fdt` and `crossval` share the four resolution knobs, and the
+    # grids and the preset are the sweep's alone. --seed exists on smoke and the simulating
+    # diagnostics, and on these two as well.
     "n_freqs": "--n-freqs",
     "ensemble_m": "--ensemble-m",
     "freqs_per_batch": "--freqs-per-batch",
@@ -86,7 +86,7 @@ FLAG: dict[str, str | None] = {
     "s_grid": "--s-grid",
     "t_grid": "--t-grid",
     "seed": "--seed",
-    # the five FDT settings neither front end exposes (P2, P75): no option string answers them
+    # the five FDT settings neither front end exposes: no option string answers them
     "freq_bounds": None, "burn_in_nd": None, "t_obs_periods": None, "dt_nd": None, "psd_t_obs_nd": None,
     # inputs
     "bounds": "--bounds",

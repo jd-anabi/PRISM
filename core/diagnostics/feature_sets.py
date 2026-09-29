@@ -1,11 +1,11 @@
 """The FEATURE SET a config's diagnostics must be built over, and the guards that refuse a config
 whose science they do not cover.
 
-Moved from ``scripts/_common.py`` (piece 2 of the 2026-09-11 one-flow design). The computation is
-unchanged; only the guards changed: from ``SystemExit`` to a ``Refusal`` (piece 3) that names the
-diagnostic, the mode and the model and no flag, subcommand or file -- these run inside the
-command-line tool and the GUI now, where a SystemExit would walk past the tool's exit-code table or
-take the app down, and each front end appends its own fix sentence to a refusal.
+Moved from the retired ``scripts/_common.py``. The computation is unchanged; only the guards
+changed: from ``SystemExit`` to a ``Refusal`` that names the diagnostic, the mode and the model and
+no flag, subcommand or file -- these run inside the command-line tool and the GUI now, where a
+SystemExit would walk past the tool's exit-code table or take the app down, and each front end
+appends its own fix sentence to a refusal.
 
 Every Jacobian / identifiability diagnostic must be built from the features the posterior ACTUALLY
 conditions on, or it answers a question about a different experiment:
@@ -23,7 +23,7 @@ import logging
 from core.config import SimConfig
 from core.refusals import Refusal
 
-# The banner is an information record (piece 3, V4).
+# The banner is an information record.
 log = logging.getLogger(__name__)
 
 _GROUP_G_PREFIX = "G"

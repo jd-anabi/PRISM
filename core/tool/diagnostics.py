@@ -8,11 +8,12 @@ posterior's own or a refusal, and the pairing is recorded in the artifact alread
 from __future__ import annotations
 
 from . import config_args
-# The four helpers below are Task 11/12's, imported by name so a test can monkeypatch them on THIS
+# The helpers below come from config_args, imported by name so a test can monkeypatch them on THIS
 # module (tests patch ``tool_diag.load_posterior_and_prior``). Do not re-implement them here: the
 # pairing rule (the prior is always the posterior's own) must exist once, in config_args. The accept
-# flag and the Accept it builds are T12's D8 pair too -- add_accept_flags/accept_from -- so this
-# module carries no second definition of them to drift from config_args's.
+# flags and the Accept they build -- add_accept_flags/accept_from, the opt-ins to a non-amortized
+# load the tool otherwise refuses -- come from there too, so this module carries no second
+# definition of them to drift from config_args's.
 from .config_args import (add_accept_flags, add_name_flags, accept_from, knobs,
                           load_posterior_and_prior, report)
 
@@ -131,7 +132,7 @@ def _register_ablation(sub) -> dict:
 
 def register(sub) -> dict:
     """``{name: subparser}`` -- the contract ``build_parser``'s ``p.subcommands.update(...)`` loop
-    needs. T17 and T18 append their entries to the dict this returns."""
+    needs. The identifiability and ablation subcommands add their entries to the dict this returns."""
     p = sub.add_parser("sbc", help="SBC repeated K times on one posterior (the run-to-run KS spread)")
     config_args.add_config_flags(p)
     p.add_argument("--posterior", required=True, metavar="REF", help="posterior name or id")

@@ -181,9 +181,9 @@ def _infer(args, store) -> int:
     cfg, _ = build_cfg(args)
     accept = accept_from(args)
     if args.cell and (args.forced or args.drive or args.f0_si is not None):
-        # Spec 3.5: --forced/--drive/--f0-si describe a MEASURED recording. --cell re-simulates the
-        # cell's own drive, so on that branch they name nothing the command reads -- exactly the
-        # silently-ignored flag D6 forbids.
+        # --forced/--drive/--f0-si describe a MEASURED recording. --cell re-simulates the cell's own
+        # drive, so on that branch they name nothing the command reads -- a flag that would be
+        # silently ignored, which the tool refuses instead.
         raise UsageError("--forced, --drive and --f0-si describe measured recordings; --cell "
                          "re-simulates the cell's own drive, so drop them.")
     # A usage error costs no posterior load: recording_set is checked here, before

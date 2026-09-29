@@ -5,7 +5,7 @@ CELL/BOUNDS/MODEL/CHI/CHI_K/TOBS_S -- which meant a run's inputs lived in a shel
 a forgotten ``BOUNDS`` silently smoke-tested a different box (the warning at the top of
 scripts/smoke_train.py). Here every one of them is a flag, ``--bounds`` is required, and every flag
 reaches its stage as a KEYWORD ARGUMENT: assigning a module constant would be a no-op, because
-orchestrator binds config constants at import (CLAUDE.md).
+orchestrator binds config constants at import.
 
 NOTHING IN THIS PACKAGE READS THE ENVIRONMENT (tests/test_tool.py pins it). The two roots and the two
 core-level settings PRISM does read are named in the --help epilog.
@@ -58,9 +58,10 @@ def add_name_flags(p, *, name_help: "str | None" = None) -> None:
 
 
 def add_resume_flags(p) -> None:
-    """``--resume`` and ``--new-run``, D7's consent pair (spec Sec. 2.7), shared verbatim by every
-    subcommand that trains a cache: ``train``, ``tsnpe`` and ``smoke`` (fix round 1, K9). Before this
-    the three defined the same two flags three times, with three slightly different help strings.
+    """``--resume`` and ``--new-run``: the resume policy and the near-miss consent, where a cache one
+    setting away is refused before any simulation unless ``--new-run`` is given. Shared verbatim by
+    every subcommand that trains a cache: ``train``, ``tsnpe`` and ``smoke``. Before this the three
+    defined the same two flags three times, with three slightly different help strings.
 
     ``--checkpoint-every`` is deliberately NOT here even though ``train`` and ``tsnpe`` share it
     identically: ``smoke`` has no flag of that shape at all -- its own ``--checkpoint`` is a bool
@@ -91,7 +92,8 @@ def model_for(args) -> str:
 
 
 def build_cfg(args, *, load_gt: bool = False):
-    """``(cfg, ignored)`` from the shared flags: the environment-free ``_common.script_cfg``.
+    """``(cfg, ignored)`` from the shared flags and nothing else: no environment variable reaches the
+    config.
 
     THE BUILDER NEVER SETS ``cfg.T_obs``. ``--t-obs`` travels to the one function that uses it, so a
     stage that has no business with a duration cannot inherit one nobody asked for.
@@ -193,11 +195,12 @@ def report(*artifacts) -> None:
 
 
 def add_accept_flags(p, *, other_observation: bool = False) -> None:
-    """D8: the tool REFUSES by default, and these two map 1:1 onto ``artifacts.Accept``. An INFERENCE
-    records the flags used in its own artifact's ``results.accepted``, so a number produced under one
-    carries that fact with it; a calibration and a TSNPE round do NOT carry that record themselves --
-    for those, the flags only ever unlock a load, and what is on record instead is the non-amortized
-    posterior's own manifest, which already says ``amortized: false``."""
+    """The tool REFUSES a non-amortized load by default, and these two map 1:1 onto
+    ``artifacts.Accept``. An INFERENCE records the flags used in its own artifact's
+    ``results.accepted``, so a number produced under one carries that fact with it; a calibration and
+    a TSNPE round do NOT carry that record themselves -- for those, the flags only ever unlock a load,
+    and what is on record instead is the non-amortized posterior's own manifest, which already says
+    ``amortized: false``."""
     p.add_argument("--accept-truncated", action="store_true",
                    help="load a NON-AMORTIZED (TSNPE) posterior. It is valid only near the "
                         "observation its region was drawn around; elsewhere the flow extrapolates.")
@@ -245,7 +248,7 @@ def recording_set(cfg, args):
         bare = [p for p, f in forced if f is None]
         if bare:
             raise UsageError(f"chi mode: every driven recording must state the frequency (Hz) it was "
-                             f"driven at -- write --forced PATH@HZ. Missing for: {bare}. (D9)")
+                             f"driven at -- write --forced PATH@HZ. Missing for: {bare}.")
         if args.f0_si is None:
             raise UsageError("chi mode needs --f0-si: chi is response/drive, so the lock-in divides "
                              "by the physical drive amplitude the recordings were made at.")

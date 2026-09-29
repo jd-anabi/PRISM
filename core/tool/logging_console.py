@@ -1,5 +1,5 @@
 """The tool's two logging handlers: information to stdout, warnings and errors to stderr with the
-level as a prefix (piece 3, V4, spec §4.3). Torch-free; imported by ``core.tool.__init__`` only.
+level as a prefix. Torch-free; imported by ``core.tool.__init__`` only.
 
 Both resolve ``sys.stdout``/``sys.stderr`` AT EMIT TIME, never at construction: capsys swaps them
 per test and the window swaps them per run, and a handler holding the stream it was built with would
@@ -10,7 +10,7 @@ import logging
 import sys
 from contextlib import contextmanager
 
-from core import runs  # noqa: F401 -- sets the ``core`` logger to INFO at import (spec §1.2)
+from core import runs  # noqa: F401 -- sets the ``core`` logger to INFO at import
 
 
 class _LiveStreamHandler(logging.Handler):

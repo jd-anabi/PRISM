@@ -3,9 +3,10 @@
 WHY THIS EXISTS. The suites pin contracts on stubs and tiny synthetic inputs. This runs the REAL
 chain on the REAL bounds/cell files -- stability-screened prior build, NPE training, SBC/TARP
 calibration, PPC and the eye test -- so plumbing that only appears when the stages are wired
-together (mode widths, sidecar round-trip, the chi block's shape agreeing with the network's input
-layer) fails here, in minutes, instead of hours into a multi-day run. It is the GPU gate: every
-suite runs on the CPU, and a tensor on the wrong device is invisible until the card sees it.
+together (mode widths, the rotation's round trip through the manifest, the chi block's shape
+agreeing with the network's input layer) fails here, in minutes, instead of hours into a multi-day
+run. It is the GPU gate: every suite runs on the CPU, and a tensor on the wrong device is invisible
+until the card sees it.
 
 WHAT TO WATCH, beyond "it finished":
 
@@ -36,7 +37,7 @@ only a CRASH means anything.
 Every knob is an ARGUMENT: this module rebinds no module constant (``scripts/smoke_train.py``
 rebound four on ``orchestrator`` and leaked a default store; both are gone). The whole stage
 sequence runs inside one ``seeded(seed, device)`` context -- one seed, streams running on, as the
-script did: per-stage seeding would replay the training strata in the calibration set (trap X5).
+script did: per-stage seeding would replay the training strata in the calibration set.
 Seeded runs are NOT bitwise-reproducible on CUDA or across devices.
 """
 import argparse
@@ -65,9 +66,9 @@ A seeded run is not bitwise-reproducible on CUDA or across devices.
 
 
 def _stages_type(value: str) -> str:
-    """argparse ``type=`` for ``--stages``: validated at PARSE TIME (fix round 1, K2), so an unknown
-    stage is an argparse error before ``main`` ever resolves a store root or creates a temp
-    directory -- and before ``registry.load_user_models()``, so it costs no torch import either.
+    """argparse ``type=`` for ``--stages``: validated at PARSE TIME, so an unknown stage is an
+    argparse error before ``main`` ever resolves a store root or creates a temp directory -- and
+    before ``registry.load_user_models()``, so it costs no torch import either.
     Returns the original string unchanged; ``run_smoke`` still does its own split (kept as a second,
     defensive check for any caller that reaches it without going through argparse)."""
     stages = [s.strip() for s in value.split(",") if s.strip()]

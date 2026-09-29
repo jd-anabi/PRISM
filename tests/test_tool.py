@@ -355,6 +355,7 @@ def test_a_taken_name_is_refused_with_exit_1_and_nothing_written(tool_run, capsy
 def test_parse_forced_and_recording_set_rules():
     """Section 3.6, as a unit: which recordings each observation mode takes, decided before anything
     is loaded or spent. The stub configs carry only the two fields the function is allowed to read."""
+    import re
     from core.tool.config_args import UsageError, parse_forced, recording_set
 
     assert parse_forced("rec.npy") == ("rec.npy", None)
@@ -373,7 +374,10 @@ def test_parse_forced_and_recording_set_rules():
         recording_set(chi, _args(f0_si=1e-12))
     with pytest.raises(UsageError, match="frequency") as exc:
         recording_set(chi, _args(forced=["a.npy"], f0_si=1e-12))
-    assert "(D9)" in str(exc.value), "spec 3.6 requires the guardrail id in the message"
+    msg = str(exc.value)
+    assert "must state the frequency (Hz) it was driven at" in msg, msg
+    assert not re.search(r"\([A-Z]\d+\)", msg), \
+        f"the refusal carries an internal label in place of its reason: {msg}"
     with pytest.raises(UsageError, match="--f0-si"):
         recording_set(chi, _args(forced=["a.npy@10"]))
     rec = recording_set(chi, _args(forced=["a.npy@10", "b.npy@20"], f0_si=1e-12))

@@ -1,9 +1,10 @@
 """SBC repeated K times on one posterior: the run-to-run DISTRIBUTION of the per-parameter KS
 p-values, optionally stratified by chi probe count.
 
-Folded from ``scripts/sbc_characterize.py`` (piece 2). What the script could not do and this does:
+Folded from the retired ``scripts/sbc_characterize.py``. What the script could not do and this does:
 the calibration set is drawn through ``validate_calibration``'s own helpers, so the draw carries
-``check_basis``, the region restriction (guardrail 8), the t_scale-override mirror in check_sbc's
+``check_basis``, the region restriction (the calibrate-on-the-region rule: a narrowed posterior
+calibrates on the prior restricted to its region), the t_scale-override mirror in check_sbc's
 reference sample, and the kept-fraction report. A single flat SBC can be a lucky draw; K repeats at a
 raised n_cal separate sampling noise (high, variable KS p) from real miscalibration (KS p stays low).
 
@@ -27,8 +28,8 @@ from core.runs import public_entry
 
 from .rng import seeded
 
-# The module's voice (piece 3, V4): the report table and the progress lines are information records,
-# which the window shows at their own level, the tool prints on stdout and the run's log.txt keeps.
+# The module's voice: the report table and the progress lines are information records, which the
+# window shows at their own level, the tool prints on stdout and the run's log.txt keeps.
 log = logging.getLogger(__name__)
 
 
@@ -90,8 +91,9 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     """SBC run ``repeats`` times on one posterior; writes a ``diagnostic`` artifact.
 
     :param posterior / prior: the LoadedPosterior and the LoadedPrior it was trained from. The
-                     proposal is the posterior's own region when it has one (guardrail 8), exactly as
-                     in validate_calibration -- these helpers are shared with it.
+                     proposal is the posterior's own region when it has one (the
+                     calibrate-on-the-region rule), exactly as in validate_calibration -- these
+                     helpers are shared with it.
     :param repeats: independent SBC runs, each seeded ``seed + r``.
     :param n_cal: calibration datasets PER REPEAT. The KS test's power grows with it; below ~2000 a
                      mild marginal miscalibration does not surface reliably.
@@ -114,7 +116,7 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     """
     store = resolve_store(store)
     store.assert_name_free("diagnostic", name)            # before K x n_cal simulations
-    # Refused, never clamped, and each a Refusal carrying its field key (V3): the message names the
+    # Refused, never clamped, and each a Refusal carrying its field key: the message names the
     # setting in neutral words and each front end appends its own "how to fix here".
     repeats = require_at_least("repeats", repeats, 1)
     n_cal = require_at_least("n_cal", n_cal, 1)
@@ -138,8 +140,8 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     labels = list(cfg.params_dict) + list(cfg.rescale_params)
     inferred_prior, force_prior = prior.prior, prior.force_prior
     # ONCE, and before create(): it can refuse (check_basis on a region measured in another basis),
-    # and a refusal must not leave a directory behind. Its "PRIOR RESTRICTED" line is guardrail 8's
-    # announcement and belongs on screen either way.
+    # and a refusal must not leave a directory behind. Its "PRIOR RESTRICTED" line announces the
+    # calibrate-on-the-region rule and belongs on screen either way.
     val_latent_prior, T, truncation = orch._calibration_prior(cfg, posterior, prior)
     stratum = "pooled" if chi_k_fixed is None else f"k{int(chi_k_fixed)}"
     log.info(f"[sbc] probe-count stratum: "

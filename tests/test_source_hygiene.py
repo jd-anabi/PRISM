@@ -84,23 +84,6 @@ READER_DOCS_DIR = "docs/guide"
 # Files not yet cleaned. It may only shrink: every file on it must still have a hit, so a cleaned
 # file has to leave it, and the last cleaning step deletes it together with the test that reads it.
 NOT_YET_CLEAN: frozenset[str] = frozenset({
-    "conftest.py",
-    "core/diagnostics/__init__.py",
-    "core/diagnostics/ablation.py",
-    "core/diagnostics/feature_sets.py",
-    "core/diagnostics/identifiability.py",
-    "core/diagnostics/rng.py",
-    "core/diagnostics/sbc.py",
-    "core/tool/__init__.py",
-    "core/tool/browse.py",
-    "core/tool/config_args.py",
-    "core/tool/diagnostics.py",
-    "core/tool/fdt.py",
-    "core/tool/fields.py",
-    "core/tool/logging_console.py",
-    "core/tool/smoke.py",
-    "core/tool/stages.py",
-    "requirements.txt",
     "tests/_fixtures.py",
     "tests/conftest.py",
     "tests/test_artifact_browser.py",

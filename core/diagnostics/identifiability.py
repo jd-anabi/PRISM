@@ -1,7 +1,7 @@
 """Identifiability: what a trained posterior KEPT (``rotation``), and whether the information is
 there at all (``laplace``, ``jacobian``).
 
-Folded from ``scripts/{posterior_identifiability,identifiability_offgt,degeneracy_map}.py`` (piece 2).
+Folded from the retired ``scripts/{posterior_identifiability,identifiability_offgt,degeneracy_map}.py``.
 
 The three answer different questions and must not be confused:
   rotation  reads the artifact's own Fisher eigenbasis. No simulation, runs in a second, and it is
@@ -36,8 +36,8 @@ from core.runs import public_entry
 from . import feature_sets
 from .rng import seeded
 
-# The reports are information records and the dead-channel and missing-eigenvalue notices warnings
-# (piece 3, V4); a warning printed as several lines is ONE record, so it is marked once.
+# The reports are information records and the dead-channel and missing-eigenvalue notices warnings;
+# a warning printed as several lines is ONE record, so it is marked once.
 log = logging.getLogger(__name__)
 
 _SF, _SS, _SC = 1, 2, 3          # CRN seeds: forced / spontaneous / chi block
@@ -67,14 +67,15 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
             f"run), so there is no eigenbasis to decompose. Train with cfg.reparam_rotate on -- note "
             f"that a model without forcing disables it -- or point this at a posterior that has one.",
             field="posterior")
-    # Refused, not clamped: a clamp turned --n-worst 0 into 1 without a word (the D6 trap).
+    # Refused, not clamped: a clamp turned --n-worst 0 into 1 without a word, and a setting is never
+    # silently clamped or ignored.
     n_worst = require_at_least("n_worst", n_worst, 1)
     top_n = require_at_least("top_n", top_n, 1)
     V = np.asarray(tr["V"], dtype=float)
     P = V.shape[0]
     if n_worst > P:
-        # M8: W[i, P-n_worst:] with P-n_worst < 0 is a NEGATIVE slice -- Python reads it "from the
-        # end", so bottom_share silently sums fewer than n_worst directions rather than crashing.
+        # W[i, P-n_worst:] with P-n_worst < 0 is a NEGATIVE slice -- Python reads it "from the end",
+        # so bottom_share silently sums fewer than n_worst directions rather than crashing.
         raise Refusal(f"The number of worst directions to report must be at most {P}, this "
                       f"posterior's latent width; got {n_worst} (default 3).", field="n_worst")
     names = list(tr["param_keys"])
@@ -166,8 +167,8 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
                  "rather than flat")
 
     settings = {"n_worst": n_worst, "top_n": top_n}
-    # S1 (spec 4.1): every float reaching the manifest goes through orch._num here, in one place, so a
-    # non-finite value becomes None instead of reaching the writer (which refuses NaN/inf outright).
+    # Every float reaching the manifest goes through orch._num here, in one place, so a non-finite
+    # value becomes None instead of reaching the writer (which refuses NaN/inf outright).
     # The compute/print/sort logic above is untouched -- it keeps reading the RAW (unconverted) floats.
     num_directions = [{**d, "eigenvalue": orch._num(d["eigenvalue"]),
                        "loadings": [{**ld, "loading": orch._num(ld["loading"])} for ld in d["loadings"]]}
@@ -256,17 +257,16 @@ def _laplace_raw(cfg, nd, res, force, m, crn, n_obs):
                                 device=device)[0][:, ::subs][:, :n_obs]
 
     if crn:
-        # fork_rng CONFINED to the CRN-seeded arms only (R1). manual_seed(_SF)/(_SS) exist so the
+        # fork_rng CONFINED to the CRN-seeded arms only. manual_seed(_SF)/(_SS) exist so the
         # +-d perturbation arms of ONE point's finite difference see the SAME simulated noise -- the
         # whole point of common random numbers -- and fork_rng keeps those fixed seeds from leaking
-        # into the caller's stream once this call returns (the M5 defect this mirrors from
-        # _jacobian_features). The crn=False noise-floor ensemble below must NOT be wrapped here: an
-        # earlier version wrapped the whole function unconditionally, so fork_rng ALSO captured and
-        # discarded the crn=False draw -- every Laplace POINT's m_noise ensemble then replayed the
-        # same frozen state, and "independent" noise floors across GT/prior points were not
-        # independent at all. The crn=False branch instead draws from the RUNNING seeded(...) stream,
-        # so different points get different noise while the whole measurement stays reproducible
-        # under --seed.
+        # into the caller's stream once this call returns, as it does in _jacobian_features. The
+        # crn=False noise-floor ensemble below must NOT be wrapped here: an earlier version wrapped
+        # the whole function unconditionally, so fork_rng ALSO captured and discarded the crn=False
+        # draw -- every Laplace POINT's m_noise ensemble then replayed the same frozen state, and
+        # "independent" noise floors across GT/prior points were not independent at all. The
+        # crn=False branch instead draws from the RUNNING seeded(...) stream, so different points get
+        # different noise while the whole measurement stays reproducible under --seed.
         with torch.random.fork_rng(devices=[device] if device.type == "cuda" else []):
             torch.manual_seed(_SF)
             xf = sim(forcef)
@@ -389,7 +389,7 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
     t_obs_s = require_positive("t_obs", config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
     n_obs_f = t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp
     if not math.isfinite(n_obs_f) or n_obs_f < 1:
-        # R3: require_positive refused zero, negative and non-finite lengths; this catches the tiny
+        # require_positive refused zero, negative and non-finite lengths; this catches the tiny
         # positive one that still floors to n_obs == 0 (a zero-length recording, not a refusal) and a
         # product that overflows to inf. Guard on the computed n_obs, never on t_obs_s alone.
         raise Refusal(
@@ -413,7 +413,7 @@ def identifiability_laplace(cfg, posterior, *, n_points: int = 6, m: int = 32, m
                 "min_valid": float(min_valid), "sd_identified": float(sd_identified),
                 "t_obs_s": t_obs_s, "seed": int(seed),
                 "log_range_params": [n for n, lg in zip(names, is_log) if lg]}
-    # M6: hoisted above store.create -- this can refuse (no `gen_dist` under the posterior's
+    # Hoisted above store.create -- this can refuse (no `gen_dist` under the posterior's
     # `.latent.prior`), and a refusal must not leave a half-written diagnostic directory behind.
     latent_prior = _training_latent_prior(posterior.latent) if n_points > 1 else None
 
@@ -594,7 +594,7 @@ def _probe_budget(ctx, feats0, keep0, xs0, t_obs_s) -> None:
         raise ValueError(
             f"chi: {bad} probe(s) violate cos^2 + sin^2 == 1, so channels 1 and 2 of the Fisher block "
             f"are not the cosine and sine of one phase. Check what is being passed to "
-            f"chi.fisher_features and the gen_chi_raw unpack (trap CHI10).")
+            f"chi.fisher_features and the gen_chi_raw unpack.")
     lo_b, hi_b = cfg.chi_freq_bounds
     log.info(f"  low edge {lo_b:g}x clears {CHI_MIN_CYCLES:g} cycles at T_obs >= "
              f"{CHI_MIN_CYCLES / (lo_b * f0_gt) / hz:.3g} s; high edge {hi_b:g}x stays under the "
@@ -679,7 +679,7 @@ def _summaries(ctx, J, fnoise, dead, names, kinds, vfr, zero_tol, sink):
     """The tables, the two figures, and the extra arrays the caller folds into the npz payload.
 
     Returns a TUPLE, not "the results block" -- ``identifiability_jacobian``'s own ``results`` stays
-    limited to spec Sec 4.5's keys, and everything restored here (the unique-handle fractions, the
+    limited to its seven summary keys, and everything restored here (the unique-handle fractions, the
     sloppiest direction, the top features, the rows dominating J) goes to the screen and to the npz's
     ``extra`` dict, the last element of the tuple, not into ``results``.
 
@@ -848,7 +848,7 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
     t_obs_s = require_positive("t_obs", config.T_MIN_EXP_S if t_obs_s is None else t_obs_s)
     n_obs_f = t_obs_s * cfg.get_unit_conversion_factor("s") / cfg.dt_exp
     if not math.isfinite(n_obs_f) or n_obs_f < 1:
-        # R3: see the identical guard in identifiability_laplace -- require_positive refused zero,
+        # See the identical guard in identifiability_laplace -- require_positive refused zero,
         # negative and non-finite lengths; this catches the tiny positive one that floors to a
         # zero-length recording (n_obs == 0), here, before any simulation.
         raise Refusal(
@@ -878,7 +878,7 @@ def identifiability_jacobian(cfg, *, m: int = 32, m_noise: int = 128, rel: float
             feats0, xf0, xs0 = _jacobian_features(ctx, gt_nd, gt_rescale, int(m_noise), False)
             fin0 = (torch.isfinite(xf0).all(1) & torch.isfinite(xs0).all(1)).cpu().numpy()
             if fin0.sum() < 10:
-                # M7: mirrors _analyze_point's own guard (laplace). Below this the noise floor is not
+                # This mirrors _analyze_point's own guard (laplace). Below this the noise floor is not
                 # estimable at all -- unguarded, np.median(amax0[fin0]) on an empty selection warns
                 # "Mean of empty slice", the derived CAP is NaN, keep0 ends up all-False, and
                 # feats0[keep0].std(0) then warns "Degrees of freedom <= 0" on a zero-size reduction.

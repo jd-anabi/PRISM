@@ -1,4 +1,4 @@
-"""Root pytest configuration (piece 0 of the 2026-09-10 hardening programme).
+"""Root pytest configuration.
 
 Lives at the repo root so it covers BOTH test trees named in pytest.ini (tests/ and
 core/Reduction/tests/). It runs before any test module is imported, which is the whole point:
