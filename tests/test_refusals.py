@@ -1,5 +1,4 @@
-"""The refusals module: one exception kind, the field registry and the rule functions (piece 3 of the
-2026-09-10 hardening programme, design §3.1).
+"""The refusals module: one exception kind, the field registry and the rule functions.
 
 The MODULE is torch-free by construction and pinned so in a fresh interpreter
 (test_the_module_is_torch_free_and_imports_only_the_standard_library): the window runs these rules
@@ -8,9 +7,9 @@ must cost nothing to import. This FILE is not torch-free, and no longer claims t
 imports ``core.config`` (and with it torch) because the registry's defaults are literal strings --
 the module cannot read ``config.py`` without importing torch -- so that test is what keeps the two
 from drifting. It is not the only one: the domain-error scan, the run buffer's warning test and the
-cell-wording tests of piece 5's §6.2 (which call ``core.cli`` and ``core.sim_config``) reach
-torch-importing modules too. Each imports them inside the test, so the file's own top-level imports
-stay the module under test and the standard library.
+cell-wording tests (which call ``core.cli`` and ``core.sim_config``) reach torch-importing modules
+too. Each imports them inside the test, so the file's own top-level imports stay the module under
+test and the standard library.
 """
 import ast
 import math
@@ -28,9 +27,9 @@ from core.refusals import (FIELDS, NOTE_MAX_CHARS, Field, Refusal, describe, ref
 
 REPO = Path(__file__).resolve().parents[1]
 
-# The registry's initial key set, exactly (design §3.1). The front-end tables (Task 4) map every one
-# of these, and a key raised anywhere under core/ must be here. A later task that adds a key adds it
-# here too -- the set is closed on purpose, so a misspelt key cannot slip in beside its twin.
+# The registry's key set, exactly. The front-end tables map every one of these, and a key raised
+# anywhere under core/ must be here. A change that adds a key adds it here too -- the set is closed
+# on purpose, so a misspelt key cannot slip in beside its twin.
 BASE_KEYS = (
     "t_obs", "num_runs", "run_size_cap", "n_directions", "hpd_level", "n_cal", "cal_n_scales",
     "num_posterior_samples", "n_samples", "num_iterations", "sweep_batch", "max_sets", "walk_step",
@@ -40,17 +39,17 @@ BASE_KEYS = (
     "bounds", "cell", "units", "recording_spont", "recording_forced", "recording_probe",
     "drive_amplitude", "drive_frequency", "drive_phase", "chi_f0_si", "chi_n_freqs", "chi_k_pad",
     "chi_max_cycles", "chi_f0", "chi_freq_bounds", "device", "model", "observation", "posterior", "prior",
-    # piece 5's secondary analyses: the eight knobs the FDT and sweep screens and their two subcommands
-    # expose, then the five FDT settings neither front end exposes -- registered all the same (P2, P75).
+    # the secondary analyses: the eight knobs the FDT and sweep screens and their two subcommands
+    # expose, then the five FDT settings neither front end exposes -- registered all the same.
     "n_freqs", "ensemble_m", "freqs_per_batch", "f0", "preset", "s_grid", "t_grid", "seed",
     "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd",
     "artifact", "note",
-    # piece 5, the model builder (spec §5.3)
+    # the model builder
     "param_value", "param_min", "param_max", "init", "x_scale", "t_scale", "forcing_value",
-    # piece 5, the live simulation (spec §5.6)
+    # the live simulation
     "frame_steps", "fps",
-    # piece 5: comparing saved FDT records (E8) -- which records, and the two mode settings the
-    # comparison checks before its record opens (F57)
+    # comparing saved FDT records -- which records, and the two mode settings the comparison checks
+    # before its record opens
     "compare_records", "prefactor", "slice_at",
 )
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
@@ -58,10 +57,10 @@ TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "re
 
 
 def _shape(exc, key):
-    """The shape every rule refusal shares (design §3.1): it starts with the field's description as
-    a sentence, ends with a period, carries the field key and the message on the exception, and ends
-    with the default clause exactly when the field has a default. Returns the message for the
-    caller's own pin on the words in between."""
+    """The shape every rule refusal shares: it starts with the field's description as a sentence,
+    ends with a period, carries the field key and the message on the exception, and ends with the
+    default clause exactly when the field has a default. Returns the message for the caller's own pin
+    on the words in between."""
     msg = str(exc)
     what = describe(key)
     assert exc.field == key, (exc.field, key)
@@ -96,13 +95,14 @@ def test_a_refusal_is_a_value_error_carrying_its_message_and_a_keyword_only_fiel
 
 
 def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions():
-    """Every key raised anywhere under core/ is here (Task 4's AST scan pins that side); this side
-    pins the registry itself: the closed initial set, and that each entry is a frozen ``Field`` whose
-    description is a lower-case noun phrase with no trailing period (it is spliced into "<What> must
-    be ..." and "<What> is blank ...") that names no box, tab, flag or button (V3: neutral; the front
-    ends add the control), and whose default is a string or None -- never a number, so a message
-    shows the default as the operator would type it. ``describe`` is the public reader and refuses
-    an unknown key with a KeyError: a message can only be built for a field a front end can map."""
+    """Every key raised anywhere under core/ is here (the key-literal scan further down pins that
+    side); this side pins the registry itself: the closed initial set, and that each entry is a frozen
+    ``Field`` whose description is a lower-case noun phrase with no trailing period (it is spliced
+    into "<What> must be ..." and "<What> is blank ...") that names no box, tab, flag or button
+    (neutral: the front ends add the control), and whose default is a string or None -- never a
+    number, so a message shows the default as the operator would type it. ``describe`` is the public
+    reader and refuses an unknown key with a KeyError: a message can only be built for a field a
+    front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
     assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 88, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
@@ -116,7 +116,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     assert FIELDS["t_obs"].default == "none: it must be given"
     assert FIELDS["run_size_cap"].what == "the rows-per-batch cap (0 = automatic)"
     assert FIELDS["new_run"] == Field("new_run", "consent to start a new simulation cache", None)
-    # piece 4's two: the artifact the browser acts on, and its note. Both descriptions obey the
+    # the artifact browser's two: the artifact it acts on, and its note. Both descriptions obey the
     # wording ban above (the regex on f.what), and neither has a default -- a note has no default
     # text and an artifact is chosen, not defaulted.
     assert FIELDS["artifact"] == Field("artifact", "the artifact", None)
@@ -128,12 +128,12 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
 
 
 def test_one_phrase_says_the_cell_is_missing_what_the_bounds_file_declares():
-    """Spec §6.2. "the cell does not supply something the bounds file declares" is ONE rule, and the
-    dry run (cli.validate_gt_file) and the injection (SimConfig._fill_checked) worded it two ways. One
+    """The cell not supplying something the bounds file declares is ONE rule, and the dry run
+    (cli.validate_gt_file) and the injection (SimConfig._fill_checked) worded it two ways. One
     builder now produces the phrase. It is a FRAGMENT -- lower case, no trailing period -- because
     the dry run's problems are joined with "; " (infer_tab._on_cell_changed) while the refusal puts
-    "Cell file is " in front and a period after. The label is used as given, never pluralised
-    (P38), and a list is plain comma-separated names, never a repr'd Python list."""
+    "Cell file is " in front and a period after. The label is used as given, never pluralised, and a
+    list is plain comma-separated names, never a repr'd Python list."""
     from core.refusals import missing_values_phrase
     assert missing_values_phrase("ND parameters", ["k_gs", "gamma"]) == \
         "missing ND parameters the bounds file requires: k_gs, gamma"
@@ -145,10 +145,10 @@ def test_one_phrase_says_the_cell_is_missing_what_the_bounds_file_declares():
 
 
 def test_the_two_cell_sites_both_splice_the_one_phrase():
-    """The other half of §6.2: each of the two sites builds its wording through the phrase and does
-    not re-type the sentence beside the call. Asserted on executable source, because what would
+    """The other half of that rule: each of the two sites builds its wording through the phrase and
+    does not re-type the sentence beside the call. Asserted on executable source, because what would
     regress is somebody re-typing the sentence. cli._merge_vals_bounds is a known third wording,
-    left alone on purpose (P53: it carries the cell path), so it is not in this list."""
+    left alone on purpose (it carries the cell path), so it is not in this list."""
     from core import cli, sim_config
     from tests._fixtures import code_only
     for obj in (cli.validate_gt_file, sim_config.SimConfig._fill_checked):
@@ -158,11 +158,11 @@ def test_the_two_cell_sites_both_splice_the_one_phrase():
 
 
 def test_the_dry_run_and_the_injection_word_a_missing_value_identically(monkeypatch):
-    """Spec §6.2 and §8.2 ("the cell refusal's wording is identical from load_and_validate_gt and
-    from the dry run"), P76. The refusal is exactly "Cell file is " + the dry run's problem + ".".
-    Both are reached without a bounds file: the dry run through a stand-in config carrying the three
-    dicts it reads and a stubbed values parser; the injection through the static
-    SimConfig._fill_checked, called with the label inject_ground_truth passes."""
+    """The cell refusal's wording is identical from load_and_validate_gt and from the dry run: the
+    refusal is exactly "Cell file is " + the dry run's problem + ".". Both are reached without a
+    bounds file: the dry run through a stand-in config carrying the three dicts it reads and a
+    stubbed values parser; the injection through the static SimConfig._fill_checked, called with the
+    label inject_ground_truth passes."""
     import types
     from collections import OrderedDict
     from core import cli
@@ -182,7 +182,7 @@ def test_the_dry_run_and_the_injection_word_a_missing_value_identically(monkeypa
 
 
 def test_a_blank_is_refused_by_every_rule_with_the_default_in_the_sentence():
-    """V2: a blank box is a refusal, never a zero or a default. ``None`` is the blank (what
+    """A blank box is a refusal, never a zero or a default. ``None`` is the blank (what
     ``value_or_none()`` returns for an empty or half-typed box), every rule refuses it before it looks
     at anything else, and the sentence names the default so the operator knows what to type. A field
     with no default gets the short form. The two "0 = automatic" boxes accept a typed 0 only."""
@@ -304,7 +304,7 @@ def test_require_below_refuses_an_inverted_or_blank_pair_and_returns_two_floats(
     pair is not hypothetical: a typed (0.0, 0.0) would make np.linspace produce a sweep of one
     repeated value rather than refuse. A BLANK end is another matter -- value() would read it as a
     real 0, which passes here whenever the other end is above it -- so every caller reads its ends
-    through value_or_none and a blank arrives as None (the whole-piece review's N30).
+    through value_or_none and a blank arrives as None.
 
     Both ends are refused blank and non-finite first, so the message never reads "0 and nan"; the
     pair comes back as floats, which is what the caller binds."""
@@ -389,10 +389,10 @@ def test_require_file_refuses_a_blank_and_a_missing_path_naming_the_input_kind(t
 
 
 def test_require_note_trims_one_line_and_refuses_a_break_or_the_limit():
-    """B5 (design §2.4). A note is ONE line, at most NOTE_MAX_CHARS characters, and blank clears it.
+    """A note is ONE line, at most NOTE_MAX_CHARS characters, and blank clears it.
 
     Surrounding whitespace is TRIMMED -- the one transformation this module allows, because it changes
-    no meaning -- and everything else is refused rather than fixed (V2): a newline, a carriage return
+    no meaning -- and everything else is refused rather than fixed: a newline, a carriage return
     or a tab inside the text refuses, and so does a note over the limit, whose sentence gives BOTH the
     limit and the length given so the operator knows how much to cut. An all-whitespace note is not a
     refusal: it is how a note is CLEARED, and it comes back as "". The limit lives here and not in
@@ -439,11 +439,11 @@ def test_refuse_appends_the_default_clause_to_the_callers_sentence_and_binds_the
 def test_the_module_is_torch_free_and_imports_only_the_standard_library():
     """The window runs the rules on the GUI thread at the click and the tool before any stage import,
     so ``core.refusals`` must cost nothing: no torch, no ``core.config`` (which imports torch). Two
-    pins: the module's import statements name only the five standard-library modules the design
-    allows (``warnings`` since piece 5's Task 12 moved PreflightWarning and its "always" filter here,
-    so the FDT path can raise one without the SBI stack), and a fresh interpreter that imports it has
-    neither torch nor core.config loaded. The subprocess is the real pin -- in this process torch is
-    long since imported by the session fixtures, so a sys.modules check here would pass vacuously."""
+    pins: the module's import statements name only the five standard-library modules it may use
+    (``warnings`` because PreflightWarning and its "always" filter live here, so the FDT path can
+    raise one without the SBI stack), and a fresh interpreter that imports it has neither torch nor
+    core.config loaded. The subprocess is the real pin -- in this process torch is long since
+    imported by the session fixtures, so a sys.modules check here would pass vacuously."""
     src = (REPO / "core" / "refusals.py").read_text(encoding="utf-8")
     imported = set()
     for node in ast.walk(ast.parse(src)):
@@ -465,11 +465,10 @@ def test_every_registry_default_is_the_trees_own_default():
     what keeps them honest. Every default that config.py owns is pinned as ``str(constant)`` -- the
     same spelling the message shows -- and every other default against the object whose signature
     owns it: the truncation defaults, the stages' keyword defaults, the diagnostics' signatures, the
-    tool's ``--device`` and ``crossval --preset`` defaults, FDTConfig's own field defaults (piece
-    5), and the Simulate panel's two frame boxes as a built panel shows them (piece 5, §5.6). A
-    constant retuned in config.py without this registry following it fails here, not in a message
-    that names a default nobody set. The last assertion closes the set: no default exists that this
-    test did not look at."""
+    tool's ``--device`` and ``crossval --preset`` defaults, FDTConfig's own field defaults, and the
+    Simulate panel's two frame boxes as a built panel shows them. A constant retuned in config.py
+    without this registry following it fails here, not in a message that names a default nobody set.
+    The last assertion closes the set: no default exists that this test did not look at."""
     import argparse
     import inspect
 
@@ -517,10 +516,10 @@ def test_every_registry_default_is_the_trees_own_default():
     config_args.add_config_flags(p)
     assert FIELDS["device"].default == p.get_default("device") == "auto"
 
-    # piece 5 (P2, P54, P75): the FDT knobs' defaults are FDTConfig's own -- make_fdt_config's keyword
-    # defaults equal them -- and every key whose sweep value comes from the preset also says a sweep
-    # takes the preset's value (F32: the band and the two durations as well as n_freqs / ensemble_m).
-    # Each preset is pinned to carry those keys, so the suffix cannot outlive the fact it states.
+    # The FDT knobs' defaults are FDTConfig's own -- make_fdt_config's keyword defaults equal them --
+    # and every key whose sweep value comes from the preset also says a sweep takes the preset's value
+    # (the band and the two durations as well as n_freqs / ensemble_m). Each preset is pinned to carry
+    # those keys, so the suffix cannot outlive the fact it states.
     import dataclasses
     from core import cli
     from core.config import FDTConfig
@@ -544,9 +543,9 @@ def test_every_registry_default_is_the_trees_own_default():
     assert (FIELDS["preset"].default == build_parser().subcommands["crossval"].get_default("preset")
             == next(iter(cli.SWEEP_PRESETS)))
 
-    # piece 5, §5.6 (F3): the live simulation's two frame settings have no constant and no signature
-    # default -- the panel's own boxes are constructed with them (IntField(2000), IntField(30)), so the
-    # box text of a freshly built panel is what owns them. The session's settings file is empty per
+    # The live simulation's two frame settings have no constant and no signature default -- the
+    # panel's own boxes are constructed with them (IntField(2000), IntField(30)), so the box text of a
+    # freshly built panel is what owns them. The session's settings file is empty per
     # test (tests/conftest.py), so nothing restored over the construction defaults.
     from core.gui.panels.simulate_panel import SimulatePanel
     from tests._fixtures import qt_app
@@ -565,10 +564,10 @@ def test_every_registry_default_is_the_trees_own_default():
 
 def test_core_runs_imports_without_torch():
     """core/runs.py is imported by every public entry point and by BOTH front ends, and the tool's
-    entry sets KMP_DUPLICATE_LIB_OK and the Agg backend BEFORE any torch import (CLAUDE.md). So the
-    module must cost the standard library only -- which is also what lets public_entry duck-type
-    the config instead of isinstance-checking SimConfig. core/__init__.py is empty, so a fresh
-    interpreter tells the truth about what `import core.runs` pulls in."""
+    entry sets KMP_DUPLICATE_LIB_OK and the Agg backend BEFORE any torch import. So the module must
+    cost the standard library only -- which is also what lets public_entry duck-type the config
+    instead of isinstance-checking SimConfig. core/__init__.py is empty, so a fresh interpreter tells
+    the truth about what `import core.runs` pulls in."""
     import subprocess
     import sys
     from pathlib import Path
@@ -582,11 +581,12 @@ def test_core_runs_imports_without_torch():
 
 
 def test_the_core_logger_is_at_info_by_import():
-    """V4 (spec §1.2, "V4 and the logger level"). Python's root logger sits at WARNING, so a `core`
-    logger left at NOTSET inherits it and drops every information record before any handler sees
-    it: the window's pane and the artifact's log.txt would carry warnings only, while
-    `caplog.set_level` in a suite hid the loss. core/runs.py sets the level ONCE at import; the
-    window's handler and the tool's `main` install and remove handlers and never touch it. Task 16
+    """Python's root logger sits at WARNING, so a `core` logger left at NOTSET inherits it and drops
+    every information record before any handler sees it: the window's pane and the artifact's
+    log.txt would carry warnings only, while `caplog.set_level` in a suite hid the loss.
+    core/runs.py sets the level ONCE at import; the window's handler and the tool's `main` install
+    and remove handlers and never touch it.
+    tests/test_tool.py::test_the_core_logger_is_at_info_by_import_and_stays_so_after_main_and_a_redirect
     extends this pin across `main` and a stream redirect."""
     import logging
 
@@ -602,12 +602,12 @@ def test_the_core_logger_is_at_info_by_import():
 
 
 def test_capture_run_pushes_one_buffer_for_nested_calls():
-    """V4 (spec §4.4). A composition writes two artifacts: the observation's log.txt holds the
-    records up to its commit, the inference's holds the WHOLE composition's. So the public stages a
-    composition calls must join the composition's buffer, not open their own: capture_run pushes
-    only when nothing is active on this thread, and a nested exit pops nothing. The buffer is
-    popped on EVERY outer exit, an exception's included, so a refused or crashed run leaves no
-    handler on the logger and no tee on warnings.showwarning."""
+    """A composition writes two artifacts: the observation's log.txt holds the records up to its
+    commit, the inference's holds the WHOLE composition's. So the public stages a composition calls
+    must join the composition's buffer, not open their own: capture_run pushes only when nothing is
+    active on this thread, and a nested exit pops nothing. The buffer is popped on EVERY outer exit,
+    an exception's included, so a refused or crashed run leaves no handler on the logger and no tee
+    on warnings.showwarning."""
     import logging
     import re
     import warnings
@@ -646,11 +646,11 @@ def test_capture_run_pushes_one_buffer_for_nested_calls():
 
 
 def test_the_run_buffer_tees_python_warnings_and_calls_the_previous_hook():
-    """V4 (spec §1.2, "V4 and Python warnings"). The judgement channel -- PreflightWarning -- is
-    what a reviewer wants in an artifact's log.txt, so the buffer tees warnings.showwarning while
-    it is active. It TEES: the hook that was there before (the window's pane hook under a run,
-    pytest's recorder under pytest.warns, Python's stderr printer otherwise) is still called with
-    the same six arguments, and is restored on detach, so the tee nests cleanly inside either.
+    """The judgement channel -- PreflightWarning -- is what a reader wants in an artifact's log.txt,
+    so the buffer tees warnings.showwarning while it is active. It TEES: the hook that was there
+    before (the window's pane hook under a run, pytest's recorder under pytest.warns, Python's stderr
+    printer otherwise) is still called with the same six arguments, and is restored on detach, so the
+    tee nests cleanly inside either.
     The PreflightWarning import is local: the module under test stays torch-free, and the test
     process already holds core.orchestrator through the session fixtures."""
     import re
@@ -682,10 +682,10 @@ def test_the_run_buffer_tees_python_warnings_and_calls_the_previous_hook():
 
 
 def test_the_run_buffer_is_per_thread_in_fact_not_only_in_name():
-    """Task 2's ruling. RunLog documented itself as per-thread, but its handler sits on the
-    PROCESS-WIDE ``core`` logger and its tee replaces the PROCESS-WIDE ``warnings.showwarning`` -- so
-    a record or a warning raised from a second thread while a run is active on the main thread used to
-    land in that run's buffer too. ``attach`` now records the attaching thread
+    """RunLog documented itself as per-thread, but its handler sits on the PROCESS-WIDE ``core``
+    logger and its tee replaces the PROCESS-WIDE ``warnings.showwarning`` -- so a record or a warning
+    raised from a second thread while a run is active on the main thread used to land in that run's
+    buffer too. ``attach`` now records the attaching thread
     (``threading.get_ident()``), and both ``_RunLogHandler.emit`` and ``RunLog._showwarning`` check it
     before appending -- a record from the main thread still lands; one from another thread does not,
     though it must still reach whatever hook was installed before the buffer's own (here pytest's
@@ -732,11 +732,12 @@ def test_the_run_buffer_is_per_thread_in_fact_not_only_in_name():
 
 
 def test_the_public_entry_decorator_passes_a_sentinel_through():
-    """V1 (spec §2.2, §2.4). The decorator replaces the config argument -- the first positional, or
-    the `cfg` keyword -- with its copy_for_run() and runs the call inside capture_run(). It is
-    duck-typed, so core/runs.py never imports torch, and a stub or an object() sentinel (the gate
-    tests put one on session.cfg) passes through untouched. functools.wraps keeps the name, the
-    docstring, the signature and the source, which the AST pins on the stages read."""
+    """Every public stage works on a private copy of its config. The decorator replaces the config
+    argument -- the first positional, or the `cfg` keyword -- with its copy_for_run() and runs the
+    call inside capture_run(). It is duck-typed, so core/runs.py never imports torch, and a stub or
+    an object() sentinel (the gate tests put one on session.cfg) passes through untouched.
+    functools.wraps keeps the name, the docstring, the signature and the source, which the AST pins
+    on the stages read."""
     import inspect
     import logging
 
@@ -794,15 +795,15 @@ def test_the_public_entry_decorator_passes_a_sentinel_through():
     assert any(ln.endswith("info stage record") for ln in outer.lines), outer.lines
 
 
-# ── The tool's table, and the closure of the registry over the tree (piece 3, Task 4) ────────────
+# ── The tool's table, and the closure of the registry over the tree ──────────────────────────────
 # The rule functions take the key POSITIONALLY (require_positive("t_obs", v)); a refusal raised directly
 # carries it as field="…". Both shapes are scanned. `describe` is in the list although
 # core/tool/config_args.py has a describe(cfg, ...) of its own: that one's first argument is a config,
 # never a string literal, so a name match cannot mistake it for the registry's describe(key).
 _RULE_CALLS = ("describe", "refuse", "require_given", "require_finite", "require_positive",
                "require_at_least", "require_between", "require_below", "require_choice", "require_file",
-               # piece 5 added require_note("note", ...) call sites in both measurement panels and
-               # the tool, which the scan did not see (the whole-piece review's N30)
+               # require_note("note", ...) has call sites in both measurement panels and the tool,
+               # which the scan once missed
                "require_note")
 
 
@@ -854,7 +855,7 @@ def _static_message_box_calls(tree) -> list:
 
 
 def test_no_static_message_box_is_called_anywhere_under_core():
-    """The guard tests/conftest.py ASSERTS AS FACT, finally asserted (whole-piece review, R8).
+    """The guard tests/conftest.py ASSERTS AS FACT, finally asserted.
 
     ``_no_modal_dialogs`` patches the INSTANCE method ``QMessageBox.exec``. The five statics are C++
     class methods and escape it, and offscreen each spins a nested event loop nothing ever closes --
@@ -862,11 +863,12 @@ def test_no_static_message_box_is_called_anywhere_under_core():
     instead of failing it. No timeout plugin is installed; the failure a reviewer would have to
     diagnose is a stack dump of a stuck process.
 
-    Piece 4 converted ``main_window.py``'s last three statics and then wrote "Nothing under core/
-    calls the statics any more ... so this guard covers every box the GUI shows" into that fixture's
-    docstring -- with nothing checking it. The repository has four scans of this shape already
-    (the literal-path scan, the code-directory closure, the checkpoint-commit print scan and the
-    field-key registry scan); this is the fifth, over the same ``CODE_ROOTS + CODE_FILES``.
+    ``main_window.py``'s last three statics were converted to instance boxes, and then "Nothing
+    under core/ calls the statics any more ... so this guard covers every box the GUI shows" went
+    into that fixture's docstring -- with nothing checking it. The repository has four scans of this
+    shape already (the literal-path scan, the code-directory closure, the checkpoint-commit print
+    scan and the field-key registry scan); this is the fifth, over the same
+    ``CODE_ROOTS + CODE_FILES``.
 
     The scanner is checked on a SNIPPET first: with no static left in the tree, the tree walk alone
     passes vacuously and would go on passing if the walk stopped working."""
@@ -900,8 +902,9 @@ def test_no_static_message_box_is_called_anywhere_under_core():
 
 
 def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_registered():
-    """V3's tool half, and the closure of the registry. A Refusal names its field by a key and says
-    nothing about flags; the tool turns the key into a flag with ONE table, so:
+    """The tool's half of the field-key rule, and the closure of the registry. A Refusal names its
+    field by a key and says nothing about flags; the tool turns the key into a flag with ONE table,
+    so:
 
     (a) the table knows every registry key and no other -- a key that reached the ladder unmapped
         would print a refusal with no way out named, and an entry for a key nobody raises is a flag
@@ -915,8 +918,8 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     (e)(f) every key LITERAL under core/ is registered. The rule functions look a key up at call
         time, so a typo would surface as a KeyError from inside a refusal, on the one path no test
         walked. Found by the same AST walk the literal-path scan uses (test_artifact_store.py), over
-        the same CODE_ROOTS + CODE_FILES. The scanner is checked on a snippet FIRST: with no field=
-        literal in the tree yet (Task 5 adds the first), the tree walk alone would pass vacuously.
+        the same CODE_ROOTS + CODE_FILES. The scanner is checked on a snippet FIRST: a walk that
+        found no literal at all would pass vacuously.
     """
     import argparse
     import ast
@@ -945,7 +948,7 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     unreal = {k: f for k, f in tool_fields.FLAG.items() if f is not None and f not in real}
     assert not unreal, f"FLAG names an option no subcommand defines: {unreal}"
     assert all(f is None or f.startswith("--") for f in tool_fields.FLAG.values())
-    # A SUBSET assertion, not an equality (spec §8.3): these six answer to no option string today
+    # A SUBSET assertion, not an equality: these six answer to no option string today
     # and must keep doing so -- the units are declared per model, the four chi constants are
     # config.py's, and the artifact is positional. A later key with no flag is a new fact about that
     # key, not a regression in these six, and an equality here turns every such addition into a
@@ -959,7 +962,7 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
     assert (tool_fields.FLAG["drive_amplitude"] == tool_fields.FLAG["drive_frequency"]
             == tool_fields.FLAG["drive_phase"] == "--drive")
     assert tool_fields.FLAG["max_num_epochs"] == "--max-epochs" and tool_fields.FLAG["run_size_cap"] == "--run-size"
-    # piece 4: the note is a flag so this table can name one (config_args.add_name_flags), and the
+    # the note is a flag so this table can name one (config_args.add_name_flags), and the
     # artifact is positional, so its entry is None and fix_sentence adds NOTHING -- set_note's
     # "no complete <kind> artifact named or id'd ..." refusal carries field="artifact", and the
     # ladder's line for it therefore ends at the message, with no trailing parenthetical
@@ -992,7 +995,7 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
         'refuse(key, "w")\n'                                       # 7: a variable is not a literal
         'describe(cfg, cell="c")\n'                                # 8: config_args.describe's shape
         'other(field="not_a_refusal_kw")\n'                        # 9: field= on ANY call counts
-        'require_below("nor_this_pair", lo, hi)\n')                # 10: the ordered-pair rule (piece 5)
+        'require_below("nor_this_pair", lo, hi)\n')                # 10: the ordered-pair rule
     assert [k for _, k in sorted(_field_key_literals(snippet))] == [
         "t_obs", "no_such_box", "walk_step", "nor_this", "hpd_level", "not_a_refusal_kw", "nor_this_pair"]
 
@@ -1011,11 +1014,11 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
 
 
 def test_every_domain_error_is_a_refusal_and_carries_a_field():
-    """Spec section 3.6, first bullet. The six errors the tree already raises for "something asked for
-    that the program will not do" -- a bad or taken name, a stale manifest, a unit pint cannot
-    resolve, a cell FDT cannot run, a model definition that does not parse, a flag combination
-    argparse cannot express -- become Refusals, so ONE ladder on the tool and ONE routing in the
-    window tell a refusal from a bug by TYPE instead of guessing from ValueError. Each keeps its
+    """The six errors the tree already raises for "something asked for that the program will not
+    do" -- a bad or taken name, a stale manifest, a unit pint cannot resolve, a cell FDT cannot
+    run, a model definition that does not parse, a flag combination argparse cannot express --
+    become Refusals, so ONE ladder on the tool and ONE routing in the window tell a refusal from a
+    bug by TYPE instead of guessing from ValueError. Each keeps its
     class (every ``except StoreError`` in the tree still holds) and its docstring, and each takes
     ``field=`` through Refusal.__init__, so a raise site can name the control that answers it.
 
@@ -1038,7 +1041,7 @@ def test_every_domain_error_is_a_refusal_and_carries_a_field():
         assert cls.__doc__ and cls.__doc__.strip(), f"{cls.__name__} lost its docstring"
 
 
-# ── piece 4, B14: THE root-logger handler (spec §7.1) ────────────────────────────────────────────
+# ── THE root-logger handler ──────────────────────────────────────────────────────────────────────
 def test_the_root_handler_exists_from_startup_so_basicconfig_never_fires():
     """WHY NO SUITE HAS EVER SEEN THIS DEFECT: pytest attaches a handler to the root logger for every
     test phase (_pytest/logging.py, ``catching_logs.__enter__``, around line 349), so
@@ -1132,9 +1135,9 @@ def test_caplog_still_sees_core_records_while_the_root_handler_is_installed(capl
 
 
 def test_the_root_sink_takes_exactly_what_no_handler_below_the_root_has_emitted():
-    """Fix round 1: the filter's rule is "no logger between the record's own and the root (the root
-    excluded) has a handler that already emitted it", replacing a rule by logger NAME that lost three
-    kinds of record. Run as a plain script would run it -- pytest's root handlers off, put back
+    """The filter's rule is "no logger between the record's own and the root (the root excluded) has
+    a handler that already emitted it", replacing a rule by logger NAME that lost three kinds of
+    record. Run as a plain script would run it -- pytest's root handlers off, put back
     WHOLESALE in the finally -- because what is under test is what reaches the root.
 
     (a) a ``core`` WARNING with NO ``core`` handler attached (the window between runs) reaches the
@@ -1217,9 +1220,7 @@ def test_the_root_sink_takes_exactly_what_no_handler_below_the_root_has_emitted(
 
 
 def test_the_run_log_handler_does_not_count_as_having_emitted_a_record():
-    """Task 20's deferred item, and the off-thread case a reviewer's probe found beside it.
-
-    ``runs._RunLogHandler`` appends to a LIST. It emits to nobody, which is exactly the standing a
+    """``runs._RunLogHandler`` appends to a LIST. It emits to nobody, which is exactly the standing a
     ``NullHandler`` already had in ``_already_emitted`` -- and it did not have it. So while ANY run
     was active the sink stayed silent for every ``core`` record, and two things followed:
 

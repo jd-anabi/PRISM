@@ -1,5 +1,5 @@
-"""The artifact store (piece 1 of the 2026-09-10 hardening programme): manifest schema, provenance,
-the store and its writer, the loaders' refusals, the simulation identity, and the stage contract."""
+"""The artifact store: manifest schema, provenance, the store and its writer, the loaders' refusals,
+the simulation identity, and the stage contract."""
 import json
 import math
 import os
@@ -60,9 +60,9 @@ def _post_body(**over):
 
 
 def test_a_posterior_manifests_amortized_flag_must_agree_with_its_region():
-    """Defect D3 at the schema: the flag and the region are two views of one fact, and different
-    readers gate on different ones -- the load path on the flag, calibration and inference on the
-    region. A manifest where they disagree cannot be written or read."""
+    """The flag and the region are two views of one fact, and different readers gate on different
+    ones -- the load path on the flag, calibration and inference on the region. A manifest where they
+    disagree cannot be written or read."""
     ok = _header(kind="posterior", body=_post_body())
     assert mf.validate(ok).body["amortized"] is True
     region = {"dims": [0], "lo": [-1.0], "hi": [1.0], "level": 0.99}
@@ -156,7 +156,7 @@ def _bodies():
     The simulation kind is deliberately absent: its manifest has no writer at all (``store.create``
     refuses it outright) and ``write_simulation_manifest`` builds its body itself. That absence is
     why ``test_bodies_covers_every_writer_kind`` closes this dict against ``BODY_KEYS`` MINUS that
-    one kind rather than against ``BODY_KEYS`` itself (piece 5, checklist 22).
+    one kind rather than against ``BODY_KEYS`` itself.
     """
     return {
         "prior": {"gmm": {"n_components": 2, "param_keys": ["a"],
@@ -173,7 +173,7 @@ def _bodies():
         # A finished single-cell measurement at its smallest: the five keys a run knows before it
         # starts, the three a finished single run fills, and the two that are null for a single run
         # (``points``) and for anything but a comparison (``compared``). ``complete`` is True
-        # because _make exits its writer cleanly, and the writer is what sets that flag (Task 3).
+        # because _make exits its writer cleanly, and the writer is what sets that flag.
         "fdt": {"study": "single", "settings": {"n_freqs": 2, "ensemble_M": 8}, "seed": 11,
                 "grid": {"omega_0": 1.0, "n_freqs": 2}, "points": None, "offgrid": {"blanks": 0,
                 "of": 2}, "notices": [], "compared": None, "complete": True,
@@ -182,8 +182,8 @@ def _bodies():
 
 
 def test_bodies_covers_every_writer_kind():
-    """Checklist 22, a SILENT pin. ``_bodies`` feeds the per-kind round trip and the finished-per-kind
-    test, and neither is closed against the schema -- so a kind added to ``BODY_KEYS`` and forgotten
+    """A SILENT pin. ``_bodies`` feeds the per-kind round trip and the finished-per-kind test, and
+    neither is closed against the schema -- so a kind added to ``BODY_KEYS`` and forgotten
     here is simply never round-tripped, and nothing says so. The simulation kind is subtracted rather
     than listed: it has no writer at all (``store.create`` refuses it), which is why ``_bodies``
     omits it on purpose.
@@ -195,15 +195,15 @@ def test_bodies_covers_every_writer_kind():
 
 
 def test_load_fdt_verifies_the_payload_hash_and_nothing_else(store):
-    """Checklist 6. An fdt record is a MEASUREMENT of a cell, not a constraint on a later run, so
-    there is no configuration it has to match and nothing is ever trained from it -- ``load_diagnostic``
-    is the precedent (D5). What it DOES check is the one thing the manifest can be checked against:
-    the payload's own sha256, so a data.h5 edited, truncated or deleted since the commit is refused
-    rather than read as the numbers the record claims.
+    """An fdt record is a MEASUREMENT of a cell, not a constraint on a later run, so there is no
+    configuration it has to match and nothing is ever trained from it -- ``load_diagnostic`` is the
+    precedent. What it DOES check is the one thing the manifest can be checked against: the payload's
+    own sha256, so a data.h5 edited, truncated or deleted since the commit is refused rather than read
+    as the numbers the record claims.
 
     A NULL recorded hash is not a mismatch. A progressive record hashes its payloads at the final
-    commit only (spec §2.2), so an unfinished record lists data.h5 with a null hash and must still
-    load -- reading what an interrupted run managed to write is the whole point of E2.
+    commit only, so an unfinished record lists data.h5 with a null hash and must still load --
+    reading what an interrupted run managed to write is the whole point of keeping its folder.
     """
     from core.artifacts import LoadedFdt
     # "measured" never wrote numbers: _make gives it results.json and nothing else.
@@ -237,7 +237,7 @@ def test_load_fdt_verifies_the_payload_hash_and_nothing_else(store):
         store.load_fdt("measured2")
     assert edited.value.field == "artifact"
 
-    # ... and so is one DELETED since the commit (ruling F29). A recorded hash is a claim the loader
+    # ... and so is one DELETED since the commit. A recorded hash is a claim the loader
     # can check, and a file that is gone fails it; skipping it and answering data_path=None would
     # pass a finished record off as one that never wrote numbers. Only a NULL hash means "not yet".
     with store.create("fdt", None, name="measured3") as w3:
@@ -293,17 +293,16 @@ ORDINARY_KINDS = ("prior", "posterior", "observation", "calibration", "inference
 
 
 def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
-    """Spec §11, risk row 2, and §8.2. The progressive mode touches ``ArtifactWriter``, which every
-    kind uses, and piece 4's review caught a delete that destroyed a finished artifact -- so the six
-    ordinary kinds' remove-on-exception is pinned HERE, before the mode exists, and this test is what
-    says the mode changed nothing for them.
+    """The progressive mode touches ``ArtifactWriter``, which every kind uses, and a delete that
+    destroyed a finished artifact has been caught in this store before -- so the six ordinary kinds'
+    remove-on-exception is pinned HERE, and this test is what says the mode changed nothing for them.
 
     Three exception shapes, because they arrive through the same ``__exit__``: a plain Exception, a
     BaseException (the shape of gui.streams.WorkerCancelled, which is what a Cancel click raises), and
     a ``Refusal`` -- the one class the progressive branch singles out. Each is raised both after a
-    payload and with NOTHING written, which is exactly the condition that branch keys on (fix round 1,
-    finding 4): an ordinary kind must remove its directory whichever way that test would come out, so
-    neither "nothing was written" nor "it was a refusal" can be what decides.
+    payload and with NOTHING written, which is exactly the condition that branch keys on: an ordinary
+    kind must remove its directory whichever way that test would come out, so neither "nothing was
+    written" nor "it was a refusal" can be what decides.
     """
     class _Cancel(BaseException):
         pass
@@ -326,15 +325,15 @@ def test_every_ordinary_kind_still_removes_its_directory_on_a_failure(store):
 
 
 def test_loose_files_sees_what_no_listing_can_and_removes_one_by_name(store):
-    """E10 and spec §6.3. ``_entries`` iterates DIRECTORIES only, so a file sitting inside a kind
-    directory is invisible to every listing in both front ends -- and the owner has two of them, the
+    """``_entries`` iterates DIRECTORIES only, so a file sitting inside a kind directory is invisible
+    to every listing in both front ends -- and the owner has two of them, the
     PNGs an older FDT run dropped into ``Artifacts/fdt``. This is the only route by which either
     front end can see or clear one; nothing is removed on the owner's behalf.
 
     It can never reach a directory: the candidate is matched against ``loose_files``'s own entries,
     which are files. ``remove_incomplete`` owns the directories and refuses a non-directory, so the
-    two calls cannot do each other's job -- the same safety property piece 4 gave ``delete`` and
-    ``remove_incomplete`` (B7).
+    two calls cannot do each other's job -- the same safety property ``delete`` and
+    ``remove_incomplete`` keep between them.
     """
     d = store.kind_dir("fdt")
     d.mkdir(parents=True, exist_ok=True)
@@ -368,16 +367,17 @@ def test_loose_files_sees_what_no_listing_can_and_removes_one_by_name(store):
 
 
 def test_a_legacy_directory_beside_the_kind_directories_is_seen_and_cleared(store):
-    """E10's second half. The store never walks its own ROOT, so a ``crossval/`` written by an older
-    build sits beside the kind directories and no command in either front end can see it. The list of
-    such names is a CLOSED literal: a store root is not a place to guess at, and offering to remove
-    whatever happens to be there is how a sweep destroys something nobody meant it to.
+    """The other half of the loose-file rule. The store never walks its own ROOT, so a ``crossval/``
+    written by an older build sits beside the kind directories and no command in either front end
+    can see it. The list of such names is a CLOSED literal: a store root is not a place to guess at,
+    and offering to remove whatever happens to be there is how a sweep destroys something nobody
+    meant it to.
 
     It can never reach a kind directory: a name that is one is refused even if it were listed, which
     is the mirror of ``remove_loose`` never reaching a directory.
     """
     assert st.LEGACY_DIRS == ("crossval",), \
-        "the one directory an older build wrote beside the kind directories (spec §2.1)"
+        "the one directory an older build wrote beside the kind directories"
     assert not set(st.LEGACY_DIRS) & set(st.KIND_DIRS.values()), \
         "a legacy name that is also a kind directory would make this call reach a real artifact"
 
@@ -432,12 +432,12 @@ def test_a_legacy_name_that_is_a_junction_is_neither_offered_nor_followed(store)
 
 def test_a_legacy_name_that_resolves_to_another_directory_is_neither_offered_nor_removed(
         store, monkeypatch):
-    """The whole-piece review's N27 (L395). Windows addresses one directory by several names -- an
-    8.3 short name among them -- so a ``crossval`` that is really an alias of a KIND directory would
-    pass every string check, and its resolved parent IS the root, so the realpath-parent check passes
-    too. ``realpath`` expands the alias, so the resolved BASENAME must be the legacy name itself.
-    The alias cannot be made without an administrator, so ``os.path.realpath`` is made to resolve
-    ``crossval`` to ``simulations``, which is what an alias would look like to this code."""
+    """Windows addresses one directory by several names -- an 8.3 short name among them -- so a
+    ``crossval`` that is really an alias of a KIND directory would pass every string check, and its
+    resolved parent IS the root, so the realpath-parent check passes too. ``realpath`` expands the
+    alias, so the resolved BASENAME must be the legacy name itself. The alias cannot be made without
+    an administrator, so ``os.path.realpath`` is made to resolve ``crossval`` to ``simulations``,
+    which is what an alias would look like to this code."""
     old = store.root / "crossval"
     old.mkdir(parents=True)
     (old / "sweep_S.h5").write_bytes(b"what an alias of a kind directory would hold")
@@ -459,11 +459,11 @@ def test_a_legacy_name_that_resolves_to_another_directory_is_neither_offered_nor
 
 
 def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
-    """Spec §2.2 step 1 and E2. ``validate`` refuses a PARTIAL body key set, so the first manifest
-    cannot carry only what is known -- it carries every key of BODY_KEYS["fdt"] with the unknown ones
-    null. Five are known before the run starts (study, settings, seed, notices, complete) and five
-    are not (grid, points, offgrid, compared, results), which is what makes an in-flight record
-    readable in the browser while it runs.
+    """``validate`` refuses a PARTIAL body key set, so the first manifest cannot carry only what is
+    known -- it carries every key of BODY_KEYS["fdt"] with the unknown ones null. Five are known
+    before the run starts (study, settings, seed, notices, complete) and five are not (grid, points,
+    offgrid, compared, results), which is what makes an in-flight record readable in the browser
+    while it runs.
 
     ``complete`` is the WRITER's field, not the stage's: it is False here because the writer wrote it
     so, and it is the writer that sets it True at the commit. A stage that forgot to touch it cannot
@@ -471,7 +471,7 @@ def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
     """
     w = store.create("fdt", None, name="inflight")
     assert w.progressive is True and w._wrote_anything is False
-    assert not w.dir.exists(), "create() mints the id and the path and creates NOTHING (spec §1.2)"
+    assert not w.dir.exists(), "create() mints the id and the path and creates NOTHING"
     w.body = {"study": "single", "settings": {"n_freqs": 2}, "seed": 5, "notices": []}
     with w:
         assert w.dir.is_dir()
@@ -488,8 +488,8 @@ def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
             == {"omega_0": 1.0}, "refresh re-writes the manifest as the run proceeds"
         w.payload("data.h5").write_bytes(b"numbers")
         assert w._wrote_anything is True
-        # the manifest still parses, and a payload write does not mark the record finished (the
-        # whole-piece review's N32: `is not None` could never fail -- from_json_text returns or raises)
+        # the manifest still parses, and a payload write does not mark the record finished (an
+        # `is not None` check could never fail here -- from_json_text returns or raises)
         assert mf.from_json_text((w.dir / st.MANIFEST).read_text(encoding="utf-8")).body["complete"] \
             is False
     assert store.list("fdt")[0].finished, "the commit is what makes it finished"
@@ -499,17 +499,18 @@ def test_a_progressive_record_has_a_valid_manifest_from_its_first_moment(store):
 
 
 def test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_record(store):
-    """Review Focus 1, and E2. The record exists, nothing has been written into it, and the cancel is
-    a BaseException -- the shape ``core/gui/streams.py``'s WorkerCancelled has. The folder must
-    survive: a run that took hours and was stopped is exactly what E2 keeps a folder for, and the
+    """The record exists, nothing has been written into it, and the cancel is a BaseException -- the
+    shape ``core/gui/streams.py``'s WorkerCancelled has. The folder must survive: a run that took
+    hours and was stopped is exactly what an interrupted record keeps its folder for, and the
     spontaneous spectrum inside it is what diagnoses why it was stopped.
 
-    A REFUSAL at the same point must do the opposite (spec §2.2 step 3) and the two arrive through
-    the same ``__exit__``, which is why both are asserted here and not in two places.
+    A REFUSAL at the same point must do the opposite, and the two arrive through the same
+    ``__exit__``, which is why both are asserted here and not in two places.
 
-    And the store half of spec §8.2's "the leftover sweep never offers it" (controller ruling F7): the
-    kept record carries a manifest, so ``remove_incomplete`` -- the one call the sweep removes through
-    -- refuses it even once it is old enough to be past the recency guard. The tool half is Task 30's.
+    And the store half of "the leftover sweep never offers it": the kept record carries a manifest,
+    so ``remove_incomplete`` -- the one call the sweep removes through -- refuses it even once it is
+    old enough to be past the recency guard. The tool half is tests/test_tool.py's
+    test_an_unfinished_fdt_record_is_listed_as_not_finished_and_never_swept.
     """
     class _Cancel(BaseException):
         pass
@@ -519,7 +520,7 @@ def test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_rec
     with pytest.raises(_Cancel):
         with w:
             raise _Cancel()
-    assert w.dir.is_dir(), "E2: an interrupted record keeps its folder"
+    assert w.dir.is_dir(), "an interrupted record keeps its folder"
     row = [r for r in store.list("fdt") if r.id == w.id][0]
     assert row.complete and not row.finished, "a manifest, and an honest 'did not finish'"
     assert store.get("fdt", w.id).body["complete"] is False
@@ -543,7 +544,7 @@ def test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_rec
     assert w3.dir.is_dir() and (w3.dir / "data.h5").is_file(), \
         "what the run did measure is what the message tells the reader to look at"
 
-    # F7: past the recency guard, and still never a leftover -- it carries a manifest
+    # past the recency guard, and still never a leftover -- it carries a manifest
     backdate_tree(w.dir)
     with pytest.raises(st.StoreError, match="holds a valid fdt manifest"):
         store.remove_incomplete("fdt", w.dir.name)
@@ -553,11 +554,10 @@ def test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_rec
 
 
 def test_a_second_run_is_refused_by_name_while_an_unfinished_record_holds_it(store):
-    """Review Focus 2. ``assert_name_free`` runs at ``create()``, before anything is spent, and a
-    progressive record occupies its name from its first moment -- so a second run under the same name
-    is refused at the click rather than colliding with a directory halfway through an hours-long
-    measurement. The refusal carries ``field="name"``, which is what lets each front end name its own
-    control.
+    """``assert_name_free`` runs at ``create()``, before anything is spent, and a progressive record
+    occupies its name from its first moment -- so a second run under the same name is refused at the
+    click rather than colliding with a directory halfway through an hours-long measurement. The
+    refusal carries ``field="name"``, which is what lets each front end name its own control.
     """
     w = store.create("fdt", None, name="repeat")
     w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
@@ -570,10 +570,10 @@ def test_a_second_run_is_refused_by_name_while_an_unfinished_record_holds_it(sto
 
 
 def test_a_failure_inside_a_progressive_record_writes_the_log_up_to_it(store):
-    """Spec §2.2 step 3: the final refresh on the failure path is what puts the run's records on
-    disk. Without it the one document that says WHY the run stopped would exist only for runs that
-    did not stop -- which is the opposite of when it is needed. The log is written from
-    ``runs.current_run_log()``, which is thread-local, so it is written here from inside a real run.
+    """The final refresh on the failure path is what puts the run's records on disk. Without it the
+    one document that says WHY the run stopped would exist only for runs that did not stop -- which
+    is the opposite of when it is needed. The log is written from ``runs.current_run_log()``, which
+    is thread-local, so it is written here from inside a real run.
     """
     import logging
     from core import runs
@@ -594,11 +594,11 @@ def test_a_failure_inside_a_progressive_record_writes_the_log_up_to_it(store):
 
 
 def test_a_refused_record_that_will_not_delete_is_described_by_its_mode(store, monkeypatch):
-    """Controller ruling F30. When the removal on the failure path itself fails (a held handle on
-    Windows), the writer warns rather than let a PermissionError replace the exception that ended
-    the run. For an ordinary kind the directory left behind has no manifest, and the warning says the
-    store ignores it. A progressive record refused before it wrote anything DOES carry its first
-    manifest, so the same sentence would be false: it names what the operator can do instead.
+    """When the removal on the failure path itself fails (a held handle on Windows), the writer
+    warns rather than let a PermissionError replace the exception that ended the run. For an
+    ordinary kind the directory left behind has no manifest, and the warning says the store ignores
+    it. A progressive record refused before it wrote anything DOES carry its first manifest, so the
+    same sentence would be false: it names what the operator can do instead.
     """
     def _held(path, **kw):
         raise PermissionError("held open by a preview pane")
@@ -625,12 +625,12 @@ def test_a_refused_record_that_will_not_delete_is_described_by_its_mode(store, m
 
 
 def test_a_final_refresh_that_fails_never_replaces_the_exception_that_ended_the_run(store, monkeypatch):
-    """Spec §2.2 step 3's final refresh runs INSIDE ``__exit__``, while the run's own exception is in
+    """The failure path's final refresh runs INSIDE ``__exit__``, while the run's own exception is in
     flight. If that write fails too, the operator must still see why the RUN stopped -- a cancel, a
     refusal, a simulator error -- and not an OSError about a manifest; the record keeps the manifest
     it had, and a warning names the failed refresh. The log and the manifest are written in two
-    separate attempts (fix round 1, finding 3), so each failing is its own warning and neither is the
-    exception the caller sees.
+    separate attempts, so each failing is its own warning and neither is the exception the caller
+    sees.
     """
     w = store.create("fdt", None, name="stuck")
     w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
@@ -652,10 +652,10 @@ def test_a_final_refresh_that_fails_never_replaces_the_exception_that_ended_the_
 
 
 def test_a_first_manifest_that_cannot_be_written_leaves_no_folder_behind(store):
-    """Fix round 1, finding 1. ``__exit__`` never runs when ``__enter__`` raises, so a first manifest
-    that fails would otherwise leave a manifest-less folder for a run that never started -- listed as
-    "incomplete or interrupted", and refused by the sweep for RECENT_WRITE_SECONDS -- and every
-    refused click that put a bad value in the first body would add one.
+    """``__exit__`` never runs when ``__enter__`` raises, so a first manifest that fails would
+    otherwise leave a manifest-less folder for a run that never started -- listed as "incomplete or
+    interrupted", and refused by the sweep for RECENT_WRITE_SECONDS -- and every refused click that
+    put a bad value in the first body would add one.
 
     Two shapes. A NaN in the settings, which ``validate`` refuses (a ManifestError, itself a
     Refusal). And a numpy float32, which ``_check_finite`` does not see as a float, so it passes
@@ -694,11 +694,10 @@ def test_a_first_manifest_that_cannot_be_written_leaves_no_folder_behind(store):
 
 
 def test_a_committed_record_refuses_a_refresh(store):
-    """Fix round 1, finding 2. A refresh writes ``complete: false`` and null payload hashes, so one
-    arriving after the commit would turn a finished record back into an unfinished one -- listed as
-    not finished, and never again hash-verified by ``load_fdt``, which skips a null hash as "not yet".
-    Later tasks call ``refresh()`` from their stages; a late call must be refused, and must change
-    nothing on disk.
+    """A refresh writes ``complete: false`` and null payload hashes, so one arriving after the commit
+    would turn a finished record back into an unfinished one -- listed as not finished, and never
+    again hash-verified by ``load_fdt``, which skips a null hash as "not yet". The stages call
+    ``refresh()`` as they go; a late call must be refused, and must change nothing on disk.
     """
     w = store.create("fdt", None, name="done")
     w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
@@ -714,13 +713,13 @@ def test_a_committed_record_refuses_a_refresh(store):
 
 
 def test_an_unfinished_records_log_ends_with_what_stopped_it_and_nothing_says_it_twice(store, caplog):
-    """The whole-piece review's N1 (L280, L569, L808). The keep branch wrote the run's log as it
-    stood, and nothing put the exception in it: a record stopped by a refusal, a crash or an
-    interrupt had a log.txt ending at the last progress line, so the one document that says why the
-    run stopped did not say it. The branch now ends log.txt with one stamped line, ``error stopped:
-    <Type>: <message>``, written STRAIGHT to the file -- never as a logging record, which the tool's
-    console and the window's pane would show a second time beside the front end's own refusal line or
-    box. Outside a run (no run log) it writes nothing, as ``_write_log`` always has."""
+    """The keep branch wrote the run's log as it stood, and nothing put the exception in it: a record
+    stopped by a refusal, a crash or an interrupt had a log.txt ending at the last progress line, so
+    the one document that says why the run stopped did not say it. The branch now ends log.txt with
+    one stamped line, ``error stopped: <Type>: <message>``, written STRAIGHT to the file -- never as a
+    logging record, which the tool's console and the window's pane would show a second time beside
+    the front end's own refusal line or box. Outside a run (no run log) it writes nothing, as
+    ``_write_log`` always has."""
     import logging
     import re
     from core import runs
@@ -759,12 +758,11 @@ def test_an_unfinished_records_log_ends_with_what_stopped_it_and_nothing_says_it
 
 
 def test_an_unfinished_record_lists_only_the_figures_on_disk_and_a_commit_lists_every_one(store):
-    """The whole-piece review's N2 (L573, L576, L589). ``figure_path`` records a figure when the
-    PATH is handed out, and every manifest listed it -- so a run stopped between the hand-out and
-    the save (Ctrl-C inside the Nadrowski passive check, a figure that failed to draw) left an
-    unfinished record listing a picture that was never written. An unfinished manifest lists only
-    the figures on disk. The COMMIT lists every one, as it always has, so a finished record's
-    manifest -- any kind's -- is byte-for-byte what it was (the GPU gate's condition)."""
+    """``figure_path`` records a figure when the PATH is handed out, and every manifest listed it --
+    so a run stopped between the hand-out and the save (Ctrl-C inside the Nadrowski passive check, a
+    figure that failed to draw) left an unfinished record listing a picture that was never written.
+    An unfinished manifest lists only the figures on disk. The COMMIT lists every one, as it always
+    has, so a finished record's manifest -- any kind's -- is byte-for-byte what it was."""
     w = store.create("fdt", None, name="phantom")
     w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
     with pytest.raises(KeyboardInterrupt):
@@ -784,12 +782,12 @@ def test_an_unfinished_record_lists_only_the_figures_on_disk_and_a_commit_lists_
 
 
 def test_a_record_removed_while_its_run_was_writing_it_is_not_rebuilt(store):
-    """The whole-piece review's M3 (H1 + L278). A progressive record looks exactly the same whether
-    its run was interrupted or is still being written from another window or a terminal, and nothing
-    stops it being deleted meanwhile (spec §1.3 leaves the cross-process lock out). The live run then
-    fails at its next write, and its ``__exit__`` took the keep branch -- whose manifest write goes
-    through ``_atomic_write``, which creates the parent folder -- so the deleted record came BACK as a
-    manifest-only husk, listing a figure that was gone, under the id just deleted.
+    """A progressive record looks exactly the same whether its run was interrupted or is still being
+    written from another window or a terminal, and nothing stops it being deleted meanwhile (there is
+    no cross-process lock). The live run then fails at its next write, and its ``__exit__`` took the
+    keep branch -- whose manifest write goes through ``_atomic_write``, which creates the parent
+    folder -- so the deleted record came BACK as a manifest-only husk, listing a figure that was
+    gone, under the id just deleted.
 
     The keep branch now checks the folder first: gone, it keeps nothing and says so, once."""
     import shutil
@@ -810,11 +808,11 @@ def test_a_record_removed_while_its_run_was_writing_it_is_not_rebuilt(store):
 
 
 def test_a_refresh_outside_the_writers_with_block_is_refused_and_creates_nothing(store):
-    """The whole-piece review's N3 (L279). ``refresh`` had no lifecycle check, and its manifest write
-    creates the parent folder -- so a refresh BEFORE ``__enter__`` made the folder the later ``with``
-    then refused as existing, leaving a permanent unfinished record, and one after a pre-spend
-    refusal brought back the folder the refusal had just removed. Both are refused now, with nothing
-    written. (After a COMMIT the refusal is the existing "already committed" one.)"""
+    """``refresh`` had no lifecycle check, and its manifest write creates the parent folder -- so a
+    refresh BEFORE ``__enter__`` made the folder the later ``with`` then refused as existing, leaving
+    a permanent unfinished record, and one after a pre-spend refusal brought back the folder the
+    refusal had just removed. Both are refused now, with nothing written. (After a COMMIT the refusal
+    is the existing "already committed" one.)"""
     w = store.create("fdt", None, name="early")
     w.body = {"study": "single", "settings": {}, "seed": 1, "notices": []}
     with pytest.raises(st.StoreError, match="not being written"):
@@ -833,10 +831,10 @@ def test_a_refresh_outside_the_writers_with_block_is_refused_and_creates_nothing
 
 
 def test_the_log_up_to_a_failure_reaches_disk_even_when_the_last_manifest_cannot(store):
-    """Fix round 1, finding 3; spec §2.2 step 3 ("the log up to the failure is on disk"). A stage that
-    stores a value the manifest cannot hold (here a NaN in ``results``) and then fails leaves a final
-    refresh that cannot validate. The log must not depend on it: the records since the last GOOD
-    refresh are exactly the ones that say why the run stopped. The run's own exception still wins.
+    """The log up to the failure is on disk. A stage that stores a value the manifest cannot hold
+    (here a NaN in ``results``) and then fails leaves a final refresh that cannot validate. The log
+    must not depend on it: the records since the last GOOD refresh are exactly the ones that say why
+    the run stopped. The run's own exception still wins.
     """
     import logging
     from core import runs
@@ -876,7 +874,7 @@ def test_an_input_file_that_vanished_during_the_run_is_recorded_unhashed_not_los
         with store.create("calibration", cfg) as w:
             w.body = _cal_body()
     # Attributed to the caller's ``with``, as it was before the commit was split into _write and its
-    # helpers (piece 5, Task 3's amendment 3): a warning that names store.py points nowhere useful.
+    # helpers: a warning that names store.py points nowhere useful.
     assert [Path(r.filename).name for r in rec if "vanished_cell" in str(r.message)] == \
         [Path(__file__).name]
     m = store.get("calibration", w.id)
@@ -934,9 +932,9 @@ def test_same_second_ids_get_a_suffix(tmp_path):
 
 
 def test_two_writers_created_before_either_is_entered_get_different_ids(tmp_path):
-    """Piece 5, spec §4.1: the sweep study's front end creates BOTH records before it dispatches, and
-    create() puts nothing on disk -- so an id checked only against the disk would be minted twice in
-    one second, and the second record would load as the first."""
+    """The sweep study's front end creates BOTH records before it dispatches, and create() puts
+    nothing on disk -- so an id checked only against the disk would be minted twice in one second,
+    and the second record would load as the first."""
     fixed = datetime(2026, 9, 22, 12, 0, 0, tzinfo=timezone.utc)
     s = st.ArtifactStore(tmp_path, clock=lambda: fixed)
     a, b = s.create("fdt", None), s.create("fdt", None)
@@ -961,9 +959,9 @@ def test_rename_keeps_the_id_and_dependents_resolve(store):
 
 
 def test_set_note_refuses_an_unknown_ref_with_the_artifact_field(store):
-    """Design §2.4. ``set_note`` was the store mutation whose refusal carried no field key, so the
-    front ends had nothing to look up and the yellow box came up with no "where to fix it" line under
-    it. It carries a key now, like every other pre-spend refusal (piece 3, V3).
+    """``set_note`` was the store mutation whose refusal carried no field key, so the front ends had
+    nothing to look up and the yellow box came up with no "where to fix it" line under it. It carries
+    a key now, like every other pre-spend refusal.
 
     The key is ``"artifact"``, NOT ``"note"``: this sentence is about a MISSING ARTIFACT, so the note
     key would send the operator to the Note box when the fix is to select an artifact that exists.
@@ -971,8 +969,8 @@ def test_set_note_refuses_an_unknown_ref_with_the_artifact_field(store):
     wrong. The window's entry for ``artifact`` is "Select an artifact in the list on the Artifacts
     screen." and the tool has no flag for it (``FLAG["artifact"] is None``), so the tool's line ends at
     the message with no trailing parenthetical -- both pinned in ``tests/test_refusals.py`` and
-    ``tests/test_nav_and_gating.py`` by the steps above. The sentence itself is unchanged and still
-    names no box and no flag."""
+    ``tests/test_nav_and_gating.py``. The sentence itself is unchanged and still names no box and no
+    flag."""
     c = _make(store, name="cal")
     assert store.set_note("calibration", c.id, "kept for the paper").note == "kept for the paper"
     assert store.get("calibration", c.id).note == "kept for the paper"
@@ -1162,15 +1160,16 @@ def test_build_prior_auto_persists_and_loads_back(store, monkeypatch):
 
 
 def test_loading_a_prior_with_no_sink_closes_its_figure(store):
-    """V8 (spec §6.3). build_prior's LOAD branch handed fig_sink straight to visualize_dist, whose None
-    fallback is a bare plt.show(). Under the tool's Agg backend (and the suites') that does nothing but
-    warn "FigureCanvasAgg is non-interactive, and thus cannot be shown", and it never closed the corner
-    figure, so every library load leaked one live figure for the life of the process. The BUILD branch
-    never did: its writer's sink (ArtifactWriter.fig_sink) saves the PNG and closes the figure when
-    nothing is forwarded. Now both branches close what they draw when given no sink, while
-    visualize_dist and emit_figure keep their own fallback for a bare-library caller. Pinned as the FDT
-    precedent is (test_tool.py::test_fdt_plot_functions_close_a_saved_figure_instead_of_show): no new
-    open figure, no non-interactive warning.
+    """A loaded prior closes its figure. build_prior's LOAD branch handed fig_sink straight to
+    visualize_dist, whose None fallback is a bare plt.show(). Under the tool's Agg backend (and the
+    suites') that does nothing but warn "FigureCanvasAgg is non-interactive, and thus cannot be
+    shown", and it never closed the corner figure, so every library load leaked one live figure for
+    the life of the process. The BUILD branch never did: its writer's sink (ArtifactWriter.fig_sink)
+    saves the PNG and closes the figure when nothing is forwarded. Now both branches close what they
+    draw when given no sink, while visualize_dist and emit_figure keep their own fallback for a
+    bare-library caller. Pinned as the FDT precedent is
+    (test_tool.py::test_fdt_plot_functions_close_a_saved_figure_instead_of_show): no new open
+    figure, no non-interactive warning.
 
     The three fig_sink docstrings (build_prior, build_posterior, infer_and_visualize) now say the same
     one thing, and it is true of every stage. Before, one said "None => plt.show()", one said "None is
@@ -1300,8 +1299,8 @@ def test_delete_refuses_a_prior_a_simulation_was_generated_against(store):
 
 
 def test_delete_refuses_a_prior_a_simulation_was_generated_against_by_fingerprint(store):
-    """The spec's prior-fingerprint clause. The cache directory is KEYED on the prior's GMM and its
-    rows are meaningless without the prior they were drawn from, so a simulation generated against
+    """The prior-fingerprint clause. The cache directory is KEYED on the prior's GMM and its rows are
+    meaningless without the prior they were drawn from, so a simulation generated against
     this prior blocks the delete whether or not it names it as a PARENT -- a cache written before the
     parent was recorded, or by a script holding a stand-in prior, names none."""
     cfg = _nad_cfg()
@@ -1324,8 +1323,8 @@ def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, 
     """The checkpoint dict build_posterior hands gen_training_data names the LoadedPrior's id, and the
     identity's prior fingerprint is the wrapper's -- checked at the seam, with train_nn stubbed.
 
-    The cadence and the epoch cap ride in as ARGUMENTS (piece 2, §2.6): checkpoint_every reaches the
-    plan's checkpoint dict and max_num_epochs reaches train_nn, neither of them through a module
+    The cadence and the epoch cap ride in as ARGUMENTS: checkpoint_every reaches the plan's
+    checkpoint dict and max_num_epochs reaches train_nn, neither of them through a module
     constant that orchestrator snapshotted at import."""
     from core import orchestrator
     from core.artifacts.identity import SimulationIdentity
@@ -1344,8 +1343,9 @@ def test_a_training_run_records_the_prior_as_the_simulation_cache_parent(store, 
                                      checkpoint_every=1, max_num_epochs=7)
     ck = captured["plan"].checkpoint
     assert ck["parents"] == {"prior": lp.id} and ck["inputs"]["model"] == "NADROWSKI"
-    # V1: the plan shares the hardware of the stage's PRIVATE copy -- equal to the caller's by value
-    # (DeviceConfig is an eq dataclass), never the caller's object
+    # the stage works on a private copy of its config, so the plan shares the hardware of that
+    # PRIVATE copy -- equal to the caller's by value (DeviceConfig is an eq dataclass), never the
+    # caller's object
     assert ck["hw"] == cfg.hw and ck["hw"] is not cfg.hw
     assert ck["identity"] == SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
     assert ck["identity"]["prior_fingerprint"] == lp.fingerprint and ck["dir"].parent == store.kind_dir("simulation")
@@ -1385,8 +1385,9 @@ def test_load_posterior_refuses_each_mismatch_class(store):
 
 
 def test_manifest_V_must_equal_the_rotation_in_the_pickled_prior(store):
-    """The D6 spec test, moved: the V a manifest records is the one the posterior's own training prior
-    carries. With no legacy sidecars left, the transpose is REFUSED, not repaired."""
+    """The test for a rotation saved transposed, moved here: the V a manifest records is the one the
+    posterior's own training prior carries. With no legacy stored rotation left, the transpose is
+    REFUSED, not repaired."""
     from core.SBI import reparam
     from core.SBI.training_checkpoint import bijection_probe
     cfg = _nad_cfg(chi_mode=True)
@@ -1425,7 +1426,7 @@ def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store, 
     _posterior_artifact(store, cfg, name="trunc", amortized=False, region=region)
     with pytest.raises(Refusal, match="NOT AMORTIZED") as excinfo:
         store.load_posterior(cfg, "trunc")
-    # V3: the message is NEUTRAL. It names the Python hatch -- the core API's own name -- and no
+    # The message is NEUTRAL. It names the Python hatch -- the core API's own name -- and no
     # control a front end owns; the FIELD is what each front end maps to its dialog or its flag
     # (core/gui/fields.py, core/tool/fields.py), so a renamed button can never go stale here.
     assert excinfo.value.field == "accept_truncated"
@@ -1436,8 +1437,8 @@ def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store, 
     assert lp.posterior.truncation.dims == [0, 1] and lp.posterior.x_obs_digest == "d" * 16
     assert lp.accepted == ["truncated"] and torch.equal(lp.posterior.truncation.probe, region.probe)
     # The same load through build_posterior's LOAD branch says so at WARNING, once, from
-    # core.orchestrator (spec §4.1, walkthrough row C9): this line reaching the pane plain, at info,
-    # is the defect piece 3 was motivated by. A stand-in prior: the load branch reads none of it.
+    # core.orchestrator: this line reaching the pane plain, at info, is the defect that gave every
+    # record its own level. A stand-in prior: the load branch reads none of it.
     import logging
     from types import SimpleNamespace
     from core import orchestrator
@@ -1455,8 +1456,8 @@ def test_a_non_amortized_posterior_needs_accept_and_the_flag_is_recorded(store, 
     with pytest.raises(ValueError, match="basis"):
         store.load_posterior(cfg, "noprobe", accept=Accept(truncated=True))
     # ... and a region that does not say WHICH observation it was drawn around is refused the same
-    # way: guardrail 2's refusal in infer_and_visualize compares against that digest, so without it
-    # the artifact would serve any observation as if it were the one it is valid near.
+    # way: the narrowed-model rule's refusal in infer_and_visualize compares against that digest, so
+    # without it the artifact would serve any observation as if it were the one it is valid near.
     no_digest = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=None,
                                           probe=bijection_probe(T, P), x_obs_digest=None)
     _posterior_artifact(store, cfg, name="nodigest", amortized=False, region=no_digest)
@@ -1507,7 +1508,7 @@ def test_build_posterior_auto_persists_and_returns_the_loaded_wrapper(store, mon
     assert m.body["transform"]["V"] is None and m.body["transform"]["param_keys"][-1] in cfg.rescale_params
     assert m.body["training"]["hidden_features"] == 8 and m.body["training"]["best_validation_loss"] == 0.6
     assert m.config["num_runs"] == 2 and m.fingerprints["gmm"] == lp.fingerprint
-    # V7: an unrotated run ran no Fisher, so it records no Fisher settings -- not defaults it never used
+    # an unrotated run ran no Fisher, so it records no Fisher settings -- not defaults it never used
     assert (m.config["fisher_m"], m.config["fisher_dz"], m.config["fisher_points"]) == (None, None, None), \
         m.config
     assert set(m.payloads) == {"posterior.pt", "loss.npz"} and m.figures == ["figures/training_loss.png"]
@@ -1601,7 +1602,7 @@ def test_generate_observations_writes_an_artifact_that_reinstalls_its_context(st
     fresh = _nad_cfg()
     assert not fresh.has_ground_truth
     store.load_observation(fresh, obs.id).install(fresh)
-    # V1: the resolved length is read off the ARTIFACT. The stage wrote it on its private copy, so the
+    # The resolved length is read off the ARTIFACT. The stage wrote it on its private copy, so the
     # caller's config still has none.
     assert fresh.has_ground_truth and fresh.T_obs == cfg.T_obs
     assert fresh.n_obs == obs.manifest.body["n_obs"] == 200 and cfg.n_obs is None
@@ -1611,8 +1612,8 @@ def test_generate_observations_writes_an_artifact_that_reinstalls_its_context(st
 
 
 def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_file(store, tmp_path):
-    """Defects 3-4: the forced-recording path raised NameError before this task. It now runs, and the
-    artifact names every recording by path and hash."""
+    """The forced-recording path used to raise NameError. It now runs, and the artifact names every
+    recording by path and hash."""
     import numpy as np
     from core import orchestrator
     from core.SBI.observations import RecordingSet
@@ -1630,7 +1631,7 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
     assert [r["role"] for r in recs] == ["spont", "forced"] and all(len(r["sha256"]) == 64 for r in recs)
     assert obs.width == sim.width and obs.manifest.body["source"]["kind"] == "experimental"
     assert obs.manifest.body["forcing_vals"]["freq"] > 0
-    # A Refusal naming the passive recording's field (spec §3.3), not a FileNotFoundError: the front
+    # A Refusal naming the passive recording's field, not a FileNotFoundError: the front
     # ends show it as "check your inputs" and name the control, not as a crash.
     with pytest.raises(Refusal) as e:
         orchestrator.build_experiment_observation(
@@ -1641,7 +1642,7 @@ def test_build_experiment_observation_hashes_recordings_and_refuses_a_missing_fi
 
 
 def test_chi_mode_refuses_a_forced_recording_without_its_drive_frequency(store, tmp_path, monkeypatch):
-    """D9: every driven chi recording states the frequency (Hz) it was driven at.
+    """Every driven chi recording states the frequency (Hz) it was driven at.
 
     The refusal has to be scoped to the FORCED role. The stage's file-check loop is
     ``[(rec.spont, "spont", None)] + [(p, "forced", f) for p, f in rec.forced]``, so its first element
@@ -1761,7 +1762,7 @@ def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unles
     try:
         with pytest.raises(Refusal, match="NOT AMORTIZED") as excinfo:
             orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20)
-        # V3: the message names the Python hatch only; each front end appends its own control from its
+        # The message names the Python hatch only; each front end appends its own control from its
         # table (core/gui/fields.py, core/tool/fields.py), keyed by the field.
         assert excinfo.value.field == "accept_other_observation"
         assert "Accept(other_observation=True)" in str(excinfo.value)
@@ -1864,11 +1865,11 @@ def test_no_literal_resource_paths_outside_config():
 
 
 def test_the_source_scans_cover_every_code_directory():
-    """CODE_ROOTS and CODE_FILES are what the two source scans walk, so a top-level package or loose
-    *.py file missing from one of them is scanned by nothing. That is not hypothetical: scripts/
-    carried thirteen files past the literal-path scan from piece 1 until piece 2 dissolved it, and
-    the tool could just as easily have been written as a top-level package of its own. The guard is
-    the closure: any new directory or file holding Python either joins CODE_ROOTS/CODE_FILES or
+    """CODE_ROOTS and CODE_FILES are what the source scans walk, so a top-level package or loose *.py
+    file missing from one of them is scanned by nothing. That is not hypothetical: scripts/ once
+    carried thirteen files past the literal-path scan until it was folded into the command-line tool,
+    and the tool could just as easily have been written as a top-level package of its own. The guard
+    is the closure: any new directory or file holding Python either joins CODE_ROOTS/CODE_FILES or
     fails here.
 
     Directories excluded by name, each for its own reason: tests/ (the suites themselves, not
@@ -1876,12 +1877,11 @@ def test_the_source_scans_cover_every_code_directory():
     Code's local state, which can hold other checkouts -- machine-local, not code that lives in
     .claude on purpose); and .git/, .pytest_cache/, __pycache__/, Artifacts/, Resources/ (data,
     caches, VCS or tool state, not product code). sbi-logs/ is not excluded any more: nothing writes
-    it since piece 3 (V9), and tests/conftest.py::_no_sbi_logs fails the session if it reappears.
-    .idea/, .superpowers/ and
-    docs/ hold no *.py today so they need no explicit exclusion; they fall out of `with_py` on
-    their own, and would have to be added here (or to CODE_ROOTS) the day one of them gained a
-    Python file. Loose top-level files need no exclusion set: every *.py at the repo root must be
-    in CODE_FILES."""
+    it now, and tests/conftest.py::_no_sbi_logs fails the session if it reappears. .idea/, the
+    gitignored planning workspace and docs/ hold no *.py today so they need no explicit exclusion;
+    they fall out of `with_py` on their own, and would have to be added here (or to CODE_ROOTS) the
+    day one of them gained a Python file. Loose top-level files need no exclusion set: every *.py at
+    the repo root must be in CODE_FILES."""
     root = Path(__file__).resolve().parents[1]
     skip = {"tests", "archive", ".claude", ".git", ".pytest_cache", "Artifacts", "Resources",
             "__pycache__"}
@@ -2031,8 +2031,8 @@ def test_flow_knobs_are_range_checked_only_when_the_call_trains(store, monkeypat
     monkeypatch.setattr(orchestrator.pipeline, "gen_training_data", lambda *a, **k: spent.append("sim"))
     bad = {"learning_rate": -0.001, "max_num_epochs": 0, "hidden_features": 0, "num_transforms": 0,
            "stop_after_epochs": 0, "fisher_m": 0, "fisher_dz": -0.1, "fisher_points": 0}
-    # Piece 3: the budget and the cadence join the exemption (spec §3.4, "the load path"). A load reads
-    # neither, and the Posterior tab forwards its budget boxes on a load as well.
+    # The budget and the cadence join the exemption: a load reads neither, and the Posterior tab
+    # forwards its budget boxes on a load as well.
     budget = {"num_runs": 0, "run_size_cap": -1, "checkpoint_every": -1}
     loaded = orchestrator.build_posterior(cfg, lp, post.id, False, **bad, **budget)
     assert loaded.id == post.id and spent == []
@@ -2045,13 +2045,14 @@ def test_flow_knobs_are_range_checked_only_when_the_call_trains(store, monkeypat
 
 
 def test_the_budget_line_prints_with_default_arguments(store, monkeypatch, caplog):
-    """Guardrail 6 on the command line: what this run will actually simulate, said once, whether or
-    not a cap or a batch count was overridden. The two conditional announcements stay -- with the
-    defaults neither of them fires, which is precisely the run whose size used to be invisible.
+    """The cost-on-screen rule on the command line: what this run will actually simulate, said once,
+    whether or not a cap or a batch count was overridden. The two conditional announcements stay --
+    with the defaults neither of them fires, which is precisely the run whose size used to be
+    invisible.
 
-    Since piece 3 the line is an INFO record on core.orchestrator (V4): the tool's stdout handler
-    prints it with exactly this text, where the GPU recipe reads it (spec §4.5), and the window puts
-    it in the pane. So it is read off caplog, with its logger and its level."""
+    The line is an INFO record on core.orchestrator: the tool's stdout handler prints it with exactly
+    this text, and the window puts it in the pane. So it is read off caplog, with its logger and its
+    level."""
     from core import orchestrator
     cfg = _nad_cfg()
     cfg.reparam_rotate = False
@@ -2088,12 +2089,12 @@ def test_make_sim_config_takes_the_device_as_an_argument():
 
 
 def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
-    """D7. A run that would start a NEW simulation cache while a committed one sits ONE identity field
+    """A run that would start a NEW simulation cache while a committed one sits ONE identity field
     away is refused BEFORE the Fisher, before any simulation, and before the cache's own create().
 
     This is the 2026-09-11 GPU incident made loud: run 2 was given NUM_RUNS=2 against run 1's 4, keyed
     a new directory, recomputed the rotation and re-simulated -- silently, exit 0. The pipeline's own
-    `resume='require'` refusal (pipeline.py:1367-1368) fires only AFTER a freshly computed Fisher,
+    `resume='require'` refusal (in gen_training_data) fires only AFTER a freshly computed Fisher,
     which is the most expensive thing a run does before it simulates, so it is hoisted here and the
     pipeline keeps its copy as a second line.
     """
@@ -2156,7 +2157,7 @@ def test_a_near_miss_cache_is_refused_before_the_fisher(store, monkeypatch):
 
 def test_the_training_preview_agrees_with_the_stage_on_width_directory_and_cadence(store, monkeypatch,
                                                                                    tmp_path):
-    """V6. The budget group's lines are only as good as their agreement with the run, and they used to
+    """The budget group's lines are only as good as their agreement with the run, and they used to
     derive their answers themselves: the cadence from config.TRAINING_CHECKPOINT_EVERY (the LIVE module
     copy -- the stage reads orchestrator's import-time binding, and tests/conftest.py rebinds only that
     one), the directory from resolve_dir's process-default root (not the store the run writes to), and
@@ -2266,7 +2267,7 @@ def test_the_training_preview_agrees_with_the_stage_on_width_directory_and_caden
 
 def test_the_training_preview_resolves_without_a_config_and_never_raises(store, monkeypatch):
     """The budget group is on screen at LAUNCH, before any config exists, and _sync_budget runs from
-    refresh_gates(), so the preview's no-config branch is explicit and it never raises (spec §6.1).
+    refresh_gates(), so the preview's no-config branch is explicit and it never raises.
 
     No config: the hardware is the config's, else hw= (the tab's memoised detect_device()), else
     detect_device(), so the width and the total line always resolve; the memory geometry is the
@@ -2339,7 +2340,7 @@ def test_the_training_preview_resolves_without_a_config_and_never_raises(store, 
     assert (p.checkpoint, p.checkpoint_error, p.cadence) == ("off", None, 0), p
 
 
-# ── the compositions: one flow under the GUI and the command line (piece 2, §2.3-§2.4) ───────────
+# ── the compositions: one flow under the GUI and the command line ────────────────────────────────
 def _sim_post(*, x_obs_digest=None, truncation=None, T=None):
     """A LoadedPosterior-shaped stand-in. simulated_inference reads only .posterior.x_obs_digest,
     .posterior.truncation and .posterior.T before it simulates, which is the whole point: every
@@ -2495,9 +2496,9 @@ def test_hand_entered_values_replace_the_recorded_cell(store, monkeypatch):
     """inject_ground_truth never touches cfg.sources, so before this the provenance of a hand-entered
     inference named -- and content-hashed -- whichever cell file the session had loaded earlier.
 
-    Since piece 3 (V1) the composition works on a private copy of the config, so the cell is dropped
-    from THAT copy: the pin reads the config the stubbed generate_observations received, and the
-    caller's config still names the cell it loaded."""
+    The composition works on a private copy of the config, like every public stage, so the cell is
+    dropped from THAT copy: the pin reads the config the stubbed generate_observations received, and
+    the caller's config still names the cell it loaded."""
     from core import cli, orchestrator
     from core.config import CELL_PATH
     cfg = _nad_cfg()
@@ -2602,10 +2603,10 @@ def test_an_experimental_observation_records_its_own_length_and_drive_frequencie
     from core.SBI.statistics import SUMMARY_WIDTH
     closing = lambda title, fig: plt.close(fig)                   # noqa: E731
 
-    # M1: a real forced build on a recording SHORTER than the simulated observation before it
+    # a real forced build on a recording SHORTER than the simulated observation before it
     cfg = _forced_cfg()
     sim = orchestrator.generate_observations(cfg, fig_sink=closing)
-    # V1: the length is the ARTIFACT's -- the stage resolved it on its private copy of cfg
+    # the length is the ARTIFACT's -- the stage resolved it on its private copy of cfg
     assert sim.manifest.body["n_obs"] == 200 and cfg.n_obs is None
     trace = sim.obs_data[0].numpy()[:150]
     spont, forced = tmp_path / "spont.npy", tmp_path / "forced.npy"
@@ -2622,7 +2623,7 @@ def test_an_experimental_observation_records_its_own_length_and_drive_frequencie
     assert exp.manifest.body["n_obs"] == 150, exp.manifest.body["n_obs"]
     assert exp.manifest.body["chi_obs_freqs"] is None, exp.manifest.body["chi_obs_freqs"]
 
-    # M2: a chi recording set records its drive frequencies in cell units, in the recordings' order
+    # a chi recording set records its drive frequencies in cell units, in the recordings' order
     chi_cfg = _nad_cfg(chi_mode=True)
     width = SUMMARY_WIDTH + 1 + orchestrator.expected_forcing_dim(chi_cfg)
 
@@ -2647,7 +2648,7 @@ def test_an_experimental_observation_records_its_own_length_and_drive_frequencie
     assert fresh.manifest.body["chi_obs_freqs"] == want, fresh.manifest.body["chi_obs_freqs"]
     assert fresh.manifest.body["n_obs"] == 50
     assert fresh.manifest.body["conditioning"]["chi_n_freqs"] == 2
-    # V1 (spec §2.4): the stage wrote the probe count, the length and the frequencies on ITS copy. A
+    # The stage wrote the probe count, the length and the frequencies on ITS private copy. A
     # bench chi observation with two probes must leave the caller's K at config.py's, or the next
     # simulated chi inference on the same session simulates two.
     assert chi_cfg.chi_n_freqs == config.CHI_N_FREQS != 2 and chi_cfg.n_obs is None
@@ -2703,10 +2704,10 @@ def test_the_compositions_forward_every_keyword_unchanged(store, monkeypatch):
     n_samples must be ABSENT when the caller did not set it, so the stage's own literal default stays
     the single place that number is written down.
 
-    The CONFIG is the one thing that does not arrive as the caller passed it (piece 3, V1): each
-    composition works on a private copy and hands THAT copy to both of its stages, carrying its own
-    writes (the cell's truth and path, T_obs in cell units), while the caller's config stays exactly as
-    it was. Never compared with == against the caller's: the composition wrote on its copy."""
+    The CONFIG is the one thing that does not arrive as the caller passed it: each composition works
+    on a private copy and hands THAT copy to both of its stages, carrying its own writes (the cell's
+    truth and path, T_obs in cell units), while the caller's config stays exactly as it was. Never
+    compared with == against the caller's: the composition wrote on its copy."""
     from core import orchestrator
     from core.artifacts import Accept
     from core.config import CELL_PATH, SimConfig
@@ -2763,8 +2764,8 @@ def test_the_config_snapshot_counts_nan_equal_to_nan_inside_a_tensor():
 
 
 def test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs():
-    """V1 (spec §2.1). copy_for_run is what every public entry point does to the config it is
-    handed, so it has to be cheap enough to do on every call -- and a plain deepcopy is not: with
+    """copy_for_run is what every public entry point does to the config it is handed, so it has to
+    be cheap enough to do on every call -- and a plain deepcopy is not: with
     the 2.4M-point grid and the pint registry cached on the object it costs 19 ms and a transient
     9.6 MB, and it duplicates a registry whose quantities the original's cannot be combined with.
     So the cached properties are POPPED off a shallow copy before the deep copy, and the copy
@@ -2828,15 +2829,16 @@ def test_copy_for_run_drops_the_caches_first_and_keeps_chi_obs_freqs():
 
 def test_fdt_config_carries_sources_and_a_seed_and_copies_itself_for_a_run():
     """``public_entry`` copies the config it is handed ONLY when that config has ``copy_for_run``
-    (core/runs.py:243-247, ``if hasattr(kwargs["cfg"], "copy_for_run")``). FDTConfig had none, so
-    decorating run_fdt would have delivered the run log and silently NOT V1's private copy -- and
-    ``cfg.omega_0 = ...`` at the top of run_fdt would have kept writing on the caller's object, which
-    is the defect spec §1 names. The copy is a plain deep copy: FDTConfig carries no cached_property,
-    so it needs none of SimConfig.copy_for_run's _CACHED popping, and this asserts that (a new cached
-    property on FDTConfig must come with the popping, as SimConfig's did).
+    (core/runs.py's ``if hasattr(kwargs["cfg"], "copy_for_run")``). FDTConfig had none, so
+    decorating run_fdt would have delivered the run log and silently NOT the private copy every
+    public stage works on -- and ``cfg.omega_0 = ...`` at the top of run_fdt would have kept writing
+    on the caller's object, which is exactly what the private copy exists to prevent. The copy is a
+    plain deep copy: FDTConfig carries no cached_property, so it needs none of
+    SimConfig.copy_for_run's _CACHED popping, and this asserts that (a new cached property on
+    FDTConfig must come with the popping, as SimConfig's did).
 
     ``sources``, ``seed`` and ``preset_name`` are DEFAULTED fields, because the reduction map shares
-    this dataclass and is outside the programme (spec §1.3): a required field would break it at every
+    this dataclass and is deliberately left as it is: a required field would break it at every
     construction site. Everything a run writes on -- omega_0, the four OrderedDicts, sources -- is an
     independent equal object on the copy."""
     from collections import OrderedDict
@@ -2852,7 +2854,7 @@ def test_fdt_config_carries_sources_and_a_seed_and_copies_itself_for_a_run():
                     rescale_params=OrderedDict(), force_params_dict=OrderedDict(),
                     units_dict=("nm", "ms"), hw=cpu_device())
     assert cfg.sources == {} and cfg.seed is None, "both default, for the reduction map's sake"
-    assert cfg.preset_name is None, "a single-cell run has no preset (P72); only the sweep sets it"
+    assert cfg.preset_name is None, "a single-cell run has no preset; only the sweep sets it"
 
     cfg.sources["cell"] = "Cells/hopf/cell.txt"
     cfg.seed = 7
@@ -2866,23 +2868,24 @@ def test_fdt_config_carries_sources_and_a_seed_and_copies_itself_for_a_run():
 
     c.omega_0 = 3.5
     c.sources["cell"] = "elsewhere.txt"
-    assert cfg.omega_0 is None, "the caller's resonance is untouched: this is what V1 buys run_fdt"
+    assert cfg.omega_0 is None, \
+        "the caller's resonance is untouched: this is what the private copy buys run_fdt"
     assert cfg.sources["cell"] == "Cells/hopf/cell.txt"
 
 
 def test_the_two_fdt_builders_fill_sources_and_the_manifest_has_an_fdt_branch():
-    """Every artifact names its inputs by path and hash, and an fdt record is no exception (spec
-    §3.2): the two FDT builders fill ``sources`` so provenance.inputs_from_cfg works with no new
-    provenance code. make_reduction_config is UNTOUCHED (P19; spec §1.2, §1.3) -- it is the
-    reduction map's builder, out of scope, and the only FDTConfig in the tree not pinned to the CPU
-    (§1.3), so this also pins that it still builds a working settings object.
+    """Every artifact names its inputs by path and hash, and an fdt record is no exception: the two
+    FDT builders fill ``sources`` so provenance.inputs_from_cfg works with no new provenance code.
+    make_reduction_config is UNTOUCHED -- it is the reduction map's builder, deliberately left as it
+    is, and the only FDTConfig in the tree not pinned to the CPU -- so this also pins that it still
+    builds a working settings object.
 
     config_from_cfg needed a branch or store.create("fdt", cfg, ...) would raise AttributeError on
-    cfg.observation_mode, the SECOND key it reads (manifest.py:246-284). The branch is taken on the
-    ABSENCE of observation_mode, and it records the settings AS GIVEN TO THE BUILDER: omega_0 is
+    cfg.observation_mode, the SECOND key it reads (manifest.config_from_cfg). The branch is taken on
+    the ABSENCE of observation_mode, and it records the settings AS GIVEN TO THE BUILDER: omega_0 is
     deliberately not in it, because the writer computes this block at create() time from the
-    caller's object while the run refines the resonance on its private copy (§1.2). Every value is
-    finite, which validate() requires of the whole config block (manifest.py:168)."""
+    caller's object while the run refines the resonance on its private copy. Every value is finite,
+    which validate() requires of the whole config block (its _check_finite on "config")."""
     from core import cli, config, registry
     from core.artifacts import manifest as mfm
     from core.artifacts import provenance as provm
@@ -2907,10 +2910,10 @@ def test_the_two_fdt_builders_fill_sources_and_the_manifest_has_an_fdt_branch():
 
     red = cli.make_reduction_config(str(config.CELL_PATH / "nadrowski" / "master_spont.txt"))
     assert red.model == "NADROWSKI" and red.params_dict, "the reduction builder still builds"
-    assert red.sources == {} and red.seed is None, "make_reduction_config is left alone (P19)"
+    assert red.sources == {} and red.seed is None, "make_reduction_config is left alone"
 
 
-# ── V1: no public entry writes on the configuration it is handed (piece 3, spec §2.2-§2.4) ──────────
+# ── no public entry writes on the configuration it is handed ─────────────────────────────────────
 from types import SimpleNamespace
 
 
@@ -2926,7 +2929,8 @@ class _BodyDone(Exception):
 def _leak(c):
     """A stage's own writes -- the observation length, the resolved sample count, the probe frequencies
     and the cell's path -- done to whichever config the seam is handed. Done to the CALLER's object,
-    any one of them is the V1 defect: the next run on that session inherits it."""
+    any one of them is the defect the private copy exists to prevent: the next run on that session
+    inherits it."""
     c.T_obs = 4242.0
     c.n_obs = 4242
     c.chi_obs_freqs = torch.tensor([4.0, 2.0])
@@ -3061,7 +3065,7 @@ def _leg_build_experiment_observation(case, monkeypatch, tmp_path):
 
     monkeypatch.setattr(orchestrator, "build_experiment_obs_chi", _builder)
     monkeypatch.setattr(orchestrator, "_write_observation", lambda store, c, *a, **k: (_leak(c), "OBS")[1])
-    freqs = (5.0, None, 9.0) if case == "refusal" else (5.0, 7.0, 9.0)      # D9: a probe with no frequency
+    freqs = (5.0, None, 9.0) if case == "refusal" else (5.0, 7.0, 9.0)      # a probe with no frequency
     rec = RecordingSet(spont=paths[0], forced=tuple(zip(paths[1:], freqs)), T_obs_s=1.0, F0_si=1.0)
     return cfg, lambda: orchestrator.build_experiment_observation(cfg, rec, fig_sink=_close,
                                                                   store=_EntryStore(case))
@@ -3088,7 +3092,7 @@ def _leg_build_posterior(case, monkeypatch, tmp_path):
 
 
 def _leg_build_truncation_region(case, monkeypatch, tmp_path):
-    """No config at all (spec §2.2: it captures logs only), so this leg watches the OBSERVATION wrapper
+    """No config at all (it captures logs only), so this leg watches the OBSERVATION wrapper
     it is handed, and its seam checks that the decorator handed the posterior wrapper through as is."""
     from core import orchestrator
     from core.SBI import reparam
@@ -3253,11 +3257,11 @@ def _leg_channel_ablation(case, monkeypatch, tmp_path):
 class _FdtWriter:
     """The writer surface run_fdt touches, over a real temp directory but no store.
 
-    PROGRESSIVE, like the real one (spec §2.2): __exit__ KEEPS the directory on an exception, so a leg
-    that refuses or booms leaves its folder behind exactly as E2 requires. It absorbs _BodyDone and
-    nothing else, so a leg can end the measurement at its first campaign and still take run_fdt's
-    `return writer.store.load_fdt(writer.id)` line -- a success from the caller's side, with no
-    solver, no figure and no h5py."""
+    PROGRESSIVE, like the real one: __exit__ KEEPS the directory on an exception, so a leg that
+    refuses or booms leaves its folder behind, as an interrupted record keeps its folder. It absorbs
+    _BodyDone and nothing else, so a leg can end the measurement at its first campaign and still
+    take run_fdt's `return writer.store.load_fdt(writer.id)` line -- a success from the caller's
+    side, with no solver, no figure and no h5py."""
 
     def __init__(self, tmp_path):
         self.id = "20260922T000000"
@@ -3288,8 +3292,7 @@ def _fdt_cfg_for_leg(case):
     """A real HOPF FDTConfig at the smallest size that is not "too thin to trust": n_freqs and
     ensemble_M sit exactly AT FDT_THIN_N_FREQS / FDT_THIN_ENSEMBLE_M, so the run raises no
     PreflightWarning that this pin would leak into the gate's count. The "refusal" case deletes the
-    parameter observable_noise_prefactor needs, which is the run's own pre-spend refusal (spec
-    §3.4)."""
+    parameter observable_noise_prefactor needs, which is the run's own pre-spend refusal."""
     from core import cli, config as _cfgmod
     cfg = cli.make_fdt_config("HOPF", False, str(_cfgmod.CELL_PATH / "hopf" / "cell.txt"),
                               n_freqs=_cfgmod.FDT_THIN_N_FREQS, ensemble_M=_cfgmod.FDT_THIN_ENSEMBLE_M)
@@ -3314,7 +3317,7 @@ def _leg_run_fdt(case, monkeypatch, tmp_path):
 def _leg_run_param_study_cli(case, monkeypatch, tmp_path):
     """The study's three endings. Its own write on its working config is ``cfg.seed = ...`` -- the one
     integer both records must agree on -- made before either sweep runs, so the seam that raises
-    _Injected is the first sweep. Its pre-spend refusal is §3.4's normalisation check, applied to the
+    _Injected is the first sweep. Its pre-spend refusal is the FDT normalisation check, applied to the
     sweep for the same reason it is applied to the single run: a cell missing n or beta would
     otherwise cost the whole first phase before anything noticed."""
     import numpy as np
@@ -3387,7 +3390,7 @@ _UNTOUCHED_LEGS = {
 # any prior or simulation is touched.
 _REFUSAL_FIELDS = {
     "generate_observations": "name",                 # _EntryStore refuses "taken" as the store does
-    "build_experiment_observation": "recording_probe",   # D9: a chi probe with no frequency
+    "build_experiment_observation": "recording_probe",   # a driven chi probe that states no frequency
     "build_prior": "num_iterations",
     "build_posterior": "num_runs",
     "build_truncation_region": "observation",        # an observation that does not hash to its digest
@@ -3401,17 +3404,17 @@ _REFUSAL_FIELDS = {
     "identifiability_laplace": "n_points",
     "identifiability_jacobian": "m_noise",
     "channel_ablation": "rows",
-    "run_fdt": "cell",                               # a cell with no FDT normalisation constant (§3.4)
+    "run_fdt": "cell",                               # a cell with no FDT normalisation constant
     "run_param_study_cli": "cell",                   # the same check, before the first phase's spend
     "compare": "compare_records",                    # one record, for a mode that draws at least two
 }
 
 
 def test_the_public_entries_carry_public_entry_and_nothing_else_does():
-    """V1 (spec §2.2). The private copy is kept by ONE decorator on exactly the functions named below:
-    the ten stages and compositions of core/orchestrator.py, the five diagnostics, and -- since piece
-    5 -- core/FDT's single-cell measurement, its two-record sweep study, and the comparison
-    facility's one entry, core/FDT/compare.py. Read off the source
+    """Every public stage works on a private copy of its config, and that copy is kept by ONE
+    decorator on exactly the functions named below: the ten stages and compositions of
+    core/orchestrator.py, the five diagnostics, core/FDT's single-cell measurement, its two-record
+    sweep study, and the comparison facility's one entry, core/FDT/compare.py. Read off the source
     (every `@public_entry` in CODE_ROOTS and CODE_FILES), not off `__wrapped__`, which any
     functools.wraps decorator sets: a public stage added without it hands its body the caller's config,
     and a helper given it (`_write_observation`, `_draw_calibration_set`, `training_identity`, ...)
@@ -3434,14 +3437,15 @@ def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     want |= {("core/diagnostics/sbc.py", "sbc_repeats"), ("core/diagnostics/ablation.py", "channel_ablation")}
     want |= {("core/diagnostics/identifiability.py", n) for n in (
         "identifiability_rotation", "identifiability_laplace", "identifiability_jacobian")}
-    # Piece 5: the FDT measurement writes a record and must not write on the caller's FDTConfig --
-    # `cfg.omega_0 = ...` twice in its own body is exactly the V1 defect, and copy_for_run (T7) is
-    # what stops it reaching the panel's settings object. The sweep study writes `cfg.seed` -- the one
-    # integer its two records must agree on (spec §4.1) -- and it too must land on a private copy.
+    # The FDT measurement writes a record and must not write on the caller's FDTConfig --
+    # `cfg.omega_0 = ...` twice in its own body would otherwise land on the caller's object, and
+    # copy_for_run is what stops it reaching the panel's settings object. The sweep study writes
+    # `cfg.seed` -- the one integer its two records must agree on -- and it too must land on a
+    # private copy.
     want |= {("core/FDT/fdt_pipeline.py", "run_fdt"),
              ("core/FDT/cross_validation.py", "run_param_study_cli")}
     # The comparison takes no configuration at all, but it writes a record, so its run's log belongs
-    # in log.txt like every other entry's -- and ONE entry for all four modes (P11), so this set and
+    # in log.txt like every other entry's -- and ONE entry for all four modes, so this set and
     # its two companions name it once.
     want |= {("core/FDT/compare.py", "compare")}
     assert found == want, f"missing {sorted(want - found)}; unexpected {sorted(found - want)}"
@@ -3451,11 +3455,11 @@ def test_the_public_entries_carry_public_entry_and_nothing_else_does():
 @pytest.mark.parametrize("case", ("success", "refusal", "boom"))
 @pytest.mark.parametrize("entry", sorted(_UNTOUCHED_LEGS))
 def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, monkeypatch, tmp_path):
-    """V1 (spec §2.4, stage level). No public stage, composition or diagnostic writes on the config it
-    is handed, however the call ends. The window builds ONE config at Build/Load prior and used to let
-    every later run write onto it: a bench chi inference with three probes made the next simulated chi
-    inference simulate three, a refused inference left a cell's truth that the next amortized training
-    anchored its Fisher rotation on, and nothing ever cleared either.
+    """No public stage, composition or diagnostic writes on the config it is handed, however the call
+    ends. The window builds ONE config at Build/Load prior and used to let every later run write onto
+    it: a bench chi inference with three probes made the next simulated chi inference simulate three,
+    a refused inference left a cell's truth that the next amortized training anchored its Fisher
+    rotation on, and nothing ever cleared either.
 
     Three endings per entry, because the decorator's copy has to hold on each: "success" returns;
     "refusal" is the entry's own pre-spend refusal, a Refusal carrying the field _REFUSAL_FIELDS
@@ -3466,7 +3470,8 @@ def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, mon
     cases cost about two seconds, nearly all of it generate_observations' one real solve.
 
     The window-level pin (a dispatched simulated inference leaves session.cfg equal to its snapshot)
-    needs the real-session fixture and lands with Task 15."""
+    needs the real-session fixture, so it lives in tests/test_nav_and_gating.py
+    (test_a_dispatched_inference_leaves_the_session_config_pristine)."""
     watched, call = _UNTOUCHED_LEGS[entry](case, monkeypatch, tmp_path)
     snap = snapshot_cfg(watched)
     if case == "success":
@@ -3483,7 +3488,7 @@ def test_every_public_entry_leaves_the_callers_config_untouched(entry, case, mon
 
 
 def test_a_bad_or_taken_name_is_refused_with_the_name_field(store):
-    """Spec section 3.6: ``assert_name_free`` raises ``Refusal(field="name")`` -- still a StoreError,
+    """``assert_name_free`` raises ``Refusal(field="name")`` -- still a StoreError,
     so every ``except StoreError`` in the tree holds, but now carrying the key both front ends map
     to their own control: the Save box (core/gui/fields.py) and --name (core/tool/fields.py). The
     message itself names NO control; the tables do, so a renamed box cannot go stale here.
@@ -3512,8 +3517,8 @@ def test_a_bad_or_taken_name_is_refused_with_the_name_field(store):
 
 
 def test_the_loaders_mismatch_refusals_name_their_artifact_field(store):
-    """Spec section 3.3: "the store's load mismatches ... become Refusals with a field key where one
-    control answers them". A prior, posterior or observation that does not belong to this
+    """The store's load mismatches are Refusals with a field key where one control answers them. A
+    prior, posterior or observation that does not belong to this
     configuration is answered by picking another one, so the refusal names that picker --
     ``prior``, ``posterior``, ``observation`` -- and the front-end tables render the sentence. The
     messages are unchanged (the mismatch-class tests above pin their words); only the type and the
@@ -3542,7 +3547,7 @@ def test_the_loaders_mismatch_refusals_name_their_artifact_field(store):
 
 
 def test_the_experimental_builders_refuse_as_refusals_before_any_lock_in():
-    """The builders' own refusals (spec §3.6): a Refusal each, with the key of the one control that
+    """The builders' own refusals: a Refusal each, with the key of the one control that
     answers it -- the drive box for a drive value that was not given (a KeyError until now, which the
     tool printed as a crash with a traceback), the probe count for a chi set outside 1..chi_k_pad --
     and None for a length mismatch, which no single control fixes. All three fire before any lock-in
@@ -3566,12 +3571,12 @@ def test_the_experimental_builders_refuse_as_refusals_before_any_lock_in():
 
 
 def test_fisher_settings_are_recorded_only_when_the_rotation_ran(store, monkeypatch):
-    """V7 (spec §6.2). A posterior's record names the Fisher ensemble, step and operating-point count
-    only when the rotation RAN in this process; otherwise all three are None. Until piece 3 the
-    manifest re-resolved them from the arguments at the write, so an unrotated run, a resumed run (which
-    reuses the checkpoint's V and never calls the Fisher) and a truncated round (which reuses the
-    region's V, guardrail 7) all recorded the settings of a Fisher nobody computed -- provenance that
-    reads as a measurement and is not one.
+    """A posterior's record names the Fisher ensemble, step and operating-point count only when the
+    rotation RAN in this process; otherwise all three are None. The manifest used to re-resolve them
+    from the arguments at the write, so an unrotated run, a resumed run (which reuses the checkpoint's
+    V and never calls the Fisher) and a truncated round (which reuses the region's V, by the
+    region-carries-its-basis rule) all recorded the settings of a Fisher nobody computed --
+    provenance that reads as a measurement and is not one.
 
     Also pins that the resolution moved UP: build_posterior resolves the three at entry and hands the
     Fisher the numbers, so decorrelate's `m or REPARAM_FISHER_M` can no longer turn a 0 into the
@@ -3659,10 +3664,10 @@ def test_fisher_settings_are_recorded_only_when_the_rotation_ran(store, monkeypa
 
 
 def test_cal_n_scales_and_the_fisher_knobs_are_refused_not_clamped(store, monkeypatch):
-    """Spec §3.3: the calibration operating-point count and the Fisher rotation's three knobs are
-    REFUSED at stage entry, never clamped or defaulted below it. Each was a silent substitution:
-    gen_cal_data clamped cal_n_scales to max(1, ...), and that count is t_scale's effective sample size
-    (trap X5), so a 0 ran a different measurement than the one asked for; decorrelate's `m or
+    """The calibration operating-point count and the Fisher rotation's three knobs are REFUSED at
+    stage entry, never clamped or defaulted below it. Each was a silent substitution: gen_cal_data
+    clamped cal_n_scales to max(1, ...), and that count is t_scale's effective sample size, so a 0
+    ran a different measurement than the one asked for; decorrelate's `m or
     REPARAM_FISHER_M` and `n_points or ...` turned a 0 into the default, and a negative dz went straight
     into the central difference; construct_prior's max(2, min_cluster_size) turned a 1 into a 2, and
     that count decides how many modes the prior has. Every refusal lands before the draw, the Fisher
@@ -3726,13 +3731,13 @@ def test_cal_n_scales_and_the_fisher_knobs_are_refused_not_clamped(store, monkey
 
 
 def test_build_prior_resolves_its_knobs_refuses_them_before_the_sweep_and_records_what_it_used(store, monkeypatch):
-    """Spec §3.4, build_prior. The seven sweep and clustering knobs are resolved AT THE STAGE (None ->
-    the config constant) and refused there, before cfg.t is sliced and the ~9-minute sweep starts. Only
+    """At build_prior, the seven sweep and clustering knobs are resolved AT THE STAGE (None -> the
+    config constant) and refused there, before cfg.t is sliced and the ~9-minute sweep starts. Only
     num_iterations was checked before; max_sets, walk_step, min_cluster_size and min_samples travelled
     as None into gen_prior, which resolved and clamped them out of sight while the prior's manifest
     recorded None. So: every out-of-rule value is refused with its field; gen_prior receives numbers,
     never None; the manifest's knobs are the numbers the sweep used; and a LOAD, which reads none of the
-    seven, is never refused over them (spec §1.2, "a stage with a load branch")."""
+    seven, is never refused over them."""
     from core import orchestrator
     cfg = _nad_cfg()
     swept = []
@@ -3787,14 +3792,14 @@ def test_build_prior_resolves_its_knobs_refuses_them_before_the_sweep_and_record
 
 
 def test_the_compositions_refuse_t_obs_at_or_below_zero_before_any_spend(store, monkeypatch):
-    """V2 at the compositions (spec §3.3, §3.4). A blank observation length reached the simulated path
-    as 0.0 from the window, simulated, WROTE the observation and then died in math.log(0.0) inside the
-    conditioning row -- after the spend, with an orphan left behind; the experimental path had no
-    check at all. Both compositions now refuse a length at or below 0, not a number, or blank, with
-    the field key, in the order the pins rely on -- the sample count, then the length, then the name,
-    then the cell file -- and before any cell is parsed, any recording is built or anything simulated.
-    Outside the training range stays a judgement: the experimental path now gives the same
-    PreflightWarning the simulated one always did."""
+    """A blank box is a refusal at the compositions too. A blank observation length reached the
+    simulated path as 0.0 from the window, simulated, WROTE the observation and then died in
+    math.log(0.0) inside the conditioning row -- after the spend, with an orphan left behind; the
+    experimental path had no check at all. Both compositions now refuse a length at or below 0, not a
+    number, or blank, with the field key, in the order the pins rely on -- the sample count, then the
+    length, then the name, then the cell file -- and before any cell is parsed, any recording is built
+    or anything simulated. Outside the training range stays a judgement: the experimental path now
+    gives the same PreflightWarning the simulated one always did."""
     from core import cli, orchestrator
     from core.config import CELL_PATH, T_MIN_EXP_S
     from core.SBI.observations import RecordingSet
@@ -3858,7 +3863,7 @@ def test_the_compositions_refuse_t_obs_at_or_below_zero_before_any_spend(store, 
 
 def test_a_missing_or_blank_recording_is_refused_with_its_roles_field_before_anything_is_read(store, tmp_path,
                                                                                                monkeypatch):
-    """Spec §3.3: every recording is "given, and the file exists", refused as a Refusal whose field is the
+    """Every recording is "given, and the file exists", refused as a Refusal whose field is the
     recording's ROLE -- the passive recording, forced mode's one driven recording, or a chi probe's
     recording -- so the window's yellow box can say which box to fix and the tool which flag. It was a
     FileNotFoundError ("the spont recording was not found: ''") that both front ends showed as a crash.
@@ -3900,12 +3905,13 @@ def test_a_missing_or_blank_recording_is_refused_with_its_roles_field_before_any
 
 
 def test_the_driven_builder_refuses_a_zero_drive_and_the_chi_builder_a_zero_amplitude(monkeypatch):
-    """Spec §3.3, the driven bench branch: the drive amplitude and frequency are "finite, > 0" (a zero
+    """The driven bench branch: the drive amplitude and frequency are "finite, > 0" (a zero
     drive is the passive branch's job, and 0 Hz used to reach the lock-in), the phase is "finite", and
     the chi builder's physical amplitude is "finite, > 0" (a blank box arrived as 0.0 and divided every
     lock-in by zero, inside the worker). Refused on the SI values as given, before any unit conversion,
     peak search, lock-in or summary statistic, each with its field key. A drive value that is absent
-    altogether is Task 6's refusal (test_the_experimental_builders_refuse_as_refusals_before_any_lock_in)."""
+    altogether is the refusal test_the_experimental_builders_refuse_as_refusals_before_any_lock_in
+    pins."""
     from core.SBI import observations as obsm
 
     def reached(what):
@@ -3939,17 +3945,17 @@ def test_the_driven_builder_refuses_a_zero_drive_and_the_chi_builder_a_zero_ampl
 
 
 def test_each_artifact_gets_the_log_of_the_entry_that_wrote_it(store, monkeypatch):
-    """V4's file. Records are buffered from the OUTERMOST public entry (core/runs.py), and the writer
-    commits the buffer so far into ``log.txt`` beside the manifest -- so a composition's two artifacts
-    hold two different files: the observation's ends at its own commit, the inference's holds the
-    whole composition, the pre-spend judgements included. A reviewer opening an inference folder a
-    month later reads what the run said, in order, and the warning it said first.
+    """The run's log file. Records are buffered from the OUTERMOST public entry (core/runs.py), and
+    the writer commits the buffer so far into ``log.txt`` beside the manifest -- so a composition's
+    two artifacts hold two different files: the observation's ends at its own commit, the
+    inference's holds the whole composition, the pre-spend judgements included. A reviewer opening
+    an inference folder a month later reads what the run said, in order, and the warning it said
+    first.
 
-    The stages are stubs that WRITE through the store and log one line each: this task lands the
-    plumbing before any print is converted (T17-T19), so the records here are the test's own. The
-    format is pinned too -- ``HH:MM:SS level message`` -- because piece 4's browser will show it. An
-    artifact written outside any entry gets no file at all: the file is a run's record, not a
-    directory decoration."""
+    The stages are stubs that WRITE through the store and log one line each, so the records here are
+    the test's own. The format is pinned too -- ``HH:MM:SS level message`` -- because the artifact
+    browser shows it. An artifact written outside any entry gets no file at all: the file is a run's
+    record, not a directory decoration."""
     import logging
     import re
 
@@ -3991,9 +3997,9 @@ def test_each_artifact_gets_the_log_of_the_entry_that_wrote_it(store, monkeypatc
     assert LOG_FILE not in store.get("inference", inf.id).payloads, "the log is not a payload"
     plain = _make(store, "calibration", name="plain")                   # outside any entry
     assert not (plain.dir / LOG_FILE).exists(), "no run, no file"
-    # A run that said NOTHING before its commit still gets the file, empty (spec §4.4, V4): a clean
-    # simulated observation logs no record, and "every committed artifact but the cache has one" is
-    # the invariant piece 4's browser reads. Silence is a record too.
+    # A run that said NOTHING before its commit still gets the file, empty: a clean simulated
+    # observation logs no record, and "every committed artifact but the cache has one" is the
+    # invariant the artifact browser reads. Silence is a record too.
     from core.runs import capture_run
     with capture_run() as run:
         quiet = _make(store, "calibration", name="quiet")
@@ -4003,13 +4009,12 @@ def test_each_artifact_gets_the_log_of_the_entry_that_wrote_it(store, monkeypatc
 
 
 def test_a_checkpointed_training_logs_into_the_posterior_and_never_into_the_cache(tiny_run, monkeypatch):
-    """The simulation cache is the one artifact kind with no ``log.txt`` (spec §1.2): its manifest is
+    """The simulation cache is the one artifact kind with no ``log.txt``: its manifest is
     training_checkpoint's, refreshed per batch across resumes, and one cache is shared by every
     posterior that names it -- no single commit holds one entry's records, and the store refuses the
     writer for the kind (store.create). The records land in the POSTERIOR's file when build_posterior
     commits. Pinned on a real checkpointed training at tiny size, with train_nn wrapped to emit one
-    record from inside the entry (the pipeline's own prints become records in T18; until then the
-    wrapper is the only voice in there)."""
+    record of the test's own from inside the entry."""
     import logging
 
     from core import orchestrator
@@ -4034,7 +4039,7 @@ def test_a_checkpointed_training_logs_into_the_posterior_and_never_into_the_cach
 
 
 def test_python_warnings_reach_the_artifact_log(store):
-    """The buffer tees ``warnings.showwarning`` while a run is active (spec §4.4): a PreflightWarning
+    """The buffer tees ``warnings.showwarning`` while a run is active: a PreflightWarning
     judgement or a library's RuntimeWarning is what a reviewer wants in the file, and neither is a
     logging record. The tee CALLS THE PREVIOUS HOOK -- here pytest.warns's recorder, in the window
     streams' own -- and puts it back afterwards, so the window and tool routes for warnings are
@@ -4064,9 +4069,9 @@ def test_the_duplicated_judgements_are_said_once(store, caplog, capsys):
     posterior is NOT AMORTIZED ... Running anyway (accepted)." were each a print, which the window
     showed at info, AND a warnings.warn, which it showed at warning -- so the pane and the tool's
     terminal carried each one twice, and a per-artifact log.txt would have too. A message carries
-    its own level now, so each is said ONCE, as the Python warning (spec §4.1): the pane shows it with
-    a triangle, the tool prints it on stderr, the run buffer tees it into log.txt. The accepted
-    sentence keeps "Running anyway (accepted)." because walkthrough row B3 reads it in the pane.
+    its own level now, so each is said ONCE, as the Python warning: the pane shows it with a
+    triangle, the tool prints it on stderr, the run buffer tees it into log.txt. The accepted sentence
+    keeps "Running anyway (accepted)." because a user reads it in the log pane.
 
     The warning is a PreflightWarning, not a bare UserWarning. A bare one is shown once per call site
     and text, so a second identical judgement in one session -- the same posterior on the same foreign
@@ -4134,12 +4139,12 @@ def test_the_duplicated_judgements_are_said_once(store, caplog, capsys):
 
 
 def test_the_orchestrator_says_everything_through_its_logger():
-    """V4 in core/orchestrator.py: every in-stage message is a record on ONE logger named for the
-    module, and the module sets no level (core/runs.py set the family's, once, at import). A print
-    left behind reaches the window at info whatever it says, is never in the artifact's log.txt (the
-    run buffer hears records and Python warnings, not stdout), and on the tool lands on stdout even
-    when it is a warning. Pinned at the AST over the whole module, because the regression is the next
-    print someone adds."""
+    """Standard logging in core/orchestrator.py: every in-stage message is a record on ONE logger
+    named for the module, and the module sets no level (core/runs.py set the family's, once, at
+    import). A print left behind reaches the window at info whatever it says, is never in the
+    artifact's log.txt (the run buffer hears records and Python warnings, not stdout), and on the
+    tool lands on stdout even when it is a warning. Pinned at the AST over the whole module, because
+    the regression is the next print someone adds."""
     import ast
     import logging
 
@@ -4157,17 +4162,17 @@ def test_the_orchestrator_says_everything_through_its_logger():
 
 
 def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
-    """B3 (spec §2.1, §2.6). ``complete`` means "has a valid manifest"; ``finished`` means "the run
-    finished". For six of the eight kinds they are the same fact -- ``ArtifactWriter._commit`` writes
-    the manifest LAST, so a manifest exists only for a run that reached the end. For the two kinds
-    whose body carries a ``complete`` flag they differ: ``training_checkpoint.create`` manifests the
-    simulation cache BEFORE the first batch is simulated, and an fdt record is written progressively
-    and keeps its folder when the run is interrupted (E2). For both, ``body["complete"]`` is the field
-    that says whether the run got to the end.
+    """``complete`` means "has a valid manifest"; ``finished`` means "the run finished". For six of
+    the eight kinds they are the same fact -- ``ArtifactWriter._commit`` writes the manifest LAST, so a
+    manifest exists only for a run that reached the end. For the two kinds whose body carries a
+    ``complete`` flag they differ: ``training_checkpoint.create`` manifests the simulation cache BEFORE
+    the first batch is simulated, and an fdt record is written progressively and keeps its folder when
+    the run is interrupted. For both, ``body["complete"]`` is the field that says whether the run got
+    to the end.
 
     ``complete`` is NOT redefined: ``list``'s secondary sort puts rows without it last, and this suite
     asserts on it. The honest question goes beside it instead -- and it is the one StorePicker.refresh
-    asks: it skips every row that is not FINISHED (the whole-piece review's N34).
+    asks: it skips every row that is not FINISHED.
     """
     from core import artifacts
     from core.SBI.training_checkpoint import identity_digest
@@ -4196,12 +4201,12 @@ def test_a_summary_says_whether_the_run_finished_for_every_kind(store):
 
 
 def test_an_fdt_row_carries_its_study_its_points_and_whether_it_finished(store):
-    """Checklist 8 and 9. ``finished`` used to be "True unless this is the simulation kind" -- one
-    kind named by hand. Two kinds now carry a ``complete`` flag in their body, and the branch is
-    derived from BODY_KEYS rather than restated, so a third can never be forgotten.
+    """``finished`` used to be "True unless this is the simulation kind" -- one kind named by hand.
+    Two kinds now carry a ``complete`` flag in their body, and the branch is derived from BODY_KEYS
+    rather than restated, so a third can never be forgotten.
 
     The point counts come off ``body["points"]`` in ONE manifest read, like every other Summary
-    field (B2): a listing costs one directory scan and a browser row costs nothing. A single run and
+    field: a listing costs one directory scan and a browser row costs nothing. A single run and
     a comparison have no points at all -- ``body["points"]`` is null -- and their counts stay None
     rather than becoming a confident, false 0/0.
     """
@@ -4232,14 +4237,14 @@ def test_an_fdt_row_carries_its_study_its_points_and_whether_it_finished(store):
 
 
 def test_a_cache_row_carries_its_progress_until_mark_complete_flips_it(store):
-    """§2.6's second pin, over a real checkpoint's whole life: ``create`` manifests it at zero batches,
+    """The same flag over a real checkpoint's whole life: ``create`` manifests it at zero batches,
     ``save`` refreshes ``batches_done``, and ``mark_complete`` is the only thing that makes it
     finished. The rows-per-batch come back as a TUPLE, so a front-end formatter can sum them without
     caring that the manifest stores a JSON list.
 
     ``batches_planned`` comes off the identity and never moves, so the progress cell reads
     ``0/3``, ``2/3``, ``3/3`` over this run's life -- and the row count is None for the first two,
-    because ``save`` passes no rows (P2)."""
+    because ``save`` passes no rows."""
     from core.SBI import training_checkpoint as tc
     ident = {"format": "training-rows/2", "model": "X", "n_runs": 3, "run_size": 4,
              "prior_fingerprint": "d" * 16, "truncation": None}
@@ -4263,9 +4268,9 @@ def test_a_cache_row_carries_its_progress_until_mark_complete_flips_it(store):
 
 
 def test_every_row_carries_its_own_directory_name(store, monkeypatch):
-    """``dir_name`` is the folder, ALWAYS -- the handle ``remove_incomplete`` takes (§2.3). ``id``
-    keeps exactly today's meaning: the manifest id for a complete row, the directory name for an
-    incomplete one, because ``get()``'s refusal already lists incomplete directory names and
+    """``dir_name`` is the folder, ALWAYS -- the handle ``remove_incomplete`` takes. ``id`` keeps the
+    meaning it always had: the manifest id for a complete row, the directory name for an incomplete
+    one, because ``get()``'s refusal already lists incomplete directory names and
     ``StorePicker`` keys on ``id``.
 
     The two disagree on a COMPLETE row too, and the listing is the first place it shows: ``rename``
@@ -4297,7 +4302,7 @@ def test_a_diagnostics_row_carries_its_variant_and_no_observation_mode(store):
     """A diagnostic records its mode under ``variant``, never under ``mode``. The reason is in
     ``core/artifacts/manifest.py``'s BODY_KEYS comment: ``Summary.mode`` is the OBSERVATION mode, so a
     listing that showed "jacobian" in that column would be reporting a conditioning geometry that does
-    not exist. §2.1 surfaces ``variant`` beside it rather than changing that."""
+    not exist. The listing surfaces ``variant`` beside it rather than changing that."""
     _make(store, "diagnostic", name="ident",
           body={"diagnostic": "identifiability", "variant": "jacobian", "settings": {}, "results": {}})
     row = store.list("diagnostic")[0]
@@ -4315,14 +4320,13 @@ def test_a_diagnostics_row_carries_its_variant_and_no_observation_mode(store):
 
 
 def test_a_malformed_simulation_body_degrades_that_field_not_the_whole_row(store):
-    """Review finding (task 3, fix round 1): ``manifest.validate`` checks the body's KEY-SET and
-    top-level types only -- ``_check_finite`` rejects a non-finite FLOAT, nothing else -- so a
-    hand-edited or partially-written manifest can hold a non-numeric ``identity["n_runs"]`` or a
-    non-numeric element of ``rows`` and still pass validation. ``list()`` must not raise on that: one
-    corrupt cache directory would otherwise empty StorePicker.refresh's whole listing (it wraps
-    ``list()`` in a bare ``except Exception: rows = []``). The malformed field degrades to None; every
-    other field on the row -- including ``complete``, which still means "has a valid manifest" -- stays
-    intact."""
+    """``manifest.validate`` checks the body's KEY-SET and top-level types only -- ``_check_finite``
+    rejects a non-finite FLOAT, nothing else -- so a hand-edited or partially-written manifest can
+    hold a non-numeric ``identity["n_runs"]`` or a non-numeric element of ``rows`` and still pass
+    validation. ``list()`` must not raise on that: one corrupt cache directory would otherwise empty
+    StorePicker.refresh's whole listing (it wraps ``list()`` in a bare
+    ``except Exception: rows = []``). The malformed field degrades to None; every other field on the
+    row -- including ``complete``, which still means "has a valid manifest" -- stays intact."""
     from core.SBI.training_checkpoint import identity_digest
     ident = {"format": "training-rows/2", "model": "X", "n_runs": 3, "prior_fingerprint": "e" * 16,
              "truncation": None}
@@ -4346,8 +4350,8 @@ def test_a_malformed_simulation_body_degrades_that_field_not_the_whole_row(store
 
 
 def test_read_log_tells_a_committed_run_from_a_silent_one_and_from_no_file_at_all(store):
-    """B4's four answers (spec §2.2, §2.6). The browser has to say something honest in each case, and
-    one place works it out so the two front ends cannot disagree:
+    """What the log reader answers. The browser has to say something honest in each case, and one
+    place works it out so the two front ends cannot disagree:
 
       * a committed artifact's records, verbatim, stamped ``HH:MM:SS level`` -- the format
         test_each_artifact_gets_the_log_of_the_entry_that_wrote_it pins BECAUSE this reader shows it;
@@ -4383,7 +4387,7 @@ def test_read_log_tells_a_committed_run_from_a_silent_one_and_from_no_file_at_al
     st.write_simulation_manifest(store.kind_dir("simulation") / digest, ident, batches_done=1)
     assert store.read_log("simulation", digest) == (None, False), "the cache never carries one"
 
-    # Both refusals are ITS OWN and carry field="artifact" (P1): routing through ``path()`` would
+    # Both refusals are ITS OWN and carry field="artifact": routing through ``path()`` would
     # inherit a field-less refusal, and neither front end could then name the way out of it.
     with pytest.raises(st.StoreError, match="no complete calibration") as e:
         store.read_log("calibration", "nothing_by_that_name")
@@ -4440,11 +4444,11 @@ def _leftovers(store, kind="prior"):
             "wrong_kind__20260101T000003"]
 
 
-_backdate = backdate_tree       # tests/_fixtures.py's; see R3 and store.RECENT_WRITE_SECONDS
+_backdate = backdate_tree       # tests/_fixtures.py's; the recency guard, store.RECENT_WRITE_SECONDS
 
 
 def test_remove_incomplete_refuses_everything_that_is_not_a_leftover(store, tmp_path):
-    """B7 (spec §2.3, §2.6). It is the COMPLEMENT of ``delete``: that one resolves through ``_find``,
+    """``remove_incomplete`` is the COMPLEMENT of ``delete``: that one resolves through ``_find``,
     which returns only manifest-bearing entries, so it can only ever remove a real artifact and
     always runs the dependency check; this one asks ``_entries`` and removes only what came back
     WITHOUT a manifest. Neither can do the other's job, which is the safety property worth keeping.
@@ -4485,14 +4489,13 @@ def test_remove_incomplete_refuses_everything_that_is_not_a_leftover(store, tmp_
 
 
 def test_remove_incomplete_removes_only_a_directory_with_no_manifest_file_at_all(store):
-    """R1 (whole-piece review). The three shapes ``_entries`` classifies as incomplete are NOT the
-    same thing, and only the first of them is a leftover this may remove: a crash before the manifest
-    was written.
+    """The three shapes ``_entries`` classifies as incomplete are NOT the same thing, and only the
+    first of them is a leftover this may remove: a crash before the manifest was written.
 
     A manifest that EXISTS but this build cannot parse, and one that declares another kind, both mean
-    "something is here that I do not understand". A reviewer probed the old rule deleting a REAL
-    calibration with its payload, because a manifest that is valid under a DIFFERENT SCHEMA reads as
-    "no artifact here" -- and ``manifest.SCHEMA`` is a versioned constant that is expected to move.
+    "something is here that I do not understand". The old rule was shown deleting a REAL calibration
+    with its payload, because a manifest that is valid under a DIFFERENT SCHEMA reads as "no artifact
+    here" -- and ``manifest.SCHEMA`` is a versioned constant that is expected to move.
     Those two are REPORTED: they keep their row in the listing, with their reason, and that is where
     they stay.
     """
@@ -4520,12 +4523,12 @@ def test_remove_incomplete_removes_only_a_directory_with_no_manifest_file_at_all
 
 
 def test_remove_incomplete_skips_a_directory_something_may_still_be_writing(store):
-    """R3. ``ArtifactWriter`` creates the directory FIRST and writes the manifest LAST, so for the
-    whole of a run -- minutes for a prior, days for a training -- a live run's directory looks
-    exactly like a leftover. A reviewer probed a sweep from a SECOND process removing one: the run
-    died at its commit, and a running cache lost its committed shards. A cross-process lock is out of
-    scope for this piece; a directory whose TREE was touched in the last few minutes is refused
-    instead, and the refusal says how old it is.
+    """The recency guard. ``ArtifactWriter`` creates the directory FIRST and writes the manifest LAST,
+    so for the whole of a run -- minutes for a prior, days for a training -- a live run's directory
+    looks exactly like a leftover. A sweep from a SECOND process was shown removing one: the run died
+    at its commit, and a running cache lost its committed shards. There is no cross-process lock; a
+    directory whose TREE was touched in the last few minutes is refused instead, and the refusal says
+    how old it is.
 
     The directory's own mtime is not the question: a long write to a file already inside it leaves
     the folder's mtime alone, so the guard reads the newest mtime in the whole tree.
@@ -4551,7 +4554,7 @@ def test_remove_incomplete_skips_a_directory_something_may_still_be_writing(stor
 
 
 def test_sweep_incomplete_removes_exactly_the_entries_it_was_handed(store):
-    """R2: the sweep is BOUND to the list that was shown. It used to re-scan at removal time, so a
+    """The sweep is BOUND to the list that was shown. It used to re-scan at removal time, so a
     directory that appeared while the confirmation sat open was deleted although the operator never
     saw it -- probed, and reported as "Removed 2 of 1 leftover directories". Now the caller computes
     the list, shows it, and hands exactly it here, and each entry goes by name through
@@ -4590,10 +4593,11 @@ def test_sweep_incomplete_removes_exactly_the_entries_it_was_handed(store):
 
 
 def test_sweep_incomplete_finishes_the_rest_when_one_directory_will_not_delete(store, monkeypatch):
-    """B7's one action per kind, and per store. A directory that will not delete is REPORTED, never
-    fatal: on Windows a held handle -- an Explorer preview, a virus scanner, a file this process still
-    has open -- makes ``shutil.rmtree`` raise PermissionError, and ``_rmtree_retry`` waits 0.1 s and
-    then 0.2 s before giving up. One such folder must not cost the operator the other six.
+    """The sweep is one action per kind, and per store. A directory that will not delete is
+    REPORTED, never fatal: on Windows a held handle -- an Explorer preview, a virus scanner, a file
+    this process still has open -- makes ``shutil.rmtree`` raise PermissionError, and
+    ``_rmtree_retry`` waits 0.1 s and then 0.2 s before giving up. One such folder must not cost the
+    operator the other six.
 
     The failure is INJECTED rather than provoked with a real handle, so the pin holds on any
     filesystem and costs no sleep."""
@@ -4626,12 +4630,12 @@ def test_sweep_incomplete_finishes_the_rest_when_one_directory_will_not_delete(s
 
 
 def test_delete_refuses_with_the_artifact_field_and_says_force_true(store):
-    """``delete``'s own two refusals carry ``field="artifact"`` too (P1, P20), because the fix for
-    either is the same: pick a different artifact in the list. The WORDING is untouched --
-    test_delete_refuses_naming_dependents_and_force_deletes (``:278-287``) already pins the message and
-    the force path -- and this test pins only the key, plus the fact that the dependents message still
-    names ``force=True``. Naming a Python keyword argument is not naming a control: no front end offers
-    it (B6), and whoever reads that line in ``log.txt`` needs to know what the escape hatch is called.
+    """``delete``'s own two refusals carry ``field="artifact"`` too, because the fix for either is the
+    same: pick a different artifact in the list. The WORDING is untouched --
+    test_delete_refuses_naming_dependents_and_force_deletes already pins the message and the force
+    path -- and this test pins only the key, plus the fact that the dependents message still names
+    ``force=True``. Naming a Python keyword argument is not naming a control: no front end offers it,
+    and whoever reads that line in ``log.txt`` needs to know what the escape hatch is called.
     """
     parent = _make(store, "posterior", name="mother", body=_bodies()["posterior"])
     child = _make(store, "inference", name="child", body={"results": {"n_samples": 5}},
@@ -4666,14 +4670,13 @@ def _short_name(path: Path) -> "str | None":
 
 
 def test_remove_incomplete_cannot_be_defeated_by_an_alias_for_a_real_directory(store):
-    """Fix round 1 (CRITICAL, reproduced against the pre-fix code by the review): a plain string
-    compare (``s.name == dir_name``) against ``_entries``'s listing can be defeated by any spelling
-    Windows resolves to the SAME directory as a real artifact's -- a case variant, an 8.3 short
-    name, or a trailing dot that Win32 strips -- deleting a complete, possibly dependency-bearing
-    artifact while bypassing ``delete()``'s dependency check entirely. The fix drives the match off
-    the filesystem's own identity (``os.path.samefile`` against each ``_entries`` row) rather than
-    a string, so it cannot be fooled by a spelling; this test pins that every alias is refused and
-    the artifact is untouched.
+    """A plain string compare (``s.name == dir_name``) against ``_entries``'s listing can be
+    defeated by any spelling Windows resolves to the SAME directory as a real artifact's -- a case
+    variant, an 8.3 short name, or a trailing dot that Win32 strips -- deleting a complete, possibly
+    dependency-bearing artifact while bypassing ``delete()``'s dependency check entirely. The fix
+    drives the match off the filesystem's own identity (``os.path.samefile`` against each
+    ``_entries`` row) rather than a string, so it cannot be fooled by a spelling; this test pins
+    that every alias is refused and the artifact is untouched.
     """
     real = _make(store, "posterior", name="mother", body=_bodies()["posterior"])
     real_name = real.dir.name
@@ -4711,7 +4714,7 @@ def test_remove_incomplete_cannot_be_defeated_by_an_alias_for_a_real_directory(s
 
 
 def test_remove_incomplete_wraps_an_rmtree_failure_as_a_fielded_refusal(store, monkeypatch):
-    """Fix round 1 [Important]: a junction or symlink makes ``shutil.rmtree`` raise a plain OSError,
+    """A junction or symlink makes ``shutil.rmtree`` raise a plain OSError,
     which is not a ``Refusal`` and carries no field key -- a front end catching ``Refusal`` would
     see an unhandled crash instead. ``remove_incomplete`` must wrap it as a fielded ``StoreError``,
     the way ``sweep_incomplete`` already handles its own per-directory failures."""
@@ -4731,12 +4734,11 @@ def test_remove_incomplete_wraps_an_rmtree_failure_as_a_fielded_refusal(store, m
 
 
 def test_remove_incomplete_refuses_to_report_success_when_the_directory_survives(store, monkeypatch):
-    """Fix round 1 [Minor]: a path trick (a trailing space or ``...`` that Win32 quietly resolves to
-    nothing) can make ``shutil.rmtree`` raise ``FileNotFoundError``, which ``_rmtree_retry`` treats
-    as "already gone" -- so a naive caller reports success on a directory it never touched.
-    ``remove_incomplete`` must check for itself that the directory is actually gone before
-    returning it. The failure is injected (a no-op fake ``_rmtree_retry``) so the pin holds on any
-    filesystem."""
+    """A path trick (a trailing space or ``...`` that Win32 quietly resolves to nothing) can make
+    ``shutil.rmtree`` raise ``FileNotFoundError``, which ``_rmtree_retry`` treats as "already gone"
+    -- so a naive caller reports success on a directory it never touched. ``remove_incomplete`` must
+    check for itself that the directory is actually gone before returning it. The failure is
+    injected (a no-op fake ``_rmtree_retry``) so the pin holds on any filesystem."""
     names = _leftovers(store, "prior")
     _backdate(store.kind_dir("prior"))
     target = store.kind_dir("prior") / names[0]
@@ -4749,7 +4751,7 @@ def test_remove_incomplete_refuses_to_report_success_when_the_directory_survives
 
 
 def test_remove_incomplete_is_not_defeated_by_a_degenerate_inode_volume(store, monkeypatch):
-    """Fix round 2: ``os.path.samefile`` identifies a file by ``(st_dev, st_ino)``; on a volume where
+    """``os.path.samefile`` identifies a file by ``(st_dev, st_ino)``; on a volume where
     every entry's ``st_ino`` is 0 -- FAT/exFAT, some network shares, and the artifacts root is
     relocatable to exactly such a drive -- EVERY comparison would report a match, so the loop would
     settle on whichever ``_entries`` row happens to come first rather than the one actually named,
@@ -4776,14 +4778,14 @@ def test_remove_incomplete_is_not_defeated_by_a_degenerate_inode_volume(store, m
 
 
 def test_sweep_incomplete_reports_a_directory_the_removal_never_actually_touched_as_failed(store, monkeypatch):
-    """Fix round 2 [Important]: the same false-success class fixed in ``remove_incomplete`` lives in
-    its sibling. A directory that vanishes between ``_entries``' classification and the removal
-    attempt -- or a path trick that makes ``shutil.rmtree`` raise ``FileNotFoundError``, which
-    ``_rmtree_retry`` treats as "already gone" and swallows -- must not be reported as removed.
-    Injected with a no-op fake ``_rmtree_retry`` so the pin holds on any filesystem.
+    """The same false-success class fixed in ``remove_incomplete`` lives in its sibling. A directory
+    that vanishes between ``_entries``' classification and the removal attempt -- or a path trick
+    that makes ``shutil.rmtree`` raise ``FileNotFoundError``, which ``_rmtree_retry`` treats as
+    "already gone" and swallows -- must not be reported as removed. Injected with a no-op fake
+    ``_rmtree_retry`` so the pin holds on any filesystem.
 
-    Since R2 the sweep removes each entry BY NAME through ``remove_incomplete``, so the check is
-    inherited rather than duplicated -- and the reason the sweep reports is that call's own refusal.
+    The sweep removes each entry BY NAME through ``remove_incomplete``, so the check is inherited
+    rather than duplicated -- and the reason the sweep reports is that call's own refusal.
     """
     d = store.kind_dir("prior")
     d.mkdir(parents=True, exist_ok=True)
@@ -4809,7 +4811,7 @@ def test_sweep_incomplete_reports_a_directory_the_removal_never_actually_touched
 
 
 def test_delete_verifies_the_directory_is_gone_and_wraps_a_removal_failure(store, monkeypatch):
-    """R7. ``_rmtree_retry`` treats ANY ``FileNotFoundError`` as "it is already gone", including one
+    """``_rmtree_retry`` treats ANY ``FileNotFoundError`` as "it is already gone", including one
     raised from INSIDE the walk after part of the tree has been removed -- so ``delete`` returned
     normally and both front ends announced success over a half-removed artifact (probed: the
     directory survived, the manifest did not, and the artifact then listed as a leftover). And a
@@ -4817,8 +4819,8 @@ def test_delete_verifies_the_directory_is_gone_and_wraps_a_removal_failure(store
     escaped ``artifacts rm`` past the ladder's ``Refusal`` rung as a raw traceback, for a condition
     that is just "try again in a moment".
 
-    Both are what ``remove_incomplete`` and ``sweep_incomplete`` were given in fix round 2. ``delete``
-    is the ONLY one of the three that removes a real artifact, and it was the least guarded.
+    Both are what ``remove_incomplete`` and ``sweep_incomplete`` were given before it. ``delete`` is
+    the ONLY one of the three that removes a real artifact, and it was the least guarded.
     """
     real = _make(store, "calibration", name="keepme", body=_cal_body())
 
@@ -4843,7 +4845,7 @@ def test_delete_verifies_the_directory_is_gone_and_wraps_a_removal_failure(store
     assert not real.dir.exists()
 
 
-# ── The report renderers (piece 4, §5 / B10) ─────────────────────────────────────────────────────
+# ── The report renderers ─────────────────────────────────────────────────────────────────────────
 
 
 def _chain(store, cfg) -> dict:
@@ -4895,7 +4897,7 @@ def _chain(store, cfg) -> dict:
 
 
 def test_render_manifest_names_every_fact_the_manifest_holds(store):
-    """§5 / B10: the manifest as text -- schema, id, name, created, note, the git revision and the
+    """The manifest as text -- schema, id, name, created, note, the git revision and the
     environment, the input files WITH their hashes, the parents, the payloads with their digests, the
     figures and the body's knobs -- laid out deterministically, so the window's Save and the tool's
     ``artifacts show`` print the same bytes.
@@ -4936,7 +4938,7 @@ def test_render_manifest_names_every_fact_the_manifest_holds(store):
 
 
 def test_render_lineage_walks_the_chain_and_prints_a_missing_parent(store):
-    """§5: the artifact, then its parents transitively through ``_PARENT_KEYS``, each artifact before
+    """The artifact, then its parents transitively through ``_PARENT_KEYS``, each artifact before
     its own parents so the chain reads newest first and oldest last. Each step names the kind, the
     name, the id, the creation time, the input files with their hashes, the knobs that decided it and
     any Accept it recorded.
@@ -4979,7 +4981,7 @@ def test_render_lineage_walks_the_chain_and_prints_a_missing_parent(store):
 
 
 def test_render_lineage_resolves_what_a_comparison_compared(store):
-    """§7.3 and checklist 12. A comparison names the runs it drew in its BODY, because ``parents`` is
+    """A comparison names the runs it drew in its BODY, because ``parents`` is
     a flat {key: id} map that cannot carry an arbitrary number of ids without widening the store's
     contract for every kind -- so deleting a record a comparison used is NOT refused, and this branch
     is the only thing that keeps the comparison's own provenance readable afterwards.
@@ -5015,7 +5017,7 @@ def test_render_lineage_resolves_what_a_comparison_compared(store):
 
 
 def test_render_lineage_reads_a_malformed_compared_block_without_dropping_or_faking_it(store):
-    """Task 5's review fix. Only a hand-edited manifest or a writer bug reaches these shapes, but the
+    """Only a hand-edited manifest or a writer bug reaches these shapes, but the
     lineage's two promises hold for them too: its one refusal is the head ref (the browser catches a
     Refusal and nothing else, so any other exception is a crash), and a broken record never reads as
     a complete one. So a malformed ``compared`` block yields a line saying WHAT is unreadable --
@@ -5059,7 +5061,7 @@ def test_render_lineage_reads_a_malformed_compared_block_without_dropping_or_fak
     assert "MISSING" not in text, "nothing here was an id the store could have held"
 
 
-# ── load_observation's two payload guards (piece 4, §8.1) ────────────────────────────────────────
+# ── load_observation's two payload guards ────────────────────────────────────────────────────────
 
 
 def _obs_artifact(store, cfg, *, name, x_obs, digest=None):
@@ -5085,7 +5087,7 @@ def _obs_artifact(store, cfg, *, name, x_obs, digest=None):
 
 
 def test_load_observation_refuses_a_payload_that_disagrees_with_its_manifest(store):
-    """Spec §8.1: the two guards AFTER ``torch.load``, each in isolation.
+    """The two guards AFTER ``torch.load``, each in isolation.
 
     Everything above them compares the MANIFEST -- the config's model, parameter order, mode, width and
     chi layout against what the manifest declares -- so a payload that is not the payload the manifest
@@ -5095,7 +5097,7 @@ def test_load_observation_refuses_a_payload_that_disagrees_with_its_manifest(sto
     digest rather than corrupted after the fact.
 
     The width guard carries ``field="observation"``, matching the Refusal above it; the digest guard
-    carries none. That asymmetry is the spec's ruling, and pinning it is what makes changing it
+    carries none. That asymmetry was chosen on purpose, and pinning it is what makes changing it
     deliberate.
     """
     cfg = _nad_cfg()                                      # master.txt declares a drive -> forced mode

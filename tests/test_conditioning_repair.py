@@ -39,7 +39,7 @@ def _fitted_net(data: torch.Tensor, n_sum: int, k_pad: int = 4):
     return net
 
 
-# ── 1.1 rank-Gaussianisation ─────────────────────────────────────────────────────────────────────
+# ── rank-Gaussianisation ─────────────────────────────────────────────────────────────────────────
 def test_rank_gaussianize_is_monotone_and_bounded():
     """The transform must be order-preserving; if it is not, it is not a reparameterisation of the
     channel at all and the flow is being shown a different variable than the one measured."""
@@ -98,10 +98,10 @@ def test_a_structurally_dead_channel_passes_through_as_zero():
 
 
 def test_the_contaminated_channel_becomes_visible_to_the_network():
-    """THE PHASE-1 GATE, in miniature. A channel whose distribution carries an extreme outlier is
-    annihilated by a mean/std affine (measured on posterior_08232026: A1_mean fitted at std 4.19e11,
-    so its whole physical range moved the embedding by 3.2e-7). Under the rank transform its response
-    must be the same order as a healthy channel's."""
+    """THE CONDITIONING REPAIR'S GATE, in miniature. A channel whose distribution carries an extreme
+    outlier is annihilated by a mean/std affine (measured on posterior_08232026: A1_mean fitted at std
+    4.19e11, so its whole physical range moved the embedding by 3.2e-7). Under the rank transform its
+    response must be the same order as a healthy channel's."""
     torch.manual_seed(2)
     n_sum = statistics.SUMMARY_WIDTH + 1
     n = 8000
@@ -147,7 +147,7 @@ def test_a_legacy_posterior_still_loads_and_evaluates():
     assert net(x).shape == (5, 8), "a legacy net could not run forward"
 
 
-# ── 1.2 valid flags ──────────────────────────────────────────────────────────────────────────────
+# ── valid flags ──────────────────────────────────────────────────────────────────────────────────
 def test_valid_flags_fire_on_the_sentinel_and_only_on_it():
     n = len(statistics.FEATURE_LABELS)
     feats = torch.randn(3, n)
@@ -193,7 +193,7 @@ def test_the_summary_block_splits_where_it_claims():
     assert torch.equal(torch.cat([feats, flags], dim=-1), s)
 
 
-# ── 1.3 winsorisation ────────────────────────────────────────────────────────────────────────────
+# ── winsorisation ────────────────────────────────────────────────────────────────────────────────
 def test_winsorisation_leaves_the_chi_block_BITWISE_untouched():
     """A padded probe slot is exactly 0.0 in all six channels and must stay bitwise inert. Clipping a
     probe column whose 0.1th percentile is non-zero would push every pad off 0.0 and turn it into a
@@ -233,7 +233,7 @@ def test_winsorisation_clips_the_outlier_instead_of_dropping_its_row():
     assert float(out[0, 1]) == float(before[0, 1]), "an untouched row's untouched column changed"
 
 
-# ── 1.4 pathological-trajectory counter ──────────────────────────────────────────────────────────
+# ── pathological-trajectory counter ──────────────────────────────────────────────────────────────
 def test_pathological_counter_separates_the_three_populations():
     acc = dict.fromkeys(("rows", "nonfinite", "constant", "overflow"), 0)
     x = torch.randn(5, 100)
@@ -278,7 +278,7 @@ def test_tier1_without_its_inputs_refuses_rather_than_guessing():
     raise AssertionError("a tier-1 box simulated with a TEMPERATURE in f_scale's column")
 
 
-# ── Phase 2: the informativeness scalar ──────────────────────────────────────────────────────────
+# ── the informativeness scalar ───────────────────────────────────────────────────────────────────
 def test_prior_log_prob_falls_back_per_block_on_a_device_error():
     """The inferred prior is ProductPrior([nd_gmm, rescale]) and the two halves need not share a
     device -- which is why the rest of the pipeline's rule for this object is "sample-only, never
@@ -343,7 +343,7 @@ def test_informativeness_is_zero_when_the_posterior_IS_the_prior():
     assert info["n_used"] == 400 and info["n_dropped"] == 0
 
 
-# ── Phase 4: TSNPE ───────────────────────────────────────────────────────────────────────────────
+# ── TSNPE ────────────────────────────────────────────────────────────────────────────────────────
 class _Gaussian:
     """A prior/posterior stand-in with an exact density, so the pinning test has a known answer."""
 
@@ -392,7 +392,8 @@ def test_the_proposal_is_the_TRUNCATED_PRIOR_and_not_the_posterior():
 
 
 def test_the_region_is_built_over_the_leading_fisher_directions_only():
-    """Guardrail 3: k, delta_E and temp sit at or near prior, so cutting every axis would delete
+    """The eigenbasis rule: the region is cut in the rotation's leading directions, and flat ones are
+    left full width. k, delta_E and temp sit at or near prior, so cutting every axis would delete
     support on noise -- and deleted support is a one-way ratchet."""
     torch.manual_seed(8)
 
@@ -459,7 +460,7 @@ def test_the_region_survives_a_sidecar_round_trip():
     assert torch.equal(back.lo, r.lo) and torch.equal(back.hi, r.hi)
 
 
-# ── Phase 4, guardrail 7: the region carries its basis ───────────────────────────────────────────
+# ── TSNPE: the region carries its basis ──────────────────────────────────────────────────────────
 class _Wide:
     """A posterior stand-in whose latent has five tight and eight wide directions (13-D)."""
 
@@ -501,8 +502,9 @@ def _orthogonal_keeping(n: int, seed: int, axis: int) -> torch.Tensor:
 def test_the_region_carries_its_basis_through_a_sidecar_round_trip():
     """A box over 'directions 0..K-1' is meaningless without the V those directions are columns of,
     and V is not reproducible across processes. So the region records the parent's V and the probe
-    of its whole training bijection, and both survive the sidecar; a sidecar written before they
-    existed loads with None rather than failing."""
+    of its whole training bijection, and both survive the stored dict (the posterior manifest's
+    truncation block is built from it); a dict written before they existed loads with None rather
+    than failing."""
     P = 13
     Q = _orthogonal(P, 3)
     _, T_train = _rotated_box(Q)
@@ -546,7 +548,7 @@ def test_the_region_carries_its_basis_through_a_sidecar_round_trip():
 
 
 def test_a_region_measured_in_one_basis_is_refused_in_a_sign_flipped_one():
-    """⚠ THE REGRESSION TEST FOR THE 2026-09-02 ROUND (defect D1).
+    """⚠ THE REGRESSION TEST FOR THE 2026-09-02 ROUND.
 
     That round drew its box in the parent posterior's V and enforced it under a freshly computed
     V' -- different signs, different column ORDER, different mixing -- so the truncated prior kept
@@ -619,8 +621,8 @@ def _lp(post, latent=None, fingerprint=None, id_="p"):
 
 
 def _lo(x, keys=_KEYS13, digest=None):
-    """A LoadedObservation-shaped stand-in: ``.digest`` defaults to the payload's own hash (so it
-    passes build_truncation_region's guardrail-1 check unless a test deliberately mismatches it)."""
+    """A LoadedObservation-shaped stand-in: ``.digest`` defaults to the payload's own hash, so it
+    passes build_truncation_region's observation-digest check unless a test mismatches it on purpose."""
     from types import SimpleNamespace
     from core import orchestrator
     return SimpleNamespace(x_obs=x, digest=digest or orchestrator.observation_digest(x), id="o", name="",
@@ -628,10 +630,10 @@ def _lo(x, keys=_KEYS13, digest=None):
 
 
 def test_build_truncation_region_records_the_parents_basis():
-    """The RECORDING end of guardrail 7: orchestrator.build_truncation_region must read the parent
-    posterior's V through reparam.rotation_of (V, not its transpose -- the GUI's mistake), probe the
-    parent's whole bijection, and bind the observation digest; a posterior with no transform, or a
-    transform with no box, is refused rather than guessed at."""
+    """The RECORDING end of the region-carries-its-basis rule: orchestrator.build_truncation_region
+    must read the parent posterior's V through reparam.rotation_of (V, not its transpose -- the GUI's
+    mistake), probe the parent's whole bijection, and bind the observation digest; a posterior with
+    no transform, or a transform with no box, is refused rather than guessed at."""
     from core import orchestrator
 
     P = 13
@@ -662,8 +664,8 @@ def test_build_truncation_region_records_the_parents_basis():
         raise AssertionError("a region was built without knowing where t_scale is")
     except ValueError as e:
         assert "t_scale" in str(e)
-    # belt and braces against D6: the parent's transform must rotate by the rotation its own network
-    # was trained under, i.e. the one inside its training prior
+    # belt and braces against a rotation saved transposed: the parent's transform must rotate by the
+    # rotation its own network was trained under, i.e. the one inside its training prior
     class _WideWithPrior(_Wide):
         def __init__(self, V):
             self.prior = type("Pr", (), {"gen_dist": reparam.RotatedLatentPrior(None, V)})()
@@ -700,7 +702,8 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
     parent's GMM fingerprint (build_truncation_region records it from the prior pickled inside the
     posterior) and build_posterior's truncation branch refuses a supplied prior that verifiably
     differs -- silent, like validate_calibration's check, when either side is unverifiable. The
-    end-to-end drive through build_posterior is leg (vi) of test_user_sbi's guardrail-7 test."""
+    end-to-end drive through build_posterior is leg (vi) of
+    test_user_sbi.test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch."""
     import ast
     import inspect
     import textwrap
@@ -757,7 +760,8 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
         assert "0" * 16 in str(e) and fp_a in str(e), e
     # ...and it is NOT part of the checkpoint identity: the identity already carries the supplied
     # prior's fingerprint, and a new key in identity_fields would re-digest every truncated
-    # checkpoint directory (the amortized identity omits the region entirely -- test_user_sbi pins it)
+    # checkpoint directory (the amortized identity carries no region, truncation None --
+    # test_user_sbi pins it)
     probe = training_checkpoint.bijection_probe(T_parent, P)
     without = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q, probe=probe)
     with_fp = truncate.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q, probe=probe,
@@ -783,7 +787,7 @@ def test_a_truncated_round_refuses_a_prior_other_than_the_parents():
     run_guards._assert_prior_matches_region(bare, gmm_b, "A truncated round")
     # and build_posterior applies it to the SUPPLIED prior: inside the `if truncation is not None`
     # branch, before the round commits to the region's basis (check_basis), and on the load branch
-    # to a sidecar's region -- pinned at the AST, so a moved or dropped call fails here
+    # to the stored region -- pinned at the AST, so a moved or dropped call fails here
     assert orchestrator._assert_prior_matches_region is run_guards._assert_prior_matches_region
     tree = ast.parse(textwrap.dedent(inspect.getsource(orchestrator.build_posterior)))
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
@@ -846,14 +850,16 @@ def test_the_same_posterior_and_observation_redraw_the_same_region():
 
 
 def test_a_t_scale_loaded_direction_is_excluded_from_the_region(caplog):
-    """⚠ DEFECT D4. gen_training_data overwrites t_scale per batch AFTER the proposal draw and
-    recomputes the latent target, so a box along a direction that loads on t_scale never reaches the
-    simulator as a restriction: the proposal becomes the prior tilted by P(A | theta_-t) (a no-op when
-    the direction IS the t_scale axis), and NPE converges to p(theta|x)*P(A|theta_-t). Such directions
-    are skipped, the box takes the next eligible ones, and the region records what was skipped and
-    why. Without t_scale's index the old behaviour (the leading k directions) is untouched. A skipped
-    direction is a WARNING record (the box is not the one asked for); the t_scale fraction inside the
-    kept subspace is an INFORMATION record."""
+    """⚠ A DIRECTION LOADED ON t_scale WOULD TURN THE RESTRICTION INTO A REWEIGHTING.
+
+    gen_training_data overwrites t_scale per batch AFTER the proposal draw and recomputes the latent
+    target, so a box along a direction that loads on t_scale never reaches the simulator as a
+    restriction: the proposal becomes the prior tilted by P(A | theta_-t) (a no-op when the direction
+    IS the t_scale axis), and NPE converges to p(theta|x)*P(A|theta_-t). Such directions are skipped,
+    the box takes the next eligible ones, and the region records what was skipped and why. Without
+    t_scale's index the old behaviour (the leading k directions) is untouched. A skipped direction is
+    a WARNING record (the box is not the one asked for); the t_scale fraction inside the kept
+    subspace is an INFORMATION record."""
     P, i_t = 13, 11
     # a 30-degree rotation in the (1, 11) plane: |V[t_scale, 1]| = sin(30) = 0.5 > 1/sqrt(13)
     V = torch.eye(P)
@@ -907,9 +913,9 @@ def test_a_t_scale_loaded_direction_is_excluded_from_the_region(caplog):
 
 def test_reparam_is_the_only_reader_of_the_rotation_matrix():
     """The transpose convention (parts[0].M == Vᵀ) is decoded in exactly one place, reparam.rotation_of.
-    A second reader is how the GUI came to write every sidecar transposed (D6); a source scan over
-    CODE_ROOTS -- every top-level directory that holds code, which since piece 2 is core/ alone -- and
-    the top-level CODE_FILES keeps the count at one. The forbidden spelling is assembled so this file
+    A second reader is how the GUI came to write every stored rotation transposed; a source scan over
+    CODE_ROOTS -- every top-level directory that holds code, which is core/ alone -- and the
+    top-level CODE_FILES keeps the count at one. The forbidden spelling is assembled so this file
     does not match itself."""
     import io as _io
     import tokenize
@@ -922,7 +928,8 @@ def test_reparam_is_the_only_reader_of_the_rotation_matrix():
     skip |= {getattr(tokenize, n) for n in ("FSTRING_START", "FSTRING_MIDDLE", "FSTRING_END") if hasattr(tokenize, n)}
 
     def _code_only(path):
-        # CODE tokens only: the comments and messages explaining D6 necessarily spell the needle
+        # CODE tokens only: the comments and messages explaining the transposed rotation necessarily
+        # spell the needle
         toks = tokenize.generate_tokens(_io.StringIO(path.read_text(encoding="utf-8")).readline)
         return "".join(t.string for t in toks if t.type not in skip)
 
@@ -935,15 +942,14 @@ def test_reparam_is_the_only_reader_of_the_rotation_matrix():
 
 
 def test_the_prompt_cli_is_retired():
-    """D1: nothing under core/ asks a question at a terminal any more.
+    """Nothing under core/ asks a question at a terminal any more.
 
     A surviving input() is not cosmetic. On a GUI worker thread it blocks forever with no prompt
     anyone can answer -- which is exactly what run_fdt's two ``None`` defaults meant, and why the
     FDT panel had to remember to pass explicit booleans. Making them REQUIRED moves that from a
     convention a caller can forget to a TypeError at the call site. The scan walks CODE_ROOTS and
-    CODE_FILES, the same set the other two source scans walk -- which since piece 2 is core/, where
-    every front end now lives (the GUI, and the command-line tool under core/tool), plus the top-level
-    conftest.py.
+    CODE_FILES, the same set the other source scans walk -- core/, where every front end now lives
+    (the GUI, and the command-line tool under core/tool), plus the top-level conftest.py.
     """
     import ast
     import inspect
@@ -1038,7 +1044,8 @@ def test_the_local_sweep_is_no_longer_a_staticmethod_pinned_to_the_cpu():
         assert params and params[0] == "self", f"{cls}._local_map is not an instance method"
         # ast.unparse, not the raw source: the comment that DOCUMENTS this fix necessarily contains
         # the string it forbids, so a naive text search flags the explanation instead of the code.
-        # Same false positive the TSNPE runner check hit -- see test_gui_progress.
+        # Same false positive the TSNPE runner check hit -- see the docstring of
+        # tests/_fixtures.code_only.
         code = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(fn))))
         assert "torch.device('cpu')" not in code and 'torch.device("cpu")' not in code, \
             f"{cls}._local_map still hardcodes the CPU"
@@ -1048,11 +1055,11 @@ def test_the_local_sweep_is_no_longer_a_staticmethod_pinned_to_the_cpu():
             f"{cls}._local_map still walks rows one at a time (a device-to-host sync per row)"
 
 
-# ── tsnpe_round: the one round path (piece 2, §2.5) ──────────────────────────────────────────────
+# ── tsnpe_round: the one round path ──────────────────────────────────────────────────────────────
 class _RoundStore:
     """The store shape tsnpe_round uses: it asks whether the posterior name is free, then hands itself
     to build_posterior. Passing one proves the round never reaches for the process default -- which is
-    what the GUI runner did, and is the carried item "thread the store into the TSNPE runner"."""
+    what the GUI runner did."""
 
     def __init__(self):
         self.asked = []
@@ -1090,13 +1097,13 @@ def test_tsnpe_round_refuses_bad_direction_counts_and_hpd_levels_before_any_spen
     """These three checks lived on the TSNPE tab, where neither the command line nor a test could reach
     them -- and truncate.region_from_posterior silently CLAMPED the direction count at both ends: a 0
     became 1, and a count above the latent size truncated every direction including the flat ones
-    guardrail 3 exists to leave at full width."""
+    the eigenbasis rule leaves at full width."""
     from core import orchestrator
     drawn, store, cfg, obs = [], _RoundStore(), _round_cfg(), _round_obs()
     saved = orchestrator.build_truncation_region
     orchestrator.build_truncation_region = lambda *a, **k: drawn.append(1)
     try:
-        # Refusals with their field and the default in the sentence (spec §3.3): the yellow box names
+        # Refusals with their field and the default in the sentence: the yellow box names
         # the box and the value to type back, which "At least one direction must be truncated" never did.
         for bad, field, why in ((dict(n_directions=0), "n_directions", "must be at least 1; got 0 (default 5)"),
                                 (dict(n_directions=14), "n_directions",
@@ -1138,11 +1145,11 @@ def test_a_tight_hpd_warns_through_the_preflight_channel_and_still_runs():
 
 
 def test_a_non_amortized_parent_is_refused_on_another_observation():
-    """D12, and there is no escape hatch. A non-amortized parent is valid only near its own
-    observation, so a region drawn from it around another one is drawn where the flow extrapolates
-    rather than where it was trained. Reachable today by loading a round's posterior on the Posterior
-    tab and then picking a different observation on the TSNPE tab; build_truncation_region does not
-    check it."""
+    """A narrowed parent around another observation is refused, with no escape hatch. A
+    non-amortized parent is valid only near its own observation, so a region drawn from it around
+    another one is drawn where the flow extrapolates rather than where it was trained. Reachable
+    today by loading a round's posterior on the Posterior tab and then picking a different
+    observation on the TSNPE tab; build_truncation_region does not check it."""
     from core import orchestrator
     cfg, store = _round_cfg(), _RoundStore()
     drawn = []
@@ -1157,7 +1164,8 @@ def test_a_non_amortized_parent_is_refused_on_another_observation():
         except Refusal as e:
             assert "b" * 16 in str(e) and "a" * 16 in str(e), f"the refusal must name both digests: {e}"
             assert "no override" in str(e), f"the refusal must say there is no way past it: {e}"
-            assert e.field is None, "D12 has no hatch and no single control; the yellow box names none"
+            assert e.field is None, ("a narrowed parent around another observation has no escape "
+                                     "hatch and no single control; the yellow box names none")
         assert drawn == [] and other.events == []
         # the parent's OWN observation is the legitimate case, and an amortized parent takes any
         assert orchestrator.tsnpe_round(cfg, _parent(digest="a" * 16), object(), _round_obs(),
@@ -1173,8 +1181,8 @@ def test_tsnpe_round_installs_the_observation_then_forwards_every_knob_to_build_
     """The SECOND hop. The store the caller names is the one every stage gets; the observation's context
     is installed BEFORE the region is drawn, so the round's ground-truth check reads THIS observation's
     truth or none; t_scale's latent index travels, because a direction that loads on it must not be
-    truncated (D4); and no Fisher keyword is accepted at all, because a truncated round reuses the
-    region's own V and never runs the Fisher (guardrail 7)."""
+    truncated; and no Fisher keyword is accepted at all, because a truncated round reuses the
+    region's own V and never runs the Fisher (the region-carries-its-basis rule)."""
     from core import orchestrator
     events, seen, store, cfg = [], {}, _RoundStore(), _round_cfg()
     obs = _round_obs(events=events)
@@ -1221,7 +1229,8 @@ def test_the_round_reads_this_observations_truth_and_no_other():
     """An experimental recording has no truth, and nothing ever cleared one: a round on a bench
     recording, run after a simulated inference in the same session, reported the STALE cell as "the
     loaded cell's GROUND TRUTH lies OUTSIDE the truncation region" -- or was silently satisfied by it.
-    install now clears it, so build_posterior's guardrail-5 block has nothing to fire on."""
+    install now clears it, so build_posterior's truth-outside-the-region warning (the watch the
+    generous-region rule keeps) has nothing to fire on."""
     from types import SimpleNamespace
     from core import cli, orchestrator
     from core.artifacts import LoadedObservation
@@ -1239,8 +1248,9 @@ def test_the_round_reads_this_observations_truth_and_no_other():
     handed = {}
 
     def _child(c, *a, **k):
-        # V1: the round installs the observation on its PRIVATE copy and trains on that copy, so the
-        # pins below read the config build_posterior received, not the caller's
+        # Every public stage works on a private copy of its config: the round installs the observation
+        # on its PRIVATE copy and trains on that copy, so the pins below read the config
+        # build_posterior received, not the caller's
         handed["cfg"] = c
         return "CHILD"
 
@@ -1270,10 +1280,10 @@ def test_the_round_reads_this_observations_truth_and_no_other():
 
 
 def test_the_round_announces_the_region_it_drew(caplog):
-    """Walkthrough row A7 quotes this line, and it is the operator's only view of which observation a
-    multi-day round was drawn around. Since piece 3 it is an INFO record on core.orchestrator (V4): the
-    tool's stdout handler prints exactly this text (spec §4.5) and the window's handler puts it in the
-    pane, so it is pinned off caplog with its logger, its level and its whole text."""
+    """This line is the operator's only view of which observation a multi-day round was drawn around.
+    It is an INFO record on core.orchestrator: the tool's stdout handler prints exactly this text and
+    the window's handler puts it in the pane, so it is pinned off caplog with its logger, its level
+    and its whole text."""
     from core import orchestrator
     cfg, store = _round_cfg(), _RoundStore()
     saved = (orchestrator.build_truncation_region, orchestrator.build_posterior)
@@ -1289,12 +1299,12 @@ def test_the_round_announces_the_region_it_drew(caplog):
 
 
 def test_the_direction_refusal_names_the_width_and_the_default():
-    """Walkthrough row C3 at the stage (spec §3.3): a direction count above THIS posterior's latent
-    width is refused in one sentence carrying the width, the value given and the default, with field
-    "n_directions". The TSNPE tab cannot check it at the click -- it has no posterior to measure the
-    width against -- so this sentence is what the yellow box shows. It used to read "14 directions
-    requested but the latent has 13; ...", naming neither the setting nor its default. The width is the
-    posterior's own: a count equal to it is legal and the round proceeds."""
+    """At the stage: a direction count above THIS posterior's latent width is refused in one sentence
+    carrying the width, the value given and the default, with field "n_directions". The TSNPE tab
+    cannot check it at the click -- it has no posterior to measure the width against -- so this
+    sentence is what the yellow box shows. It used to read "14 directions requested but the latent
+    has 13; ...", naming neither the setting nor its default. The width is the posterior's own: a
+    count equal to it is legal and the round proceeds."""
     from core import orchestrator
     from core.refusals import FIELDS
     drawn, store, cfg, obs = [], _RoundStore(), _round_cfg(), _round_obs()

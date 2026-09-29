@@ -1,5 +1,5 @@
 """Diagnostics: the ``diagnostic`` store kind, the shared feature-set and seeding helpers, and the
-five diagnostic functions (piece 2 of the 2026-09-11 one-flow design, tasks T13-T18).
+five diagnostic functions.
 
 Everything here is CPU-sized and stubbed where a simulation would otherwise dominate: a diagnostic is
 a measurement ABOUT a trained posterior, so the thing worth pinning is what it reads, what it refuses
@@ -25,7 +25,7 @@ class _LatentPriorStub:
 
 
 def _diagnostic(store, cfg, *, name="diag", parents=None, variant=None):
-    """A diagnostic artifact written the way every diagnostic function writes one (spec 4.1)."""
+    """A diagnostic artifact written the way every diagnostic function writes one."""
     with store.create("diagnostic", cfg, name=name) as w:
         w.parents = dict(parents or {})
         w.config.update({"repeats": 2})
@@ -35,10 +35,10 @@ def _diagnostic(store, cfg, *, name="diag", parents=None, variant=None):
 
 
 def test_a_diagnostic_loads_without_a_config_and_blocks_deleting_what_it_names(store):
-    """D5, the whole contract of the kind: its own directory and manifest body; a loader that takes a
-    ref and NOTHING else, because there is no config to verify a measurement against and nothing is
-    ever trained from one; and, because ``dependents`` walks every kind, the artifacts it names cannot
-    be deleted out from under it without ``force``.
+    """The whole contract of the diagnostic kind: its own directory and manifest body; a loader that
+    takes a ref and NOTHING else, because there is no config to verify a measurement against and
+    nothing is ever trained from one; and, because ``dependents`` walks every kind, the artifacts it
+    names cannot be deleted out from under it without ``force``.
     """
     import inspect
     cfg = _nad_cfg()
@@ -91,7 +91,7 @@ def test_the_chi_feature_set_drops_group_g_and_adds_the_fisher_block(caplog):
     assert labels[30:] == chi_mod.chi_labels(4, chi_mod.CHI_FISHER_CHANNELS)
     assert labels[30] == "chi0_logmag" and len(labels) == 30 + 3 * 4 == fs.n_features(chi_cfg)
 
-    # The banner is a record at INFO from the feature-set module (piece 3, V4): same words, but the
+    # The banner is a record at INFO from the feature-set module: same words, but the
     # window shows it plain, the tool prints it on stdout and the run's log.txt keeps it.
     caplog.clear()
     fs.describe_features(chi_cfg)
@@ -109,7 +109,7 @@ def test_the_chi_feature_set_drops_group_g_and_adds_the_fisher_block(caplog):
 def test_the_diagnostic_guards_refuse_naming_no_flag_or_file():
     """SystemExit was right for a script and wrong everywhere else; a bare ValueError that named
     `--no-chi` and `--bounds` was right for the tool and wrong for the window, whose user has no flag
-    to pass. The guards now raise Refusal (V3): one refusal kind, a neutral message that names the
+    to pass. The guards now raise Refusal: one refusal kind, a neutral message that names the
     diagnostic, the mode and the model but no flag, subcommand or file, and `field=None`, because no
     single control answers them -- each front end appends its own "how to fix here" from its table,
     and for None that is nothing.
@@ -159,8 +159,9 @@ def test_seeded_restores_the_callers_rng():
     """Seed ONCE, let the stream run on inside the block, and hand the caller's RNG back on the way
     out. The tool's own tests call main(argv) in-process, so a leaked seed would make one test's
     numbers depend on which tests ran before it; and re-seeding per stage is what would make the
-    calibration set replay the training strata (trap X5), which is why there is one context and not a
-    seed argument on every stage.
+    calibration set replay the training strata -- and the calibration's operating-point count is
+    t_scale's effective sample size -- which is why there is one context and not a seed argument on
+    every stage.
     """
     import numpy as np
     import torch
@@ -190,16 +191,16 @@ def test_seeded_restores_the_callers_rng():
 
 @pytest.mark.gpu
 def test_a_cpu_seeded_block_leaves_every_cuda_generator_alone():
-    """Task 17, fix round 1, finding 2 (spec §3.7). ``torch.manual_seed`` reseeds EVERY CUDA device as
-    well as the CPU, and a CPU block forks no CUDA generator -- ``fork_rng(devices=[cpu])`` raises --
-    so the old ``seeded(seed, cpu)`` left each card's generator pinned at the block's seed: two CPU FDT
-    runs at seed 5, each followed by a CUDA draw, drew identical CUDA numbers. That is the hazard
-    core/SBI/decorrelate.py documents, reached through the context whose whole job is to hand the
-    caller's streams back. A CPU block now seeds the CPU generator and numpy only.
+    """``torch.manual_seed`` reseeds EVERY CUDA device as well as the CPU, and a CPU block forks no
+    CUDA generator -- ``fork_rng(devices=[cpu])`` raises -- so the old ``seeded(seed, cpu)`` left each
+    card's generator pinned at the block's seed: two CPU FDT runs at seed 5, each followed by a CUDA
+    draw, drew identical CUDA numbers. That is the hazard core/SBI/decorrelate.py documents, reached
+    through the context whose whole job is to hand the caller's streams back. A CPU block now seeds
+    the CPU generator and numpy only.
 
-    The context lives in core/rng.py (finding 1), and core.diagnostics.rng re-exports the SAME object,
-    so the diagnostics and `smoke` -- which a tool test patches through core.diagnostics.rng --
-    keep their import."""
+    The context lives in core/rng.py, and core.diagnostics.rng re-exports the SAME object, so the
+    diagnostics and `smoke` -- which a tool test patches through core.diagnostics.rng -- keep their
+    import."""
     import core.diagnostics.rng
     import core.rng
     from core import config
@@ -218,12 +219,12 @@ def test_a_cpu_seeded_block_leaves_every_cuda_generator_alone():
 
 
 def test_the_calibration_draw_is_three_helpers_with_the_stratification_seam(store, monkeypatch, caplog):
-    """T16's sbc_repeats draws its per-repeat calibration set through EXACTLY the code
-    validate_calibration draws its own through. That is what gives the repeat-SBC run the four things
-    scripts/sbc_characterize.py never had: check_basis, the t_scale-override mirror in the reference
-    sample, the kept-fraction line and the LoadedPrior path. A second copy of the wrap is precisely how
-    a repeat-SBC run comes to draw theta* from the FULL prior while the flow was trained on the region
-    -- guardrail 8, silently inverted.
+    """sbc_repeats draws its per-repeat calibration set through EXACTLY the code validate_calibration
+    draws its own through. That is what gives the repeat-SBC run the four things the retired
+    repeat-SBC script never had: check_basis, the t_scale-override mirror in the reference sample,
+    the kept-fraction line and the LoadedPrior path. A second copy of the wrap is precisely how a
+    repeat-SBC run comes to draw theta* from the FULL prior while the flow was trained on the region
+    -- the calibrate-on-the-region rule, silently inverted.
 
     So the draw is three named helpers, and the one thing sbc_repeats varies -- chi_k_fixed, which
     runs one probe-count stratum at a time -- is a keyword on the middle one. validate_calibration
@@ -413,7 +414,7 @@ def test_sbc_refuses_before_the_spend(tiny_run, monkeypatch):
     drawn, calibrated = [], []
     monkeypatch.setattr(orchestrator.analysis, "gen_cal_data", lambda **k: drawn.append(1))
     monkeypatch.setattr(orchestrator, "_calibration_prior", lambda *a, **k: calibrated.append(1))
-    # V3: each is a Refusal carrying the knob's field key, and the message names no flag -- the tool
+    # Each is a Refusal carrying the knob's field key, and the message names no flag -- the tool
     # appends `(--repeats)` and friends from its own table.
     with pytest.raises(Refusal, match="at least 1") as e:
         sbc_repeats(r.cfg, r.posterior, r.prior, repeats=0, n_cal=8, fig_sink=r.sink)
@@ -514,8 +515,8 @@ def test_sbc_prints_small_p_values_as_numbers_and_bins_ranks_at_least_ten_wide(t
     caplog.clear()
     sbc_repeats(r.cfg, r.posterior, r.prior, repeats=10, n_cal=N, num_posterior_samples=nps,
                 fig_sink=lambda title, fig: plt.close(fig))
-    # The report table is records at INFO from the sbc module, one per line as the prints were
-    # (piece 3, V4); the blank line the header's print opened with went with the print.
+    # The report table is records at INFO from the sbc module, one per line as the prints were; the
+    # blank line the header's print opened with went with the print.
     sbc_lines = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.diagnostics.sbc"]
     assert ("INFO", "=== KS p-value distribution over repeats (sorted by median; low = miscalibrated) ===") \
         in sbc_lines, sbc_lines
@@ -548,10 +549,11 @@ def test_identifiability_rotation_decomposes_a_stored_basis(store):
     names = list(cfg.params_dict) + list(cfg.rescale_params)
     # A permutation basis: direction j is exactly parameter order[j], so every share is 0 or 1 and the
     # arithmetic below is checkable by hand. order[-1] is the WORST direction and its parameter is flat.
-    # I1: a CYCLIC SHIFT, not the identity -- V(order=range(P)) is the identity matrix, which is
-    # SYMMETRIC, so reading it transposed (the D6 defect: rows instead of columns) is indistinguishable
-    # from reading it correctly and every assertion below would still pass. A cyclic shift of P>2
-    # elements is not an involution, so its permutation matrix is genuinely non-symmetric.
+    # A CYCLIC SHIFT, not the identity -- V(order=range(P)) is the identity matrix, which is
+    # SYMMETRIC, so reading it transposed (a rotation saved transposed: rows instead of columns) is
+    # indistinguishable from reading it correctly and every assertion below would still pass. A
+    # cyclic shift of P>2 elements is not an involution, so its permutation matrix is genuinely
+    # non-symmetric.
     order = [(i + 1) % P for i in range(P)]
     V = torch.zeros(P, P, dtype=torch.float64)
     for j, i in enumerate(order):
@@ -590,7 +592,7 @@ def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_abse
     assert d.results["eigenvalues"] is None and len(d.results["directions"]) == P
     assert d.results["directions"][0]["eigenvalue"] is None
     # A WARNING, said once: the six explanatory lines travel in one record, so the pane's triangle and
-    # the tool's "warning: " prefix mark the block once and log.txt stamps it once (piece 3, V4).
+    # the tool's "warning: " prefix mark the block once and log.txt stamps it once.
     warned = [r.getMessage() for r in caplog.records
               if r.name == "core.diagnostics.identifiability" and r.levelname == "WARNING"]
     assert len(warned) == 1 and warned[0].startswith("[eigenvalues] NOT STORED for this artifact.\n"), warned
@@ -603,8 +605,8 @@ def test_identifiability_rotation_reports_absent_eigenvalues_and_refuses_an_abse
 
 
 def test_identifiability_rotation_refuses_n_worst_over_p(store):
-    """M8: ``W[i, P-n_worst:]`` is a NEGATIVE slice once ``n_worst > P`` -- Python reads it from the
-    end instead of raising, so ``bottom_share`` would silently sum fewer than n_worst directions.
+    """``W[i, P-n_worst:]`` is a NEGATIVE slice once ``n_worst > P`` -- Python reads it from the end
+    instead of raising, so ``bottom_share`` would silently sum fewer than n_worst directions.
     Refused before store.create, so no directory is written."""
     import pytest
     import torch
@@ -620,9 +622,9 @@ def test_identifiability_rotation_refuses_n_worst_over_p(store):
 
 
 def test_identifiability_rotation_writes_a_non_finite_eigenvalue_as_none(store):
-    """N1b / S1 (spec 4.1): a non-finite eigenvalue reaching identifiability_rotation's results must
-    become None, not raise at the manifest write (allow_nan=False) -- or worse, silently succeed with
-    a NaN embedded in a JSON field no downstream reader expects.
+    """A non-finite eigenvalue reaching identifiability_rotation's results must become None, not
+    raise at the manifest write (allow_nan=False) -- or worse, silently succeed with a NaN embedded
+    in a JSON field no downstream reader expects.
 
     A REAL posterior artifact cannot carry a NaN eigenvalue in the first place: store.create's own
     manifest validator refuses it outright, well before identifiability_rotation ever runs -- proven
@@ -705,7 +707,7 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
         n_feat = identifiability.feature_sets.n_features(cfg_)
         g = torch.zeros(int(m), 8, dtype=torch.float64)
         row = np.arange(n_feat, dtype=float) + float(nd.sum())
-        # M12: an alternating +-0.01 "wobble" over the ensemble AXIS (same for every feature column),
+        # An alternating +-0.01 "wobble" over the ensemble AXIS (same for every feature column),
         # not the exactly-constant-row fake this replaces. An EXACTLY constant ensemble makes fnoise
         # clamp to the 1e-9 floor, which -- after dividing a raw gradient of ~1 by it -- puts every ND
         # column of J at ~1e9-1e12 in magnitude; J^T@J then lands at ~1e21-1e24, where adding
@@ -721,7 +723,7 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
         return feats, g + 1.0, g + 1.0
 
     monkeypatch.setattr(identifiability, "_laplace_raw", _fake_raw)
-    t_obs_before = cfg.T_obs                          # I3: captured BEFORE the call, not guessed after
+    t_obs_before = cfg.T_obs                          # captured BEFORE the call, not guessed after
     d = identifiability_laplace(cfg, lp, n_points=2, m=4, m_noise=16, t_obs_s=2.0, seed=3,
                                 name="lap1")
     res = d.results
@@ -736,17 +738,17 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
     assert set(d.manifest.payloads) == {"laplace_sd.npz"}
     z = np.load(d.path / "laplace_sd.npz")
     assert z["SD"].shape == (2, len(names)) and z["points"].shape[0] == 2
-    # I3: EQUALS its pre-call value, not merely "not 2.0" -- 2.0 is SECONDS while the script's own
+    # EQUALS its pre-call value, not merely "not 2.0" -- 2.0 is SECONDS while the script's own
     # (never-ported) write was `cfg.T_obs = t_obs_s * hz` in CELL units, which is essentially never
     # exactly 2.0, so the old check would not have noticed that write happening at all.
     assert cfg.T_obs == t_obs_before, "the diagnostic must never write cfg.T_obs"
     assert {m for m, _, _ in calls} == {4, 16} and {n for _, _, n in calls} == {int(2.0 * cfg.get_unit_conversion_factor("s") / cfg.dt_exp)}
-    # F15: the noise-floor ensemble draws INDEPENDENT noise (crn False); the +-d arms share common
+    # The noise-floor ensemble draws INDEPENDENT noise (crn False); the +-d arms share common
     # random numbers (crn True), or the finite difference is noise over 2d
     assert {c for mm, c, _ in calls if mm == 16} == {False}, calls
     assert {c for mm, c, _ in calls if mm == 4} == {True}, calls
 
-    # M12: this fake makes the numbers a closed form, derived here and pinned so a units/arithmetic
+    # This fake makes the numbers a closed form, derived here and pinned so a units/arithmetic
     # slip in _analyze_point's covariance inversion fails LOUDLY rather than merely changing a number.
     # The fake's feats depend on nd.sum() (`arange(n_feat) + nd.sum() + wobble`), never on res/force:
     #  - perturbing a RESCALE parameter leaves the fake's MEAN output totally unchanged (the wobble is
@@ -783,7 +785,7 @@ def test_identifiability_laplace_reports_sd_per_point_with_its_unit(store, monke
 def test_the_laplace_guards_refuse_before_anything_is_created(store, monkeypatch):
     """A chi posterior conditions on a different feature set entirely, so the single-frequency
     41-feature arithmetic would produce a confident, meaningless 'identified / not identified'.
-    M11: THREE guards fire before store.create, so no directory is written -- chi (a chi posterior
+    THREE guards fire before store.create, so no directory is written -- chi (a chi posterior
     conditions on a different feature set), forced (a spontaneous cell has no drive to read), and
     n_points (there must be at least the ground truth)."""
     import pytest
@@ -826,10 +828,10 @@ def test_the_laplace_guards_refuse_before_anything_is_created(store, monkeypatch
 
 
 def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(store, monkeypatch):
-    """M9/R3: a t_obs_s that computes a non-positive OR sub-one n_obs (zero, negative, or a tiny
-    positive value that still floors to 0 samples), or a non-finite t_obs_s (NaN would otherwise
-    crash at int(nan) rather than refuse), and an m_noise below 10 (which cannot estimate a
-    feature-noise floor at all) -- all fire before store.create, for both simulating diagnostics."""
+    """A t_obs_s that computes a non-positive OR sub-one n_obs (zero, negative, or a tiny positive
+    value that still floors to 0 samples), or a non-finite t_obs_s (NaN would otherwise crash at
+    int(nan) rather than refuse), and an m_noise below 10 (which cannot estimate a feature-noise floor
+    at all) -- all fire before store.create, for both simulating diagnostics."""
     import pytest
     import torch
     from core.diagnostics import identifiability, identifiability_jacobian, identifiability_laplace
@@ -845,7 +847,7 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
 
     def _refused(field, fn, *a, **kw) -> str:
         """The call raises a Refusal carrying `field`, and its message names no flag: the tool
-        appends `(--t-obs)` and friends itself, from its own table (V3)."""
+        appends `(--t-obs)` and friends itself, from its own table."""
         with pytest.raises(Refusal) as e:
             fn(*a, **kw)
         assert e.value.field == field, (field, str(e.value))
@@ -854,7 +856,7 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
 
     assert "greater than 0" in _refused("t_obs", identifiability_laplace, cfg, lp, t_obs_s=0.0,
                                         name="lap_bad_t")
-    # R3: a TINY positive value must also refuse -- n_obs floors to 0 samples, not a valid
+    # A TINY positive value must also refuse -- n_obs floors to 0 samples, not a valid
     # recording, and the old `t_obs_s <= 0` guard let it straight through.
     assert "at least one sample" in _refused("t_obs", identifiability_laplace, cfg, lp,
                                              t_obs_s=1e-12, name="lap_tiny_t")
@@ -869,7 +871,7 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
     for nm in ("lap_bad_t", "lap_tiny_t", "lap_bad_m", "jac_bad_t", "jac_tiny_t", "jac_bad_m"):
         assert [s for s in store.list("diagnostic") if s.name == nm] == []
 
-    # F10: the arm ensemble, the relative step and the validity floor. --m 0 used to run the whole
+    # The arm ensemble, the relative step and the validity floor. --m 0 used to run the whole
     # noise ensemble and then every arm at batch 0; --rel 0 on a zero-valued truth divided by zero and
     # reached lstsq after the spend; --min-valid outside (0, 1] silently accepted or refused every arm.
     bad = [("m", {"m": 0}), ("rel", {"rel": 0.0}), ("rel", {"rel": float("nan")}),
@@ -880,7 +882,8 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
         for nm in (f"lap_bad_{knob}", f"jac_bad_{knob}"):
             assert [s for s in store.list("diagnostic") if s.name == nm] == []
 
-    # rotation used to CLAMP n_worst / top_n to 1: a --n-worst 0 quietly became 1 (the D6 trap)
+    # rotation used to CLAMP n_worst / top_n to 1: a --n-worst 0 quietly became 1, where a setting
+    # must be refused, never silently clamped
     from core.diagnostics import identifiability_rotation
     rot = store.load_posterior(cfg, _rotation_posterior(store, cfg, V=torch.eye(P, dtype=torch.float64),
                                                         evals=None).id)
@@ -892,7 +895,7 @@ def test_laplace_and_jacobian_refuse_bad_probe_settings_before_any_simulation(st
 
 
 def test_laplace_raw_does_not_leak_its_crn_seed(monkeypatch):
-    """M5: ``_laplace_raw``'s CRN reseeds (``_SF``/``_SS``) must not escape the call, exactly as
+    """``_laplace_raw``'s CRN reseeds (``_SF``/``_SS``) must not escape the call, exactly as
     ``_jacobian_features`` already guards with ``fork_rng`` -- otherwise every subsequent measurement
     (including the noise floor at points 2..K, which is NOT itself reseeded) is pinned downstream of
     the CRN constants and silently stops depending on ``--seed`` at all.
@@ -915,7 +918,7 @@ def test_laplace_raw_does_not_leak_its_crn_seed(monkeypatch):
     nd = cfg.params_tensor[0].clone()
     res = torch.tensor([v for v, _ in cfg.rescale_params.values()], dtype=cfg.hw.dtype)
     force = torch.tensor([v for v, _ in cfg.force_params_dict.values()], dtype=cfg.hw.dtype)
-    # R4: torch.manual_seed is process-global and NEVER restores on its own -- fork_rng here is not
+    # torch.manual_seed is process-global and NEVER restores on its own -- fork_rng here is not
     # the thing under test (that is _laplace_raw's OWN fork_rng), it is this TEST keeping its own
     # seeding from leaking into whichever test runs next.
     with torch.random.fork_rng():
@@ -927,7 +930,7 @@ def test_laplace_raw_does_not_leak_its_crn_seed(monkeypatch):
 
 
 def test_laplace_points_draw_independent_noise_but_the_whole_run_reproduces(monkeypatch):
-    """R1 (a regression introduced by the M5 fix above): fork_rng must wrap ONLY the CRN-seeded
+    """A regression the seed-leak fix above once introduced: fork_rng must wrap ONLY the CRN-seeded
     (``crn=True``) arms, not the ``crn=False`` noise-floor ensemble too. An earlier version wrapped
     the whole function unconditionally, so fork_rng ALSO captured-and-discarded whatever the
     crn=False branch drew -- every Laplace POINT's m_noise ensemble then replayed the exact same
@@ -965,7 +968,7 @@ def test_laplace_points_draw_independent_noise_but_the_whole_run_reproduces(monk
     f1a, f2a = _two_points()
     assert not np.allclose(f1a, f2a), \
         "two crn=False calls in the same run must draw DIFFERENT noise -- fork_rng is discarding " \
-        "the stream's progression between them, exactly the R1 regression"
+        "the stream's progression between them, exactly what the seed-leak fix once broke"
     f1b, f2b = _two_points()
     assert np.allclose(f1a, f1b) and np.allclose(f2a, f2b), \
         "the same seed must reproduce BOTH points' noise exactly"
@@ -985,8 +988,8 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     n_feat = identifiability.feature_sets.n_features(cfg)
     n_theta = len(names)
     rng = np.random.default_rng(0)
-    # I2: a per-(feature, parameter) weight matrix, deterministic and with NO shared structure across
-    # parameters -- unlike the R-J fake this replaces, whose response depended ONLY on theta.sum(),
+    # A per-(feature, parameter) weight matrix, deterministic and with NO shared structure across
+    # parameters -- unlike the fake this replaces, whose response depended ONLY on theta.sum(),
     # making every raw gradient the SAME constant vector (=2d/2d) for EVERY parameter and every pair
     # "degenerate" (|cos|==1) by construction: a rank-1 Jacobian the assertions below could not tell
     # apart from a real, non-degenerate one.
@@ -999,12 +1002,12 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
         theta = np.concatenate([pvec.detach().cpu().numpy(), rescale_vec.detach().cpu().numpy()])
         idx = np.arange(n_feat)
         base = (idx + 1).astype(float)
-        # R-J: relative noise (proportional to each channel's own scale), not a fixed absolute
+        # Relative noise (proportional to each channel's own scale), not a fixed absolute
         # magnitude -- see the module's own comment on the same choice in _dead_channels' docstring.
         lean = 0.001 * (W @ theta)
         response = base * (1.0 + lean)
         feats = response[None, :] * (1.0 + rng.normal(0.0, 1e-3, size=(int(m), n_feat)))
-        # I2: ONE genuinely dead channel -- ~5.0 plus INDEPENDENT (theta-blind) noise 5 orders of
+        # ONE genuinely dead channel -- ~5.0 plus INDEPENDENT (theta-blind) noise 5 orders of
         # magnitude quieter than its own scale, well under noise_eps*fscale. Its noise is NOT exactly
         # zero (unlike simply hardcoding a constant): a literal constant would already give an
         # all-zero raw gradient on its own (0 divided by anything is 0), so deleting the dead-channel
@@ -1019,7 +1022,7 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     monkeypatch.setattr(identifiability, "_jacobian_features", _fake_feats)
     d = identifiability_jacobian(cfg, m=4, m_noise=16, t_obs_s=2.0, seed=1, name="jac1")
     res = d.results
-    # F15: the m_noise ensemble without common random numbers, every +-d arm with them
+    # the m_noise ensemble without common random numbers, every +-d arm with them
     assert {c for mm, c in crns if mm == 16} == {False}, crns
     assert {c for mm, c in crns if mm == 4} == {True}, crns
     assert d.variant == "jacobian" and d.manifest.parents == {}
@@ -1030,7 +1033,7 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     assert res["unmeasurable"] == [] and res["condition_number"] > 0
     assert all(a in names and b in names for a, b, _ in
                [(p["a"], p["b"], p["cos"]) for p in res["degenerate_pairs"]])
-    # I2: a rank-1 J (the old fake) makes EVERY pair degenerate -- this full-rank response must not.
+    # A rank-1 J (the old fake) makes EVERY pair degenerate -- this full-rank response must not.
     assert 0 <= len(res["degenerate_pairs"]) < math.comb(n_theta, 2)
     assert set(d.manifest.payloads) == {"degeneracy_map.npz"}
     assert sorted(d.manifest.figures) == ["figures/jacobian_cosine_matrix.png",
@@ -1042,7 +1045,7 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
     assert d.manifest.inputs["cell"]["path"].endswith("master_weak.txt")
     assert d.manifest.inputs["bounds"]["sha256"]
 
-    # S1: the restored npz arrays -- shapes only (the numbers are the fake's, not a fixed science
+    # The restored npz arrays -- shapes only (the numbers are the fake's, not a fixed science
     # result): S/C describe the SVD/cosine structure over the measurable and stiff subsets, the pairs
     # are parallel arrays (no pickle needed to load them), and the top-features table is (P, k).
     n_meas = int(z["measurable_mask"].sum())
@@ -1058,16 +1061,16 @@ def test_identifiability_jacobian_maps_degeneracy_over_the_mode_s_own_features(s
 
 
 def test_identifiability_jacobian_is_chi_aware(store, monkeypatch):
-    """I2: the map's row count and payload must track the MODE's own feature set -- 30 spontaneous +
-    3K chi under chi, not the 41-feature forced set -- so hard-coding the forced width anywhere in
-    this path would be caught here."""
+    """The map's row count and payload must track the MODE's own feature set -- 30 spontaneous + 3K
+    chi under chi, not the 41-feature forced set -- so hard-coding the forced width anywhere in this
+    path would be caught here."""
     import numpy as np
     from core import cli, config, registry
     from core.config import VALID_LABELS, VALID_MODELS
     from core.diagnostics import identifiability, identifiability_jacobian
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
     cell = str(config.CELL_PATH / "nadrowski" / "master_weak.txt")
-    # I2: the smallest HONEST setup -- chi mode ignores the cell's own drive entirely (assert_forced
+    # The smallest HONEST setup -- chi mode ignores the cell's own drive entirely (assert_forced
     # is skipped for chi in identifiability_jacobian), but cfg.ground_truth still needs a loaded cell
     # for the pre-spend refusal to pass, so this reuses the SAME forced cell/bounds pairing every
     # other test here uses rather than inventing a new bounds/cell file just for this one assertion.
@@ -1147,10 +1150,10 @@ def test_the_probe_budget_refuses_a_miswired_cos_sin_pair():
 
 
 def test_the_probe_budget_accepts_a_correctly_wired_pair():
-    """M10: the miswired test above sets every other slot to ZERO, so a channel-OFFSET regression
-    (reading cos/sin from the wrong pair of columns) could still coincidentally break cos^2+sin^2==1
-    and pass for the wrong reason. A genuinely correct (0.6, 0.8) pair (0.36+0.64==1) must NOT raise,
-    which a wrong-offset read (landing on a zeroed slot) generally would."""
+    """The miswired test above sets every other slot to ZERO, so a channel-OFFSET regression (reading
+    cos/sin from the wrong pair of columns) could still coincidentally break cos^2+sin^2==1 and pass
+    for the wrong reason. A genuinely correct (0.6, 0.8) pair (0.36+0.64==1) must NOT raise, which a
+    wrong-offset read (landing on a zeroed slot) generally would."""
     import numpy as np
     import torch
     from core.diagnostics import identifiability
@@ -1235,7 +1238,7 @@ def test_ablation_sweeps_the_summary_columns_through_the_whole_conditioning_path
             seen.append(x.detach().clone())
             return self.inner(x)
 
-    # I2: the net's own weight init AND the data draw are BOTH seeded inside one fork_rng, so
+    # The net's own weight init AND the data draw are BOTH seeded inside one fork_rng, so
     # healthy_max no longer depends on what ran before this test in the same process -- fork_rng
     # restores the caller's RNG on the way out, exactly as core.diagnostics.rng.seeded does.
     with torch.random.fork_rng():
@@ -1248,26 +1251,26 @@ def test_ablation_sweeps_the_summary_columns_through_the_whole_conditioning_path
     assert len(rows) == n_sum and [r[1] for r in rows] == labels
     base = seen[0]
     assert base.shape == (1, n_sum + fdim)
-    # M5: the base point must be a REAL row of data (the docstring's whole point), not a column-wise
+    # The base point must be a REAL row of data (the docstring's whole point), not a column-wise
     # median vector -- which, for i.i.d. Gaussian data, essentially never matches any actual row.
     assert any(torch.equal(base[0], data[i]) for i in range(data.shape[0])), \
         "the base point must be a real row of data, not a synthesized median vector"
     for j, call in enumerate(seen[1:]):
         assert torch.equal(call[:, n_sum:], base[:, n_sum:].expand(call.shape[0], -1)), \
             "the forcing block moved during a summary sweep"
-        # M5: EXACTLY the j-th column, not merely "at most one" -- the data is random normal, so a
+        # EXACTLY the j-th column, not merely "at most one" -- the data is random normal, so a
         # column/label mix-up (sweeping column k while labelling and counting it as column j) would
         # still pass a "<= 1" check but fails this one.
         varying = [k for k in range(n_sum) if call[:, k].min() != call[:, k].max()]
         assert varying == [j], "the swept column did not match the sweep's own column index"
     healthy_max = max(r[0] for r in rows)
-    # I2: guards against a near-dead random init shrinking the bound (below) into the noise floor --
+    # Guards against a near-dead random init shrinking the bound (below) into the noise floor --
     # a healthy sweep on an untrained net is still order 1 here, not order 1e-6.
     assert healthy_max > 1e-2, "an unstandardized sweep must move the embedding by more than noise"
 
     zeroing = torch.nn.Sequential(_Zero(), net)
     rows0 = ablation._sweep_channels(zeroing, data, n_sum, 5, labels)[1:]
-    # N3: R-K(3) as given (== 0.0 -> <= 1e-6) still under-tolerates. Since I2 the net's init is SEEDED
+    # An absolute bound (== 0.0, or even <= 1e-6) still under-tolerates. The net's init is SEEDED
     # (built inside the same fork_rng as the data draw above), so this is not init noise: _Zero maps
     # every input to the identical zero tensor, but _sweep_channels calls emb() once on a 1-ROW batch
     # (e0 = emb(base)) and once on a 5-ROW batch (emb(v), n_sweep=5) -- the same logical computation,
@@ -1305,7 +1308,7 @@ def test_ablation_reads_the_cache_its_posterior_names(tiny_run, monkeypatch):
     real = ablation._sweep_channels
 
     def _recording_sweep(emb, *a, **k):
-        # R-K(2): a NAMED function, not a lambda short-circuiting on `used.setdefault(...) or real(...)`
+        # A NAMED function, not a lambda short-circuiting on `used.setdefault(...) or real(...)`
         # -- setdefault returns the stored value, and `emb` (an nn.Module) is truthy, so `or` would
         # never call `real` at all.
         used["emb"] = emb
@@ -1323,14 +1326,14 @@ def test_ablation_reads_the_cache_its_posterior_names(tiny_run, monkeypatch):
     assert len(res["channels"]) == SUMMARY_WIDTH + 1
     assert set(res["channels"][0]) == {"label", "max_disp", "rel_median", "p1", "p99", "verdict"}
     assert res["counts"]["total"] == SUMMARY_WIDTH + 1
-    # N2: the invariant must cover ALL FOUR counted categories, "nonfinite" (S1) included -- a real
+    # The invariant must cover ALL FOUR counted categories, "nonfinite" included -- a real
     # SBITEST net never diverges here, so this stays a no-op today (nonfinite == 0), but the sum would
     # silently undercount total the day it legitimately is not.
     assert (res["counts"]["constant"] + res["counts"]["invisible"] + res["counts"]["usable"]
             + res["counts"]["nonfinite"] == res["counts"]["total"])
     assert res["accepted"] == [] and d.manifest.payloads == {} and d.manifest.figures == []
     assert d.manifest.config["rows"] == 12 and d.manifest.config["n_sweep"] == 5
-    # M4: matched on the DIAGNOSTIC's own name/id, not merely the generic "name it as a parent" text --
+    # Matched on the DIAGNOSTIC's own name/id, not merely the generic "name it as a parent" text --
     # post itself also names the simulation cache as a parent, so a generic match would pass even if
     # the diagnostic's OWN parent link were silently dropped. dependents() lists each blocker as
     # "{kind} {name or '(unnamed)'} [{id}]" (store.py); re.escape because the id may contain regex
@@ -1341,11 +1344,11 @@ def test_ablation_reads_the_cache_its_posterior_names(tiny_run, monkeypatch):
 
 
 def test_channel_ablation_refuses_bad_rows_and_n_sweep_before_the_row_read(store):
-    """I1: rows < 1 and n_sweep < 2 are refused before ANYTHING about the posterior or its cache is
-    even touched. Before this guard, a negative --rows silently sliced ``x[:-5]``, --n-sweep 1 wrote
+    """rows < 1 and n_sweep < 2 are refused before ANYTHING about the posterior or its cache is even
+    touched. Before this guard, a negative --rows silently sliced ``x[:-5]``, --n-sweep 1 wrote
     a table measured at p1 only (no range at all), and 0 for either crashed deep inside
     ``training_checkpoint.load_rows``/``store.create`` well after the read. Each is a Refusal
-    carrying the knob's field key and naming no flag (V3). ``object()`` stands in for the posterior:
+    carrying the knob's field key and naming no flag. ``object()`` stands in for the posterior:
     if either guard did not fire FIRST, this would blow up on ``posterior.name`` with an
     AttributeError, not the Refusal under test -- so the test is self-checking on ordering too."""
     from core.diagnostics import channel_ablation
@@ -1363,8 +1366,8 @@ def test_channel_ablation_refuses_bad_rows_and_n_sweep_before_the_row_read(store
 
 
 def test_load_rows_max_rows_still_checks_completeness_if_the_cap_is_never_reached(tmp_path):
-    """M3: max_rows only waives the batches_done completeness check when the CAP actually stopped the
-    walk early -- a partial read is the point THEN. If the cache holds fewer committed batches than
+    """max_rows only waives the batches_done completeness check when the CAP actually stopped the walk
+    early -- a partial read is the point THEN. If the cache holds fewer committed batches than
     batches_done claims, asking for far more rows than the (incomplete) cache actually holds must still
     refuse: the cap can never fire, so silently returning whatever partial data exists on disk would
     hide the very corruption the completeness check exists to catch."""
@@ -1381,8 +1384,8 @@ def test_load_rows_max_rows_still_checks_completeness_if_the_cap_is_never_reache
 
 
 def test_load_rows_max_rows_stops_before_a_later_corrupt_shard(tmp_path):
-    """M6: the cap stops the walk AT the shard that reaches the count -- a corrupted LATER shard must
-    never even be opened. Also covers x_only=False together with max_rows, which no earlier test did."""
+    """The cap stops the walk AT the shard that reaches the count -- a corrupted LATER shard must never
+    even be opened. Also covers x_only=False together with max_rows, which no earlier test did."""
     import pytest
     import torch
     from core.SBI import training_checkpoint as tc
@@ -1409,8 +1412,8 @@ def test_load_rows_max_rows_stops_before_a_later_corrupt_shard(tmp_path):
 class _FakeDPWithEst(DirectPosterior):
     """A DirectPosterior by type only (the loader's isinstance check accepts it), carrying a tiny REAL
     ``EmbeddedNet`` as its ``posterior_estimator`` so ``ablation._find_net`` has something to find --
-    module-level so it pickles. M7: this is what makes the two width refusals cheap to pin without a
-    real training run."""
+    module-level so it pickles. This is what makes the two width refusals cheap to pin without a real
+    training run."""
     def __init__(self, net):
         self.posterior_estimator = net
 
@@ -1418,7 +1421,7 @@ class _FakeDPWithEst(DirectPosterior):
 class _EstWithEmbedding(torch.nn.Module):
     """``posterior_estimator`` with its net BEHIND a real ``.embedding_net`` attribute -- module-level
     so it pickles (a local class inside a function is not picklable at all: ``torch.save`` fails with
-    ``Can't get local object``). N1a: this is what lets ``channel_ablation``'s own
+    ``Can't get local object``). This is what lets ``channel_ablation``'s own
     ``emb = est.embedding_net`` resolve when the caller goes on to monkeypatch ``_sweep_channels``."""
     def __init__(self, inner):
         super().__init__()
@@ -1427,7 +1430,7 @@ class _EstWithEmbedding(torch.nn.Module):
 
 def _ablation_posterior_with_cache(store, cfg, *, name, net_input_dim, sim_cols,
                                    batches_done=1, run_size=3, wrap_embedding=False):
-    """A posterior naming a real (tiny) simulation cache on disk, without a real training run (M7).
+    """A posterior naming a real (tiny) simulation cache on disk, without a real training run.
     ``net_input_dim`` controls the trained net's OWN ``input_dim`` (independent of the cache); ``sim_cols``
     controls the cache's OWN row width (independent of the net) -- so the two guards in
     ``channel_ablation`` (the net's summary width against ``SUMMARY_WIDTH + 1``, and the cache's row
@@ -1435,7 +1438,7 @@ def _ablation_posterior_with_cache(store, cfg, *, name, net_input_dim, sim_cols,
     fire before ``est.embedding_net`` (the whole conditioning path) is ever touched, so a bare,
     forcing_dim=0 EmbeddedNet is enough -- the sweep path itself is never exercised by this stub.
 
-    ``wrap_embedding=True`` (N1a) instead puts the net BEHIND a ``.embedding_net`` attribute, so
+    ``wrap_embedding=True`` instead puts the net BEHIND a ``.embedding_net`` attribute, so
     ``channel_ablation``'s own ``emb = est.embedding_net`` resolves and the sweep call is actually
     reached -- needed only when the caller goes on to monkeypatch ``_sweep_channels`` itself, since a
     real forcing_dim=0 net makes ``reparam.posterior_mode``'s tier-2 detection read "spontaneous",
@@ -1474,8 +1477,8 @@ def _ablation_posterior_with_cache(store, cfg, *, name, net_input_dim, sim_cols,
 
 
 def test_channel_ablation_refuses_a_mismatched_summary_width(store):
-    """M7: pins the guard at ablation.py's ``n_sum != SUMMARY_WIDTH + 1`` -- a stub posterior/cache
-    pair, no real training run, since the guard fires before the sweep path is ever built."""
+    """Pins the guard at ablation.py's ``n_sum != SUMMARY_WIDTH + 1`` -- a stub posterior/cache pair,
+    no real training run, since the guard fires before the sweep path is ever built."""
     import pytest
     from core.diagnostics import channel_ablation
     from core.SBI.statistics import SUMMARY_WIDTH
@@ -1489,7 +1492,7 @@ def test_channel_ablation_refuses_a_mismatched_summary_width(store):
 
 
 def test_channel_ablation_refuses_a_cache_whose_width_disagrees_with_the_posterior(store):
-    """M7: pins the OTHER width guard -- the cache's own row width against
+    """Pins the OTHER width guard -- the cache's own row width against
     ``posterior.manifest.body['conditioning']['width']`` -- again via a stub, no training run.
 
     The chi branch (``blk[:, -1]``, not ``blk[:, 0]``) is NOT pinned here: reaching it needs a full,
@@ -1499,7 +1502,7 @@ def test_channel_ablation_refuses_a_cache_whose_width_disagrees_with_the_posteri
     StoreError before ``channel_ablation`` is ever reached. Building that (a correctly-shaped chi
     ``EmbeddedNet`` wrapped so ``.embedding_net`` resolves, PLUS fabricated probe rows in the real chi
     column layout) is materially more scaffolding than the two width guards, which fail before any of
-    it is touched -- so per M7's own escape clause, this is skipped rather than forced.
+    it is touched -- so this is skipped rather than forced.
     """
     import pytest
     from core import orchestrator
@@ -1516,7 +1519,7 @@ def test_channel_ablation_refuses_a_cache_whose_width_disagrees_with_the_posteri
 
 
 def test_channel_ablation_writes_a_non_finite_displacement_as_an_explicit_verdict(store, monkeypatch):
-    """N1a / S1 (spec 4.1): a channel whose sweep drove the network to NaN/Inf gets its OWN verdict --
+    """A channel whose sweep drove the network to NaN/Inf gets its OWN verdict --
     every numeric comparison against NaN is False, so before the fix it fell all the way through to
     "healthy" instead -- and the float fields that DERIVE from that NaN must be None in the manifest,
     because the writer refuses a non-finite float outright (``allow_nan=False``) and would otherwise
@@ -1526,8 +1529,8 @@ def test_channel_ablation_writes_a_non_finite_displacement_as_an_explicit_verdic
     the rest finite fillers): the point is not to reproduce a real divergence, but to drive the REAL,
     unmonkeypatched code that runs AFTER it returns -- the verdict loop, the counts, the results dict
     and the manifest write -- with the least scaffolding. That still needs ``est.embedding_net`` to
-    resolve (``channel_ablation`` builds it before calling ``_sweep_channels``), so this reuses M7's
-    stub-posterior helper with ``wrap_embedding=True`` rather than a real training run.
+    resolve (``channel_ablation`` builds it before calling ``_sweep_channels``), so this reuses the
+    width tests' stub-posterior helper with ``wrap_embedding=True`` rather than a real training run.
     """
     import math
     from core import cli, config, registry
@@ -1570,16 +1573,16 @@ def test_channel_ablation_writes_a_non_finite_displacement_as_an_explicit_verdic
 
 
 def test_the_diagnostic_warnings_are_records_and_the_reports_are_information(caplog, capsys):
-    """V4 in the diagnostics and the plot helpers. A diagnostic's report -- its tables, banners and
-    per-point progress -- is information; what the operator must act on is a warning: feature channels
-    whose Jacobian rows were ZEROED as noise, and a loss plot with nothing to draw. Until piece 3 every
-    one of them was print(), so on the command line the dead-channel block sat in stdout between two
-    tables, and in the window it wore no triangle.
+    """Standard logging in the diagnostics and the plot helpers. A diagnostic's report -- its tables,
+    banners and per-point progress -- is information; what the operator must act on is a warning:
+    feature channels whose Jacobian rows were ZEROED as noise, and a loss plot with nothing to draw.
+    Every one of them used to be print(), so on the command line the dead-channel block sat in stdout
+    between two tables, and in the window it wore no triangle.
 
     A warning printed as several lines is ONE record: the header and its per-channel rows travel
     together, so the pane's triangle and the tool's "warning: " prefix mark the block once and log.txt
     puts one timestamp over the rows it explains. Nothing reaches stdout any more -- on the command line
-    the tool's information handler puts the report there (Task 16), not a print."""
+    the tool's information handler puts the report there, not a print."""
     import logging
     from types import SimpleNamespace
 

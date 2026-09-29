@@ -368,11 +368,12 @@ def test_chi_fisher_rotation_builds_over_the_chi_feature_set():
     # The Fisher must use the RAW lock-ins, so its feature width is 3 per probe (log|chi|, cos, sin)
     # -- NOT the 6-channel conditioning block. `u`, `mask` and `logcyc` are all excluded because
     # fnoise is a DENOMINATOR: a channel that barely varies with theta is an amplifier, not a quiet
-    # row. (`logcyc` left on 2026-08-10, C-9/C-10 -- it is an exact duplicate of A3_log_fpeak with the
-    # ceiling clear, and floor() quantization with it binding.)
+    # row. (`logcyc` left the Fisher channels on 2026-08-10 because it duplicates A3_log_fpeak -- an
+    # exact duplicate with the ceiling clear, and floor() quantization of it with the ceiling binding.)
     assert chi_mod.CHI_FISHER_CHANNELS == ("logmag", "cos", "sin")
     for banned in ("u", "mask", "logcyc"):
-        assert banned not in chi_mod.CHI_FISHER_CHANNELS, f"`{banned}` is back (trap CHI10)"
+        assert banned not in chi_mod.CHI_FISHER_CHANNELS, \
+            f"`{banned}` is back: a near-constant channel inflates a standardised Jacobian"
     # The resolution filter MUST be off: it depends on f_peak, hence on theta, so a probe crossing
     # the cycle threshold between the +dz and -dz arms is a mask step of 1 over fnoise's 1e-9 floor.
     assert all(rf is False for _, rf in calls), "the Fisher must disable the resolution filter"
@@ -469,9 +470,10 @@ def test_chi_mode_full_sbi_pipeline(tmp_path):
             p = tmp_path / f"chi_forced_{i}.npy"
             np.save(p, x_dim[0].numpy())
             forced_paths.append(p)
-        # D9: every driven chi recording states its drive frequency. generate_observations recorded the
-        # absolute probe frequencies it measured at in the OBSERVATION's manifest (`chi_obs_freqs`, in
-        # CELL units); since piece 3 (V1) it writes them on its private copy of cfg, never on this one.
+        # Every driven chi recording states its drive frequency, in Hz. generate_observations recorded
+        # the absolute probe frequencies it measured at in the OBSERVATION's manifest (`chi_obs_freqs`,
+        # in CELL units); like every public stage it writes them on its private copy of cfg, never on
+        # this one.
         # observations.py multiplies by freq_si_to_cell to get from Hz to cell units, so divide by it
         # here to undo that and recover Hz.
         measured = obs.manifest.body["chi_obs_freqs"]
@@ -798,9 +800,9 @@ def test_chi_batch_never_outruns_the_nd_time_grid():
 def test_chi_k_fixed_holds_the_probe_count_for_a_stratified_calibration():
     """``chi_k_fixed`` must pin the per-ROW live-probe count, and the default must NOT.
 
-    WHY THIS EXISTS. Section 4.1 step 5 wants SBC stratified by probe count, because a pooled SBC
-    over a mixture of counts can be flat while each count is miscalibrated in compensating
-    directions. There was no lever: ``chi_n_freqs`` was accepted by gen_training_data and never read.
+    WHY THIS EXISTS. SBC has to be stratifiable by probe count, because a pooled SBC over a mixture
+    of counts can be flat while each count is miscalibrated in compensating directions. There was no
+    lever: ``chi_n_freqs`` was accepted by gen_training_data and never read.
 
     TWO ways to get this wrong, both silent:
       * fixing k_b but leaving ``_subset_probe_rows`` on. The drive SET would then have K probes while
@@ -1020,8 +1022,9 @@ def test_solver_failure_raises_instead_of_killing_the_process():
     original preserved as __cause__ so the real traceback survives), while a cooperative cancel must
     still sail straight through. streams.WorkerCancelled derives from BaseException exactly so it
     skips handlers like this one; widening the except would turn every GUI cancel into a spurious
-    simulation failure. See test_gui_progress.test_worker_cancelled_passes_through_except_exception
-    for the generic version of that contract.
+    simulation failure. See
+    tests/test_worker_dispatch.py::test_worker_cancelled_passes_through_except_exception for the
+    generic version of that contract.
     """
     from core.Solvers import sdeint
     from core.Simulator.simulator import SimulationError
@@ -1771,7 +1774,7 @@ def test_overlay_figures_warn_instead_of_vanishing_on_a_width_mismatch():
         "the warning must report the ACTUAL shapes, else it cannot be diagnosed"
 
 
-# ── C-11: reproducibility harness + the resume seam ──────────────────────────────────────────────
+# ── the training checkpoint (the simulation cache): reproducibility harness + the resume seam ────
 _TD_MODES = ("chi", "forced", "spontaneous")
 
 
@@ -1824,12 +1827,13 @@ def _gen_td(mode, *, seed=0, n_runs=3, run_size=4, prior=None, **over):
 
 
 def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override(caplog):
-    """⚠ DEFECT D4 MADE VISIBLE. The rejection sampler accepts a row BEFORE gen_training_data
-    overwrites its t_scale with the batch's value and recomputes the latent target, so its acceptance
-    rate says nothing about the rows the flow trains on. A region that pins the t_scale latent to a
-    sliver around the truth accepts every draw of a fixed prior (100 %) and contains NONE of the
-    recorded targets; a region on an ND direction contains all of them. Both numbers are reported --
-    since piece 3 as an information record on the pipeline's logger, not a stdout print."""
+    """⚠ MADE VISIBLE: a direction loaded on t_scale turns the restriction into a reweighting. The
+    rejection sampler accepts a row BEFORE gen_training_data overwrites its t_scale with the batch's
+    value and recomputes the latent target, so its acceptance rate says nothing about the rows the
+    flow trains on. A region that pins the t_scale latent to a sliver around the truth accepts every
+    draw of a fixed prior (100 %) and contains NONE of the recorded targets; a region on an ND
+    direction contains all of them. Both numbers are reported -- as an information record on the
+    pipeline's logger, not a stdout print."""
     from core.SBI import reparam as _rp, truncate as _tr
 
     cfg = _td_cfg()
@@ -1870,7 +1874,8 @@ def test_the_reported_kept_fraction_is_measured_after_the_t_scale_override(caplo
 
 
 def test_gen_training_data_is_reproducible_from_a_seed_in_every_mode():
-    """THE GATE for any change to gen_training_data's loop, and the reason C-11 could be built at all.
+    """THE GATE for any change to gen_training_data's loop, and the reason the training checkpoint
+    (the simulation cache) could be built at all.
 
     Two runs of identical code, identical seeds, must be bit-identical in all three branches. This is
     the same harness the 2026-08-11 batch-retry refactor was held to; it is what makes "the resume is
@@ -1918,7 +1923,7 @@ def _ck(tmp, **over):
 
 
 def test_a_resumed_training_run_is_bit_identical_to_an_uninterrupted_one():
-    """THE test C-11 exists to pass.
+    """THE test the training checkpoint (the simulation cache) exists to pass.
 
     Three runs at the same seeds: one straight through, one killed partway, and a resume of that
     second one. The resume's output must equal the uninterrupted output BIT FOR BIT -- not merely
@@ -2058,9 +2063,9 @@ def test_a_complete_checkpoint_short_circuits_generation_entirely():
 
 
 def test_checkpointing_off_writes_nothing_and_changes_nothing(store):
-    """checkpoint=None is the whole backward-compatibility story: analysis.gen_cal_data,
-    scripts/chi_mask_audit.py at 7433ced^ and every pre-C-11 call site pass nothing and must be
-    untouched -- same bytes out, and no disk written."""
+    """checkpoint=None is the whole backward-compatibility story: every caller that wants no cache
+    (``analysis.gen_cal_data`` among them) passes nothing and must be untouched -- same bytes out,
+    and no disk written."""
     a_x, a_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
     b_x, b_th = _gen_td("chi", seed=21, n_runs=2, run_size=4)
     assert torch.equal(a_x, b_x) and torch.equal(a_th, b_th)
@@ -2068,7 +2073,7 @@ def test_checkpointing_off_writes_nothing_and_changes_nothing(store):
         "checkpointing was off but the store's simulation directory gained something"
 
 
-# ── C-11: the atomic write and the checkpoint store (pure, no simulation) ────────────────────────
+# ── the training checkpoint (the simulation cache): the atomic write and the store (no simulation) ──
 def _ckpt_ident(**over):
     base = {"model": "NADROWSKI", "run_size": 4, "n_runs": 6, "chi_mode": True, "chi_k_pad": 12,
             "t_scale_bounds": (1.0, 40.0), "nd_dim": 10}
@@ -2187,7 +2192,7 @@ def test_fisher_eigenbasis_can_return_the_eigenvalues_its_columns_are_sorted_by(
     # The near-null direction must be LAST -- every reader of V depends on that ordering.
     assert int(ev.argmin()) == 4
 
-    # and the one-argument form is unchanged, because build_rotated_bijection and the scripts use it
+    # and the one-argument form is unchanged, because decorrelate.build_latent_fisher_rotation uses it
     assert torch.equal(fisher_eigenbasis(F), V)
 
 def test_the_training_budget_routes_to_a_different_checkpoint():
@@ -2222,15 +2227,15 @@ def test_the_training_budget_routes_to_a_different_checkpoint():
 
 
 def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest_is_untouched():
-    """⚠ DEFECT D3, and the constraint that makes fixing it delicate.
+    """⚠ THE REGION BELONGS TO THE SIMULATION CACHE'S IDENTITY, and the constraint that comes with it.
 
     A TSNPE round's rows are drawn from the prior RESTRICTED to a region, so its checkpoint identity
     must differ from the amortized run's at the same budget -- otherwise a round at the parent's
     budget resolves to the parent's directory, resumes its untruncated rows and, if that checkpoint
-    is complete, simulates nothing while printing that it is restricted. But identity_digest
-    serialises the WHOLE dict, so adding a `truncation: None` key would re-digest every existing
-    checkpoint and orphan all five complete ones on disk. Hence: the key is present for a truncated
-    run and OMITTED, never None, for an amortized one, whose identity is byte-identical to before.
+    is complete, simulates nothing while printing that it is restricted. So `truncation` is ALWAYS in
+    the identity: None for an amortized run, the region's fields for a truncated one, and a round at
+    its parent's budget keys a directory of its own. The constraint: identity_digest serialises the
+    WHOLE dict, so the amortized identity must not move, and the golden digest below pins that.
     """
     from core import cli as _cli, registry as _reg
     from core.SBI import training_checkpoint as tc, truncate as _tr
@@ -2250,9 +2255,8 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
     assert ia["truncation"] is None, "an amortized identity records truncation=None"
     # THE GOLDEN DIGEST. Computed once from this cfg/prior pair at the commit that added the region
     # to the identity; if it moves, every complete checkpoint on disk is orphaned. Update it only
-    # deliberately, with a migration for the checkpoints on disk (scripts/migrate_checkpoint_flags.py
-    # at e37df41^ is the precedent). Belongs to training-rows/2 -- the training-rows/1 digest this
-    # superseded was "463e81d156cd".
+    # deliberately, with a migration for the checkpoints on disk. Belongs to training-rows/2 -- the
+    # training-rows/1 digest this superseded was "463e81d156cd".
     assert tc.identity_digest(ia) == "1912d2139359", \
         f"the amortized identity moved to {tc.identity_digest(ia)} -- every checkpoint on disk is orphaned"
     assert set(ia) == {
@@ -2288,28 +2292,29 @@ def test_a_truncated_round_routes_to_its_own_checkpoint_and_the_amortized_digest
 
 
 def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplog):
-    """⚠ GUARDRAIL 7, end to end through build_posterior, with ZERO simulation.
+    """⚠ THE REGION-CARRIES-ITS-BASIS RULE, end to end through build_posterior, with ZERO simulation.
 
     The 2026-09-02 TSNPE round computed a FRESH Fisher rotation and enforced the parent's box in it:
-    0.01% of the parent posterior survived and the ground truth did not (Appendix A 2026-09-09, D1).
-    So a truncated round must (i) never call the Fisher, (ii) train under the region's own V and
-    refuse a region whose probe disagrees with that bijection, (iii) refuse to resume a checkpoint
-    stored under another V, (iv) refuse a config whose rotation flag disagrees with the region,
-    (v) warn -- not refuse -- when the loaded cell's truth lies outside the box, and (vi) refuse a
-    supplied prior other than the parent's, which the region names by fingerprint (2026-09-10).
+    0.01% of the parent posterior survived and the ground truth did not -- a region drawn in one
+    rotation and enforced in another. So a truncated round must (i) never call the Fisher, (ii)
+    train under the region's own V and refuse a region whose probe disagrees with that bijection,
+    (iii) refuse to resume a checkpoint stored under another V, (iv) refuse a config whose rotation
+    flag disagrees with the region, (v) warn -- not refuse -- when the loaded cell's truth lies
+    outside the box, and (vi) refuse a supplied prior other than the parent's, which the region
+    names by fingerprint (2026-09-10).
 
     train_nn is stubbed to capture the plan and return a bare DirectPosterior, so the whole path up to
     the first TRAINING simulation runs for real (the tiny prior build does simulate, for seconds) and
     no training row is ever generated.
 
-    The round's lines are records on core.orchestrator since piece 3 (V4), read off caplog with their
-    level; the GROUND TRUTH judgement is said ONCE, as the warning (spec §4.1), so leg (v) pins the
-    warning and the absence of a record repeating it.
+    The round's lines are records on core.orchestrator, read off caplog with their level; the GROUND
+    TRUTH judgement is said ONCE, as the warning, so leg (v) pins the warning and the absence of a
+    record repeating it.
     """
     from types import SimpleNamespace
     from core.SBI import reparam as _rp, truncate as _tr, training_checkpoint as _tc
-    # Module-level (not defined here) so it pickles: every build_posterior call now auto-persists
-    # (piece 1, Task 7), and pickle cannot serialize a class defined inside a function.
+    # Module-level (not defined here) so it pickles: every build_posterior call now auto-persists,
+    # and pickle cannot serialize a class defined inside a function.
     from tests._fixtures import _FakeDP
 
     def _lp(post, latent=None, fingerprint=None, id_="p"):
@@ -2325,7 +2330,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplo
     seen = {}
 
     def _fisher_stub(*a, **k):
-        raise AssertionError("a truncated round must never compute a fresh Fisher rotation (D1)")
+        raise AssertionError("a truncated round must never compute a fresh Fisher rotation: its region "
+                             "would be enforced in another rotation than the one it was drawn in")
 
     def _train_stub(plan, **kw):
         seen["prior"] = plan.prior
@@ -2390,9 +2396,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplo
         assert isinstance(seen["prior"].base, _rp.RotatedLatentPrior)
         assert torch.allclose(seen["prior"].base.V.cpu(), Q), "the round did not train under the region's V"
         assert bool(region.contains(seen["prior"].sample((256,)).cpu().double()).all())
-        # NOT `is region`: the returned posterior is read back through the store (piece 1, Task 7), so
-        # its region is reconstructed from the manifest, not the same in-memory object -- compare by
-        # value instead.
+        # NOT `is region`: the returned posterior is read back through the store, so its region is
+        # reconstructed from the manifest, not the same in-memory object -- compare by value instead.
         assert post.truncation.dims == region.dims and post.x_obs_digest == "deadbeefdeadbeef"
         assert torch.allclose(post.truncation.lo.double(), region.lo.double())
         assert torch.allclose(post.truncation.hi.double(), region.hi.double())
@@ -2436,9 +2441,9 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplo
         _round(own_prior, observation=None)                # the region's own observation digest fills in
         said = [(r.levelname, r.getMessage()) for r in caplog.records if r.name == "core.orchestrator"]
         assert any(lv == "INFO" and m.endswith("verified against the loaded one.") for lv, m in said), said
-        # x_obs_digest, like `region` above (and `far`/`near` below): since the residual fix a
-        # non-amortized round's region must name the observation it was drawn around, checked before
-        # the prior-fingerprint refusal this leg means to exercise.
+        # x_obs_digest, like `region` above (and `far`/`near` below): a non-amortized round's region
+        # must name the observation it was drawn around, checked before the prior-fingerprint refusal
+        # this leg means to exercise.
         foreign = _tr.TruncationRegion([0], [w0.quantile(0.2)], [w0.quantile(0.8)], n_latent=P, V=Q,
                                        probe=probe, prior_fingerprint="0" * 16,
                                        x_obs_digest="deadbeefdeadbeef")
@@ -2451,8 +2456,9 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplo
         # (ii) a region whose recorded probe does not describe the bijection its own V builds
         flip = torch.ones(P)
         flip[0] = -1.0
-        # x_obs_digest, like `region`/`foreign` above: the residual fix's refusal sits before
-        # check_basis, so this leg needs a digest too to reach the probe mismatch it means to test.
+        # x_obs_digest, like `region`/`foreign` above: the refusal of a region that names no
+        # observation sits before check_basis, so this leg needs a digest too to reach the probe
+        # mismatch it means to test.
         inconsistent = _tr.TruncationRegion([0], [-1.0], [1.0], n_latent=P, V=Q @ torch.diag(flip),
                                             probe=probe, x_obs_digest="deadbeefdeadbeef")
         try:
@@ -2462,10 +2468,10 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplo
             assert "recorded probe does not describe" in str(e), e
 
         # (iii) checkpoints. The amortized parent's checkpoint at this very budget (same V, no region
-        # in its identity -- the D3 silent no-op) is simply NOT this round's directory any more: the
-        # region is part of the identity, so the round routes elsewhere and simulates. A checkpoint
-        # that IS under this round's identity but stores another rotation is refused, and one that
-        # records this region under the region's own V resumes.
+        # in its identity -- once a silent no-op for the round) is simply NOT this round's directory
+        # any more: the region is part of the identity, so the round routes elsewhere and simulates.
+        # A checkpoint that IS under this round's identity but stores another rotation is refused,
+        # and one that records this region under the region's own V resumes.
         import shutil
         amortized = orchestrator.training_identity(cfg, inferred_prior, 8, 2)
         own = orchestrator.training_identity(cfg, inferred_prior, 8, 2, truncation=region)
@@ -2530,9 +2536,9 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplo
             z0 = float(T_train.inv(cfg.ground_truth_tensor.reshape(1, -1))[0, 0])
         lo, hi = ((w0.quantile(0.6), w0.quantile(0.9)) if z0 <= float(w0.median())
                   else (w0.quantile(0.1), w0.quantile(0.4)))      # the side of the median the truth is NOT on
-        # x_obs_digest, like `region` above: since the final fix wave a NON-AMORTIZED artifact whose
-        # region does not name the observation it was drawn around is refused on load, and the round
-        # reads its own artifact back through the loader before returning. (A region built by
+        # x_obs_digest, like `region` above: a NON-AMORTIZED artifact whose region does not name the
+        # observation it was drawn around is refused on load, and the round reads its own artifact
+        # back through the loader before returning. (A region built by
         # build_truncation_region always carries the digest; only a hand-made one can lack it.)
         far = _tr.TruncationRegion([0], [lo], [hi], n_latent=P, V=Q, probe=probe,
                                    x_obs_digest="deadbeefdeadbeef")
@@ -2544,7 +2550,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplo
         assert len(truth) == 1 and "direction 0" in str(truth[0].message), [str(c.message) for c in caught]
         assert issubclass(truth[0].category, orchestrator.PreflightWarning), truth[0].category
         assert not any("GROUND TRUTH" in r.getMessage() for r in caplog.records), \
-            "the judgement is said ONCE, as the warning; a record repeating it is the duplicate V4 removed"
+            ("the judgement is said ONCE, as the warning; a record repeating it is a duplicate the "
+             "move to logging removed")
         near = _tr.TruncationRegion([0], [min(z0, float(w0.quantile(0.02))) - 0.5],
                                     [max(z0, float(w0.quantile(0.98))) + 0.5], n_latent=P, V=Q, probe=probe,
                                     x_obs_digest="deadbeefdeadbeef")
@@ -2561,7 +2568,8 @@ def test_a_tsnpe_round_reuses_the_parents_basis_and_refuses_every_mismatch(caplo
 
 
 def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_path, caplog):
-    """⚠ GUARDRAIL 8, end to end through validate_calibration with the real gen_cal_data (10 rows).
+    """⚠ THE CALIBRATE-ON-THE-REGION RULE, end to end through validate_calibration with the real
+    gen_cal_data (10 rows).
 
     For a TSNPE posterior the calibration prior must be the prior RESTRICTED to its region -- drawn
     from the full prior, theta* lands mostly where the flow saw no training row, and check_sbc's
@@ -2694,7 +2702,7 @@ def test_calibration_theta_star_lies_inside_the_region_when_one_is_given(tmp_pat
         assert torch.equal(cap["prior_samples"][:, i_t].sort().values, cap["thetas"].cpu()[:, i_t].sort().values), \
             "the reference sample did not mirror the t_scale override"
 
-        # ── the SAME guarantee through sbc_repeats (piece 2 §4.4) ────────────────────────────────
+        # ── the SAME guarantee through sbc_repeats ───────────────────────────────────────────────
         from core.artifacts import ArtifactStore, use_store
         from core.diagnostics import sbc_repeats
         cap.clear()
@@ -2812,7 +2820,7 @@ def test_a_truncated_rounds_checkpoint_is_never_a_near_miss_of_an_amortized_run(
     """A TSNPE round's identity is the amortized run's plus one key, so every truncated checkpoint
     would be "one setting away" from every amortized run at its budget -- and the Posterior tab's
     fresh-run modal would tell the user to change a setting that tab does not have, to continue rows
-    an amortized run must never adopt (D3). near_miss_siblings ignores that key; describe_siblings
+    an amortized run must never adopt. near_miss_siblings ignores that key; describe_siblings
     still names the directory, saying why it is not resumable."""
     import tempfile
     from core.SBI import training_checkpoint as tc
@@ -3182,7 +3190,8 @@ def test_the_cuda_graph_step_matches_the_eager_step_bitwise():
 
 @pytest.mark.gpu
 def test_the_cuda_graph_preserves_the_rng_contract_a_cache_resume_depends_on():
-    """C-11's resume restores the CUDA RNG state and expects the noise stream to continue from there.
+    """A resume of the training checkpoint (the simulation cache) restores the CUDA RNG state and
+    expects the noise stream to continue from there.
 
     A captured graph could plausibly have broken this in two ways: by FREEZING the noise (replaying
     identical draws, which would silently collapse every ensemble to one trajectory), or by keeping a
@@ -3221,14 +3230,15 @@ def test_the_cuda_graph_preserves_the_rng_contract_a_cache_resume_depends_on():
         torch.cuda.set_rng_state_all(state)
         d = run()
         assert torch.equal(c, d), \
-            "restoring the CUDA RNG state did not reproduce the run -- C-11's resume would break"
+            ("restoring the CUDA RNG state did not reproduce the run -- a simulation-cache resume "
+             "would break")
     finally:
         _cfg.SOLVER_CUDA_GRAPHS = prev
 
 
 @pytest.mark.gpu
 def test_the_graph_cache_is_not_hung_off_the_solver_class():
-    """Trap X1 in a new costume.
+    """The rule that `sdeint.Solver` is resolved at call time, in a new costume.
 
     The graph cache is module-level, NOT a Solver attribute or a module-level Solver singleton,
     because `sdeint.Solver` must stay resolvable at CALL time for
@@ -3368,7 +3378,7 @@ def test_the_sweep_and_flow_knobs_are_ARGUMENTS_because_the_constants_are_snapsh
         for knob in knobs:
             assert knob in params, (
                 f"{fn.__name__} must accept {knob!r} as an ARGUMENT -- assigning to the config "
-                f"constant is a silent no-op, because orchestrator snapshots it at import (X12)")
+                f"constant is a silent no-op, because orchestrator snapshots it at import")
             assert params[knob].default is None, (
                 f"{fn.__name__}'s {knob!r} must default to None, so 'not supplied' is distinct from "
                 f"a value and the config constant is resolved inside the function")
@@ -3455,8 +3465,8 @@ def test_the_oom_notice_is_printed_before_the_release(caplog):
 
     On 2026-08-27 the order was the other way round: `note` was captured, the release raised, and the
     only record of the ORIGINAL failure died with it. Ordering, not wording, is what this pins -- so
-    it asserts the notice is present after a release that raises. Since piece 3 the notice is a
-    WARNING record (a logging call has no once-per-location registry, so every OOM is on the record)."""
+    it asserts the notice is present after a release that raises. The notice is a WARNING record (a
+    logging call has no once-per-location registry, so every OOM is on the record)."""
     saved_empty = torch.cuda.empty_cache
     saved_floor = pipeline_mod._MIN_SIM_CHUNK
     caplog.clear()
@@ -3555,8 +3565,8 @@ def test_the_vram_ceiling_bounds_the_plan_and_stays_out_of_the_identity():
 
 
 def test_the_drive_is_charged_at_its_build_peak():
-    """Section 8.2 recorded the planner under-counting the drive 4x -- a 2.16 GiB result with an
-    8.64 GiB transient -- and named it a plausible source of the unwrapped OOMs. `_per_row` is
+    """The planner was measured under-counting the drive 4x -- a 2.16 GiB result with an 8.64 GiB
+    transient -- a plausible source of the unwrapped OOMs. `_per_row` is
     where that bites: it is the number _budget_note_oom teaches the learned cap, so under-counting
     taught the cap something smaller than what actually failed.
 
@@ -3626,11 +3636,11 @@ def test_the_batch_retry_waits_releases_and_restores_the_rng():
         assert needle in src, f"batch retry: {needle!r} missing -- {why}"
     # The release must follow the notice, not precede it (the 2026-08-27 ordering bug).
     # ORDER, not adjacency: anything pinning these two as neighbours goes stale the moment
-    # a step is inserted between them -- round 2 moved the RNG restore ahead of the release
-    # and round 4 put the _we_are_the_holder branch before the wait. This line DID go stale,
-    # and took the whole suite down with it, because str.index raises ValueError rather than
-    # AssertionError and the runner below caught only the latter: the 26 tests after it never
-    # ran. Both halves of that are fixed.
+    # a step is inserted between them -- one later change moved the RNG restore ahead of the
+    # release and another put the _we_are_the_holder branch before the wait. This line DID go
+    # stale, and took the whole suite down with it, because str.index raises ValueError rather
+    # than AssertionError and the old hand-rolled runner caught only the latter: the 26 tests
+    # after it never ran. Both halves of that are fixed.
     assert src.index("Waiting") < src.index("_release_device_memory(device)"), \
         "the batch-retry notice must be printed BEFORE the release that may itself fail"
 
@@ -3638,7 +3648,7 @@ def test_the_batch_retry_waits_releases_and_restores_the_rng():
 def test_cancellable_wait_returns_and_stays_short(caplog):
     """It sleeps in slices so the cooperative cancel -- which is raised from a stream write or a log
     record on the worker thread -- gets a chance to fire, and logs so a multi-minute pause is not read
-    as a hang. The line is an INFORMATION record (spec §4.1, the every-5-s wait line): waiting is the
+    as a hang. The line is an INFORMATION record (the every-5-s wait line): waiting is the
     remedy, not the fault, and the OOM notice before it already carries the warning."""
     import time as _time
     caplog.clear()
@@ -3652,7 +3662,7 @@ def test_cancellable_wait_returns_and_stays_short(caplog):
     assert not any("zero" in r.getMessage() for r in caplog.records), "a zero wait has nothing to say"
 
 
-# ── 2026-08-28: the recovery step that fixed round 1 became the next failure point ───────────────
+# ── 2026-08-28: the recovery step added the day before became the next failure point ─────────────
 def test_short_err_survives_an_empty_message():
     """`str(err).splitlines()[0]` raises IndexError when the message is empty, because "".splitlines()
     is [] and not [""]. That is reachable: _is_oom returns True on the TYPE test alone, so a
@@ -3689,7 +3699,7 @@ def test_log_memory_can_never_kill_a_run(caplog):
     mem_get_info, max_memory_allocated, max_memory_reserved, reset_peak_memory_stats -- and runs on
     the SUCCESS path every _MEM_LOG_EVERY batches, which is exactly the moment after a batch has
     fought its way through all three OOM ladders and the card is at its most degraded. The note is an
-    INFORMATION record, like the line it stands in for (walkthrough C9: [mem] lines plain)."""
+    INFORMATION record, like the line it stands in for: the [mem] lines reach the pane plain."""
 
     class _FakeDevice:
         type = "cuda"
@@ -3788,11 +3798,11 @@ def test_a_failed_snapshot_never_writes_a_stale_restore_point():
     written either way, because they are hours of simulation and a checkpoint that resumes without
     restoring streams merely draws fresh noise from that point.
 
-    Also pinned, since piece 4 (B15): the whole rescue write sits inside a ``cancel_deferred()``
-    section, so neither of its two log calls can raise between the completed batches and the write
-    that commits them. Needled on ``rng=_rescue_rng`` rather than on the call's opening, because the
-    CADENCE write two screens up is ``_tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k + 1``
-    and would match a shorter needle first."""
+    Also pinned: the whole rescue write sits inside a ``cancel_deferred()`` section, so neither of
+    its two log calls can raise between the completed batches and the write that commits them.
+    Needled on ``rng=_rescue_rng`` rather than on the call's opening, because the CADENCE write two
+    screens up is ``_tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k + 1`` and would match a
+    shorter needle first."""
     src = code_only(pipeline_mod.gen_training_data)
     assert "_pending_rng_at = batch_k" in src, (
         "the snapshot must be paired with the batch index it describes")
@@ -4019,13 +4029,13 @@ def test_the_fisher_wraps_each_operating_point_and_skips_on_exhausted_oom():
     assert 0 <= i_retry < i_skip, "the exhausted-retry skip must follow the wrapped call"
 
 
-# ── piece 3, V4: core/SBI and the solver speak through logging ─────────────────────────────────────
+# ── core/SBI and the solver speak through logging ────────────────────────────────────────────────
 def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
-    """V4 for core/SBI and the solver (spec §4.1). The 35 in-stage prints of pipeline, decorrelate,
+    """Standard logging for core/SBI and the solver. The 35 in-stage prints of pipeline, decorrelate,
     truncate, summaries, Priors/prior and Solvers/sdeint are logging calls on each module's own
-    ``log = logging.getLogger(__name__)``, at the level the plan's site table gives them -- pinned
-    here AS that table, one row per call, so a call added without a row, a row whose call went, or a
-    level changed in passing fails by name.
+    ``log = logging.getLogger(__name__)``, each at its own level -- pinned here AS a table, one row
+    per call, so a call added without a row, a row whose call went, or a level changed in passing
+    fails by name.
 
     Severity used to come from the STREAM: every stderr print wore the window's warning triangle (the
     [mem] statistics line and the 5-s wait line among them) and every stdout print went plain (the
@@ -4036,7 +4046,7 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
     "{}" for each field, "{name}" for a bare variable -- so a comment or docstring that quotes a
     message cannot satisfy it. Also pinned: no print() call is left in the six modules, and the one
     message that named a window control ("the VRAM ceiling on the Config tab") names the core's own
-    settings instead (spec §3.1: the modules §3.6 converts name no box or tab)."""
+    settings instead: a core message names no box or tab."""
     import logging
 
     from core.SBI import decorrelate, summaries, truncate
@@ -4130,9 +4140,9 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
 
 
 def test_nothing_prints_or_logs_inside_a_checkpoint_commit():
-    """CLAUDE.md and training_checkpoint's module docstring: never print or log between steps 1 and 3
-    of a checkpoint save. Under the window every print passes _SignalStream.write and, since piece 3,
-    every ``core`` record passes _PumpLogHandler.emit; both call CancelToken.check(), so a helpful
+    """training_checkpoint's module docstring: never print or log between steps 1 and 3 of a
+    checkpoint save. Under the window every print passes _SignalStream.write and every ``core``
+    record passes _PumpLogHandler.emit; both call CancelToken.check(), so a helpful
     ``log.info("[checkpoint] committed ...")`` inside the commit would let a Cancel raise
     WorkerCancelled between the shard fsync and the state replace. No suite runs a GUI cancel at that
     moment, so the rule is pinned here, on the code: no print, no ``log.*``/``logging.*`` call and no
@@ -4232,17 +4242,17 @@ def test_the_sbi_records_carry_their_levels_at_run_time(monkeypatch, caplog):
 
 
 def test_the_mem_and_wait_lines_reach_the_window_plain_and_the_wait_still_checks_cancel(monkeypatch):
-    """Walkthrough row C9's first half, offscreen. Both lines were stderr prints, and stderr is the
-    window's WARNING stream, so a healthy multi-day run wore a triangle on every [mem] statistics line
-    and on every 5-s wait line. As information records they land plain, through the window's logging
-    handler.
+    """The [mem] lines reach the pane plain, and so do the wait lines, checked offscreen. Both lines
+    were stderr prints, and stderr is the window's WARNING stream, so a healthy multi-day run wore a
+    triangle on every [mem] statistics line and on every 5-s wait line. As information records they
+    land plain, through the window's logging handler.
 
-    The wait line has a second duty, the one the print inventory flagged: _cancellable_wait LOGS
-    between its 1-s slices precisely so the Cancel button has a checkpoint during a multi-minute
-    pause, and a handler that did not check the token would have removed that checkpoint without a
-    single test noticing. The window's handler checks the token before it sinks the record, as the
-    stream's write() did -- pinned by requesting a cancel and asking for an eight-second wait: the
-    raise must come after the first slice, not after eight.
+    The wait line has a second duty: _cancellable_wait LOGS between its 1-s slices precisely so the
+    Cancel button has a checkpoint during a multi-minute pause, and a handler that did not check the
+    token would have removed that checkpoint without a single test noticing. The window's handler
+    checks the token before it sinks the record, as the stream's write() did -- pinned by requesting
+    a cancel and asking for an eight-second wait: the raise must come after the first slice, not
+    after eight.
 
     No caplog here and no caplog.set_level: the ``core`` logger is at INFO by import."""
     import time as _time
@@ -4290,13 +4300,13 @@ def test_the_mem_and_wait_lines_reach_the_window_plain_and_the_wait_still_checks
 
 
 def test_training_creates_no_sbi_logs_directory(tmp_path, monkeypatch):
-    """V9 (spec §6.4). Unless it is handed a writer, sbi's trainer builds a TensorBoard SummaryWriter
-    under <cwd>/sbi-logs/NPE_C/<timestamp>/ the moment SNPE(...) is constructed. That is one directory
-    per training, left in whatever directory the process started from: 1359 of them at the repo root
-    by piece 3 (1360 directories with NPE_C), none ever read. The curves PRISM keeps are the ones
-    train_nn returns in its diagnostics, which build_posterior writes into the posterior artifact
-    (loss.npz and the "Training loss" figure).
-    train_nn now hands sbi core.SBI.train._NoSummary, which discards them.
+    """Unless it is handed a writer, sbi's trainer builds a TensorBoard SummaryWriter under
+    <cwd>/sbi-logs/NPE_C/<timestamp>/ the moment SNPE(...) is constructed. That is one directory per
+    training, left in whatever directory the process started from: 1359 of them had piled up at the
+    repo root before this was stopped (1360 directories with NPE_C), none ever read. The curves
+    PRISM keeps are the ones train_nn returns in its diagnostics, which build_posterior writes into
+    the posterior artifact (loss.npz and the "Training loss" figure). train_nn now hands sbi
+    core.SBI.train._NoSummary, which discards them.
 
     This is the cheapest REAL train_nn. gen_training_data is replaced by 64 rows of a 2-parameter toy
     (train.py calls it through the pipeline module object, so the monkeypatch takes effect). Everything
@@ -4427,9 +4437,9 @@ def _crash_batch_3_with_a_cancel_pending(monkeypatch, crash):
 
 
 def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_original(monkeypatch):
-    """THE collision no gate can provoke (piece 4, B15). The run crashes with the cancel token
-    REQUESTED AND NOT YET FIRED -- Cancel pressed in the moment before the failure -- and the rescue
-    block's own announcement is then the next cancel checkpoint. Before B15 that announcement raised
+    """THE collision no gate can provoke. The run crashes with the cancel token REQUESTED AND NOT YET
+    FIRED -- Cancel pressed in the moment before the failure -- and the rescue block's own
+    announcement is then the next cancel checkpoint. Before the repair that announcement raised
     WorkerCancelled from inside the ``except BaseException`` handler: ``_tc.save`` was skipped, the
     re-raise at the end of the block was never reached, and every batch since the last cadence write
     was lost while the window reported a clean cancellation.
@@ -4449,7 +4459,7 @@ def test_a_crash_with_a_cancel_pending_still_saves_the_rows_and_raises_the_origi
 
 
 def test_a_crash_unwinding_through_a_finally_that_speaks_still_saves_and_raises_the_original(monkeypatch):
-    """THE RACE THE FIRST B15 DESIGN CALLED RESIDUAL, and it is not rare (piece 4, B15 fix round 1).
+    """THE RACE THE REPAIR'S FIRST DESIGN CALLED RESIDUAL, and it is not rare.
     ``sdeint.euler_compiled`` wraps the graphed CUDA solver -- the likeliest place for a GPU run to
     crash -- in ``try ... finally: bar.close()``, and the bar's closing write is a cancel checkpoint
     reached while the crash unwinds. With a cancel requested and not yet fired, that checkpoint used to

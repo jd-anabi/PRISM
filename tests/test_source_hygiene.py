@@ -83,16 +83,7 @@ READER_DOCS_DIR = "docs/guide"
 
 # Files not yet cleaned. It may only shrink: every file on it must still have a hit, so a cleaned
 # file has to leave it, and the last cleaning step deletes it together with the test that reads it.
-NOT_YET_CLEAN: frozenset[str] = frozenset({
-    "tests/_fixtures.py",
-    "tests/conftest.py",
-    "tests/test_artifact_store.py",
-    "tests/test_conditioning_repair.py",
-    "tests/test_diagnostics.py",
-    "tests/test_refusals.py",
-    "tests/test_user_models.py",
-    "tests/test_user_sbi.py",
-})
+NOT_YET_CLEAN: frozenset[str] = frozenset()
 
 _DIRECTIVE = re.compile(r"noqa(?::[ \t]*[A-Z]+[0-9]+(?:[ \t]*,[ \t]*[A-Z]+[0-9]+)*)?"
                         r"|type:[ \t]*ignore(?:\[[^\]]*\])?")

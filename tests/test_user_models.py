@@ -346,7 +346,7 @@ def test_model_store_round_trip_emits_a_parseable_triple():
 
 
 def _doc_v2(name="UMTESTV2", params=None):
-    """A schema_version-2 doc: params carry {value, lo, hi} (per-parameter SBI bounds, S-1)."""
+    """A schema_version-2 doc: params carry {value, lo, hi} (per-parameter SBI bounds)."""
     return {
         "schema_version": 2,
         "name": name,
@@ -484,9 +484,9 @@ def test_a_log_box_reaches_the_registry_and_the_prior_mask():
 
 def test_forcing_bounds_are_physical_not_the_symmetric_placeholder():
     """Forcing parameters used to take nd_bounds, so a drive amplitude of 0.05 got (-0.95, 1.05) --
-    the S-1 defect, still live in the forcing block after the ND half was fixed. phase is a KNOWN
-    box, freq is geometric and strictly positive (forcing_prior gives it a log-uniform marginal,
-    undefined at lo <= 0), amp is floored at 0, offset stays symmetric."""
+    the symmetric-placeholder defect, still live in the forcing block after the ND half was fixed.
+    phase is a KNOWN box, freq is geometric and strictly positive (forcing_prior gives it a
+    log-uniform marginal, undefined at lo <= 0), amp is floored at 0, offset stays symmetric."""
     import math as _math
     sin = {"kind": "sin", "params": {"amp": 0.05, "freq": 10.0, "phase": 1.0, "offset": -2.0}}
     name, folder = "UMTESTFRC", "umtestfrc"
@@ -543,7 +543,7 @@ def test_builder_param_row_preserves_and_defaults():
     mb._detect_params()                                            # re-detect preserves box AND coordinate
     assert mb._param_fields["d0"].spec() == (0.05, 0.01, 0.1, "log")
     mb._param_fields["k"].set_spec(5.0, 0.0, 1.0)                  # value outside its box
-    # A field problem is a Refusal since piece 5 (§5.1); the click handler is what shows it.
+    # A field problem is a Refusal; the click handler is what shows it.
     with pytest.raises(Refusal) as ei:
         mb._validate()
     assert ei.value.field == "param_value" and "outside its bounds" in ei.value.message
@@ -599,11 +599,11 @@ def test_builder_refuses_a_log_box_with_a_non_positive_minimum():
 
 
 def test_a_log_box_under_automatic_bounds_is_refused_with_a_fix_that_can_be_done():
-    """The whole-piece review's N19 (L641). The automatic box is ``nd_bounds(v) = (v - pad, v + pad)``
-    with ``pad = max(|v|, 1)``, so its minimum is at or below 0 for EVERY value: a log parameter under
-    'auto' is always refused. The sentence said "raise the minimum" -- and the fix line under it
-    points at the 'min' box, which 'auto' has just disabled. Under 'auto' the sentence says to turn
-    the automatic bounds off first (or go back to linear)."""
+    """The automatic box is ``nd_bounds(v) = (v - pad, v + pad)`` with ``pad = max(|v|, 1)``, so its
+    minimum is at or below 0 for EVERY value: a log parameter under 'auto' is always refused. The
+    sentence said "raise the minimum" -- and the fix line under it points at the 'min' box, which
+    'auto' has just disabled. Under 'auto' the sentence says to turn the automatic bounds off first
+    (or go back to linear)."""
     from core.gui.screens.model_builder_screen import ModelBuilderScreen
     from core.refusals import Refusal
     qt_app()
@@ -627,19 +627,20 @@ def test_a_log_box_under_automatic_bounds_is_refused_with_a_fix_that_can_be_done
 
 
 def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
-    """Spec §1.2, §5.1, §5.3. The model builder is the fifth surface of piece 5's set, and the only
-    one that is a plain QWidget rather than a BasePanel -- it has no ``_refusal`` and no log pane --
-    so its refusals go through the shared ``refusal_box.show_refusal`` and are recorded on its own
-    status line instead. Before this, every one of its input problems was a status-line sentence
-    only: a form a full screen tall could refuse to save with a message at the bottom of it, and the
-    wording was this screen's alone, so the same mistake read differently here and everywhere else.
+    """The model builder shows a field refusal in the same yellow box as the panels, but it is a plain
+    QWidget rather than a BasePanel -- it has no ``_refusal`` and no log pane -- so its refusals go
+    through the shared ``refusal_box.show_refusal`` and are recorded on its own status line instead. Before this, every one of its input problems was a status-line
+    sentence only: a form a full screen tall could refuse to save with a message at the bottom of it,
+    and the wording was this screen's alone, so the same mistake read differently here and everywhere
+    else.
 
     Each of its numeric fields now carries a registry key, so the box's informative line names the
-    box on THIS screen -- "on the Model Builder screen", not "on the Infer tab", which is the collision
-    E6 widened the table for. Five are checked here, one per shape: a blank bound (FloatField.value()
-    reads a blank as 0.0, the hazard _ParamRow's own docstring warns about), a cleared value (read
-    through value_or_none for the same reason, F16), an inverted pair, a non-positive display scale,
-    and a blank forcing parameter -- which reached model_store as a real 0.0 nobody typed.
+    box on THIS screen -- "on the Model Builder screen", not "on the Infer tab", which is why the
+    table names screens as well as tabs. Five are checked here, one per shape: a blank bound
+    (FloatField.value() reads a blank as 0.0, the hazard _ParamRow's own docstring warns about), a
+    cleared value (read through value_or_none for the same reason), an inverted pair, a non-positive
+    display scale, and a blank forcing parameter -- which reached model_store as a real 0.0 nobody
+    typed.
     """
     from PySide6.QtWidgets import QMessageBox
     from core.gui import fields as gui_fields
@@ -676,7 +677,7 @@ def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
         mb._validate()
     assert ei.value.field == "param_min"
 
-    # (a') a cleared value (F16): refused as blank, never read as a value of 0.0 -- 0.0 sits inside
+    # (a') a cleared value: refused as blank, never read as a value of 0.0 -- 0.0 sits inside
     # this row's (-1, 1) box, so value() would have let it through as a value nobody typed
     mb._param_fields["k"].set_spec(0.5, -1.0, 1.0)
     mb._param_fields["k"].value.setText("")
@@ -707,15 +708,14 @@ def test_the_builder_shows_a_field_refusal_in_the_yellow_box():
 
 
 def test_the_builder_refuses_at_validate_what_save_would_refuse():
-    """Validate refuses every value Save refuses, in the yellow box naming the box. Spec §5.1, §5.6.
+    """Validate refuses every value Save refuses, in the yellow box naming the box.
 
     ``model_store._check_schema`` refuses three values the builder's own checks let through: a forcing
     frequency or time constant at or below 0, and a t_scale at or above ``T_SCALE_MAX_S``, the
     transient budget. Validate passed all three -- its smoke integration runs with the forcing off and
     at any t_scale -- so the form said "valid", and Save then failed with "Save failed: ..." on the
-    status line alone, naming no box (found by Task 22's review; a REFUSAL defect, so §5.6's bounded
-    mandate fixes it here). Each is now the same rule in the same words, raised as a Refusal keyed to
-    the box, so both buttons reach the yellow box and nothing is saved.
+    status line alone, naming no box. Each is now the same rule in the same words, raised as a
+    Refusal keyed to the box, so both buttons reach the yellow box and nothing is saved.
     """
     from PySide6.QtWidgets import QMessageBox
     from core.gui import fields as gui_fields
@@ -767,13 +767,12 @@ def test_the_builder_refuses_at_validate_what_save_would_refuse():
 
 
 def test_a_negative_drive_amplitude_is_refused_at_validate_at_save_and_at_load(tmp_path):
-    """The whole-piece review's N18 (L777), and the owner's ruling R-F5. A drive amplitude is a
-    magnitude -- its sign is the phase's (or, for an exponential drive, its ``sign``'s) -- and its
-    saved box is floored at 0 (``_forcing_bounds``), so amp = -2 saved a (0, 0) box that excluded its
-    own value, and Validate and Save both passed it. ``forcing_value_problem`` refuses it now, so the
-    builder's Validate and Save show the yellow box naming the forcing box and nothing is written,
-    and a saved JSON carrying one is refused at load (the shipped SHM and SHM2 carry no forcing). A
-    zero amplitude is still a legitimate "no drive"."""
+    """A drive amplitude is a magnitude -- its sign is the phase's (or, for an exponential drive, its
+    ``sign``'s) -- and its saved box is floored at 0 (``_forcing_bounds``), so amp = -2 saved a (0, 0)
+    box that excluded its own value, and Validate and Save both passed it. ``forcing_value_problem``
+    refuses it now, so the builder's Validate and Save show the yellow box naming the forcing box and
+    nothing is written, and a saved JSON carrying one is refused at load (the shipped SHM and SHM2
+    carry no forcing). A zero amplitude is still a legitimate "no drive"."""
     import json
     from PySide6.QtWidgets import QMessageBox
     from core.gui import fields as gui_fields
@@ -824,12 +823,12 @@ def test_a_negative_drive_amplitude_is_refused_at_validate_at_save_and_at_load(t
 def test_a_model_round_trips_through_the_builder_and_back():
     """Build a model in the screen, save it, load it back, and the form assembles the SAME document.
 
-    Spec section 5.6. The builder is the one surface where a user types a model from nothing, and
-    every field it drops on the way back is silent: a forcing amplitude, a box coordinate or an
-    initial condition that quietly reverts to its default would be discovered only by a later run
-    that behaved differently from the form the operator was looking at. The pieces are individually
-    tested -- ``_ParamRow`` preserves a custom box across a re-detect, ``model_store`` emits a
-    parseable triple -- but nothing has ever asserted that the WHOLE path is lossless.
+    The builder is the one surface where a user types a model from nothing, and every field it drops
+    on the way back is silent: a forcing amplitude, a box coordinate or an initial condition that
+    quietly reverts to its default would be discovered only by a later run that behaved differently
+    from the form the operator was looking at. The pieces are individually tested -- ``_ParamRow``
+    preserves a custom box across a re-detect, ``model_store`` emits a parseable triple -- but
+    nothing has ever asserted that the WHOLE path is lossless.
 
     Exercises the fields most likely to be lost: a forcing block with four parameters, a log box
     with a positive lower bound, a non-default initial condition, and both display scales. Writes a
@@ -838,8 +837,7 @@ def test_a_model_round_trips_through_the_builder_and_back():
 
     Every typed value differs from its box's default, and the model is read back into a FRESH
     screen: ``reset()`` never clears the scales, so a reload into the screen that saved -- or a
-    value equal to the default -- would pass even if ``load_existing`` never set it (Task 35's
-    review).
+    value equal to the default -- would pass even if ``load_existing`` never set it.
     """
     from core.gui.screens.model_builder_screen import _FORCE_KINDS, ModelBuilderScreen
 
@@ -1074,7 +1072,7 @@ def test_load_app_font_prefers_inter_when_forced():
         app.setFont(saved)
 
 
-# ── icon set (B-e) ─────────────────────────────────────────────────────────────────────────────────
+# ── icon set ───────────────────────────────────────────────────────────────────────────────────────
 def test_icons_register_or_fallback():
     """The bundled icon font registers (or degrades to None), and every semantic name has a real
     codepoint glyph AND a non-empty unicode fallback."""
@@ -1170,7 +1168,7 @@ def test_the_app_icon_loads_at_several_sizes():
 def test_the_ico_is_the_png_set_and_the_class_icon_call_is_harmless_offscreen():
     """The Windows taskbar shows the window CLASS icon whenever its icon query is not answered in time,
     and Qt registers its class with the stock generic glyph because python.exe carries no icon
-    resource (the 2026-09-11 walkthrough, row 1). The class icon has to come from a real .ico, so
+    resource (seen on the real taskbar on 2026-09-11). The class icon has to come from a real .ico, so
     assets/app/prism.ico ships beside the PNGs and must BE the PNG set: its 256 frame is
     prism-256.png pixel for pixel, or an SVG edit that regenerated the PNGs but not the .ico would put
     two different marks on the title bar and the taskbar. Off a real Windows display the call is a
@@ -1200,8 +1198,7 @@ def test_the_window_class_icon_becomes_ours_on_a_real_windows_display():
 
     Before the call the class icon is the stock IDI_APPLICATION handle -- the generic glyph the
     taskbar showed for PRISM -- and after it the class carries a different, non-null icon. The window
-    is never shown, so nothing flashes on screen; the taskbar itself is row 1 of
-    docs/checklists/display-walkthrough.md."""
+    is never shown, so nothing flashes on screen; the taskbar itself is checked on the real screen."""
     import ctypes
     from ctypes import wintypes
     from PySide6.QtGui import QGuiApplication
@@ -1218,7 +1215,8 @@ def test_the_window_class_icon_becomes_ours_on_a_real_windows_display():
     w = QMainWindow()
     hwnd = int(w.winId())
     before = user32.GetClassLongPtrW(hwnd, -14)                          # GCLP_HICON
-    assert before == user32.LoadIconW(None, 32512), "Qt's class icon is no longer IDI_APPLICATION; re-check the walkthrough"
+    assert before == user32.LoadIconW(None, 32512), \
+        "Qt's class icon is no longer IDI_APPLICATION; re-check the taskbar on a real screen"
     assert app_icon.set_windows_class_icon(w) is True
     after = user32.GetClassLongPtrW(hwnd, -14)
     assert after and after != before, (before, after)
@@ -1255,7 +1253,7 @@ def test_build_app_starts_and_sets_the_window_icon(tmp_path, monkeypatch):
             assert (tmp_path / "Artifacts").is_dir()
             from core import logging_root
             assert logging_root.installed() is True, \
-                "build_app must install THE root-logger handler at start-up (piece 4, B14)"
+                "build_app must install THE root-logger handler at start-up"
             window.close()
         assert default_store() is before, "build_app's store install leaked past the test"
     finally:

@@ -1,20 +1,19 @@
-"""Shared test helpers: the artifact-store stand-ins (piece 1 of the 2026-09-10 hardening programme)
-and, since piece 3, the GUI suites' helpers.
+"""Shared test helpers: the artifact-store stand-ins and the GUI suites' helpers.
 
 A plain module: importing it imports torch and sbi (``DirectPosterior`` has to be imported at module
 level for ``_FakeDP`` to pickle) and does NOTHING ELSE -- no simulation, no file I/O, no torch
 seeding, no store writes. Everything else here is a function or class definition whose own imports
 stay lazy, exactly as they were before the move, so a bare ``import tests._fixtures`` costs the torch
 import and nothing more.
-Moved out of ``tests/test_artifact_store.py`` (Task 7) so ``tests/test_user_sbi.py``,
+Moved out of ``tests/test_artifact_store.py`` so ``tests/test_user_sbi.py``,
 ``tests/test_nav_and_gating.py`` and others can share them without importing a whole other test
 module (which pytest would then also collect a second time under a different name).
 
-Piece 3 (Task 9) added what the GUI suites used to copy per file -- ``qt_app``, ``pump``,
-``code_only``, ``PaneCapture`` -- and the dialog record ``SHOWN`` that tests/conftest.py's session
-guard appends to. ONE import spelling, ``tests._fixtures`` (pytest.ini puts the repo root on the
-path; tests/ has no __init__.py): ``from _fixtures import SHOWN`` would import this module a second
-time under another name, with a second, empty SHOWN that the guard never touches.
+It also holds what the GUI suites used to copy per file -- ``qt_app``, ``pump``, ``code_only``,
+``PaneCapture`` -- and the dialog record ``SHOWN`` that tests/conftest.py's session guard appends
+to. ONE import spelling, ``tests._fixtures`` (pytest.ini puts the repo root on the path; tests/ has
+no __init__.py): ``from _fixtures import SHOWN`` would import this module a second time under
+another name, with a second, empty SHOWN that the guard never touches.
 """
 import ast
 import inspect
@@ -27,14 +26,13 @@ import torch
 
 from core.artifacts import manifest as mf
 
-# The top-level repository directories that hold PRODUCT code, and therefore the only ones the source
-# scans walk: the literal-path scan (tests/test_artifact_store.py), and the rotation-reader and
-# input() scans (both tests/test_conditioning_repair.py). Only the rotation-reader scan ever walked
-# scripts/ (the other two always covered "core" alone); piece 2 folded the scripts into
-# `python -m core <subcommand>` and removed scripts/ -- the tool's own code lives under core/tool,
-# so one root now covers every scan and both front ends. tests/ and the gitignored archive/ are
-# deliberately absent: they are not shipped code. test_the_source_scans_cover_every_code_directory
-# keeps this set closed, so a new top-level package cannot appear and be scanned by nothing.
+# The top-level repository directories that hold PRODUCT code, and therefore the ones the source
+# scans walk: among them the literal-path scan (tests/test_artifact_store.py), the rotation-reader
+# and input() scans (both tests/test_conditioning_repair.py) and the refusal and message-box scans
+# (tests/test_refusals.py). The command-line tool's own code lives under core/tool, so one root
+# covers every scan and both front ends. tests/ and the gitignored archive/ are deliberately absent:
+# they are not shipped code. test_the_source_scans_cover_every_code_directory keeps this set closed,
+# so a new top-level package cannot appear and be scanned by nothing.
 CODE_ROOTS: tuple[str, ...] = ("core",)
 
 # The top-level repository files (outside any CODE_ROOTS directory) that hold product code, so the
@@ -45,8 +43,8 @@ def backdate_tree(path, seconds: float = 3600.0) -> None:
     """Push a whole tree's modification times into the past.
 
     ``ArtifactStore.remove_incomplete`` refuses a directory whose tree was touched within
-    ``store.RECENT_WRITE_SECONDS`` (the whole-piece review's R3: an artifact's manifest is written
-    LAST, so a run in flight -- possibly in another process -- looks exactly like a leftover). A
+    ``store.RECENT_WRITE_SECONDS`` (the recency guard: an artifact's manifest is written LAST, so a
+    run in flight -- possibly in another process -- looks exactly like a leftover). A
     test's leftover is seconds old, so every test that means one to be REMOVED says so here rather
     than sleeping five minutes or monkeypatching the guard away.
     """
@@ -123,7 +121,7 @@ class PaneCapture:
         output, and therefore every print, every retired tqdm bar, every ``core`` record (through
         ``streams._PumpLogHandler``) and every Python warning (through ``redirect_streams``'
         ``showwarning``). That channel is the one the helper used to miss, so a test could assert on
-        what the pane said while being blind to almost everything in it (B17).
+        what the pane said while being blind to almost everything in it.
 
     TWO ORDERS, ONE LIST. A captured entry is ``(level, text)``: that is what the hand-written stubs
     this helper replaced appended and what every assertion in the suites reads. A batch's pairs arrive
@@ -387,8 +385,8 @@ def build_browse_store(root):
     ``root``. Returns ``{kind: id, ..., "bad": (dir_name, dir_name, dir_name)}``.
 
     SECONDS, not minutes -- the browser suite must not reach for ``tiny_run``, whose cost is why
-    ``screen_run`` is module-scoped (spec §9.1). Every writer is handed ``cfg=None`` and every body is
-    the smallest dict its kind's ``manifest.BODY_KEYS`` allows, so nothing here reads a bounds file,
+    ``screen_run`` is module-scoped. Every writer is handed ``cfg=None`` and every body is the
+    smallest dict its kind's ``manifest.BODY_KEYS`` allows, so nothing here reads a bounds file,
     builds a SimConfig, fits a GMM or trains anything. Nothing ever loads these payloads (there are
     none): the browser only reads manifests. The one real cost is ``ArtifactWriter._commit``'s three
     ``git`` subprocesses per artifact.
@@ -397,13 +395,13 @@ def build_browse_store(root):
     content. The simulation cache is the exception: it is ALWAYS unnamed
     (``write_simulation_manifest`` writes ``name=""``), so its row also covers ``Summary.label``'s
     ``(unnamed <id>)`` form. It is written at 3 of 4 batches and NOT complete, so its row carries real
-    progress and ``finished`` is False while ``complete`` is True -- B3's distinction, on disk. The 4
-    is the identity's ``n_runs``, which is where ``Summary.batches_planned`` comes from, so "3/4" on
-    the row is read off the manifest and not assembled by the table. It is written with NO ``rows``,
-    because that is the only state the real writer can be in mid-run: ``training_checkpoint.save``
-    passes none and only ``mark_complete`` records them (P2). A fixture that handed rows to an
-    unfinished cache would be a shape no run produces, and would hide every "rows only once it
-    finished" branch in both front ends.
+    progress and ``finished`` is False while ``complete`` is True -- a valid manifest that is not a
+    finished run, on disk. The 4 is the identity's ``n_runs``, which is where
+    ``Summary.batches_planned`` comes from, so "3/4" on the row is read off the manifest and not
+    assembled by the table. It is written with NO ``rows``, because that is the only state the real
+    writer can be in mid-run: ``training_checkpoint.save`` passes none and only ``mark_complete``
+    records them. A fixture that handed rows to an unfinished cache would be a shape no run
+    produces, and would hide every "rows only once it finished" branch in both front ends.
 
     No artifact gets a ``log.txt``: the writer writes one only when a public entry is active
     (``runs.current_run_log()``), and this helper is not one. A test that wants records writes the
@@ -466,26 +464,25 @@ def build_browse_store(root):
 
 class _FdtStop(Exception):
     """Ends a record's write block where a cancel or a crash would, so ``build_fdt_record`` can leave
-    an UNFINISHED record on disk (E2) without pretending to fail inside the store."""
+    an UNFINISHED record on disk without pretending to fail inside the store."""
 
 
 def build_fdt_record(store, *, study="single", name="", note="", finished=True,
                      omegas=(0.5, 1.0, 2.0, 4.0), ratio=(1.0, 3.0, 1.2, 1.05),
                      omega_0=1.0, prefactor=2.0, settings=None, sweep_param="s", points=None,
                      seed=7):
-    """One ``fdt`` record with a real manifest, a real ``data.h5`` and one figure (spec §8.1), written
-    in seconds.
+    """One ``fdt`` record with a real manifest, a real ``data.h5`` and one figure, written in seconds.
 
     ``cfg=None``, like ``build_browse_store``'s rows: nothing here reads a bounds file, builds a
     SimConfig or simulates. The dataset names are ``cross_validation._fdt_measure``'s own vocabulary
-    (``omega_grid``, ``T_eff_over_T``), which is what the single-cell run writes (spec §2.3) and what
+    (``omega_grid``, ``T_eff_over_T``), which is what the single-cell run writes and what
     ``core.FDT.compare`` reads back. A ``study="sweep"`` record holds the sweep's layout instead: one
     group per entry of ``points``, swept in ``sweep_param``, each on the ``omegas`` axis; with no
     ``points`` it holds an empty group, a sweep in which no operating point finished.
     ``finished=False`` leaves the record unfinished on disk with its numbers already written -- the
-    state E2 exists to preserve, and the one a comparison refuses. ``seed`` is the seed the body
-    records: 7 unless a test gives each record its own, which a repeats comparison reads -- records
-    that share one are one run drawn twice (the whole-piece review's N12).
+    state the store keeps an interrupted record in, and the one a comparison refuses. ``seed`` is the
+    seed the body records: 7 unless a test gives each record its own, which a repeats comparison
+    reads -- records that share one are one run drawn twice.
 
     The figure is drawn on a bare ``matplotlib.figure.Figure``, never through pyplot, so a fixture
     that writes dozens of records leaves no open figure and touches no backend.
@@ -506,9 +503,9 @@ def build_fdt_record(store, *, study="single", name="", note="", finished=True,
                 h5.attrs["omega_0"] = float(omega_0)
                 h5.attrs["prefactor"] = float(prefactor)
                 if study == "sweep":
-                    # The layout load_param_sweep reads, which is what the sweep record holds (spec
-                    # §2.3): one group per operating point, each with the shared omega/omega_0 axis
-                    # and its own ratio row. `points` is [(param_value, ratio-row), ...].
+                    # The layout load_param_sweep reads, which is what the sweep record holds: one
+                    # group per operating point, each with the shared omega/omega_0 axis and its own
+                    # ratio row. `points` is [(param_value, ratio-row), ...].
                     h5.attrs["sweep_param"] = str(sweep_param)
                     h5.attrs["omega_0_ref"] = float(omega_0)
                     ops = h5.create_group("operating_points")
@@ -652,8 +649,9 @@ def snapshot_cfg(cfg) -> dict:
     cloned to the CPU and every other value deep-copied, so a later write through a shared container
     cannot reach the snapshot. Works on any object with a ``__dict__``.
 
-    The V1 pins of piece 3 (spec §2.4) take one before a public entry and hand it to
-    ``assert_cfg_unchanged`` after, whether the entry returned, refused or raised.
+    The tests that pin that every public stage works on a private copy of its config take one before
+    a public entry and hand it to ``assert_cfg_unchanged`` after, whether the entry returned, refused
+    or raised.
     """
     import copy
     from core.sim_config import _CACHED

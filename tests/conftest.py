@@ -33,7 +33,7 @@ def _sandbox_default_store(tmp_path_factory):
 
 @pytest.fixture(scope="session", autouse=True)
 def _no_sbi_logs():
-    """<repo>/sbi-logs must not exist before or after the session (V9, spec §6.4). This sits beside
+    """<repo>/sbi-logs must not exist before or after the session. This sits beside
     _sandbox_default_store for the same reason: the suites leave the repository as they found it.
 
     sbi's default TensorBoard writer made <cwd>/sbi-logs/NPE_C/<timestamp>/ on every training, and
@@ -48,7 +48,7 @@ def _no_sbi_logs():
     from core import config
     logs = config.REPO_ROOT / "sbi-logs"
     assert not logs.exists(), (
-        f"{logs} exists before the session: delete it (nothing in PRISM writes it since piece 3), "
+        f"{logs} exists before the session: delete it (nothing in PRISM writes it any more), "
         f"or this session's teardown check would blame the tests for it")
     yield
     assert not logs.exists(), (
@@ -82,9 +82,9 @@ def tiny_run(tmp_path_factory):
 def screen_run(tiny_run):
     """An InferenceScreen whose session holds the tiny run's prior and posterior and a TRUTH-FREE
     copy of its config -- the window's own shape: a session config is bounds-built at Build/Load prior
-    and never carries a cell (spec §2.4). A COPY, because tiny_run is module-scoped and its siblings in
-    the same file need the truth it injected; a truth-carrying session would also make the pin
-    vacuous, since the composition re-injects the very same cell on its copy.
+    and never carries a cell. A COPY, because tiny_run is module-scoped and its siblings in the same
+    file need the truth it injected; a truth-carrying session would also make the pin vacuous, since
+    the composition re-injects the very same cell on its copy.
 
     Module-scoped like tiny_run, so a file pays for one screen. Its panels restore from the session's
     temporary settings file (_settings_home), never from the real PRISM.ini."""
@@ -110,9 +110,10 @@ def _checkpointing_off_unless_asked():
     A TEST-INTEGRITY guard, not housekeeping. Left on, the full-pipeline tests write real caches keyed
     on a digest of their config -- and a COMPLETE cache short-circuits generation and returns its
     stored rows. So the FIRST run would create them and every run afterwards would silently skip
-    gen_training_data entirely while the suite stayed green. Under D7 a stray cache is worse still: a
-    committed sibling one identity field away now REFUSES a later run instead of quietly restarting it,
-    so one test's leftovers would fail another's.
+    gen_training_data entirely while the suite stayed green. Under the rule that refuses a cache one
+    setting away before any simulation, a stray cache is worse still: a committed sibling one identity
+    field away REFUSES a later run instead of quietly restarting it, so one test's leftovers would fail
+    another's.
 
     Rebound on ORCHESTRATOR, not on config: orchestrator does ``from .config import
     TRAINING_CHECKPOINT_EVERY`` at import and would otherwise keep its snapshot. SESSION-scoped, which
@@ -129,11 +130,11 @@ def _checkpointing_off_unless_asked():
 
 @pytest.fixture(scope="session", autouse=True)
 def _settings_home(tmp_path_factory):
-    """The settings location is NEVER the real PRISM.ini during a test process, at any scope (spec
-    §5.4). This is the session half: a path under the session temp that does not exist until Qt
-    writes it, installed before any module- or session-scoped fixture can build a panel (pytest sets
-    higher scopes up first), so a panel built by tiny_run's siblings or by screen_run restores from an
-    empty file too. The function half is _isolated_settings, below.
+    """The settings location is NEVER the real PRISM.ini during a test process, at any scope. This
+    is the session half: a path under the session temp that does not exist until Qt writes it,
+    installed before any module- or session-scoped fixture can build a panel (pytest sets higher
+    scopes up first), so a panel built by tiny_run's siblings or by screen_run restores from an empty
+    file too. The function half is _isolated_settings, below.
 
     Teardown asserts the developer's real user-scope file is byte-identical, mirroring
     _sandbox_default_store's assertion on the real Artifacts/: a saved value winning over config.py is
@@ -176,9 +177,9 @@ def _no_modal_dialogs():
     it on top with monkeypatch, as test_the_fresh_cache_and_narrowed_posterior_dialogs_default_to_cancel
     does; the undo puts this guard back, because a MonkeyPatch on a class records the __dict__ entry, this
     lambda. Same MonkeyPatch shape as _checkpointing_off_unless_asked. Nothing under core/ calls the
-    statics any more: main_window.py's last three went through MainWindow._tell in piece 4, so this
-    guard covers every box the GUI shows and a test reads one off SHOWN -- and that is a FACT WITH A
-    PIN since the whole-piece review's R8, not a claim: tests/test_refusals.py::
+    statics any more: main_window.py's last three now go through MainWindow._tell, so this guard
+    covers every box the GUI shows and a test reads one off SHOWN -- and that is a FACT WITH A PIN,
+    not a claim: tests/test_refusals.py::
     test_no_static_message_box_is_called_anywhere_under_core scans CODE_ROOTS + CODE_FILES for one,
     because a static added here would HANG this suite rather than fail it."""
     from PySide6.QtWidgets import QMessageBox
