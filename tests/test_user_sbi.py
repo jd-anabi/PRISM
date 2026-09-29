@@ -2081,6 +2081,29 @@ def test_checkpointing_off_writes_nothing_and_changes_nothing(store):
         "checkpointing was off but the store's simulation directory gained something"
 
 
+def test_the_cache_size_estimate_counts_every_target_column(monkeypatch, tmp_path):
+    """The pre-flight's cache size counts one float32 column per inferred parameter, not a fixed eight:
+    10,000 x 2,048 chi rows of 122 conditioning columns and 13 targets are 10.3 GiB."""
+    from tests._fixtures import stand_in_gen_obs
+    got = pipeline_mod._cache_size_bytes(10_000, 2048, chi_mode=True, chi_k_pad=12, n_targets=13)
+    assert got == 10_000 * 2048 * (SUMMARY_WIDTH + 1 + config.CHI_ELEM_W * 12 + 13) * 4
+    assert f"{got / 2 ** 30:.1f}" == "10.3"
+    assert pipeline_mod._cache_size_bytes(1, 1, chi_mode=False, chi_k_pad=None, n_targets=13) == (SUMMARY_WIDTH + 1 + 8 + 13) * 4
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _spy(n_runs, run_size, **k):
+        seen.update(k, n_runs=n_runs, run_size=run_size)
+        raise _Stop
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    monkeypatch.setattr(pipeline_mod, "_cache_size_bytes", _spy)
+    with pytest.raises(_Stop):
+        _gen_td("chi", seed=3, n_runs=2, run_size=4, checkpoint=_ck(tmp_path / "d"))
+    assert seen == {"n_runs": 2, "run_size": 4, "chi_mode": True, "chi_k_pad": 4, "n_targets": 13}, seen
+
+
 # ── the training checkpoint (the simulation cache): the atomic write and the store (no simulation) ──
 def _ckpt_ident(**over):
     base = {"model": "NADROWSKI", "run_size": 4, "n_runs": 6, "chi_mode": True, "chi_k_pad": 12,

@@ -490,6 +490,21 @@ def stub_calibration_battery(monkeypatch, *, ks_pvals=None, tarp_ks_p=0.5) -> di
     return seen
 
 
+def stand_in_gen_obs(model=None, params=None, t=None, inits=None, force=None, n_segs=None,
+                     steady_idx=0, fixed_dict=None, state_dep_drift=False, batch_size=1,
+                     var_idx=None, dtype=torch.float32, device=torch.device("cpu")):
+    """A cheap stand-in for pipeline.gen_obs with its shape: the drive's first channel as the
+    response, a unit oscillation at angular frequency 1 in ND time (so the passive trace has a
+    spectral peak), and a little noise from torch's global stream."""
+    n = t.shape[0] - steady_idx
+    x = (force[:, 0, steady_idx:].to(dtype).expand(batch_size, n) + torch.sin(t[steady_idx:]).to(dtype)
+         + 0.01 * torch.randn(batch_size, n, dtype=dtype, device=device))
+    out = torch.zeros((1 if var_idx is not None else inits.shape[-1], batch_size, n), dtype=dtype,
+                      device=device)
+    out[0] = x
+    return out
+
+
 def build_browse_store(root):
     """One artifact of each of the EIGHT kinds plus the three bad-directory shapes, in a store at
     ``root``. Returns ``{kind: id, ..., "bad": (dir_name, dir_name, dir_name)}``.

@@ -37,7 +37,7 @@ from core.SBI import training_checkpoint as tc
 from core.SBI.run_guards import _log_params_for
 from core.sim_config import SimConfig
 from tests._fixtures import (_FakeDP, _nad_cfg, _prior_artifact, _tiny_nadrowski_gen_prior,
-                             stub_calibration_battery)
+                             stand_in_gen_obs, stub_calibration_battery)
 
 TIER1_BOX = config.BOUNDS_PATH / "nadrowski" / "master_tier1.txt"
 TIER1_CELL = config.CELL_PATH / "nadrowski" / "master_spont_tier1.txt"
@@ -132,21 +132,6 @@ def force_scale_spy(monkeypatch) -> list:
 
     monkeypatch.setattr(forcing, "build_nondim_force_tensor", spy)
     return seen
-
-
-def stand_in_gen_obs(model=None, params=None, t=None, inits=None, force=None, n_segs=None,
-                     steady_idx=0, fixed_dict=None, state_dep_drift=False, batch_size=1,
-                     var_idx=None, dtype=torch.float32, device=torch.device("cpu")):
-    """A cheap stand-in for pipeline.gen_obs with its shape: the drive's first channel as the
-    response, a unit oscillation at angular frequency 1 in ND time (so the passive trace has a
-    spectral peak), and a little noise from torch's global stream."""
-    n = t.shape[0] - steady_idx
-    x = (force[:, 0, steady_idx:].to(dtype).expand(batch_size, n) + torch.sin(t[steady_idx:]).to(dtype)
-         + 0.01 * torch.randn(batch_size, n, dtype=dtype, device=device))
-    out = torch.zeros((1 if var_idx is not None else inits.shape[-1], batch_size, n), dtype=dtype,
-                      device=device)
-    out[0] = x
-    return out
 
 
 def _assert_every_drive_used_the_derived_scale(spy, f, rtol=2e-3):

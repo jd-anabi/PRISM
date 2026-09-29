@@ -156,6 +156,19 @@ def _batch_tag() -> str:
     return _BATCH_TAG or "simulation"
 
 
+def _cache_size_bytes(n_runs: int, run_size: int, *, chi_mode: bool, chi_k_pad: int | None,
+                      n_targets: int) -> int:
+    """The simulation cache's size on disk, in bytes: every row as float32, its conditioning
+    [S | log T | chi block or forcing] plus one target column per inferred parameter.
+
+    The forcing width is an upper bound (eight columns), because it is not known before the first
+    batch returns; the chi block's width is exact. A disk-space sanity check, not an accounting
+    figure.
+    """
+    width = statistics.SUMMARY_WIDTH + 1 + (config.CHI_ELEM_W * chi_k_pad if chi_mode else 8)
+    return n_runs * run_size * (width + n_targets) * 4
+
+
 # 21 lines over a 5000-batch run. PRISM_MEM_LOG_EVERY overrides it for a diagnostic run: when a run
 # is dying at batch 93, a line every 250 batches has told you nothing at all.
 _MEM_LOG_EVERY = int(os.environ.get("PRISM_MEM_LOG_EVERY") or 250)
@@ -1439,12 +1452,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                        parents=checkpoint.get("parents"), inputs=checkpoint.get("inputs"),
                        hw=checkpoint.get("hw"))
             _free = shutil.disk_usage(_ck_dir).free
-            # Conditioning width is [S(41) | log T | forcing-or-chi]; the exact forcing width is not
-            # resolved until the first batch returns, so bound it here -- this is a disk-space sanity
-            # check, not an accounting figure. +8 covers the latent targets.
-            _w = statistics.SUMMARY_WIDTH + 1 + (
-                config.CHI_ELEM_W * chi_k_pad if chi_mode else 8)
-            _need = n_runs * run_size * (_w + 8) * 4
+            _need = _cache_size_bytes(n_runs, run_size, chi_mode=chi_mode, chi_k_pad=chi_k_pad,
+                                      n_targets=nd_dim + len(rescale_idx))
             log.info(f"[checkpoint] writing to {_ck_dir} every {_ck_every} batches "
                      f"(~{_need / 2 ** 30:.1f} GiB total, {_free / 2 ** 30:.1f} GiB free)")
             if _free < _need:
