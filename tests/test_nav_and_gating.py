@@ -120,7 +120,7 @@ def _spont_cfg():
     return Cfg()
 
 
-# ── Phase-2 panels ───────────────────────────────────────────────────────────────────────────────
+# ── the FDT and CrossVal panels and their figure watcher ─────────────────────────────────────────
 def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins(monkeypatch):
     """FDT supports HOPF/BP + additive-noise user models. An FDTModelError (a missing FDT parameter,
     or a user model with multiplicative/zero observable noise) is a Refusal now, so the guard lets it

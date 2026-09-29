@@ -134,7 +134,7 @@ def test_a_failed_run_does_not_pin_its_frames():
             if was_enabled:
                 gc.enable()
 
-# ── Phase 3: cancellation ────────────────────────────────────────────────────────────────────────
+# ── cancellation ─────────────────────────────────────────────────────────────────────────────────
 def test_worker_cancelled_passes_through_except_exception():
     """The cancel exception must be a BaseException so the pipeline's many `except Exception` handlers
     (sbi, cross_validation, Worker.run itself) do not swallow it."""
@@ -298,7 +298,7 @@ def test_inference_config_restore_with_a_stale_model_does_not_desync_the_bounds_
     assert picker.base_path.name == model.lower()
     assert picker.combo.count() > 0, "the bounds picker was left empty by a stale model"
 
-# ── Phase 3: error dialogs ───────────────────────────────────────────────────────────────────────
+# ── error dialogs ────────────────────────────────────────────────────────────────────────────────
 def test_on_error_puts_the_traceback_in_details_not_the_body():
     """A run failure's traceback belongs in a collapsible Details panel, not pasted whole into the
     dialog body. The worker hands over the EXCEPTION now, not its text: a bug is anything that is not
