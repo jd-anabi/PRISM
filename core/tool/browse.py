@@ -557,24 +557,26 @@ _REF = "the artifact's name, or its id"
 def register(subparsers) -> dict:
     """``{name: subparser}`` -- the contract ``build_parser``'s ``p.subcommands.update(...)`` loop
     needs. One subcommand, six modes."""
+    text = "read, annotate and tidy the artifact store (loads nothing, simulates nothing)"
     p = subparsers.add_parser(
-        "artifacts", help="read, annotate and tidy the artifact store (loads nothing, simulates "
-                          "nothing)",
+        "artifacts", help=text, description=text,
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     modes = p.add_subparsers(dest="mode", required=True,
                              metavar="{list,show,note,rm,sweep,summary}")
 
-    ls = modes.add_parser("list", help="one line per artifact of a kind, or of all eight")
+    text = "one line per artifact of a kind, or of all eight"
+    ls = modes.add_parser("list", help=text, description=text)
     ls.add_argument("kind", nargs="?", default=None, metavar="<kind>", help=_KIND)
     ls.set_defaults(handler=_list)
 
-    show = modes.add_parser("show", help="one artifact's manifest and the records of the run that "
-                                         "wrote it")
+    text = "one artifact's manifest and the records of the run that wrote it"
+    show = modes.add_parser("show", help=text, description=text)
     show.add_argument("kind", metavar="<kind>", help=_KIND)
     show.add_argument("ref", metavar="<ref>", help=_REF)
     show.set_defaults(handler=_show)
 
-    note = modes.add_parser("note", help="set or clear one artifact's note")
+    text = "set or clear one artifact's note"
+    note = modes.add_parser("note", help=text, description=text)
     note.add_argument("kind", metavar="<kind>", help=_KIND)
     note.add_argument("ref", metavar="<ref>", help=_REF)
     note.add_argument("--note", required=True, metavar="TEXT",
@@ -582,15 +584,16 @@ def register(subparsers) -> dict:
                            f"with a newline, or a longer one, is refused rather than trimmed to fit")
     note.set_defaults(handler=_note)
 
-    rm = modes.add_parser("rm", help="delete one artifact; refused when anything depends on it")
+    text = "delete one artifact; refused when anything depends on it"
+    rm = modes.add_parser("rm", help=text, description=text)
     rm.add_argument("kind", metavar="<kind>", help=_KIND)
     rm.add_argument("ref", metavar="<ref>", help=_REF)
     rm.set_defaults(handler=_rm)
 
-    sweep = modes.add_parser("sweep", help="remove every directory with no manifest at all, every "
-                                           "loose file beside the records, and (with no kind) the "
-                                           "legacy directory an older build left beside the kind "
-                                           "directories (a dry run until --yes)")
+    text = ("remove every directory with no manifest at all, every loose file beside the records, "
+            "and (with no kind) the legacy directory an older build left beside the kind "
+            "directories (a dry run until --yes)")
+    sweep = modes.add_parser("sweep", help=text, description=text)
     sweep.add_argument("kind", nargs="?", default=None, metavar="<kind>",
                        help=f"{_KIND}; with no kind, all eight, and the legacy directory beside them")
     sweep.add_argument("--yes", action="store_true",
@@ -599,7 +602,8 @@ def register(subparsers) -> dict:
                             "the window asks for in a dialog")
     sweep.set_defaults(handler=_sweep)
 
-    summary = modes.add_parser("summary", help="the lineage report: this artifact, then its parents")
+    text = "the lineage report: this artifact, then its parents"
+    summary = modes.add_parser("summary", help=text, description=text)
     summary.add_argument("kind", metavar="<kind>", help=_KIND)
     summary.add_argument("ref", metavar="<ref>", help=_REF)
     summary.add_argument("--out", default=None, metavar="PATH",

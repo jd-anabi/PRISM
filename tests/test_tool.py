@@ -6,6 +6,7 @@ it, or a knob flag that quietly stops reaching its stage, is invisible from outs
 therefore asserts that ``default_store()`` is still the session sandbox when ``main`` returns, and the
 knob tests read the keyword a recorder actually received rather than the run's output.
 """
+import argparse
 import ast
 from pathlib import Path
 from types import SimpleNamespace
@@ -128,6 +129,69 @@ def test_the_help_epilog_names_the_core_environment_settings():
     epilog = build_parser().epilog
     for name in ("PRISM_RESOURCES", "PRISM_ARTIFACTS", "PRISM_VRAM_CEILING_GIB", "PRISM_MEM_LOG_EVERY"):
         assert name in epilog, name
+
+
+HOUSE_METAVARS = frozenset({"N", "X", "S", "K", "REF", "PATH", "NAME", "TEXT", "STAGE[,STAGE...]",
+                            "PATH[@HZ]", "NAME=VALUE", ("MIN", "MAX", "N")})
+
+
+def _parsers(parser=None, path=()):
+    """Every parser under ``python -m core`` with its path as typed after it: the top level (path
+    ""), each subcommand, and each mode of a subcommand that has modes."""
+    parser = build_parser() if parser is None else parser
+    yield " ".join(path), parser
+    for a in parser._actions:
+        if isinstance(a, argparse._SubParsersAction):
+            for name, sub in a.choices.items():
+                yield from _parsers(sub, (*path, name))
+
+
+def _leaves(parser=None):
+    """The parsers that run something: each subcommand without modes, and each mode."""
+    for path, p in _parsers(parser):
+        if path and not any(isinstance(a, argparse._SubParsersAction) for a in p._actions):
+            yield path, p
+
+
+def test_every_leaf_parser_has_a_description():
+    """``<subcommand> --help`` and ``<subcommand> <mode> --help`` open with what the command does:
+    every subcommand and mode parser carries a description, and it is the one-liner the listing
+    above it shows, so the two never disagree."""
+    seen = []
+    for path, parser in _parsers():
+        for a in parser._actions:
+            if isinstance(a, argparse._SubParsersAction):
+                listed = {ca.dest: ca.help for ca in a._choices_actions}
+                for name, sub in a.choices.items():
+                    where = f"{path} {name}".strip()
+                    assert sub.description, f"`{where} --help` says nothing about what it does"
+                    assert sub.description == listed[name], (where, sub.description, listed[name])
+                    seen.append(where)
+    assert {"prior", "smoke", "identifiability laplace", "compare cells", "artifacts sweep"} <= set(seen)
+
+
+def test_every_value_flag_has_a_house_placeholder():
+    """A flag that takes a value says what it is and shows what to type from the house set -- N a
+    count, X a real number, S seconds, K the probe count, REF an artifact's name or id, PATH, NAME,
+    TEXT -- or lists its choices; never the internal destination name argparse prints otherwise."""
+    bad, no_help = [], []
+    for path, leaf in _leaves():
+        for a in leaf._actions:
+            if not a.option_strings or a.nargs == 0:
+                continue
+            if not a.help:
+                no_help.append(f"{path} {a.option_strings[0]}")
+            if a.choices is None and a.metavar not in HOUSE_METAVARS:
+                bad.append(f"{path} {a.option_strings[0]}: {a.metavar!r}")
+    assert not no_help, "value flags that say nothing:\n" + "\n".join(no_help)
+    assert not bad, "value flags without a house placeholder:\n" + "\n".join(bad)
+    shown = {(path, a.option_strings[0]): a.metavar
+             for path, leaf in _leaves() for a in leaf._actions if a.option_strings}
+    assert shown[("infer", "--f0-si")] == "X", "a force in newtons, not a count"
+    assert shown[("tsnpe", "--level")] == "X"
+    assert shown[("compare renormalise", "--prefactor")] == shown[("compare sweeps", "--at")] == "X"
+    assert shown[("sbc", "--chi-k-fixed")] == "K", "the chi probe count, as --chi-k shows it"
+    assert shown[("smoke", "--stages")] == "STAGE[,STAGE...]"
 
 
 def _env_reads_and_knob_writes(tree) -> list:

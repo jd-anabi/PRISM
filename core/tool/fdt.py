@@ -135,7 +135,7 @@ def _add_store_root(p) -> None:
     these two do not have. So ``main`` now keys them on ``args.temp_store_root``, which only
     ``smoke`` sets.
     """
-    p.add_argument("--store-root", dest="store_root", default=None,
+    p.add_argument("--store-root", dest="store_root", default=None, metavar="PATH",
                    help="the artifact store this run writes its record into (default: the "
                         "PRISM_ARTIFACTS root, like every subcommand but `smoke`)")
 
@@ -146,39 +146,43 @@ def _add_fdt_knobs(p) -> None:
     is the command-line half of the rule that every run records the seed it used: a seed a record
     carries must be one the operator can supply back. Unset, the run draws one from [0, 2**31) and
     records it."""
-    p.add_argument("--n-freqs", dest="n_freqs", type=int, default=None,
-                   help="drive frequencies in Campaign 2")
-    p.add_argument("--ensemble-m", dest="ensemble_M", type=int, default=None,
+    p.add_argument("--n-freqs", dest="n_freqs", type=int, default=None, metavar="N",
+                   help="drive frequencies in the driven-response sweep")
+    p.add_argument("--ensemble-m", dest="ensemble_M", type=int, default=None, metavar="N",
                    help="trajectories per frequency")
-    p.add_argument("--freqs-per-batch", dest="freqs_per_batch", type=int, default=None,
+    p.add_argument("--freqs-per-batch", dest="freqs_per_batch", type=int, default=None, metavar="N",
                    help="frequencies packed into one simulator call")
-    p.add_argument("--f0", dest="F0", type=float, default=None,
-                   help="ND forcing amplitude (keep it inside the linear regime)")
-    p.add_argument("--seed", type=int, default=None,
-                   help="the run's random seed, a whole number from 0 (default: draw one; either "
-                        "way the record carries it, so the run can be repeated)")
+    p.add_argument("--f0", dest="F0", type=float, default=None, metavar="X",
+                   help="non-dimensional drive amplitude; keep it inside the linear regime")
+    p.add_argument("--seed", type=int, default=None, metavar="N",
+                   help="the random seed for the whole run, a whole number from 0; the record "
+                        "carries it, so the run can be repeated (default: draw one)")
 
 
 def register(subparsers):
+    text = "effective-temperature (FDT) analysis for one cell"
     fdt = subparsers.add_parser(
-        "fdt", help="effective-temperature (FDT) analysis for one cell",
+        "fdt", help=text, description=text,
         epilog=FDT_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
-    fdt.add_argument("--cell", required=True, help="the cell file to analyse")
-    fdt.add_argument("--model", default=None,
+    fdt.add_argument("--cell", required=True, metavar="PATH",
+                     help="the cell file whose ground truth the analysis runs at")
+    fdt.add_argument("--model", default=None, metavar="NAME",
                      help="model name (default: the cell's parent folder)")
     _add_store_root(fdt)
+    add_name_flags(fdt)
     _add_fdt_knobs(fdt)
     fdt.add_argument("--skip-sanity", dest="skip_sanity", action="store_true",
                      help="skip the sanity checks and go straight to the production sweep")
     fdt.add_argument("--no-production", dest="no_production", action="store_true",
                      help="stop after the sanity checks")
-    add_name_flags(fdt)
     fdt.set_defaults(handler=run_fdt_cmd, interrupt_note=FDT_INTERRUPT_NOTE)
 
+    text = "the FDT parameter-sweep study (S and T_a/T), NADROWSKI only"
     cv = subparsers.add_parser(
-        "crossval", help="the FDT parameter-sweep study (S and T_a/T), NADROWSKI only",
+        "crossval", help=text, description=text,
         epilog=CROSSVAL_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
-    cv.add_argument("--cell", required=True, help="the NWK cell file the sweeps start from")
+    cv.add_argument("--cell", required=True, metavar="PATH",
+                    help="a Nadrowski cell file whose ground truth the sweeps start from")
     cv.add_argument("--preset", choices=("exploratory", "production"), default="exploratory",
                     help="resolution preset (default: exploratory)")
     cv.add_argument("--s-grid", dest="s_grid", nargs=3, type=float, required=True,
@@ -186,8 +190,8 @@ def register(subparsers):
     cv.add_argument("--t-grid", dest="t_grid", nargs=3, type=float, required=True,
                     metavar=("MIN", "MAX", "N"), help="the T_a/T sweep grid")
     _add_store_root(cv)
-    _add_fdt_knobs(cv)
     add_name_flags(cv, name_help=CROSSVAL_NAME_HELP)
+    _add_fdt_knobs(cv)
     cv.set_defaults(handler=run_crossval, interrupt_note=CROSSVAL_INTERRUPT_NOTE)
     return {"fdt": fdt, "crossval": cv, **_register_compare(subparsers)}
 
@@ -303,23 +307,24 @@ def _register_compare(sub) -> dict:
     means nothing to a mode is an argparse error rather than a setting silently ignored. No
     --store-root and no configuration flags, for core/tool/browse.py's reasons: the root is
     PRISM_ARTIFACTS, and --help here costs no torch import."""
-    p = sub.add_parser("compare", help="compare saved FDT records (cells, repeats, renormalise, sweeps)",
+    text = "compare saved FDT records (cells, repeats, renormalise, sweeps)"
+    p = sub.add_parser("compare", help=text, description=text,
                        epilog=COMPARE_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     modes = p.add_subparsers(dest="variant", required=True,
                              metavar="{cells,repeats,renormalise,sweeps}")
     built = {}
     for name, helptext in _COMPARE_MODES:
-        m = modes.add_parser(name, help=helptext)
+        m = modes.add_parser(name, help=helptext, description=helptext)
         m.add_argument("--record", action="append", required=True, metavar="REF",
                        help="a saved fdt record, by name or id; repeat the flag once per record")
         add_name_flags(m)
         m.set_defaults(handler=run_compare, interrupt_note=COMPARE_INTERRUPT_NOTE)
         built[name] = m
     built["renormalise"].add_argument(
-        "--prefactor", type=float, required=True, metavar="VALUE",
+        "--prefactor", type=float, required=True, metavar="X",
         help="the normalisation constant to recompute T_eff/T with")
     built["sweeps"].add_argument(
-        "--at", type=float, default=None, metavar="VALUE",
+        "--at", type=float, default=None, metavar="X",
         help="the operating point to slice both sweeps at (default: the middle of the range they "
              "share)")
     return {"compare": p}

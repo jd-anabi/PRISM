@@ -83,25 +83,32 @@ def register(subparsers):
     """The ``smoke`` subcommand. Its defaults are the drill's sizes, and they are the ONE place in
     the tool that restates a literal (every other subcommand leaves defaults to its stage)."""
     from core.tool.config_args import add_config_flags, add_resume_flags
+    text = ("every stage end to end at tiny sizes; run it on the card after changing code\n"
+            "that moves tensors")
     p = subparsers.add_parser(
-        "smoke", help="every stage end to end at tiny sizes (the GPU gate)",
+        "smoke", help=text, description=text,
         epilog=EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_config_flags(p)
-    p.add_argument("--cell", required=True,
-                   help="the cell file whose truth the infer stage simulates")
-    p.add_argument("--t-obs", dest="t_obs_s", type=float, default=None,
-                   help="observation duration in seconds (default: config.T_MIN_EXP_S)")
-    p.add_argument("--seed", type=int, default=0, help="RNG seed for the whole run (default 0)")
+    p.add_argument("--cell", required=True, metavar="PATH",
+                   help="the cell file whose ground truth the infer stage simulates")
+    p.add_argument("--t-obs", dest="t_obs_s", type=float, default=None, metavar="S",
+                   help="observation length, in seconds, of the observation the infer stage "
+                        "simulates (default: config.T_MIN_EXP_S)")
+    p.add_argument("--seed", type=int, default=0, metavar="N",
+                   help="the random seed for the whole run (default 0)")
     p.add_argument("--stages", default=",".join(STAGES), type=_stages_type,
-                   help=f"comma list, a subset of {','.join(STAGES)} (default: all four)")
-    p.add_argument("--num-runs", dest="num_runs", type=int, default=4,
-                   help="training batches (default 4)")
-    p.add_argument("--run-size", dest="run_size_cap", type=int, default=32,
-                   help="simulations per training batch (default 32); the prior sweep is unaffected")
-    p.add_argument("--n-cal", dest="n_cal", type=int, default=40,
-                   help="calibration datasets for SBC/TARP (default 40)")
-    p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=5,
-                   help="training epochs ceiling (default 5)")
+                   metavar="STAGE[,STAGE...]",
+                   help=f"the stages to run, a comma-separated subset of {','.join(STAGES)} "
+                        "(default: all four)")
+    p.add_argument("--num-runs", dest="num_runs", type=int, default=4, metavar="N",
+                   help="training batches to simulate (default 4)")
+    p.add_argument("--run-size", dest="run_size_cap", type=int, default=32, metavar="N",
+                   help="ceiling on simulations per training batch; the prior sweep keeps the "
+                        "hardware batch (default 32)")
+    p.add_argument("--n-cal", dest="n_cal", type=int, default=40, metavar="N",
+                   help="calibration datasets to simulate (default 40)")
+    p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=5, metavar="N",
+                   help="hard ceiling on training epochs (default 5)")
     p.add_argument("--checkpoint", action="store_true",
                    help="checkpoint the training rows every max(1, num_runs // 2) batches; OFF by "
                         "default so a second run of one config re-runs the simulation path this "
@@ -109,14 +116,14 @@ def register(subparsers):
     p.add_argument("--save", action="store_true",
                    help="name the artifacts this run BUILDS: smoke_prior / smoke_posterior. A second "
                         "--save run against the same store is refused by name, at stage entry")
-    p.add_argument("--store-root", dest="store_root", default=None,
+    p.add_argument("--store-root", dest="store_root", default=None, metavar="PATH",
                    help="the artifact store this run writes (prior, cache, posterior, observation, "
-                        "calibration, inference). Default: a fresh temp directory, left on disk. "
-                        "Reuse one, with --prior and --checkpoint, to resume")
-    p.add_argument("--prior", dest="prior", default=None,
-                   help="a prior artifact (name or id) in --store-root to LOAD instead of building. "
-                        "Required for a resume: the cache identity includes prior_fingerprint, and "
-                        "two fits of one box differ")
+                        "calibration, inference); reuse one, with --prior and --checkpoint, to "
+                        "resume. Default: a fresh temp directory, left on disk.")
+    p.add_argument("--prior", dest="prior", default=None, metavar="REF",
+                   help="prior artifact in --store-root to load instead of building, by name or id; "
+                        "a resume needs it, because the cache is keyed on the prior's fit and two "
+                        "fits of one box differ")
     add_resume_flags(p)
     # THE ONE subcommand that writes to a root of its own rather than to PRISM_ARTIFACTS: `main`
     # reads this property (never `hasattr(args, "store_root")`, which `fdt` and `crossval` now

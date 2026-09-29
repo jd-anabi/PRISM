@@ -12,12 +12,12 @@ core-level settings PRISM does read are named in the --help epilog.
 
 Every ``core`` import that costs torch is inside a function: the parser is built before
 ``registry.load_user_models`` runs, and ``--help`` must not cost a torch import. ``core.refusals`` is
-torch-free and is the one top-level exception, for ``UsageError``'s base.
+torch-free and is the one top-level exception, for ``UsageError``'s base and the note's length limit.
 """
 import argparse
 from pathlib import Path
 
-from core.refusals import Refusal
+from core.refusals import NOTE_MAX_CHARS, Refusal
 
 
 class UsageError(Refusal):
@@ -43,8 +43,10 @@ def add_config_flags(p) -> None:
     p.add_argument("--chi-k", dest="chi_n_freqs", type=int, default=None, metavar="K",
                    help="probe frequencies per observation (default: config.CHI_N_FREQS)")
     p.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto",
-                   help="auto detects CUDA; cpu forces config.cpu_device(); cuda is auto's own "
-                        "detection, refused when it does not yield the card (default: auto)")
+                   help="auto picks the card when CUDA is present with compute capability 8.0 or "
+                        "above, else Apple's MPS when present, else the CPU; cpu forces the CPU; "
+                        "cuda requires the card and is refused when it is absent or below 8.0 "
+                        "(default: auto)")
 
 
 def add_name_flags(p, *, name_help: "str | None" = None) -> None:
@@ -54,7 +56,42 @@ def add_name_flags(p, *, name_help: "str | None" = None) -> None:
                    help=name_help or ("name the artifact this command writes ('' = unnamed). A taken "
                                       "name is refused at the stage's entry, before anything is spent."))
     p.add_argument("--note", default="", metavar="TEXT",
-                   help="free text recorded in the artifact's manifest")
+                   help=f"free text recorded in the artifact's manifest: one line, at most "
+                        f"{NOTE_MAX_CHARS} characters ('' = no note)")
+
+
+def add_training_flags(p, *, fisher: bool) -> None:
+    """The training knobs ``train`` and ``tsnpe`` share, each defaulting to None so that only a given
+    one reaches the stage and the stage's own default applies otherwise.
+
+    Defined once here because the two subcommands used to define these flags twice, and ``tsnpe``'s
+    copy carried no help at all. ``tsnpe`` passes ``fisher=False``: a narrowing round reuses its
+    parent's rotation and never computes a Fisher of its own, so a Fisher flag there would be
+    silently ignored. ``smoke`` does not use this helper: its defaults are its own literals, the
+    drill's sizes, and its ``--checkpoint`` is an on/off switch rather than a count of batches.
+    """
+    p.add_argument("--num-runs", type=int, default=None, metavar="N",
+                   help="training batches to simulate")
+    p.add_argument("--run-size", dest="run_size_cap", type=int, default=None, metavar="N",
+                   help="ceiling on simulations per training batch; 0 = the hardware batch")
+    p.add_argument("--hidden-features", type=int, default=None, metavar="N",
+                   help="flow width per transform")
+    p.add_argument("--num-transforms", type=int, default=None, metavar="N", help="flow depth")
+    p.add_argument("--learning-rate", type=float, default=None, metavar="X",
+                   help="Adam learning rate")
+    p.add_argument("--stop-after-epochs", type=int, default=None, metavar="N",
+                   help="early-stopping patience, in epochs")
+    p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=None, metavar="N",
+                   help="hard ceiling on training epochs")
+    if fisher:
+        p.add_argument("--fisher-m", type=int, default=None, metavar="N",
+                       help="ensemble per latent perturbation for the Fisher rotation")
+        p.add_argument("--fisher-dz", type=float, default=None, metavar="X",
+                       help="latent central-difference step")
+        p.add_argument("--fisher-points", type=int, default=None, metavar="N",
+                       help="operating points the Fisher rotation is averaged over")
+    p.add_argument("--checkpoint-every", type=int, default=None, metavar="N",
+                   help="batches between checkpoint commits; 0 = no cache, nothing resumable")
 
 
 def add_resume_flags(p) -> None:
