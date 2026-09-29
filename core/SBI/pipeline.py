@@ -156,6 +156,79 @@ def _batch_tag() -> str:
     return _BATCH_TAG or "simulation"
 
 
+# ── How many chi probes were masked, per committed batch ─────────────────────────────────────────
+# The batch probe tally of the gen_training_data call in progress, or None. A module global for the
+# reason _BATCH_TAG is one: its only producer, gen_chi_block, sits several calls below the batch loop
+# and has no business taking a batch index or a tally; single-writer by construction (one
+# gen_training_data at a time per process), set for the life of one call and cleared however it ends.
+_ACTIVE_LEDGER = None
+
+
+class _BatchProbeLedger:
+    """The masked and simulated probe counts of a chi training run, one (masked, total) per committed
+    batch, in batch order.
+
+    Each gen_chi_block call reports its row range's counts with ``add``; they wait, pending, until the
+    batch loop has stored the batch's rows and calls ``commit``. An attempt the batch-level retry
+    abandons is dropped with ``discard`` before the re-run. Row halving runs one batch as several row
+    ranges, and an out-of-memory error raised after gen_chi_block returned leaves a report for the
+    failed full range, so ``add`` first drops every pending report whose range overlaps the new one:
+    a halved batch is then counted once. A pending report may also carry a ``record``, kept and
+    dropped with its counts under the same rule.
+
+    ``committed`` may be restored from a simulation cache, whose first ``len(committed)`` batches it
+    then describes. ``first_batch`` is the first batch this tally counts: 0 when it covers the whole
+    run, or the resume point when the cache holds no per-batch counts for the batches before it.
+    Draws no random numbers and touches no tensor.
+    """
+
+    def __init__(self, committed=(), first_batch: int = 0):
+        self.committed: list[tuple[int, int]] = [(int(m), int(t)) for m, t in committed]
+        self.first_batch = int(first_batch)
+        self._pending: list[tuple[int, int, int, int, object]] = []
+
+    def add(self, lo: int, hi: int, masked: int, total: int, record=None) -> None:
+        """Hold one row range's counts until its batch commits, replacing any pending range it overlaps."""
+        self._pending = [p for p in self._pending if not (p[0] < hi and lo < p[1])]
+        self._pending.append((int(lo), int(hi), int(masked), int(total), record))
+
+    def discard(self) -> None:
+        """Drop every pending count: the attempt that reported them is being re-run."""
+        self._pending = []
+
+    def commit(self, batch_k: int) -> None:
+        """Commit the pending counts as batch ``batch_k``'s, which must be the next batch in order."""
+        expected = self.first_batch + len(self.committed)
+        if batch_k != expected:
+            raise RuntimeError(f"the batch probe tally was asked to commit batch {batch_k}, but the next "
+                               f"batch in order is {expected}")
+        self.committed.append((sum(p[2] for p in self._pending), sum(p[3] for p in self._pending)))
+        self._pending = []
+
+    def summary_line(self, scope: str) -> str:
+        """The run-total record: masked of simulated probes over the committed batches, and the spread
+        of the per-batch masked fraction over those that simulated any. ``scope`` says which batches
+        those are."""
+        from statistics import median                # the standard library's, not core.SBI.statistics
+        masked = sum(m for m, _ in self.committed)
+        total = sum(t for _, t in self.committed)
+        if total == 0:
+            return f"[chi] masked probes: none counted, {scope}"
+        fractions = [100.0 * m / t for m, t in self.committed if t > 0]
+        return (f"[chi] masked probes: {masked:,} of {total:,} ({100.0 * masked / total:.1f}%) over "
+                f"{len(self.committed)} batches, {scope}; per batch {min(fractions):.1f}-"
+                f"{max(fractions):.1f}%, median {median(fractions):.1f}%")
+
+
+def _chi_counts(ledger, k: int) -> list[list[int]] | None:
+    """What a simulation cache committing batches [0, k) stores as their per-batch probe counts: the
+    tally's first ``k`` entries, or None -- store nothing -- when there is no tally or it does not
+    cover every one of those batches, so the cache never claims counts for batches nobody counted."""
+    if ledger is None or ledger.first_batch != 0 or len(ledger.committed) < k:
+        return None
+    return [[m, t] for m, t in ledger.committed[:k]]
+
+
 def _cache_size_bytes(n_runs: int, run_size: int, *, chi_mode: bool, chi_k_pad: int | None,
                       n_targets: int) -> int:
     """The simulation cache's size on disk, in bytes: every row as float32, its conditioning
@@ -964,10 +1037,13 @@ class _BatchGeometry:
     dfrac: torch.Tensor = None
 
 
-def _chi_rows(g: _BatchGeometry, nd, resc, init_rows, x_scale, x_offset, _patho) -> torch.Tensor:
+def _chi_rows(g: _BatchGeometry, nd, resc, init_rows, x_scale, x_offset, _patho,
+              row_range: tuple[int, int] | None = None) -> torch.Tensor:
     """One chi-mode row block: spontaneous run + K single-tone probes -> [S | log T | chi block].
     gen_obs / gen_stats / gen_chi_block / _subset_probe_rows are read as MODULE names on purpose --
-    the test harness patches them on this module and must be honoured."""
+    the test harness patches them on this module and must be honoured. ``row_range`` is the block's
+    [lo, hi) within its batch, handed to gen_chi_block so its probe counts reach the batch probe tally
+    under the range they describe."""
     (model, t_fine, n_segs_k, steady_idx, subsample_factor, N_points_k, T_k, n_force_ch,
      dt_exp, fixed_dict, state_dep_drift, sim_ridx, forcing_idx, dtype, device) = (
         g.model, g.t_fine, g.n_segs_k, g.steady_idx, g.subsample_factor, g.N_points_k, g.T_k,
@@ -1009,7 +1085,7 @@ def _chi_rows(g: _BatchGeometry, nd, resc, init_rows, x_scale, x_offset, _patho)
         # gets to choose where it probes; every other caller is reproducing an experiment
         # whose frequencies are already fixed.
         adapt_placement=True,
-        dtype=dtype, device=device)
+        row_range=row_range, dtype=dtype, device=device)
     # Per-ROW subsetting of the SAME drive set. Free -- the simulation is shared with the
     # rows that keep the probe -- and it is the only way to decouple the probe count from
     # the batch's (t_scale, T) stratum. It also hands the flow pairs of rows with the same
@@ -1462,12 +1538,24 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                     f"{_need / 2 ** 30:.1f} GiB. The run will fail partway through a checkpoint "
                     f"write; free space now.", stacklevel=2)
 
-    global _BATCH_TAG
+    # The batch probe tally, chi mode only: each batch's masked and simulated probe counts, committed
+    # beside its rows and stored in the cache beside batches_done, so the run total at the end covers
+    # a resumed run's earlier batches too. A stored list is trusted only when it describes exactly the
+    # committed batches. A cache committed without per-batch counts (or with a list of another length)
+    # starts the tally at the resume point instead, and the total then says it covers only this process.
+    _ledger = None
+    if chi_mode:
+        _stored = _state.get("chi_masked", []) if _ck_resumed is not None else []
+        _ledger = (_BatchProbeLedger(committed=_stored) if len(_stored) == _start_k
+                   else _BatchProbeLedger(first_batch=_start_k))
+
+    global _BATCH_TAG, _ACTIVE_LEDGER
     _patho = dict.fromkeys(("rows", "nonfinite", "constant", "overflow"), 0)
     _patho_seen = 0              # count already reported, so each line is NEW rows
     _pending_rng = None          # RNG as of the TOP of batch_k -- see the checkpoint write below
     _pending_rng_at = -1         # ...and WHICH batch it describes; see the rescue write
     _ck_from = _start_k          # first batch not yet committed to disk
+    _ACTIVE_LEDGER = _ledger     # read by gen_chi_block; cleared in the `finally` below
     batch_k = _start_k           # bound up front: the except handler reads it, and an exception
     try:                         # before the first iteration would otherwise raise NameError there
       with torch.no_grad():
@@ -1606,7 +1694,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 x_offset = (resc[:, sim_ridx["x_offset"]].unsqueeze(1)
                             if "x_offset" in sim_ridx else 0.0)
                 if chi_mode:
-                    return _chi_rows(geom, nd, resc, init_rows, x_scale, x_offset, _patho)
+                    return _chi_rows(geom, nd, resc, init_rows, x_scale, x_offset, _patho,
+                                     row_range=(lo, hi))
                 elif spontaneous_only:
                     return _spontaneous_rows(geom, nd, init_rows, x_scale, x_offset, _patho)
                 return _forced_rows(geom, nd, resc, init_rows, fparams, x_scale, x_offset, _patho)
@@ -1676,6 +1765,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                 # OUTSIDE THE HANDLER, for the reason spelled out in _rows_with_oom_retry: while
                 # `_err` is bound its traceback owns every frame of the failed attempt and the
                 # tensors they hold, so releasing here is what makes the release mean anything.
+                if _ledger is not None:
+                    _ledger.discard()        # the abandoned attempt's probe counts; the re-run reports its own
                 _delay = _delays[min(_attempt, len(_delays) - 1)]
                 log.error(f"{_batch_tag()}: batch FAILED after both halving retries "
                           f"({_attempt + 1}/{_attempts + 1}){_free_gib_note(device)}. Waiting "
@@ -1734,6 +1825,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             _lo, _hi = batch_k * run_size, (batch_k + 1) * run_size
             x_buf[_lo:_hi] = _rows_out
             th_buf[_lo:_hi] = _th_out
+            if _ledger is not None:
+                _ledger.commit(batch_k)      # the rows are stored, so their probe counts count
             del _rows_out, _th_out
             # plans ON: cuFFT caches a plan per distinct transform SHAPE, outside PyTorch's
             # caching allocator -- so empty_cache() cannot touch it and it surfaces as a RAW driver
@@ -1783,7 +1876,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                                 f"snapshot. The rows are still held and go out at the next boundary.")
                 else:
                     _tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k + 1, rng=_ck_rng,
-                             x_buf=x_buf, th_buf=th_buf, run_size=run_size)
+                             x_buf=x_buf, th_buf=th_buf, run_size=run_size,
+                             chi_masked=_chi_counts(_ledger, batch_k + 1))
                     _ck_from = batch_k + 1
 
     except BaseException:
@@ -1819,7 +1913,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                     log.info(f"[checkpoint] stopping: saving {batch_k - _ck_from} completed batches "
                              f"({_ck_from} -> {batch_k}) before unwinding…")
                     _tc.save(_ck_dir, from_batch=_ck_from, batch_k=batch_k,
-                             rng=_rescue_rng, x_buf=x_buf, th_buf=th_buf, run_size=run_size)
+                             rng=_rescue_rng, x_buf=x_buf, th_buf=th_buf, run_size=run_size,
+                             chi_masked=_chi_counts(_ledger, batch_k))
                 except Exception as _e:              # noqa: BLE001
                     # A failed rescue write must never REPLACE the cancel/crash with an I/O error. It is
                     # an ERROR record: a failure reported rather than raised.
@@ -1830,6 +1925,7 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
         # NEXT failure anywhere in the process claim a batch that finished hours ago, which is worse
         # than no tag at all.
         _BATCH_TAG = ""
+        _ACTIVE_LEDGER = None
 
     if _patho["rows"]:
         _bad = _patho["nonfinite"] + _patho["constant"] + _patho["overflow"]
@@ -1837,6 +1933,18 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                  f"trajectories ({100.0 * _bad / _patho['rows']:.4f}%) -- "
                  f"{_patho['nonfinite']:,} non-finite, {_patho['constant']:,} exactly constant, "
                  f"{_patho['overflow']:,} over {_PATHO_MAG:g}")
+    if _ledger is not None:
+        # One record per chi-mode call, also when a resume found the cache complete and simulated
+        # nothing: the per-block warnings are one sample each, and the run total is the number to read.
+        if _ck_dir is None:
+            _scope = "this process only (no simulation cache)"
+        elif _ledger.first_batch == 0:
+            _scope = "every committed batch of the simulation cache"
+        else:
+            _scope = (f"only the batches this process generated; the cache's first {_ledger.first_batch} "
+                      f"batches were committed without per-batch counts")
+        masked_line = _ledger.summary_line(_scope)
+        log.info(masked_line)
     if _region is not None and _region_total:
         log.info(f"[tsnpe] post-override containment: {_region_inside:,}/{_region_total:,} = "
                  f"{_region_inside / _region_total:.3%} of the recorded latent targets lie inside the "
@@ -1857,7 +1965,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             # returns its stored rows, so its restore point is never read and None costs nothing.
             _tc.save(_ck_dir, from_batch=_ck_from, batch_k=n_runs,
                      rng=_try_rng_snapshot(_tc, device, chi_gen),
-                     x_buf=x_buf, th_buf=th_buf, run_size=run_size)
+                     x_buf=x_buf, th_buf=th_buf, run_size=run_size,
+                     chi_masked=_chi_counts(_ledger, n_runs))
         _tc.mark_complete(_ck_dir, n_runs, rows=tuple(int(v) for v in x_buf.shape))
         log.info(f"[checkpoint] complete: {n_runs} batches in {_ck_dir}. Safe to delete once the "
                  f"posterior is saved; keeping it lets you retrain the flow without re-simulating.")

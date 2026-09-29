@@ -248,7 +248,8 @@ def gen_chi_raw(model: str, params_nd: torch.Tensor, rescale: torch.Tensor, x_sp
             torch.stack(logcyc_list, dim=1), valid)
 
 
-def gen_chi_block(*args, k_pad: int = None, bounds: tuple = None, **kwargs) -> tuple:
+def gen_chi_block(*args, k_pad: int = None, bounds: tuple = None,
+                  row_range: tuple[int, int] | None = None, **kwargs) -> tuple:
     """``gen_chi_raw`` + :func:`core.SBI.chi.pack_probe_block` -> the padded CONDITIONING block.
 
     Split from the raw lock-in deliberately: the Fisher (``SBI/decorrelate.feats``) needs the
@@ -256,6 +257,10 @@ def gen_chi_block(*args, k_pad: int = None, bounds: tuple = None, **kwargs) -> t
     there and poison the Jacobian -- see CHI_FISHER_CHANNELS. Sharing the simulation loop keeps the
     two feature sets provably from drifting apart.
 
+    :param row_range: the rows' [lo, hi) within their training batch. Given only by the training
+                      generator; with it, and while a batch probe tally is active, this call's masked
+                      and simulated probe counts are reported to that tally under the range. Never
+                      forwarded to ``gen_chi_raw``.
     :return: ((B, CHI_ELEM_W*k_pad) block, (B, k_pad) bool mask).
     """
     # `bounds` goes to BOTH: the packer normalises u_hat by it, and adapt_placement compresses into
@@ -265,6 +270,8 @@ def gen_chi_block(*args, k_pad: int = None, bounds: tuple = None, **kwargs) -> t
     block, mask = chi.pack_probe_block(chi_stack, u, logcyc, valid, k_pad=k_pad, bounds=bounds)
     B, K = chi_stack.shape
     dropped = int((~mask[:, :K]).sum())
+    if row_range is not None and _pipeline._ACTIVE_LEDGER is not None:
+        _pipeline._ACTIVE_LEDGER.add(int(row_range[0]), int(row_range[1]), dropped, B * K)
     if dropped:
         # Silent attrition is what made the first chi posterior inexplicable. Make it a number.
         warnings.warn(

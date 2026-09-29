@@ -29,7 +29,9 @@ LAYOUT.  ``<Artifacts>/simulations/<digest12>/``   (core.artifacts.store.KIND_DI
     manifest.json  the store's record: identity, parents, batches_done, complete, rows, wall time
     header.pt      write-once: identity + the (t_scale, T) schedule + inits + V + V's eigenvalues
                    + the bijection probe
-    state.pt       rewritten atomically; its ``batches_done`` is THE COMMIT POINT
+    state.pt       rewritten atomically; its ``batches_done`` is THE COMMIT POINT. A chi run's also
+                   carries ``chi_masked``, the [masked, total] probe counts of each committed batch;
+                   absent when a batch was committed without them, so readers use ``.get``
     state.prev.pt  one generation back, a few KB, for the case where state.pt is lost mid-write
     shards/x_<from>_<to>.pt, th_<from>_<to>.pt    write-once row blocks, never mutated after commit
 
@@ -192,7 +194,7 @@ def create(path, identity: dict, *, schedule_t_scales, schedule_Ts, inits, V, fi
         "run_size": int(run_size),
         "n_runs": int(n_runs),
     }, path / _HEADER)
-    atomic_torch_save({"batches_done": 0, "complete": False, "rng": None}, path / _STATE)
+    atomic_torch_save({"batches_done": 0, "complete": False, "rng": None, "chi_masked": []}, path / _STATE)
     from core.artifacts.store import write_simulation_manifest
     write_simulation_manifest(path, identity, parents=parents, inputs=inputs, hw=hw,
                               batches_done=0, complete=False, V=V)
@@ -335,17 +337,22 @@ def _shard(path, prefix: str, a: int, b: int) -> Path:
     return Path(path) / _SHARDS / f"{prefix}_{a:06d}_{b:06d}.pt"
 
 
-def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_size: int) -> None:
+def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_size: int,
+         chi_masked=None) -> None:
     """Commit batches [from_batch, batch_k). See the module docstring for why the order matters.
 
     ``.clone()`` on the slices is LOAD-BEARING, not tidiness: ``torch.save`` of a slice VIEW serialises
     the entire underlying storage, so saving ``x_buf[a:b]`` directly writes the whole multi-GiB buffer
     every time -- hundreds of GiB over a run, presenting as "checkpointing got slow". ``.contiguous()``
     does not help, because a row-slice of a contiguous 2-D tensor is already contiguous and stays a view.
+
+    ``chi_masked`` is the (masked, total) probe counts of batches [0, batch_k), stored in the state
+    beside ``batches_done``; None stores no counts, for a run that did not count every one of them.
     """
     path = Path(path)
     (path / _SHARDS).mkdir(parents=True, exist_ok=True)
     lo, hi = from_batch * run_size, batch_k * run_size
+    counts = None if chi_masked is None else [[int(m), int(t)] for m, t in chi_masked]
     # The WHOLE save is one deferred-cancel section, so a cancel cannot fire anywhere
     # inside it. Steps 1-3 because a GUI cancel landing between the shard fsync and the state replace
     # would commit a batches_done that points at data still in the page cache. _refresh_manifest too,
@@ -361,21 +368,26 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
         prev = path / _STATE
         if prev.exists():
             shutil.copyfile(prev, path / _STATE_PREV)
-        atomic_torch_save({"batches_done": int(batch_k), "complete": False, "rng": rng}, prev)
+        state = {"batches_done": int(batch_k), "complete": False, "rng": rng}
+        if counts is not None:
+            state["chi_masked"] = counts
+        atomic_torch_save(state, prev)
         _refresh_manifest(path, batches_done=batch_k)
 
 
 def mark_complete(path, batch_k: int, rows=None) -> None:
     path = Path(path)
     st = peek(path) or {}
+    state = {"batches_done": int(batch_k), "complete": True, "rng": st.get("rng")}
+    if "chi_masked" in st:
+        state["chi_masked"] = st["chi_masked"]       # the per-batch probe counts, carried forward
     # ONE deferred-cancel section around both writes, for the reason save() gives:
     # a cancel between the state flip and the manifest refresh -- or out of anything the refresh
     # reaches, whose `except Exception` cannot stop a BaseException -- leaves every row committed and
     # the manifest still saying the cache is unfinished, so the Artifacts browser labels a finished
     # cache "unfinished" until the next resume rewrites it.
     with cancel_deferred():
-        atomic_torch_save({"batches_done": int(batch_k), "complete": True,
-                           "rng": st.get("rng")}, path / _STATE)
+        atomic_torch_save(state, path / _STATE)
         _refresh_manifest(path, batches_done=batch_k, complete=True, rows=rows)
 
 

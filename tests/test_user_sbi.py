@@ -2104,6 +2104,280 @@ def test_the_cache_size_estimate_counts_every_target_column(monkeypatch, tmp_pat
     assert seen == {"n_runs": 2, "run_size": 4, "chi_mode": True, "chi_k_pad": 4, "n_targets": 13}, seen
 
 
+# ── the masked-probe run total ─────────────────────────────────────────────────────────────────────
+# The generator tests below run through the real batch loop with pipeline.gen_obs replaced by the
+# shared stand-in simulator. Its passive trace peaks at angular frequency 1 in the model's own time,
+# so every row of a batch (all drawn at the cell's truth) has the same peak, and a probe is masked in
+# every row or in none: a probe is masked when the batch's duration draw leaves it under the cycle
+# floor at that batch's (t_scale, T) stratum. Each test checks that some committed batch masked part of
+# its probes, so a tally that miscounts cannot hide behind all-or-nothing batches.
+def test_the_probe_ledger_commits_each_batch_once_and_drops_abandoned_attempts():
+    """Counts are committed only after a batch's rows are stored: a range re-run in halves replaces the
+    report it overlaps, an attempt the retry loop abandons is discarded, and batches commit in order."""
+    L = pipeline_mod._BatchProbeLedger()
+    L.add(0, 8, 5, 24)                   # the whole batch, reported before it ran out of memory
+    L.add(0, 4, 2, 12)                   # re-run in halves
+    L.add(4, 8, 1, 12)
+    L.commit(0)
+    assert L.committed == [(3, 24)]
+    L.add(0, 8, 7, 24)
+    L.discard()
+    L.add(0, 8, 4, 24)
+    L.commit(1)
+    L.commit(2)
+    assert L.committed == [(3, 24), (4, 24), (0, 0)]
+    with pytest.raises(RuntimeError):
+        L.commit(7)
+    resumed = pipeline_mod._BatchProbeLedger(committed=[[1, 10], [2, 10]])
+    resumed.add(0, 4, 3, 10)
+    resumed.commit(2)
+    assert resumed.committed == [(1, 10), (2, 10), (3, 10)] and resumed.first_batch == 0
+    partial = pipeline_mod._BatchProbeLedger(first_batch=5)
+    partial.add(0, 4, 1, 8)
+    partial.commit(5)
+    assert partial.committed == [(1, 8)] and partial.first_batch == 5
+
+
+def test_the_probe_ledger_summary_names_its_scope_and_spread():
+    L = pipeline_mod._BatchProbeLedger(committed=[(1, 10), (3, 10), (2, 20)])
+    assert L.summary_line("every committed batch of the simulation cache") == (
+        "[chi] masked probes: 6 of 40 (15.0%) over 3 batches, every committed batch of the simulation "
+        "cache; per batch 10.0-30.0%, median 10.0%")
+    assert pipeline_mod._BatchProbeLedger().summary_line("this process only (no simulation cache)") == (
+        "[chi] masked probes: none counted, this process only (no simulation cache)")
+
+
+def _masked_lines(caplog) -> list:
+    """The pipeline's masked-probe run-total records, as (level, message)."""
+    return [(r.levelname, r.getMessage()) for r in caplog.records
+            if r.name == pipeline_mod.__name__ and r.getMessage().startswith("[chi] masked probes")]
+
+
+def _warned_masked(caught) -> int:
+    """The sum of the per-block masked-probe warnings in a warnings capture."""
+    import re
+    pattern = re.compile(r"chi: (\d+)/\d+ probes masked")
+    return sum(int(m.group(1)) for w in caught for m in [pattern.search(str(w.message))] if m)
+
+
+def _probe_shapes(monkeypatch) -> list:
+    """Wrap gen_chi_raw so each call records its (rows, probes)."""
+    real, seen = pipeline_mod.gen_chi_raw, []
+
+    def _raw(*a, **k):
+        out = real(*a, **k)
+        seen.append(tuple(out[0].shape))
+        return out
+    monkeypatch.setattr(pipeline_mod, "gen_chi_raw", _raw)
+    return seen
+
+
+def _tally_spy(monkeypatch) -> dict:
+    """Wrap the batch probe tally's add, discard and commit. Records each add's (lo, hi, masked, total),
+    the number of discards, and the (masked, total) each commit appended."""
+    cls, seen = pipeline_mod._BatchProbeLedger, {"adds": [], "discards": 0, "commits": []}
+    real_add, real_discard, real_commit = cls.add, cls.discard, cls.commit
+
+    def add(self, lo, hi, masked, total, record=None):
+        seen["adds"].append((lo, hi, masked, total))
+        return real_add(self, lo, hi, masked, total, record)
+
+    def discard(self):
+        seen["discards"] += 1
+        return real_discard(self)
+
+    def commit(self, batch_k):
+        real_commit(self, batch_k)
+        seen["commits"].append(self.committed[-1])
+    monkeypatch.setattr(cls, "add", add)
+    monkeypatch.setattr(cls, "discard", discard)
+    monkeypatch.setattr(cls, "commit", commit)
+    return seen
+
+
+def test_the_masked_probe_total_is_logged_once_for_a_run_without_a_cache(caplog, monkeypatch):
+    """A chi run with no simulation cache logs one information record: the per-block masked warnings
+    summed, of every probe simulated, over its three batches, scoped to this process. Forced and
+    spontaneous runs simulate no probes and log none."""
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    shapes = _probe_shapes(monkeypatch)
+    tally = _tally_spy(monkeypatch)
+    caplog.clear()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _gen_td("chi", seed=7, n_runs=3, run_size=4)
+    masked, total = _warned_masked(caught), sum(b * k for b, k in shapes)
+    assert any(0 < m < t for m, t in tally["commits"]), tally["commits"]
+    lines = _masked_lines(caplog)
+    assert len(lines) == 1 and lines[0][0] == "INFO", lines
+    assert f"{masked:,} of {total:,}" in lines[0][1], (masked, total, lines)
+    assert "over 3 batches" in lines[0][1] and "this process only (no simulation cache)" in lines[0][1], lines
+    for mode in ("forced", "spontaneous"):
+        caplog.clear()
+        _gen_td(mode, seed=5, n_runs=1, run_size=2)
+        assert not _masked_lines(caplog), (mode, _masked_lines(caplog))
+
+
+def test_the_masked_probe_total_covers_every_committed_batch_across_a_resume(caplog, monkeypatch):
+    """The counts ride in the simulation cache beside the rows, so a run killed partway and resumed
+    logs the same total as one that ran straight through, and so does a later call that finds the
+    cache complete. Each run writes at its own cadence, so each of the three writes carries the
+    counts: the reference writes after its second batch and at the end, the killed run only on its
+    way out, and the resume after its last batch."""
+    import tempfile
+    from core.SBI import training_checkpoint as tc
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    tmp = Path(tempfile.mkdtemp())
+    n_runs = 3
+
+    def _line():
+        lines = _masked_lines(caplog)
+        assert len(lines) == 1 and lines[0][0] == "INFO", lines
+        return lines[0][1]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        caplog.clear()
+        _gen_td("chi", seed=11, n_runs=n_runs, run_size=4, checkpoint=_ck(tmp / "ref", every=2))
+        ref_line = _line()
+        assert "every committed batch of the simulation cache" in ref_line, ref_line
+        ref = tc.peek(tmp / "ref")["chi_masked"]
+        assert len(ref) == n_runs and all(t > 0 for _, t in ref), ref
+        assert any(0 < m < t for m, t in ref), ref
+
+        real, spy = _kill_at(2)
+        monkeypatch.setattr(pipeline_mod, "gen_stats", spy)
+        with pytest.raises(_KillRun):
+            _gen_td("chi", seed=11, n_runs=n_runs, run_size=4,
+                    checkpoint=_ck(tmp / "a", every=3, resume="never"))
+        monkeypatch.setattr(pipeline_mod, "gen_stats", real)
+        assert tc.peek(tmp / "a")["chi_masked"] == ref[:2]
+
+        caplog.clear()
+        _gen_td("chi", seed=11, n_runs=n_runs, run_size=4,
+                checkpoint=_ck(tmp / "a", every=1, resume="require"))
+        assert _line() == ref_line
+        assert tc.peek(tmp / "a")["chi_masked"] == ref
+
+        caplog.clear()
+        _gen_td("chi", seed=11, n_runs=n_runs, run_size=4,
+                checkpoint=_ck(tmp / "a", every=1, resume="require"))
+        assert _line() == ref_line
+
+
+def test_a_resume_from_a_cache_without_per_batch_counts_says_the_total_covers_only_this_process(caplog, monkeypatch):
+    """A cache committed before the counts were kept has none for its first batches. It still resumes;
+    the total then covers only the batches this process generated and says so, and the cache is never
+    given counts for batches nobody counted -- not when this process commits more, and not when a later
+    call finds the cache complete."""
+    import tempfile
+    from core.SBI import training_checkpoint as tc
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    tmp = Path(tempfile.mkdtemp())
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        real, spy = _kill_at(2)
+        monkeypatch.setattr(pipeline_mod, "gen_stats", spy)
+        with pytest.raises(_KillRun):
+            _gen_td("chi", seed=11, n_runs=4, run_size=4,
+                    checkpoint=_ck(tmp / "old", every=1, resume="never"))
+        monkeypatch.setattr(pipeline_mod, "gen_stats", real)
+    for name in ("state.pt", "state.prev.pt"):
+        path = tmp / "old" / name
+        if path.exists():
+            st = torch.load(str(path), map_location="cpu", weights_only=False)
+            st.pop("chi_masked", None)
+            torch.save(st, str(path))
+    assert tc.peek(tmp / "old")["batches_done"] == 2 and "chi_masked" not in tc.peek(tmp / "old")
+
+    shapes = _probe_shapes(monkeypatch)
+    tally = _tally_spy(monkeypatch)
+    caplog.clear()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        x, _th = _gen_td("chi", seed=11, n_runs=4, run_size=4,
+                         checkpoint=_ck(tmp / "old", every=1, resume="require"))
+    masked, total = _warned_masked(caught), sum(b * k for b, k in shapes)
+    assert any(0 < m < t for m, t in tally["commits"]), tally["commits"]
+    assert any(r.getMessage().startswith("[checkpoint] resuming at batch 2/4") for r in caplog.records)
+    lines = _masked_lines(caplog)
+    assert len(lines) == 1 and lines[0][0] == "INFO", lines
+    for part in ("over 2 batches", "only the batches this process generated", "first 2 batches",
+                 f"{masked:,} of {total:,}"):
+        assert part in lines[0][1], (part, lines)
+    assert x.shape[0] == 16, tuple(x.shape)
+    assert "chi_masked" not in tc.peek(tmp / "old")
+
+    caplog.clear()
+    _gen_td("chi", seed=11, n_runs=4, run_size=4, checkpoint=_ck(tmp / "old", every=1, resume="require"))
+    assert [m for _, m in _masked_lines(caplog)] == [
+        "[chi] masked probes: none counted, only the batches this process generated; the cache's first "
+        "4 batches were committed without per-batch counts"], _masked_lines(caplog)
+    assert tc.peek(tmp / "old")["complete"] is True and "chi_masked" not in tc.peek(tmp / "old")
+
+
+def _oom_error():
+    """The out-of-memory error the batch loop sees from a chi batch: the raw driver form, wrapped."""
+    from core.Simulator.simulator import SimulationError
+    return SimulationError("chi batch failed: AcceleratorError: CUDA error: out of memory")
+
+
+def test_a_batch_re_run_in_halves_is_counted_once(monkeypatch):
+    """Row halving runs one batch as several row ranges under one batch tag, and an out-of-memory error
+    raised after gen_chi_block returned leaves a report for the failed full range. The halves replace
+    it, so the batch commits the halves' counts and nothing more."""
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    monkeypatch.setattr(pipeline_mod, "_BUDGET_CAP_ELEMENTS", pipeline_mod._BUDGET_CAP_ELEMENTS)
+    monkeypatch.setattr(pipeline_mod, "_budget_clean_runs", pipeline_mod._budget_clean_runs)
+    monkeypatch.setattr(pipeline_mod, "_MIN_SIM_CHUNK", 1)
+    tally = _tally_spy(monkeypatch)
+    real = pipeline_mod._subset_probe_rows
+
+    def _subset(block, *a, **k):
+        if block.shape[0] > 2:
+            raise _oom_error() from torch.AcceleratorError("CUDA error: out of memory")
+        return real(block, *a, **k)
+    monkeypatch.setattr(pipeline_mod, "_subset_probe_rows", _subset)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _gen_td("chi", seed=11, n_runs=1, run_size=4)
+    assert [(lo, hi) for lo, hi, _, _ in tally["adds"]] == [(0, 4), (0, 2), (2, 4)], tally
+    halves = tally["adds"][1:]
+    assert tally["commits"] == [(sum(a[2] for a in halves), sum(a[3] for a in halves))], tally
+    assert 0 < tally["commits"][0][0] < tally["commits"][0][1], tally
+
+
+def test_an_abandoned_batch_attempt_is_discarded_before_the_re_run(monkeypatch):
+    """The batch-level retry re-runs a whole batch after both halving ladders gave up. The abandoned
+    attempt's counts are discarded before the re-run, and the batch commits the re-run's."""
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    monkeypatch.setattr(pipeline_mod, "_BUDGET_CAP_ELEMENTS", pipeline_mod._BUDGET_CAP_ELEMENTS)
+    monkeypatch.setattr(pipeline_mod, "_budget_clean_runs", pipeline_mod._budget_clean_runs)
+    monkeypatch.setattr(pipeline_mod, "_MIN_SIM_CHUNK", 64)
+    monkeypatch.setattr(config, "TRAINING_BATCH_RETRY_DELAYS_S", (0.0,))
+    tally = _tally_spy(monkeypatch)
+    real, calls = pipeline_mod._subset_probe_rows, []
+
+    def _subset(block, *a, **k):
+        calls.append(block.shape[0])
+        if len(calls) == 1:
+            raise _oom_error() from torch.AcceleratorError("CUDA error: out of memory")
+        return real(block, *a, **k)
+    monkeypatch.setattr(pipeline_mod, "_subset_probe_rows", _subset)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _gen_td("chi", seed=11, n_runs=1, run_size=4)
+    assert tally["discards"] == 1, tally
+    assert [(lo, hi) for lo, hi, _, _ in tally["adds"]] == [(0, 4), (0, 4)], tally
+    assert tally["commits"] == [tuple(tally["adds"][1][2:])], tally
+    assert 0 < tally["commits"][0][0] < tally["commits"][0][1], tally
+
+
 # ── the training checkpoint (the simulation cache): the atomic write and the store (no simulation) ──
 def _ckpt_ident(**over):
     base = {"model": "NADROWSKI", "run_size": 4, "n_runs": 6, "chi_mode": True, "chi_k_pad": 12,
@@ -4063,7 +4337,7 @@ def test_the_fisher_wraps_each_operating_point_and_skips_on_exhausted_oom():
 
 # ── core/SBI and the solver speak through logging ────────────────────────────────────────────────
 def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
-    """Standard logging for core/SBI and the solver. The 35 in-stage prints of pipeline, decorrelate,
+    """Standard logging for core/SBI and the solver. The in-stage prints of pipeline, decorrelate,
     truncate, summaries, Priors/prior and Solvers/sdeint are logging calls on each module's own
     ``log = logging.getLogger(__name__)``, each at its own level -- pinned here AS a table, one row
     per call, so a call added without a row, a row whose call went, or a level changed in passing
@@ -4109,6 +4383,7 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
             ("[checkpoint] stopping: saving", "INFO"),
             ("[checkpoint] could not save on the way out", "ERROR"),
             ("[patho] run total:", "INFO"),
+            ("{masked_line}", "INFO"),                            # the masked-probe run total
             ("[tsnpe] post-override containment:", "INFO"),
             ("[checkpoint] complete:", "INFO"),
         ),
@@ -4130,7 +4405,7 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
         ),
         _sdeint_mod: (("[solver] CUDA graph capture unavailable", "WARNING"),),
     }
-    assert sum(len(rows) for rows in table.values()) == 35
+    assert sum(len(rows) for rows in table.values()) == 36
 
     def _template(node) -> str:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
