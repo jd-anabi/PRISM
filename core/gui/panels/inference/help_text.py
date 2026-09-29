@@ -111,11 +111,14 @@ HELP = {
     "infer_other_obs": "A TSNPE posterior is valid only NEAR the observation its region was drawn "
                        "around: elsewhere the flow has never seen a training row and extrapolates "
                        "confidently rather than returning the prior. Ticking this runs it anyway and "
-                       "records \"accepted\": [\"other_observation\"] in the inference, so a number "
-                       "produced this way is marked. Simulated mode needs it for ANY TSNPE posterior: "
-                       "re-simulating the same cell draws new noise, so the observation can never carry "
-                       "the region's digest. Greyed out for an amortized posterior, where it would mean "
-                       "nothing.",
+                       "adds \"other_observation\" to the inference's \"accepted\" record, so a number "
+                       "produced this way is marked. A TSNPE posterior that was loaded, not trained in "
+                       "this session, already carries \"truncated\", the acceptance its load was given, "
+                       "so its record reads [\"truncated\", \"other_observation\"]; a round trained in "
+                       "this session records [\"other_observation\"] alone. Simulated mode needs it for "
+                       "ANY TSNPE posterior: re-simulating the same cell draws new noise, so the "
+                       "observation can never carry the region's digest. Greyed out for an amortized "
+                       "posterior, where it would mean nothing.",
     "spont": "Path to the recorded spontaneous/passive (undriven) trace (.csv or .npy; last column "
              "= values).",
     "forced": "Path to the recorded forced (driven) hair-bundle trace (.csv or .npy; last column = "

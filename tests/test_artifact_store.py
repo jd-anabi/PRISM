@@ -1968,7 +1968,8 @@ def test_inference_records_ppc_summary_and_ground_truth(tiny_run):
 
 def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unless_accepted(tiny_run):
     """Successor of test_conditioning_repair's warning test: a NON-AMORTIZED posterior on an observation
-    other than its region's is a REFUSAL now, and accepting it is written into the inference."""
+    other than its region's is a REFUSAL now, and accepting it is written into the inference beside
+    the acceptance the posterior was loaded under."""
     from copy import copy
     from core import orchestrator
     from core.artifacts import Accept
@@ -1995,9 +1996,10 @@ def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unles
         assert r.cfg.T_obs == was + 7.0, "a refused inference installed the observation's context anyway"
     finally:
         r.cfg.T_obs = was
+    claims_another.accepted = ["truncated"]       # loaded with Accept(truncated=True): the record is the union
     inf = orchestrator.infer_and_visualize(r.cfg, claims_another, obs, fig_sink=r.sink, n_samples=20,
                                            accept=Accept(other_observation=True))
-    assert inf.results["accepted"] == ["other_observation"]
+    assert inf.results["accepted"] == ["truncated", "other_observation"]
     same = copy(r.posterior)
     same.posterior = reparam.TransformedPosterior(r.posterior.latent, r.posterior.posterior.T,
                                                   truncation=None, x_obs_digest=obs.digest)
