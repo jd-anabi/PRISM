@@ -81,10 +81,6 @@ ALLOW_TEST_NAMES: frozenset[str] = frozenset({
 PROSE_FILES = ("README.md", "requirements.txt", "pytest.ini", "run.bat", "run.sh")
 READER_DOCS_DIR = "docs/guide"
 
-# Files not yet cleaned. It may only shrink: every file on it must still have a hit, so a cleaned
-# file has to leave it, and the last cleaning step deletes it together with the test that reads it.
-NOT_YET_CLEAN: frozenset[str] = frozenset()
-
 _DIRECTIVE = re.compile(r"noqa(?::[ \t]*[A-Z]+[0-9]+(?:[ \t]*,[ \t]*[A-Z]+[0-9]+)*)?"
                         r"|type:[ \t]*ignore(?:\[[^\]]*\])?")
 _PROSE_TOKENS = {tokenize.COMMENT, tokenize.STRING, tokenize.FSTRING_MIDDLE}
@@ -205,10 +201,10 @@ def _failure_message(hits: list[Hit]) -> str:
             "(a pattern) -- in the commit that introduces it.")
 
 
-def test_no_file_outside_the_pending_list_cites_a_working_document():
-    """The rule itself, over every file it covers. The walk is checked first: it must reach the
-    top-level code files, the five prose files and this module, and at least 150 Python files, so a
-    walk that silently stopped cannot pass."""
+def test_no_scanned_file_cites_a_working_document():
+    """The rule itself: every file it covers must be clean, with no exemption. The walk is checked
+    first: it must reach the top-level code files, the five prose files and this module, and at least
+    150 Python files, so a walk that silently stopped cannot pass."""
     files = scanned_files()
     missing = [name for name in (*CODE_FILES, *PROSE_FILES) if not (_REPO / name).is_file()]
     assert not missing, f"a file the rule names does not exist: {missing}"
@@ -216,16 +212,8 @@ def test_no_file_outside_the_pending_list_cites_a_working_document():
     walked = sum(p.suffix == ".py" for p in files)
     assert walked >= 150, f"the scan walked only {walked} Python files"
     by_file, _used = _scan_everything()
-    hits = [h for rel, found in sorted(by_file.items()) if rel not in NOT_YET_CLEAN for h in found]
+    hits = [h for rel, found in sorted(by_file.items()) for h in found]
     assert not hits, _failure_message(hits)
-
-
-def test_every_pending_file_still_has_a_hit():
-    """The pending list is always the true remainder: a file cleaned, or deleted, must leave it."""
-    by_file, _used = _scan_everything()
-    done = sorted(rel for rel in NOT_YET_CLEAN if not by_file.get(rel))
-    assert not done, ("on NOT_YET_CLEAN with no hit left, or no longer scanned -- remove from the "
-                      "list:\n  " + "\n  ".join(done))
 
 
 _GAP = chr(0xB7)  # written inside each label below and removed at run time, so no literal matches
