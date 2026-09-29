@@ -14,16 +14,27 @@ across processes (its operating points come from the unseeded global RNG), so th
 computable without it. The region a TSNPE round trains under DOES enter (``truncation``): it
 carries the PARENT's V, copied and never recomputed, so its digest is stable by construction.
 
-``units_sha256`` is the units file's fingerprint, and it is what moved the format from
+``units_sha256`` is the units declaration's fingerprint, and it is what moved the format from
 training-rows/2 to training-rows/3. On a box that declares temperature in place of the force scale,
 every simulation is driven at a force scale derived through Boltzmann's constant in the cell's
-units, so the same bounds read under another units file simulate other rows. It hashes the FILE,
-never ``cfg.units_dict``, whose token order is not stable between processes, and it hashes the bytes
-with CRLF read as LF, so a checkout that rewrites line endings does not re-key a cache. It fails
-open to None for a config with no units source or a file that is gone, as the GUI's pre-Train status
-line computes identities from stand-ins. A cache written under the older format keys a different
-directory, so it is never found for a resume, and a directory moved into place by hand is refused
-field by field (``training_checkpoint.verify``).
+units, whose force and length factors nothing else in the identity carries (only the time factor
+reaches it, through the experiment's time grid), so the same bounds read under other units simulate
+other rows. The declaration comes from one of two places, fingerprinted differently:
+
+  * a units FILE, named by ``cfg.sources["units"]``: the sha256 of its bytes with CRLF read as LF, so
+    a checkout that rewrites line endings does not re-key a cache. The file, never
+    ``cfg.units_dict``, because that tuple is parsed through a set and its order is not stable
+    between processes.
+  * unit TOKENS typed in place of a file (the window's typed units, or a token override given to
+    ``make_sim_config``), which name no file: the sha256 of the UTF-8 text ``"units-tokens:"``
+    followed by the distinct tokens, sorted and joined with newlines. Sorted, because the order
+    carries no meaning; prefixed, so it is never the fingerprint of a usable units file: a file
+    holding exactly that text has no ``# Units`` section and so declares no units at all.
+
+A named file that cannot be read, and a config with neither a file nor tokens (a stand-in), fail open
+to None, as the GUI's pre-Train status line computes identities from stand-ins. A cache written
+under the older format keys a different directory, so it is never found for a resume, and a
+directory moved into place by hand is refused field by field (``training_checkpoint.verify``).
 """
 from __future__ import annotations
 
@@ -34,17 +45,26 @@ from pathlib import Path
 FORMAT = "training-rows/3"
 
 
+_TOKENS_PREFIX = "units-tokens:"
+
+
 def _units_sha256(cfg) -> str | None:
-    """sha256 hex of the units file ``cfg.sources["units"]`` names, over its bytes with CRLF replaced
-    by LF; None when the config has no sources, no units entry, or the file cannot be read."""
+    """The units declaration's fingerprint, as the module docstring describes: sha256 hex of the units
+    file ``cfg.sources["units"]`` names, over its bytes with CRLF replaced by LF, or None when that
+    file cannot be read; with no file named, sha256 hex of ``"units-tokens:"`` plus the sorted
+    distinct tokens of ``cfg.units_dict`` joined by newlines; None when there are no tokens either."""
     path = (getattr(cfg, "sources", None) or {}).get("units")
-    if not path:
+    if path:
+        try:
+            data = Path(path).read_bytes()
+        except OSError:
+            return None
+        return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+    tokens = getattr(cfg, "units_dict", None)
+    if not isinstance(tokens, (list, tuple)) or not tokens or not all(isinstance(u, str) for u in tokens):
         return None
-    try:
-        data = Path(path).read_bytes()
-    except OSError:
-        return None
-    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+    text = _TOKENS_PREFIX + "\n".join(sorted(set(tokens)))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)

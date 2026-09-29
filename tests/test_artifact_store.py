@@ -1073,7 +1073,7 @@ def test_identity_carries_truncation_always_and_feature_set_version_rekeys(monke
 def test_the_simulation_identity_fingerprints_the_units_file_it_was_built_with(tmp_path):
     """The derived force scale depends on Boltzmann's constant in the cell's units, so the cache identity
     carries the units file's fingerprint: line endings do not change it, an edit does, and a config with
-    no units source fails open to None."""
+    neither a units file nor unit tokens fails open to None."""
     import hashlib
     from core.artifacts.identity import FORMAT, SimulationIdentity
     cfg = _nad_cfg()
@@ -1087,8 +1087,32 @@ def test_the_simulation_identity_fingerprints_the_units_file_it_was_built_with(t
     assert SimulationIdentity.from_cfg(_nad_cfg(units_override=str(crlf)), None, 4, 2).to_dict()["units_sha256"] == ident["units_sha256"]
     assert SimulationIdentity.from_cfg(_nad_cfg(units_override=str(edited)), None, 4, 2).to_dict()["units_sha256"] != ident["units_sha256"]
     bare = _nad_cfg()
-    bare.sources = {}
+    bare.sources, bare.units_dict = {}, ()
     assert SimulationIdentity.from_cfg(bare, None, 4, 2).to_dict()["units_sha256"] is None
+
+
+def test_the_simulation_identity_fingerprints_typed_unit_tokens_when_no_units_file_is_named():
+    """Units typed as tokens name no file, and the derived force scale depends on them all the same (k_B
+    in the cell's units takes its force and length factors), so the identity fingerprints the tokens:
+    another force or length token re-keys the cache, the same tokens in another order do not, and the
+    tokens' fingerprint is never the fingerprint of a units file holding the same tokens."""
+    from core.artifacts.identity import SimulationIdentity
+
+    def ident(tokens):
+        return SimulationIdentity.from_cfg(_nad_cfg(units_override=tokens), None, 4, 2)
+
+    pn = ident(("nm", "ms", "pN", "kHz"))
+    fp = pn.to_dict()["units_sha256"]
+    assert isinstance(fp, str) and len(fp) == 64
+    for other in (("nm", "ms", "nN", "kHz"), ("um", "ms", "pN", "kHz")):
+        o = ident(other)
+        assert o.to_dict()["units_sha256"] != fp and o.digest != pn.digest, other
+    assert ident(("kHz", "pN", "ms", "nm")).to_dict()["units_sha256"] == fp
+    from_file = SimulationIdentity.from_cfg(_nad_cfg(), None, 4, 2).to_dict()["units_sha256"]
+    assert sorted(_nad_cfg().units_dict) == ["kHz", "ms", "nm", "pN"] and from_file != fp
+    unnamed = _nad_cfg()
+    unnamed.sources = {}
+    assert SimulationIdentity.from_cfg(unnamed, None, 4, 2).to_dict()["units_sha256"] == fp
 
 
 def test_simulation_directories_live_under_the_store_without_a_prefix(store):
