@@ -1,6 +1,5 @@
-"""Comparing saved FDT records (piece 5, spec §7; decision E8).
+"""Comparing saved FDT records.
 
-The comparison facility is the last part of the piece and nothing before it depends on it (E12).
 This suite covers the shared machinery -- the common grid, the interpolation that never blends a
 blank away, and what a comparison refuses before it draws anything -- and then one test per mode.
 
@@ -68,7 +67,7 @@ def _record_dirs(store):
 
 
 def test_the_common_grid_is_the_log_spaced_intersection_at_the_smallest_point_count():
-    """Spec §7.2. Every run detects its own resonance and builds its grid around it, so two runs of
+    """Every run detects its own resonance and builds its grid around it, so two runs of
     the same cell land on different frequencies; drawing them on one axis without a common grid would
     compare a value at 1.9 with a value at 2.1 and call the difference a result. The intersection is
     what both runs actually measured, and the smallest point count is the only one neither has to be
@@ -143,9 +142,9 @@ def test_the_common_grid_ends_exactly_on_the_shared_span_so_its_end_points_are_n
 
 
 def test_no_target_point_is_interpolated_across_a_blank():
-    """Spec §7.2, and the whole point of the off-grid fix (E9): a frequency the run could not measure
+    """The whole point of the off-grid fix: a frequency the run could not measure
     comes back blank, and a comparison that quietly interpolated over it would put the fabricated tail
-    back -- the exact defect §1 of the spec measured in ``_interp_log``. A target between two good
+    back -- the defect ``_interp_log`` had. A target between two good
     samples is a blend; a target whose bracket includes a blank, or that lies outside the source's
     span, is blank. Asserted through an interpolated INDICATOR rather than by trusting NaN to survive
     ``np.interp``, which retries a non-finite result from the other bracket."""
@@ -167,10 +166,10 @@ def test_no_target_point_is_interpolated_across_a_blank():
 
 
 def test_a_comparison_refuses_one_record_another_study_and_an_unfinished_one(tmp_path, monkeypatch):
-    """Review Focus item 5, and spec §7.1's "a comparison draws only records whose complete is true".
-    Every mode's arity is a real input class -- one cell is not a comparison, and a sweep drawn as a
-    single-cell run reads a layout that is not there -- and E2 means half-written records sit on disk
-    carrying a valid manifest, so the flag can hand one over by id or name (the window's picker offers
+    """A comparison draws only records whose complete is true. Every mode's arity is a real input
+    class -- one cell is not a comparison, and a sweep drawn as a single-cell run reads a layout that
+    is not there -- and an interrupted run keeps its folder, so half-written records sit on disk
+    carrying a valid manifest and the flag can hand one over by id or name (the window's picker offers
     finished records only). Each refusal names what it got and carries the field both front ends map
     to their own control."""
     store = _store(tmp_path)
@@ -203,9 +202,9 @@ def test_a_comparison_refuses_one_record_another_study_and_an_unfinished_one(tmp
 
 
 def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, monkeypatch, caplog):
-    """Refuse before the spend (P49, F57-F59). A progressive record exists from the moment its writer
-    is entered, and E2 keeps it through an exception -- so a refusal raised after that point would
-    leave a comparison record behind that holds nothing, or, refused before its first write, announce
+    """Refuse before the spend. A progressive record exists from the moment its writer is entered,
+    and the writer keeps it through an exception -- so a refusal raised after that point would leave
+    a comparison record behind that holds nothing, or, refused before its first write, announce
     a record ("Writing comparison record <id> at <dir>") for a directory the writer then removes.
     Every refusal a comparison can make from what it was GIVEN is therefore made before the record
     opens: each one leaves the kind directory exactly as it found it and logs no such line.
@@ -221,7 +220,7 @@ def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, mo
     not meet, a slice point outside the range they share, and slice rows that share no band. The
     drawers are stubs here, so a pre-flight refusal cannot be the drawer's. The ref that names
     nothing is refused under the comparison's own field, not the store's ``artifact``, so both front
-    ends name the control that answers it (F58)."""
+    ends name the control that answers it."""
     caplog.set_level(logging.INFO, logger="core")
     store = _store(tmp_path)
     for mode in cmp.MODE_RULES:
@@ -283,7 +282,7 @@ def test_every_refusal_lands_before_the_comparison_opens_its_record(tmp_path, mo
         cmp.compare("cells", a, store=store)
     assert _record_dirs(store) == before
 
-    # the no-drawer guard names what this build DOES draw (P11), once the table is back to real
+    # the no-drawer guard names what this build DOES draw, once the table is back to real
     monkeypatch.delitem(cmp._DRAWERS, "cells")
     with pytest.raises(Refusal) as e:
         cmp.compare("cells", [a, b], store=store)
@@ -296,8 +295,8 @@ def test_each_drawer_backstops_its_preflight_in_the_same_words(tmp_path, monkeyp
     """The pre-flight is where these refusals LAND; the drawers keep them as a backstop, for a caller
     that reaches a drawer another way. Each check is one helper that both call, so a refusal has one
     wording whichever route raises it: with the pre-flight table emptied, the REAL drawer refuses the
-    same input with the same field and the same sentence. And it refuses before its first write
-    (P49): the record it opened -- the log names it, which is the proof the drawer ran -- is removed
+    same input with the same field and the same sentence. And it refuses before its first write:
+    the record it opened -- the log names it, which is the proof the drawer ran -- is removed
     by the writer, because nothing was written into it."""
     caplog.set_level(logging.INFO, logger="core")
     store = _store(tmp_path)
@@ -319,15 +318,15 @@ def test_each_drawer_backstops_its_preflight_in_the_same_words(tmp_path, monkeyp
 
 
 def test_a_comparison_is_a_record_that_names_the_mode_and_the_runs_it_drew(tmp_path, monkeypatch):
-    """Spec §7.3: a comparison is an ``fdt`` record of its own, with ``study = "comparison"``, its
+    """A comparison is an ``fdt`` record of its own, with ``study = "comparison"``, its
     sources in ``body.compared`` and NOT in ``parents`` (the parents block is a flat {key: id} map and
-    cannot carry an arbitrary number of ids -- spec §1.2), the common grid and the interpolated curves
+    cannot carry an arbitrary number of ids), the common grid and the interpolated curves
     in ``data.h5``, and its figures as its output. Driven through a stub drawer, so this pins the
     record and not any one mode's picture.
 
     Every ``data.h5`` carries ``omega_0`` and ``prefactor`` at its root (the layout contract); for a
     comparison neither has one value, so the root holds NaN and each curve carries the constants of
-    the record it came from (F55) -- which is what a renormalised curve needs to be read correctly."""
+    the record it came from -- which is what a renormalised curve needs to be read correctly."""
     store = _store(tmp_path)
     a = build_fdt_record(store, name="cell_a")
     b = build_fdt_record(store, name="cell_b", omegas=(1.0, 2.0, 4.0), ratio=(1.0, 2.0, 1.1),
@@ -396,10 +395,10 @@ def test_a_comparison_records_the_ids_it_resolved_never_the_refs_it_was_given(tm
 
 
 def test_a_comparison_whose_source_was_deleted_still_lists_and_loads(tmp_path, monkeypatch):
-    """Spec §7.3 and §8.2, design ruling R5: deleting a run a comparison drew is NOT refused -- the
-    sources live in the body, which the dependency check does not read -- and the comparison stays
-    what it was: listed, loadable, and honest about the gap, its lineage printing
-    ``MISSING fdt [<id>]`` for the run that is gone and the ordinary line for the one that is not."""
+    """Deleting a run a comparison drew is NOT refused -- the sources live in the body, which the
+    dependency check does not read -- and the comparison stays what it was: listed, loadable, and
+    honest about the gap, its lineage printing ``MISSING fdt [<id>]`` for the run that is gone and
+    the ordinary line for the one that is not."""
     store = _store(tmp_path)
     monkeypatch.setitem(cmp._DRAWERS, "cells", _curves_stub)
     a = build_fdt_record(store, name="cell_a")
@@ -421,9 +420,9 @@ def test_a_comparison_whose_source_was_deleted_still_lists_and_loads(tmp_path, m
 
 
 def test_an_interrupted_comparison_keeps_its_record_unfinished(tmp_path, monkeypatch):
-    """E2, for the comparison's own record: a cancel after the record opened leaves it on disk, marked
+    """For the comparison's own record, too: a cancel after the record opened leaves it on disk, marked
     unfinished, holding what was written -- the same rule every fdt record follows, and the one the
-    tool's interrupt note describes. Nothing resumes it (F56): the records it drew are untouched and
+    tool's interrupt note describes. Nothing resumes it: the records it drew are untouched and
     re-running draws a new comparison."""
     store = _store(tmp_path)
     a = build_fdt_record(store, name="cell_a")
@@ -445,7 +444,7 @@ def test_an_interrupted_comparison_keeps_its_record_unfinished(tmp_path, monkeyp
 
 
 def test_the_compare_path_loads_no_inference_machinery(tmp_path):
-    """Task 17's lesson, applied to the comparison: importing any ``core.diagnostics`` submodule runs
+    """As for an FDT run, so for the comparison: importing any ``core.diagnostics`` submodule runs
     that package's ``__init__``, which loads the SBI stack and prints two false pytensor "g++" lines
     at the head of the run. A comparison draws saved numbers and needs none of it. RUN in a fresh
     interpreter -- this process holds the orchestrator through the session fixtures, so a
@@ -489,10 +488,10 @@ def test_the_compare_path_loads_no_inference_machinery(tmp_path):
 
 
 def test_compare_cells_draws_every_record_on_one_axis_and_records_its_peak(tmp_path):
-    """Spec §7.1: several cells' ratio curves on ONE axis, labelled by cell. The labels matter as much
+    """Several cells' ratio curves on ONE axis, labelled by cell. The labels matter as much
     as the curves -- a picture of four unlabelled traces answers nothing -- and the peak of each is in
     the record, so the comparison can be read back without re-opening the figure. The two records here
-    measure different bands on purpose: the drawn grid is their intersection (§7.2), not either one's
+    measure different bands on purpose: the drawn grid is their intersection, not either one's
     own."""
     store = _store(tmp_path)
     a = build_fdt_record(store, name="master_spont", omegas=(0.5, 1.0, 2.0, 4.0),
@@ -518,9 +517,9 @@ def test_compare_cells_draws_every_record_on_one_axis_and_records_its_peak(tmp_p
 
 
 def test_compare_cells_keeps_a_blank_blank_and_says_so_in_the_record(tmp_path):
-    """E9 carried through a comparison. A run that could not measure a frequency reports a blank, and
-    the comparison must not blend it away: the blank stays blank, the count is in the record's
-    notices, and the notices are what the walkthrough row reads. A silently interpolated gap is the
+    """A blank carried through a comparison. A run that could not measure a frequency reports a
+    blank, and the comparison must not blend it away: the blank stays blank, the count is in the
+    record's notices, and the notices are what a user reads. A silently interpolated gap is the
     fabricated tail the off-grid fix removed, put back one layer up."""
     store = _store(tmp_path)
     a = build_fdt_record(store, name="a", omegas=(1.0, 2.0, 4.0, 8.0),
@@ -536,7 +535,7 @@ def test_compare_cells_keeps_a_blank_blank_and_says_so_in_the_record(tmp_path):
 
 
 def test_compare_repeats_draws_the_spread_across_the_runs_as_a_band(tmp_path):
-    """Spec §7.1 and E7: repeats of one cell run at different seeds, and the spread across them IS the
+    """Repeats of one cell run at different seeds, and the spread across them IS the
     measurement error -- the number that says whether a difference between two cells means anything.
     The band is the envelope across the repeats at each frequency, so a point blank in ANY repeat is
     blank in the band: an envelope silently narrowed by a missing run would understate exactly the
@@ -606,7 +605,7 @@ def test_two_cells_that_share_a_file_name_never_share_a_legend_entry(tmp_path, m
     showed "default" twice would put two cells' curves under one name -- the picture would claim the
     same cell measured twice. So colliding names grow the folder they sit in ("shm/default"), a stem
     no other cell shares stays short, and two runs of the SAME cell (which share its name honestly)
-    are told apart by the run. ``repeats`` names the cells it drew (P60) by the same rule, so its
+    are told apart by the run. ``repeats`` names the cells it drew by the same rule, so its
     notice counts two cells here, not one "default"."""
     store = _store(tmp_path)
     shm = _record_of_cell(store, monkeypatch, "Cells/shm/default.txt", name="run_shm")
@@ -665,11 +664,10 @@ def _lines_sink():
 def test_repeats_of_one_cell_say_so_as_information_and_draw_every_measured_point(tmp_path,
                                                                                   monkeypatch,
                                                                                   caplog):
-    """The whole-piece review's N11 (L807). Per P60/A1 the repeats mode reports which cells it drew,
-    in the record's notices -- and ``compare`` logged every notice at WARNING, so EVERY correct
-    comparison of one cell's repeats warned: a warning on every run trains the owner to ignore
-    warnings. The one-cell sentence is kept in the notices and logged as information; drawing more
-    than one cell is still the warning it should be.
+    """The repeats mode reports which cells it drew, in the record's notices -- and ``compare``
+    logged every notice at WARNING, so EVERY correct comparison of one cell's repeats warned: a
+    warning on every run trains the owner to ignore warnings. The one-cell sentence is kept in the
+    notices and logged as information; drawing more than one cell is still the warning it should be.
 
     And the repeat curves and their mean were drawn as lines with no marker, so a measured point
     with a blank on each side -- a segment of one point -- was not drawn at all. Every curve now marks
@@ -707,12 +705,12 @@ def test_repeats_of_one_cell_say_so_as_information_and_draw_every_measured_point
 
 
 def test_repeats_that_share_a_seed_are_named_as_one_run_drawn_twice(tmp_path, caplog):
-    """The whole-piece review's N12 (S4), as the owner ruled it (R-F6: a notice, never a refusal).
-    E7: repeats of a cell use DIFFERENT seeds, and their spread is the measurement error. Two records
-    of one seed and one setting are one run drawn twice -- a deliberate reproducibility check -- and
-    their band has zero width; the record reported that as the measurement error without a word.
-    The mode now groups the records by seed, names the ones that share one in the notices (logged as
-    a warning: it changes what the band means) and records every seed in ``results``."""
+    """A shared seed is a notice, never a refusal. Repeats of a cell use DIFFERENT seeds, and their
+    spread is the measurement error. Two records of one seed and one setting are one run drawn twice
+    -- a deliberate reproducibility check -- and their band has zero width; the record reported that
+    as the measurement error without a word. The mode now groups the records by seed, names the ones
+    that share one in the notices (logged as a warning: it changes what the band means) and records
+    every seed in ``results``."""
     store = _store(tmp_path)
     ids = [build_fdt_record(store, name=name, seed=seed, omegas=(1.0, 2.0, 4.0), ratio=(1.0, 3.0, 1.0))
            for name, seed in (("twin_a", 7), ("twin_b", 7), ("other", 8))]
@@ -736,11 +734,11 @@ def test_repeats_that_share_a_seed_are_named_as_one_run_drawn_twice(tmp_path, ca
 
 
 def test_a_renormalised_blank_is_described_without_an_interpolation_it_never_did(tmp_path):
-    """The whole-piece review's N13 (L817). The blank notice every mode shares speaks of "the common
-    grid" and of blanks "never interpolated across", and renormalise draws the record on its OWN grid
-    and interpolates nothing -- so its record described a step that never ran. It says what is true
-    of a rescaling: the run did not measure those points, and no constant brings them back. The
-    interpolating modes keep their sentence."""
+    """The blank notice every mode shares speaks of "the common grid" and of blanks "never
+    interpolated across", and renormalise draws the record on its OWN grid and interpolates nothing
+    -- so its record described a step that never ran. It says what is true of a rescaling: the run
+    did not measure those points, and no constant brings them back. The interpolating modes keep
+    their sentence."""
     store = _store(tmp_path)
     one = build_fdt_record(store, name="gappy", omegas=(1.0, 2.0, 4.0), ratio=(1.0, float("nan"), 1.5))
     _seen, sink = _closing()
@@ -754,7 +752,7 @@ def test_a_renormalised_blank_is_described_without_an_interpolation_it_never_did
 
 
 def test_sweeps_that_do_not_overlap_are_refused_naming_each_sweep_and_its_range(tmp_path):
-    """The whole-piece review's N14 (L826). "Their ranges do not meet" named neither sweep nor range,
+    """The old refusal, "Their ranges do not meet", named neither sweep nor range,
     and the ranges are taken over the operating points that FINISHED -- so two sweeps whose grids
     overlap on paper can be refused, and the operator could not tell why. The refusal names each
     sweep and the range of its finished points."""
@@ -773,11 +771,11 @@ def test_sweeps_that_do_not_overlap_are_refused_naming_each_sweep_and_its_range(
 
 
 def test_a_sweep_slice_prints_the_values_it_compared_to_the_places_it_compared_them(tmp_path):
-    """The whole-piece review's N15 (L830). Rows are compared rounded to twelve decimal places and
-    were printed with ``:g`` -- six significant digits -- so a slice point typed with more digits
-    produced a sentence that contradicts itself ("sliced at s = 0.1, the nearest ... to the slice
-    point s = 0.1"). The sentence, the slice figure's title and the log line print to the precision
-    the comparison is made at."""
+    """Rows are compared rounded to twelve decimal places and were printed with ``:g`` -- six
+    significant digits -- so a slice point typed with more digits produced a sentence that
+    contradicts itself ("sliced at s = 0.1, the nearest ... to the slice point s = 0.1"). The
+    sentence, the slice figure's title and the log line print to the precision the comparison is
+    made at."""
     both = cmp._rows_notice("s", 0.1000001, ["a", "b"], [0.1, 0.1])
     assert both and "sliced at s = 0.1," in both[0] and "slice point s = 0.1000001" in both[0], both
     apart = cmp._rows_notice("s", 0.1, ["a", "b"], [0.1000001, 0.1000002])
@@ -800,10 +798,10 @@ def test_a_sweep_slice_prints_the_values_it_compared_to_the_places_it_compared_t
 
 
 def test_compare_renormalise_rescales_one_run_and_draws_it_against_the_original(tmp_path):
-    """Spec §7.1. T_eff/T is LINEAR in the normalisation constant -- spectral.eff_temp_ratio is
+    """T_eff/T is LINEAR in the normalisation constant -- spectral.eff_temp_ratio is
     ``prefactor * omega * G / (4 chi'')`` -- so recomputing it with another constant is an exact
     rescaling of what the record already holds, and nothing is re-simulated. That is why the run
-    records the prefactor it used (spec §2.3): without it the stored ratio cannot be undone, and this
+    records the prefactor it used: without it the stored ratio cannot be undone, and this
     mode would have to guess. A record that carries no usable constant is refused, naming it, rather
     than silently rescaling from a NaN."""
     store = _store(tmp_path)
@@ -860,8 +858,8 @@ def _stub_measurement(monkeypatch):
     cell measure identical spectra and susceptibilities and differ only in the constant applied.
 
     The spectrum stops at 10 while the default probe grid (0.1..30 around the peak at 1.0) reaches
-    30, so the top probes come back blank, as a real run's do past the spectrum's Nyquist frequency
-    (spec §3.5); chi'' rises with the frequency, so the ratio is a curve and not a constant."""
+    30, so the top probes come back blank, as a real run's do past the spectrum's Nyquist frequency;
+    chi'' rises with the frequency, so the ratio is a curve and not a constant."""
     import torch
     from core.FDT import fdt_pipeline
 
@@ -895,7 +893,7 @@ def test_renormalising_a_real_run_equals_measuring_it_again_with_the_other_const
     blank: a blank is a frequency the run could not measure, and no constant brings it back.
 
     The drawn grid is the record's OWN grid, bit for bit, and each curve in the comparison's file
-    carries the constant ITS numbers were computed with (F55)."""
+    carries the constant ITS numbers were computed with."""
     from core import cli, config, registry
     from core.FDT import fdt_pipeline
     from core.FDT.campaigns import observable_noise_prefactor
@@ -948,12 +946,12 @@ def test_renormalising_a_real_run_equals_measuring_it_again_with_the_other_const
     peak = res["per_record"][0]
     assert peak["peak_ratio"] == pytest.approx(float(np.nanmax(renormalised)))
     assert rec.body["notices"] and "no constant brings them back" in rec.body["notices"][0], \
-        "renormalise interpolates nothing, and its notice says so (the whole-piece review's N13)"
+        "renormalise interpolates nothing, and its notice says so"
     assert [r["id"] for r in rec.body["compared"]["records"]] == [measured.id]
 
 
 def test_compare_sweeps_draws_both_surfaces_and_one_slice_through_them(tmp_path):
-    """Spec §7.1's fourth mode. Two sweeps answer "does FDT come back" along one parameter each, and
+    """The fourth mode. Two sweeps answer "does FDT come back" along one parameter each, and
     the question this mode exists for is whether they agree -- which is read at ONE operating point,
     not off two surfaces side by side. The slice point defaults to the middle of the range the two
     sweeps share, is recorded, and each sweep contributes the row nearest it (the two grids are set
@@ -1093,7 +1091,7 @@ def test_compare_sweeps_reads_one_measurement_the_same_from_both_sweeps(store, m
     however near it sits; and when the two rows differ, the record says so, naming both.
 
     Two sweeps of the same cell share its name, so their curves are told apart by the run
-    (``labelled_curves``' rule), and each curve carries the constants F55 requires: ``omega_0`` its
+    (``labelled_curves``' rule), and each curve carries its own constants: ``omega_0`` its
     row's own resonance, the ``prefactor`` NaN (a sweep records one constant for the cell and none
     per operating point), plus its swept value and its sweep's reference as provenance."""
     from core import cli, config

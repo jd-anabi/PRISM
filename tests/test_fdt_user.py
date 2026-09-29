@@ -1,5 +1,5 @@
 """FDT unit tests, Qt-free except for that one widget read: the user-model normalization gate
-(FEATURE 1 v3 + B-d) and, since piece 5, the records the two measurements write.
+and the records the two measurements write.
 
 Locks down the generalized effective-temperature normalization and its gate:
   * campaigns.observable_noise_prefactor computes the per-model coupling/D_x -- n*beta for NADROWSKI,
@@ -12,7 +12,7 @@ Locks down the generalized effective-temperature normalization and its gate:
 
 The normalisation and gate tests need no cell file and no QApplication: a tiny fake cfg supplies only
 .model / .params_dict (and, for the force-channel test, .inits_tensor / .force_params_dict), which is
-all those functions read. The FDT config-builder tests added by piece 5 DO read the real Nadrowski
+all those functions read. The FDT config-builder tests DO read the real Nadrowski
 cell, because what they pin is the builder refusing a knob before it parses one. One of them also
 builds two numeric widgets (offscreen) to read the value a blank box really produces. The record
 tests build a real HOPF config and write into the ``store`` fixture's temp store, with both campaigns
@@ -96,12 +96,12 @@ def test_observable_noise_prefactor_builtins():
 
 
 def test_a_built_in_cell_with_no_observable_noise_is_refused_as_the_cells():
-    """The whole-piece review's N8 (FE6). The user-model branch refuses a zero noise ("FDT requires a
-    stochastic observable", field ``cell``), but the Hopf and BP branches divided by the noise term
-    bare: a cell with ``sigma_x = 0`` or ``eta_hb = 0`` -- parse_cell does not range-check values on
-    the FDT path -- raised ZeroDivisionError at the very top of the run, a bug report in both front
-    ends. Any noise term that is not finite and positive is refused like the user model's, and the
-    arithmetic for a good one is unchanged (test_observable_noise_prefactor_builtins)."""
+    """The user-model branch refuses a zero noise ("FDT requires a stochastic observable", field
+    ``cell``), but the Hopf and BP branches divided by the noise term bare: a cell with
+    ``sigma_x = 0`` or ``eta_hb = 0`` -- parse_cell does not range-check values on the FDT path --
+    raised ZeroDivisionError at the very top of the run, a bug report in both front ends. Any noise term
+    that is not finite and positive is refused like the user model's, and the arithmetic for a good
+    one is unchanged (test_observable_noise_prefactor_builtins)."""
     import pytest
 
     for model, params, term in (("HOPF", {"sigma_x": 0.0}, "sigma_x"),
@@ -159,10 +159,10 @@ def test_observable_noise_prefactor_user_rejects_multiplicative_zero_negative():
 
 
 def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeypatch):
-    """Spec §3.4, first bullet. The per-model normalisation prefactor was resolved at step 8 of
-    run_fdt -- AFTER both campaigns -- so a cell missing `n` or `beta` cost the entire run, hours of
-    it, before the pipeline said the one thing it could have said in a second. It is resolved first
-    now, and carried down to step 8.
+    """The per-model normalisation prefactor was resolved at step 8 of run_fdt -- AFTER both
+    campaigns -- so a cell missing `n` or `beta` cost the entire run, hours of it, before the
+    pipeline said the one thing it could have said in a second. It is resolved first now, and
+    carried down to step 8.
 
     The assertion that carries the point is that NO CAMPAIGN RAN. A refusal merely moved a few lines
     up in the source but still sitting behind a campaign would pass a message-only test and buy the
@@ -173,7 +173,7 @@ def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeyp
     "every domain error is a refusal and carries a field"), but until now every FDT one carried
     field=None, so neither front-end table could name the control or the flag that answers it.
 
-    The third is the order against the thin-setting notice (ruling F10): the stub is thin on both
+    The third is the order against the thin-setting notice: the stub is thin on both
     knobs, so the notice WOULD fire if it ran first, and a refused run must not first warn the
     operator about how far to trust a result it will never produce. No PreflightWarning may precede
     the refusal.
@@ -222,11 +222,12 @@ def test_the_prefactor_is_refused_before_anything_is_simulated(tmp_path, monkeyp
 
 
 def test_a_probe_below_the_first_real_bin_comes_back_blank_not_blended():
-    """Spec §3.5, E9 -- and the demonstration of the defect, which is the whole point of the fix.
+    """A frequency the run could not measure comes back blank -- and the demonstration of the
+    defect, which is the whole point of the fix.
 
-    _interp_log's docstring promises NaN outside the grid, and PRISM_HANDOFF names the consequence of
-    not having it: "widen freq_bounds past the PSD resolution and T_eff/T acquires a smooth,
-    plausible-looking, entirely fabricated tail". A Welch grid starts at exactly 0.0, the helper
+    _interp_log's docstring promises NaN outside the grid; without it, widening freq_bounds past the
+    spectrum's resolution gives T_eff/T a smooth, plausible, fabricated tail. A Welch grid starts at
+    exactly 0.0, the helper
     clamps that bin to 1e-30 before taking logarithms, and the in-range test compares against the
     CLAMPED bin -- so every positive frequency passed it and the low end returned a value blended off
     the zero-frequency bin. Here the zero bin holds 100 and the first real bin holds 1: a probe at
@@ -245,8 +246,8 @@ def test_a_probe_below_the_first_real_bin_comes_back_blank_not_blended():
 
 
 def test_every_probe_outside_the_resolved_span_is_blank_and_the_covered_ones_are_exact():
-    """Spec §3.5. The count of excluded points is what reaches the record as body.offgrid (spec
-    §2.3) and what the sweep's per-point summary reports, so it has to be honest at BOTH ends: the
+    """The count of excluded points is what reaches the record as body.offgrid
+    and what the sweep's per-point summary reports, so it has to be honest at BOTH ends: the
     upper end already blanked, the lower end never did. The covered points are asserted too, because
     a range test that blanked too much would also make the count "honest" and would silently throw
     away measured frequencies -- 2**0.5 sits at exactly half a log-decade between the 1.0 and 2.0
@@ -268,11 +269,11 @@ def test_every_probe_outside_the_resolved_span_is_blank_and_the_covered_ones_are
     from core.FDT.sanity import _resolved_span
     assert _resolved_span(x_old) == (1.0, 4.0), "the zero bin is not the band's lower end"
     assert _resolved_span(torch.tensor([0.0], dtype=torch.float64)) == (float("inf"), float("-inf")), \
-        "a grid with no positive bin resolves nothing: every probe is then out of range (P7)"
+        "a grid with no positive bin resolves nothing: every probe is then out of range"
 
 
 def test_the_sanity_checks_name_the_band_the_spectrum_actually_resolves(monkeypatch):
-    """Spec §3.5: "the callers' count of excluded points becomes honest". The count is only half of
+    """The callers' count of excluded points must be honest, and the count is only half of
     it. Both sanity checks print the excluded band as freqs_psd.min()..freqs_psd.max(), and a Welch
     grid's min is exactly 0.0 -- so the sentence read "fall outside the Welch PSD grid (0..2)" while
     excluding a probe at 0.5, which is inside 0..2. The band the reader is asked to narrow towards
@@ -313,21 +314,22 @@ def test_the_sanity_checks_name_the_band_the_spectrum_actually_resolves(monkeypa
 
 
 def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaign(tmp_path, monkeypatch):
-    """Spec §3.4, second bullet, and E9. The probe grid is built around a resonance the spontaneous
+    """A band the spectrum cannot resolve is refused before the driven campaign. The probe grid is
+    built around a resonance the spontaneous
     campaign found, so the grid's lowest frequency and the lowest frequency the spectrum resolves are
     only comparable once Campaign 1 is done. That is the first moment the condition is knowable, and
     it sits directly before the expensive half of the run -- which is the only reason the check is
-    worth anything. Before T14 this band silently produced a fabricated low-frequency tail; after T14
-    it produces blanks; refusing says so before the drive is spent.
+    worth anything. Before off-grid probes came back blank, this band silently produced a fabricated
+    low-frequency tail; after, it produced blanks; refusing says so before the drive is spent.
 
     The assertion that carries the point is that Campaign 2 NEVER RAN. The message is checked too:
     it names the band that was asked for, the band that exists, and what sets it -- and it names no
-    box, tab or flag. Its field is "freq_bounds" (P75): the key is registered, and both front-end
+    box, tab or flag. Its field is "freq_bounds": the key is registered, and both front-end
     tables map it to None because no control and no flag exposes the band, so neither table offers a
     fix sentence and neither pretends to.
 
-    What sets the resolution is the spectrum's Welch SEGMENT, not the recording (ruled after Task 14's
-    review, which measured it): Campaign 1's segment stops growing at WELCH_NPERSEG_CAP samples,
+    What sets the resolution is the spectrum's Welch SEGMENT, not the recording, as a measurement
+    showed: Campaign 1's segment stops growing at WELCH_NPERSEG_CAP samples,
     163.84 ND at dt_nd = 0.01. This recording is 200 ND -- 20,000 samples, past the cap, as both
     shipped durations are -- so the refusal must NOT send the operator to lengthen it, and says why
     instead. The below-cap branch is the next test."""
@@ -383,17 +385,18 @@ def test_a_band_below_the_spectrums_resolution_refuses_before_the_driven_campaig
     assert f"cap of {WELCH_NPERSEG_CAP} samples" in msg, msg
     assert e.value.field == "freq_bounds", e.value.field
     from core.tool.fields import fix_sentence
-    assert fix_sentence("freq_bounds") == "", "no flag exposes the band, so no fix is offered (P2, P75)"
+    assert fix_sentence("freq_bounds") == "", "no flag exposes the band, so no fix is offered"
     assert driven == [], "Campaign 2 was entered before the band was checked"
     written = [p.name for p in tmp_path.glob("*.png")]
     assert written == ["Spontaneous PSD.png"], ("the spontaneous spectrum's picture must be on disk "
                                                 f"when the band refusal fires -- it is what diagnoses "
-                                                f"it (P22): {written}")
+                                                f"it: {written}")
 
 
 def test_the_band_refusal_offers_a_longer_recording_only_where_it_lowers_the_resolution(
         tmp_path, monkeypatch):
-    """The other branch of the ruling above. Below the Welch segment's cap a longer recording DOES
+    """The other branch of the rule above, that the Welch segment and not the recording sets the
+    resolution. Below the Welch segment's cap a longer recording DOES
     lengthen the segment, so it lowers the spectrum's first real bin, and the refusal offers it beside
     the band -- with the cap, so the operator knows how far it goes. 100 ND at dt_nd = 0.01 is 10,000
     samples, cut into 8,192-sample segments.
@@ -463,7 +466,8 @@ def test_the_band_refusal_offers_a_longer_recording_only_where_it_lowers_the_res
 
 
 def test_the_sanity_warnings_name_what_really_bounds_each_end_of_the_spectrum(monkeypatch):
-    """The same ruling, for the two sanity warnings T14 made print the resolved band. Both gave advice
+    """The same rule -- name what really sets each end of the spectrum -- for the two sanity warnings
+    that print the resolved band. Both gave advice
     that cannot work at the shipped settings. check_high_freq_fdt blanks at the TOP of the grid and
     said "raise psd_T_obs_nd" -- but the top of a Welch spectrum is its Nyquist frequency, pi/dt_nd,
     which no recording length moves. check_passive_baseline said "lengthen the passive run", which
@@ -471,7 +475,7 @@ def test_the_sanity_warnings_name_what_really_bounds_each_end_of_the_spectrum(mo
     is min(4000, psd_T_obs_nd) ND, past the cap at every shipped setting. Each now names what bounds
     its end, and the passive one offers a longer run only below the cap, in the band refusal's words
     (one helper). Nothing is simulated: the campaign seams are stubbed, and the passive check keeps
-    four covered probes, so its bare ValueError (Task 33's) is not reached."""
+    four covered probes, so its bare ValueError is not reached."""
     import copy
 
     import pytest
@@ -526,24 +530,24 @@ def test_the_sanity_warnings_name_what_really_bounds_each_end_of_the_spectrum(mo
 
 
 def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(tmp_path, monkeypatch):
-    """Spec §3.6, E4. A run whose every probe frequency is blank has measured nothing: today it
+    """A run whose every probe frequency is blank has measured nothing: today it
     divides blanks by blanks, saves a figure with no points on it, and reports success -- an answer
     indistinguishable from a real one until someone opens the picture. It refuses instead, naming the
-    band and the two settings that set it. Its field is "freq_bounds", as the band refusal's is (F37):
+    band and the two settings that set it. Its field is "freq_bounds", as the band refusal's is:
     the same subject, and neither front end exposes it, so neither offers a fix sentence.
 
-    E4's other half is asserted here too: the run leaves behind what diagnoses the failure. The
+    The other half is asserted here too: the run leaves behind what diagnoses the failure. The
     spontaneous spectrum's picture is written BEFORE the driven campaign, so it is on disk when this
     refusal fires, while the ratio and susceptibility figures -- which would have been empty -- are
-    not. That directory is the record's folder, which the writer keeps unfinished (E2; the store-backed
+    not. That directory is the record's folder, which the writer keeps unfinished (the store-backed
     case is test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_leaves_none);
     the ordering is what makes the promise keepable.
 
     Nothing about it needs the drive: whether a probe is blank depends only on the grid and Campaign
-    1's spectrum, so it is refused BEFORE Campaign 2 is spent (the review of Task 16), and Campaign 2
+    1's spectrum, so it is refused BEFORE Campaign 2 is spent, and Campaign 2
     here is a recorder that must never be entered.
 
-    The low end is gated by T15, so the reachable case is the UPPER end (spec §3.5): here the probe
+    The low end is gated by the band refusal, so the reachable case is the UPPER end: here the probe
     grid runs 1.0..6.0 against a spectrum that resolves 0.1..0.3. The four plot helpers are replaced
     by recorders that write their save_path, so the test asserts WHICH figures a run leaves without
     paying for matplotlib (the real figures are the next tests')."""
@@ -565,7 +569,7 @@ def test_a_run_that_can_measure_nothing_refuses_and_leaves_the_spectrum_behind(t
             dtype = torch.float64
 
     # Resolves 0.1..0.3, peak at 0.2 -> the grid runs 1.0 .. 6.0: its LOWEST probe is above the
-    # spectrum's highest bin, so T15's low-end gate passes and every probe is blank anyway.
+    # spectrum's highest bin, so the band refusal's low-end gate passes and every probe is blank anyway.
     freqs_psd = torch.tensor([0.0, 0.1, 0.2, 0.3], dtype=torch.float64)
     G = torch.tensor([9.0, 1.0, 5.0, 1.0], dtype=torch.float64)
     monkeypatch.setattr(fdt_pipeline, "run_campaign1_psd",
@@ -648,8 +652,9 @@ def _figures_in(directory) -> list:
 
 def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
         tmp_path, monkeypatch, caplog):
-    """The ruling carried from Tasks 14 and 15: every sentence a refusal says about what the spectrum
-    resolves must be TRUE of the spectrum the run measured -- advice that sends the operator to double
+    """The rule the band refusal and the sanity warnings follow: every sentence a refusal says about
+    what the spectrum resolves must be TRUE of the spectrum the run measured -- advice that sends the
+    operator to double
     a spontaneous campaign for an identical band is worse than none. The test above pins the refusal
     on a four-bin stub, where no sentence about a Nyquist frequency can be true; this one runs the
     REAL Campaign 1 -- only the simulator is replaced, by a noiseless tone at 1 ND, so the peak is
@@ -739,13 +744,13 @@ def test_the_nothing_measurable_refusal_says_only_what_is_true_of_the_spectrum(
 
 def test_the_spectrum_figure_draws_what_the_spectrum_holds_whatever_the_band(
         tmp_path, monkeypatch, caplog):
-    """The review of Task 16 (Critical), at the figure. The spontaneous-spectrum figure is drawn BEFORE
-    the two band refusals, as the picture that diagnoses them -- and plot_psd clipped the spectrum to
-    the probe band and log-scaled both axes, so a band holding no spectrum point (wholly above the
-    Nyquist top or wholly below the first bin: exactly the cases those refusals exist for) raised "Data
-    has no positive values" from tight_layout, and so did a spectrum with no finite value. Every run
-    test stubbed plot_psd, which is why none saw it. The REAL function is driven here; the figure it
-    saves is caught at savefig and read back:
+    """The spontaneous-spectrum figure is drawn BEFORE the two band refusals, as the picture that
+    diagnoses them -- and plot_psd clipped the spectrum to the probe band and log-scaled both axes,
+    so a band holding no spectrum point (wholly above the Nyquist top or wholly below the first bin:
+    exactly the cases those refusals exist for) raised "Data has no positive values" from
+    tight_layout, and so did a spectrum with no finite value. Every run test stubbed plot_psd, which
+    is why none saw it. The REAL function is driven here; the figure it saves is caught at savefig
+    and read back:
 
     * a band that holds points: the ordinary figure, unchanged -- log/log, the in-band points only,
       the resonance line, nothing added;
@@ -812,15 +817,15 @@ def test_the_spectrum_figure_draws_what_the_spectrum_holds_whatever_the_band(
 
 
 def test_both_band_refusals_leave_the_real_spectrum_figure_and_never_drive(tmp_path, monkeypatch):
-    """The same finding end to end. With the real plot_psd the run died of a plotting ValueError
+    """The same failure end to end. With the real plot_psd the run died of a plotting ValueError
     before either band refusal was reached: a band wholly above the spectrum's top (nothing
-    measurable), and a band wholly below its first bin -- which Task 15 had refused cleanly before
-    the figure moved above its check, so that one was a regression.
+    measurable), and a band wholly below its first bin -- which the band refusal had refused cleanly
+    before the figure moved above its check, so that one was a regression.
 
     Nothing is stubbed here but the simulator and Campaign 2: the real Campaign 1 (a noiseless tone),
     the real plot_spontaneous_trajectory and plot_psd. Each band ends in its own refusal, keyed
     "freq_bounds", with both pictures on disk, and the driven campaign is never entered -- both
-    refusals are knowable from the grid and Campaign 1 alone (the review's order finding)."""
+    refusals are knowable from the grid and Campaign 1 alone."""
     import pytest
 
     from core.FDT import fdt_pipeline
@@ -853,13 +858,13 @@ def test_both_band_refusals_leave_the_real_spectrum_figure_and_never_drive(tmp_p
 
 def test_a_diverged_spontaneous_simulation_is_refused_as_the_cells_before_the_peak_search(
         tmp_path, monkeypatch, caplog):
-    """The review of Task 16 (Important 2). A spontaneous simulation that diverged leaves a spectrum
-    with no finite value, and find_spectral_peak then returns the FIRST bin as the resonance (argmax
-    takes NaN for the largest value) -- so the band check told the operator to raise freq_bounds'
-    lower multiplier, and, followed, the nothing-measurable refusal named a resolved band: both false,
-    and the real diagnosis never said. It is refused now as what it is, right after Campaign 1 and
-    BEFORE the peak search, keyed "cell": no band and no recording length makes a diverged
-    simulation measurable.
+    """A spontaneous simulation that diverged leaves a spectrum with no finite value, and
+    find_spectral_peak then returns the FIRST bin as the resonance (argmax takes NaN for the largest
+    value) -- so the band check told the operator to raise freq_bounds' lower multiplier, and,
+    followed, the nothing-measurable refusal named a resolved band: both false, and the real
+    diagnosis never said. It is refused now as what it is, right after Campaign 1 and BEFORE the
+    peak search, keyed "cell": no band and no recording length makes a diverged simulation
+    measurable.
 
     The folder keeps the picture that shows the divergence -- the spontaneous trajectory, drawn by
     the REAL plot_spontaneous_trajectory, which draws NaN and inf without raising -- and nothing the
@@ -978,10 +983,11 @@ def test_n_force_channels_user_vs_builtin():
 
 
 def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatch, caplog, capsys):
-    """V4 in the FDT pipeline and the sweep study (piece 3). Banners, per-point progress, the sanity
+    """Records with their own levels, in the FDT pipeline and the sweep study. Banners, per-point
+    progress, the sanity
     table and the saved-plot paths are information; a failed sanity verdict and a plot that had to
     drop non-finite points are warnings; a Campaign-2 point that FAILED and was recorded rather than
-    raised is an error. Until piece 3 all of it was print(): the only severity marker was a hand-typed
+    raised is an error. Once all of it was print(): the only severity marker was a hand-typed
     "WARNING:" word, and the per-point failure of an overnight sweep scrolled past at the level of its
     progress lines.
 
@@ -989,8 +995,7 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     Campaign 2. The sweep still completes, logs one error, warns about the count (a Python warning,
     unchanged) and says so. The hand-typed "WARNING: " word is gone from the sanity verdict because
     the level carries it -- on the tool it would have read "warning: WARNING: ...". No record starts or
-    ends with a blank line, and nothing reaches stdout: the front ends' handlers put records there
-    (Task 16)."""
+    ends with a blank line, and nothing reaches stdout: the front ends' handlers put records there."""
     import logging
 
     import numpy as np
@@ -1035,9 +1040,9 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     monkeypatch.setattr(cv, "plot_fdt_3d_vs_param", lambda *a, save_path=None, **k: None)
     w = _LogWriter(tmp_path)
     caplog.clear()
-    # The stub's two trajectories are below the thin-setting threshold (E5). A sweep called on its own
-    # does NOT warn it -- the study warns once, at its top, for both of its records (Task 12's review,
-    # pinned by test_a_thin_study_warns_once_and_both_records_keep_the_notice) -- but it still KEEPS
+    # The stub's two trajectories are below the thin-setting threshold. A sweep called on its own
+    # does NOT warn it -- the study warns once, at its top, for both of its records (pinned by
+    # test_a_thin_study_warns_once_and_both_records_keep_the_notice) -- but it still KEEPS
     # the sentence in its body. Only the failed-point count is raised here.
     with pytest.warns(UserWarning, match="1/2 operating points failed") as raised:
         cv.run_fdt_param_sweep(_SweepCfg(), "s", np.array([0.0, 0.1]), {"temp": 1.0}, writer=w)
@@ -1057,13 +1062,13 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
     # ── the FDT run: a failed sanity verdict is a WARNING, without the hand-typed word ─────────────
     class _Hopf:
         model = "HOPF"
-        # run_fdt resolves the normalisation prefactor before its first record (spec §3.4), and the
+        # run_fdt resolves the normalisation prefactor before its first record, and the
         # HOPF prefactor is 2/sigma_x^2 -- so this stub has to carry the one parameter it reads.
         params_dict = {"sigma_x": (0.1, None)}
-        # run_fdt judges the thin settings next (E5) and reads both knobs to do it. At these values
+        # run_fdt judges the thin settings next and reads both knobs to do it. At these values
         # nothing is said, so the exact record list below is unchanged.
         n_freqs, ensemble_M = 60, 256
-        # ...and it records every knob in body.settings and seeds on hw's device (piece 5).
+        # ...and it records every knob in body.settings and seeds on hw's device.
         freqs_per_batch, F0 = 1, 0.05
         freq_bounds, burn_in_nd, T_obs_periods = (0.1, 30.0), 100.0, 30
         dt_nd, psd_T_obs_nd, seed = 0.01, 8000.0, None
@@ -1076,7 +1081,7 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
                          writer=_LogWriter(tmp_path), seed=1)
     name = "core.FDT.fdt_pipeline"
     assert records() == [
-        (name, "INFO", f"Writing fdt record x at {Path(tmp_path)}"),     # the whole-piece review's N1
+        (name, "INFO", f"Writing fdt record x at {Path(tmp_path)}"),     # the record is named first
         (name, "INFO", "Cell file natural-frequency estimate: omega_0 ~= 1.0 (ND Hopf natural frequency)"),
         (name, "WARNING", "One or more sanity checks failed (see metrics above)."),
         (name, "INFO", "Aborted by user."),
@@ -1111,11 +1116,11 @@ def test_the_fdt_messages_are_records_with_their_own_levels(tmp_path, monkeypatc
 
 
 def test_make_fdt_config_refuses_every_zero_knob_a_blank_box_produces():
-    """Review Focus 3, and spec §3.3's table. Nothing on this path was checked: freqs_per_batch=0
-    makes campaigns._plan_adaptive_batches append (start, 0) for ever -- the application LOOKS HUNG
-    rather than failed -- ensemble_M=0 raises ZeroDivisionError inside _pick_n_segs
-    (FDT_MAX_ELEMENTS_PER_SEG // batch_size), F0=0 divides by zero in spectral.lock_in_chi
-    (2.0 / (F0 * T_obs)), and n_freqs=0 produces an empty grid, an empty figure and exit 0.
+    """Nothing on this path was checked: freqs_per_batch=0 makes campaigns._plan_adaptive_batches
+    append (start, 0) for ever -- the application LOOKS HUNG rather than failed -- ensemble_M=0
+    raises ZeroDivisionError inside _pick_n_segs (FDT_MAX_ELEMENTS_PER_SEG // batch_size), F0=0
+    divides by zero in spectral.lock_in_chi (2.0 / (F0 * T_obs)), and n_freqs=0 produces an empty
+    grid, an empty figure and exit 0.
 
     Each floor is asserted against the value a BLANK BOX produces and not only against a typed zero,
     because IntField.value() and FloatField.value() both return 0 for an empty field: a rule written
@@ -1166,9 +1171,9 @@ def test_make_fdt_config_refuses_every_zero_knob_a_blank_box_produces():
 
 
 def test_a_zero_frequencies_per_call_would_spin_the_batch_planner_and_is_refused_first():
-    """The whole-piece review's N42 (S5): spec §8.2 asks that each floor be "shown failing before the
-    change with the behaviour it prevents", and the batch planner's unbounded loop "asserted with a
-    bounded call count, not by running it". ``_plan_adaptive_batches`` packs ``min(fpb_max, ...)``
+    """Each floor is shown failing with the behaviour it prevents, and the batch planner's unbounded
+    loop is asserted with a bounded call count, not by running it. ``_plan_adaptive_batches`` packs
+    ``min(fpb_max, ...)``
     frequencies per batch and advances by that many: at ``fpb_max = 0`` it never advances -- the run
     LOOKS HUNG rather than failing. The grid it walks is handed in as a list that counts its reads and
     raises past a bound, so the spin is observed without being run; the same planner at 1 finishes;
@@ -1207,9 +1212,9 @@ def test_a_zero_frequencies_per_call_would_spin_the_batch_planner_and_is_refused
 
 
 def test_a_record_created_on_one_thread_and_run_on_another_logs_the_run(store, monkeypatch):
-    """The whole-piece review's N42 (S5), spec §8.2 "the run entries": a record's log.txt holds the
-    run's records, written from the WORKER thread. The window CREATES the writer on its own thread and
-    the stage ENTERS it on the worker (spec §1.2), and the run log is thread-local: every other
+    """A record's log.txt holds the run's records, written from the WORKER thread. The window
+    CREATES the writer on its own thread and the stage ENTERS it on the worker, and the run log is
+    thread-local: every other
     log.txt test runs both halves on one thread, so none could tell a panel that entered the writer
     itself -- whose log would be empty -- from a correct one. Here the writer is created on this
     thread and run_fdt runs on a ``threading.Thread``."""
@@ -1241,7 +1246,7 @@ def test_a_record_created_on_one_thread_and_run_on_another_logs_the_run(store, m
 
 
 def test_make_fdt_config_refuses_a_missing_cell_an_unsupported_model_and_a_broken_band():
-    """The rest of spec §3.3's table. A missing cell surfaced as FileNotFoundError from the parser;
+    """The rest of the builder's refusals. A missing cell surfaced as FileNotFoundError from the parser;
     it is now refused by its input kind first, with field="cell", exactly as make_sim_config refuses
     a missing bounds file. The model row is NOT require_choice: registry.fdt_support is a predicate
     that returns a TAILORED diagnostic sentence per model (intrinsic forcing, multiplicative noise,
@@ -1249,13 +1254,13 @@ def test_make_fdt_config_refuses_a_missing_cell_an_unsupported_model_and_a_broke
     fdt_support's own words are kept verbatim.
 
     The frequency band, the burn-in, the two durations and the step are parameters of neither
-    builder and are exposed by neither front end (§1.2), so they are checked DEFENSIVELY under their
+    builder and are exposed by neither front end, so they are checked DEFENSIVELY under their
     own registered keys, which map to None in both front-end tables: the message names the setting
-    and fix_sentence adds nothing, because there is no control and no flag (P2, P75). They are
+    and fix_sentence adds nothing, because there is no control and no flag. They are
     reached through with_overrides, which is how a hand-edited preset or a caller can produce one.
 
-    The burn-in floor is 0 and 0 itself is legal (E5). A fractional negative and a NaN are refused
-    too (F33): the count rule would have read -0.5 through int() as 0 and passed it, and raised a
+    The burn-in floor is 0 and 0 itself is legal. A fractional negative and a NaN are refused
+    too: the count rule would have read -0.5 through int() as 0 and passed it, and raised a
     bare ValueError on a NaN."""
     import pytest
 
@@ -1301,18 +1306,17 @@ def test_make_fdt_config_refuses_a_missing_cell_an_unsupported_model_and_a_broke
         assert needle in str(e.value), str(e.value)
         assert e.value.field == key, (key, e.value.field)
         assert gui_fields.fix_sentence(key) == "" and tool_fields.fix_sentence(key) == "", \
-            "no control and no flag: the message names the setting and offers no fix (P2)"
-    assert cli.check_fdt_settings(good.with_overrides(burn_in_nd=0.0)) is None, "E5: a zero burn-in is legal"
+            "no control and no flag: the message names the setting and offers no fix"
+    assert cli.check_fdt_settings(good.with_overrides(burn_in_nd=0.0)) is None, "a zero burn-in is legal"
     assert cli.check_fdt_settings(good) is None, "the built config passes its own check"
 
 
 def test_make_param_sweep_config_refuses_a_blank_grid_and_records_the_preset_name():
-    """Spec §4.4. Before piece 5 the window checked nothing about its two grids, and its grid row
+    """The window once checked nothing about its two grids, and its grid row
     read three value() calls -- so a grid whose boxes were left empty arrived as (0.0, 0.0, 0) and
     np.linspace produced a sweep of zero points without a word. The row now reads its boxes through
     value_or_none (``_GridRow.spec_or_none``), and each grid is checked as a whole HERE: every part
-    given, both ends finite, at least 2 points, and the minimum below the maximum (the whole-piece
-    review's N34 corrected this sentence).
+    given, both ends finite, at least 2 points, and the minimum below the maximum.
 
     ``preset_name`` exists because the builder takes ``preset`` as an already-RESOLVED dict and both
     call sites drop the name (core/tool/fdt.py's ``dict(cli.SWEEP_PRESETS[args.preset])``), while
@@ -1334,7 +1338,7 @@ def test_make_param_sweep_config_refuses_a_blank_grid_and_records_the_preset_nam
         "an unset knob falls back to the preset, in the builder rather than at each call site"
     assert np.allclose(s_grid, np.linspace(0.0, 0.5, 3)) and len(t_grid) == 3
     assert cfg.sources["cell"] == cell
-    assert cfg.preset_name == "exploratory", "body.settings['preset'] is read off the config (P72)"
+    assert cfg.preset_name == "exploratory", "body.settings['preset'] is read off the config"
     assert cli.make_fdt_config("NADROWSKI", True, cell, n_freqs=4, ensemble_M=8).preset_name is None
 
     for spec, field, needle in (
@@ -1356,7 +1360,7 @@ def test_make_param_sweep_config_refuses_a_blank_grid_and_records_the_preset_nam
         "The resolution preset must be one of exploratory, production; got 'overnight' "
         "(default exploratory).")
 
-    # §3.3's four shared knobs are checked here too, with the same wording the single-cell builder
+    # The four shared knobs are checked here too, with the same wording the single-cell builder
     # uses: one rule set, two builders.
     with pytest.raises(Refusal) as e:
         cli.make_param_sweep_config(cell, **ok, ensemble_M=0)
@@ -1364,18 +1368,18 @@ def test_make_param_sweep_config_refuses_a_blank_grid_and_records_the_preset_nam
 
 
 def test_cell_sources_names_exactly_the_files_parse_cell_opens(monkeypatch):
-    """The whole-piece review's N28 (L438), and spec §12 row (b). ``parse_cell`` keeps its 7-tuple
-    and throws the bounds and units paths it resolved away, so ``cli.cell_sources`` RE-DERIVES them
-    for the record -- two copies of one resolution rule (a same-named sibling, else the model's
-    master; the units file only on the decoupled branch), which is Review Focus 4's hazard: a record
-    that names the wrong bounds file is worse than one that names none. Nothing tied the copies
-    together. Here the two file readers ``parse_cell`` calls are wrapped to record what it OPENS, for
-    every shipped cell, with the model argument both callers pass, and ``cell_sources`` must name
-    exactly those files (None on the legacy inline branch, which opens neither).
+    """``parse_cell`` keeps its 7-tuple and throws the bounds and units paths it resolved away, so
+    ``cli.cell_sources`` RE-DERIVES them for the record -- two copies of one resolution rule (a
+    same-named sibling, else the model's master; the units file only on the decoupled branch), and
+    that is a hazard: a record that names the wrong bounds file is worse than one that names none.
+    Nothing tied the copies together. Here the two file readers ``parse_cell`` calls are wrapped to
+    record what it OPENS, for every shipped cell, with the model argument both callers pass, and
+    ``cell_sources`` must name exactly those files (None on the legacy inline branch, which opens
+    neither).
 
     A cell ``parse_cell`` refuses is skipped: ``master_spont_tier1.txt`` resolves to the Nadrowski
     master and is refused (its missing ``f_scale``) AFTER opening the bounds file and BEFORE the units
-    file, so there is nothing to compare for it (an owner item: list 4, item 11)."""
+    file, so there is nothing to compare for it."""
     from core import cli, config
     from core.Helpers import file_manager
     from core.refusals import Refusal
@@ -1409,13 +1413,12 @@ def test_cell_sources_names_exactly_the_files_parse_cell_opens(monkeypatch):
 
 
 def test_a_temperature_grid_reaching_below_zero_is_refused_and_zero_is_allowed():
-    """The whole-piece review's M1, fix 3, as the owner ruled it (R-F1). A negative T_a/T is
-    unphysical -- the active temperature below zero -- and it is the one known way a sweep point
-    diverges: the model takes a square root of it, which torch answers with NaN rather than an error,
-    so every such point's spectrum came back empty and the sweep booked the point as done. It is
-    refused under ``t_grid`` before anything is spent. Zero stays LEGAL (no active noise is a
-    meaningful operating point), and S has no floor: any other diverging point is caught by the
-    sweep's own per-point checks."""
+    """A negative T_a/T is unphysical -- the active temperature below zero -- and it is the one
+    known way a sweep point diverges: the model takes a square root of it, which torch answers with
+    NaN rather than an error, so every such point's spectrum came back empty and the sweep booked
+    the point as done. It is refused under ``t_grid`` before anything is spent. Zero stays LEGAL (no
+    active noise is a meaningful operating point), and S has no floor: any other diverging point is
+    caught by the sweep's own per-point checks."""
     import pytest
 
     from core import cli, config
@@ -1434,15 +1437,15 @@ def test_a_temperature_grid_reaching_below_zero_is_refused_and_zero_is_allowed()
     _cfg, _s, t_grid = cli.make_param_sweep_config(cell, **{**ok, "t_spec": (0.0, 1.0, 3)})
     assert t_grid[0] == 0.0, "a zero T_a/T is a meaningful operating point and stays legal"
     _cfg, s_grid, _t = cli.make_param_sweep_config(cell, **{**ok, "s_spec": (-0.5, 0.5, 3)})
-    assert s_grid[0] == -0.5, "the ruling sets no floor on S"
+    assert s_grid[0] == -0.5, "S has no floor"
 
 
 def test_a_thin_setting_warns_and_hands_back_the_sentence_for_the_record():
-    """E5: checks refuse what BREAKS; a setting too thin to trust warns instead, and the warning is
+    """Checks refuse what BREAKS; a setting too thin to trust warns instead, and the warning is
     recorded. A one-frequency grid and a two-trajectory ensemble both produce a real number -- the
     computation is defined -- but the number is a quick look, and a record that does not say so
-    reads later as a measurement. A floor here would forbid the quick look, which E5 explicitly
-    does not.
+    reads later as a measurement. A floor here would forbid the quick look, which the rule is
+    written to allow.
 
     The channel is PreflightWarning, the same one every other judgement in the tree uses
     (core/refusals.py, re-exported by core.orchestrator), so the window shows it at warning
@@ -1488,8 +1491,8 @@ def test_a_thin_setting_warns_and_hands_back_the_sentence_for_the_record():
     assert rec == [], "a run at the thresholds is not annotated"
 
     # the run entries raise it themselves: a notice the operator never sees is not a notice. The sweep
-    # study warns at ITS top, once for both records, not in each sweep (Task 12's review: a thin study
-    # warned twice, and the second warning arrived only after the whole first sweep had run).
+    # study warns at ITS top, once for both records, not in each sweep (a thin study once warned
+    # twice, and the second warning arrived only after the whole first sweep had run).
     import inspect
     from core.FDT import cross_validation
     for fn in (fdt_pipeline.run_fdt, cross_validation.run_param_study_cli):
@@ -1498,7 +1501,7 @@ def test_a_thin_setting_warns_and_hands_back_the_sentence_for_the_record():
 
 
 def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(tmp_path, monkeypatch):
-    """Task 12, fix round 1. The class lives in the torch-free core.refusals so the FDT path can raise
+    """The class lives in the torch-free core.refusals so the FDT path can raise
     it without importing the SBI stack, and the orchestrator re-exports the SAME object, so every
     ``pytest.warns(orchestrator.PreflightWarning)`` in the tree still catches an FDT notice.
 
@@ -1506,7 +1509,7 @@ def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(
     _preflight_warn: stacklevel=3 through run boundaries). Pointing at the stage's own
     ``notices = warn_thin_settings(cfg)`` line told the operator nothing on the tool's stderr. The
     call goes through run_fdt here, because that is the frame layout the stacklevel is counted for:
-    helper, stage, caller -- and since run_fdt became a public entry (Task 17), the @public_entry
+    helper, stage, caller -- and since run_fdt became a public entry, the @public_entry
     wrapper's frame between the stage and its caller is the one RUN_BOUNDARY_FILES skips."""
     import pytest
 
@@ -1538,7 +1541,7 @@ def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(
 
 
 def test_the_thin_notice_loads_no_sbi_and_keeps_its_always_filter():
-    """Task 12, fix round 1. An FDT or sweep run needs no inference machinery, and importing it cost
+    """An FDT or sweep run needs no inference machinery, and importing it cost
     every ``fdt``/``crossval`` tool run about two seconds plus two false pytensor "g++ not
     available" warnings at the head of its output, thin settings or not. Checked in a FRESH
     interpreter, because this process holds the orchestrator through the session fixtures, so a
@@ -1575,8 +1578,8 @@ def _stub_campaigns(monkeypatch, n_psd=1601):
     slow-marked and lives in tests/test_tool.py.
 
     The spectrum runs 0..40 with a bin every 0.025 and its peak at 1.0, so the default probe grid
-    (0.1..30 around that peak) is resolved end to end: the band refusal (spec §3.4) and the blanks
-    (spec §3.5) stay out of a test that is not about them."""
+    (0.1..30 around that peak) is resolved end to end: the band refusal and the blanks
+    stay out of a test that is not about them."""
     import torch
     from core.FDT import fdt_pipeline
 
@@ -1599,8 +1602,9 @@ def _stub_campaigns(monkeypatch, n_psd=1601):
 
 
 def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monkeypatch):
-    """E1 and V1 together, which is the whole point of making this a public entry. Before piece 5 the
-    measurement returned None, wrote five timestamped PNGs into a flat <artifacts root>/fdt that no
+    """A named record, and the caller's configuration left alone, together -- which is the whole point
+    of making this a public entry. The measurement once returned None, wrote five timestamped PNGs
+    into a flat <artifacts root>/fdt that no
     command could list or delete, and wrote ``cfg.omega_0`` on the panel's own settings object twice
     (core/FDT/fdt_pipeline.py's steps 1 and 4) -- so the frequency grid of the NEXT run started from
     the last run's resonance. The record answers the first; copy_for_run, which public_entry is
@@ -1610,10 +1614,10 @@ def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monk
     equality), with the keys a single-cell run cannot fill left null. Two trajectories is below the
     trust threshold, so the run warns -- asserted, never leaked -- and the record KEEPS the sentence.
 
-    The seed argument OVERRIDES the one the config was built with (P12), and the record's config block
+    The seed argument OVERRIDES the one the config was built with, and the record's config block
     must say so from its FIRST manifest: store.create computes that block from the caller's object,
     before any seed is resolved, so it read the builder's seed (or none) while the body held the one
-    the run used -- and `artifacts show` prints the config block (fix round 1, finding 3)."""
+    the run used -- and `artifacts show` prints the config block."""
     import json
 
     import pytest
@@ -1649,10 +1653,10 @@ def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monk
     assert rec.body["seed"] == 11 and rec.body["complete"] is True
     assert rec.body["points"] is None and rec.body["compared"] is None
     assert rec.body["notices"] == fdt_pipeline.thin_notices(cfg) and len(rec.body["notices"]) == 1, \
-        "ensemble_M=2 is below FDT_THIN_ENSEMBLE_M: T12's sentence is KEPT in the record (P51)"
+        "ensemble_M=2 is below FDT_THIN_ENSEMBLE_M: the thin-setting sentence is KEPT in the record"
     assert rec.body["offgrid"]["blanks"] == 0
     assert rec.body["settings"]["confirm_production"] is None, \
-        "skip_sanity was set, so confirm_production was never consulted (the whole-piece review's N6)"
+        "skip_sanity was set, so confirm_production was never consulted"
     assert rec.body["grid"]["n_freqs"] == 5 and rec.body["grid"]["omega_0"] > 0.0
     assert rec.body["offgrid"]["of"] == 5
     assert rec.body["settings"]["ensemble_M"] == 2 and rec.body["settings"]["skip_sanity"] is True
@@ -1667,12 +1671,12 @@ def test_run_fdt_writes_a_record_and_leaves_the_callers_config_alone(store, monk
 
 
 def test_the_single_cell_record_holds_the_numbers_not_only_the_pictures(store, monkeypatch):
-    """E1 / spec §3.8. Every number the four figures draw is recoverable from the record: before piece
-    5 the grid, the spectrum, the susceptibility and the ratio existed only inside the run, so a
+    """Every number the four figures draw is recoverable from the record: once, the grid, the
+    spectrum, the susceptibility and the ratio existed only inside the run, so a
     re-plot -- and any comparison of two cells -- meant re-running hours of simulation. The ``study``
     attribute at the root is what lets a reader check the layout before reading it: three layouts
-    share this filename (spec §2.3). The dataset names are the interface contract's, the vocabulary
-    the sweep file already uses (P5, P71).
+    share this filename. The dataset names are the interface contract's, the vocabulary
+    the sweep file already uses.
 
     Two trajectories is below the trust threshold, so the run warns; asserted, never leaked."""
     import h5py
@@ -1684,7 +1688,7 @@ def test_the_single_cell_record_holds_the_numbers_not_only_the_pictures(store, m
 
     _stub_campaigns(monkeypatch)
     # Real and imaginary parts DIFFERENT (1 + 2j), so a swap of chi' and chi'' in the file fails
-    # here: the shared stub's 1 + 1j could not tell them apart (the whole-piece review's N2, L589).
+    # here: the shared stub's 1 + 1j could not tell them apart.
     monkeypatch.setattr(fdt_pipeline, "run_campaign2_chi",
                         lambda cfg, omegas: torch.full(omegas.shape, 1 + 2j, dtype=torch.complex128))
     cfg = cli.make_fdt_config("HOPF", False, str(config.CELL_PATH / "hopf" / "cell.txt"),
@@ -1694,7 +1698,7 @@ def test_the_single_cell_record_holds_the_numbers_not_only_the_pictures(store, m
                                    writer=store.create("fdt", cfg, name="numbers"), seed=2)
 
     assert rec.data_path == rec.path / "data.h5" and rec.data_path.exists()
-    assert rec.manifest.payloads["data.h5"], "a committed payload is hashed (spec §2.2)"
+    assert rec.manifest.payloads["data.h5"], "a committed payload is hashed"
     with h5py.File(rec.data_path, "r") as h5:
         assert h5.attrs["study"] == "single"
         assert h5.attrs["model"] == "HOPF"
@@ -1711,12 +1715,12 @@ def test_the_single_cell_record_holds_the_numbers_not_only_the_pictures(store, m
 
 
 def test_a_failed_fdt_run_keeps_its_record_marked_unfinished(store, monkeypatch):
-    """E2: an interrupted or crashed measurement keeps its folder, plainly marked unfinished, and the
+    """An interrupted or crashed measurement keeps its folder, plainly marked unfinished, and the
     spontaneous spectrum it did collect is what diagnoses the failure. The six ordinary kinds still
     delete theirs -- tests/test_artifact_store.py pins that -- so this is the one place the
     progressive mode is visible from a stage.
 
-    The numbers file is asked for only once both campaigns are in (P49), so a run that dies in the
+    The numbers file is asked for only once both campaigns are in, so a run that dies in the
     driven campaign leaves a record that neither lists ``data.h5`` nor holds one: a listed payload
     that was never written would be a phantom, as a listed figure that was never drawn is."""
     import json
@@ -1744,11 +1748,11 @@ def test_a_failed_fdt_run_keeps_its_record_marked_unfinished(store, monkeypatch)
 
 
 def test_a_figure_that_fails_after_the_driven_campaign_does_not_cost_the_numbers(store, monkeypatch):
-    """E2's point is that a failed run keeps what it MEASURED. Once both campaigns are in, the numbers
+    """A failed run keeps what it MEASURED. Once both campaigns are in, the numbers
     are hours of simulation and the two final figures are minutes of matplotlib, so ``data.h5`` is
     written first: a figure that fails to draw (a matplotlib error, a full disk) leaves an unfinished
-    record whose numbers are on disk and readable, and a re-plot needs no re-run (Task 18's ruling).
-    The file is listed with a null hash, as every payload of an unfinished record is (P47)."""
+    record whose numbers are on disk and readable, and a re-plot needs no re-run.
+    The file is listed with a null hash, as every payload of an unfinished record is."""
     import json
 
     import h5py
@@ -1775,7 +1779,7 @@ def test_a_figure_that_fails_after_the_driven_campaign_does_not_cost_the_numbers
     assert payloads == {"data.h5": None}, payloads
     # Neither the ratio figure that failed nor the chi figure after it is listed: the chi path is
     # asked for only when its figure is drawn, and an unfinished manifest lists only the figures on
-    # disk (the whole-piece review's N2). Before, both were listed and neither existed.
+    # disk. Before, both were listed and neither existed.
     assert sorted(manifest["figures"]) == ["figures/spontaneous_psd.png",
                                            "figures/spontaneous_trajectory.png"], manifest["figures"]
     with h5py.File(w.dir / "data.h5", "r") as h5:
@@ -1787,8 +1791,8 @@ def test_a_figure_that_fails_after_the_driven_campaign_does_not_cost_the_numbers
 
 def test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_leaves_none(
         store, monkeypatch):
-    """The two refusals a single-cell run can meet, and why they end differently (spec §2.2 step 3,
-    E2, E4). The band refusal is knowable only once the spontaneous campaign has run and its two
+    """The two refusals a single-cell run can meet, and why they end differently. The band refusal
+    is knowable only once the spontaneous campaign has run and its two
     figures are on disk, so it is not a pre-spend refusal: the record is KEPT, unfinished, with the
     spectrum that diagnoses the refusal inside it and the resonance already in its body. The
     prefactor refusal is raised before anything is spent -- before the writer is even entered -- so
@@ -1834,11 +1838,10 @@ def test_a_band_refused_after_the_spectrum_keeps_its_record_and_a_refused_cell_l
 
 
 def test_run_fdt_refuses_a_seed_the_generator_cannot_take_before_its_record_opens(store, monkeypatch):
-    """The whole-piece review's N5 (L711). run_fdt resolved its seed with no rule of its own: -1 was
-    accepted and recorded, and 2**64 reached ``seeded`` inside the entered writer as a bare
-    ValueError, leaving an unfinished husk with no figures. Both builders and the sweep apply
-    ``require_seed``; run_fdt now applies it too, after the prefactor (ruling F10) and before the
-    writer is entered, so a refused seed opens no record."""
+    """run_fdt resolved its seed with no rule of its own: -1 was accepted and recorded, and 2**64
+    reached ``seeded`` inside the entered writer as a bare ValueError, leaving an unfinished husk
+    with no figures. Both builders and the sweep apply ``require_seed``; run_fdt now applies it too,
+    after the prefactor and before the writer is entered, so a refused seed opens no record."""
     import pytest
     from core import cli, config
     from core.FDT import fdt_pipeline
@@ -1857,12 +1860,12 @@ def test_run_fdt_refuses_a_seed_the_generator_cannot_take_before_its_record_open
 
 
 def test_confirm_production_is_recorded_only_when_it_was_consulted(store, monkeypatch):
-    """The whole-piece review's N6 (C3). ``confirm_production`` is read only on the sanity branch, so
-    with ``skip_sanity`` the production run goes ahead whatever its value -- and the window can pass
-    False there (untick Proceed, then tick Skip: the disabled box keeps its state). The record then
-    paired ``skip_sanity: true, confirm_production: false`` with a production result, a setting the
-    run never obeyed and the tool's refusal of the same pair contradicts. It is recorded null when
-    it was not consulted, and as given when it was."""
+    """``confirm_production`` is read only on the sanity branch, so with ``skip_sanity`` the
+    production run goes ahead whatever its value -- and the window can pass False there (untick
+    Proceed, then tick Skip: the disabled box keeps its state). The record then paired
+    ``skip_sanity: true, confirm_production: false`` with a production result, a setting the run
+    never obeyed and the tool's refusal of the same pair contradicts. It is recorded null when it
+    was not consulted, and as given when it was."""
     from core import cli, config
     from core.FDT import fdt_pipeline
 
@@ -1879,13 +1882,13 @@ def test_confirm_production_is_recorded_only_when_it_was_consulted(store, monkey
 
 
 def test_run_fdt_draws_and_records_a_seed_when_none_is_given(store, monkeypatch):
-    """E7: every run records the seed it used, so repeats of one cell can be told apart and their
+    """Every run records the seed it used, so repeats of one cell can be told apart and their
     spread read as the measurement error. A blank Seed box and an absent --seed both mean "draw one
     and record it" -- a run whose seed were simply unset could never be repeated.
 
     The draw comes from a seeded Random patched in as the module's ``random``, never from reseeding
     Python's global stream: that would leave it seeded for every later test in the one-process gate.
-    The config block records the drawn seed too, not the builder's None (fix round 1, finding 3)."""
+    The config block records the drawn seed too, not the builder's None."""
     import random
     from core import cli, config
     from core.FDT import fdt_pipeline
@@ -1903,8 +1906,8 @@ def test_run_fdt_draws_and_records_a_seed_when_none_is_given(store, monkeypatch)
 
 
 def test_the_seed_determines_the_numbers(store, monkeypatch):
-    """P82 / E7. Recording a seed is worth nothing unless the seed DETERMINES what the run draws --
-    and compare repeats (E8) reads the spread across repeats as the measurement error on exactly that
+    """Recording a seed is worth nothing unless the seed DETERMINES what the run draws --
+    and compare repeats reads the spread across repeats as the measurement error on exactly that
     premise. Campaign 1 is stubbed to draw from the ambient torch generator, which is what the solver
     draws its noise from: one seed twice draws the same, another seed draws differently."""
     import torch
@@ -1930,7 +1933,7 @@ def test_the_seed_determines_the_numbers(store, monkeypatch):
 
 
 def test_a_sanity_run_lists_only_the_figures_it_drew(store, monkeypatch):
-    """Fix round 1, finding 4. The passive-baseline check is NADROWSKI-only -- run_all_sanity drops it
+    """The passive-baseline check is NADROWSKI-only -- run_all_sanity drops it
     for every other model -- but run_fdt asked the writer for its figure path before the sanity run
     regardless, so every HOPF, BP or user-model sanity run listed figures/passive_baseline_ratio.png
     in its manifest and the file never existed. One helper in core/FDT/sanity.py now owns the rule and
@@ -1973,10 +1976,10 @@ def test_a_sanity_run_lists_only_the_figures_it_drew(store, monkeypatch):
 
 
 def test_an_interrupted_passive_check_leaves_no_phantom_figure(store, monkeypatch):
-    """The whole-piece review's N2 (L573). The passive-baseline check takes its figure's path as an
-    argument and saves at its END, so a Ctrl-C inside it -- the first and longest stage of a sanity
-    run -- left the unfinished record listing figures/passive_baseline_ratio.png, which was never
-    drawn. An unfinished manifest lists only what is on disk."""
+    """The passive-baseline check takes its figure's path as an argument and saves at its END, so a
+    Ctrl-C inside it -- the first and longest stage of a sanity run -- left the unfinished record
+    listing figures/passive_baseline_ratio.png, which was never drawn. An unfinished manifest lists
+    only what is on disk."""
     import json
 
     import pytest
@@ -2002,14 +2005,14 @@ def test_an_interrupted_passive_check_leaves_no_phantom_figure(store, monkeypatc
 
 def test_the_spectrum_figure_offgrid_and_numbers_are_on_disk_before_what_follows_them(store,
                                                                                      monkeypatch):
-    """The whole-piece review's N2 (S1) and ruling R-F7. Spec §2.2 step 2: the stage refreshes after
-    each figure and after data.h5. run_fdt refreshed only after Campaign 1 and at the end, so a
+    """The stage refreshes after each figure and after data.h5. run_fdt refreshed only after
+    Campaign 1 and at the end, so a
     process that died WITHOUT an exception during the hours of Campaign 2 -- a closed window, a
     kill, a power cut; no ``__exit__`` runs -- left a manifest listing neither the spontaneous-PSD
     figure, the picture that diagnoses the run, nor the ``offgrid`` count computed before the drive;
     and one that died while the two final figures were drawn left data.h5 unlisted.
 
-    Proved in-process (R-F7, never a child calling ``os._exit``): Campaign 2, when entered, and the
+    Proved in-process (never a child calling ``os._exit``): Campaign 2, when entered, and the
     ratio figure, when drawn, read ``manifest.json`` FROM DISK -- what a hard kill at that moment
     would leave -- and assert what it lists. The sweep's data.h5 is listed from before its first
     point, too."""
@@ -2066,12 +2069,12 @@ def test_the_spectrum_figure_offgrid_and_numbers_are_on_disk_before_what_follows
 
 
 def test_both_stages_name_the_record_they_write_before_anything_else(store, monkeypatch, caplog):
-    """The whole-piece review's N1 (H3). The tool prints `writing record <id> at <dir>` before
-    anything is spent (ruling F20), and ``compare`` logs `Writing comparison record ...` the moment
-    its record opens -- but run_fdt and the sweep said nothing, so a window run cancelled or crashed
-    during the long first stages ended with "Run cancelled." and never named the unfinished record it
-    left on disk. Each stage's first line inside its entered writer names the record: a logging
-    record, so it reaches the window's pane, the tool's console and the record's own log.txt."""
+    """The tool prints `writing record <id> at <dir>` before anything is spent, and ``compare`` logs
+    `Writing comparison record ...` the moment its record opens -- but run_fdt and the sweep said
+    nothing, so a window run cancelled or crashed during the long first stages ended with "Run
+    cancelled." and never named the unfinished record it left on disk. Each stage's first line
+    inside its entered writer names the record: a logging record, so it reaches the window's pane,
+    the tool's console and the record's own log.txt."""
     import logging
 
     from core import cli, config
@@ -2100,14 +2103,14 @@ def test_both_stages_name_the_record_they_write_before_anything_else(store, monk
 
 
 def test_an_fdt_run_loads_no_inference_machinery(tmp_path):
-    """Fix round 1, finding 1. The seeding context used to live in core/diagnostics/rng.py, and
-    importing ANY submodule runs its package's __init__ -- which imports the five diagnostics and
-    through them core.orchestrator, sbi and pytensor: about two seconds and two false pytensor "g++"
-    lines on stderr at the head of every `python -m core fdt`, refused runs included. It lives in
-    core/rng.py now. The import-time probe above cannot see a cost paid when the run STARTS, so this
-    one RUNS run_fdt in a fresh interpreter -- campaigns and figures stubbed, a temp store -- and then
-    looks. A fresh interpreter because this process holds the orchestrator through the session
-    fixtures, so a sys.modules check here would pass vacuously.
+    """The seeding context used to live in core/diagnostics/rng.py, and importing ANY submodule runs
+    its package's __init__ -- which imports the five diagnostics and through them core.orchestrator,
+    sbi and pytensor: about two seconds and two false pytensor "g++" lines on stderr at the head of
+    every `python -m core fdt`, refused runs included. It lives in core/rng.py now. The import-time
+    probe above cannot see a cost paid when the run STARTS, so this one RUNS run_fdt in a fresh
+    interpreter -- campaigns and figures stubbed, a temp store -- and then looks. A fresh
+    interpreter because this process holds the orchestrator through the session fixtures, so a
+    sys.modules check here would pass vacuously.
 
     The bare ``sbi`` package IS loaded, by the store rather than the run: provenance.env_info reads
     ``sbi.__version__`` into every manifest of every kind, and sbi's ``__init__`` imports nothing but
@@ -2166,7 +2169,7 @@ def _stub_the_study(monkeypatch):
 
 def _thin_study_cfg():
     """The Nadrowski sweep config at its smallest: two points per grid, three frequencies, and two
-    trajectories -- below FDT_THIN_ENSEMBLE_M, so the study says so once (E5)."""
+    trajectories -- below FDT_THIN_ENSEMBLE_M, so the study says so once."""
     from core import cli, config
     return cli.make_param_sweep_config(
         str(config.CELL_PATH / "nadrowski" / "master_spont.txt"),
@@ -2175,14 +2178,13 @@ def _thin_study_cfg():
 
 
 def test_a_study_writes_one_record_per_swept_parameter_under_one_seed(store, monkeypatch):
-    """Spec §4.1 (E4, E7). Before piece 5 the study ran the S sweep, plotted it, then ran the T sweep,
-    and an all-failed S sweep raised before the T sweep even started -- one listing entry for two
-    measurements, and the second measurement hostage to the first. Two records make each sweep
-    answerable on its own.
+    """The study once ran the S sweep, plotted it, then ran the T sweep, and an all-failed S sweep
+    raised before the T sweep even started -- one listing entry for two measurements, and the second
+    measurement hostage to the first. Two records make each sweep answerable on its own.
 
     ONE seed is drawn once and recorded on BOTH, because the two sweeps are one study: a reader who
     wants to repeat the study repeats it, not half of it. The config block says so too, from each
-    record's first manifest (Task 17's fix round 1: `artifacts show` prints that block).
+    record's first manifest (`artifacts show` prints that block).
 
     The two records are created back to back, before either is entered, which is what the store's
     in-memory "minted" set is for: without it both got one id, and the T sweep loaded as the S one."""
@@ -2202,28 +2204,28 @@ def test_a_study_writes_one_record_per_swept_parameter_under_one_seed(store, mon
     assert [r.name for r in recs] == ["sweep_s", "sweep_t"]
     assert len({r.id for r in recs}) == 2, [r.id for r in recs]
     assert [r.body["points"]["param"] for r in recs] == ["s", "temp"]
-    assert {r.body["seed"] for r in recs} == {77}, "one study, one seed (spec §4.1)"
+    assert {r.body["seed"] for r in recs} == {77}, "one study, one seed"
     assert {r.manifest.config["seed"] for r in recs} == {77}, "the config block names the seed USED"
     assert [r.body["settings"]["sweep_grid"] for r in recs] == [[0.0, 0.1, 2], [1.0, 1.1, 2]], \
-        "F40: [min, max, N] as spec §2.3 says; the array itself is in data.h5"
+        "[min, max, N]; the array itself is in data.h5"
     assert [r.body["settings"]["held"] for r in recs] == [{"temp": 1.0}, {"s": 0.0}], \
-        "what each sweep held fixed is a knob it resolved (spec §2.3; the whole-piece review's N7)"
+        "what each sweep held fixed is a knob it resolved"
     for r in recs:
         assert r.body["study"] == "sweep" and r.body["complete"] is True
-        assert r.body["grid"] is None, "each point's grid is in data.h5, not in the body (§2.3)"
+        assert r.body["grid"] is None, "each point's grid is in data.h5, not in the body"
         assert r.body["settings"]["preset"] == "exploratory"
         assert r.data_path.exists() and r.manifest.figures, \
             "each sweep plots into its OWN record when it finishes -- no midpoint special case"
         with h5py.File(r.data_path, "r") as h5:
-            assert h5.attrs["study"] == "sweep" and "prefactor" in h5.attrs, "the contract's root attributes (P6)"
+            assert h5.attrs["study"] == "sweep" and "prefactor" in h5.attrs, "the contract's root attributes"
             assert h5.attrs["omega_0"] == h5.attrs["omega_0_ref"] == 1.0
-        assert r.body["settings"]["skip_sanity"] is None, "P70: a sweep has no sanity branch"
+        assert r.body["settings"]["skip_sanity"] is None, "a sweep has no sanity branch"
         assert (r.path / "log.txt").read_text(encoding="utf-8").strip(), \
             "each sweep enters its own writer on the thread whose run log becomes log.txt"
 
 
 def test_a_thin_study_warns_once_and_both_records_keep_the_notice(store, monkeypatch):
-    """E5, and Task 12's review. The notice used to be raised inside each sweep, so a thin study warned
+    """The notice used to be raised inside each sweep, so a thin study warned
     TWICE -- and the second warning, the T sweep's, arrived only after the whole S sweep had run, which
     is not a warning before the spend at all. It is raised ONCE, at the top of the study, and it names
     the front end's call (the study is the public entry, so stacklevel=3 past the run boundary lands
@@ -2249,11 +2251,11 @@ def test_a_thin_study_warns_once_and_both_records_keep_the_notice(store, monkeyp
 
 
 def test_a_cell_the_sweep_cannot_normalise_opens_no_record(store, monkeypatch):
-    """Spec §3.4, applied to the sweep, and Task 17's ordering carried to it. The normalisation
-    constant is resolved BEFORE the writer is entered: resolved inside, after data.h5 had been handed
-    out, a cell missing ``beta`` would have left an unfinished record around an empty file, for a run
-    that never simulated anything. The study refuses the same cell at its top, before its thin notice
-    (ruling F10): a study that is refused must not first warn about how far to trust its result."""
+    """run_fdt's order, applied to the sweep. The normalisation constant is resolved BEFORE the
+    writer is entered: resolved inside, after data.h5 had been handed out, a cell missing ``beta``
+    would have left an unfinished record around an empty file, for a run that never simulated
+    anything. The study refuses the same cell at its top, before its thin notice: a study that is
+    refused must not first warn about how far to trust its result."""
     import warnings
 
     import pytest
@@ -2277,7 +2279,7 @@ def test_a_cell_the_sweep_cannot_normalise_opens_no_record(store, monkeypatch):
         with pytest.raises(FDTModelError):
             cv.run_param_study_cli(cfg, s_grid=s_grid, t_grid=t_grid, writers=writers, seed=1)
     assert not [w for w in rec if issubclass(w.category, PreflightWarning)], \
-        "the refusal comes before the thin notice (F10)"
+        "the refusal comes before the thin notice"
     assert not any(wr.dir.exists() for wr in writers.values()) and store.list("fdt") == []
 
 
@@ -2286,7 +2288,7 @@ def _sweep_stubs(monkeypatch, *, phase_a_fail=(), phase_b_fail=()):
 
     The counters are per CALL, so they run on across both sweeps of a study: Campaign-2 calls 0-1 are
     a two-point S grid's and 2-3 the T grid's. The figure stub writes the file it was handed, as
-    _stub_the_study's does: a figure the manifest lists and the disk lacks is a phantom (Task 17).
+    _stub_the_study's does: a figure the manifest lists and the disk lacks is a phantom.
     The spectrum spans 0.1..40, past the common grid's 0.2..30 (every stubbed omega_0 is 1.0), so no
     probe is off-grid -- consistent with a ratio that is finite everywhere -- unless a test says so."""
     import torch
@@ -2320,9 +2322,9 @@ def _sweep_stubs(monkeypatch, *, phase_a_fail=(), phase_b_fail=()):
 
 
 def test_a_sweep_counts_failures_in_both_phases(store, monkeypatch):
-    """E4: some points failed is a COMPLETED record carrying the count, and both phases count.
+    """Some points failed is a COMPLETED record carrying the count, and both phases count.
 
-    Phase A caught nothing before piece 5 (core/FDT/cross_validation.py's Phase A loop has no try at
+    Phase A once caught nothing (core/FDT/cross_validation.py's Phase A loop had no try at
     all), so one operating point whose spontaneous campaign raised -- a transient OOM, a solver blow-up
     at the grid's far end -- ended the whole study with a traceback and left no record of the points
     that had already worked. The counts are what let a reader judge the answer.
@@ -2330,7 +2332,7 @@ def test_a_sweep_counts_failures_in_both_phases(store, monkeypatch):
     The counts are kept CURRENT as the sweep runs -- a browser row watching an hours-long sweep reads
     them from the manifest each refresh writes -- and ``done`` is COUNTED, never derived as planned
     minus failed, which would call every not-yet-run point done from the first refresh on. A finished
-    sweep fills ``results`` and ``offgrid`` too (P78: spec §2.3 leaves them null only until the run
+    sweep fills ``results`` and ``offgrid`` too (they stay null only until the run
     finishes)."""
     import pytest
     from core import cli, config
@@ -2353,26 +2355,27 @@ def test_a_sweep_counts_failures_in_both_phases(store, monkeypatch):
     with pytest.warns(UserWarning, match="operating points failed"):
         rec = cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
 
-    assert rec.body["complete"] is True, "some points failed is a completed record (E4)"
+    assert rec.body["complete"] is True, "some points failed is a completed record"
     assert rec.body["points"] == {"param": "s", "planned": 4, "done": 2, "failed": 2}
-    assert rec.body["results"] is not None and rec.body["results"]["peak_ratio"] == 2.0, "P78"
+    assert rec.body["results"] is not None and rec.body["results"]["peak_ratio"] == 2.0, \
+        "a finished sweep fills its results"
     assert rec.body["offgrid"] == {"blanks": 0, "of": 2 * 3}, \
         "the 2 LANDED points x the 3-point common grid (every stubbed omega_0 is 1.0): the two " \
-        "failed points' slots were never measured (the whole-piece review's M2, departing from P78)"
+        "failed points' slots were never measured"
     assert refreshed == [(0, 0), (0, 1), (1, 1), (1, 2), (2, 2), (2, 2)], \
-        "one refresh once data.h5 is open (it is listed before the first point, the whole-piece " \
-        "review's N2), one per point as it lands or fails (A: point 0 fails; B: 1 lands, 2 fails, " \
+        "one refresh once data.h5 is open (it is listed before the first point), " \
+        "one per point as it lands or fails (A: point 0 fails; B: 1 lands, 2 fails, " \
         f"3 lands), then the final one: {refreshed}"
     (summary,) = store.list("fdt")
     assert (summary.points_done, summary.points_failed, summary.points_planned) == (2, 2, 4)
 
 
 def test_a_sweep_with_every_point_failed_refuses_after_its_record_is_written(store, monkeypatch):
-    """E4 and §4.3. A run that measured NOTHING refuses, naming the setting to change -- today it is a
+    """A run that measured NOTHING refuses, naming the setting to change -- today it is a
     RuntimeError the command line reports as a crash -- and the refusal is raised AFTER the final
     refresh, so the spectra the message tells the reader to look at are already on disk. The folder
-    stays (E2): that is the whole reason the first phase's PSDs are worth keeping. The message names
-    the cell by its file name as well as the grid (F41: spec §4.3's "naming the grid and the cell").
+    stays: that is the whole reason the first phase's PSDs are worth keeping. The message names
+    the cell by its file name as well as the grid.
     The sweep's own count warning fires first, as it does for any failed point; asserted, never
     leaked."""
     import pytest
@@ -2392,7 +2395,7 @@ def test_a_sweep_with_every_point_failed_refuses_after_its_record_is_written(sto
             cv.run_fdt_param_sweep(cfg, "s", s_grid, {"temp": 1.0}, writer=w)
     assert e.value.field == "s_grid"
     assert "all 2" in str(e.value)
-    assert "master_spont.txt" in str(e.value), "F41: the refusal names the cell"
+    assert "master_spont.txt" in str(e.value), "the refusal names the cell"
     assert "spontaneous spectra of the 2" in str(e.value), "every first campaign landed, and it says so"
 
     (summary,) = store.list("fdt")
@@ -2400,12 +2403,13 @@ def test_a_sweep_with_every_point_failed_refuses_after_its_record_is_written(sto
     assert summary.points_failed == 2
     body = store.get("fdt", summary.id).body
     assert body["points"]["failed"] == 2, "the final refresh ran BEFORE the refusal"
-    assert body["results"] is None and body["offgrid"] is None, "null until the run finishes (§2.3)"
+    assert body["results"] is None and body["offgrid"] is None, "null until the run finishes"
     assert (w.dir / "data.h5").exists(), "the message points at the PSDs; they must be there"
 
 
 def test_a_sweep_whose_first_phase_lost_every_point_refuses_without_a_common_grid(store, monkeypatch):
-    """Step 6's guard. When Phase A loses EVERY point there is no resonance to build the common grid
+    """The guard for an empty first phase. When Phase A loses EVERY point there is no resonance to
+    build the common grid
     around -- ``_build_common_grid`` would raise ``ValueError: min() arg is an empty sequence`` -- so
     Phase B is skipped and the sweep ends in the same calm refusal. The message must stay true of
     what the record holds: not one spontaneous campaign landed, so it holds no spectra and says so."""
@@ -2460,15 +2464,14 @@ def _point_errors(data_path) -> dict:
 
 
 def test_a_sweep_point_whose_spontaneous_simulation_diverged_is_a_failed_point(store, monkeypatch):
-    """The whole-piece review's M1 (C1). Phase A never looked at the spontaneous spectrum: a point
-    whose simulation diverged returned a spectrum NaN in every bin, the resonance search quietly fell
-    back to the linearised estimate, Phase B then booked every one of its probes as off-grid and
-    counted the point DONE -- so a sweep where every point diverged committed a finished record,
-    ``done N, failed 0``, which the CrossVal picker offered and ``compare sweeps`` accepted. A
-    single-cell run refuses the same spectrum (field ``cell``). The sweep now applies that run's own
-    test, with its own sentence, straight after each point's Campaign 1: the point is FAILED, its
-    reason in its ``error`` attribute, and a sweep that measured nothing reaches the all-failed
-    refusal it always should have.
+    """Phase A never looked at the spontaneous spectrum: a point whose simulation diverged returned
+    a spectrum NaN in every bin, the resonance search quietly fell back to the linearised estimate,
+    Phase B then booked every one of its probes as off-grid and counted the point DONE -- so a sweep
+    where every point diverged committed a finished record, ``done N, failed 0``, which the CrossVal
+    picker offered and ``compare sweeps`` accepted. A single-cell run refuses the same spectrum
+    (field ``cell``). The sweep now applies that run's own test, with its own sentence, straight
+    after each point's Campaign 1: the point is FAILED, its reason in its ``error`` attribute, and a
+    sweep that measured nothing reaches the all-failed refusal it always should have.
 
     Two cases: every point diverged (the refusal, an unfinished record, Phase B never entered), and one
     point of three (a finished record counting it failed)."""
@@ -2511,7 +2514,8 @@ def test_a_sweep_point_whose_spontaneous_simulation_diverged_is_a_failed_point(s
 
 
 def test_a_sweep_point_whose_driven_simulation_diverged_is_a_failed_point(store, monkeypatch):
-    """M1's Phase-B half. A driven campaign whose susceptibility holds no finite value at any probe
+    """The Phase-B half of the diverged-point rule. A driven campaign whose susceptibility holds no
+    finite value at any probe
     measured nothing at that point, whatever the spontaneous spectrum supplied: it used to LAND, as a
     point with every probe blank. It is a failed point now, with its reason recorded, and the rest of
     the sweep is unaffected. A chi'' that is non-finite at SOME probes still lands (the off-grid test
@@ -2573,12 +2577,12 @@ def _stub_resonances(monkeypatch, *, fail_s=()):
 
 def test_a_sweeps_results_are_per_point_and_its_offgrid_counts_only_what_was_measured(store,
                                                                                        monkeypatch):
-    """The whole-piece review's M2 (C2 + S3), departing from P78/A6. A finished sweep's ``results`` was
-    the single-cell summary run over every landed point's curve CONCATENATED: its
-    ``ratio_at_resonance`` was then the FIRST landed point's ratio at the sweep's LARGEST resonance --
-    no operating point's ratio at its own resonance -- and its peak did not say which point produced
-    it. ``offgrid.of`` counted every PLANNED point's slots, the failed points' never-measured ones
-    included, beside blanks and a usable fraction taken over the landed points only.
+    """A finished sweep's ``results`` was the single-cell summary run over every landed point's
+    curve CONCATENATED: its ``ratio_at_resonance`` was then the FIRST landed point's ratio at the
+    sweep's LARGEST resonance -- no operating point's ratio at its own resonance -- and its peak did
+    not say which point produced it. ``offgrid.of`` counted every PLANNED point's slots, the failed
+    points' never-measured ones included, beside blanks and a usable fraction taken over the landed
+    points only.
 
     Now: one entry per landed point, each with its OWN ratio at its own resonance (what
     ``load_param_sweep``'s row gives at the probe nearest that row's resonance); the top-level
@@ -2632,12 +2636,12 @@ def test_a_sweeps_results_are_per_point_and_its_offgrid_counts_only_what_was_mea
 
 
 def test_a_mid_run_refresh_refused_by_a_file_lock_is_warned_and_the_sweep_goes_on(store, monkeypatch):
-    """The whole-piece review's N4 (H2). A refresh is bookkeeping -- each point's numbers are already
-    flushed to data.h5 before it runs -- yet one refused by the OS ended the sweep: Windows fails a
-    write to a file another program holds without write sharing (Explorer's preview pane on log.txt,
-    a scanner), and the refresh after every operating point let that PermissionError out, so the
-    rest of an overnight sweep never ran. A mid-run refresh now warns once and returns; the next
-    refresh, or the commit (which stays strict), writes what it could not."""
+    """A refresh is bookkeeping -- each point's numbers are already flushed to data.h5 before it
+    runs -- yet one refused by the OS ended the sweep: Windows fails a write to a file another
+    program holds without write sharing (Explorer's preview pane on log.txt, a scanner), and the
+    refresh after every operating point let that PermissionError out, so the rest of an overnight
+    sweep never ran. A mid-run refresh now warns once and returns; the next refresh, or the commit
+    (which stays strict), writes what it could not."""
     import pytest
     from core.FDT import cross_validation as cv
 
@@ -2664,7 +2668,7 @@ def test_a_mid_run_refresh_refused_by_a_file_lock_is_warned_and_the_sweep_goes_o
 
 
 def test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash(store, monkeypatch, caplog):
-    """The nanmax defect (§4.3). ``log.info(f"... {np.nanmax(ratio.cpu().numpy()):.3g}")`` sits
+    """The nanmax defect. ``log.info(f"... {np.nanmax(ratio.cpu().numpy()):.3g}")`` sits
     OUTSIDE the try that guards Campaign 2, so a point whose ratio comes back EMPTY raises
     ``ValueError: zero-size array to reduction operation fmax which has no identity`` from numpy --
     after the first phase's whole cost has been paid, and with a traceback rather than a count. Inside
@@ -2697,19 +2701,19 @@ def test_an_empty_ratio_is_a_counted_failure_not_a_numpy_crash(store, monkeypatc
 
 def test_the_dead_single_point_helper_is_gone():
     """``_fdt_measure`` has no caller anywhere in the tree, and its ``cfg.omega_0 = omega_0_emp`` is
-    the only write on a caller's settings object left in this module -- exactly the V1 defect the rest
-    of the piece removes, sitting in code nothing runs. Dead code that models the wrong thing is worse
-    than dead code."""
+    the only write on a caller's settings object left in this module -- exactly the write every public
+    entry's private copy prevents, sitting in code nothing runs. Dead code that models the wrong thing
+    is worse than dead code."""
     from core.FDT import cross_validation as cv
     assert not hasattr(cv, "_fdt_measure")
 
 
 def test_an_all_failed_first_sweep_does_not_cost_the_second(store, monkeypatch, caplog):
-    """P77 and spec §4.3/§8.2. Before piece 5 an all-failed S sweep raised out of the study before the
-    T sweep had started. Now the S record stays on disk, unfinished (E2), the study says so at error,
-    and the T sweep runs and finishes. _sweep_stubs' Campaign-2 counter is shared by both sweeps:
-    calls 0-1 are the S grid's. Two trajectories is below the trust threshold, so the study warns
-    once at its top; that and the S sweep's count warning are asserted, never leaked."""
+    """An all-failed S sweep once raised out of the study before the T sweep had started. Now the S
+    record stays on disk, unfinished, the study says so at error, and the T sweep runs and finishes.
+    _sweep_stubs' Campaign-2 counter is shared by both sweeps: calls 0-1 are the S grid's. Two
+    trajectories is below the trust threshold, so the study warns once at its top; that and the S
+    sweep's count warning are asserted, never leaked."""
     import logging
     import pytest
     from core import cli, config
@@ -2741,10 +2745,10 @@ def test_an_all_failed_first_sweep_does_not_cost_the_second(store, monkeypatch, 
 
 
 def test_a_study_whose_two_sweeps_both_measured_nothing_refuses(store, monkeypatch, caplog):
-    """P77's other half: only when BOTH sweeps measured nothing does the study refuse, after logging
-    both at error (ruling F14/F45), and both unfinished records stay on disk.
+    """The other half: only when BOTH sweeps measured nothing does the study refuse, after logging
+    both at error, and both unfinished records stay on disk.
 
-    ONE refusal naming BOTH grids (the whole-piece review's N9, FE8): it used to be the activity
+    ONE refusal naming BOTH grids: it used to be the activity
     sweep's own, so the yellow box and the tool's line sent the operator to the S grid alone although
     the T_a/T grid had failed too. Keyed ``s_grid`` still -- a refusal names one field -- but its
     sentence names both. And each sweep is called what both front ends call it, "the S sweep" and
@@ -2784,11 +2788,11 @@ def test_a_study_whose_two_sweeps_both_measured_nothing_refuses(store, monkeypat
 
 
 def test_a_sweep_point_is_reproducible_from_the_seed_and_its_index(store, monkeypatch):
-    """P82 / spec §4.1: every operating point draws from a stream derived from (the study's seed, the
+    """Every operating point draws from a stream derived from (the study's seed, the
     sweep, the phase, the point's index) -- ``cross_validation._point_seed`` -- so a point is
     reproducible from the seed and its index, and depends on nothing else.
 
-    What the derivation replaced (Task 19's review): ``seed + k`` for Phase A and ``seed + n + k`` for
+    What the derivation replaced: ``seed + k`` for Phase A and ``seed + n + k`` for
     Phase B. Point k of the S sweep and point k of the T sweep drew the SAME Phase-A stream -- the two
     records' noise was correlated, which a comparison of sweeps would read as signal -- one sweep's
     Phase B could land on the other's Phase A when the grids differ in length, and Phase B depended on
@@ -2852,7 +2856,7 @@ def test_a_sweep_point_is_reproducible_from_the_seed_and_its_index(store, monkey
 
 
 def test_a_malformed_study_call_is_refused_before_the_first_sweep_spends(store, monkeypatch):
-    """Task 19's review. A study called with the wrong writers -- one missing, one extra, one writer
+    """A study called with the wrong writers -- one missing, one extra, one writer
     handed in for both sweeps, or one already entered -- used to find out only when the sweep that
     needed it reached it: the T sweep's KeyError, or its FileExistsError, arrived after the whole S
     sweep had been paid for. So did a sweep parameter the plot tables have no label for, at the END of
@@ -2897,7 +2901,7 @@ def test_a_negative_seed_is_refused_before_the_sweep_opens_its_record(store, mon
     refused by the same rule, before its writer is entered. Inside the per-point guard it would fail
     EVERY point and end in a false "measured nothing" refusal naming the grid -- the wrong setting.
 
-    The study refuses the same seed at its top, before its thin-setting notice (fix round 1, F10): a
+    The study refuses the same seed at its top, before its thin-setting notice: a
     refused study must not first warn about how far to trust a result it will never produce."""
     import warnings
 
@@ -2926,11 +2930,10 @@ def test_a_negative_seed_is_refused_before_the_sweep_opens_its_record(store, mon
 
 def test_a_seed_above_the_generators_ceiling_is_refused_by_both_builders_and_the_study(
         store, monkeypatch):
-    """Task 28's ruling on ``--seed``, which takes any integer. A seed above 2**64 - 1 overflows the
-    generator ``seeded`` hands it to -- "Overflow when unpacking long long", a bare ValueError raised
-    INSIDE the run, after its record is open -- so the one seed rule both builders, the study and
-    each sweep apply has a ceiling as well as its floor, refused under the same field key before
-    anything is spent.
+    """``--seed`` takes any integer. A seed above 2**64 - 1 overflows the generator ``seeded`` hands
+    it to -- "Overflow when unpacking long long", a bare ValueError raised INSIDE the run, after its
+    record is open -- so the one seed rule both builders, the study and each sweep apply has a
+    ceiling as well as its floor, refused under the same field key before anything is spent.
 
     The ceiling itself is legal and comes back EXACTLY: a rule that compared in float would round
     2**64 - 1 up to 2**64 and refuse the largest seed the generator takes. The sentence is pinned
@@ -2965,7 +2968,7 @@ def test_a_seed_above_the_generators_ceiling_is_refused_by_both_builders_and_the
     top = cli.make_param_sweep_config(cell, **sweep, seed=SEED_MAX)[0].seed
     assert top == SEED_MAX and isinstance(top, int), top
 
-    # The study, handed the seed directly (it overrides cfg.seed, P12): refused before its
+    # The study, handed the seed directly (it overrides cfg.seed): refused before its
     # thin-setting notice and before either record is opened, as the negative seed is above.
     _sweep_stubs(monkeypatch)
     cfg, s_grid, t_grid = _thin_study_cfg()
@@ -2989,11 +2992,11 @@ def test_a_seed_above_the_generators_ceiling_is_refused_by_both_builders_and_the
 
 
 def test_a_sweeps_offgrid_counts_only_the_probes_its_spectra_could_not_supply(store, monkeypatch):
-    """Fix round 1 (Important). ``offgrid.blanks`` counts the probe frequencies the SPONTANEOUS
-    spectrum could not supply (spec §2.3, E9) -- exactly what a single-cell record counts
-    (``torch.isnan(G_at_omegas)`` in fdt_pipeline), and the comparisons read the field from both study
-    types. Counting every NaN in a landed ratio booked a NaN chi'' from the DRIVEN campaign -- a solver
-    blow-up at one probe -- as off-grid, so it read as a band problem.
+    """``offgrid.blanks`` counts the probe frequencies the SPONTANEOUS spectrum could not supply --
+    exactly what a single-cell record counts (``torch.isnan(G_at_omegas)`` in fdt_pipeline), and the
+    comparisons read the field from both study types. Counting every NaN in a landed ratio booked a
+    NaN chi'' from the DRIVEN campaign -- a solver blow-up at one probe -- as off-grid, so it read
+    as a band problem.
 
     Here the spectrum stops at 3.0, so the common grid's probes above it are off-grid at both points,
     and point 0's driven campaign also returns a NaN chi'' at one probe INSIDE the band: that probe
@@ -3043,7 +3046,7 @@ def test_a_sweeps_offgrid_counts_only_the_probes_its_spectra_could_not_supply(st
 
 
 def test_an_all_blank_point_lands_without_a_numpy_warning(store, monkeypatch, caplog):
-    """Fix round 1. The per-point peak line took ``np.nanmax`` over the whole ratio, and on a ratio
+    """The per-point peak line took ``np.nanmax`` over the whole ratio, and on a ratio
     with no finite value numpy warns ``RuntimeWarning: All-NaN slice encountered`` -- which reached
     the run log and stderr as if the operator had something to act on. The peak is taken over the
     FINITE values only: a point with none still LANDS, its line says there is no peak, and an EMPTY
@@ -3051,8 +3054,7 @@ def test_an_all_blank_point_lands_without_a_numpy_warning(store, monkeypatch, ca
 
     The susceptibility is FINITE here: a ratio with no finite value beside a measured chi is what a
     spectrum that supplied no probe gives. A chi with no finite value is a diverged driven campaign,
-    a failed point since the whole-piece review's M1
-    (test_a_sweep_point_whose_driven_simulation_diverged_is_a_failed_point)."""
+    a failed point (test_a_sweep_point_whose_driven_simulation_diverged_is_a_failed_point)."""
     import logging
     import warnings
 
@@ -3077,8 +3079,9 @@ def test_an_all_blank_point_lands_without_a_numpy_warning(store, monkeypatch, ca
 
 
 def test_a_refusal_that_is_not_measured_nothing_ends_the_study_at_once(store, monkeypatch, caplog):
-    """Task 20's departure from A7, pinned (fix round 1). ``StoreError``, ``ManifestError`` and
-    ``FDTModelError`` are all Refusals, so catching every Refusal from a sweep would log a store
+    """Only the all-failed refusal lets the study go on to its next sweep. ``StoreError``,
+    ``ManifestError`` and ``FDTModelError`` are all Refusals, so catching every Refusal from a sweep
+    would log a store
     failure as "the s sweep measured nothing; its unfinished record is kept" -- false -- and then
     spend the whole T sweep. Only the all-failed refusal carries its grid's field; any other refusal
     ends the study at once and the T writer is never entered."""
@@ -3107,7 +3110,7 @@ def test_a_refusal_that_is_not_measured_nothing_ends_the_study_at_once(store, mo
 
 
 def test_a_finished_sweep_draws_its_real_figure_into_its_record(store, monkeypatch):
-    """Task 19's review. Every other sweep test stubs ``plot_fdt_3d_vs_param`` with a lambda that
+    """Every other sweep test stubs ``plot_fdt_3d_vs_param`` with a lambda that
     swallows any keyword, so a misspelled keyword at the sweep's one call -- or a figure path the
     writer never handed out -- would pass them all and fail only at the end of a real sweep, hours in.
     Here the REAL drawing function runs (Agg, the root conftest's backend) on the stubbed campaigns'

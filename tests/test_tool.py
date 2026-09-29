@@ -1,4 +1,4 @@
-"""The command-line tool (``python -m core``), piece 2 of the 2026-09-10 hardening programme.
+"""The command-line tool (``python -m core``).
 
 Everything runs IN PROCESS through ``main(argv)``. A subprocess would look more like the operator's
 command line and would catch less: a handler that swaps the process default store and never restores
@@ -49,7 +49,7 @@ def _session_default_store():
     before a function-scoped fixture's ``default_store()`` read -- ever runs. Capturing ``before``
     inside a function-scoped fixture would read the store AFTER those two calls, so a leak baked in
     during ``tool_run``'s setup would already be sitting in ``before`` and every later comparison
-    would trivially pass (spec Sec. 8.4's gap). Recording it here, ahead of every module fixture, is what
+    would trivially pass. Recording it here, ahead of every module fixture, is what
     keeps ``default_store() is <this>`` a real check of the object the session started with.
     """
     from core.artifacts import default_store
@@ -112,7 +112,7 @@ def tool_run(tool_env, _session_default_store):
 def _default_store_is_restored(_session_default_store):
     """``main`` runs its handler under ``use_store`` and must put the process default back. A tool that
     leaked its store would make every later test in the session write into the tool's root, and only a
-    SINGLE-PROCESS gate could ever notice (CLAUDE.md); this makes it a per-test failure instead.
+    SINGLE-PROCESS gate could ever notice; this makes it a per-test failure instead.
 
     Compared against ``_session_default_store`` -- captured once, before any module fixture's real
     ``main`` calls -- rather than a fresh ``default_store()`` read here, so a leak already baked into a
@@ -123,8 +123,8 @@ def _default_store_is_restored(_session_default_store):
 
 
 def test_the_help_epilog_names_the_core_environment_settings():
-    """D13: two roots and two core-level settings, named where an operator looks -- and nowhere else,
-    because the tool itself reads none of them."""
+    """The two roots and the two core-level settings are named where an operator looks -- and nowhere
+    else, because the tool itself reads none of them."""
     epilog = build_parser().epilog
     for name in ("PRISM_RESOURCES", "PRISM_ARTIFACTS", "PRISM_VRAM_CEILING_GIB", "PRISM_MEM_LOG_EVERY"):
         assert name in epilog, name
@@ -175,11 +175,11 @@ def _env_reads_and_knob_writes(tree) -> list:
 
 
 def test_the_tool_reads_no_environment_and_writes_no_knob(tmp_path):
-    """D6: every setting is a flag that travels to its stage as a keyword.
+    """Every setting is a flag that travels to its stage as a keyword.
 
     An ``os.environ`` read inside the tool would be a knob no flag names, and an assignment to a
-    module constant is the trap CLAUDE.md spells out -- orchestrator binds config constants at import,
-    so ``config.X = v`` changes nothing and the run silently uses the default. The entry is the one
+    module constant is the import-binding trap -- orchestrator binds config constants at import, so
+    ``config.X = v`` changes nothing and the run silently uses the default. The entry is the one
     exception, and only for the two lines that MUST precede torch.
     """
     root = Path(__file__).resolve().parents[1]
@@ -251,16 +251,16 @@ def test_every_prior_flag_reaches_build_prior_as_a_keyword(tool_env, monkeypatch
 
 def test_a_stage_note_that_breaks_the_rule_is_refused_before_the_stage_runs(tool_env, monkeypatch,
                                                                             capsys):
-    """The stage ``--note`` (config_args.add_name_flags) used to reach the manifest unchecked: piece
-    4's store contract leaves the note rule to each FRONT END (``ArtifactStore.set_note``:
+    """The stage ``--note`` (config_args.add_name_flags) used to reach the manifest unchecked: the
+    store's contract leaves the note rule to each FRONT END (``ArtifactStore.set_note``:
     "require_note is that rule, and both front ends run it"), ``create`` stores a note as it is
     given, and only ``artifacts note`` ran the rule. So a 250-character note, or one with a newline,
     was written into a record that the tool's own ``artifacts note`` would then refuse to write back.
 
-    ``main`` now judges it ONCE, before any handler runs, for every subcommand that has the flag
-    (piece 5, the Task 29 ruling): a refusal is the ladder's one line ending ``(--note)``, exit 1,
-    and nothing -- not the config build, not the stage -- has run. The stage is a recorder, so a
-    refused note is asserted by what never reached it.
+    ``main`` now judges it ONCE, before any handler runs, for every subcommand that has the flag: a
+    refusal is the ladder's one line ending ``(--note)``, exit 1, and nothing -- not the config
+    build, not the stage -- has run. The stage is a recorder, so a refused note is asserted by what
+    never reached it.
     """
     from core import orchestrator
     from core.refusals import NOTE_MAX_CHARS
@@ -341,7 +341,7 @@ def test_a_taken_name_is_refused_with_exit_1_and_nothing_written(tool_run, capsy
     capsys.readouterr()
     assert main(["prior", *_cfg(bounds), "--name", "tp"]) == 1
     err = capsys.readouterr().err
-    # V3 on the tool: ONE line, the message and the flag that answers it. No class name and no
+    # A refusal on the tool is ONE line: the message and the flag that answers it. No class name and no
     # [raised at ...] -- those were hedges for a bug disguised as a ValueError, which a dedicated
     # Refusal class no longer needs. fix_sentence owns the parentheses, so "((" would mean the
     # message carried its own copy of the flag.
@@ -353,8 +353,9 @@ def test_a_taken_name_is_refused_with_exit_1_and_nothing_written(tool_run, capsy
 
 
 def test_parse_forced_and_recording_set_rules():
-    """Section 3.6, as a unit: which recordings each observation mode takes, decided before anything
-    is loaded or spent. The stub configs carry only the two fields the function is allowed to read."""
+    """The recording-set rules, as a unit: which recordings each observation mode takes, decided
+    before anything is loaded or spent. The stub configs carry only the two fields the function is
+    allowed to read."""
     import re
     from core.tool.config_args import UsageError, parse_forced, recording_set
 
@@ -406,9 +407,9 @@ def test_infer_usage_errors_exit_2(tool_run, capsys):
     assert main([*base, "--cell", cell, "--spont", "x.npy"]) == 2     # mutually exclusive
     assert main([*base]) == 2                                        # and one of them is required
 
-    # R-L's ordering, PROVED rather than assumed: --posterior names a ref that does not exist, so the
-    # only way this can return 2 (recording_set's UsageError) rather than 1
-    # (load_posterior_and_prior's StoreError) is if the recording rules are checked BEFORE the load.
+    # The recording rules come before the load, PROVED rather than assumed: --posterior names a ref
+    # that does not exist, so the only way this can return 2 (recording_set's UsageError) rather than
+    # 1 (load_posterior_and_prior's StoreError) is if the recording rules are checked BEFORE the load.
     # Moving recording_set after the load would silently turn this into a 1.
     bad_ref = ["infer", *_cfg(bounds), "--posterior", "nosuch", "--t-obs", "1.0"]
     capsys.readouterr()
@@ -416,7 +417,7 @@ def test_infer_usage_errors_exit_2(tool_run, capsys):
     err = capsys.readouterr().err
     assert "usage:" in err and "no Forcing section" in err
 
-    # --cell with any of the experimental-only recording flags: I3, refused before the load too.
+    # --cell with any of the experimental-only recording flags: refused before the load too.
     capsys.readouterr()
     assert main([*bad_ref, "--cell", cell, "--forced", "y.npy@10", "--f0-si", "1e-12"]) == 2
     err = capsys.readouterr().err
@@ -441,8 +442,9 @@ def test_validate_and_simulated_infer(tool_run):
 
 
 def test_near_miss_is_refused_before_simulation(tool_run, capsys):
-    """D7 on the command line: the 2026-09-11 incident, in which run 2 silently started a new cache
-    under an identity one field away from run 1's, is now a refusal with no spend."""
+    """A committed cache one setting away is refused before any simulation, on the command line. A
+    second run once silently started a new cache under an identity one field away from the first
+    run's; that is now a refusal with no spend."""
     from core.artifacts import ArtifactStore
     bounds, cell, root = tool_run
     store = ArtifactStore(root)
@@ -559,9 +561,9 @@ def test_ctrl_c_mid_simulation_keeps_the_committed_batches(tool_run, monkeypatch
 
 
 def test_every_validate_infer_and_tsnpe_flag_reaches_its_stage_as_a_keyword(tool_round, monkeypatch):
-    """Spec 3.4: a flag's dest IS the stage's keyword name, for the three subcommands T11 did not
-    cover. Pins the WHOLE keyword mapping each call produces -- ``set(kw) ==`` the exact set, as T11's
-    own ``test_every_train_flag_reaches_build_posterior_as_a_keyword`` does -- not a sample of it:
+    """A flag's dest IS the stage's keyword name, for the three subcommands the prior and train tests
+    do not cover. Pins the WHOLE keyword mapping each call produces -- ``set(kw) ==`` the exact set, as
+    ``test_every_train_flag_reaches_build_posterior_as_a_keyword`` does -- not a sample of it:
     ``knobs()`` silently DROPS a dest that no longer matches a flag (a rename like ``--run-size``
     losing ``dest="run_size_cap"``, or a typo in ``getattr(args, "accept_other_observation", False)``),
     so checking only a few keys would stay green through that drift; only the exact set catches it.
@@ -691,8 +693,8 @@ def test_the_sbc_subcommand_forwards_every_knob_as_a_keyword(tmp_path, monkeypat
     assert rc == 0
     assert seen["ref"] == "tpost" and seen["accept"] == Accept(truncated=True)
     assert seen["args"] == ("POST", "PRIOR")
-    # The FULL set, not a sample of it (as T12's own tool tests pin VALIDATE_KNOBS/TSNPE_KNOBS,
-    # tests/test_tool.py ~473-508): knobs() silently DROPS a dest that no longer matches a flag, so
+    # The FULL set, not a sample of it (as the validate/infer/tsnpe knob test above pins
+    # VALIDATE_KNOBS/TSNPE_KNOBS): knobs() silently DROPS a dest that no longer matches a flag, so
     # checking only a few keys would stay green through a knob quietly no longer reaching sbc_repeats,
     # or through one being forwarded unconditionally (e.g. n_cal=args.n_cal beside **knobs(...)),
     # which would crash a real run on int(None) the moment the flag was left off.
@@ -717,11 +719,12 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
     error (exit 2) rather than a silently ignored setting -- `rotation --cell x` is the case that
     matters, because rotation simulates nothing and a cell would never be read.
 
-    R-T/flags-to-keywords: rotation and laplace declare the accept flag with `add_accept_flags` and
-    build their Accept with `accept_from`, the single D8 definition (Tasks 12/16) -- so this also
-    pins the FULL `set(kw)` each mode's handler forwards, one distinct value per knob, the way T12
-    and T16's own tool tests pin VALIDATE_KNOBS/TSNPE_KNOBS/sbc's set: `knobs()` silently drops a
-    dest that no longer matches a flag, so checking only a few keys would stay green through that."""
+    Every flag reaches its handler as a keyword: rotation and laplace declare the accept flag with
+    `add_accept_flags` and build their Accept with `accept_from`, the single definition of how an
+    --accept-* flag answers a narrowed or truncated load -- so this also pins the FULL `set(kw)` each
+    mode's handler forwards, one distinct value per knob, the way the validate/infer/tsnpe and sbc
+    knob tests pin VALIDATE_KNOBS/TSNPE_KNOBS/sbc's set: `knobs()` silently drops a dest that no
+    longer matches a flag, so checking only a few keys would stay green through that."""
     import pytest
     from core import tool
     from core.tool import diagnostics as tool_diag
@@ -735,7 +738,7 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
         # store), so the `or` would short-circuit and hand `report` a dict, which has no `.kind`.
         def _rec(*a, **kw):
             seen[_n] = kw
-            seen_args[_n] = a               # M13: the POSITIONAL cfg -- was previously ignored
+            seen_args[_n] = a               # the POSITIONAL cfg, which the keyword set alone misses
             return SimpleNamespace(kind="diagnostic", path=tmp_path / "diagnostics" / "d__1")
 
         return _rec
@@ -752,7 +755,7 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
                                                       "n_worst", "top_n"}
     assert seen["identifiability_rotation"]["n_worst"] == 2
     assert seen["identifiability_rotation"]["top_n"] == 5
-    # M13: rotation's cfg must NOT carry a loaded ground truth (build_cfg's needs_gt=False for it) --
+    # rotation's cfg must NOT carry a loaded ground truth (build_cfg's needs_gt=False for it) --
     # a bounds-only cfg's ground_truth raises, exactly like a config nobody ever pointed at a cell.
     with pytest.raises(ValueError):
         _ = seen_args["identifiability_rotation"][0].ground_truth
@@ -772,7 +775,7 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
     assert seen["identifiability_laplace"]["rel"] == 0.03
     assert seen["identifiability_laplace"]["min_valid"] == 0.6
     assert seen["identifiability_laplace"]["seed"] == 9
-    # M13: laplace's cfg DOES need a loaded ground truth (build_cfg's needs_gt=True for it).
+    # laplace's cfg DOES need a loaded ground truth (build_cfg's needs_gt=True for it).
     assert seen_args["identifiability_laplace"][0].ground_truth is not None
 
     assert tool.main(["identifiability", "jacobian", "--bounds", bounds, "--device", "cpu",
@@ -789,7 +792,7 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
     assert seen["identifiability_jacobian"]["min_valid"] == 0.7
     assert seen["identifiability_jacobian"]["seed"] == 11
     assert "n_points" not in seen["identifiability_jacobian"]
-    # M13: jacobian's cfg likewise needs a loaded ground truth (build_cfg's needs_gt=True for it too).
+    # jacobian's cfg likewise needs a loaded ground truth (build_cfg's needs_gt=True for it too).
     assert seen_args["identifiability_jacobian"][0].ground_truth is not None
 
     assert tool.main(["identifiability", "rotation", "--bounds", bounds, "--device", "cpu",
@@ -798,7 +801,7 @@ def test_identifiability_is_a_nested_subcommand_whose_modes_do_not_share_flags(t
 
 
 def test_identifiability_rotation_refuses_a_posterior_without_a_rotation(tool_run, capsys):
-    """Spec §8.4, through the REAL posterior load: no stub stands between the tool and the store.
+    """Through the REAL posterior load: no stub stands between the tool and the store.
 
     tool_run's tpost carries a rotation (the tool has no flag that turns it off), so the posterior
     under test is trained here, through the real build_posterior at tiny size with reparam_rotate off,
@@ -859,11 +862,11 @@ def test_the_ablation_subcommand_forwards_its_knobs(tmp_path, monkeypatch):
 
 
 def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_path, capsys):
-    """The four stages end to end at tiny size, then the drill the GPU gate of record runs (§3.8).
+    """The four stages end to end at tiny size, then the drill the GPU smoke gate runs.
 
     Leg (b) is the resume: the SAME --num-runs against the SAME store, with the prior LOADED by name
-    so prior_fingerprint is pinned. Leg (c) is the 2026-09-11 incident -- one field apart (n_runs) --
-    which used to start a new cache and exit 0, and is now a refusal before the Fisher. Leg (d) is the
+    so prior_fingerprint is pinned. Leg (c) is a run one field apart (n_runs), which once silently
+    started a new cache and exited 0, and is now a refusal before the Fisher. Leg (d) is the
     stage banner: a stage that raises names itself before the traceback.
     """
     from core import orchestrator
@@ -907,8 +910,8 @@ def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_p
     # The flag comes from core/tool/fields.py's table, appended by the ladder; the message itself
     # names only the keyword, and a Refusal prints with no class name and no [raised at ...].
     assert "--new-run" in cap.err and "raised at" not in cap.err, cap.err
-    # K8, fix round 1: the comment always said "both values" -- pin them, read literally off the
-    # message's own format (orchestrator._near_miss_lines: "this run <mine>, that cache <theirs>").
+    # Both values, as leg (c)'s comment says -- read literally off the message's own format
+    # (orchestrator._near_miss_lines: "this run <mine>, that cache <theirs>").
     # This run asked for --num-runs 3; leg (a) committed the cache at --num-runs 2.
     assert "this run 3" in cap.err and "that cache 2" in cap.err, cap.err
     assert len(ArtifactStore(root).list("simulation")) == 1, "nothing may be written by a refusal"
@@ -933,12 +936,12 @@ def test_smoke_runs_the_four_stages_and_the_resume_drill_is_loud(tool_env, tmp_p
 
 
 def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, tmp_path, monkeypatch):
-    """K1, fix round 1 (review finding, spec Sec. 8.4): no test pinned smoke's own knob forwarding.
-    Deleting ``run_size_cap=args.run_size_cap`` from smoke.py kept the four-stage test (and leg (b)
-    of its drill) green, because both legs of THAT test fall back to the same hardware batch -- the
-    GPU gate would then silently train at the card's batch and key a different simulation identity.
-    This pins the exact ``set(kw)`` each of the four stage calls receives, one distinct non-default
-    value per flag, the way T11/T16's own knob tests pin TRAIN_KNOBS/TSNPE_KNOBS/sbc's set.
+    """Smoke's own knob forwarding, which no other test pins. Deleting
+    ``run_size_cap=args.run_size_cap`` from smoke.py keeps the four-stage test (and leg (b) of its
+    drill) green, because both legs of THAT test fall back to the same hardware batch -- the GPU
+    gate would then silently train at the card's batch and key a different simulation identity. This
+    pins the exact ``set(kw)`` each of the four stage calls receives, one distinct non-default value
+    per flag, the way the train, tsnpe and sbc knob tests pin TRAIN_KNOBS/TSNPE_KNOBS/sbc's set.
 
     All four orchestrator calls smoke.py makes (build_prior, build_posterior, validate_calibration,
     simulated_inference) CAN be stubbed with recorders without re-implementing smoke -- none of
@@ -1014,11 +1017,11 @@ def test_every_smoke_flag_reaches_its_stage_as_a_keyword(tool_env, tmp_path, mon
 
 
 def test_smoke_rejects_an_unknown_stage_at_parse_time(tool_env, monkeypatch, capsys):
-    """K2, fix round 1: an unknown --stages entry is now an argparse type= error, so it is refused
+    """An unknown --stages entry is an argparse type= error, so it is refused
     DURING PARSING -- before main ever calls tempfile.mkdtemp or registry.load_user_models(). Pinned
     by call counts on both, not by a directory listing or the exit code alone: the OLD runtime-only
     check (still present in run_smoke as a second, defensive line -- see its own docstring) already
-    returned exit 2 for this exact input, AND K3's own leaked-root cleanup would already remove the
+    returned exit 2 for this exact input, AND the leaked-root cleanup (the next test's) would remove the
     resulting empty prism_smoke_* directory after that runtime refusal -- so neither the exit code
     nor a clean tempdir listing can tell "refused before a root was resolved" apart from "refused
     after one was created and then cleaned up". Only the call counts can.
@@ -1046,10 +1049,10 @@ def test_smoke_rejects_an_unknown_stage_at_parse_time(tool_env, monkeypatch, cap
 
 def test_smoke_leaves_no_leaked_temp_root_on_a_bad_bounds_file(tool_env, tmp_path, monkeypatch,
                                                                 capsys):
-    """K3, fix round 1: mkdtemp runs before build_cfg, so a bad --bounds used to leave an empty
+    """mkdtemp runs before build_cfg, so a bad --bounds used to leave an empty
     %TEMP%\\prism_smoke_* behind forever, its path never printed anywhere an operator would look.
     main() now removes an auto-created root when the handler fails AND the root is still empty; a
-    non-empty root (Step 7's real one-stage check, or any run that got as far as writing anything)
+    non-empty root (any run that got as far as writing anything)
     or a user-named --store-root is never touched -- pinned by the main four-stage smoke test's own
     --store-root runs, which still leave their directories on disk.
 
@@ -1067,7 +1070,7 @@ def test_smoke_leaves_no_leaked_temp_root_on_a_bad_bounds_file(tool_env, tmp_pat
     assert main(["smoke", "--bounds", bad_bounds, "--device", "cpu", "--cell", cell]) == 1
     after = set(tmp_path.iterdir())
     assert after == before, "a bad --bounds must not leave an empty prism_smoke_* directory behind"
-    # §3.3's file rule at the build: ONE refusal line naming the input kind and the flag, not the
+    # The missing-file rule at the build: ONE refusal line naming the input kind and the flag, not the
     # parser's bare FileNotFoundError with a [raised at file_manager.py:...] hedge
     err = capsys.readouterr().err
     lines = [ln for ln in err.splitlines() if ln.startswith("prism smoke: refused:")]
@@ -1077,7 +1080,7 @@ def test_smoke_leaves_no_leaked_temp_root_on_a_bad_bounds_file(tool_env, tmp_pat
 
 
 def test_a_missing_cell_is_refused_at_the_read_naming_the_flag(tool_env, capsys):
-    """The cell half of §3.3's file rule, on a subcommand whose config build reads the truth
+    """The cell half of the missing-file rule, on a subcommand whose config build reads the truth
     (identifiability jacobian, through cli.load_and_validate_gt): a --cell that names no file is a
     Refusal(field="cell") printed as one line ending in the flag, before anything is spent."""
     bounds, cell, _root = tool_env
@@ -1093,7 +1096,7 @@ def test_a_missing_cell_is_refused_at_the_read_naming_the_flag(tool_env, capsys)
 
 
 def test_smoke_ctrl_c_advice_depends_on_store_root():
-    """K5, fix round 1: smoke keys its store on --store-root, not PRISM_ARTIFACTS, so the generic
+    """Smoke keys its store on --store-root, not PRISM_ARTIFACTS, so the generic
     "the same command with --resume require continues them" advice is wrong for it -- re-issuing run
     1's own command line just re-BUILDS the prior. Unit-tested directly against the extracted helper
     (rather than only by driving a real KeyboardInterrupt through a real smoke run, as the existing
@@ -1127,8 +1130,8 @@ def test_smoke_ctrl_c_advice_depends_on_store_root():
 
 
 def test_smoke_ctrl_c_prints_store_specific_resume_advice(tool_env, tmp_path, monkeypatch, capsys):
-    """K5 end to end: main()'s KeyboardInterrupt handler must pick the smoke-specific advice for
-    smoke -- keyed on smoke's own ``args.temp_store_root`` property (piece 5, E11), neither on the
+    """The same advice end to end: main()'s KeyboardInterrupt handler must pick the smoke-specific
+    advice for smoke -- keyed on smoke's own ``args.temp_store_root`` property, neither on the
     subcommand name nor on the --store-root flag, which fdt and crossval declare too -- and must leave
     every other subcommand's generic advice untouched (test_ctrl_c_mid_simulation_keeps_the_committed_
     batches still asserts only "interrupted" is in stderr for train). Raising KeyboardInterrupt
@@ -1163,7 +1166,7 @@ def test_smoke_ctrl_c_prints_store_specific_resume_advice(tool_env, tmp_path, mo
 
 def test_smoke_refuses_a_bad_cell_and_an_impossible_resume_before_the_prior(tool_env, tmp_path,
                                                                             monkeypatch, capsys):
-    """F5/F6: smoke checks what it can from its flags before the prior build.
+    """Smoke checks what it can from its flags before the prior build.
 
     The cell used to be parsed first inside the infer stage, after the prior (~100 s), the training
     and the calibration; a mistyped one then exited 1 and left orphans. And a --resume that can never
@@ -1202,7 +1205,7 @@ def _fdt_cfg_stub():
     ``manifest.config_from_cfg`` reads (``_fdt_config_from_cfg``), plus ``sources``, and NO
     ``observation_mode`` -- its absence is what selects that branch. The handler opens an ``fdt``
     record on the config before it runs anything (``store.create("fdt", cfg)``), and that real store
-    path stays under test (ruling F6), so a bare placeholder string would fail there on ``cfg.model``.
+    path stays under test, so a bare placeholder string would fail there on ``cfg.model``.
     Coupled to that branch on purpose: a field it starts reading must be added here."""
     return SimpleNamespace(
         model="HOPF", state_dep_drift=False, params_dict={"sigma_x": (0.1, (0.0, 1.0))},
@@ -1241,9 +1244,9 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
         seen["fdt_writer_entered"] = writer.dir.exists()
         return SimpleNamespace(id="rec", path=writer.dir)
 
-    # The sweep's recorder hands back the same kind of stub (ruling F6): the handler opens BOTH records
+    # The sweep's recorder hands back the same kind of stub: the handler opens BOTH records
     # on it with store.create("fdt", cfg) before the study runs, so a placeholder string would fail
-    # there. preset_name is what a sweep config adds (P72).
+    # there. preset_name is what a sweep config adds.
     sweep_cfg = _fdt_cfg_stub()
     sweep_cfg.preset_name = "exploratory"
 
@@ -1273,7 +1276,7 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     assert kw == {"n_freqs": 3, "ensemble_M": 7, "freqs_per_batch": 2, "F0": 0.11}
     assert seen["run_fdt"] == (fdt_cfg, True, True)                   # --no-production absent
 
-    # M4, fix round 1: NADROWSKI's state-dependent (multiplicative) drift, next to HOPF's False above.
+    # NADROWSKI's state-dependent (multiplicative) drift, next to HOPF's False above.
     seen.clear()
     assert main(["fdt", "--cell", nad]) == 0
     assert seen["make_fdt_config"][1] is True, "NADROWSKI has state-dependent drift"
@@ -1283,7 +1286,7 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     assert seen["make_fdt_config"][3] == {}, "an unset knob must not be passed: the default is in cli"
     assert seen["run_fdt"] == (fdt_cfg, False, False)
 
-    # I1, fix round 1: NEITHER flag. The two cases above alone cannot catch confirm_production
+    # NEITHER flag. The two cases above alone cannot catch confirm_production
     # cross-wired to skip_sanity: (skip_sanity=True, no_production=False) and (skip_sanity=False,
     # no_production=True) both coincidentally survive that bug (True/True and False/False again).
     # Only the both-False combination tells them apart -- it must come out (False, True).
@@ -1292,7 +1295,7 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     assert seen["run_fdt"] == (fdt_cfg, False, True), \
         "neither flag: sanity runs, then production proceeds by default"
     assert seen["fdt_writer_kind"] == "fdt", \
-        "the record is created by the front end and ENTERED by the stage (spec §1.2)"
+        "the record is created by the front end and ENTERED by the stage"
     assert seen["fdt_writer_entered"] is False, "the handler entered the writer the stage must enter"
     assert "[prism fdt] record rec at " in capsys.readouterr().out
 
@@ -1305,16 +1308,16 @@ def test_fdt_and_crossval_flags_reach_their_builders(tool_env, monkeypatch, caps
     assert set(kw) == {"preset", "preset_name", "s_spec", "t_spec", "n_freqs", "ensemble_M",
                        "freqs_per_batch", "F0"}
     assert kw["preset_name"] == "exploratory", \
-        "the resolved dict does not say which preset it is; body.settings must hold the name (§4.4)"
+        "the resolved dict does not say which preset it is; body.settings must hold the name"
     assert kw["s_spec"] == (0.0, 0.1, 2) and kw["t_spec"] == (1.0, 1.1, 3)
     assert isinstance(kw["s_spec"][2], int), "np.linspace refuses a float num"
     assert kw["n_freqs"] == 2 and kw["ensemble_M"] == 8
     assert kw["freqs_per_batch"] == 4 and kw["F0"] == 0.2
     assert kw["preset"] == dict(cli.SWEEP_PRESETS["exploratory"])
     assert seen["run_param_study_cli"] == (sweep_cfg, "S", "T")
-    assert seen["crossval_writer_kinds"] == ["fdt", "fdt"], "one record per swept parameter (§4.1)"
+    assert seen["crossval_writer_kinds"] == ["fdt", "fdt"], "one record per swept parameter"
     assert seen["crossval_writers_entered"] == [False, False], \
-        "the handler entered a writer each sweep must enter on its own (spec §1.2)"
+        "the handler entered a writer each sweep must enter on its own"
     out = capsys.readouterr().out
     assert "s.h5" in out and "t.h5" in out, out
 
@@ -1342,9 +1345,9 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys, monkeypatch):
     assert main(["fdt", "--cell", cell, "--model", "NOPE"]) == 1
     err = capsys.readouterr().err
     assert "Unknown model" in err
-    # M1, as V3's one line since piece 5: the hint says where the NAME came from and the ladder's
-    # fix sentence says which flag answers it, so neither has to do the other's job.
-    assert "--model named it" in err, "M1: the refusal says where the name came from"
+    # One refusal line: the hint says where the NAME came from and the ladder's fix sentence says
+    # which flag answers it, so neither has to do the other's job.
+    assert "--model named it" in err, "the refusal says where the name came from"
     assert err.rstrip().endswith("(--model)"), err
     assert "ValueError" not in err and "raised at" not in err, err
 
@@ -1355,13 +1358,13 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys, monkeypatch):
     assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "1",
                  "--t-grid", "1", "1.1", "2"]) == 2
 
-    # M3, fix round 1: a bad --t-grid (valid --s-grid alongside it) must name --t-grid, not --s-grid.
+    # A bad --t-grid (valid --s-grid alongside it) must name --t-grid, not --s-grid.
     capsys.readouterr()
     assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "2",
                  "--t-grid", "1", "1.1", "1"]) == 2
     assert "--t-grid" in capsys.readouterr().err
 
-    # M2, fix round 1: inf/nan point counts used to raise OverflowError/ValueError past main's usage-
+    # inf/nan point counts used to raise OverflowError/ValueError past main's usage-
     # error net (a traceback, "*** FAILED ***", exit 1) instead of naming the flag at exit 2.
     capsys.readouterr()
     assert main(["crossval", "--cell", nad, "--s-grid", "0", "0.1", "inf",
@@ -1378,7 +1381,7 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys, monkeypatch):
     assert main(["fdt"]) == 2                       # --cell is required
     assert main(["crossval", "--cell", nad]) == 2   # both grids are required
 
-    # F8: --skip-sanity with --no-production runs nothing, and used to run the full production sweep
+    # --skip-sanity with --no-production runs nothing, and used to run the full production sweep
     # silently. A usage error, before any config is built (a recorder stands in for the builder).
     from core import cli
     built = []
@@ -1392,13 +1395,13 @@ def test_fdt_and_crossval_usage_errors(tool_env, capsys, monkeypatch):
 
 def test_an_unsupported_model_named_by_the_cells_folder_is_one_refusal_line(tool_env, tmp_path,
                                                                             capsys):
-    """The CELL-FOLDER branch of the unsupported-model hint -- the first of the two gaps
-    docs/STATE.md names. Only the ``--model`` branch has ever been tested
-    (test_fdt_and_crossval_usage_errors), and the two say different things on purpose: passing the
-    wrong ``--model`` and standing a cell in the wrong folder are different mistakes with different
-    fixes, and the operator cannot tell which one happened from the reason alone.
+    """The CELL-FOLDER branch of the unsupported-model hint, which no other test covers: the other
+    tests take only the ``--model`` branch (test_fdt_and_crossval_usage_errors), and the two say
+    different things on purpose: passing the wrong ``--model`` and standing a cell in the wrong
+    folder are different mistakes with different fixes, and the operator cannot tell which one
+    happened from the reason alone.
 
-    V3 as well (spec §6.2): this used to be a bare ``ValueError``, so ``main``'s unconverted-refusal
+    One refusal line as well: this used to be a bare ``ValueError``, so ``main``'s unconverted-refusal
     rung printed ``refused: ValueError: ... [raised at fdt.py:139]`` -- the class name and the raise
     site are a hedge for a bug disguised as a refusal, and a fielded ``Refusal`` no longer needs
     either. The cell file is never opened: the model gate runs before the builder, which is the
@@ -1423,7 +1426,7 @@ def test_an_unsupported_model_named_by_the_cells_folder_is_one_refusal_line(tool
 
 def test_fdt_and_crossval_take_store_root_and_otherwise_follow_the_environment(
         tool_env, tmp_path, monkeypatch):
-    """E11, first half: both analyses write records now, so both need the flag that says WHERE --
+    """Both analyses write records, so both need the flag that says WHERE --
     and without it they must follow PRISM_ARTIFACTS like every subcommand but `smoke`, never a
     throwaway temp root nobody would think to look in.
 
@@ -1464,11 +1467,11 @@ def test_fdt_and_crossval_take_store_root_and_otherwise_follow_the_environment(
 
 def test_fdt_and_crossval_take_seed_and_hand_it_to_the_builder_and_the_run(tool_env, tmp_path,
                                                                            monkeypatch):
-    """E7's command-line half (P79). A record carries the seed its run used; without the flag that
-    supplies one, that seed can never be supplied back -- the defect E7 names. The ONE integer
-    reaches the builder (through ``knobs``, so an unset flag forwards nothing and the builder's own
-    default stands) and the run (explicitly, so None there means "draw one") -- the rule both panels
-    follow (P12).
+    """Every run records its seed, drawing one when none is given: the command-line half. A record
+    carries the seed its run used; without the flag that supplies one, that seed can never be
+    supplied back. The ONE integer reaches the builder (through ``knobs``, so an unset flag forwards
+    nothing and the builder's own default stands) and the run (explicitly, so None there means "draw
+    one") -- the rule both panels follow.
 
     ``ArtifactStore.create`` is replaced because the builder recorders return a placeholder, not an
     FDTConfig, and ``store.create("fdt", cfg)`` reads the run's settings off its cfg: the dispatch is
@@ -1517,18 +1520,18 @@ def test_fdt_and_crossval_take_seed_and_hand_it_to_the_builder_and_the_run(tool_
     seen.clear()
     assert main(["fdt", "--cell", cell]) == 0
     assert "seed" not in seen["fdt_builder"], "an unset --seed forwards nothing to the builder"
-    assert seen["fdt_run"] is None, "no --seed: the run draws one and records it (E7, P12)"
+    assert seen["fdt_run"] is None, "no --seed: the run draws one and records it"
 
 
 def test_fdt_and_crossval_declare_seed_and_store_root_by_name(capsys):
-    """P79 and E11, pinned on THESE TWO parsers by name. The FLAG-table pin (tests/test_refusals.py)
-    only asks that SOME subcommand defines ``--seed``, and ``smoke`` and the diagnostics already did
-    -- so it stayed green while neither analysis took the flag its own refusals name. The ``--help``
-    each prints is what an operator reads, so it is checked too.
+    """``--seed`` and ``--store-root``, pinned on THESE TWO parsers by name. The FLAG-table pin
+    (tests/test_refusals.py) only asks that SOME subcommand defines ``--seed``, and ``smoke`` and the
+    diagnostics already did -- so it stayed green while neither analysis took the flag its own
+    refusals name. The ``--help`` each prints is what an operator reads, so it is checked too.
 
     And the temp-root property is ``smoke``'s ALONE: every other subcommand must leave
     ``temp_store_root`` unset, or ``main`` would hand it a throwaway root, rmdir its root after a
-    failure and print smoke's resume advice (E11)."""
+    failure and print smoke's resume advice."""
     parser = build_parser()
     for name in ("fdt", "crossval"):
         sub = parser.subcommands[name]
@@ -1551,13 +1554,13 @@ def test_fdt_and_crossval_declare_seed_and_store_root_by_name(capsys):
 
 def test_an_fdt_run_that_fails_leaves_the_artifacts_root_where_it_found_it(tmp_path, monkeypatch,
                                                                           capsys):
-    """E11's second half, and the accidental flip it exists to prevent. ``main`` removes an
-    auto-created store root when the run did not succeed (``_remove_if_still_empty``) -- a safety
-    net written for ``smoke``'s own ``mkdtemp`` directory. Keyed on the FLAG's presence, declaring
-    ``--store-root`` on ``fdt`` would point that ``rmdir`` at the operator's real ``Artifacts/``
-    root. ``rmdir`` refuses a non-empty directory, so nothing would be lost TODAY -- which is
-    exactly why this needs a test rather than a reader: the hazard is invisible on any machine whose
-    store already holds an artifact.
+    """Only ``smoke`` makes and removes its own artifacts root; this test exists to prevent the
+    accidental flip. ``main`` removes an auto-created store root when the run did not succeed
+    (``_remove_if_still_empty``) -- a safety net written for ``smoke``'s own ``mkdtemp`` directory.
+    Keyed on the FLAG's presence, declaring ``--store-root`` on ``fdt`` would point that ``rmdir``
+    at the operator's real ``Artifacts/`` root. ``rmdir`` refuses a non-empty directory, so nothing
+    would be lost TODAY -- which is exactly why this needs a test rather than a reader: the hazard
+    is invisible on any machine whose store already holds an artifact.
 
     PRISM_ARTIFACTS points at a directory that does not exist yet, so ``main`` creates it and the
     root is empty at the moment the cleanup would run: the one state in which the wrong dispatch
@@ -1579,13 +1582,13 @@ def test_an_fdt_run_that_fails_leaves_the_artifacts_root_where_it_found_it(tmp_p
     capsys.readouterr()
     assert main(["fdt", "--cell", str(tmp_path / "nadrowski" / "cell.txt")]) == 1
     assert root.is_dir(), \
-        "a failed fdt run removed the operator's artifacts root (E11: auto_root is smoke's alone)"
+        "a failed fdt run removed the operator's artifacts root (auto_root is smoke's alone)"
     assert Path(config.artifacts_root()).resolve() == root.resolve()
 
 
 def test_a_seed_the_generator_cannot_take_is_refused_naming_the_flag(tool_env, capsys):
-    """``--seed`` is ``type=int``, so argparse takes any integer; its range is the builders' rule
-    (A3). One above 2**64 - 1 used to pass that rule, open the record and then overflow the
+    """``--seed`` is ``type=int``, so argparse takes any integer; its range is the builders' rule.
+    One above 2**64 - 1 used to pass that rule, open the record and then overflow the
     generator inside the run. Now the builder refuses it -- exit 1, one ``refused:`` line ending in
     the flag -- before the record is created: nothing new appears under the root's ``fdt/``."""
     _bounds, _cell, root = tool_env
@@ -1608,7 +1611,7 @@ def test_a_seed_the_generator_cannot_take_is_refused_naming_the_flag(tool_env, c
         assert "Overflow" not in err and "Traceback" not in err, err
         # The folder snapshot below cannot fail on its own -- create() writes nothing, so a refusal
         # from run_fdt's own seed rule (after the record is created and announced) would leave the
-        # same listing. The announcement is what tells them apart (the whole-piece review's N5, T5):
+        # same listing. The announcement is what tells them apart:
         # the BUILDER refuses, before any record is created or named.
         assert "writing record" not in captured.out, captured.out
 
@@ -1618,10 +1621,10 @@ def test_a_seed_the_generator_cannot_take_is_refused_naming_the_flag(tool_env, c
 
 def test_a_hopf_cell_with_no_observable_noise_is_one_refusal_line_naming_the_cell(tool_env, tmp_path,
                                                                                  capsys):
-    """The whole-piece review's N8 (FE6), end to end. A Hopf cell whose ``sigma_x`` is 0 reached the
-    normalisation's division bare: a ZeroDivisionError traceback and ``*** FAILED ***``. It is one
-    ``refused:`` line now, ending in ``(--cell)``, and no record is opened -- the normalisation is
-    resolved before the writer is entered.
+    """End to end: a Hopf cell whose ``sigma_x`` is 0 reached the normalisation's division bare: a
+    ZeroDivisionError traceback and ``*** FAILED ***``. It is one ``refused:`` line now, ending in
+    ``(--cell)``, and no record is opened -- the normalisation is resolved before the writer is
+    entered.
 
     The cell is a COPY in a temp folder named ``hopf`` (its model comes from the folder, and its
     bounds resolve from the real Bounds/hopf/ by name, read-only): nothing under Resources/ is
@@ -1648,7 +1651,7 @@ def test_a_hopf_cell_with_no_observable_noise_is_one_refusal_line_naming_the_cel
 
 
 def test_a_temperature_grid_below_zero_is_refused_naming_the_flag_before_any_record(tool_env, capsys):
-    """The whole-piece review's M1, fix 3, at the command line (ruling R-F1). ``--t-grid`` is three
+    """The temperature grid's floor, at the command line. ``--t-grid`` is three
     plain floats, so a negative end reached the sweep, where every point's simulation diverged and
     the study recorded two "finished" sweeps that measured nothing. The builder refuses it now --
     exit 1, one ``refused:`` line ending in the flag -- before either record is created."""
@@ -1671,9 +1674,9 @@ def test_a_temperature_grid_below_zero_is_refused_naming_the_flag_before_any_rec
 def test_fdt_and_crossval_name_their_records_and_refuse_a_taken_name_before_any_folder(tool_env,
                                                                                         monkeypatch,
                                                                                         capsys):
-    """The whole-piece review's M4, the tool's half (FE1 + S2). Neither analysis declared --name or
-    --note: every record the tool wrote was "(unnamed)", ``--name`` exited 2, and nothing renames an
-    fdt record afterwards -- E1's named records, and the parity between the two front ends, broken.
+    """Named records, the tool's half. Neither analysis declared --name or --note: every record the
+    tool wrote was "(unnamed)", ``--name`` exited 2, and nothing renames an fdt record afterwards --
+    the analyses' named records, and the parity between the two front ends, broken.
 
     ``fdt --name N --note T`` names its record N; ``crossval --name N`` names its two N-s and N-temp,
     the window's stem rule, one per swept parameter. Both creates happen before anything is spent, so
@@ -1735,11 +1738,11 @@ def test_fdt_and_crossval_name_their_records_and_refuse_a_taken_name_before_any_
 @pytest.mark.parametrize("cmd", ["fdt", "crossval"])
 def test_a_zero_knob_is_one_refusal_line_naming_its_flag_and_opens_no_record(tmp_path, monkeypatch,
                                                                              capsys, cmd, flag):
-    """The whole-piece review's N42 (S5): spec §8.2's "each floor in §3.3 refuses, at the click and
-    at the flag, naming its setting". The floors were pinned at the builder only, so a tool-side
-    regression -- a knob filter that drops a 0 so the builder's default runs silently, a FLAG entry
-    mapped to None -- would pass the suite. Through ``main``: exit 1, ONE ``refused:`` line ending in
-    the flag, no record announced and no folder under the root's ``fdt/``."""
+    """Each setting's floor refuses, at the click and at the flag, naming its setting. The floors
+    were pinned at the builder only, so a tool-side regression -- a knob filter that drops a 0 so
+    the builder's default runs silently, a FLAG entry mapped to None -- would pass the suite.
+    Through ``main``: exit 1, ONE ``refused:`` line ending in the flag, no record announced and no
+    folder under the root's ``fdt/``."""
     from core import config
 
     root = tmp_path / "A"
@@ -1758,9 +1761,9 @@ def test_a_zero_knob_is_one_refusal_line_naming_its_flag_and_opens_no_record(tmp
 
 
 def test_the_crossval_help_states_every_rule_its_grids_are_held_to():
-    """The whole-piece review's N20 (L483). The epilog said each grid is MIN MAX N with N at least 2,
-    and not that MIN must be below MAX -- the rule the builder refuses a grid by -- nor, since M1,
-    that the T_a/T grid may not reach below 0. The help an operator reads states all three."""
+    """The epilog said each grid is MIN MAX N with N at least 2, and not that MIN must be below
+    MAX -- the rule the builder refuses a grid by -- nor, once the temperature grid had a floor, that
+    the T_a/T grid may not reach below 0. The help an operator reads states all three."""
     from core.tool.fdt import CROSSVAL_EPILOG
     text = " ".join(CROSSVAL_EPILOG.split())
     assert "at least 2" in text and "MIN must be below MAX" in text, text
@@ -1768,7 +1771,7 @@ def test_the_crossval_help_states_every_rule_its_grids_are_held_to():
 
 
 def test_crossval_preset_choices_match_sweep_presets():
-    """M5, fix round 1: ``--preset``'s hard-coded choices stay hard-coded -- importing ``core.cli``
+    """``--preset``'s hard-coded choices stay hard-coded -- importing ``core.cli``
     while building the parser would cost a torch import on plain ``--help`` -- so this pins the two
     lists in sync instead of trusting them to agree by eye."""
     from core import cli
@@ -1779,15 +1782,15 @@ def test_crossval_preset_choices_match_sweep_presets():
 
 
 def test_fdt_ctrl_c_gets_its_own_interrupt_note(tool_env, monkeypatch, capsys):
-    """I2, fix round 1: fdt/crossval keep no cache and take no --resume, so main's generic advice
+    """fdt/crossval keep no cache and take no --resume, so main's generic advice
     ("if a [checkpoint] line above says batches were saved, ... --resume require") is simply wrong
-    for them -- there is no cache to resume. Since piece 5 the recovery story is the RECORD the run
-    was writing: kept, marked unfinished, listed and deletable (E2); re-running still starts over,
+    for them -- there is no cache to resume. The recovery story is the RECORD the run
+    was writing: kept, marked unfinished, listed and deletable; re-running still starts over,
     because nothing resumes. Every OTHER subcommand's Ctrl-C message is untouched
     (test_smoke_ctrl_c_prints_store_specific_resume_advice and
     test_ctrl_c_mid_simulation_keeps_the_committed_batches still pin the generic wording).
 
-    Ruling F20: a static note cannot carry the record's id, so the handler prints it -- id and
+    A static note cannot carry the record's id, so the handler prints it -- id and
     directory -- the moment ``store.create`` mints it, which is before anything can be interrupted;
     and the note says what an operator who passed ``--store-root`` must do first, because the
     ``artifacts`` commands read only PRISM_ARTIFACTS."""
@@ -1806,16 +1809,16 @@ def test_fdt_ctrl_c_gets_its_own_interrupt_note(tool_env, monkeypatch, capsys):
     captured = capsys.readouterr()
     err = captured.err
     assert "interrupted" in err
-    # E2, through the note: what survives an interrupt is a NAMED RECORD, kept and marked
+    # Through the note: what survives an interrupt is a NAMED RECORD, kept and marked
     # unfinished -- not "the plots already written under <artifacts root>/fdt", which is where these
-    # outputs stopped going when they became artifacts (spec §6.1).
+    # outputs stopped going when they became artifacts.
     assert "unfinished" in err and "artifacts list fdt" in err, err
     assert "artifacts rm fdt" in err, "the note must say how to clear the record it just named"
     assert "from scratch" in err, err
     assert "<artifacts root>/fdt" not in err, "the flat output folder is gone"
     assert "--resume" not in err
     assert "--store-root" in err and "PRISM_ARTIFACTS" in err, err
-    # the whole-piece review's N24: what the record holds, not "everything measured" (a record
+    # what the record holds, not "everything measured" (a record
     # stopped during the sanity checks holds no measurement at all), and the first moments, before
     # its folder existed, when there is nothing to clear
     assert "holding what it had written so far" in err and "everything measured" not in err, err
@@ -1826,8 +1829,8 @@ def test_fdt_ctrl_c_gets_its_own_interrupt_note(tool_env, monkeypatch, capsys):
 
 
 def test_crossval_ctrl_c_names_each_record_and_how_to_clear_them(tool_env, monkeypatch, capsys):
-    """The crossval twin of the test above (F20): a study opens TWO records, one per swept parameter
-    (spec §4.1), so the handler prints one ``writing record`` line for each before the study runs,
+    """The crossval twin of the test above: a study opens TWO records, one per swept parameter,
+    so the handler prints one ``writing record`` line for each before the study runs,
     and the note is crossval's own -- one sweep's record may be finished, the one interrupted is kept
     unfinished, and a sweep that never started left nothing."""
     from core import cli, config
@@ -1852,7 +1855,7 @@ def test_crossval_ctrl_c_names_each_record_and_how_to_clear_them(tool_env, monke
     assert "--store-root" in err and "PRISM_ARTIFACTS" in err, err
     assert "from scratch" in err and "--resume" not in err, err
     assert "<artifacts root>/crossval" not in err, "the flat output folder is gone"
-    assert "before its folder existed; then there is nothing to clear" in err, err     # N24
+    assert "before its folder existed; then there is nothing to clear" in err, err
     written = [ln for ln in captured.out.splitlines()
                if ln.startswith("[prism crossval] writing record ")]
     assert len(written) == 2, captured.out
@@ -1884,13 +1887,13 @@ def _compare_stub(w, records, *, sink, **_options):
 
 
 def test_compare_is_a_nested_subcommand_whose_help_costs_no_torch():
-    """Spec §7.1: one subcommand, four modes, ``identifiability``'s shape -- a parser per mode, so a
+    """One subcommand, four modes, ``identifiability``'s shape -- a parser per mode, so a
     flag that means nothing to a mode is an argparse error rather than a setting silently ignored:
     ``--prefactor`` exists on renormalise alone (and is required there), ``--at`` on sweeps alone.
     ``--record`` is repeatable and required on every mode. No configuration flags and no
     ``--store-root`` (the ``artifacts`` family's reasons: the root is PRISM_ARTIFACTS), and each mode
-    carries its OWN interrupt note -- a comparison's record is kept on Ctrl-C and nothing resumes it
-    (F56), so main's generic "--resume require" advice would be wrong. ``--help`` costs no torch
+    carries its OWN interrupt note -- a comparison's record is kept on Ctrl-C and nothing resumes it,
+    so main's generic "--resume require" advice would be wrong. ``--help`` costs no torch
     import, checked in a FRESH interpreter because this process imported torch long ago."""
     import argparse
     import subprocess
@@ -1927,7 +1930,7 @@ def test_compare_is_a_nested_subcommand_whose_help_costs_no_torch():
 
 def test_a_compare_ref_that_names_nothing_is_refused_naming_the_record_flag(tmp_path, monkeypatch,
                                                                             capsys):
-    """F58. The store refuses a ref it cannot resolve under ``field="artifact"`` -- a key whose flag is
+    """The store refuses a ref it cannot resolve under ``field="artifact"`` -- a key whose flag is
     None, because in the ``artifacts`` family the artifact is positional -- so a mistyped ``--record``
     used to be refused naming no flag at all. The comparison re-raises it under its own key, so the
     one line names the flag that answers it; and like every comparison refusal it lands before the
@@ -1947,7 +1950,7 @@ def test_a_compare_ref_that_names_nothing_is_refused_naming_the_record_flag(tmp_
 
 def test_a_compare_that_names_one_run_twice_is_refused_naming_the_record_flag(tmp_path, monkeypatch,
                                                                              capsys):
-    """Review Focus 5 at the command line: the arity counts RUNS, not ``--record`` flags. Two flags
+    """At the command line, the arity counts RUNS, not ``--record`` flags. Two flags
     naming one run -- by id both times, or by id and then by name -- would meet "at least 2" with a
     single run and draw it as two agreeing with each other. Refused before the record opens, naming
     the run and the flag."""
@@ -1971,8 +1974,8 @@ def test_a_compare_refused_by_its_preflight_opens_no_record_and_announces_none(t
     judge once it has read its records -- a shared band, a recorded constant, a sweep's points, the
     range two sweeps share and where --at falls in it -- is judged after they load and before the
     record opens. Judged by a drawer, inside the record already opened, a refusal made the tool print
-    "Writing comparison record <id> at <dir>" for a directory the writer then removed (Task 38's
-    review). Each such refusal is one line naming the flag that answers it, with no "Writing
+    "Writing comparison record <id> at <dir>" for a directory the writer then removed. Each such
+    refusal is one line naming the flag that answers it, with no "Writing
     comparison record" line and no folder."""
     from core.artifacts import ArtifactStore
     from core.tool.fields import FLAG
@@ -2001,8 +2004,8 @@ def test_a_compare_refused_by_its_preflight_opens_no_record_and_announces_none(t
 
 
 def test_compare_ctrl_c_keeps_the_record_and_says_nothing_resumes(tmp_path, monkeypatch, capsys):
-    """F56, the comparison's own interrupt note. A comparison's record is progressive, so a Ctrl-C
-    after it opened KEEPS it, marked unfinished (E2) -- the opposite of main's generic "the artifact
+    """The comparison's own interrupt note. A comparison's record is progressive, so a Ctrl-C
+    after it opened KEEPS it, marked unfinished -- the opposite of main's generic "the artifact
     being written was removed" -- and there is no cache and no --resume. The note says where the
     record is (the ``Writing comparison record`` line, printed the moment it opened, since fixed text
     cannot carry the id), how to list and remove it, that re-running draws a new one, and that a
@@ -2031,10 +2034,10 @@ def test_compare_ctrl_c_keeps_the_record_and_says_nothing_resumes(tmp_path, monk
 
 def test_a_comparison_whose_source_was_deleted_still_lists_through_the_tool(tmp_path, monkeypatch,
                                                                             capsys):
-    """Spec §7.3/§8.2 and design ruling R5, through the command line: ``artifacts rm`` deletes a run a
-    comparison drew without refusing (the sources are in the comparison's body, which the dependency
-    check does not read), and the comparison is still listed, finished, by ``artifacts list fdt`` --
-    while ``artifacts summary`` prints ``MISSING fdt [<id>]`` for the run that is gone."""
+    """Through the command line: ``artifacts rm`` deletes a run a comparison drew without refusing
+    (the sources are in the comparison's body, which the dependency check does not read), and the
+    comparison is still listed, finished, by ``artifacts list fdt`` -- while ``artifacts summary``
+    prints ``MISSING fdt [<id>]`` for the run that is gone."""
     from core.FDT import compare as cmp
     store, ids = _compare_root(tmp_path, monkeypatch)
     monkeypatch.setitem(cmp._DRAWERS, "cells", _compare_stub)
@@ -2057,8 +2060,8 @@ def test_a_comparison_whose_source_was_deleted_still_lists_through_the_tool(tmp_
 
 
 def test_compare_cells_from_the_command_line_writes_a_record_and_names_it(tool_env, capsys):
-    """``python -m core compare cells --record A --record B``: the tool's half of E8. The subcommand
-    mirrors identifiability's shape -- a parser per mode -- reads PRISM_ARTIFACTS like every
+    """``python -m core compare cells --record A --record B``: the tool's half of comparing. The
+    subcommand mirrors identifiability's shape -- a parser per mode -- reads PRISM_ARTIFACTS like every
     subcommand but smoke, and prints the one [prism] line per artifact written that every other
     write path prints. One record is a refusal, not a traceback: it exits 1 and names --record."""
     from core.artifacts import ArtifactStore
@@ -2081,12 +2084,12 @@ def test_compare_cells_from_the_command_line_writes_a_record_and_names_it(tool_e
 
 
 def test_the_fdt_subcommands_no_longer_say_they_have_no_bounds_file():
-    """Spec §3.2. Two sentences in this module claimed these analyses have no bounds file. They are
+    """Two sentences in this module claimed these analyses have no bounds file. They are
     false, and the record makes the falsehood expensive: ``cli.parse_cell`` DOES resolve one
     (``resolve_bounds_for_cell`` -- the same-named sibling, else the folder's master), and on the
-    decoupled path that file "defines the param set + order" (core/cli.py:156-161). A record that
-    did not name which bounds file resolved would not say which parameter set its numbers were
-    measured under.
+    decoupled path that file "defines the param set + order" (``cli.parse_cell``'s docstring). A
+    record that did not name which bounds file resolved would not say which parameter set its
+    numbers were measured under.
 
     A source scan, because these are DOCSTRINGS -- nothing executes them, so nothing else can catch
     them going stale. What is true and must stay said is that neither subcommand takes a ``--bounds``
@@ -2107,36 +2110,36 @@ def test_fdt_and_crossval_run_at_tiny_size(tmp_path, monkeypatch, capsys):
     """The real pipelines, at the smallest sizes the flags allow, writing real ``fdt`` records.
 
     No new science: this asks only whether the two subcommands drive the campaigns end to end and
-    leave behind what piece 5 promises -- a record per run (two for the study), its numbers in
-    ``data.h5``, its pictures under ``figures/``, and a body that says what ran. Until piece 5 it
+    leave behind what the analyses promise -- a record per run (two for the study), its numbers in
+    ``data.h5``, its pictures under ``figures/``, and a body that says what ran. It once
     globbed ``artifacts_root()/fdt`` and ``/crossval`` for loose PNGs and .h5 files, which is
-    exactly what E1 moved (spec section 8.3).
+    exactly what the named records replaced.
 
     Neither subcommand is given --store-root, deliberately: with the flag unset these two follow
-    ``config.artifacts_root()`` and NOT a throwaway temp root (spec section 6.1), and this test is
+    ``config.artifacts_root()`` and NOT a throwaway temp root, and this test is
     what keeps that true end to end. The test points PRISM_ARTIFACTS at a temp root of its own, which
     ``artifacts_root()`` reads at every call; without it the records land in the real ``Artifacts/``
     and the session teardown fails. Not through ``tool_env``, which also installs SBITEST into the
-    REAL ``Resources/`` -- a slow set killed part-way left it there (the whole-piece review's N38).
+    REAL ``Resources/`` -- a slow set killed part-way left it there.
 
-    Both runs take a FIXED seed (N40), so a failure minutes in can be reproduced exactly; the
-    draw-when-absent path (E7) is pinned by the fast tests. 20260925 is this test's own: the other
+    Both runs take a FIXED seed, so a failure minutes in can be reproduced exactly; the
+    draw-when-absent path is pinned by the fast tests. 20260925 is this test's own: the other
     slow test measures the same cell under 20260924, so no two single-cell records of the slow set
     are one run drawn twice, and the study's point streams are SeedSequence derivations of it
     (``cross_validation._point_seed``), never the seed itself.
 
-    The single-cell leg runs a shipped NADROWSKI cell. Until piece 5 it ran the shipped Hopf cell,
+    The single-cell leg runs a shipped NADROWSKI cell. It once ran the shipped Hopf cell,
     which the band check now refuses at the default band by design: its lowest probe, 0.1 x its
     spontaneous peak of about 0.268 (ND), lies below the spectrum's first resolved bin, 0.0383. That
     refusal is pinned in tests/test_fdt_user.py; here it would test a refusal instead of a record.
     The shipped Nadrowski cells clear that bin with a 1.3-1.4x margin.
 
-    The study writes TWO records, one per swept parameter, carrying ONE seed (spec section 4.1): an
+    The study writes TWO records, one per swept parameter, carrying ONE seed: an
     activity sweep that failed entirely no longer costs the temperature sweep.
 
     Measured alone at e952f48: 302.22 s on the CPU. (A 452.03 s figure taken the same day was a
     loaded machine's, and the earlier gates' 243, 208 and 229 s were before the single-cell leg moved
-    to a Nadrowski cell; no cause is claimed for the difference -- N34.)
+    to a Nadrowski cell; no cause is claimed for the difference.)
     """
     import math
 
@@ -2147,7 +2150,7 @@ def test_fdt_and_crossval_run_at_tiny_size(tmp_path, monkeypatch, capsys):
     from core.tool import main
 
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
-    seed = 20260925                          # fixed (N40); the docstring says why it cannot collide
+    seed = 20260925                          # fixed; the docstring says why it cannot collide
     cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
     capsys.readouterr()
     assert main(["fdt", "--cell", cell, "--n-freqs", "2", "--ensemble-m", "8",
@@ -2160,28 +2163,28 @@ def test_fdt_and_crossval_run_at_tiny_size(tmp_path, monkeypatch, capsys):
     single = [s for s in store.list("fdt") if s.study == "single"]
     assert single and single[0].finished, (seed, single)
     rec = store.load_fdt(single[0].id)
-    # The record the tool named before it spent anything (ruling F20) is the one it wrote.
+    # The record the tool named before it spent anything is the one it wrote.
     assert f"[prism fdt] writing record {rec.id} at " in out, out[-2000:]
     assert rec.body["study"] == "single" and rec.body["complete"] is True
     assert rec.body["seed"] == seed, rec.body["seed"]
     assert rec.body["settings"]["n_freqs"] == 2 and rec.body["settings"]["ensemble_M"] == 8
     assert rec.body["settings"]["skip_sanity"] is True
     # 2 frequencies and 8 trajectories are the thin-setting THRESHOLDS themselves, not below them
-    # (spec section 3.3: "fewer than two grid frequencies, fewer than eight trajectories"), so this
-    # run is not marked as a quick look.
+    # (a setting is thin at fewer than two grid frequencies or fewer than eight trajectories), so
+    # this run is not marked as a quick look.
     assert rec.body["notices"] == [], rec.body["notices"]
     assert rec.body["offgrid"]["of"] == 2, rec.body["offgrid"]
     assert rec.body["grid"]["n_freqs"] == 2, rec.body["grid"]
-    # The numbers, not only the pictures (E1).
+    # The numbers, not only the pictures.
     assert "data.h5" in rec.manifest.payloads and rec.data_path.exists()
-    # The contract's single-cell layout (P5, P6, P71), BY NAME: the names core.FDT.compare reads
+    # The contract's single-cell layout, BY NAME: the names core.FDT.compare reads
     # back. The only other writer of this layout is a test fixture, so this is the one place a REAL
-    # run's file is checked against the names its reader expects (rulings F21/F22).
+    # run's file is checked against the names its reader expects.
     with h5py.File(rec.data_path, "r") as h5:
         assert h5.attrs["study"] == "single", dict(h5.attrs)
         assert float(h5.attrs["omega_0"]) > 0.0, dict(h5.attrs)
         # POSITIVE, not only finite: a normalisation constant is coupling / D_x, and a zero or a
-        # negative one would pass a finiteness check while every ratio came out wrong (N37)
+        # negative one would pass a finiteness check while every ratio came out wrong
         assert math.isfinite(float(h5.attrs["prefactor"])) and float(h5.attrs["prefactor"]) > 0, \
             dict(h5.attrs)
         for key in ("omega_grid", "T_eff_over_T", "chi_prime", "chi_double_prime"):
@@ -2189,7 +2192,7 @@ def test_fdt_and_crossval_run_at_tiny_size(tmp_path, monkeypatch, capsys):
         assert "PSD_omegas" in h5 and "PSD_G" in h5, list(h5)
         assert h5["PSD_omegas"].shape == h5["PSD_G"].shape, list(h5)
     # ... and read back by the reader itself: the comparison's own curve_of, on the record a real run
-    # wrote rather than on the fixture's (F21/F22), labelled by the cell it measured.
+    # wrote rather than on the fixture's, labelled by the cell it measured.
     from core.FDT import compare as cmp
     curve = cmp.curve_of(store.load_fdt(rec.id))
     assert curve.id == rec.id and curve.label == "master_spont", curve
@@ -2215,7 +2218,7 @@ def test_fdt_and_crossval_run_at_tiny_size(tmp_path, monkeypatch, capsys):
     sweeps = [s for s in store.list("fdt") if s.study == "sweep"]
     assert len(sweeps) == 2, (seed, sweeps)
     assert all(s.finished for s in sweeps), (seed, sweeps)
-    # Every real operating point lands at this size (ruling F53): a failed point is a finding to
+    # Every real operating point lands at this size: a failed point is a finding to
     # report, not a tolerance to allow.
     assert {s.points_planned for s in sweeps} == {2}, (seed, sweeps)
     assert {s.points_done for s in sweeps} == {2}, (seed, sweeps)
@@ -2225,19 +2228,18 @@ def test_fdt_and_crossval_run_at_tiny_size(tmp_path, monkeypatch, capsys):
     assert {r.body["points"]["param"] for r in recs} == {"s", "temp"}, \
         [r.body["points"] for r in recs]
     assert {r.body["seed"] for r in recs} == {seed}, \
-        "the study records its ONE seed on both records (spec section 4.1)"
+        "the study records its ONE seed on both records"
     for r in recs:
         param = r.body["points"]["param"]
         assert r.body["complete"] is True
-        # A sweep's per-point grids live in data.h5, so the body's single grid block is null
-        # (spec section 2.3).
+        # A sweep's per-point grids live in data.h5, so the body's single grid block is null.
         assert r.body["grid"] is None, r.body["grid"]
         assert r.body["settings"]["preset"] == "exploratory", r.body["settings"]
         assert "data.h5" in r.manifest.payloads and r.data_path.exists()
-        # Each sweep plots itself into its own record (spec section 4.1).
+        # Each sweep plots itself into its own record.
         assert r.manifest.figures == [f"figures/fdt_ratio_vs_{param}.png"], r.manifest.figures
         assert (r.path / r.manifest.figures[0]).exists(), r.manifest.figures
-        # The line the tool printed for this record before either sweep spent anything (F20) names
+        # The line the tool printed for this record before either sweep spent anything names
         # the sweep the record holds -- what the interrupt note sends the operator back to.
         line = [ln for ln in out.splitlines()
                 if ln.startswith(f"[prism crossval] writing record {r.id} at ")]
@@ -2249,10 +2251,9 @@ def test_the_nadrowski_only_sanity_checks_are_selected_for_a_nadrowski_cell(monk
     """``run_all_sanity`` keeps ``passive_baseline`` and ``high_freq_fdt`` for NADROWSKI and drops
     them for every other model (core/FDT/sanity.py: ``_runs_nadrowski_only_checks`` decides,
     ``_NADROWSKI_ONLY`` names the two), because both reason about parameters -- the s-feedback and
-    the motor thermostat -- that only Nadrowski has. Until piece 5 the only end-to-end test of the
-    ``fdt`` subcommand ran a HOPF cell with ``--skip-sanity``, so the branch that KEEPS the two was
-    exercised nowhere and neither was the note that announces dropping them. Spec section 1's last
-    bullet.
+    the motor thermostat -- that only Nadrowski has. The only end-to-end test of the ``fdt``
+    subcommand once ran a HOPF cell with ``--skip-sanity``, so the branch that KEEPS the two was
+    exercised nowhere and neither was the note that announces dropping them.
 
     The five check bodies are stubbed, so this asserts the SELECTION and the note, not the physics;
     the slow test below runs them for real.
@@ -2294,15 +2295,15 @@ def test_the_nadrowski_only_sanity_checks_are_selected_for_a_nadrowski_cell(monk
 def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tmp_path, monkeypatch, capsys):
     """The real sanity checks on a real Nadrowski cell, and the passive-baseline figure they draw.
 
-    This is the gap spec section 1's last bullet names: the single-cell leg above runs with
-    --skip-sanity (on a Hopf cell until piece 5, a Nadrowski one since), so
+    The single-cell leg above runs with --skip-sanity (once on a Hopf cell, now on a Nadrowski
+    one), so
     ``check_passive_baseline`` and ``check_high_freq_fdt`` -- the two checks that decide whether the
     whole PSD / lock-in / noise-prefactor convention is right; the passive one also draws a figure of
     its own -- had never executed under test. Everything is real: the campaigns, the checks,
     the production sweep and the record.
 
     Production is NOT skipped. ``--no-production`` would be cheaper, and its contract is fixed too
-    (planning ruling P55: a finished record with ``grid`` and ``offgrid`` null) -- but it stops
+    (a finished record with ``grid`` and ``offgrid`` null) -- but it stops
     before Campaign 1, so on a Nadrowski cell with the checks on, the two campaigns, the three
     production figures and ``data.h5`` would go unexercised. This test runs the whole path and
     records what that costs.
@@ -2310,15 +2311,14 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tmp_path, monkeypatch, 
     Its own --store-root, so the record cannot be confused with the one the tiny-size test above
     writes into its own artifacts root. PRISM_ARTIFACTS is pointed at a temp root too, so any write
     that escapes the store still misses the real ``Artifacts/`` -- set here rather than through
-    ``tool_env``, which also installs SBITEST into the REAL ``Resources/`` (the whole-piece review's
-    N38).
+    ``tool_env``, which also installs SBITEST into the REAL ``Resources/``.
 
     Measured 2026-09-24 at 6210a05, run alone: 796.34 s on the CPU (13 min 22 s for the whole
     pytest process). Most of it is the checks: an earlier run cut off at 540 s had by then spent
     466 s on the passive-baseline check ALONE (the record was created at 12:41:35 and that check's
     figure written at 12:49:21). The seed was drawn in that measurement and is fixed since. The time
     can still move with the seed: omega_0 comes from Campaign 1's stochastic spectrum, and the probe
-    grid and the drive lengths follow it (N34).
+    grid and the drive lengths follow it.
     """
     import warnings
 
@@ -2330,7 +2330,7 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tmp_path, monkeypatch, 
     root = tmp_path / "store"
     cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
     # A FIXED seed, so a failure thirteen minutes in can be reproduced exactly; the record carries
-    # the seed either way (E7), and it is checked below to be this one.
+    # the seed either way, and it is checked below to be this one.
     seed = 20260924
     capsys.readouterr()
     # A sanity check EXCLUDES a probe the spontaneous spectrum does not resolve and says so in a
@@ -2339,7 +2339,7 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tmp_path, monkeypatch, 
     # than leaked into the session's warning count. It is not REQUIRED -- whether a probe falls off
     # the grid is physics, and this test is about the path -- but any OTHER warning is a finding, and
     # fails: the high-frequency check's own off-grid notice included, which the old substring match
-    # also swallowed (the whole-piece review's N39). The filters are inherited, not "always": what is
+    # also swallowed. The filters are inherited, not "always": what is
     # recorded is exactly what would otherwise have reached the session's warnings summary.
     with warnings.catch_warnings(record=True) as said:
         rc = main(["fdt", "--cell", cell, "--n-freqs", "2", "--ensemble-m", "8",
@@ -2351,7 +2351,7 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tmp_path, monkeypatch, 
               if not str(w.message).startswith("check_passive_baseline:")]
     assert not others, others
     # ...and the high-frequency check MEASURED something: every probe off the grid is a FAIL whose
-    # only trace would be this metric (N39)
+    # only trace would be this metric
     assert "all high-frequency probes lie outside the PSD grid" not in out, out[-2000:]
 
     # The two Nadrowski-only checks ran, and the note that announces dropping them did not appear.
@@ -2376,15 +2376,14 @@ def test_fdt_runs_the_nadrowski_sanity_checks_end_to_end(tmp_path, monkeypatch, 
 
 
 def test_fdt_plot_functions_close_a_saved_figure_instead_of_show(tmp_path, monkeypatch):
-    """Commit B, fix round 1: every real caller (fdt_pipeline.py, sanity.py) always passes
-    ``save_path``, so the old unconditional ``plt.show()`` was pure cost under the tool's Agg
-    backend -- it does nothing there except print "FigureCanvasAgg is non-interactive, and thus
-    cannot be shown" (four times per real ``fdt`` run, once per plot function) and it never closed
-    the figure it drew, leaking one live figure per call for the life of the process. Close-when-
-    saved is the right default; ``plt.show()`` survives for the no-``save_path`` case no current
-    caller uses.
+    """Every real caller (fdt_pipeline.py, sanity.py) always passes ``save_path``, so the old
+    unconditional ``plt.show()`` was pure cost under the tool's Agg backend -- it does nothing there
+    except print "FigureCanvasAgg is non-interactive, and thus cannot be shown" (four times per real
+    ``fdt`` run, once per plot function) and it never closed the figure it drew, leaking one live
+    figure per call for the life of the process. Close-when-saved is the right default;
+    ``plt.show()`` survives for the no-``save_path`` case no current caller uses.
 
-    Through the same helper as its three siblings (the whole-piece review's N36), so ``plt.show`` is
+    Through the same helper as its three siblings, so ``plt.show`` is
     SPIED here too rather than inferred from a missing Agg warning.
     """
     import numpy as np
@@ -2425,8 +2424,8 @@ def _figure_is_saved_closed_and_silent(draw, out, monkeypatch):
 
 def test_plot_eff_temp_ratio_closes_a_saved_figure_instead_of_show(tmp_path, monkeypatch):
     """The headline T_eff/T figure. ``bb22ac4`` gave all four of core/FDT/plots.py's drawing
-    functions the close-when-saved branch and only ``plot_psd`` got a test -- the gap
-    ``docs/STATE.md``'s piece-5 row hands on and spec section 8.2 closes.
+    functions the close-when-saved branch and only ``plot_psd`` got a test; this one covers that
+    branch of ``plot_eff_temp_ratio``.
 
     This one matters most of the four: a real ``fdt`` run draws it once at the end, and on a
     NADROWSKI cell with the sanity checks on the passive-baseline check draws it again
@@ -2446,7 +2445,7 @@ def test_plot_eff_temp_ratio_closes_a_saved_figure_instead_of_show(tmp_path, mon
 def test_plot_spontaneous_trajectory_closes_a_saved_figure_instead_of_show(tmp_path, monkeypatch):
     """The Campaign-1 diagnostic trace. Like ``plot_chi_components`` it has no non-finite filter of
     its own, so its save branch is reached on every input; and it is one of the two figures (with the
-    spontaneous PSD, which piece 5 moved ahead of Campaign 2) that a run cancelled between the two
+    spontaneous PSD, which is drawn ahead of Campaign 2) that a run cancelled between the two
     campaigns has already drawn into its record.
     """
     import numpy as np
@@ -2477,15 +2476,16 @@ def test_plot_chi_components_closes_a_saved_figure_instead_of_show(tmp_path, mon
 
 
 def test_the_tool_prints_a_refusal_with_its_flag_and_a_bug_with_a_traceback(tool_env, monkeypatch, capsys):
-    """Spec section 1.2, "V3 and the tool's ladder": four rungs, told apart by TYPE.
+    """The tool's ladder: four rungs, told apart by TYPE.
 
     A Refusal is one operator line -- ``prism <cmd>: refused: <message> <fix>`` -- with the flag from
     core/tool/fields.py in parentheses when its field has one, and NOTHING after the message when
     the field is None or has no flag (fix_sentence owns the parentheses, so a bare message never
-    ends in "()"). No class name, no [raised at ...]. A bare ValueError from a site piece 3 has not
-    converted keeps today's hedged shape, class and location included, so an unconverted refusal
-    still reads as a refusal. Anything else is a bug and prints the whole traceback. UsageError is
-    now a Refusal too and MUST stay exit 2 with its own prefix: it is caught one rung earlier.
+    ends in "()"). No class name, no [raised at ...]. A bare ValueError from a site not yet
+    converted to a Refusal keeps today's hedged shape, class and location included, so an
+    unconverted refusal still reads as a refusal. Anything else is a bug and prints the whole
+    traceback. UsageError is now a Refusal too and MUST stay exit 2 with its own prefix: it is
+    caught one rung earlier.
 
     The stage is stubbed to raise, so the ladder is exercised on the real path from main through
     the handler and build_cfg, not on a synthetic try/except."""
@@ -2520,7 +2520,8 @@ def test_the_tool_prints_a_refusal_with_its_flag_and_a_bug_with_a_traceback(tool
     assert lines == ["prism prior: refused: Nothing to resume."], err
     assert "(" not in lines[0] and ")" not in lines[0]
 
-    # (c) a registered field with no flag (the chi band is fixed by measurement, D11): same as (b)
+    # (c) a registered field with no flag (there is no chi override: the band is config.py's, fixed
+    # by measurement): same as (b)
     monkeypatch.setattr(orchestrator, "build_prior", _raising(Refusal(
         "The chi frequency band (fixed by measurement) is not the one this posterior was trained under.",
         field="chi_freq_bounds")))
@@ -2594,8 +2595,9 @@ def test_device_cuda_is_refused_when_unavailable(tool_env, monkeypatch, capsys):
 
 
 def test_the_tool_routes_info_to_stdout_and_warnings_to_stderr_and_removes_its_handlers(tool_env, monkeypatch, capsys):
-    """V4 on the command line. An information record is stdout, plain -- the GPU recipe reads
-    ``[checkpoint] resuming at batch k/n`` off stdout and must keep doing so once T17 makes it a record.
+    """The console routing of logging records, on the command line. An information record is stdout,
+    plain -- the GPU smoke gate reads ``[checkpoint] resuming at batch k/n`` off stdout and must keep
+    doing so now that it is a record.
     A warning or an error is stderr with its level as a prefix, so an operator's ``2>err.log`` holds
     exactly what needs acting on.
 
@@ -2682,7 +2684,7 @@ def test_the_core_logger_is_at_info_by_import_and_stays_so_after_main_and_a_redi
         assert "setLevel" not in code_only(fn), f"{fn.__name__} touches the logger's level"
 
 
-# The console lines the GPU smoke gate in CLAUDE.md and docs/STATE.md reads by eye (spec §4.5), each with
+# The console lines the GPU smoke gate reads by eye, each with
 # the ONE kind of call that must carry it in its module: an information record (stdout on the tool), a
 # warning record (stderr, behind "warning: "), a framing print (stdout: no file=) or a Python warning
 # (stderr).
@@ -2726,11 +2728,11 @@ def _calls_carrying(module_name: str, needle: str) -> list[str]:
 
 
 def test_the_gate_lines_keep_their_text_and_stream(capsys):
-    """The GPU smoke gate is read BY EYE off the console (CLAUDE.md, docs/STATE.md): run 2 must show
+    """The GPU smoke gate is read BY EYE off the console: run 2 must show
     "Reusing the Fisher rotation stored with the training checkpoint" and "[checkpoint] resuming at
     batch 4/4", run 2b no "[fisher]" line, runs 1 and 3 no OOM line and their masked-probe counts, and
     the smoke driver frames every stage with "=== <stage> ===", "[ok] <stage> in Xs" and "[smoke] ALL
-    STAGES COMPLETED". No suite assertion read most of these before piece 3, so the conversion to
+    STAGES COMPLETED". No suite assertion read most of these before, so the conversion to
     logging could have reworded one, or demoted an OOM notice to information on stdout, with every
     suite green and the gate silently unreadable.
 
@@ -2738,7 +2740,7 @@ def test_the_gate_lines_keep_their_text_and_stream(capsys):
     kind that puts it on its stream, and by no other. The ROUTE: under the tool's console handlers an
     information record lands on stdout as bare text and a warning record on stderr behind "warning: ",
     so a level in the source IS a stream on the command line. In the window the same level is the
-    pane's plain line or triangle (Task 16)."""
+    pane's plain line or triangle."""
     import logging
 
     from core.tool.logging_console import console_handlers
@@ -2757,19 +2759,19 @@ def test_the_gate_lines_keep_their_text_and_stream(capsys):
     assert err == "warning: training batch 3/4: OOM at simulation batch 64; retrying in chunks of 32\n", err
 
 
-# Every module whose in-stage prints piece 3 converted: Task 16 (file_manager.list_dir), Task 17 (the
-# orchestrator), Task 18 (core/SBI and the solver), Task 19 (the diagnostics, FDT and the plot helpers).
+# Every module whose in-stage prints were converted to logging records: file_manager.list_dir, the
+# orchestrator, core/SBI and the solver, the diagnostics, FDT and the plot helpers.
 _CONVERTED = ("core/orchestrator.py", "core/SBI", "core/Solvers/sdeint.py", "core/diagnostics", "core/FDT",
               "core/Helpers/visualizers.py", "core/Helpers/file_manager.py")
 
 
 def test_no_print_call_remains_in_the_converted_modules():
-    """The definition of done for V4's conversion (spec §4.1): no print() call is left in a module whose
+    """The definition of done for the conversion to logging: no print() call is left in a module whose
     messages are the pipeline's own voice. A print there reaches the window at the level of whichever
     STREAM it used, never reaches the artifact's log.txt, and on the command line ignores the
     stdout/stderr split -- the three defects the conversion exists to remove. Parsed, not grepped: a
     docstring or a comment that mentions print() is not a call. The tool's framing prints (core/tool)
-    stay prints and are deliberately outside this set (spec §4.1)."""
+    stay prints and are deliberately outside this set."""
     root = config.REPO_ROOT
     files = []
     for rel in _CONVERTED:
@@ -2784,7 +2786,7 @@ def test_no_print_call_remains_in_the_converted_modules():
     assert left == [], f"print() calls left in the converted modules: {sorted(left)}"
 
 
-# ── the artifacts family (piece 4, B9; design §4) ────────────────────────────────────────────────
+# ── the artifacts family ─────────────────────────────────────────────────────────────────────────
 
 
 @pytest.fixture
@@ -2792,10 +2794,10 @@ def browse_store(tmp_path, monkeypatch):
     """A store holding one artifact of each of the eight kinds plus three unusable directories, with
     PRISM_ARTIFACTS pointing at it.
 
-    ``config.artifacts_root()`` reads the variable on EVERY call (core/config.py:185-189) and ``main``
+    ``config.artifacts_root()`` reads the variable on EVERY call and ``main``
     opens its store on it, so ``main(["artifacts", ...])`` reads exactly this root -- the same redirect
     test_the_sbc_subcommand_forwards_every_knob_as_a_keyword uses. Yields ``(root, ids)``, where
-    ``ids`` is ``{kind: id}`` from tests/_fixtures.py::build_browse_store (Task 9's builder: the real
+    ``ids`` is ``{kind: id}`` from tests/_fixtures.py::build_browse_store (the real
     writer at minimum size, seconds not minutes -- it must never reach for ``tiny_run``)."""
     from tests._fixtures import build_browse_store
     root = tmp_path / "A"
@@ -2805,7 +2807,7 @@ def browse_store(tmp_path, monkeypatch):
 
 
 def test_the_artifacts_listing_shows_the_browsers_own_columns():
-    """ONE FORMATTER PER FACT (design §1.2), kept honest across two front ends that cannot share code.
+    """ONE FORMATTER PER FACT, kept honest across two front ends that cannot share code.
     The browser's ``cells_for``/``columns_for`` live in a Qt module, and importing it from
     ``core/tool/browse.py`` would pull PySide6 into ``python -m core --help`` -- so the tool keeps its
     own column list and the two COLUMN SETS are pinned against each other HERE rather than trusted to
@@ -2824,10 +2826,10 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
     assert browse.KINDS == tuple(KIND_DIRS), "the eight kinds, in KIND_DIRS order"
     assert set(browse.COLUMNS) == set(browse.KINDS), "every kind has a column set, and no other"
     for kind in browse.KINDS:
-        # The tool's literal is the GUI's own spelling, lower-cased (P11): one canonical column list,
+        # The tool's literal is the GUI's own spelling, lower-cased: one canonical column list,
         # Title-case in the window and lower-case in a terminal where the output may be piped.
         assert browse.COLUMNS[kind] == tuple(c.lower() for c in columns_for(kind)), kind
-    # The THIRD deliberate duplication, and the only one that had no pin (tests lens, I2): the
+    # The THIRD deliberate duplication, and the only one that had no pin: the
     # sentence that tells an operator a training cache blocks a prior's delete because it was
     # GENERATED against it, rather than because it named it. Its own comment cites COLUMNS above as
     # the precedent for restating it -- so it is pinned the same way.
@@ -2835,7 +2837,7 @@ def test_the_artifacts_listing_shows_the_browsers_own_columns():
 
 
 def test_the_rendered_help_counts_the_kinds_correctly():
-    """Checklist 18, a SILENT pin. Five phrases in core/tool/browse.py hand-write how many kinds
+    """A SILENT pin. Five phrases in core/tool/browse.py hand-write how many kinds
     there are -- two "all seven"s in EPILOG, the "<kind> is one of ..." line under them, and the
     ``kind`` help on ``list`` and on ``sweep``. None is generated, none was pinned, and a stale one
     prints a wrong help page to an operator with no failure anywhere.
@@ -2872,9 +2874,9 @@ def test_the_rendered_help_counts_the_kinds_correctly():
 
 
 def test_artifacts_list_prints_one_line_per_artifact_with_its_kinds_facts(browse_store, capsys):
-    """design §3.2's table, per kind: a posterior's mode, width and amortization; a cache's progress
-    as a FRACTION (``batches_done``/``batches_planned``) and -- separately -- whether it FINISHED (B3:
-    ``complete`` means "has a valid manifest", which is true of a cache from its first batch on). Read
+    """The listing's table, per kind: a posterior's mode, width and amortization; a cache's progress
+    as a FRACTION (``batches_done``/``batches_planned``) and -- separately -- whether it FINISHED
+    (``complete`` means "has a valid manifest", which is true of a cache from its first batch on). Read
     off the store's own rows rather than off literal names, so the assertions hold whatever
     build_browse_store names its artifacts."""
     from core.artifacts import ArtifactStore
@@ -2907,7 +2909,7 @@ def test_artifacts_list_prints_one_line_per_artifact_with_its_kinds_facts(browse
 def test_the_artifacts_listing_progress_cell_is_a_fraction_and_shows_rows_only_once_finished():
     """Both halves of the progress cell, on stand-in summaries: ``build_browse_store``'s cache is an
     unfinished one, so the FINISHED half has no fixture to come from: ``batches_planned`` (the body's
-    ``identity["n_runs"]``, spec §12 row 2) makes the cell a FRACTION, and ``rows`` is written only by
+    ``identity["n_runs"]``) makes the cell a FRACTION, and ``rows`` is written only by
     ``mark_complete`` -- ``save`` passes none -- so a cache mid-run shows its batches and no row
     count. A comma and plain ASCII, never the browser's middle dot: this is text a script may read."""
     from core.artifacts.store import Summary
@@ -2948,7 +2950,7 @@ def test_the_artifacts_listing_points_cell_is_plain_ascii_and_a_dash_when_there_
 def test_artifacts_list_with_no_kind_covers_every_kind_under_a_heading(browse_store, capsys):
     """Every kind the tool lists, fdt included -- read off ``browse.KINDS`` (pinned equal to the
     store's own kinds by test_the_artifacts_listing_shows_the_browsers_own_columns), never a literal
-    that had fallen one kind behind (the whole-piece review's N31)."""
+    that had fallen one kind behind."""
     from core.tool import browse
     root, ids = browse_store
     capsys.readouterr()
@@ -2961,13 +2963,13 @@ def test_artifacts_list_with_no_kind_covers_every_kind_under_a_heading(browse_st
 
 
 def test_an_empty_artifacts_listing_exits_0_and_a_bad_kind_exits_1(tmp_path, monkeypatch, capsys):
-    """§4.3: an empty listing is 0, with a line saying there is nothing there. A script must be able to
+    """An empty listing is 0, with a line saying there is nothing there. A script must be able to
     tell "nothing on disk" from "you asked for something wrong", and exiting 1 on an empty store would
     make the two indistinguishable. A kind that does not exist IS the second case: the store's own
     refusal, through the ladder's ``refused:`` rung at exit 1.
 
     The empty root need not exist beforehand -- ``main`` mkdirs the store root before any handler runs
-    (core/tool/__init__.py:103)."""
+    (core/tool/__init__.py, ``main``)."""
     monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "empty"))
 
     capsys.readouterr()
@@ -2975,7 +2977,7 @@ def test_an_empty_artifacts_listing_exits_0_and_a_bad_kind_exits_1(tmp_path, mon
     out = capsys.readouterr().out
     named_empty = out.split("nothing in:")[1]
     from core.tool import browse
-    for kind in browse.KINDS:                    # fdt included (the whole-piece review's N31)
+    for kind in browse.KINDS:                    # fdt included
         assert kind in named_empty, kind
     assert "holds no artifacts yet" in out, out
 
@@ -2995,7 +2997,7 @@ def test_an_empty_artifacts_listing_exits_0_and_a_bad_kind_exits_1(tmp_path, mon
 def test_artifacts_list_puts_an_unusable_directory_last_with_its_reason(browse_store, capsys):
     """A leftover directory is the first thing an operator can act on that no front end has ever shown:
     ``get``/``path`` and the GUI picker all skip it. ``list`` already sorts incomplete rows last, and
-    the row carries the ``dir_name`` because that is the only handle ``sweep`` can take (B7).
+    the row carries the ``dir_name`` because that is the only handle ``sweep`` can take.
 
     NOTE on ordering among several leftovers: ``browse_store`` (build_browse_store) already seeds three
     ``leftover_*`` directories under ``priors/`` for the store shapes it covers, so this test's own
@@ -3021,7 +3023,7 @@ def test_artifacts_list_puts_an_unusable_directory_last_with_its_reason(browse_s
 
 
 def test_artifacts_show_prints_the_manifest_then_the_runs_records(browse_store, capsys, monkeypatch):
-    """The manifest through the ONE renderer both front ends use (design §5), then the records with
+    """The manifest through the ONE renderer both front ends use, then the records with
     their ``HH:MM:SS level`` stamps, then a truncation notice when the tail was cut. Asserting the
     renderer's own output is IN the printed text is what keeps a second, drifting renderer from being
     written here."""
@@ -3051,7 +3053,7 @@ def test_artifacts_show_prints_the_manifest_then_the_runs_records(browse_store, 
 
 
 def test_artifacts_show_states_the_two_honest_gaps(browse_store, capsys):
-    """design §3.3's two sentences, WORD FOR WORD the browser's, because one operator reads both. A
+    """The two honest-gap sentences, WORD FOR WORD the browser's, because one operator reads both. A
     cache has no log by design (it is written batch by batch across resumes and shared by every
     posterior that names it), and an artifact written with no run active has none either -- and
     ``read_log`` answers ``(None, False)`` for both, so the KIND is what tells them apart."""
@@ -3074,7 +3076,7 @@ def test_artifacts_show_states_the_two_honest_gaps(browse_store, capsys):
 def test_artifacts_show_names_a_directory_the_manifest_disagrees_with(browse_store, capsys):
     """``rename`` writes the manifest first and tolerates a refused directory move (the manifest is
     what resolves an artifact), which leaves a folder whose name disagrees with ``Manifest.dir_name``.
-    ``show`` is the first place that is visible (design §3.3, §2.6)."""
+    ``show`` is the first place that is visible."""
     from core.artifacts import ArtifactStore
     root, ids = browse_store
     sub = ArtifactStore(root).path("calibration", ids["calibration"])
@@ -3087,7 +3089,7 @@ def test_artifacts_show_names_a_directory_the_manifest_disagrees_with(browse_sto
 
 
 def test_artifacts_show_on_a_missing_ref_exits_1_through_the_refused_rung(browse_store, capsys):
-    """§4.3: a missing or ambiguous ref is 1, through the existing ``refused:`` rung. The message
+    """A missing or ambiguous ref is 1, through the existing ``refused:`` rung. The message
     already quotes the ref, which is exactly why core/tool/fields.py maps the ``artifact`` key to
     None -- the tool names the artifact positionally, so there is no option string to print, and
     fix_sentence owns the parentheses, so the line simply ends at the message."""
@@ -3103,13 +3105,13 @@ def test_artifacts_show_on_a_missing_ref_exits_1_through_the_refused_rung(browse
 
 
 def test_the_artifacts_family_takes_no_configuration_flags_and_its_help_costs_no_torch():
-    """B9's two halves, pinned. (1) No configuration flags anywhere in the family: a listing must not
-    be able to fail on a bounds file it does not need, and --store-root in particular is absent
-    because this family creates no second root and reads the one PRISM_ARTIFACTS names. It used to
-    be absent for a second reason as well -- ``main`` keyed smoke's temp root, its empty-root
-    cleanup and its Ctrl-C advice on ``hasattr(args, "store_root")`` -- which piece 5 retired when it
-    gave fdt/crossval the flag and made those three an explicit per-subcommand choice (piece-5
-    spec §6.1). (2) ``--help``
+    """The artifacts family's two halves, pinned. (1) No configuration flags anywhere in the family:
+    a listing must not be able to fail on a bounds file it does not need, and --store-root in
+    particular is absent because this family creates no second root and reads the one
+    PRISM_ARTIFACTS names. It used to be absent for a second reason as well -- ``main`` keyed smoke's
+    temp root, its empty-root cleanup and its Ctrl-C advice on ``hasattr(args, "store_root")`` --
+    which was retired when fdt/crossval got the flag and those three became an explicit
+    per-subcommand choice. (2) ``--help``
     for the family imports no torch -- checked in a FRESH interpreter, because in this process torch
     is long since imported by the session fixtures, so a sys.modules check here would pass
     vacuously (the pattern of test_every_field_key_has_a_flag_..., leg (d))."""
@@ -3137,7 +3139,7 @@ def test_the_artifacts_family_takes_no_configuration_flags_and_its_help_costs_no
 
 
 def test_artifacts_note_sets_trims_and_clears_a_note(browse_store, capsys):
-    """B5: the note is one line, trimmed, and a blank one CLEARS it. ``--note`` is a flag rather than
+    """The note is one line, trimmed, and a blank one CLEARS it. ``--note`` is a flag rather than
     a positional precisely so core/tool/fields.py can map the ``note`` key to a real option string --
     the table's values are pinned against build_parser()'s own option strings, both ways."""
     from core.artifacts import ArtifactStore
@@ -3154,12 +3156,12 @@ def test_artifacts_note_sets_trims_and_clears_a_note(browse_store, capsys):
 
 
 def test_a_note_that_breaks_the_rule_is_refused_naming_the_flag(browse_store, capsys):
-    """V2 on the note: no clamp and no silent default. An over-long note is refused with BOTH numbers
+    """No clamp and no silent default on the note. An over-long note is refused with BOTH numbers
     in the sentence, a newline is refused rather than flattened, and the manifest is untouched in
     either case. The flag comes from core/tool/fields.py's table, appended by main's ladder -- and
     only for a refusal about the note TEXT, which is ``require_note``'s (field="note"). The third leg
     is the other refusal this mode can raise: ``set_note``'s own "no complete artifact", which carries
-    field="artifact" (spec §12 row 1), a key whose flag is None -- so that line ends at the message."""
+    field="artifact", a key whose flag is None -- so that line ends at the message."""
     from core.artifacts import ArtifactStore
     from core.refusals import NOTE_MAX_CHARS
     root, ids = browse_store
@@ -3180,8 +3182,8 @@ def test_a_note_that_breaks_the_rule_is_refused_naming_the_flag(browse_store, ca
     assert "(--note)" in capsys.readouterr().err
     assert s.get("prior", ids["prior"]).note == before, "a refused note changed the manifest"
 
-    # A ref that names no artifact is a DIFFERENT refusal: set_note's, with field="artifact" (spec
-    # §12 row 1), whose entry in core/tool/fields.py is None because the tool names the artifact
+    # A ref that names no artifact is a DIFFERENT refusal: set_note's, with field="artifact", whose
+    # entry in core/tool/fields.py is None because the tool names the artifact
     # positionally. fix_sentence owns the parentheses, so the line simply ends at the message -- no
     # "(--note)" here, because the note is not what is wrong.
     capsys.readouterr()
@@ -3194,7 +3196,7 @@ def test_a_note_that_breaks_the_rule_is_refused_naming_the_flag(browse_store, ca
 
 
 def test_artifacts_rm_offers_no_force_and_deletes_one_artifact(browse_store, capsys):
-    """B6: delete is one artifact at a time and there is NO force in either front end, so the store's
+    """Delete is one artifact at a time and there is NO force in either front end, so the store's
     refusal is the last word. A diagnostic is the leaf case -- ``_PARENT_KEYS["diagnostic"]`` is
     empty, so nothing can ever name one as a parent."""
     import argparse
@@ -3202,7 +3204,7 @@ def test_artifacts_rm_offers_no_force_and_deletes_one_artifact(browse_store, cap
     root, ids = browse_store
     modes = {name: sub for a in build_parser().subcommands["artifacts"]._actions
              if isinstance(a, argparse._SubParsersAction) for name, sub in a.choices.items()}
-    assert "--force" not in modes["rm"]._option_string_actions, "B6: no force in either front end"
+    assert "--force" not in modes["rm"]._option_string_actions, "no force in either front end"
 
     s = ArtifactStore(root)
     gone = s.path("diagnostic", ids["diagnostic"])
@@ -3215,12 +3217,12 @@ def test_artifacts_rm_offers_no_force_and_deletes_one_artifact(browse_store, cap
 
 
 def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys):
-    """The other half of B6: because no force is offered, an artifact anything depends on cannot be
-    deleted AT ALL, and the refusal names every dependent -- in the TOOL's OWN WORDS (fix round 1,
-    IMPORTANT 1), never the store's raw sentence, which ends "pass force=True to orphan them": a step
+    """The other half of that rule: because no force is offered, an artifact anything depends on
+    cannot be deleted AT ALL, and the refusal names every dependent -- in the TOOL's OWN WORDS, never
+    the store's raw sentence, which ends "pass force=True to orphan them": a step
     nothing in either front end offers, so it must never reach an operator.
 
-    Fix round 2: ``tool_run`` is MODULE-scoped, so every test in this file shares one store, and
+    ``tool_run`` is MODULE-scoped, so every test in this file shares one store, and
     ``tp`` -- the one prior every SBI test in this module trains against -- accumulates a dependent
     for every posterior, calibration and cache an EARLIER-running test in this module built against
     it (``test_validate_and_simulated_infer``'s ``tcal`` among them). A hard-coded "2 artifact(s)"
@@ -3228,10 +3230,10 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
     expected IDS are read off ``s.dependents`` itself, which is the one ground truth that holds no
     matter what the rest of the module has built by the time this runs.
 
-    Whole-piece review (tests lens, I2): that round-2 narrowing dropped the assertion on the REASON
-    clause altogether -- only the ids were checked, so deleting ``-- {why}`` from the f-string would
-    leave the suite green and the operator without the one sentence that says WHY a training cache
-    blocks a prior's delete. Re-pinned here order-independently: every dependent's id is followed by
+    Reading the count and the ids off ``s.dependents`` must not drop the assertion on the REASON
+    clause: with only the ids checked, deleting ``-- {why}`` from the f-string would leave the suite
+    green and the operator without the one sentence that says WHY a training cache blocks a prior's
+    delete. So it is pinned here order-independently: every dependent's id is followed by
     a reason clause, and the reasons are the two the front ends agree on, COUNTED rather than
     sequenced (which dependent gets which is ``dependents()``'s business, not this test's)."""
     from core.artifacts import ArtifactStore
@@ -3264,21 +3266,21 @@ def test_artifacts_rm_refuses_an_artifact_something_depends_on(tool_run, capsys)
 
 def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_directories(
         browse_store, capsys):
-    """B7 with R1 and R4. One action removes every directory of a kind that has NO manifest at all,
+    """One action removes every directory of a kind that has NO manifest at all,
     through a store call that CAN ONLY remove such a directory -- ``delete`` resolves through
     ``_find``, which never returns a manifest-less entry, and ``remove_incomplete`` is its
-    complement. §4.3: nothing to remove is exit 0, and it says so rather than printing nothing.
+    complement. Nothing to remove is exit 0, and it says so rather than printing nothing.
 
-    R4: the window ASKS before it removes and this did not -- no preview, no confirmation, and a
-    reviewer's probe deleted two directories and printed their reasons afterwards. So the default is
+    The window ASKS before it removes and this did not -- no preview, no confirmation, and a
+    trial run deleted two directories and printed their reasons afterwards. So the default is
     a DRY RUN: exactly what it would remove, removing nothing, and ``--yes`` performs it. That is a
-    confirmation and not an override: B6 stands, there is still no ``--force`` and no way to reach a
-    real artifact from here.
+    confirmation and not an override: the no-force rule stands, there is still no ``--force`` and no
+    way to reach a real artifact from here.
 
-    R1: of the three shapes ``build_browse_store`` seeds under ``priors/`` (no manifest at all, a
+    Of the three shapes ``build_browse_store`` seeds under ``priors/`` (no manifest at all, a
     manifest that will not parse, a valid manifest of another kind), only the FIRST is a leftover a
     sweep may remove. The other two are reported and survive -- a manifest valid under a different
-    SCHEMA reads as "no artifact here" to this build, and deleting one cost a reviewer's probe a real
+    SCHEMA reads as "no artifact here" to this build, and deleting one cost a trial run a real
     calibration with its payload."""
     from tests._fixtures import backdate_tree
     root, ids = browse_store
@@ -3289,7 +3291,7 @@ def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_d
     bad_names = set(ids["bad"]) | {leftover.name}
     kept = [p for p in (root / "priors").iterdir() if p.name not in bad_names]
     assert kept, "build_browse_store wrote a prior"
-    backdate_tree(root / "priors")          # R3's guard is tested at the store; not the subject here
+    backdate_tree(root / "priors")          # the recency guard is tested at the store, not here
 
     # (a) the DRY RUN: says what it would remove, removes nothing, exits 0
     capsys.readouterr()
@@ -3299,7 +3301,7 @@ def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_d
     assert "--yes" in out, "the dry run must name the flag that performs it"
     assert "still being written" in out, \
         ("a preview run beside a live training would otherwise offer that training's own directory "
-         "with no warning: the listing cannot tell a run in flight from a leftover (R3)")
+         "with no warning: the listing cannot tell a run in flight from a leftover")
     assert leftover.is_dir() and manifest_less.is_dir(), "a dry run removed something"
 
     # (b) --yes performs it, and only the manifest-less directories go
@@ -3312,7 +3314,7 @@ def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_d
         assert d.is_dir(), f"{d.name} carries a manifest.json and must never be swept"
         assert d.name in out, out
     assert all(p.exists() for p in kept), "sweep removed an artifact with a usable manifest"
-    # RULED IN 5 (fix round 1): sweep_incomplete's own return has no reason, so the tool reads it off
+    # sweep_incomplete's own return has no reason, so the tool reads it off
     # `list` before removing and prints it after -- an operator must be able to tell "no manifest"
     # from "a manifest of another kind" after the fact, not just which directory went.
     assert "no manifest.json" in out, out
@@ -3324,9 +3326,10 @@ def test_artifacts_sweep_is_a_dry_run_until_yes_and_removes_only_manifest_less_d
 
 
 def test_artifacts_sweep_offers_a_loose_file_and_never_a_records_payload(browse_store, capsys):
-    """E10, first category. ``ArtifactStore._entries`` iterates DIRECTORIES only, so a file sitting
-    directly inside a kind directory is invisible to every listing in both front ends -- and the
-    owner's machine has two of them, the PNGs a pre-piece-5 fdt run left in ``Artifacts/fdt``. They
+    """The tidy-up's first category, the loose file. ``ArtifactStore._entries`` iterates DIRECTORIES
+    only, so a file sitting directly inside a kind directory is invisible to every listing in both
+    front ends -- and the owner's machine has two of them, the PNGs an older build's fdt run left in
+    ``Artifacts/fdt``. They
     carry no record of which cell or which settings produced them and no command could reach them.
 
     The complement matters as much as the category: ``loose_files`` reads the kind directory's own
@@ -3360,7 +3363,7 @@ def test_artifacts_sweep_offers_a_loose_file_and_never_a_records_payload(browse_
 
 
 def test_a_legacy_directory_is_offered_by_the_all_kinds_sweep_only(browse_store, capsys):
-    """E10's second category, and why it has a form of its own. A legacy directory -- a `crossval/`
+    """The second tidy-up category, and why it has its own form. A legacy directory -- a `crossval/`
     an older build wrote -- sits BESIDE the kind directories, under no kind, and the store never
     walks its own root, so it is invisible to every listing. ``sweep`` takes the kind POSITIONALLY
     (core/tool/browse.py's `sweep [<kind>]`), so only the form with no kind can offer something that
@@ -3409,12 +3412,12 @@ def test_a_legacy_directory_is_offered_by_the_all_kinds_sweep_only(browse_store,
 
 def test_a_sweep_claims_nothing_it_could_not_read_and_its_help_names_every_category(
         tmp_path, monkeypatch, capsys):
-    """The whole-piece review's N25 (L728), the tool's half. "nothing to sweep: ... and no legacy
-    directory sits beside them" printed even when the store root could not be read -- a line that
-    contradicted the error printed beside it. Each clause is printed only when its read succeeded.
-    The dry-run footnote named only "a directory that is still being written", though a recently
-    written loose file and the legacy directory are refused too, and ``artifacts sweep --help``
-    never mentioned the legacy directory at all."""
+    """The tool's half. "nothing to sweep: ... and no legacy directory sits beside them" printed
+    even when the store root could not be read -- a line that contradicted the error printed beside
+    it. Each clause is printed only when its read succeeded. The dry-run footnote named only "a
+    directory that is still being written", though a recently written loose file and the legacy
+    directory are refused too, and ``artifacts sweep --help`` never mentioned the legacy directory
+    at all."""
     from core.artifacts import ArtifactStore
 
     root = tmp_path / "empty_root"
@@ -3451,12 +3454,10 @@ def test_a_sweep_claims_nothing_it_could_not_read_and_its_help_names_every_categ
 
 
 def test_a_loose_file_written_seconds_ago_is_refused_rather_than_swept(browse_store, capsys):
-    """R3's guard, extended to the new categories (spec §6.3: "the recency guard applies"). A file
-    inside a kind directory can be a run in flight writing its own figure as easily as it can be a
-    leftover -- and a sweep from a second process has no ``BasePanel._running`` to consult. The
-    removal refuses it, the tool reports it, and the exit code says the sweep did not do everything
-    it offered.
-    """
+    """The recency guard, extended to the new categories. A file inside a kind directory can be a
+    run in flight writing its own figure as easily as it can be a leftover -- and a sweep from a
+    second process has no ``BasePanel._running`` to consult. The removal refuses it, the tool
+    reports it, and the exit code says the sweep did not do everything it offered."""
     from tests._fixtures import backdate_tree
     root, ids = browse_store
     backdate_tree(root / "priors")            # every leftover directory is old; only the file is new
@@ -3471,14 +3472,14 @@ def test_a_loose_file_written_seconds_ago_is_refused_rather_than_swept(browse_st
 
 
 def test_an_unfinished_fdt_record_is_listed_as_not_finished_and_never_swept(browse_store, capsys):
-    """Controller ruling F7, the tool half of spec §8.2's "the leftover sweep never offers it" (the
+    """The tool half of the rule that the leftover sweep never offers an unfinished record (the
     store half is tests/test_artifact_store.py's
-    test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_record). E2 keeps an
-    interrupted fdt record's folder with what it measured inside, and that folder carries a manifest
-    from its first moment -- so it is an ARTIFACT, listed and honestly marked unfinished, never a
-    leftover. Now that the sweep also reaches FILES inside a kind directory, the record's own payload
-    is what this pins: it lives one level down, inside the record's folder, where ``loose_files``
-    never looks.
+    test_a_cancel_between_the_first_manifest_and_the_first_payload_keeps_the_record). An interrupted
+    fdt run keeps its folder, marked unfinished, with what it measured inside, and that folder
+    carries a manifest from its first moment -- so it is an ARTIFACT, listed and honestly marked
+    unfinished, never a leftover. Now that the sweep also reaches FILES inside a kind directory, the
+    record's own payload is what this pins: it lives one level down, inside the record's folder,
+    where ``loose_files`` never looks.
 
     Backdated past the recency guard, so a sweep that did offer the record would also REMOVE it under
     --yes rather than be saved by the age check.
@@ -3517,12 +3518,12 @@ def test_an_unfinished_fdt_record_is_listed_as_not_finished_and_never_swept(brow
 
 
 def test_a_sweep_that_could_not_remove_something_exits_1_naming_it(browse_store, monkeypatch, capsys):
-    """§4.3: a sweep that removed everything is 0; one that could not remove a directory is 1, naming
+    """A sweep that removed everything is 0; one that could not remove a directory is 1, naming
     each failure. A held handle on Windows is what that stands for and it cannot be provoked on
     demand, so the two lists are injected on the store's own method -- what is under test is the
     ladder, not the removal.
 
-    The injection also pins the CONTRACT R2 gave that method: it is handed the list of
+    The injection also pins that method's CONTRACT: it is handed the list of
     ``(kind, dir_name)`` the operator was shown, not a kind to re-scan."""
     from core.artifacts import ArtifactStore
     root, ids = browse_store
@@ -3545,14 +3546,14 @@ def test_a_sweep_that_could_not_remove_something_exits_1_naming_it(browse_store,
 
 
 def test_artifacts_summary_prints_the_lineage_or_writes_it_to_out(browse_store, tmp_path, capsys):
-    """B10: the lineage report is a FILE, never a store kind of its own, and it comes out of the same
+    """The lineage report is a FILE, never a store kind of its own, and it comes out of the same
     renderer the browser's "Lineage report..." writes -- so the document a reviewer receives is the
-    same whichever front end made it (design §5). ``--out`` writes exactly what stdout would have
+    same whichever front end made it. ``--out`` writes exactly what stdout would have
     carried.
 
     The file is compared as BYTES, not as text: read_text would translate CRLF back to LF on the way
-    in and pass whatever newline=None had written, which is precisely the drift §5 forbids and the
-    GUI's own report test pins the same way (P23)."""
+    in and pass whatever newline=None had written, which is precisely the drift the one-renderer rule
+    forbids and the GUI's own report test pins the same way."""
     from core.artifacts import ArtifactStore, render_lineage
     root, ids = browse_store
     want = render_lineage(ArtifactStore(root), "posterior", ids["posterior"])
@@ -3569,13 +3570,13 @@ def test_artifacts_summary_prints_the_lineage_or_writes_it_to_out(browse_store, 
 
 
 def test_the_artifacts_family_keeps_the_ladders_exit_codes(browse_store, capsys):
-    """§4.3, one line per rung: a usage error is 2 (argparse, one rung earlier than every refusal); a
+    """One line per rung: a usage error is 2 (argparse, one rung earlier than every refusal); a
     missing ref, a bad kind and a bad note are 1; an empty listing and a sweep with nothing to remove
     are 0. ``--note`` being REQUIRED is part of this: a note must never be cleared by omission.
 
     There is no exit 3 anywhere in the tool and this family adds none: a BUG is the existing unhandled
     rung, which sets 1 with a traceback, so 1 covers a refusal and a bug alike (``main``'s own
-    docstring: "1 a refusal or a bug") and no task here touches the ladder."""
+    docstring: "1 a refusal or a bug") and this family does not touch the ladder."""
     root, ids = browse_store
     assert main(["artifacts"]) == 2, "a mode is required"
     assert main(["artifacts", "nosuchmode"]) == 2
@@ -3594,7 +3595,8 @@ def test_the_artifacts_family_keeps_the_ladders_exit_codes(browse_store, capsys)
 
 
 def test_the_artifacts_family_has_all_six_modes_and_still_no_configuration_flags():
-    """The closure of B9's list, and the extension of Task 13's own pin to the four modes that write:
+    """The closure of the family's list, and the extension of the no-configuration-flags pin above to
+    the four modes that write:
     six modes, no configuration flag on any of them, and --note exactly where core/tool/fields.py
     says it is (that table is pinned against these very option strings, both ways)."""
     import argparse
@@ -3608,20 +3610,19 @@ def test_the_artifacts_family_has_all_six_modes_and_still_no_configuration_flags
             assert flag not in parser._option_string_actions, (name, flag)
     assert "--note" in modes["note"]._option_string_actions
     assert "--out" in modes["summary"]._option_string_actions
-    # R4: the sweep's confirmation. Only the sweep has it -- it is not a global "don't ask me", and
+    # The sweep's confirmation. Only the sweep has it -- it is not a global "don't ask me", and
     # nothing else in this family removes anything without naming one artifact.
     assert {name for name, m in modes.items() if "--yes" in m._option_string_actions} == {"sweep"}
 
 
-# ── fix round 1 (post-implementation review) ─────────────────────────────────────────────────────
+# ── the artifacts family: a failed write, a leftover's name, the shared sentences ────────────────
 
 
 def test_artifacts_summary_write_failure_is_refused_not_a_crash(browse_store, tmp_path, capsys):
-    """IMPORTANT 2 (fix round 1): the window wraps the identical write and reports it
-    (``artifact_screen._lineage_report``'s own ``except OSError``); an operator's ``--out`` typo -- a
-    directory, a read-only file -- must not escape ``write_text`` as an unhandled traceback and a
-    failure banner. Writing to a DIRECTORY is the OSError every platform raises for free, no fixture
-    needed."""
+    """The window wraps the identical write and reports it (``artifact_screen._lineage_report``'s
+    own ``except OSError``); an operator's ``--out`` typo -- a directory, a read-only file -- must
+    not escape ``write_text`` as an unhandled traceback and a failure banner. Writing to a DIRECTORY
+    is the OSError every platform raises for free, no fixture needed."""
     root, ids = browse_store
     a_directory = str(tmp_path)                   # tmp_path exists and is a directory, not a file
 
@@ -3640,15 +3641,15 @@ def test_artifacts_summary_write_failure_is_refused_not_a_crash(browse_store, tm
 
 
 def test_note_and_rm_on_a_leftover_name_sweep_as_the_next_step(browse_store, capsys):
-    """IMPORTANT 3 (fix round 1): a ref copied straight off ``list``'s own "incomplete ..." row
-    cannot resolve through ``_find`` (which never returns a manifest-less entry), and the store's
-    "no complete artifact" refusal said nothing about why, or what removes it -- unlike ``show``,
-    which already states both honest gaps. ``note`` and ``rm`` now name ``sweep``, but ONLY for a ref
-    that actually names one of THIS kind's leftovers; an ordinary typo still gets the plain refusal,
-    with nothing invented about it.
+    """A ref copied straight off ``list``'s own "incomplete ..." row cannot resolve through
+    ``_find`` (which never returns a manifest-less entry), and the store's "no complete artifact"
+    refusal said nothing about why, or what removes it -- unlike ``show``, which already states both
+    honest gaps. ``note`` and ``rm`` now name ``sweep``, but ONLY for a ref that actually names one
+    of THIS kind's leftovers; an ordinary typo still gets the plain refusal, with nothing invented
+    about it.
 
-    Whole-piece review (three lenses): the sentence is built as ``exc.message + hint``, and the
-    store's message ENDS with the ref while the hint BEGAN with it -- so the ref printed twice, back
+    The sentence is built as ``exc.message + hint``, and the
+    store's message ENDS with the ref while the hint once BEGAN with it -- so the ref printed twice, back
     to back, with no sentence break, in the one exit-1 line an operator sees after copying a ``list``
     row's "incomplete" name into ``note``. The substring assertions below could not see it; the
     count can."""
@@ -3682,10 +3683,9 @@ def test_note_and_rm_on_a_leftover_name_sweep_as_the_next_step(browse_store, cap
 
 
 def test_the_shows_two_honest_gaps_are_word_for_word_the_browsers_own_constants(browse_store, capsys):
-    """RULED IN 5 (fix round 1): the comment above ``_show``'s ``print`` claims its two "no log"
-    sentences are the browser's OWN CONSTANTS, word for word -- and that claim drifted once already
-    (this task's own first round silently fixed a stale copy, with no test to catch it). Pinned the
-    way the column table already is
+    """The comment above ``_show``'s ``print`` claims its two "no log" sentences are the browser's
+    OWN CONSTANTS, word for word -- and that claim drifted once already (a stale copy was fixed
+    silently, with no test to catch it). Pinned the way the column table already is
     (``test_the_artifacts_listing_shows_the_browsers_own_columns``): import both front ends and
     compare the actual strings, not eyeball the source a third time."""
     from core.artifacts import ArtifactStore
@@ -3704,20 +3704,20 @@ def test_the_shows_two_honest_gaps_are_word_for_word_the_browsers_own_constants(
     assert ascreen._NO_RUN_LOG in capsys.readouterr().out
 
 
-# ── piece 4, B14: the tool's root sink ───────────────────────────────────────────────────────────
+# ── the tool's root sink ─────────────────────────────────────────────────────────────────────────
 def test_main_installs_the_root_handler_for_the_run_and_leaves_nothing_behind(tool_env, monkeypatch,
                                                                              capsys):
     """Every record from a logger OUTSIDE the ``core`` tree goes to STDERR, whatever its level,
     prefixed with the logger that said it. Deliberately unlike the window's level split: this tool's
-    STDOUT carries results a script reads (the GPU recipe in CLAUDE.md greps ``[checkpoint] resuming
+    STDOUT carries results a script reads (the GPU smoke gate greps ``[checkpoint] resuming
     at batch`` off it), so a library's chatter may never land there.
 
     ``logging.warning`` -- the module-level function, on the ROOT logger -- is sbi's own shape
     (sbi/samplers/rejection/rejection.py:336,359), and ``root`` names nothing, so for that ONE logger
     name the prefix falls back to ``record.module``, the basename of the file that logged:
     ``library: rejection:`` under sbi, and this test file's own stem here (the ``logging.warning``
-    below is called from ``_prior``, which lives in this file). Walkthrough row D15 expects the module
-    name.
+    below is called from ``_prior``, which lives in this file). The module name is what a user reads
+    on the console.
 
     Two more things are pinned here, both of which only a repeated-call test can see: the handler is
     installed FOR the handler call and removed in a finally (``main`` runs dozens of times in one
@@ -3767,7 +3767,7 @@ def test_main_installs_the_root_handler_for_the_run_and_leaves_nothing_behind(to
 
 
 def test_the_tools_root_sink_routes_a_core_record_as_the_console_handlers_would(capsys):
-    """Fix round 1. A ``core`` record reaches the tool's root sink only when the console handlers are
+    """A ``core`` record reaches the tool's root sink only when the console handlers are
     not attached (``main`` attaches them for the handler call alone), and it is PRISM's own voice, so
     it is written as those handlers would write it -- information bare on stdout, warning and above on
     stderr with the level as a prefix -- never ``library:``, and never lost. A library record goes to
