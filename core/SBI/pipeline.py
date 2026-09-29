@@ -1400,8 +1400,12 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                            batch order; None changes nothing. A batch's records arrive only after its
                            rows are stored, in ascending row order: a range re-run in halves is seen
                            as its halves, and an attempt the batch-level retry abandons is never seen.
-                           Chi mode only -- forced and spontaneous runs never call it. It sees the
-                           rows, it cannot change them, and an exception it raises propagates.
+                           Chi mode only -- forced and spontaneous runs never call it. It receives
+                           copies of each committed range's probe measurements, never the rows, and
+                           nothing it does reaches them; attached, it adds one peak estimate per range
+                           on the simulation device, so on a card short of memory the rows match a
+                           run without an observer bit for bit only when no halving happens. An
+                           exception it raises propagates.
     :return: Tuple of (training_data, thetas) where training_data has shape
              (n_runs * run_size, n_stats + n_forcing + 1) and thetas has shape
              (n_runs * run_size, nd_dim + rescale_dim).
