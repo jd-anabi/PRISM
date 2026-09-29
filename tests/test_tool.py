@@ -4188,6 +4188,39 @@ def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(t
     assert "--clarity-min" in r.stdout and "drive" in r.stdout, r.stdout
 
 
+def test_each_probes_mode_takes_exactly_its_own_flags():
+    """Past the framing every subcommand shares -- the configuration, the name and note, the seed and
+    help -- each mode's flags are exactly its own, so a flag registered on the wrong mode fails here by
+    name. --cell, --repeats and --peak-window belong to band and drive, never to mask. The drive
+    strengths' default phrase states the fixed grid it describes."""
+    import argparse
+    from core.diagnostics import probes
+    from core.tool.help_defaults import BEHAVIOUR, DEFAULT_CLASS
+    framing = {"-h", "--help", "--bounds", "--model", "--device", "--name", "--note", "--seed"}
+    p = build_parser().subcommands["probes"]
+    modes = {name: sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
+             for name, sub in a.choices.items()}
+    own = {name: set(sub._option_string_actions) - framing for name, sub in modes.items()}
+    assert own == {
+        "band": {"--cell", "--lengths", "--multipliers", "--drives", "--repeats", "--cycle-caps", "--cv-max",
+                 "--phase-max", "--snr-min", "--sup-min", "--peak-window"},
+        "mask": {"--prior", "--num-runs", "--run-size", "--chi-k-fixed"},
+        "drive": {"--cell", "--t-obs", "--repeats", "--detune", "--strengths", "--free-min", "--captured-max",
+                  "--peak-window", "--clarity-min"},
+    }, own
+    assert all(framing - {"-h", "--help"} <= set(sub._option_string_actions) for sub in modes.values())
+    # the drive's run count and clarity threshold say what pure noise does to the clarity, and its
+    # recording length that one the time grid cannot hold is refused
+    helps = {flag: modes["drive"]._option_string_actions[flag].help
+             for flag in ("--repeats", "--clarity-min", "--t-obs")}
+    assert "pure noise" in helps["--repeats"].lower() and "pure noise" in helps["--clarity-min"].lower(), helps
+    assert "time grid" in helps["--t-obs"] and "refused" in helps["--t-obs"], helps
+    assert DEFAULT_CLASS[("probes drive", "--strengths")] == (
+        BEHAVIOUR, "sixteen from 0.01 to 20, plus the configured chi drive")
+    grid = probes._DRIVE_STRENGTHS
+    assert (len(grid), grid[0], grid[-1]) == (16, 0.01, 20.0) and list(grid) == sorted(set(grid))
+
+
 def _probe_drive_argv():
     """``probes drive`` on the master box and its spontaneous cell, CPU."""
     bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")

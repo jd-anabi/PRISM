@@ -91,7 +91,11 @@ reported in model units and in the cell's force unit, with suggested Forcing
 lines for a cell file, which are logged and recorded, never written. There is
 no linearity test, and the phase locking is reported, never judged. No clear
 oscillation, a drive at or above 0.9 x Nyquist, or a drive within a bin of
-the own-peak window is recorded with nothing judged.
+the own-peak window is recorded with nothing judged. Warned, while the
+strengths are still judged: a --clarity-min that does not clear the clarity
+pure noise reaches with these runs and samples (recorded), fewer than 30
+cycles of the peak in the recording, and a drive whose second to fifth
+harmonic lands within a bin of the own-peak window.
 
 The check changes nothing. Its default strengths include the configured chi
 drive's, but that row cannot certify the chi drive: its verdict depends on the
@@ -204,9 +208,11 @@ def _register_drive(modes) -> None:
     drive.add_argument("--cell", required=True, metavar="PATH",
                        help="the cell file whose ground truth is driven")
     _value_flag(drive, _DRIVE, "--t-obs", dest="t_obs_s", type=float, metavar="S",
-                help="recording length, in seconds, of the undriven runs and of every driven ensemble")
+                help="recording length, in seconds, of the undriven runs and of every driven ensemble; one "
+                     "longer than the pre-simulated time grid holds is refused")
     _value_flag(drive, _DRIVE, "--repeats", type=int, metavar="N",
-                help="noise repeats per ensemble, undriven and at each strength")
+                help="noise repeats per ensemble, undriven and at each strength; the fewer the runs, the "
+                     "higher the clarity pure noise reaches, and the record states that level")
     _value_flag(drive, _DRIVE, "--detune", type=float, metavar="X",
                 help="the drive frequency, as a multiple of the cell's own peak frequency; it must differ "
                      "from 1 by more than --peak-window")
@@ -224,7 +230,9 @@ def _register_drive(modes) -> None:
                      "never narrower than two frequency bins either side")
     _value_flag(drive, _DRIVE, "--clarity-min", type=float, metavar="X",
                 help="smallest peak clarity -- the undriven peak bin's power over the median power -- that "
-                     "counts as an oscillation; below it no strength is judged")
+                     "counts as an oscillation; below it no strength is judged. Pure noise reaches a clarity "
+                     "that grows as the runs fall: the record states it, and a threshold that does not "
+                     "clear it is warned")
     _value_flag(drive, _DRIVE, "--seed", type=int, metavar="N", help="the random seed for the whole run")
     drive.set_defaults(handler=_drive, chi_mode=False, chi_n_freqs=None, interrupt_note=PROBES_INTERRUPT_NOTE)
 

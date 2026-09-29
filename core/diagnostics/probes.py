@@ -1179,7 +1179,22 @@ DRIVE_NOTES = (
     "The phase-locking value is reported and never judged.",
     "The drive is detuned from the peak frequency so that the own-peak window reads the cell's own "
     "rhythm and not the drive; every verdict is read at that detune.",
+    "Pure noise scores a clarity too, the higher the fewer the runs: noise_clarity states the level for "
+    "this run's size -- typical, and the one 1 in 100 noise ensembles reaches -- and a clarity threshold "
+    "that does not clear it cannot tell an oscillation from noise.",
 )
+
+#: Fewer cycles of the peak than this in the recording, and the drive lies only a few frequency bins
+#: from the own-peak window: (detune - 1) times the cycles.
+_FEW_CYCLES = 30.0
+
+#: What a record with so few cycles adds to its notes.
+FEW_CYCLES_NOTE = ("This recording fits fewer than 30 cycles of the peak, so the drive lies only a few "
+                   "frequency bins from the own-peak window: unless it falls on a bin, its leakage into the "
+                   "window can make a captured cell read in between or free-running.")
+
+#: The drive's harmonics checked against the own-peak window, as the band check checks its probes'.
+_HARMONIC_ORDERS = (2, 3, 4, 5)
 
 #: The configured chi drive's own row carries this note: it is driven here at the detuned frequency,
 #: never at a chi probe's.
@@ -1224,6 +1239,18 @@ def _undriven(x0: torch.Tensor, dt: float) -> _Undriven:
     f_peak = chi.peak_freq(x0, dt).double()
     return _Undriven(freqs, power, omega0, clarity, float(torch.quantile(f_peak, 0.5)), float(f_peak.std()),
                      float(torch.quantile(x0.amax(dim=-1) - x0.amin(dim=-1), 0.5)))
+
+
+def _oscillating(clarity, clarity_min: float) -> bool:
+    """Whether the undriven ensemble counts as an oscillation: a clarity AT or above ``clarity_min``.
+    The clarity arrives as a float or None (not measured), and None is no oscillation."""
+    return clarity is not None and clarity >= clarity_min
+
+
+def _reaches(freq: float, lo: int, hi: int, df: float) -> bool:
+    """Whether ``freq`` lies less than one frequency bin from the own-peak window's bins ``[lo, hi)``:
+    closer than that, a tone that does not fall on a bin leaks straight into the window."""
+    return lo - 1 < freq / df < hi
 
 
 def _drive_verdict(ratio, free_min: float, captured_max: float):
@@ -1314,9 +1341,18 @@ def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float =
     each is a result -- recorded with every verdict null and one warning, and nothing driven: no clear
     oscillation (a clarity below ``clarity_min``), a drive at or above 0.9 x Nyquist, and a drive less
     than one frequency bin from the own-peak window, which is never narrower than two bins either side
-    and so can reach past the detune on a short recording. Measures only: see the module docstring.
+    and so can reach past the detune on a short recording.
 
-    :param t_obs_s: the recording length in seconds, long enough for at least one sample.
+    Three more are warned and recorded while the strengths are still judged. The clarity pure noise
+    reaches with this many runs and samples is computed before the spend and recorded, and a
+    ``clarity_min`` that does not clear it is warned: noise passing it would be judged as a cell. Fewer
+    than 30 cycles of the peak in the recording put the drive few bins from the window, where an
+    off-bin drive's leakage can hide capture. And a drive whose harmonic, second to fifth, lands within
+    a bin of the window -- a sub-harmonic detune -- lets a nonlinear cell's harmonic refill it. Measures
+    only: see the module docstring.
+
+    :param t_obs_s: the recording length in seconds, long enough for at least one sample and no longer
+                    than the pre-simulated time grid holds.
     :param repeats: noise runs per ensemble, at least 2.
     :param detune: the drive frequency as a multiple of the peak frequency; it must differ from 1 by more
                    than ``peak_window``.
@@ -1352,6 +1388,13 @@ def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float =
     if geom.n_obs < 1:
         refuse("drive_t_obs", f"{_what('drive_t_obs')} must be long enough for at least one sample; "
                               f"{t_obs_s:g} s gives none.")
+    n_grid = cfg.t.shape[0]
+    if geom.n_fine > n_grid:
+        # refused, never clipped: a clipped run would record one length and measure another
+        fit = (n_grid - cfg.steady_idx) // geom.subsample
+        longest = math.floor(fit * cfg.dt_exp / cfg.get_unit_conversion_factor("s") * 1000) / 1000
+        refuse("drive_t_obs", f"{_what('drive_t_obs')} must fit the pre-simulated time grid, which holds at "
+                              f"most {longest:.3f} s for this cell; got {t_obs_s:g} s.")
     repeats = require_at_least("drive_repeats", repeats, 2)
     peak_window = require_between("drive_peak_window", peak_window, 0, 1, open_lo=True, open_hi=True)
     detune = require_positive("drive_detune", detune)
@@ -1386,15 +1429,14 @@ def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float =
     f_eff = _force_scale(rs, sim_idx)
     force_scale = float(f_eff[0])                        # one cell: every run's is the same
     plv_column = FEATURE_LABELS.index("G6_plv")
+    n_obs = geom.n_obs
+    # what pure noise of this size scores, known before the spend: the spectrum's bins above zero
+    # frequency are the samples' half
+    noise = {"median": orch._num(probe_math.noise_clarity(repeats, n_obs // 2, 0.5)),
+             "p99": orch._num(probe_math.noise_clarity(repeats, n_obs // 2, 0.99))}
+    notes = list(DRIVE_NOTES)
 
     with store.create("diagnostic", cfg, name=name, note=note) as w:
-        n_grid = cfg.t.shape[0]
-        if geom.n_fine > n_grid:
-            n_fit = (n_grid - cfg.steady_idx) // geom.subsample
-            geom = probe_math.Geometry(n_fit, cfg.steady_idx + n_fit * geom.subsample, geom.subsample)
-            log.warning(f"[drive] a {t_obs_s:g} s recording runs past the pre-simulated time grid, so it is "
-                        f"measured over the {geom.n_obs * dt / per_s:.3f} s that fit.")
-        n_obs = geom.n_obs
         log.info(f"[drive] driving the cell at {_count(len(strengths), 'strength', 'strengths')} from "
                  f"{strengths[0]:g} to {strengths[-1]:g}, {repeats} runs each over {n_obs * dt / per_s:g} s "
                  f"({n_obs} samples), beside the configured chi drive {configured['chi_f0']:g}")
@@ -1405,13 +1447,22 @@ def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float =
             u = _undriven(x0, dt)
             omega0, clarity = u.omega0, orch._num(u.clarity)
             f_drive = detune * omega0                    # NaN when the peak was not measured
-            oscillating = clarity is not None and clarity >= clarity_min
+            oscillating = _oscillating(clarity, clarity_min)
             omega0_hz = orch._num(omega0 * per_s)
+            cycles = orch._num(omega0 * n_obs * dt)
             log.info(f"[drive] undriven: the ensemble's own peak is at {_fmt(omega0_hz, '.3f')} Hz; per run, "
                      f"median {u.peak_median * per_s:.3f} Hz, spread {u.peak_spread * per_s:.3f} Hz; clarity "
-                     f"{_fmt(clarity, '.3g')} (peak over median power); peak-to-peak {u.peak_to_peak:.4g}; "
-                     f"{_fmt(orch._num(omega0 * n_obs * dt), '.4g')} cycles in the recording")
-            not_judged = None
+                     f"{_fmt(clarity, '.3g')} (peak over median power; pure noise of this size scores "
+                     f"{_fmt(noise['median'], '.3g')} typically, {_fmt(noise['p99'], '.3g')} in 1 of 100 "
+                     f"ensembles); peak-to-peak {u.peak_to_peak:.4g}; {_fmt(cycles, '.4g')} cycles in the "
+                     f"recording")
+            if noise["p99"] is not None and clarity_min <= noise["p99"]:
+                log.warning(f"[drive] the clarity threshold {clarity_min:g} does not clear the clarity pure "
+                            f"noise reaches with {repeats} runs of {n_obs} samples -- {noise['median']:.3g} "
+                            f"typically, {noise['p99']:.3g} in 1 of 100 noise ensembles -- so passing it "
+                            f"does not tell an oscillation from noise; more runs or a higher threshold "
+                            f"does. This ensemble's clarity is {_fmt(clarity, '.3g')}.")
+            not_judged, harmonic = None, None
             if not oscillating:
                 said = ("could not be measured" if clarity is None
                         else f"is {clarity:.3g}, below the {clarity_min:g} that counts as an oscillation")
@@ -1423,15 +1474,30 @@ def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float =
             else:
                 lo, hi = probe_math.own_peak_window(n_obs, omega0, peak_window, dt)
                 df = 1.0 / (n_obs * dt)
-                if lo - 1 < f_drive / df < hi:
+                if _reaches(f_drive, lo, hi, df):
                     not_judged = (f"the drive at {f_drive * per_s:.3f} Hz is less than one frequency bin "
                                   f"from the own-peak window ({lo * df * per_s:.3f} to "
                                   f"{(hi - 1) * df * per_s:.3f} Hz over this recording, never narrower than "
                                   f"two bins either side), so the window would read the drive; a longer "
                                   f"recording or a detune further from 1 moves it clear")
+                else:
+                    harmonic = next((k for k in _HARMONIC_ORDERS if _reaches(k * f_drive, lo, hi, df)), None)
             if not_judged is not None:
                 log.warning(f"[drive] {not_judged}: nothing was driven, and no strength is judged")
             else:
+                if cycles < _FEW_CYCLES:
+                    log.warning(f"[drive] only {cycles:.3g} cycles of the peak fit in the recording, fewer "
+                                f"than {_FEW_CYCLES:g}: the drive lies {abs(detune - 1.0) * cycles:.3g} "
+                                f"frequency bins from the peak, and unless it falls on a bin its leakage "
+                                f"into the own-peak window can make a captured cell read in between or "
+                                f"free-running; a longer recording avoids it")
+                    notes.append(FEW_CYCLES_NOTE)
+                if harmonic is not None:
+                    log.warning(f"[drive] the drive's harmonic {harmonic}, at "
+                                f"{harmonic * f_drive * per_s:.3f} Hz, lands within a bin of the own-peak "
+                                f"window: a nonlinear cell's response "
+                                f"there can refill the window and hide capture; a detune away from 1/2, 1/3, "
+                                f"1/4 and 1/5 avoids it")
                 log.info(f"[drive] driving at {detune:g} x the peak frequency, {f_drive * per_s:.3f} Hz, "
                          f"phase pi/2, each strength times the force scale {force_scale:.4g}")
                 for row in rows:
@@ -1508,23 +1574,26 @@ def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float =
                      "captured")
         else:
             log.info(_forcing_lines(suggested))
-        for text in DRIVE_NOTES:
+        for text in notes:
             log.info(f"[drive] note: {text}")
 
         results = {
-            "omega0": {"cell_units": orch._num(omega0), "hz": orch._num(omega0 * per_s)},
+            "omega0": {"cell_units": orch._num(omega0), "hz": omega0_hz},
             "peak_per_trace_hz": {"median": orch._num(u.peak_median * per_s),
                                   "spread": orch._num(u.peak_spread * per_s)},
-            "clarity": clarity, "oscillating": oscillating, "peak_to_peak": orch._num(u.peak_to_peak),
-            "cycles_in_recording": orch._num(omega0 * n_obs * dt), "n_obs": n_obs,
+            "clarity": clarity, "noise_clarity": noise, "oscillating": oscillating,
+            "peak_to_peak": orch._num(u.peak_to_peak), "cycles_in_recording": cycles, "n_obs": n_obs,
+            # the lowest harmonic of the drive that lands within a bin of the own-peak window; None when
+            # none does, and when the run stopped short of checking (no oscillation, Nyquist, or the
+            # drive itself within a bin of the window)
             "drive_frequency": {"cell_units": orch._num(f_drive), "hz": orch._num(f_drive * per_s),
-                                "detune": detune},
+                                "detune": detune, "harmonic": harmonic},
             "force_scale": orch._num(force_scale), "strengths": rows,
             "strongest_free_running": None if strongest is None else {
                 "strength": strongest["strength"], "cell_force": strongest["cell_force"]},
             "weakest_captured": None if weakest is None else {
                 "strength": weakest["strength"], "cell_force": weakest["cell_force"]},
-            "chi_f0_row": chi_f0_row, "suggested_forcing": suggested, "notes": list(DRIVE_NOTES)}
+            "chi_f0_row": chi_f0_row, "suggested_forcing": suggested, "notes": notes}
 
         def column(key):
             return np.asarray([np.nan if row[key] is None else row[key] for row in rows], dtype=float)

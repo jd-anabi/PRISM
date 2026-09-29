@@ -3225,7 +3225,7 @@ class _EntryWriter:
 
 
 class _EntryStore:
-    """The store surface the fifteen entries touch, over nothing. Every method a stage hands its
+    """The store surface the entries touch, over nothing. Every method a stage hands its
     WORKING config to (create, load_prior, load_posterior) writes on it first (_leak) and then, for
     the "boom" case, raises _Injected. A name of "taken" is refused as the real store refuses one."""
 
@@ -3696,7 +3696,7 @@ _REFUSAL_FIELDS = {
     "probe_band": "band_repeats",
     "probe_mask": "mask_num_runs",
     "probe_drive": "drive_repeats",
-    "run_fdt": "cell",                             # a cell with no FDT normalisation constant
+    "run_fdt": "cell",                               # a cell with no FDT normalisation constant
     "run_param_study_cli": "cell",                   # the same check, before the first phase's spend
     "compare": "compare_records",                    # one record, for a mode that draws at least two
 }

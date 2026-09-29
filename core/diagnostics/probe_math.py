@@ -141,6 +141,25 @@ def own_peak_ratio(forced: torch.Tensor, reference: torch.Tensor, omega0: float,
     return kept / max(base, 1e-30)
 
 
+def noise_clarity(repeats: int, n_bins: int, q: float) -> float:
+    """The clarity pure white noise scores -- its ensemble spectrum's highest bin above zero frequency
+    over its median bin there -- as the ``q`` quantile over noise ensembles of ``repeats`` runs whose
+    spectra hold ``n_bins`` bins above zero frequency. NaN when there are no such bins.
+
+    Analytic, not simulated. For Gaussian white noise each bin of one demeaned run's power spectrum
+    above zero frequency is an independent exponential variable (the one real bin at the sampling
+    limit aside), so each bin of the mean over ``repeats`` runs is an independent Gamma variable of
+    shape ``repeats``, and the noise's own scale cancels in the ratio. The highest of ``n_bins`` of
+    them lies below the Gamma quantile at ``q ** (1 / n_bins)`` with probability ``q``; the median bin
+    is taken at the Gamma median, which it approaches as the bins grow. Checked against simulated
+    noise measured the way the drive check measures a cell."""
+    from scipy import special
+    if n_bins < 1:
+        return float("nan")
+    top = special.gammainccinv(repeats, -math.expm1(math.log(q) / n_bins))
+    return float(top / special.gammaincinv(repeats, 0.5))
+
+
 def circular_spread(z: torch.Tensor) -> float:
     """The circular standard deviation of the phases of complex ``z``, in radians: 0 when every entry
     points one way, growing without bound as the phases spread round the circle. Each entry counts
