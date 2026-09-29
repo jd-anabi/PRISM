@@ -553,6 +553,8 @@ def test_every_registry_default_is_the_trees_own_default():
     }
     for key, expected in owned_by_a_signature.items():
         assert FIELDS[key].default == expected, (key, expected, FIELDS[key].default)
+    # the probe checks share one seed key, so its default must be every mode's
+    assert _default(probes.probe_mask, "seed") == _default(probes.probe_band, "seed")
     p = argparse.ArgumentParser()
     config_args.add_config_flags(p)
     assert FIELDS["device"].default == p.get_default("device") == "auto"

@@ -3684,7 +3684,7 @@ _REFUSAL_FIELDS = {
     "channel_ablation": "rows",
     "probe_band": "band_repeats",
     "probe_mask": "mask_num_runs",
-    "run_fdt": "cell",                              # a cell with no FDT normalisation constant
+    "run_fdt": "cell",                               # a cell with no FDT normalisation constant
     "run_param_study_cli": "cell",                   # the same check, before the first phase's spend
     "compare": "compare_records",                    # one record, for a mode that draws at least two
 }

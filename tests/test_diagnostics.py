@@ -2098,27 +2098,57 @@ def test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_tw
         50 * 14.1 * 1.380649e-2 * 300 / 62.14 / 10.0, rel=1e-3)
 
 
-def _mask_record(tag, lo, hi, *, n_points=5000, k_pad=12):
-    """Rows lo..hi of a designed four-row batch: row 2 is too slow for the band's top, row 1 loses one
-    probe to a shortened lock-in, row 3 loses one to the packer -- 5 of 12 probes masked in all."""
+#: A 5000-unit recording sampled every half unit: a sampling interval of 1 would hide a length or a
+#: Nyquist limit computed the wrong way round.
+_MASK_DT, _MASK_POINTS = 0.5, 10_000
+#: The duration fractions of the three probes, shared by every row as training shares them.
+_MASK_FRAC = (1.0, 0.2, 1.0)
+#: Row kinds: (the row's own peak, its three multipliers after placement, the probes the packer keeps).
+#:   full    every probe clears the floor.
+#:   short   between the band's ends -- its bottom would miss the floor at full length, so placement lifted
+#:           its probes -- and it loses the probe the duration draw shortened.
+#:   slow    too slow even at the band's top, its probes parked there: all three miss the floor.
+#:   packer  as full, but the packer drops one lock-in.
+#:   fast    one probe at 0.9 x Nyquist and one non-finite, neither possible in training.
+#:   wide    one valid probe outside the band, which the packer drops -- not possible in training either.
+_MASK_ROWS = {"full": (0.02, (0.1, 0.2, 0.3), 3), "short": (0.004, (0.15, 0.2, 0.3), 2),
+              "slow": (0.0008, (0.3, 0.3, 0.3), 0), "packer": (0.02, (0.1, 0.2, 0.3), 2),
+              "fast": (0.8, (0.3, 1.2, float("nan")), 1), "wide": (0.02, (0.1, 0.2, 0.6), 2)}
+
+
+def _mask_record(tag, lo, hi, kinds=("full", "short", "slow", "packer"), *, k_pad=12):
+    """Rows lo..hi of a batch whose rows are ``kinds``, built as the training generator builds them: each
+    probe driven at its row's peak times its multiplier, locked in over its duration fraction of the
+    recording under the 20-cycle ceiling, and masked when not finite, at 0.9 x Nyquist or below 2 cycles.
+    The default batch masks 5 of its 12 probes: 3 too slow, 1 shortened, 1 at the packer."""
     from core.SBI.chi_probes import ProbeRecord
-    f_peak = torch.tensor([0.02, 0.02, 0.0001, 0.02], dtype=torch.float64)[lo:hi]
-    u = torch.log(torch.tensor([0.1, 0.2, 0.3], dtype=torch.float64)).expand(4, 3)[lo:hi]
-    valid = torch.tensor([[1, 1, 1], [0, 1, 1], [0, 0, 0], [1, 1, 1]], dtype=torch.bool)[lo:hi]
-    live = torch.tensor([3, 2, 0, 2])[lo:hi]
-    return ProbeRecord(batch_tag=tag, lo=lo, hi=hi, f_peak=f_peak, duration_frac=torch.ones(3), k=3, u=u,
-                       logcyc=torch.log(f_peak.unsqueeze(1) * u.exp() * n_points), valid=valid,
+    rows = [_MASK_ROWS[k] for k in kinds][lo:hi]
+    f_peak = torch.tensor([r[0] for r in rows], dtype=torch.float64)
+    mult = torch.tensor([r[1] for r in rows], dtype=torch.float64)
+    freq = f_peak.unsqueeze(1) * mult
+    n_k = torch.tensor([max(1, round(f * _MASK_POINTS)) for f in _MASK_FRAC], dtype=torch.float64)
+    usable = torch.isfinite(freq) & (freq > 0) & (freq < 0.9 * 0.5 / _MASK_DT)
+    ceiling = torch.floor(20.0 / freq.clamp(min=1e-30) / _MASK_DT).clamp(min=1.0)
+    cycles = freq * torch.where(usable, torch.minimum(ceiling, n_k), n_k) * _MASK_DT
+    live = torch.tensor([r[2] for r in rows])
+    return ProbeRecord(batch_tag=tag, lo=lo, hi=hi, f_peak=f_peak,
+                       duration_frac=torch.tensor(_MASK_FRAC, dtype=torch.float64), k=3, u=torch.log(mult),
+                       logcyc=torch.log(cycles.clamp(min=1e-30)), valid=usable & (cycles >= 2.0),
                        packed_mask=torch.arange(k_pad).unsqueeze(0) < live.unsqueeze(1),
-                       dt_exp=1.0, n_points=n_points)
+                       dt_exp=_MASK_DT, n_points=_MASK_POINTS)
 
 
 def _mask_generator(script, calls):
     """In place of pipeline.gen_training_data: per batch, the warnings an abandoned attempt left, then
-    each committed range's own masked-probe warning, then the records, handed over at commit."""
+    each committed range's own masked-probe warning, then the records, handed over at commit. Each call's
+    arguments are recorded bound to the real generator's signature, read before the patch."""
+    import inspect
     import warnings
+    from core.SBI import pipeline
+    signature = inspect.signature(pipeline.gen_training_data)
 
     def _gen(*a, probe_observer=None, **kw):
-        calls.append(kw)
+        calls.append(signature.bind(*a, probe_observer=probe_observer, **kw).arguments)
         for tag, stale, records in script:
             for text in stale:
                 warnings.warn(text)
@@ -2139,6 +2169,7 @@ def _mask_prior(store, cfg):
 
 
 def test_probes_mask_splits_the_thrown_out_probes_by_cause_over_the_committed_row_ranges(store, monkeypatch):
+    import numpy as np
     from core import config
     from core.diagnostics import probe_mask
     from core.SBI import pipeline
@@ -2155,9 +2186,10 @@ def test_probes_mask_splits_the_thrown_out_probes_by_cause_over_the_committed_ro
         d = probe_mask(cfg, prior, num_runs=2, run_size=4, name="mask1")
     assert len(caught) == 4, "every warning still reaches the hook that was in force"
     r, kw = d.results, calls[0]
+    assert kw["prior"] is prior.prior and kw["forcing_prior"] is prior.force_prior
     assert kw["checkpoint"] is None and kw["chi_mode"] is True and kw.get("theta_transform") is None
     assert (kw["chi_f0"], kw["chi_freq_bounds"]) == (config.CHI_F0, config.CHI_FREQ_BOUNDS)
-    assert (kw["n_runs"], kw["run_size"]) == (2, 4)
+    assert (kw["n_runs"], kw["run_size"], kw["chi_k_fixed"]) == (2, 4, None)
     assert store.list("simulation") == []
     assert (d.variant, d.manifest.parents, d.manifest.fingerprints["gmm"]) == ("mask", {"prior": prior.id}, prior.fingerprint)
     assert (r["probes"], r["live"], r["masked"]) == (24, 14, 10)
@@ -2165,13 +2197,24 @@ def test_probes_mask_splits_the_thrown_out_probes_by_cause_over_the_committed_ro
     assert (c["cycle_floor"]["count"], c["too_slow_at_band_top"]["count"],
             c["shortened_by_duration_draw"]["count"], c["non_finite_lock_in"]["count"]) == (8, 6, 2, 2)
     assert r["invariants"] == {"non_finite_frequency": 0, "at_or_above_nyquist": 0, "out_of_band": 0, "hold": True}
+    assert r["attribution"] == {"floor_label_at_or_above_the_floor": 0, "shortened_label_at_full_length": 0,
+                                "holds": True}
     assert r["per_batch"]["fractions"] == [pytest.approx(5 / 12)] * 2 and r["per_batch"]["sd"] == 0.0
-    assert r["omega0"]["hz"][2] == pytest.approx(20.0)
+    assert r["per_batch"]["k"] == [3, 3]
+    assert r["omega0"]["hz"][2] == pytest.approx(12.0)             # the median of 0.8, 4 and 20 Hz rows
     assert r["rows"] == {"total": 8, "zero_live": 2, "one_live": 0}
     assert r["span"]["values"][1] == pytest.approx(3.0) and r["span"]["single_probe_rows"] == 0
     assert r["dominant_cause"] == "too_slow_at_band_top"
-    assert r["cross_check"] == {"row_ranges": 3, "mismatches": [], "abandoned_attempt_warnings": 1}
+    assert r["cross_check"] == {"row_ranges": 3, "batches": {"expected": 2, "committed": 2}, "coverage": [],
+                                "mismatches": [], "abandoned_attempt_warnings": 1, "holds": True}
     assert "fixed probe-generator seed" in d.settings["probe_layout"]
+    assert d.settings["configured"]["probe_count"] == {"drawn_per_batch_from": [config.CHI_K_MIN_TRAIN, 12]}
+    assert np.load(d.path / "probe_mask.npz")["batch_k"].tolist() == [3, 3]
+
+    with only_masked_probe_warnings():
+        d = probe_mask(cfg, prior, num_runs=2, run_size=4, chi_k_fixed=3, name="mask1k3")
+    assert calls[1]["chi_k_fixed"] == 3
+    assert d.settings["chi_k_fixed"] == d.settings["configured"]["probe_count"] == 3
 
 
 def test_probes_mask_records_and_warns_a_count_the_production_warning_does_not_confirm(store, monkeypatch,
@@ -2193,16 +2236,20 @@ def test_probes_mask_records_and_warns_a_count_the_production_warning_does_not_c
     with only_masked_probe_warnings():
         d = probe_mask(cfg, prior, num_runs=1, run_size=4, name="mask2")
     check = d.results["cross_check"]
-    assert check["mismatches"] == [{"batch_tag": t1, "lo": 0, "hi": 4, "audit": 5, "production": 4}]
-    assert (check["row_ranges"], check["abandoned_attempt_warnings"]) == (1, 0)
+    assert check["mismatches"] == [{"batch_tag": t1, "lo": 0, "hi": 4, "audit": {"masked": 5, "total": 12},
+                                    "production": {"masked": 4, "total": 12}}]
+    assert (check["row_ranges"], check["abandoned_attempt_warnings"], check["holds"]) == (1, 0, False)
     said = [m.getMessage() for m in caplog.records
             if m.name == "core.diagnostics.probes" and m.levelname == "WARNING"]
     assert sum("does not match" in m for m in said) == 1, said
+    assert any("5 of 12" in m and "4 of 12" in m for m in said), said
 
 
 def test_the_mask_audit_agrees_with_the_production_warnings_on_real_training_rows(monkeypatch):
     """The training generator itself -- its schedule, probe draw, placement, lock-in, packer and
-    masked-probe warning -- on a stand-in cell, audited from what its observer handed over."""
+    masked-probe warning -- on the real cell with a stand-in solver, audited from what its observer
+    handed over. The split of the cycle floor is checked against a plain per-probe count."""
+    import math
     from core import cli, config
     from core.diagnostics import probes
     from core.rng import seeded
@@ -2229,13 +2276,30 @@ def test_the_mask_audit_agrees_with_the_production_warnings_on_real_training_row
             chi_f0=config.CHI_F0, chi_freq_bounds=config.CHI_FREQ_BOUNDS, chi_k_pad=4,
             chi_max_cycles=config.CHI_MAX_CYCLES, n_vars=cfg.inits_tensor.shape[-1],
             dtype=cfg.hw.dtype, device=cfg.hw.device, probe_observer=records.append)
-    res = probes._audit(cfg, records, warned)
+    res = probes._audit(cfg, records, warned, num_runs=2, run_size=4)
     assert res["probes"] > 0 and res["masked"] > 0, res
-    assert res["cross_check"]["mismatches"] == [] and res["cross_check"]["row_ranges"] == len(records)
+    check = res["cross_check"]
+    assert check["holds"] and check["mismatches"] == [] and check["row_ranges"] == len(records), check
     assert res["masked"] == sum(int((~r.packed_mask[:, :r.k]).sum()) for r in records)
     inv, c = res["invariants"], res["causes"]
     assert (c["cycle_floor"]["count"] + c["non_finite_lock_in"]["count"] + inv["non_finite_frequency"]
             + inv["at_or_above_nyquist"] + inv["out_of_band"]) == res["masked"]
+    assert res["attribution"]["holds"], res["attribution"]
+    too_slow = shortened = 0
+    for rec in records:
+        full_cycles_at_top = rec.f_peak * (rec.n_points * rec.dt_exp) * config.CHI_FREQ_BOUNDS[1]
+        for b in range(rec.hi - rec.lo):
+            for j in range(rec.k):
+                freq = float(rec.f_peak[b]) * math.exp(float(rec.u[b, j]))
+                if bool(rec.valid[b, j]) or not 0 < freq < 0.9 * 0.5 / rec.dt_exp:
+                    continue
+                if float(full_cycles_at_top[b]) < config.CHI_MIN_CYCLES:
+                    too_slow += 1
+                else:
+                    shortened += 1
+                    assert float(rec.duration_frac[j]) < 1.0
+    assert (c["too_slow_at_band_top"]["count"], c["shortened_by_duration_draw"]["count"]) == (too_slow, shortened)
+    assert too_slow + shortened == c["cycle_floor"]["count"] > 0
 
 
 @pytest.mark.parametrize("kw, field", [
@@ -2273,3 +2337,115 @@ def test_probes_mask_refuses_a_config_that_is_not_chi_or_not_config_pys_band(sto
             probe_mask(cfg, prior, num_runs=1, run_size=1)
         assert e.value.field is None and words in str(e.value), str(e.value)
     assert _diagnostic_dirs(store) == []
+
+
+def test_probes_mask_refuses_a_user_model_out_of_sync_with_its_bounds_as_a_prior_load_does(store, monkeypatch):
+    """The simulator binds parameter columns by position, so a user model whose definition no longer
+    lists its parameters in the bounds file's order is refused before the spend -- by the same check,
+    in the same words, as loading a prior for training."""
+    from types import SimpleNamespace
+    from core import orchestrator, registry
+    from core.diagnostics import probe_mask
+    from core.SBI import pipeline
+    cfg = _nad_cfg(chi_mode=True)
+    prior = _mask_prior(store, cfg)
+    stale = SimpleNamespace(compiled=SimpleNamespace(param_names=list(reversed(list(cfg.params_dict)))))
+    monkeypatch.setattr(registry, "is_user_model", lambda name: True)
+    monkeypatch.setattr(registry, "get", lambda name: stale)
+    monkeypatch.setattr(pipeline, "gen_training_data", lambda *a, **k: pytest.fail("simulated before the refusal"))
+    said = []
+    for call in (lambda: probe_mask(cfg, prior, num_runs=1, run_size=1),
+                 lambda: orchestrator.build_prior(cfg, "mp", False, store=store)):
+        with pytest.raises(Refusal) as e:
+            call()
+        said.append((e.value.field, str(e.value)))
+    assert said[0] == said[1] and said[0][0] is None and "out of sync" in said[0][1], said
+    assert _diagnostic_dirs(store) == []
+
+
+def test_the_mask_cross_check_pairs_each_warning_with_its_own_row_range():
+    """Under nested row halving a batch warns for attempts it then abandons. Here [0,8) fails without a
+    warning; [0,4) commits masking 2; [4,8) warns 3 and fails; its halves [4,6) and [6,8) commit masking
+    1 and nothing. Each committed range is paired with its own warning and the abandoned one is set
+    aside. A range the audit counts as masking nothing, when the generator warned about it, is a
+    mismatch, never an abandoned attempt."""
+    from core.diagnostics import probes
+    cfg = _nad_cfg(chi_mode=True)
+    tag = "training batch 1/1 [t_scale=3.73, T=5000, n_fine=59000, N_points=10000, rows=8]"
+    kinds = ("packer", "full", "short", "full", "short", "full", "full", "full")
+    records = [_mask_record(tag, lo, hi, kinds) for lo, hi in ((0, 4), (4, 6), (6, 8))]
+    check = probes._audit(cfg, records, [(tag, 2, 12), (tag, 3, 12), (tag, 1, 6)],
+                          num_runs=1, run_size=8)["cross_check"]
+    assert (check["mismatches"], check["abandoned_attempt_warnings"], check["holds"]) == ([], 1, True), check
+    quiet = [_mask_record(tag, 0, 4, ("full",) * 4)]
+    check = probes._audit(cfg, quiet, [(tag, 3, 12)], num_runs=1, run_size=4)["cross_check"]
+    assert check["mismatches"] == [{"batch_tag": tag, "lo": 0, "hi": 4, "audit": {"masked": 0, "total": 12},
+                                    "production": {"masked": 3, "total": 12}}], check
+    assert check["abandoned_attempt_warnings"] == 0 and not check["holds"]
+
+
+def test_probes_mask_finds_a_batch_and_rows_the_audit_never_saw(store, monkeypatch, caplog):
+    """Three batches asked for, two reached the audit, and the second of those only for half its rows:
+    both are findings, recorded and warned in the one record that says the audit does not match."""
+    from core.diagnostics import probe_mask
+    from core.SBI import pipeline
+    from tests._fixtures import only_masked_probe_warnings
+    cfg = _nad_cfg(chi_mode=True)
+    prior = _mask_prior(store, cfg)
+    t1, t2 = (f"training batch {k}/3 [t_scale=3.73, T=5000, n_fine=59000, N_points=10000, rows=4]" for k in (1, 2))
+    script = [(t1, [], [_mask_record(t1, 0, 4)]), (t2, [], [_mask_record(t2, 0, 2)])]
+    monkeypatch.setattr(pipeline, "gen_training_data", _mask_generator(script, []))
+    with only_masked_probe_warnings():
+        check = probe_mask(cfg, prior, num_runs=3, run_size=4, name="seen").results["cross_check"]
+    assert check["batches"] == {"expected": 3, "committed": 2} and not check["holds"]
+    assert [(c["batch_tag"], c["ranges"], c["rows"]) for c in check["coverage"]] == [(t2, [[0, 2]], 4)]
+    said = [m.getMessage() for m in caplog.records
+            if m.name == "core.diagnostics.probes" and m.levelname == "WARNING"]
+    found = [m for m in said if "does not match" in m]
+    assert len(found) == 1 and "2 of the 3 batches" in found[0] and t2 in found[0], said
+
+
+def test_probes_mask_reports_a_cause_that_cannot_fire_in_training_as_a_broken_invariant(store, monkeypatch,
+                                                                                      caplog):
+    """A probe at 0.9 x Nyquist, one whose frequency is not finite and a valid one outside the band are
+    each counted under their own reason -- never as the cycle floor -- and a warning says a cause that
+    cannot fire in training fired. At a half-unit sampling interval the limit is 0.9 cycles per unit, so
+    the valid probe at 0.24 is below it."""
+    from core.diagnostics import probe_mask
+    from core.SBI import pipeline
+    from tests._fixtures import only_masked_probe_warnings
+    cfg = _nad_cfg(chi_mode=True)
+    prior = _mask_prior(store, cfg)
+    t1 = "training batch 1/1 [t_scale=3.73, T=5000, n_fine=59000, N_points=10000, rows=2]"
+    script = [(t1, [], [_mask_record(t1, 0, 2, ("fast", "wide"))])]
+    monkeypatch.setattr(pipeline, "gen_training_data", _mask_generator(script, []))
+    with only_masked_probe_warnings():
+        r = probe_mask(cfg, prior, num_runs=1, run_size=2, name="broken").results
+    assert r["invariants"] == {"non_finite_frequency": 1, "at_or_above_nyquist": 1, "out_of_band": 1, "hold": False}
+    c = r["causes"]
+    assert (r["masked"], c["cycle_floor"]["count"], c["non_finite_lock_in"]["count"]) == (3, 0, 0)
+    assert r["dominant_cause"] is None and r["cross_check"]["holds"]
+    said = [m.getMessage() for m in caplog.records
+            if m.name == "core.diagnostics.probes" and m.levelname == "WARNING"]
+    assert sum("cannot fire in training" in m for m in said) == 1, said
+
+
+def test_the_mask_audit_flags_a_masked_probe_its_causes_do_not_explain(caplog):
+    """A probe masked for a reason the audit does not know -- valid by every rule it checks, locked in
+    over the whole recording -- would otherwise be counted under the cycle floor as shortened by the
+    duration draw. The labels are checked against the record, and a label it contradicts is a finding."""
+    import dataclasses
+    from core.diagnostics import probes
+    cfg = _nad_cfg(chi_mode=True)
+    tag = "training batch 1/1 [t_scale=3.73, T=5000, n_fine=59000, N_points=10000, rows=1]"
+    rec = _mask_record(tag, 0, 1, ("full",))
+    odd = dataclasses.replace(rec, valid=torch.tensor([[False, True, True]]),
+                              packed_mask=torch.arange(12).unsqueeze(0) < 2)
+    res = probes._audit(cfg, [odd], [(tag, 1, 3)], num_runs=1, run_size=1)
+    assert res["causes"]["shortened_by_duration_draw"]["count"] == 1
+    assert res["attribution"] == {"floor_label_at_or_above_the_floor": 1, "shortened_label_at_full_length": 1,
+                                  "holds": False}
+    probes._log_mask(res)
+    said = [m.getMessage() for m in caplog.records
+            if m.name == "core.diagnostics.probes" and m.levelname == "WARNING"]
+    assert sum("a masking rule the audit does not know" in m for m in said) == 1, said

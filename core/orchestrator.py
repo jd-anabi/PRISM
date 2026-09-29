@@ -54,7 +54,8 @@ from .runs import RUN_BOUNDARY_FILES, public_entry
 from .SBI.overlay import emit_overlay_figures as _emit_overlay_figures
 from .SBI.run_guards import (_find_nd_gmm, _gmm_fingerprint,  # noqa: E402
                              _assert_prior_used_matches_posterior, _assert_prior_matches_region,
-                             _assert_chi_config_is_deliberate, _log_params_for)
+                             _assert_chi_config_is_deliberate, _assert_user_model_in_sync,
+                             _log_params_for)
 from .SBI import (embedded_network, pipeline, analysis, decorrelate, chi, derived, overlay, ppc,
                   truncate,
                   statistics, training_checkpoint)
@@ -652,16 +653,8 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
 
     # User-model guard: the bounds ND section order MUST equal the compiled param order (torch.unbind
     # binds columns positionally). A hand-edited JSON over a stale Bounds file would mis-bind silently.
-    from core import registry
-    if registry.is_user_model(cfg.model):
-        spec = registry.get(cfg.model)
-        expected = list(spec.compiled.param_names)
-        actual = list(cfg.params_dict.keys())
-        if actual != expected:
-            # field=None: the fix is a re-save in the model builder, which no inference control names.
-            raise Refusal(
-                f"Model '{cfg.model}' is out of sync with its bounds file: definition uses {expected}, "
-                f"bounds file lists {actual}. Re-save the model from the Settings model builder.")
+    # One check, shared with the mask audit, which loads a prior to simulate from it too.
+    _assert_user_model_in_sync(cfg)
 
     if not build_new and ref is not None:
         loaded = store.load_prior(cfg, ref)

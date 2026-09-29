@@ -59,12 +59,18 @@ Runs --num-runs batches of --run-size rows through the training generator
 itself, over the prior, at the configured band and drive, and splits every
 masked probe by cause: too slow for the cycle floor even at the band's top over
 the full recording, shortened below the floor by the duration draw, or a
-non-finite lock-in. Each row range's count is checked against the generator's
-own masked-probe warning. No simulation cache is written.
+non-finite or zero lock-in. Each row range's count is checked against the
+generator's own masked-probe warning, and every batch and row asked for must
+reach the audit. No simulation cache is written.
 
 The audit changes nothing: its record states the configured band, drive, slot
-count, cycle floor and ceiling it ran at.
+count, cycle floor and ceiling it ran at, and the probe counts it audited.
 """
+
+#: ``probes mask``'s bounds file is checked against the prior it loads, never a posterior.
+MASK_BOUNDS_HELP = ("bounds file: which parameters are inferred, in what order, and the box. It must be "
+                    "the one the prior was built with -- the store refuses a prior whose model, parameter "
+                    "order, box or log-box mask differs.")
 
 
 def _value_flag(p, leaf, flag, *, help, **kw):
@@ -134,7 +140,7 @@ def _register_mask(modes) -> None:
     text = "why are training probes thrown out, over a prior?"
     mask = modes.add_parser("mask", help=text, description=text, epilog=MASK_EPILOG, allow_abbrev=False,
                             formatter_class=argparse.RawDescriptionHelpFormatter)
-    config_args.add_config_flags(mask, chi=False)
+    config_args.add_config_flags(mask, chi=False, bounds_help=MASK_BOUNDS_HELP)
     add_name_flags(mask)
     _value_flag(mask, _MASK, "--prior", required=True, metavar="REF",
                 help="prior artifact to audit, by name or id; it is loaded, never built")

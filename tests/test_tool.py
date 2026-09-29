@@ -4117,11 +4117,20 @@ def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(t
     for flag in ("--chi", "--no-chi", "--chi-k", "--chi-f0", "--chi-band", "--f0", "--prior", "--posterior",
                  "--num-runs", "--strengths", "--t-obs"):
         assert flag not in band._option_string_actions, flag
-    for flag in ("--chi", "--no-chi", "--chi-k", "--cell", "--lengths", "--strengths", "--posterior"):
+    for flag in ("--chi", "--no-chi", "--chi-k", "--chi-f0", "--chi-band", "--f0", "--cell", "--lengths",
+                 "--strengths", "--posterior"):
         assert flag not in mask._option_string_actions, flag
     for mode in (band, mask):
         assert mode.get_default("chi_mode") is True
         assert mode.get_default("interrupt_note") == tool_probes.PROBES_INTERRUPT_NOTE
+    # the probe count mask can hold is training's own range, from the floor of its per-batch draw
+    assert f"from {config.CHI_K_MIN_TRAIN} to" in mask._option_string_actions["--chi-k-fixed"].help
+    # mask's bounds file is checked against the prior it loads; every other subcommand keeps its sentence
+    from core.tool import config_args
+    mask_bounds = mask._option_string_actions["--bounds"].help
+    assert "the prior" in mask_bounds and "posterior" not in mask_bounds, mask_bounds
+    assert (band._option_string_actions["--bounds"].help == config_args.BOUNDS_HELP
+            == build_parser().subcommands["train"]._option_string_actions["--bounds"].help)
 
     capsys.readouterr()
     assert main(["probes"]) == 2

@@ -186,7 +186,7 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     # tool-only (the probe checks). The four grids and the phase threshold have no default value:
     # without them the check follows a rule (the configured band and drive, this cell's lengths, the
     # configured cycle ceiling; the phase not judged), which the help states in words.
-    Field("probe_seed", "the probe check's random seed", "0"),                         # probe_band
+    Field("probe_seed", "the probe check's random seed", "0"),                         # probe_band, probe_mask
     Field("probe_lengths", "the recording lengths, in seconds", None),
     Field("probe_multipliers", "the probe frequencies, as multiples of the peak frequency", None),
     Field("probe_drives", "the non-dimensional drive amplitudes", None),

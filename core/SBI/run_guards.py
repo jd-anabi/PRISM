@@ -159,6 +159,29 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
         f"for every future run.")
 
 
+def _assert_user_model_in_sync(cfg: SimConfig) -> None:
+    """Refuse a user model whose bounds file no longer lists its ND parameters in the order its
+    definition does.
+
+    The simulators bind parameter columns by position (``torch.unbind``), so a hand-edited definition
+    over a stale bounds file would simulate every row with its values in the wrong places, silently.
+    A built-in model passes. Run before anything is simulated by every stage that loads a prior to
+    simulate from it: loading a prior for training and the probe checks' mask audit.
+
+    :raises Refusal: (field None) naming both orders. The fix is a re-save in the model builder, which
+        no inference control or flag names.
+    """
+    from core import registry                       # lazy, as in _log_params_for
+    if not registry.is_user_model(cfg.model):
+        return
+    expected = list(registry.get(cfg.model).compiled.param_names)
+    actual = list(cfg.params_dict.keys())
+    if actual != expected:
+        raise Refusal(
+            f"Model '{cfg.model}' is out of sync with its bounds file: definition uses {expected}, "
+            f"bounds file lists {actual}. Re-save the model from the Settings model builder.")
+
+
 def _log_params_for(cfg: SimConfig):
     """Which ND parameter names go in a LOG box, for this config's model.
 

@@ -26,7 +26,13 @@ class UsageError(Refusal):
     (which recordings a mode takes, which drive keys exist). Raised after parsing; exit code 2."""
 
 
-def add_config_flags(p, *, chi: bool = True) -> None:
+#: ``--bounds``'s help on every subcommand that states nothing of its own.
+BOUNDS_HELP = ("bounds file: which parameters are inferred, in what order, and the box. It must be the one "
+               "any posterior this command loads was trained with -- the store refuses a mismatch in "
+               "model, order, box or mode.")
+
+
+def add_config_flags(p, *, chi: bool = True, bounds_help: "str | None" = None) -> None:
     """The config flags every SBI subcommand takes.
 
     ``--bounds`` is required on all of them, and it is one rule rather than a default: the bounds file
@@ -36,11 +42,11 @@ def add_config_flags(p, *, chi: bool = True) -> None:
     ``chi=False`` leaves out ``--chi`` and ``--chi-k`` and nothing else, for a subcommand that sets
     the observation mode itself: a probe check measures the chi probes, so it builds its config in chi
     mode through its own parser defaults, and a chi flag there could only contradict it.
+
+    ``bounds_help`` replaces ``BOUNDS_HELP`` for a subcommand whose bounds file is checked against
+    something other than a posterior -- ``probes mask`` loads a prior.
     """
-    p.add_argument("--bounds", required=True, metavar="PATH",
-                   help="bounds file: which parameters are inferred, in what order, and the box. It "
-                        "must be the one any posterior this command loads was trained with -- the "
-                        "store refuses a mismatch in model, order, box or mode.")
+    p.add_argument("--bounds", required=True, metavar="PATH", help=bounds_help or BOUNDS_HELP)
     p.add_argument("--model", default=None, metavar="NAME",
                    help="model name" + default_text("the bounds file's parent folder, upper-cased"))
     if chi:
