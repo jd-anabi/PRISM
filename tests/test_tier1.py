@@ -21,9 +21,7 @@ Cheap by design: every fast test but the live runner's replaces ``pipeline.gen_o
 recordings are one to two seconds and batches are two of four rows. The live runner solves five
 milliseconds for real. One slow test runs the real ``smoke`` chain on the tier-1 box.
 """
-import re
 import warnings
-from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -37,7 +35,7 @@ from core.SBI import training_checkpoint as tc
 from core.SBI.run_guards import _log_params_for
 from core.sim_config import SimConfig
 from tests._fixtures import (_FakeDP, _nad_cfg, _prior_artifact, _tiny_nadrowski_gen_prior,
-                             stand_in_gen_obs, stub_calibration_battery)
+                             only_masked_probe_warnings, stand_in_gen_obs, stub_calibration_battery)
 
 TIER1_BOX = config.BOUNDS_PATH / "nadrowski" / "master_tier1.txt"
 TIER1_CELL = config.CELL_PATH / "nadrowski" / "master_spont_tier1.txt"
@@ -141,23 +139,6 @@ def _assert_every_drive_used_the_derived_scale(spy, f, rtol=2e-3):
         assert torch.allclose(e["f_scale"], torch.full_like(e["f_scale"], f), rtol=rtol), e["f_scale"]
 
 
-_MASKED_PROBES = re.compile(r"chi: \d+/\d+ probes masked")
-
-
-@contextmanager
-def _only_masked_probe_warnings():
-    """Capture every Python warning raised inside and check each one on exit. At one-to-two-second
-    recordings a chi batch may mask a probe too short to lock in, and it says so with a count. Whether
-    a given batch does depends on its unseeded (t_scale, T_obs) draw, so zero or more such lines are
-    allowed, and nothing else is. Yields the captured list."""
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        yield caught
-    others = [f"{w.category.__name__}: {w.message}" for w in caught
-              if not (w.category is UserWarning and _MASKED_PROBES.search(str(w.message)))]
-    assert not others, others
-
-
 def test_the_tier1_box_parses_to_temperature_in_place_of_the_force_scale():
     """The tier-1 box declares T where other boxes declare f_scale, which switches the derivation on;
     the simulator's index renames T's column to f_scale, and the config carries what the relation
@@ -185,7 +166,7 @@ def test_training_rows_keep_temperature_while_every_simulation_gets_the_derived_
     cfg = with_truth(tier1_cfg(chi=chi))
     monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
     spy = force_scale_spy(monkeypatch)
-    with _only_masked_probe_warnings() as caught:
+    with only_masked_probe_warnings() as caught:
         x, theta = pipeline.gen_training_data(
             cfg.model, _narrow_prior(cfg), orchestrator.build_forcing_prior(cfg), cfg.t, 4, 2,
             cfg.steady_idx, cfg.dt_nd_min, len(cfg.params_dict), cfg.forcing_idx, cfg.rescale_idx,
@@ -209,7 +190,7 @@ def test_the_calibration_set_simulates_at_the_derived_force_scale(monkeypatch):
     cfg.t_max_exp = 2 * cfg.t_min_exp                      # a test config: keep the recordings short
     monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
     spy = force_scale_spy(monkeypatch)
-    with _only_masked_probe_warnings():
+    with only_masked_probe_warnings():
         x_cal, theta = orchestrator._draw_calibration_set(
             cfg, _narrow_prior(cfg), None, orchestrator.build_forcing_prior(cfg), n_cal=8, cal_n_scales=2)
     i_T = len(cfg.params_dict) + cfg.rescale_idx["T"]
@@ -250,7 +231,7 @@ def test_a_simulated_observation_and_its_predictive_checks_use_the_derived_force
     monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
     spy = force_scale_spy(monkeypatch)
     f = derived_force_scale(cfg)
-    with _only_masked_probe_warnings() as caught:
+    with only_masked_probe_warnings() as caught:
         obs = orchestrator.generate_observations(cfg, fig_sink=_close, name="tier1_obs")
         _assert_every_drive_used_the_derived_scale(spy, f, rtol=1e-5)
         spy.clear()

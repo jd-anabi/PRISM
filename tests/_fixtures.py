@@ -20,6 +20,7 @@ import inspect
 import os
 import textwrap
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import torch
@@ -503,6 +504,23 @@ def stand_in_gen_obs(model=None, params=None, t=None, inits=None, force=None, n_
                       device=device)
     out[0] = x
     return out
+
+
+@contextmanager
+def only_masked_probe_warnings():
+    """Capture every Python warning raised inside and check each one on exit. At one-to-two-second
+    recordings a chi batch may mask a probe too short to lock in, and it says so with a count. Whether
+    a given batch does depends on its unseeded (t_scale, T_obs) draw, so zero or more such lines are
+    allowed, and nothing else is. Yields the captured list."""
+    import re
+    import warnings
+    masked = re.compile(r"chi: \d+/\d+ probes masked")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        yield caught
+    others = [f"{w.category.__name__}: {w.message}" for w in caught
+              if not (w.category is UserWarning and masked.search(str(w.message)))]
+    assert not others, others
 
 
 def build_browse_store(root):
