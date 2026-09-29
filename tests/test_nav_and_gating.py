@@ -120,6 +120,15 @@ def _spont_cfg():
     return Cfg()
 
 
+def _chi_built_cfg():
+    """The chi twin of _spont_cfg: _chi_cfg's fields plus the two the Prior tab's post-build path
+    reads beyond them -- the drive amplitude its chi line prints and check_unit_consistency."""
+    cfg = _chi_cfg()
+    type(cfg).chi_f0 = 0.15
+    type(cfg).check_unit_consistency = lambda self: []
+    return cfg
+
+
 # ── the FDT and CrossVal panels and their figure watcher ─────────────────────────────────────────
 def test_fdt_panel_guard_translates_model_error_and_gate_admits_builtins(monkeypatch):
     """FDT supports HOPF/BP + additive-noise user models. An FDTModelError (a missing FDT parameter,
@@ -3331,6 +3340,34 @@ def test_the_prior_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing():
         assert refused[-1].field == key and f"must be {_rule_words(minimum)}" in refused[-1].message, \
             (key, refused[-1].message)
         field.setText(keep)
+
+
+def test_the_prior_tabs_chi_line_reads_the_summary_width_at_the_click(monkeypatch):
+    """The Prior tab's chi line states the conditioning layout, [S(n) | log T_obs | chi(m)]. Both widths
+    are read when the line is written, never typed in: a summary that gains or loses a feature must not
+    leave the tab printing the old width, as it once printed 41 while the block was 49 wide."""
+    from core.gui.screens.inference_screen import InferenceScreen
+    from core.gui.session import SbiSession
+    from core.SBI import statistics
+    from tests._fixtures import qt_app
+
+    qt_app()
+    inf = InferenceScreen()
+    cfg = _chi_built_cfg()
+    inf.session = SbiSession(draft=object(), cfg=None, inf_prior=_prior_stub())
+    inf.session.draft = type("D", (), {"make_config": lambda self, **kw: cfg})()
+    pp = inf.prior_panel
+    pp.bounds_source.set_direct(False)
+    pp.bounds_picker.combo.clear()
+    pp.bounds_picker.combo.addItem("master.txt", userData="master.txt")
+    pp.prior_picker.selected = lambda: ("abc123def456", False)      # a load: no knob box is read
+    sent = []
+    pp.dispatch = lambda fn, *a, **k: sent.append(fn)
+    monkeypatch.setattr(statistics, "SUMMARY_WIDTH", 50)
+    pp._build_prior()
+    assert sent, "the click did not reach its dispatch"
+    text = pp.log_pane.toPlainText()
+    assert "[S(50) |" in text, text
 
 
 def test_the_prior_tab_rows_are_labelled_from_the_control_table():

@@ -7,6 +7,7 @@ from core.artifacts import default_store
 from core.Helpers import file_manager
 from core.config import BOUNDS_PATH
 from core.refusals import Refusal, require_at_least, require_positive
+from core.SBI import statistics
 
 from ... import icons, settings
 from ...fields import label
@@ -226,11 +227,13 @@ class PriorPanel(_StagePanel):
             # Width from the SHARED rule, not 3*K: that was layout 1, where a probe's frequency was
             # implied by its slot. Under the padded probe set it is CHI_ELEM_W * chi_k_pad and does
             # not depend on K at all -- which is the entire point of the layout, so reporting the old
-            # formula here told the user the opposite of what the mode now does.
+            # formula here told the user the opposite of what the mode now does. The summary's width is
+            # read here too, never typed in: a typed one went stale once already when a feature was added.
             self.log_pane.append_line(
                 f"χ(ω) mode: {cfg.chi_n_freqs} drive frequencies over {lo:g}–{hi:g}×Ω₀ at ND amplitude "
                 f"{cfg.chi_f0:g}, each locked in over at most {cfg.chi_max_cycles:g} drive cycles; "
-                f"conditioning is [S(49) | log T_obs | χ({orchestrator.expected_forcing_dim(cfg)})] over "
+                f"conditioning is [S({statistics.SUMMARY_WIDTH}) | log T_obs | "
+                f"χ({orchestrator.expected_forcing_dim(cfg)})] over "
                 f"{cfg.chi_k_pad} probe slots. Train a NEW posterior (the width differs from a non-χ one).")
 
         # Passed, never written to config: orchestrator does `from .config import
