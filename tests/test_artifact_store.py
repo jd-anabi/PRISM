@@ -4037,6 +4037,38 @@ def test_a_resume_from_a_checkpoint_that_stores_no_eigenvalues_records_them_as_u
     assert any(s.startswith("[checkpoint] ") and "unknown" in s for s in said), said
 
 
+def test_a_resume_carries_the_stored_eigenvalues_under_the_checkpoint_prefix(store, monkeypatch, caplog):
+    """A cache that keeps its rotation's eigenvalues beside the rotation hands them to a resumed run,
+    which says so in an information record with their spread. The prefix is the checkpoint's, never the
+    Fisher's: no Fisher ran in this process, and a reader of the log must not be told one did."""
+    from core import orchestrator
+    from core.artifacts.identity import SimulationIdentity
+    from core.SBI import training_checkpoint as tc
+    from tests._fixtures import stubbed_training
+    h = stubbed_training(store, monkeypatch, rotate=True)
+
+    def fisher_must_not_run(*a, **k):
+        raise AssertionError("a resumed run recomputed the Fisher")
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", fisher_must_not_run)
+    Q, _ = torch.linalg.qr(torch.randn(h.P, h.P))
+    evals = [float(v) for v in range(h.P, 0, -1)]           # best P, worst 1: a spread of P
+    ident = SimulationIdentity.from_cfg(h.cfg, h.prior, 4, 2).to_dict()
+    d = tc.resolve_dir(ident, store.kind_dir("simulation"))
+    tc.create(d, ident, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2), inits=torch.zeros(4, 3),
+              V=Q, fisher_eigenvalues=evals, probe=torch.zeros(0), run_size=4, n_runs=2)
+    torch.save({"batches_done": 1, "complete": False, "rng": None}, d / "state.pt")
+    caplog.clear()
+    m = store.get("posterior", orchestrator.build_posterior(
+        h.cfg, h.prior, None, True, num_runs=2, checkpoint_every=1, **h.budget).id)
+    assert m.body["training"]["resumed_from_batch"] == 1
+    assert m.body["transform"]["fisher_eigenvalues"] == evals
+    mine = [r for r in caplog.records if r.name == "core.orchestrator"]
+    said = [r.getMessage() for r in mine if r.levelname == "INFO"]
+    assert any(s.startswith("[checkpoint] ") and "eigenvalues come with it" in s
+               and f"spread best/worst {h.P:.3g}" in s for s in said), said
+    assert not any(r.getMessage().startswith("[fisher]") for r in mine), [r.getMessage() for r in mine]
+
+
 def test_cal_n_scales_and_the_fisher_knobs_are_refused_not_clamped(store, monkeypatch):
     """The calibration operating-point count and the Fisher rotation's three knobs are REFUSED at
     stage entry, never clamped or defaulted below it. Each was a silent substitution: gen_cal_data
