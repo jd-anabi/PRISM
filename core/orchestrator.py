@@ -826,7 +826,9 @@ def build_posterior(
                      its manifest and the load path refuses it for general inference.
     :param observation / parent_posterior: for a TSNPE round, the LoadedObservation the region was
                      drawn around (its ``.digest`` is what the artifact records as what it is valid
-                     near) and the LoadedPosterior it was drawn from; recorded as parents.
+                     near) and the LoadedPosterior it was drawn from; recorded as parents. The
+                     acceptances the parent was loaded under (``parent_posterior.accepted``) are
+                     recorded in ``training.accepted``, which is empty without a parent.
     :param accept: LOAD path only. An ``artifacts.Accept``; a NON-AMORTIZED artifact is refused unless
                      ``accept.truncated`` (the Posterior tab passes it), and the flag is recorded.
     :param hidden_features: flow width per transform; None = config.NSF_HIDDEN_FEATURES.
@@ -1473,6 +1475,9 @@ def build_posterior(
                          "tsnpe_acceptance": _acc,
                          "tsnpe_containment": None if _tot is None else {"inside": int(_in), "total": int(_tot)},
                          "truth_containment": _containment,
+                         # The acceptances the parent was loaded under, so a round drawn from a
+                         # narrowed parent is marked as one; none without a parent.
+                         "accepted": list(getattr(parent_posterior, "accepted", None) or []),
                          "wall_seconds": time.time() - _t0},
         }
     # Read back through the loader: the freshly written artifact is verified exactly as a later load
@@ -1903,7 +1908,8 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
     containment of the recorded calibration targets printed beside it is what the override left.
 
     :param posterior / prior: the LoadedPosterior and the LoadedPrior it was trained from; the region
-                     comes off the posterior.
+                     comes off the posterior, and the acceptances it was loaded under
+                     (``posterior.accepted``) are recorded in ``results["accepted"]``.
     :param n_cal: calibration datasets for SBC/TARP; None = config.SBC_N_CAL.
     :param cal_n_scales: (t_scale, T_obs) operating points the calibration set is spread over; None =
                      config.CAL_N_SCALES.
@@ -2062,6 +2068,9 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             "n_cal": int(n_cal_used), "cal_n_scales": n_scales_used,
             "num_posterior_samples": nps,
             "verdict": verdict, "seed": seed_used,
+            # The acceptances the posterior was loaded under, as an inference records them, so a
+            # calibration of a narrowed posterior is marked as one.
+            "accepted": list(getattr(posterior, "accepted", None) or []),
         }
         # The stage's LAST record, so the window's log ends on the verdict.
         log.info(_verdict_message(verdict, seed_used, n_scales_used, n_cal_used))
@@ -2138,7 +2147,9 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
                      a simulated cell's truth) is put back on cfg by observation.install, so this runs
                      in a fresh session too. show_truth = the observation is a simulated cell.
     :param accept: Accept(other_observation=True) lets a NON-AMORTIZED posterior run on an observation
-                     other than its region's; the flag is recorded in the artifact.
+                     other than its region's. The artifact's ``results["accepted"]`` holds the
+                     acceptances the posterior was loaded under (``posterior.accepted``) plus this
+                     inference's own ``other_observation`` use.
     :param n_samples: posterior draws for the corner, the PPC and the summary (1000 = the historical
                      constant).
     :param fig_sink: Optional (title, fig) -> None display callback (a GUI embeds the figures). Every
@@ -2165,7 +2176,7 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
     # warning: outside its region a truncated flow extrapolates confidently.
     # Accept(other_observation=True) is the recorded exception (a simulated cell re-drawn with new
     # noise is the legitimate case).
-    _want, accepted = post.x_obs_digest, []
+    _want, used = post.x_obs_digest, False
     if _want is not None and observation.digest != _want:
         _msg = (f"[tsnpe] this posterior is NOT AMORTIZED. TSNPE trained it on a prior restricted to a "
                 f"region drawn around the observation with digest {_want}; the observation supplied has digest "
@@ -2181,7 +2192,12 @@ def infer_and_visualize(cfg: SimConfig, posterior: LoadedPosterior, observation:
         # posterior on the same foreign observation twice in one session must be told twice.
         warnings.warn(_msg + " Running anyway (accepted).", PreflightWarning, stacklevel=2,
                       skip_file_prefixes=RUN_BOUNDARY_FILES)
-        accepted = accept.used()
+        used = True
+    # The record: the acceptances the posterior was loaded under, plus this inference's own use of
+    # other_observation. So an inference on a narrowed posterior's own observation is marked as one too.
+    load = list(getattr(posterior, "accepted", None) or [])
+    accepted = [a for a in ("truncated", "other_observation")
+                if a in load or (a == "other_observation" and used)]
     # ONLY NOW: a refused inference must not leave the rejected observation's T_obs, probe frequencies
     # or ground truth on the session's cfg, where the next stage would silently run against them.
     observation.install(cfg)

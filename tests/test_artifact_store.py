@@ -1767,6 +1767,7 @@ def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(ti
     assert r.store.load_calibration(cal.id).results == res
     assert res["seed"] is None and res["verdict"]["threshold"] == pytest.approx(0.05 / len(keys)) and \
         [p["name"] for p in res["verdict"]["parameters"]] == keys
+    assert res["accepted"] == []
     with pytest.raises(ValueError, match="not the one this posterior was trained with"):
         orchestrator.validate_calibration(r.cfg, r.posterior, r.other_prior(), fig_sink=r.sink, n_cal=4, cal_n_scales=1)
 
@@ -1894,6 +1895,23 @@ def test_validate_without_a_seed_runs_on_in_the_callers_stream(store, monkeypatc
     assert cal.results["seed"] is None
 
 
+def test_a_calibration_records_the_acceptance_its_posterior_was_loaded_under(store, monkeypatch):
+    """A calibration of a posterior loaded with Accept(truncated=True) records that acceptance in its
+    results, and so in the results file written from them, as an inference does; a calibration of a
+    posterior loaded without it records none."""
+    from core import orchestrator
+    from tests._fixtures import stub_calibration_battery
+    seen = stub_calibration_battery(monkeypatch)
+    run = lambda: orchestrator.validate_calibration(_nad_cfg(), seen["posterior"], seen["prior"], n_cal=8,
+                                                    cal_n_scales=2, fig_sink=_close, store=store)
+    seen["posterior"].accepted = ["truncated"]
+    cal = run()
+    assert cal.results["accepted"] == ["truncated"]
+    assert json.loads((cal.path / "results.json").read_text(encoding="utf-8"))["accepted"] == ["truncated"]
+    seen["posterior"].accepted = []
+    assert run().results["accepted"] == []
+
+
 def test_inference_records_ppc_summary_and_ground_truth(tiny_run):
     from core import orchestrator
     r = tiny_run
@@ -1947,7 +1965,8 @@ def test_inference_refuses_a_foreign_observation_for_a_truncated_posterior_unles
     same = copy(r.posterior)
     same.posterior = reparam.TransformedPosterior(r.posterior.latent, r.posterior.posterior.T,
                                                   truncation=None, x_obs_digest=obs.digest)
-    assert orchestrator.infer_and_visualize(r.cfg, same, obs, fig_sink=r.sink, n_samples=20).results["accepted"] == []
+    same.accepted = ["truncated"]                 # loaded with Accept(truncated=True), run on its own observation
+    assert orchestrator.infer_and_visualize(r.cfg, same, obs, fig_sink=r.sink, n_samples=20).results["accepted"] == ["truncated"]
 
 
 def test_a_round_records_parent_posterior_and_observation_as_parents(tiny_run):
@@ -1966,6 +1985,7 @@ def test_a_round_records_parent_posterior_and_observation_as_parents(tiny_run):
                                          checkpoint_every=1)
     m = child.manifest
     assert m.body["amortized"] is False and child.posterior.truncation is not None
+    assert m.body["training"]["accepted"] == []
     assert m.parents["parent_posterior"] == r.posterior.id and m.parents["observation"] == obs.id
     assert m.parents["prior"] == r.prior.id and m.body["truncation"]["x_obs_digest"] == obs.digest
     sim = m.parents["simulation"]
@@ -1981,6 +2001,32 @@ def test_a_round_records_parent_posterior_and_observation_as_parents(tiny_run):
         orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2, hidden_features=8,
                                      num_transforms=1, stop_after_epochs=1, truncation=region, observation=other,
                                      parent_posterior=r.posterior)
+
+
+def test_a_narrowing_round_records_the_acceptance_its_parent_was_loaded_under(store, monkeypatch):
+    """A round drawn from a parent loaded with Accept(truncated=True) records that acceptance in its
+    training block; a round from a parent loaded without it, and an amortized run, record none."""
+    from types import SimpleNamespace
+    from core import orchestrator
+    from core.SBI import reparam, truncate, training_checkpoint as tc
+    from core.SBI.run_guards import _log_params_for
+    from tests._fixtures import stubbed_training
+    h = stubbed_training(store, monkeypatch)
+    T = reparam.build_inferred_bijection(h.cfg, log_params=_log_params_for(h.cfg))
+    region = truncate.TruncationRegion([0], [-50.0], [50.0], n_latent=h.P, x_obs_digest="d" * 16,
+                                       probe=tc.bijection_probe(T, h.P, device=h.cfg.hw.device))
+
+    def child_of(accepted):
+        parent = SimpleNamespace(id="20300101T000000", accepted=accepted,
+                                 manifest=SimpleNamespace(body={"transform": {"fisher_eigenvalues": None}}))
+        out = orchestrator.build_posterior(h.cfg, h.prior, None, True, num_runs=2, checkpoint_every=0,
+                                           truncation=region, parent_posterior=parent, **h.budget)
+        return store.get("posterior", out.id).body["training"]["accepted"]
+
+    assert child_of(["truncated"]) == ["truncated"]
+    assert child_of([]) == []
+    plain = orchestrator.build_posterior(h.cfg, h.prior, None, True, num_runs=2, checkpoint_every=0, **h.budget)
+    assert store.get("posterior", plain.id).body["training"]["accepted"] == []
 
 
 def test_no_literal_resource_paths_outside_config():
@@ -5230,6 +5276,19 @@ def test_render_lineage_walks_the_chain_and_prints_a_missing_parent(store):
     # an unknown ref is the store's own refusal, unchanged
     with pytest.raises(st.StoreError, match="no complete posterior"):
         render_lineage(store, "posterior", "nope")
+
+
+def test_the_lineage_report_prints_the_acceptance_a_calibration_and_a_narrowing_round_ran_under(store):
+    """The report reads a calibration's acceptance from its results and a posterior's from its training
+    block, and prints each on its own step."""
+    from core.artifacts import render_lineage
+    post = _make(store, "posterior", name="round",
+                 body={"mode": "chi", "conditioning": {"width": 50}, "transform": {}, "amortized": True,
+                       "truncation": None, "training": {"accepted": ["truncated"]}})
+    cal = _make(store, "calibration", name="cal", body={"results": {"n_cal": 4, "accepted": ["truncated"]}},
+                parents={"posterior": post.id})
+    text = render_lineage(store, "calibration", cal.id)
+    assert text.count("\n  accepted: truncated\n") == 2, text
 
 
 def test_render_lineage_resolves_what_a_comparison_compared(store):

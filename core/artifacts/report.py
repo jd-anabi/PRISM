@@ -175,18 +175,18 @@ def render_manifest(m) -> str:
 
 
 def _accepted(m) -> list:
-    """The escape hatches the artifact records (``Accept.used()``), or ``[]``.
+    """The escape hatches the artifact records, or ``[]``.
 
-    An inference writes them under ``body.results.accepted`` (``orchestrator.py:2176``) and so does
-    every diagnostic (``sbc.py:220``, ``identifiability.py:182,464``, ``ablation.py:203``); a
-    calibration records none -- there the flag only ever unlocked the load, and what is on record is
-    the posterior's own ``amortized: false``. So the key is read with ``.get`` and its absence is not a
-    gap.
+    An inference, a calibration and every diagnostic record the acceptances they ran under in
+    ``body.results.accepted``; a trained posterior records them in ``body.training.accepted`` -- a
+    narrowing round the ones its parent was loaded under, an amortized run none. A record written
+    before calibrations and posteriors kept the key has none, so it is read with ``.get`` and its
+    absence is not a gap.
     """
-    results = m.body.get("results")
-    if not isinstance(results, dict):
+    block = m.body.get("training" if m.kind == "posterior" else "results")
+    if not isinstance(block, dict):
         return []
-    return [str(a) for a in (results.get("accepted") or [])]
+    return [str(a) for a in (block.get("accepted") or [])]
 
 
 def _compared_lines(store, m) -> list:

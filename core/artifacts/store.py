@@ -96,10 +96,11 @@ class StoreError(Refusal):
 @dataclass(frozen=True)
 class Accept:
     """The ONLY escape hatches on the load path. An INFERENCE writes the flags used into its own
-    manifest's ``results.accepted``, so a number produced under one is marked; a calibration or a
-    TSNPE round built with one does not carry that mark itself -- there, the flag only ever unlocks
-    the load, and what is on record is the non-amortized posterior's own manifest, which already says
-    ``amortized: false``."""
+    manifest's ``results.accepted`` -- the ones its posterior was loaded under, plus its own
+    ``other_observation`` -- so a number produced under one is marked. A calibration and a narrowing
+    round are marked the same way: a calibration records the acceptances its posterior was loaded
+    under in its ``results.accepted``, and a narrowing round records the ones its parent was loaded
+    under in its own ``training.accepted``."""
     truncated: bool = False            # load a NON-AMORTIZED (TSNPE) posterior
     other_observation: bool = False    # infer with it on an observation other than its region's
 

@@ -239,11 +239,10 @@ def report(*artifacts) -> None:
 
 def add_accept_flags(p, *, other_observation: bool = False) -> None:
     """The tool REFUSES a non-amortized load by default, and these two map 1:1 onto
-    ``artifacts.Accept``. An INFERENCE records the flags used in its own artifact's
-    ``results.accepted``, so a number produced under one carries that fact with it; a calibration and
-    a TSNPE round do NOT carry that record themselves -- for those, the flags only ever unlock a load,
-    and what is on record instead is the non-amortized posterior's own manifest, which already says
-    ``amortized: false``."""
+    ``artifacts.Accept``. A calibration, a narrowing round and an inference each record the
+    acceptances they ran under, so a number produced under one carries that fact with it: an
+    inference and a calibration in their own artifact's ``results.accepted``, a narrowing round in
+    its posterior's ``training.accepted``."""
     p.add_argument("--accept-truncated", action="store_true",
                    help="load a NON-AMORTIZED (TSNPE) posterior. It is valid only near the "
                         "observation its region was drawn around; elsewhere the flow extrapolates.")
