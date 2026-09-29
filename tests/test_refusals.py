@@ -434,6 +434,11 @@ def test_refuse_appends_the_default_clause_to_the_callers_sentence_and_binds_the
     assert e.value.field == "cell"
     with pytest.raises(KeyError):
         refuse("not_a_field", "x")
+    from core.refusals import default_clause, default_text
+    assert default_clause("num_runs") == default_text("5000") == " (default 5000)"
+    assert default_clause("max_num_epochs") == " (default no ceiling)"
+    assert default_clause("min_valid") == " (default 0.5)"
+    assert default_clause("new_run") == ""
 
 
 def test_the_module_is_torch_free_and_imports_only_the_standard_library():
@@ -490,7 +495,13 @@ def test_every_registry_default_is_the_trees_own_default():
         "chi_max_cycles": "CHI_MAX_CYCLES",
     }
     for key, const in owned_by_config.items():
+        if key == "max_num_epochs":
+            continue                                    # the one named exception, just below
         assert FIELDS[key].default == str(getattr(config, const)), (key, const, FIELDS[key].default)
+    # The epoch cap is the largest 32-bit integer, which the trainer reads as no cap at all; the
+    # help and the refusal line say so in words rather than print the number.
+    assert config.TRAINING_MAX_NUM_EPOCHS == 2**31 - 1
+    assert FIELDS["max_num_epochs"].default == "no ceiling"
 
     def _default(fn, name):
         return inspect.signature(fn).parameters[name].default
@@ -507,7 +518,8 @@ def test_every_registry_default_is_the_trees_own_default():
         "m": str(_default(identifiability.identifiability_laplace, "m")),
         "m_noise": str(_default(identifiability.identifiability_laplace, "m_noise")),
         "rel": str(_default(identifiability.identifiability_laplace, "rel")),
-        "rows": str(_default(ablation.channel_ablation, "rows")),
+        "min_valid": str(_default(identifiability.identifiability_laplace, "min_valid")),
+        "rows":str(_default(ablation.channel_ablation, "rows")),
         "n_sweep": str(_default(ablation.channel_ablation, "n_sweep")),
     }
     for key, expected in owned_by_a_signature.items():

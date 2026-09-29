@@ -97,7 +97,9 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("num_transforms", "the number of flow transforms", "8"),                     # NSF_NUM_TRANSFORMS
     Field("learning_rate", "the learning rate", "0.001"),                              # TRAINING_LEARNING_RATE
     Field("stop_after_epochs", "the early-stop patience, in epochs", "20"),            # TRAINING_STOP_AFTER_EPOCHS
-    Field("max_num_epochs", "the maximum number of epochs", "2147483647"),             # TRAINING_MAX_NUM_EPOCHS
+    # TRAINING_MAX_NUM_EPOCHS is the largest 32-bit integer, which the trainer reads as no cap at all,
+    # so the default is said in words rather than printed as that number
+    Field("max_num_epochs", "the maximum number of epochs", "no ceiling"),
     Field("fisher_m", "the Fisher ensemble size per perturbation", "48"),              # REPARAM_FISHER_M
     Field("fisher_dz", "the Fisher central-difference step", "0.1"),                   # REPARAM_FISHER_DZ
     Field("fisher_points", "the number of Fisher operating points", "8"),              # REPARAM_FISHER_POINTS
@@ -177,7 +179,7 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("m", "the ensemble size", "32"),                                             # identifiability_laplace
     Field("m_noise", "the noise-floor ensemble size", "128"),                          # identifiability_laplace
     Field("rel", "the relative perturbation", "0.02"),                                 # identifiability_laplace
-    Field("min_valid", "the minimum valid fraction", None),
+    Field("min_valid", "the minimum valid fraction", "0.5"),                           # identifiability_laplace
     Field("rows", "the number of rows", "200000"),                                     # channel_ablation
     Field("n_sweep", "the number of sweep points", "33"),                              # channel_ablation
     Field("chi_k_fixed", "the fixed chi probe count", None),
@@ -211,21 +213,27 @@ def _what(key: str) -> str:
     return what[0].upper() + what[1:]
 
 
-def _default_clause(key: str) -> str:
+def default_text(value: str) -> str:
+    """" (default 5000)": the one form a default takes, in a refusal line and in the tool's help
+    alike, so the two never print it two ways."""
+    return f" (default {value})"
+
+
+def default_clause(key: str) -> str:
     """" (default 5000)", or "" for a field with no default."""
     default = FIELDS[key].default
-    return "" if default is None else f" (default {default})"
+    return "" if default is None else default_text(default)
 
 
 def refuse(key: str, message: str) -> NoReturn:
     """A Refusal for ``key`` with the field's default clause appended to the caller's own sentence,
     which carries its own period. For the refusals whose rule is not one of the ``require_*`` shapes
     below: a direction count above the latent width, a device that is not there."""
-    raise Refusal(message + _default_clause(key), field=key)
+    raise Refusal(message + default_clause(key), field=key)
 
 
 def _blank(key: str) -> NoReturn:
-    raise Refusal(f"{_what(key)} is blank{_default_clause(key)}.", field=key)
+    raise Refusal(f"{_what(key)} is blank{default_clause(key)}.", field=key)
 
 
 def require_given(key: str, value):
@@ -242,7 +250,7 @@ def require_finite(key: str, value) -> float:
         _blank(key)
     v = float(value)
     if not math.isfinite(v):
-        raise Refusal(f"{_what(key)} must be a finite number; got {value!r}{_default_clause(key)}.", field=key)
+        raise Refusal(f"{_what(key)} must be a finite number; got {value!r}{default_clause(key)}.", field=key)
     return v
 
 
@@ -253,7 +261,7 @@ def require_positive(key: str, value) -> float:
         _blank(key)
     v = float(value)
     if not math.isfinite(v) or v <= 0:
-        raise Refusal(f"{_what(key)} must be greater than 0; got {v:g}{_default_clause(key)}.", field=key)
+        raise Refusal(f"{_what(key)} must be greater than 0; got {v:g}{default_clause(key)}.", field=key)
     return v
 
 
@@ -265,7 +273,7 @@ def require_at_least(key: str, value, minimum: int) -> int:
         _blank(key)
     v = int(value)
     if v < minimum:
-        raise Refusal(f"{_what(key)} must be at least {minimum}; got {v}{_default_clause(key)}.", field=key)
+        raise Refusal(f"{_what(key)} must be at least {minimum}; got {v}{default_clause(key)}.", field=key)
     return v
 
 
@@ -279,7 +287,7 @@ def require_between(key: str, value, lo, hi, *, open_lo: bool = False, open_hi: 
     if not inside:
         ends = " (exclusive)" if (open_lo or open_hi) else ""
         raise Refusal(f"{_what(key)} must be between {lo:g} and {hi:g}{ends}; got {v:g}"
-                      f"{_default_clause(key)}.", field=key)
+                      f"{default_clause(key)}.", field=key)
     return v
 
 
@@ -296,7 +304,7 @@ def require_below(key: str, lo, hi) -> tuple:
     a, b = require_finite(key, lo), require_finite(key, hi)
     if not a < b:
         raise Refusal(f"{_what(key)} must have its lower bound below its upper bound; got {a:g} and "
-                      f"{b:g}{_default_clause(key)}.", field=key)
+                      f"{b:g}{default_clause(key)}.", field=key)
     return a, b
 
 
@@ -308,7 +316,7 @@ def require_choice(key: str, value, choices: tuple) -> str:
     v = str(value)
     if v not in choices:
         raise Refusal(f"{_what(key)} must be one of {', '.join(choices)}; got {value!r}"
-                      f"{_default_clause(key)}.", field=key)
+                      f"{default_clause(key)}.", field=key)
     return v
 
 
@@ -318,10 +326,10 @@ def require_file(key: str, path, what: str | None = None) -> str:
     field's own description stands in. A directory is not the file."""
     if path is None or not os.fspath(path).strip():
         kind = what or describe(key)
-        raise Refusal(f"{_what(key)} is blank: no {kind} file was given{_default_clause(key)}.", field=key)
+        raise Refusal(f"{_what(key)} is blank: no {kind} file was given{default_clause(key)}.", field=key)
     p = os.fspath(path)
     if not os.path.isfile(p):
-        raise Refusal(f"{_what(key)} was not found: {p!r}{_default_clause(key)}.", field=key)
+        raise Refusal(f"{_what(key)} was not found: {p!r}{default_clause(key)}.", field=key)
     return p
 
 
@@ -344,8 +352,8 @@ def require_note(key: str, text: str) -> str:
     if not trimmed:
         return ""
     if any(ch in trimmed for ch in "\n\r\t"):
-        raise Refusal(f"{_what(key)} must be one line; got {trimmed!r}{_default_clause(key)}.", field=key)
+        raise Refusal(f"{_what(key)} must be one line; got {trimmed!r}{default_clause(key)}.", field=key)
     if len(trimmed) > NOTE_MAX_CHARS:
         raise Refusal(f"{_what(key)} must be at most {NOTE_MAX_CHARS} characters; got "
-                      f"{len(trimmed)}{_default_clause(key)}.", field=key)
+                      f"{len(trimmed)}{default_clause(key)}.", field=key)
     return trimmed
