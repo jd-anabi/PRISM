@@ -95,15 +95,29 @@ def _ensemble_power(x: torch.Tensor, dt: float) -> tuple[torch.Tensor, torch.Ten
     return freqs, power
 
 
+def own_peak_window(n: int, omega0: float, window_frac: float, dt: float) -> tuple[int, int]:
+    """The own-peak window, as the bins ``[lo, hi)`` of the spectrum of ``n``-sample traces sampled
+    every ``dt``: the bin nearest ``omega0`` (a frequency, in cycles per unit of ``dt``) with
+    ``window_frac * omega0`` either side, never fewer than two bins either side, never the
+    zero-frequency bin. Empty (``lo >= hi``) when the traces have no bin above zero frequency.
+    ``omega0`` must be finite and positive."""
+    n_bins = n // 2 + 1
+    df = 1.0 / (n * dt)
+    i = min(round(omega0 / df), n_bins - 1)
+    hw = max(2, round(window_frac * omega0 / df))
+    return max(1, i - hw), min(n_bins, i + hw + 1)
+
+
 def own_peak_ratio(forced: torch.Tensor, reference: torch.Tensor, omega0: float, window_frac: float,
                    dt: float) -> float:
     """The power the forced ensemble keeps in the cell's own peak, over the undriven reference's.
 
     ``omega0`` is the undriven peak FREQUENCY in cell frequency units -- cycles per cell time unit, as
     the chi peak estimator returns it -- not an angular frequency; ``dt`` is the sample step in the
-    same time unit. The window is the bin nearest ``omega0`` with ``window_frac * omega0`` either
-    side, never fewer than two bins either side, and it never includes the zero-frequency bin. Near 1
-    the cell still runs free under the drive; near 0 the drive has captured it.
+    same time unit. The window is ``own_peak_window``'s: the bin nearest ``omega0`` with
+    ``window_frac * omega0`` either side, never fewer than two bins either side, and it never includes
+    the zero-frequency bin. Near 1 the cell still runs free under the drive; near 0 the drive has
+    captured it.
 
     NaN when ``omega0`` is not finite and positive (no peak to measure), and when the traces are too
     short to have any bin above zero frequency. The two ensembles must hold traces of one length, so
@@ -117,13 +131,9 @@ def own_peak_ratio(forced: torch.Tensor, reference: torch.Tensor, omega0: float,
             f"{reference.shape[-1]}; the two spectra must share one frequency axis.")
     if not (math.isfinite(omega0) and omega0 > 0):
         return float("nan")
-    freqs, p_forced = _ensemble_power(forced, dt)
+    _, p_forced = _ensemble_power(forced, dt)
     _, p_ref = _ensemble_power(reference, dt)
-    n_bins = freqs.shape[0]
-    df = 1.0 / (n * dt)
-    i = min(round(omega0 / df), n_bins - 1)
-    hw = max(2, round(window_frac * omega0 / df))
-    lo, hi = max(1, i - hw), min(n_bins, i + hw + 1)
+    lo, hi = own_peak_window(n, omega0, window_frac, dt)
     if lo >= hi:
         return float("nan")
     kept = float(p_forced[lo:hi].sum())

@@ -40,11 +40,13 @@ def add_config_flags(p, *, chi: bool = True, bounds_help: "str | None" = None) -
     unset one used to resolve the 12-dimensional spontaneous box behind the operator's back.
 
     ``chi=False`` leaves out ``--chi`` and ``--chi-k`` and nothing else, for a subcommand that sets
-    the observation mode itself: a probe check measures the chi probes, so it builds its config in chi
-    mode through its own parser defaults, and a chi flag there could only contradict it.
+    the observation mode itself through its own parser defaults: a probe check that measures the chi
+    probes builds its config in chi mode, the drive check with chi mode off, and a chi flag on either
+    could only contradict it.
 
     ``bounds_help`` replaces ``BOUNDS_HELP`` for a subcommand whose bounds file is checked against
-    something other than a posterior -- ``probes mask`` loads a prior.
+    something other than a posterior -- ``probes mask`` loads a prior, and ``probes drive`` needs a
+    Forcing section.
     """
     p.add_argument("--bounds", required=True, metavar="PATH", help=bounds_help or BOUNDS_HELP)
     p.add_argument("--model", default=None, metavar="NAME",

@@ -55,10 +55,14 @@ BASE_KEYS = (
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
                   "n_sweep", "chi_k_fixed",
                   # the probe checks: the seed, the band check's four grids, its repeat count and its
-                  # five pass thresholds, and the mask audit's batch count and batch size
+                  # five pass thresholds, the mask audit's batch count and batch size, and the drive
+                  # check's recording length, repeat count, detune, strengths, two verdict thresholds,
+                  # own-peak window and clarity threshold
                   "probe_seed", "probe_lengths", "probe_multipliers", "probe_drives", "band_repeats",
                   "probe_cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "band_peak_window",
-                  "mask_num_runs", "mask_run_size")
+                  "mask_num_runs", "mask_run_size",
+                  "drive_t_obs", "drive_repeats", "drive_detune", "drive_strengths", "free_min",
+                  "captured_max", "drive_peak_window", "clarity_min")
 
 
 def _shape(exc, key):
@@ -109,7 +113,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     reader and refuses an unknown key with a KeyError: a message can only be built for a field a
     front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 101, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 109, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -550,11 +554,21 @@ def test_every_registry_default_is_the_trees_own_default():
         "band_peak_window": str(_default(probes.probe_band, "peak_window")),
         "mask_num_runs": str(_default(probes.probe_mask, "num_runs")),
         "mask_run_size": str(_default(probes.probe_mask, "run_size")),
+        "drive_t_obs": str(_default(probes.probe_drive, "t_obs_s")),
+        "drive_repeats": str(_default(probes.probe_drive, "repeats")),
+        "drive_detune": str(_default(probes.probe_drive, "detune")),
+        "free_min": str(_default(probes.probe_drive, "free_min")),
+        "captured_max": str(_default(probes.probe_drive, "captured_max")),
+        "drive_peak_window": str(_default(probes.probe_drive, "peak_window")),
+        "clarity_min": str(_default(probes.probe_drive, "clarity_min")),
     }
     for key, expected in owned_by_a_signature.items():
         assert FIELDS[key].default == expected, (key, expected, FIELDS[key].default)
     # the probe checks share one seed key, so its default must be every mode's
-    assert _default(probes.probe_mask, "seed") == _default(probes.probe_band, "seed")
+    assert (_default(probes.probe_mask, "seed") == _default(probes.probe_band, "seed")
+            == _default(probes.probe_drive, "seed"))
+    # the drive strengths have no default value: without them the check follows a rule
+    assert _default(probes.probe_drive, "strengths") is None and FIELDS["drive_strengths"].default is None
     p = argparse.ArgumentParser()
     config_args.add_config_flags(p)
     assert FIELDS["device"].default == p.get_default("device") == "auto"

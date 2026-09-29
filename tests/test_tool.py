@@ -241,6 +241,14 @@ def _owned_defaults() -> dict:
         ("probes mask", "--num-runs"): sig(probes.probe_mask, "num_runs"),
         ("probes mask", "--run-size"): sig(probes.probe_mask, "run_size"),
         ("probes mask", "--seed"): sig(probes.probe_mask, "seed"),
+        ("probes drive", "--t-obs"): sig(probes.probe_drive, "t_obs_s"),
+        ("probes drive", "--repeats"): sig(probes.probe_drive, "repeats"),
+        ("probes drive", "--detune"): sig(probes.probe_drive, "detune"),
+        ("probes drive", "--free-min"): sig(probes.probe_drive, "free_min"),
+        ("probes drive", "--captured-max"): sig(probes.probe_drive, "captured_max"),
+        ("probes drive", "--peak-window"): sig(probes.probe_drive, "peak_window"),
+        ("probes drive", "--clarity-min"): sig(probes.probe_drive, "clarity_min"),
+        ("probes drive", "--seed"): sig(probes.probe_drive, "seed"),
         ("smoke", "--t-obs"): str(config.T_MIN_EXP_S),
         ("fdt", "--n-freqs"): str(fdt["n_freqs"]),
         ("fdt", "--ensemble-m"): str(fdt["ensemble_M"]),
@@ -4096,12 +4104,12 @@ def _probe_mask_argv(prior="mp"):
 
 
 def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(tmp_path, monkeypatch, capsys):
-    """The family's modes take no chi flag and no flag of another mode: each builds its own chi
-    configuration, and the band and drive it judges are config.py's. No parser in the family matches an
-    abbreviated option, so a prefix of one of its flags is an error rather than that flag -- a habitual
-    --chi-k on mask is refused, never read as --chi-k-fixed. Ctrl-C gets the family's own note --
-    nothing is kept and nothing resumes. ``--help`` costs no torch import, checked in a FRESH
-    interpreter because this process imported torch long ago."""
+    """The family's modes take no chi flag and no flag of another mode: band and mask build their own
+    chi configuration, drive builds one with chi mode off, and the band and drive any of them judges are
+    config.py's. No parser in the family matches an abbreviated option, so a prefix of one of its flags
+    is an error rather than that flag -- a habitual --chi-k on mask is refused, never read as
+    --chi-k-fixed. Ctrl-C gets the family's own note -- nothing is kept and nothing resumes. ``--help``
+    costs no torch import, checked in a FRESH interpreter because this process imported torch long ago."""
     import argparse
     import subprocess
     import sys
@@ -4111,18 +4119,26 @@ def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(t
     p = build_parser().subcommands["probes"]
     modes = {name: sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
              for name, sub in a.choices.items()}
-    assert set(modes) == {"band", "mask"}, sorted(modes)
+    assert set(modes) == {"band", "mask", "drive"}, sorted(modes)
     assert p.allow_abbrev is False and all(m.allow_abbrev is False for m in modes.values())
-    band, mask = modes["band"], modes["mask"]
+    band, mask, drive = modes["band"], modes["mask"], modes["drive"]
     for flag in ("--chi", "--no-chi", "--chi-k", "--chi-f0", "--chi-band", "--f0", "--prior", "--posterior",
-                 "--num-runs", "--strengths", "--t-obs"):
+                 "--num-runs", "--strengths", "--t-obs", "--detune", "--free-min", "--captured-max",
+                 "--clarity-min"):
         assert flag not in band._option_string_actions, flag
     for flag in ("--chi", "--no-chi", "--chi-k", "--chi-f0", "--chi-band", "--f0", "--cell", "--lengths",
-                 "--strengths", "--posterior"):
+                 "--strengths", "--posterior", "--t-obs", "--detune", "--peak-window", "--repeats"):
         assert flag not in mask._option_string_actions, flag
+    for flag in ("--chi", "--no-chi", "--chi-k", "--chi-f0", "--chi-band", "--f0", "--lengths", "--multipliers",
+                 "--drives", "--cycle-caps", "--cv-max", "--phase-max", "--snr-min", "--sup-min", "--prior",
+                 "--posterior", "--num-runs", "--run-size", "--chi-k-fixed"):
+        assert flag not in drive._option_string_actions, flag
     for mode in (band, mask):
         assert mode.get_default("chi_mode") is True
+    assert drive.get_default("chi_mode") is False and drive.get_default("chi_n_freqs") is None
+    for mode in (band, mask, drive):
         assert mode.get_default("interrupt_note") == tool_probes.PROBES_INTERRUPT_NOTE
+    assert drive._option_string_actions["--t-obs"].dest == "t_obs_s"
     # the probe count mask can hold is training's own range, from the floor of its per-batch draw
     assert f"from {config.CHI_K_MIN_TRAIN} to" in mask._option_string_actions["--chi-k-fixed"].help
     # mask's bounds file is checked against the prior it loads; every other subcommand keeps its sentence
@@ -4131,11 +4147,17 @@ def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(t
     assert "the prior" in mask_bounds and "posterior" not in mask_bounds, mask_bounds
     assert (band._option_string_actions["--bounds"].help == config_args.BOUNDS_HELP
             == build_parser().subcommands["train"]._option_string_actions["--bounds"].help)
+    # drive loads no posterior: its bounds file must declare the Forcing section it suggests values for
+    drive_bounds = drive._option_string_actions["--bounds"].help
+    assert "Forcing section" in drive_bounds and "posterior" not in drive_bounds, drive_bounds
 
     capsys.readouterr()
     assert main(["probes"]) == 2
     err = capsys.readouterr().err
-    assert "{band,mask}" in err and "variant" not in err, "a bare probes names its modes, not the dest"
+    assert "{band,mask,drive}" in err and "variant" not in err, "a bare probes names its modes, not the dest"
+    assert main([*_probe_drive_argv(), "--no-chi"]) == 2
+    assert main([*_probe_drive_argv(), "--strength", "0.1"]) == 2, "a prefix of --strengths is not --strengths"
+    assert main([*_probe_drive_argv(), "--lengths", "1"]) == 2
     assert main([*_probe_band_argv(), "--chi"]) == 2
     assert main([*_probe_band_argv(), "--sup", "0.4"]) == 2, "a prefix of --sup-min is not --sup-min"
     assert main([*_probe_band_argv(), "--cycle", "8"]) == 2, "a prefix of --cycle-caps is not --cycle-caps"
@@ -4156,13 +4178,57 @@ def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(t
     probe = ("import sys\n"
              "from core.tool import main\n"
              "rc = [main(['probes', '--help']), main(['probes', 'band', '--help']),\n"
-             "      main(['probes', 'mask', '--help'])]\n"
+             "      main(['probes', 'mask', '--help']), main(['probes', 'drive', '--help'])]\n"
              "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.'))\n"
-             "sys.exit(0 if rc == [0, 0, 0] and not bad else repr((rc, bad[:3])))\n")
+             "sys.exit(0 if rc == [0, 0, 0, 0] and not bad else repr((rc, bad[:3])))\n")
     r = subprocess.run([sys.executable, "-c", probe], cwd=str(config.REPO_ROOT),
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "--cycle-caps" in r.stdout and "band" in r.stdout and "--chi-k-fixed" in r.stdout, r.stdout
+    assert "--clarity-min" in r.stdout and "drive" in r.stdout, r.stdout
+
+
+def _probe_drive_argv():
+    """``probes drive`` on the master box and its spontaneous cell, CPU."""
+    bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    return ["probes", "drive", "--bounds", bounds, "--device", "cpu", "--cell", cell]
+
+
+def test_probes_drive_builds_a_non_chi_config_with_the_cell_and_forwards_every_knob(tmp_path, monkeypatch):
+    """Every flag reaches the stage as its keyword -- --t-obs as t_obs_s, the strengths as a list of
+    floats -- and nothing else does; a bare call forwards only the four the handler always passes, so
+    every default stays in the stage's signature. The positional config has chi mode off, the cell
+    loaded, and config.py's chi drive and band: nothing on the command line reaches them."""
+    from core import tool
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    calls = []
+
+    def _rec(*a, **kw):
+        calls.append((a, kw))
+        return SimpleNamespace(kind="diagnostic", path=tmp_path / "diagnostics" / "d1__1")
+
+    monkeypatch.setattr("core.diagnostics.probe_drive", _rec)
+    assert tool.main([*_probe_drive_argv(), "--t-obs", "2.5", "--repeats", "6", "--detune", "1.3",
+                      "--strengths", "0.05", "0.5", "4", "--free-min", "0.6", "--captured-max", "0.2",
+                      "--peak-window", "0.03", "--clarity-min", "4.5", "--seed", "3", "--name", "d1",
+                      "--note", "hello"]) == 0
+    (args, kw), = calls
+    assert set(kw) == {"name", "note", "fig_sink", "store", "t_obs_s", "repeats", "detune", "strengths",
+                       "free_min", "captured_max", "peak_window", "clarity_min", "seed"}
+    assert kw["strengths"] == [0.05, 0.5, 4.0] and all(isinstance(v, float) for v in kw["strengths"])
+    assert (kw["t_obs_s"], kw["repeats"], kw["detune"], kw["free_min"], kw["captured_max"], kw["peak_window"],
+            kw["clarity_min"], kw["seed"], kw["name"], kw["note"]) == (2.5, 6, 1.3, 0.6, 0.2, 0.03, 4.5, 3, "d1",
+                                                                       "hello")
+    cfg = args[0]
+    assert cfg.chi_mode is False and cfg.has_forcing and cfg.ground_truth is not None
+    assert (cfg.chi_f0, cfg.chi_freq_bounds) == (config.CHI_F0, config.CHI_FREQ_BOUNDS)
+
+    calls.clear()
+    assert tool.main(_probe_drive_argv()) == 0
+    (_, kw), = calls
+    assert set(kw) == {"name", "note", "fig_sink", "store"}, kw
+    assert tool.main([*_probe_drive_argv()[:-2]]) == 2 and len(calls) == 1, "--cell is required"
 
 
 def test_probes_mask_loads_its_prior_by_reference_and_forwards_every_knob(tmp_path, monkeypatch):

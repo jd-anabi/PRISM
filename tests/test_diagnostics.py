@@ -2449,3 +2449,313 @@ def test_the_mask_audit_flags_a_masked_probe_its_causes_do_not_explain(caplog):
     said = [m.getMessage() for m in caplog.records
             if m.name == "core.diagnostics.probes" and m.levelname == "WARNING"]
     assert sum("a masking rule the audit does not know" in m for m in said) == 1, said
+
+
+def _probe_said(caplog, level):
+    return [m.getMessage() for m in caplog.records if m.name == "core.diagnostics.probes" and m.levelname == level]
+
+
+def test_probes_drive_picks_the_leading_free_running_run_and_the_weakest_capture(store, monkeypatch, caplog):
+    import numpy as np
+    from core.diagnostics import probes, probe_drive
+    refill = lambda a: torch.where(a < 0.1, 1.0, torch.where(a < 0.2, 0.5, torch.where(a < 5.0, 0.1, 1.0)))
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(own_factor=refill))   # own peak on bin 125 at 5 s
+    d = probe_drive(_probe_cfg(chi=False), repeats=2, strengths=[0.01, 0.05, 0.1, 0.2, 1.0, 8.0], name="drive1")
+    r = d.results
+    assert [s["verdict"] for s in r["strengths"]] == ["free-running", "free-running", "in between",
+                                                    "captured", "captured", "free-running"]
+    assert r["strongest_free_running"]["strength"] == 0.05                    # never the refilled 8.0
+    assert r["strongest_free_running"]["cell_force"] == pytest.approx(0.5)
+    assert (r["weakest_captured"]["strength"], r["weakest_captured"]["cell_force"]) == (0.2, pytest.approx(2.0))
+    assert r["omega0"]["hz"] == pytest.approx(25.0) and r["drive_frequency"]["hz"] == pytest.approx(35.0)
+    assert r["oscillating"] is True and r["clarity"] > 3.0 and r["chi_f0_row"] is None
+    sf = r["suggested_forcing"]
+    assert sf["free_running"]["amp"] == pytest.approx(0.5) and sf["free_running"]["freq"] == pytest.approx(0.035)
+    assert sf["captured"]["amp"] == pytest.approx(2.0)
+    assert sf["box"]["amp"] == [0.0, pytest.approx(6.0)] and sf["box"]["freq"] == [pytest.approx(0.0025), pytest.approx(0.25)]
+    assert np.load(d.path / "probe_drive.npz")["own_peak_ratio"].shape == (6,)
+    said = [m.getMessage() for m in caplog.records if m.name == "core.diagnostics.probes" and m.levelname == "INFO"]
+    assert any(m.startswith("[drive] strongest free-running strength 0.05") for m in said), said
+    assert any(m.startswith("[drive] weakest captured strength 0.2") for m in said), said
+    assert any(m.startswith("[drive] suggested Forcing section") for m in said), said
+    # the record's shape and its values: the own oscillation keeps its amplitude times own_factor, so
+    # the own-peak ratio is that factor squared, and the response is |chi| = 2 at every strength
+    assert (d.diagnostic, d.variant, d.manifest.parents) == ("probes", "drive", {})
+    assert set(r) == {"omega0", "peak_per_trace_hz", "clarity", "oscillating", "peak_to_peak",
+                      "cycles_in_recording", "n_obs", "drive_frequency", "force_scale", "strengths",
+                      "strongest_free_running", "weakest_captured", "chi_f0_row", "suggested_forcing", "notes"}
+    assert [s["own_peak_ratio"] for s in r["strengths"]] == pytest.approx([1.0, 1.0, 0.25, 0.01, 0.01, 1.0], abs=2e-3)
+    assert [s["chi_median"] for s in r["strengths"]] == pytest.approx([2.0] * 6, rel=1e-2)
+    assert [s["cell_force"] for s in r["strengths"]] == pytest.approx([0.1, 0.5, 1.0, 2.0, 10.0, 80.0])
+    assert r["strengths"][-1]["plv_median"] > 0.99 and all(0.0 <= s["plv_median"] <= 1.0 for s in r["strengths"])
+    assert (r["n_obs"], r["cycles_in_recording"], r["force_scale"]) == (5000, pytest.approx(125.0), pytest.approx(10.0))
+    assert r["omega0"]["cell_units"] == pytest.approx(0.025)
+    assert r["peak_per_trace_hz"] == {"median": pytest.approx(25.0), "spread": pytest.approx(0.0, abs=1e-9)}
+    assert r["drive_frequency"] == {"cell_units": pytest.approx(0.035), "hz": pytest.approx(35.0), "detune": 1.4}
+    assert r["peak_to_peak"] == pytest.approx(2.0, abs=0.1)
+    assert sf["free_running"] == {"amp": pytest.approx(0.5), "freq": pytest.approx(0.035), "phase": 0.0, "offset": 0.0}
+    assert sf["captured"] == {"amp": pytest.approx(2.0), "freq": pytest.approx(0.035), "phase": 0.0, "offset": 0.0}
+    assert sf["box"]["phase"] == [0.0, 6.283185307] and sf["box"]["offset"] == [-50.0, 50.0]
+    z = np.load(d.path / "probe_drive.npz")
+    assert set(z.files) == {"strengths", "own_peak_ratio", "chi_median", "plv_median", "freqs", "power"}
+    assert z["strengths"].tolist() == [0.01, 0.05, 0.1, 0.2, 1.0, 8.0] and z["freqs"].shape == z["power"].shape
+    assert d.manifest.figures == ["figures/probe_drive_own_peak_ratio.png"]
+    assert store.load_diagnostic(d.id).results == r
+    assert _probe_said(caplog, "WARNING") == []                    # a clean run warns nothing
+
+
+def test_probes_drive_measures_the_configured_chi_drive_explicitly_on_its_default_grid(store, monkeypatch):
+    import math
+    from core.diagnostics import probes, probe_drive
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in())        # captures from strength 1.0
+    d = probe_drive(_probe_cfg(chi=False), repeats=2, name="drive_grid")
+    s, r = d.settings, d.results
+    assert s["strengths"] == [0.01, 0.02, 0.05, 0.1, 0.15, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0,
+                              12.0, 20.0]
+    row = r["chi_f0_row"]
+    assert set(row) == {"strength", "own_peak_ratio", "verdict", "note"}
+    assert row["strength"] == 0.15 and row["verdict"] == "free-running" and "detune" in row["note"]
+    assert row["own_peak_ratio"] == pytest.approx(1.0, abs=2e-3)
+    assert any("no linearity test" in n for n in r["notes"])
+    assert s["drive_phase"] == pytest.approx(math.pi / 2)
+    assert set(s) == {"t_obs_s", "repeats", "detune", "strengths", "free_min", "captured_max", "peak_window",
+                      "clarity_min", "seed", "drive_phase", "configured"}
+    assert (s["t_obs_s"], s["repeats"], s["detune"], s["free_min"], s["captured_max"], s["peak_window"],
+            s["clarity_min"], s["seed"]) == (5.0, 2, 1.4, 0.7, 0.1, 0.02, 3.0, 0)
+    assert s["configured"] == {"chi_f0": 0.15, "chi_freq_bounds": [0.03, 0.3], "chi_k_pad": 12,
+                               "chi_min_cycles": 2.0, "chi_max_cycles": 20.0, "probe_count": 6}
+    assert (r["strongest_free_running"]["strength"], r["weakest_captured"]["strength"]) == (0.75, 1.0)
+
+
+def test_probes_drive_reports_what_it_cannot_judge_as_results_not_refusals(store, monkeypatch, caplog):
+    """Each of these is known only after the undriven spend: no clear oscillation, nothing captured in
+    the grid, and a drive at 0.9 x Nyquist or above. Each writes its record and says so in one warning.
+    The two where nothing is judged drive nothing at all."""
+    from core.diagnostics import probes, probe_drive
+    warned, ids = [], []
+
+    def run(stand_in, **kw):
+        caplog.clear()
+        monkeypatch.setattr(probes, "_simulate", stand_in)
+        d = probe_drive(_probe_cfg(chi=False), repeats=2, **kw)
+        warned.append(_probe_said(caplog, "WARNING"))
+        ids.append(d.id)
+        return d.results
+
+    seen = []
+    r = run(_probe_stand_in(seen=seen), clarity_min=1e9, strengths=[0.1, 2.0], name="quiet")
+    assert r["oscillating"] is False and seen == []
+    assert all(s["verdict"] is None and s["own_peak_ratio"] is None and s["chi_median"] is None
+               for s in r["strengths"])
+    assert r["strongest_free_running"] is None and r["weakest_captured"] is None
+    assert r["suggested_forcing"] == {"free_running": None, "captured": None, "box": None}
+    assert r["clarity"] > 3.0                                      # measured, below the threshold asked for
+    r = run(_probe_stand_in(), strengths=[0.1, 0.5], name="uncaptured")
+    assert r["weakest_captured"] is None and r["strongest_free_running"]["strength"] == 0.5
+    assert r["suggested_forcing"]["captured"] is None and r["suggested_forcing"]["box"] is None
+    assert r["suggested_forcing"]["free_running"]["amp"] == pytest.approx(5.0)
+    seen = []
+    r = run(_probe_stand_in(f_own=0.4, seen=seen), strengths=[0.1], name="fast")
+    assert r["drive_frequency"]["cell_units"] == pytest.approx(0.56) and r["strengths"][0]["verdict"] is None
+    assert r["oscillating"] is True and seen == []
+    assert [len(w) for w in warned] == [1, 1, 1], warned
+    assert "no clear oscillation" in warned[0][0]
+    assert "nothing in the grid captured" in warned[1][0]
+    assert "Nyquist" in warned[2][0]
+    assert [store.load_diagnostic(i).variant for i in ids] == ["drive"] * 3
+
+
+def test_probes_drive_masks_a_drive_between_nine_tenths_of_nyquist_and_nyquist(store, monkeypatch, caplog):
+    """The edge of training's masking rule, where "at or above Nyquist" parts from it: at 1 ms sampling
+    Nyquist is 0.5 cycles per ms, and a cell at 0.33 is driven at 0.462 -- below Nyquist, above 0.45."""
+    from core.diagnostics import probes, probe_drive
+    seen = []
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(f_own=0.33, seen=seen))
+    r = probe_drive(_probe_cfg(chi=False), repeats=2, strengths=[0.1], name="edge").results
+    assert r["drive_frequency"]["cell_units"] == pytest.approx(0.462) and r["strengths"][0]["verdict"] is None
+    assert seen == [] and any("Nyquist" in m for m in _probe_said(caplog, "WARNING"))
+
+
+def test_probes_drive_turns_non_finite_measures_into_null(store, monkeypatch):
+    """A driven ensemble that returns NaN is not measured: a NaN compares false against every threshold
+    and would otherwise read as captured or in between, and a manifest refuses it."""
+    from core.diagnostics import probes, probe_drive
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(nan_driven=True))
+    d = probe_drive(_probe_cfg(chi=False), repeats=2, strengths=[0.1], name="drive_nan")
+    row, = d.results["strengths"]
+    assert row["own_peak_ratio"] is None and row["verdict"] is None
+    assert row["chi_median"] is None and row["plv_median"] is None
+    assert d.results["strongest_free_running"] is None and d.results["weakest_captured"] is None
+    assert store.load_diagnostic(d.id).results == d.results
+
+
+def test_probes_drive_judges_each_strength_against_the_thresholds_it_is_given(store, monkeypatch, caplog):
+    """Own-peak ratios of 1, 0.25 and 0.01: free-running at or above free_min, captured at or below
+    captured_max, in between otherwise -- so moving either threshold past 0.25 moves that one strength,
+    and a grid whose weakest strength is not free-running names no free-running strength at all."""
+    from core.diagnostics import probes, probe_drive
+    refill = lambda a: torch.where(a < 0.1, 1.0, torch.where(a < 0.2, 0.5, 0.1))
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(own_factor=refill))
+    kw = dict(repeats=2, strengths=[0.05, 0.1, 0.2])
+
+    def verdicts(r):
+        return [s["verdict"] for s in r["strengths"]]
+
+    r = probe_drive(_probe_cfg(chi=False), name="t_default", **kw).results
+    assert verdicts(r) == ["free-running", "in between", "captured"]
+    r = probe_drive(_probe_cfg(chi=False), free_min=0.2, name="t_free", **kw).results
+    assert verdicts(r) == ["free-running", "free-running", "captured"]
+    assert r["strongest_free_running"]["strength"] == 0.1 and r["weakest_captured"]["strength"] == 0.2
+    r = probe_drive(_probe_cfg(chi=False), free_min=0.5, captured_max=0.3, name="t_captured", **kw).results
+    assert verdicts(r) == ["free-running", "captured", "captured"]
+    assert r["strongest_free_running"]["strength"] == 0.05 and r["weakest_captured"]["strength"] == 0.1
+    caplog.clear()
+    r = probe_drive(_probe_cfg(chi=False), repeats=2, strengths=[0.1, 0.2], name="t_strong").results
+    assert verdicts(r) == ["in between", "captured"]
+    assert r["strongest_free_running"] is None and r["weakest_captured"]["strength"] == 0.2
+    assert r["suggested_forcing"]["free_running"] is None and r["suggested_forcing"]["captured"] is not None
+    warned = _probe_said(caplog, "WARNING")
+    assert len(warned) == 1 and "no free-running strength" in warned[0], warned
+
+
+def test_probes_drive_states_every_frequency_and_length_in_the_cells_own_units(store, monkeypatch):
+    """At a half-millisecond sampling interval, a sampling interval of 1 would hide a units inversion: a
+    5 s recording holds 10000 samples, the own peak stays at 25 Hz and 125 cycles, the lock-in reads
+    |chi| = 2 only on the true time axis, and 0.9 x Nyquist is 0.9 cycles per ms -- so a drive at 0.56,
+    masked at 1 ms, is driven here."""
+    from core.diagnostics import probes, probe_drive
+    refill = lambda a: torch.where(a < 0.1, 1.0, 0.1)
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(own_factor=refill))
+    cfg = _probe_cfg(chi=False)
+    cfg.dt_exp = 0.5
+    r = probe_drive(cfg, repeats=2, strengths=[0.05, 0.2], name="half_ms").results
+    assert (r["n_obs"], r["cycles_in_recording"]) == (10000, pytest.approx(125.0))
+    assert r["omega0"] == {"cell_units": pytest.approx(0.025), "hz": pytest.approx(25.0)}
+    assert r["peak_per_trace_hz"]["median"] == pytest.approx(25.0)
+    assert r["drive_frequency"]["hz"] == pytest.approx(35.0)
+    assert [s["verdict"] for s in r["strengths"]] == ["free-running", "captured"]
+    assert [s["chi_median"] for s in r["strengths"]] == pytest.approx([2.0, 2.0], rel=1e-2)
+    seen = []
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(f_own=0.4, seen=seen))
+    r = probe_drive(cfg, repeats=2, strengths=[0.1], name="half_ms_fast").results
+    assert r["drive_frequency"]["cell_units"] == pytest.approx(0.56) and len(seen) == 1
+    assert r["strengths"][0]["verdict"] == "free-running"
+
+
+def _pulled_stand_in(shift_bins):
+    """In place of probes._simulate, a cell whose own oscillation, at 0.025 cycles per ms, keeps its
+    amplitude under a drive but is pulled ``shift_bins`` frequency bins up the axis; no other response."""
+    import math
+
+    def _sim(cfg, geom, nd, res_sim, sim_idx, inits, *, amp_dim=None, freq=None):
+        B, n = nd.shape[0], geom.n_obs
+        t = torch.arange(n, dtype=torch.float64) * cfg.dt_exp
+        f = 0.025 + (0.0 if amp_dim is None else shift_bins / (n * cfg.dt_exp))
+        x = torch.sin(2 * math.pi * f * t + 2 * math.pi * torch.rand(B, 1, dtype=torch.float64))
+        return (x + 0.01 * torch.randn(B, n, dtype=torch.float64)).to(cfg.hw.dtype)
+    return _sim
+
+
+def test_probes_drive_reads_the_own_peak_window_it_is_given_and_never_judges_one_the_drive_reaches(
+        store, monkeypatch, caplog):
+    """The window's width is the one asked for: an oscillation pulled four bins up leaves a 2 % window
+    (two bins either side of bin 125) and stays inside a 5 % one (six bins). And the window is never
+    narrower than two bins, so over 1 s (bins of 1 Hz, the peak on bin 25) a drive at 1.05 x the peak
+    lands on bin 26, inside it: that strength is not judged, while 1.12 x -- bin 28 -- is."""
+    from core.diagnostics import probes, probe_drive
+    monkeypatch.setattr(probes, "_simulate", _pulled_stand_in(4))
+    kw = dict(repeats=2, strengths=[0.1])
+    r = probe_drive(_probe_cfg(chi=False), name="w_narrow", **kw).results
+    assert r["strengths"][0]["verdict"] == "captured" and r["strengths"][0]["own_peak_ratio"] < 0.01
+    r = probe_drive(_probe_cfg(chi=False), peak_window=0.05, name="w_wide", **kw).results
+    assert r["strengths"][0]["verdict"] == "free-running"
+    assert r["strengths"][0]["own_peak_ratio"] == pytest.approx(1.0, abs=2e-3)
+    seen = []
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(seen=seen))
+    caplog.clear()
+    r = probe_drive(_probe_cfg(chi=False), t_obs_s=1.0, detune=1.05, name="w_reached", **kw).results
+    assert r["strengths"][0]["verdict"] is None and seen == []
+    warned = _probe_said(caplog, "WARNING")
+    assert len(warned) == 1 and "own-peak window" in warned[0], warned
+    r = probe_drive(_probe_cfg(chi=False), t_obs_s=1.0, detune=1.12, name="w_clear", **kw).results
+    assert r["strengths"][0]["verdict"] == "free-running" and len(seen) == 1
+
+
+def test_probes_drive_repeats_at_one_seed_and_differs_at_another(store, monkeypatch):
+    from core.diagnostics import probes, probe_drive
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in())
+    kw = dict(repeats=2, strengths=[0.1, 2.0])
+    a = probe_drive(_probe_cfg(chi=False), seed=5, name="dseed_a", **kw)
+    b = probe_drive(_probe_cfg(chi=False), seed=5, name="dseed_b", **kw)
+    c = probe_drive(_probe_cfg(chi=False), seed=6, name="dseed_c", **kw)
+    assert a.results == b.results and a.settings == b.settings
+    assert c.results != a.results and c.settings["seed"] == 6
+
+
+def test_a_drive_check_leaves_its_configuration_a_training_one_and_config_py_untouched(store, monkeypatch):
+    """The drive strengths and the detuned frequency reach the simulator and nothing else."""
+    from core import config
+    from core.diagnostics import probes, probe_drive
+    from tests._fixtures import assert_cfg_unchanged, snapshot_cfg
+    training = _nad_cfg(chi_mode=True)
+    cfg = _probe_cfg(chi=False)
+    snaps = [(training, snapshot_cfg(training)), (cfg, snapshot_cfg(cfg))]
+    constants = {k: getattr(config, k) for k in dir(config) if k.startswith("CHI_")}
+    seen = []
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(seen=seen))
+    probe_drive(cfg, repeats=2, strengths=[0.5], name="drive_untouched")
+    for watched, snap in snaps:
+        assert_cfg_unchanged(watched, snap)
+    assert {k: getattr(config, k) for k in dir(config) if k.startswith("CHI_")} == constants
+    assert seen and all(v == pytest.approx(0.5) for strengths, _ in seen for v in strengths), seen
+    assert all(f == pytest.approx(0.035) for _, freqs in seen for f in freqs), seen
+
+
+_DRIVE_BASE = dict(repeats=2, strengths=[0.1])
+
+
+@pytest.mark.parametrize("kw, field", [
+    ({"t_obs_s": 0.0}, "drive_t_obs"),
+    ({"t_obs_s": 1e-7}, "drive_t_obs"),
+    ({"repeats": 1}, "drive_repeats"),
+    ({"detune": 0.0}, "drive_detune"),
+    ({"detune": 1.01}, "drive_detune"),
+    ({"detune": 0.99}, "drive_detune"),
+    ({"strengths": []}, "drive_strengths"),
+    ({"strengths": [0.1, 0.05]}, "drive_strengths"),
+    ({"strengths": [0.1, 0.1]}, "drive_strengths"),
+    ({"strengths": [0.1, float("nan")]}, "drive_strengths"),
+    ({"strengths": [-0.1]}, "drive_strengths"),
+    ({"free_min": 1.2}, "free_min"),
+    ({"free_min": 0.0}, "free_min"),
+    ({"captured_max": 0.0}, "captured_max"),
+    ({"captured_max": 0.8}, "captured_max"),
+    ({"captured_max": 0.7}, "captured_max"),
+    ({"peak_window": 0.0}, "drive_peak_window"),
+    ({"peak_window": 1.0}, "drive_peak_window"),
+    ({"clarity_min": 0.0}, "clarity_min"),
+    ({"clarity_min": float("nan")}, "clarity_min"),
+    ({"seed": -1}, "probe_seed"),
+    ({"name": "taken"}, "name"),
+])
+def test_probes_drive_refuses_before_the_writer_opens(store, monkeypatch, kw, field):
+    from core.diagnostics import probes, probe_drive
+    cfg = _probe_cfg(chi=False)
+    _diagnostic(store, cfg, name="taken")
+    monkeypatch.setattr(probes, "_simulate", lambda *a, **k: pytest.fail("simulated before the refusal"))
+    before = _diagnostic_dirs(store)
+    with pytest.raises(Refusal) as e:
+        probe_drive(cfg, **{**_DRIVE_BASE, **kw})
+    assert e.value.field == field, (kw, e.value.field, str(e.value))
+    assert _diagnostic_dirs(store) == before
+
+
+def test_probes_drive_refuses_a_box_with_no_forcing_section(store, monkeypatch):
+    """The strengths and the suggested Forcing lines are stated in the force unit a Forcing box carries;
+    the spontaneous box declares no Forcing section, so the check refuses it before anything is spent."""
+    from core.diagnostics import probes, probe_drive
+    monkeypatch.setattr(probes, "_simulate", lambda *a, **k: pytest.fail("simulated before the refusal"))
+    with pytest.raises(Refusal) as e:
+        probe_drive(_probe_cfg("master_spont.txt", "master_spont.txt", chi=False), **_DRIVE_BASE)
+    assert e.value.field is None and "Forcing section" in str(e.value), str(e.value)
+    assert _diagnostic_dirs(store) == []

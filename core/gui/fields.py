@@ -182,6 +182,8 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     "probe_seed": None, "probe_lengths": None, "probe_multipliers": None, "probe_drives": None,
     "band_repeats": None, "probe_cycle_caps": None, "cv_max": None, "phase_max": None, "snr_min": None,
     "sup_min": None, "band_peak_window": None, "mask_num_runs": None, "mask_run_size": None,
+    "drive_t_obs": None, "drive_repeats": None, "drive_detune": None, "drive_strengths": None,
+    "free_min": None, "captured_max": None, "drive_peak_window": None, "clarity_min": None,
 }
 
 

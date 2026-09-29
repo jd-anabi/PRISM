@@ -7,8 +7,8 @@ could not be tested, and wrote nothing the store could describe. The five functi
 ``identifiability_jacobian`` and ``channel_ablation`` -- are re-exported from here, beside the two
 submodules all of them share. So are the probe checks (``probes``), which re-measure the chi probe
 settings and change none of them: ``probe_band`` asks whether the configured band and drive hold for
-a cell, and ``probe_mask`` why training probes are thrown out over a prior. Their shared geometry and
-spectrum helpers are ``probe_math``.
+a cell, ``probe_mask`` why training probes are thrown out over a prior, and ``probe_drive`` how hard a
+lab can drive a cell. Their shared geometry and spectrum helpers are ``probe_math``.
 
 ``feature_sets`` answers "which features does THIS config's posterior actually condition on", which
 is what makes a Jacobian diagnostic a statement about the experiment that was run rather than about
@@ -21,4 +21,4 @@ from .identifiability import (identifiability_jacobian, identifiability_laplace,
                               identifiability_rotation)
 from .sbc import sbc_repeats  # noqa: F401
 from .ablation import channel_ablation  # noqa: F401
-from .probes import probe_band, probe_mask  # noqa: F401
+from .probes import probe_band, probe_drive, probe_mask  # noqa: F401

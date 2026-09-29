@@ -9,9 +9,11 @@ change to a setting is made in core/config.py.
 ``band`` and ``mask`` build their configuration in chi mode themselves -- the chi probes are what
 they measure -- so they take no chi flag at all: ``config_args.add_config_flags(..., chi=False)``
 leaves out ``--chi``, ``--no-chi`` and ``--chi-k``, and chi mode and the configured probe count come
-from each parser's defaults instead. ``band``'s grid flags have their own names and field keys, never
-the training drive's. ``mask`` takes the prior it audits by reference, loaded and never built, and
-its batch count and size have keys of their own, because training's keys state training's defaults.
+from each parser's defaults instead. ``drive`` builds its configuration with chi mode OFF, the same
+way and with no chi flag either: it drives the cell itself, at strengths and a frequency of its own.
+``band``'s grid flags have their own names and field keys, never the training drive's, and so do
+``drive``'s. ``mask`` takes the prior it audits by reference, loaded and never built, and its batch
+count and size have keys of their own, because training's keys state training's defaults.
 
 Every parser in the family is built with ``allow_abbrev=False``. argparse otherwise accepts any
 unambiguous prefix of an option, so an option typed out of habit on a mode that happens to have a
@@ -38,6 +40,9 @@ _BAND_KNOBS = ("lengths", "multipliers", "drives", "repeats", "cycle_caps", "cv_
                "snr_min", "sup_min", "peak_window", "seed")
 _MASK = "probes mask"
 _MASK_KNOBS = ("num_runs", "run_size", "chi_k_fixed", "seed")
+_DRIVE = "probes drive"
+_DRIVE_KNOBS = ("t_obs_s", "repeats", "detune", "strengths", "free_min", "captured_max", "peak_window",
+                "clarity_min", "seed")
 
 BAND_EPILOG = """\
 At every recording length, probe frequency and drive strength, an ensemble of
@@ -71,6 +76,32 @@ count, cycle floor and ceiling it ran at, and the probe counts it audited.
 MASK_BOUNDS_HELP = ("bounds file: which parameters are inferred, in what order, and the box. It must be "
                     "the one the prior was built with -- the store refuses a prior whose model, parameter "
                     "order, box or log-box mask differs.")
+
+DRIVE_EPILOG = """\
+The cell's own noisy runs are simulated undriven: the peak frequency, the
+peak's clarity (the peak bin's power over the median power, which must reach
+--clarity-min) and the cycles in the recording. Then, one ensemble per
+strength, they are driven at --detune times the peak frequency, and each
+strength is judged by the share of the undriven own-peak power the driven runs
+keep inside the own-peak window: free-running at --free-min or more, captured
+at --captured-max or less, in between otherwise. The strongest free-running
+strength is the top of the unbroken run of free-running strengths from the
+weakest up; the weakest captured strength is the first captured one. Both are
+reported in model units and in the cell's force unit, with suggested Forcing
+lines for a cell file, which are logged and recorded, never written. There is
+no linearity test, and the phase locking is reported, never judged. No clear
+oscillation, a drive at or above 0.9 x Nyquist, or a drive within a bin of
+the own-peak window is recorded with nothing judged.
+
+The check changes nothing. Its default strengths include the configured chi
+drive's, but that row cannot certify the chi drive: its verdict depends on the
+detune, and probes band judges it.
+"""
+
+#: ``probes drive`` loads no posterior; its bounds file must declare a Forcing section.
+DRIVE_BOUNDS_HELP = ("bounds file: which parameters are inferred, in what order, and the box. It must "
+                     "declare a Forcing section, the section this check suggests values for; a box without "
+                     "one is refused.")
 
 
 def _value_flag(p, leaf, flag, *, help, **kw):
@@ -157,6 +188,47 @@ def _register_mask(modes) -> None:
     mask.set_defaults(handler=_mask, chi_mode=True, chi_n_freqs=None, interrupt_note=PROBES_INTERRUPT_NOTE)
 
 
+def _drive(args, store) -> None:
+    import core.diagnostics as diag
+    cfg, _ = config_args.build_cfg(args, load_gt=True)
+    return report(diag.probe_drive(cfg, name=args.name, note=args.note, fig_sink=config_args.close_sink,
+                                   store=store, **knobs(args, *_DRIVE_KNOBS)))
+
+
+def _register_drive(modes) -> None:
+    text = "how hard can a lab drive this cell?"
+    drive = modes.add_parser("drive", help=text, description=text, epilog=DRIVE_EPILOG, allow_abbrev=False,
+                             formatter_class=argparse.RawDescriptionHelpFormatter)
+    config_args.add_config_flags(drive, chi=False, bounds_help=DRIVE_BOUNDS_HELP)
+    add_name_flags(drive)
+    drive.add_argument("--cell", required=True, metavar="PATH",
+                       help="the cell file whose ground truth is driven")
+    _value_flag(drive, _DRIVE, "--t-obs", dest="t_obs_s", type=float, metavar="S",
+                help="recording length, in seconds, of the undriven runs and of every driven ensemble")
+    _value_flag(drive, _DRIVE, "--repeats", type=int, metavar="N",
+                help="noise repeats per ensemble, undriven and at each strength")
+    _value_flag(drive, _DRIVE, "--detune", type=float, metavar="X",
+                help="the drive frequency, as a multiple of the cell's own peak frequency; it must differ "
+                     "from 1 by more than --peak-window")
+    _value_flag(drive, _DRIVE, "--strengths", type=float, nargs="+", metavar="X",
+                help="non-dimensional drive strengths, increasing; each drives at that multiple of the "
+                     "cell's force scale")
+    _value_flag(drive, _DRIVE, "--free-min", type=float, metavar="X",
+                help="smallest share of the undriven own-peak power the driven runs keep that counts as "
+                     "free-running, in (0, 1]")
+    _value_flag(drive, _DRIVE, "--captured-max", type=float, metavar="X",
+                help="largest share of the undriven own-peak power the driven runs keep that counts as "
+                     "captured, in (0, 1) and below --free-min")
+    _value_flag(drive, _DRIVE, "--peak-window", type=float, metavar="X",
+                help="half-width of the own-peak window, as a fraction of the peak frequency, in (0, 1); "
+                     "never narrower than two frequency bins either side")
+    _value_flag(drive, _DRIVE, "--clarity-min", type=float, metavar="X",
+                help="smallest peak clarity -- the undriven peak bin's power over the median power -- that "
+                     "counts as an oscillation; below it no strength is judged")
+    _value_flag(drive, _DRIVE, "--seed", type=int, metavar="N", help="the random seed for the whole run")
+    drive.set_defaults(handler=_drive, chi_mode=False, chi_n_freqs=None, interrupt_note=PROBES_INTERRUPT_NOTE)
+
+
 def register(sub) -> dict:
     """``{"probes": parent}``: the family's parent parser, its modes under ``variant``."""
     text = "check the chi probe settings on a cell or a prior"
@@ -164,6 +236,7 @@ def register(sub) -> dict:
     modes = p.add_subparsers(dest="variant", required=True)
     _register_band(modes)
     _register_mask(modes)
+    _register_drive(modes)
     # the metavar names the modes in a bare `probes` usage error, never the internal dest; built from
     # the registered modes, so it grows with the family
     modes.metavar = "{" + ",".join(modes.choices) + "}"

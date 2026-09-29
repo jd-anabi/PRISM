@@ -123,7 +123,8 @@ FLAG: dict[str, str | None] = {
     "n_sweep": "--n-sweep",
     "chi_k_fixed": "--chi-k-fixed",
     # tool-only: the probe checks. Their own flag names, never the training drive's; --seed,
-    # --repeats, --num-runs and --run-size answer two keys each, as --drive answers three
+    # --num-runs, --run-size, --peak-window and --t-obs answer two keys each, and --repeats three, as
+    # --drive answers three
     "probe_seed": "--seed",
     "probe_lengths": "--lengths",
     "probe_multipliers": "--multipliers",
@@ -137,6 +138,14 @@ FLAG: dict[str, str | None] = {
     "band_peak_window": "--peak-window",
     "mask_num_runs": "--num-runs",
     "mask_run_size": "--run-size",
+    "drive_t_obs": "--t-obs",
+    "drive_repeats": "--repeats",
+    "drive_detune": "--detune",
+    "drive_strengths": "--strengths",
+    "free_min": "--free-min",
+    "captured_max": "--captured-max",
+    "drive_peak_window": "--peak-window",
+    "clarity_min": "--clarity-min",
 }
 
 

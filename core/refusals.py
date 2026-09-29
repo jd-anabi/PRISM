@@ -201,6 +201,16 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     # defaults, which are not the audit's
     Field("mask_num_runs", "the number of training batches to audit", "12"),         # probe_mask
     Field("mask_run_size", "the rows per audited batch", "32"),                       # probe_mask
+    # the drive check's own knobs: its recording length and repeat count are not training's or the
+    # band check's, and without strengths it follows a rule (a fixed sixteen plus the configured chi drive)
+    Field("drive_t_obs", "the driven recording length, in seconds", "5.0"),           # probe_drive
+    Field("drive_repeats", "the number of noise repeats per drive strength", "16"),   # probe_drive
+    Field("drive_detune", "the drive frequency, as a multiple of the peak frequency", "1.4"),  # probe_drive
+    Field("drive_strengths", "the non-dimensional drive strengths", None),
+    Field("free_min", "the own-peak power fraction that counts as free-running", "0.7"),       # probe_drive
+    Field("captured_max", "the own-peak power fraction that counts as captured", "0.1"),       # probe_drive
+    Field("drive_peak_window", "the own-peak window, as a fraction of the peak frequency", "0.02"),  # probe_drive
+    Field("clarity_min", "the smallest peak clarity that counts as an oscillation", "3.0"),    # probe_drive
 )}
 
 

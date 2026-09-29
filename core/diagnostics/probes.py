@@ -22,6 +22,13 @@ nothing else: they MEASURE, and never change a setting. Each writes one ordinary
         count against the generator's own masked-probe warning, row range by row range. No
         simulation cache is written.
 
+  drive How hard can a lab drive this cell? It records the cell's own noisy runs undriven -- the
+        peak frequency, its clarity, the cycles in the recording -- then drives them at a range of
+        strengths at a frequency detuned from the peak, and judges each strength by how much of the
+        cell's own peak power survives: free-running, captured, or in between. It names the
+        strongest free-running strength and the weakest captured one, in model units and in the
+        cell's force unit, and suggests Forcing lines for a cell file, which it never writes.
+
 MEASURING IS NOT OVERRIDING. A check takes its own recording lengths, frequencies, drive strengths and
 lock-in ceilings, and they reach the simulator only as the drive builder's frequency and amplitude,
 inside this module. None of them passes through a configuration field, through the training
@@ -123,6 +130,15 @@ def _simulate(cfg, geom, nd, res_sim, sim_idx, inits, *, amp_dim=None, freq=None
     x_scale = res_sim[:, sim_idx["x_scale"]].unsqueeze(1)
     x_offset = res_sim[:, sim_idx["x_offset"]].unsqueeze(1) if "x_offset" in sim_idx else 0.0
     return helpers.rescale(x, x_scale, x_offset)
+
+
+def _force_scale(res_sim, sim_idx) -> torch.Tensor:
+    """Per row, in float64, the force scale a drive amplitude is built on, exactly as the chi probe
+    loop takes it: the simulator block's f_scale -- on a box that declares temperature in its place,
+    the one derived from it -- else the Hopf-style x_scale / t_scale."""
+    if "f_scale" in sim_idx:
+        return res_sim[:, sim_idx["f_scale"]].double()
+    return (res_sim[:, sim_idx["x_scale"]] / res_sim[:, sim_idx["t_scale"]]).double()
 
 
 class _Criteria(NamedTuple):
@@ -241,12 +257,7 @@ def _measure(cfg, res_sim, sim_idx, t_scale, lengths, multipliers, drives, caps,
     nd = cfg.params_tensor.expand(repeats, -1).contiguous()
     rs = res_sim.expand(repeats, -1).contiguous()
     inits = cfg.inits_tensor.expand(repeats, -1).contiguous()
-    # The force scale the drive amplitude is built on, exactly as the chi probe loop takes it: the
-    # simulator block's f_scale, else the Hopf-style x_scale / t_scale.
-    if "f_scale" in sim_idx:
-        f_eff = rs[:, sim_idx["f_scale"]].double()
-    else:
-        f_eff = (rs[:, sim_idx["x_scale"]] / rs[:, sim_idx["t_scale"]]).double()
+    f_eff = _force_scale(rs, sim_idx)
     harmonic = probe_math.harmonic_flags(multipliers, crit.peak_window)
     n_grid = cfg.t.shape[0]
     n_max = min(config.N_ND_MAX, n_grid)
@@ -1152,4 +1163,379 @@ def probe_mask(cfg, prior, *, num_runs: int = 12, run_size: int = 32, chi_k_fixe
         w.fingerprints["gmm"] = prior.fingerprint
         w.config.update(settings)
         w.body = {"diagnostic": "probes", "variant": "mask", "settings": settings, "results": results}
+    return store.load_diagnostic(w.id)
+
+
+# ── drive: how hard a lab can drive this cell ────────────────────────────────────────────────────────
+
+#: The drive strengths measured when none are given, in model units: from well below the configured chi
+#: drive to far past where a cell is captured. The configured chi drive is always measured as well.
+_DRIVE_STRENGTHS = (0.01, 0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0)
+
+#: What every drive record says about the measurement it made.
+DRIVE_NOTES = (
+    "Free-running versus captured is the criterion: the share of the undriven own-peak power the driven "
+    "runs keep inside the own-peak window. There is no linearity test.",
+    "The phase-locking value is reported and never judged.",
+    "The drive is detuned from the peak frequency so that the own-peak window reads the cell's own "
+    "rhythm and not the drive; every verdict is read at that detune.",
+)
+
+#: The configured chi drive's own row carries this note: it is driven here at the detuned frequency,
+#: never at a chi probe's.
+CHI_F0_NOTE = ("its verdict depends on the detune, so this check cannot certify the configured chi drive; "
+               "probes band judges that")
+
+#: The suggested bounds box's phase and offset rows: one whole cycle, and the master box's offset range.
+_BOX_PHASE = (0.0, 6.283185307)
+_BOX_OFFSET = (-50.0, 50.0)
+
+
+class _Undriven(NamedTuple):
+    freqs: torch.Tensor       # the undriven ensemble spectrum's frequency axis, cell frequency units
+    power: torch.Tensor       # its ensemble-mean power, float64
+    omega0: float             # the highest bin's frequency, zero frequency excluded; NaN when not measured
+    clarity: float            # that bin's power over the median power, zero frequency excluded; NaN likewise
+    peak_median: float        # each run's own peak frequency: the median over the runs, cell units
+    peak_spread: float        # and its standard deviation
+    peak_to_peak: float       # each run's largest minus smallest value: the median over the runs
+
+
+def _undriven(x0: torch.Tensor, dt: float) -> _Undriven:
+    """What the drive check reads off the undriven ensemble ``x0`` (runs by samples, float64).
+
+    The peak is the ensemble spectrum's highest bin above zero frequency. Its clarity is that single
+    bin's power over the median power above zero frequency. Measured so, pure noise over 16 runs of 5000
+    samples scores about 2; summed over a five-bin window and set against the median bin, it would score
+    about 6 and pass a clarity of 3. Fewer runs raise the single bin's noise score as well: about 6 over
+    two runs. The peak and its clarity are not measured (NaN) when the spectrum is not finite or has no
+    bin above zero frequency, and the clarity also when the median power is not above 0. Each run's own
+    peak is the chi peak estimator's, as training reads it."""
+    from core.SBI import chi
+    freqs, power = probe_math._ensemble_power(x0, dt)
+    omega0 = clarity = math.nan
+    if power.shape[0] > 1 and bool(torch.isfinite(power).all()):
+        above = power[1:]
+        k = int(above.argmax())
+        omega0 = float(freqs[1 + k])
+        median = float(torch.quantile(above, 0.5))
+        if median > 0:
+            clarity = float(above[k]) / median
+    f_peak = chi.peak_freq(x0, dt).double()
+    return _Undriven(freqs, power, omega0, clarity, float(torch.quantile(f_peak, 0.5)), float(f_peak.std()),
+                     float(torch.quantile(x0.amax(dim=-1) - x0.amin(dim=-1), 0.5)))
+
+
+def _drive_verdict(ratio, free_min: float, captured_max: float):
+    """"free-running" at an own-peak ratio of ``free_min`` or more, "captured" at ``captured_max`` or
+    less, "in between" otherwise, and None when the ratio was not measured. The ratio arrives as a
+    float or None, so no comparison here ever meets a NaN -- which compares false against both
+    thresholds and would read as in between."""
+    if ratio is None:
+        return None
+    if ratio >= free_min:
+        return "free-running"
+    if ratio <= captured_max:
+        return "captured"
+    return "in between"
+
+
+def _drive_picks(rows: list) -> tuple:
+    """The strongest free-running row and the weakest captured one, each None when there is none.
+
+    The strongest free-running strength is the last of the unbroken run of free-running strengths from
+    the weakest up -- never the strongest free-running strength anywhere in the grid, so a strength
+    whose own peak refills at a very large drive can never be picked. The weakest captured strength is
+    the first captured one."""
+    strongest = None
+    for row in rows:
+        if row["verdict"] != "free-running":
+            break
+        strongest = row
+    weakest = next((row for row in rows if row["verdict"] == "captured"), None)
+    return strongest, weakest
+
+
+def _forcing_lines(suggested: dict) -> str:
+    """The suggested Forcing section as the report's one information record."""
+    lines = ["[drive] suggested Forcing section for a cell file, in the cell's own units -- logged and "
+             "recorded here, never written to any file:"]
+    for label, key in (("free-running", "free_running"), ("captured", "captured")):
+        row = suggested[key]
+        if row is not None:
+            lines.append(f"  {label}: " + ", ".join(f"{k} = {v:.10g}" for k, v in row.items()))
+    if suggested["box"] is not None:
+        lines.append("  and for its bounds file: " + ", ".join(
+            f"{k} in ({lo:.10g}, {hi:.10g})" for k, (lo, hi) in suggested["box"].items()))
+    return "\n".join(lines)
+
+
+def _drive_figure(sink, strengths, ratios, free_min: float, captured_max: float) -> None:
+    """The own-peak ratio against the drive strength on a log axis, with the two thresholds drawn; a
+    strength not measured leaves a gap."""
+    from matplotlib import pyplot as plt
+    fig, ax = plt.subplots(figsize=(6.5, 4.0))
+    ax.set_xscale("log")
+    ax.plot(strengths, [np.nan if r is None else r for r in ratios], "o-", color="tab:blue")
+    ax.axhline(free_min, ls="--", color="tab:green", label=f"free-running at or above {free_min:g}")
+    ax.axhline(captured_max, ls="--", color="tab:red", label=f"captured at or below {captured_max:g}")
+    ax.set_xlim(strengths[0] / 1.5, strengths[-1] * 1.5)
+    ax.set_xlabel("drive strength (model units)")
+    ax.set_ylabel("own-peak power, driven / undriven")
+    ax.legend(fontsize=8)
+    title = "Probe drive own-peak ratio"
+    ax.set_title(title)
+    fig.tight_layout()
+    sink(title, fig)
+
+
+@public_entry
+def probe_drive(cfg, *, t_obs_s: float = 5.0, repeats: int = 16, detune: float = 1.4, strengths=None,
+                free_min: float = 0.70, captured_max: float = 0.10, peak_window: float = 0.02,
+                clarity_min: float = 3.0, seed: int = 0, name: str = "", note: str = "", fig_sink=None,
+                store=None):
+    """How hard can a lab drive this cell?
+
+    An ensemble of ``repeats`` noisy runs of the cell, ``t_obs_s`` seconds long, is simulated undriven:
+    its own peak frequency (the ensemble spectrum's highest bin above zero frequency), each run's own
+    peak, the peak's clarity (that bin's power over the median power), the peak-to-peak and the cycles
+    in the recording. The cell is then driven, a fresh ensemble per strength, by a cosine at ``detune``
+    times the peak frequency whose amplitude is the strength times the cell's force scale. Per strength:
+    the median |chi| of the lock-in at the drive, the median phase-locking value (reported, never
+    judged), and the own-peak ratio -- the power the driven runs keep within ``peak_window`` of the
+    peak, over the undriven power there. A strength is free-running at a ratio of ``free_min`` or more,
+    captured at ``captured_max`` or less, in between otherwise, and not judged when the ratio is not
+    finite.
+
+    The strongest free-running strength is the largest of the unbroken run of free-running strengths
+    from the weakest up; the weakest captured strength is the first captured one. Both are reported in
+    model units and in the cell's force unit, with suggested Forcing lines and a bounds box for a cell
+    file, logged and recorded, never written. Three things are known only after the undriven spend, and
+    each is a result -- recorded with every verdict null and one warning, and nothing driven: no clear
+    oscillation (a clarity below ``clarity_min``), a drive at or above 0.9 x Nyquist, and a drive less
+    than one frequency bin from the own-peak window, which is never narrower than two bins either side
+    and so can reach past the detune on a short recording. Measures only: see the module docstring.
+
+    :param t_obs_s: the recording length in seconds, long enough for at least one sample.
+    :param repeats: noise runs per ensemble, at least 2.
+    :param detune: the drive frequency as a multiple of the peak frequency; it must differ from 1 by more
+                   than ``peak_window``.
+    :param strengths: non-dimensional drive strengths, increasing; None = sixteen from 0.01 to 20 plus
+                      the configured chi drive, which is always measured explicitly.
+    :param free_min: the own-peak ratio that counts as free-running, in (0, 1].
+    :param captured_max: the own-peak ratio that counts as captured, in (0, 1) and below ``free_min``.
+    :param peak_window: the own-peak window's half-width as a fraction of the peak frequency, in (0, 1).
+    :param clarity_min: the smallest peak clarity that counts as an oscillation, above 0.
+    :param seed: the whole run is seeded with it, and it is recorded.
+    """
+    from core.SBI import chi, derived
+    from core.SBI.statistics import FEATURE_LABELS, SummaryStatistics
+    store = resolve_store(store)
+    store.assert_name_free("diagnostic", name)
+    if not cfg.has_forcing:
+        raise Refusal(
+            f"The drive check states each drive strength as a force in the cell's own unit and suggests a "
+            f"Forcing section for the cell file, so it needs a bounds file that declares a Forcing section; "
+            f"this config is {cfg.observation_mode}: its bounds file declares none. A cell loaded against a "
+            f"box with a Forcing section states Forcing values of its own, which the check never reads -- "
+            f"it drives the cell itself.", field=None)
+    _ = cfg.ground_truth                      # refuses a cell-free config, before anything is spent
+    dtype, device = cfg.hw.dtype, cfg.hw.device
+    # the cell's simulation block in the config's own dtype, exactly as the band check builds it
+    res = torch.tensor([[v for v, _ in cfg.rescale_params.values()]], dtype=dtype, device=device)
+    res_sim, sim_idx = derived.for_simulation(cfg, cfg.params_tensor, res)
+    t_scale = float(res_sim[0, sim_idx["t_scale"]])
+
+    seed = require_seed(seed, key="probe_seed")
+    t_obs_s = require_positive("drive_t_obs", t_obs_s)
+    geom = probe_math.recording_geometry(cfg, t_obs_s, t_scale)
+    if geom.n_obs < 1:
+        refuse("drive_t_obs", f"{_what('drive_t_obs')} must be long enough for at least one sample; "
+                              f"{t_obs_s:g} s gives none.")
+    repeats = require_at_least("drive_repeats", repeats, 2)
+    peak_window = require_between("drive_peak_window", peak_window, 0, 1, open_lo=True, open_hi=True)
+    detune = require_positive("drive_detune", detune)
+    if not abs(detune - 1.0) > peak_window:
+        refuse("drive_detune", f"{_what('drive_detune')} must differ from 1 by more than the own-peak window "
+                               f"({peak_window:g}), so that the window measures the cell's own rhythm and "
+                               f"not the drive; got {detune:g}.")
+    strengths = _positive_list("drive_strengths", strengths)
+    if strengths is not None and any(b <= a for a, b in zip(strengths, strengths[1:])):
+        refuse("drive_strengths", f"{_what('drive_strengths')} must increase, each above the one before; "
+                                  f"got {', '.join(f'{s:g}' for s in strengths)}.")
+    free_min = require_between("free_min", free_min, 0, 1, open_lo=True)
+    captured_max = require_between("captured_max", captured_max, 0, 1, open_lo=True, open_hi=True)
+    if not captured_max < free_min:
+        refuse("captured_max", f"{_what('captured_max')} must be below {describe('free_min')} "
+                               f"({free_min:g}); got {captured_max:g}.")
+    clarity_min = require_positive("clarity_min", clarity_min)
+
+    if strengths is None:
+        # the configured chi drive is measured at its own value, never read off a neighbouring strength
+        strengths = sorted(set(_DRIVE_STRENGTHS) | {float(cfg.chi_f0)})
+    configured = _configured(cfg)
+    settings = {"t_obs_s": t_obs_s, "repeats": repeats, "detune": detune, "strengths": strengths,
+                "free_min": free_min, "captured_max": captured_max, "peak_window": peak_window,
+                "clarity_min": clarity_min, "seed": seed, "drive_phase": DRIVE_PHASE,
+                "configured": configured}
+    dt = float(cfg.dt_exp)
+    per_s = cfg.get_unit_conversion_factor("s")          # cell time units per second
+    nd = cfg.params_tensor.expand(repeats, -1).contiguous()
+    rs = res_sim.expand(repeats, -1).contiguous()
+    inits = cfg.inits_tensor.expand(repeats, -1).contiguous()
+    f_eff = _force_scale(rs, sim_idx)
+    force_scale = float(f_eff[0])                        # one cell: every run's is the same
+    plv_column = FEATURE_LABELS.index("G6_plv")
+
+    with store.create("diagnostic", cfg, name=name, note=note) as w:
+        n_grid = cfg.t.shape[0]
+        if geom.n_fine > n_grid:
+            n_fit = (n_grid - cfg.steady_idx) // geom.subsample
+            geom = probe_math.Geometry(n_fit, cfg.steady_idx + n_fit * geom.subsample, geom.subsample)
+            log.warning(f"[drive] a {t_obs_s:g} s recording runs past the pre-simulated time grid, so it is "
+                        f"measured over the {geom.n_obs * dt / per_s:.3f} s that fit.")
+        n_obs = geom.n_obs
+        log.info(f"[drive] driving the cell at {_count(len(strengths), 'strength', 'strengths')} from "
+                 f"{strengths[0]:g} to {strengths[-1]:g}, {repeats} runs each over {n_obs * dt / per_s:g} s "
+                 f"({n_obs} samples), beside the configured chi drive {configured['chi_f0']:g}")
+        rows = [{"strength": a, "cell_force": orch._num(a * force_scale), "chi_median": None,
+                 "plv_median": None, "own_peak_ratio": None, "verdict": None} for a in strengths]
+        with seeded(seed, device):
+            x0 = _simulate(cfg, geom, nd, rs, sim_idx, inits).double()
+            u = _undriven(x0, dt)
+            omega0, clarity = u.omega0, orch._num(u.clarity)
+            f_drive = detune * omega0                    # NaN when the peak was not measured
+            oscillating = clarity is not None and clarity >= clarity_min
+            omega0_hz = orch._num(omega0 * per_s)
+            log.info(f"[drive] undriven: the ensemble's own peak is at {_fmt(omega0_hz, '.3f')} Hz; per run, "
+                     f"median {u.peak_median * per_s:.3f} Hz, spread {u.peak_spread * per_s:.3f} Hz; clarity "
+                     f"{_fmt(clarity, '.3g')} (peak over median power); peak-to-peak {u.peak_to_peak:.4g}; "
+                     f"{_fmt(orch._num(omega0 * n_obs * dt), '.4g')} cycles in the recording")
+            not_judged = None
+            if not oscillating:
+                said = ("could not be measured" if clarity is None
+                        else f"is {clarity:.3g}, below the {clarity_min:g} that counts as an oscillation")
+                not_judged = f"no clear oscillation: the undriven peak's clarity {said}"
+            elif f_drive >= _NYQUIST_SHARE * (0.5 / dt):
+                not_judged = (f"the drive, {detune:g} x the peak frequency = {f_drive * per_s:.3f} Hz, is at "
+                              f"or above 0.9 x Nyquist ({_NYQUIST_SHARE * 0.5 / dt * per_s:.3f} Hz at this "
+                              f"sampling rate); a smaller detune brings it below")
+            else:
+                lo, hi = probe_math.own_peak_window(n_obs, omega0, peak_window, dt)
+                df = 1.0 / (n_obs * dt)
+                if lo - 1 < f_drive / df < hi:
+                    not_judged = (f"the drive at {f_drive * per_s:.3f} Hz is less than one frequency bin "
+                                  f"from the own-peak window ({lo * df * per_s:.3f} to "
+                                  f"{(hi - 1) * df * per_s:.3f} Hz over this recording, never narrower than "
+                                  f"two bins either side), so the window would read the drive; a longer "
+                                  f"recording or a detune further from 1 moves it clear")
+            if not_judged is not None:
+                log.warning(f"[drive] {not_judged}: nothing was driven, and no strength is judged")
+            else:
+                log.info(f"[drive] driving at {detune:g} x the peak frequency, {f_drive * per_s:.3f} Hz, "
+                         f"phase pi/2, each strength times the force scale {force_scale:.4g}")
+                for row in rows:
+                    amp = row["strength"] * f_eff
+                    freq = torch.full((repeats,), f_drive, dtype=torch.float64, device=device)
+                    xf = _simulate(cfg, geom, nd, rs, sim_idx, inits, amp_dim=amp, freq=freq).double()
+                    lock = chi.lock_in_batched(xf, 2.0 * math.pi * freq, amp, n_obs * dt, dt)
+                    stats = SummaryStatistics(x0, xf, dt, amp, freq, DRIVE_PHASE).compute_statistics()
+                    # the statistic turns a non-finite value into 0, which would read as measured
+                    plv = torch.where(torch.isfinite(xf).all(dim=-1), stats[:, plv_column].double(),
+                                      torch.full((repeats,), math.nan, dtype=torch.float64, device=device))
+                    ratio = orch._num(probe_math.own_peak_ratio(xf, x0, float(omega0), peak_window, dt))
+                    row.update(chi_median=orch._num(torch.quantile(lock.abs(), 0.5)),
+                               plv_median=orch._num(torch.quantile(plv, 0.5)), own_peak_ratio=ratio,
+                               verdict=_drive_verdict(ratio, free_min, captured_max))
+                    log.info(f"[drive] strength {row['strength']:g} ({_fmt(row['cell_force'], '.4g')} in the "
+                             f"cell's force unit): median |chi| {_fmt(row['chi_median'], '.3g')}, phase "
+                             f"locking {_fmt(row['plv_median'], '.2f')}, own-peak ratio "
+                             f"{_fmt(ratio, '.3f')}, {row['verdict'] or 'not measured'}")
+
+        strongest, weakest = _drive_picks(rows)
+        if not_judged is None:
+            unmeasured = [row["strength"] for row in rows if row["verdict"] is None]
+            if unmeasured:
+                log.warning(f"[drive] the driven runs gave a non-finite own-peak ratio at "
+                            f"{_count(len(unmeasured), 'strength', 'strengths')} of {len(rows)}, not judged: "
+                            + ", ".join(f"{a:g}" for a in unmeasured))
+            if strongest is None:
+                first = rows[0]
+                state = ("was not measured" if first["verdict"] is None else
+                         f"is already {first['verdict']}; weaker strengths may find where the cell still "
+                         f"runs free")
+                log.warning(f"[drive] no free-running strength is named: the weakest strength in the grid, "
+                            f"{first['strength']:g}, {state}")
+            if weakest is None:
+                last = rows[-1]
+                state = ("was not measured" if last["own_peak_ratio"] is None else
+                         f"leaves an own-peak ratio of {last['own_peak_ratio']:.3f}; stronger strengths may "
+                         f"find where it is captured")
+                log.warning(f"[drive] nothing in the grid captured the cell (captured is an own-peak ratio "
+                            f"of {captured_max:g} or less): the strongest strength, {last['strength']:g}, "
+                            f"{state}")
+        for label, row in (("strongest free-running", strongest), ("weakest captured", weakest)):
+            if row is not None:
+                a = row["strength"]
+                log.info(f"[drive] {label} strength {a:g} ({a * force_scale:.4g} in the cell's force unit)")
+
+        chi_row = next((row for row in rows if math.isclose(row["strength"], configured["chi_f0"],
+                                                             rel_tol=_REL_TOL)), None)
+        chi_f0_row = None if chi_row is None else {
+            "strength": chi_row["strength"], "own_peak_ratio": chi_row["own_peak_ratio"],
+            "verdict": chi_row["verdict"], "note": CHI_F0_NOTE}
+        if chi_f0_row is None:
+            log.info(f"[drive] the configured chi drive {configured['chi_f0']:g} is not among the strengths "
+                     f"measured")
+        else:
+            log.info(f"[drive] the configured chi drive {chi_f0_row['strength']:g}: own-peak ratio "
+                     f"{_fmt(chi_f0_row['own_peak_ratio'], '.3f')}, {chi_f0_row['verdict'] or 'not measured'}"
+                     f" -- {CHI_F0_NOTE}")
+
+        def forcing(row):
+            if row is None:
+                return None
+            return {"amp": orch._num(row["strength"] * force_scale), "freq": orch._num(f_drive), "phase": 0.0,
+                    "offset": 0.0}
+
+        suggested = {"free_running": forcing(strongest), "captured": forcing(weakest), "box": None}
+        if weakest is not None:
+            suggested["box"] = {"amp": [0.0, orch._num(3.0 * weakest["strength"] * force_scale)],
+                                "freq": [orch._num(omega0 / 10.0), orch._num(omega0 * 10.0)],
+                                "phase": list(_BOX_PHASE), "offset": list(_BOX_OFFSET)}
+        if strongest is None and weakest is None:
+            log.info("[drive] no Forcing section is suggested: no strength was judged free-running or "
+                     "captured")
+        else:
+            log.info(_forcing_lines(suggested))
+        for text in DRIVE_NOTES:
+            log.info(f"[drive] note: {text}")
+
+        results = {
+            "omega0": {"cell_units": orch._num(omega0), "hz": orch._num(omega0 * per_s)},
+            "peak_per_trace_hz": {"median": orch._num(u.peak_median * per_s),
+                                  "spread": orch._num(u.peak_spread * per_s)},
+            "clarity": clarity, "oscillating": oscillating, "peak_to_peak": orch._num(u.peak_to_peak),
+            "cycles_in_recording": orch._num(omega0 * n_obs * dt), "n_obs": n_obs,
+            "drive_frequency": {"cell_units": orch._num(f_drive), "hz": orch._num(f_drive * per_s),
+                                "detune": detune},
+            "force_scale": orch._num(force_scale), "strengths": rows,
+            "strongest_free_running": None if strongest is None else {
+                "strength": strongest["strength"], "cell_force": strongest["cell_force"]},
+            "weakest_captured": None if weakest is None else {
+                "strength": weakest["strength"], "cell_force": weakest["cell_force"]},
+            "chi_f0_row": chi_f0_row, "suggested_forcing": suggested, "notes": list(DRIVE_NOTES)}
+
+        def column(key):
+            return np.asarray([np.nan if row[key] is None else row[key] for row in rows], dtype=float)
+
+        _drive_figure(w.fig_sink(fig_sink), strengths, [row["own_peak_ratio"] for row in rows], free_min,
+                      captured_max)
+        file_manager.atomic_savez(w.payload("probe_drive.npz"), {
+            "strengths": np.asarray(strengths, dtype=float), "own_peak_ratio": column("own_peak_ratio"),
+            "chi_median": column("chi_median"), "plv_median": column("plv_median"),
+            "freqs": u.freqs.cpu().numpy(), "power": u.power.cpu().numpy()})
+        w.parents = {}
+        w.config.update(settings)
+        w.body = {"diagnostic": "probes", "variant": "drive", "settings": settings, "results": results}
     return store.load_diagnostic(w.id)
