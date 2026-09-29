@@ -1420,7 +1420,7 @@ def test_gen_training_data_recovers_from_an_oom_outside_the_simulator():
         # where the old sorted-order runner happened to pass. Any seed whose draws fit works;
         # fork_rng leaves the global stream as it found it for the tests after this one.
         with torch.random.fork_rng(devices=[]):
-            torch.manual_seed(0)
+            torch.default_generator.manual_seed(0)
             data, thetas = pipeline_mod.gen_training_data(
                 model, _FixedPrior(cfg.ground_truth_tensor.reshape(1, -1)), None, t,
                 run_size=run_size, n_runs=2, steady_idx=steady_idx, dt_nd_min=cfg.dt_nd_min,

@@ -1766,7 +1766,7 @@ def test_the_training_ceiling_is_the_bound_the_sobol_prefilter_enforces():
     top = probe_math.training_ceiling_s(cfg, 3.73) * cfg.get_unit_conversion_factor("s")
     args = (cfg.dt_exp, cfg.dt_nd_min, cfg.steady_idx)
     with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(0)
+        torch.default_generator.manual_seed(0)
         pipeline._batch_schedule(4, cfg.t, (3.73, 3.73), top, top, *args)
         beyond = top + 2 * cfg.dt_exp
         with pytest.raises(ValueError, match="fine-grid ceiling"):
@@ -2169,7 +2169,7 @@ def test_the_probe_simulator_drives_a_tier1_cell_at_its_derived_force_scale(monk
     amp = (cfg.chi_f0 * rs[:, sim_idx["f_scale"]]).contiguous()
     freq = torch.full((2,), 0.005, dtype=torch.float64)
     with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(0)
+        torch.default_generator.manual_seed(0)
         x = probes._simulate(cfg, geom, nd, rs, sim_idx, inits, amp_dim=amp, freq=freq)
     assert x.shape == (2, geom.n_obs) and bool(torch.isfinite(x).all())
     assert len(seen) == 1
