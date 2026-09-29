@@ -1,11 +1,11 @@
-"""Comparing saved FDT records (piece 5, spec §7; decision E8).
+"""Comparing saved FDT records.
 
-A comparison is itself an ``fdt`` record, with ``body.study = "comparison"`` (§7.3): ``body.compared``
+A comparison is itself an ``fdt`` record, with ``body.study = "comparison"``: ``body.compared``
 names the mode and the records it drew, its figures are its output, and its ``data.h5`` holds the
 common grid and the interpolated curves. It names its sources in the BODY and not in ``parents``,
 because the parents block is a flat ``{key: id}`` map read as ``m.parents.get(pk) == id_``, so it
-cannot carry an arbitrary number of ids without widening the store's contract for every kind (spec
-§1.2). Deleting a record a comparison drew is therefore not refused; ``report.render_lineage``
+cannot carry an arbitrary number of ids without widening the store's contract for every kind.
+Deleting a record a comparison drew is therefore not refused; ``report.render_lineage``
 resolves the body's ids and prints ``MISSING`` for one the store no longer holds -- which is why the
 body records each source's RESOLVED id, never the ref the caller typed: the store resolves a name as
 well as an id, and a later run that took a deleted source's name must not read as that source.
@@ -15,8 +15,8 @@ two runs of the same cell land on different frequencies; each mode therefore goe
 three steps -- load and check the records, interpolate onto a common grid, write the record -- and
 differs only in what it draws. The modes register themselves in ``_DRAWERS``.
 
-REFUSED BEFORE THE RECORD OPENS. The record is progressive (spec §2.2): it exists from the moment
-its writer is entered, and an exception after that KEEPS it (E2). So everything a comparison can
+REFUSED BEFORE THE RECORD OPENS. The record is progressive: it exists from the moment its writer is
+entered, and an exception after that KEEPS it, marked unfinished. So everything a comparison can
 refuse from what it was given is refused before ``open_record``: the mode, its settings, the arity
 and each record by ``compare`` and ``load_records``, and what the records HOLD -- whether their
 curves share a band, the constant a record was normalised with, a sweep's operating points and where
@@ -26,10 +26,10 @@ check is a helper its drawer calls again as a backstop, so a refusal reads the s
 raises it. An interrupted comparison keeps its record, unfinished; nothing resumes it, and
 re-running draws a new one.
 
-BLANKS ARE NEVER INTERPOLATED ACROSS. A frequency a run could not measure comes back blank (E9), and
-a comparison that blended over one would put back exactly the fabricated tail the off-grid fix
-removed. A target point whose bracketing samples include a blank is blank, and the record says how
-many there were, in its notices and on the axis.
+BLANKS ARE NEVER INTERPOLATED ACROSS. A frequency a run could not measure comes back blank and
+counted, never interpolated, and a comparison that blended over one would put back exactly the
+fabricated tail the off-grid fix removed. A target point whose bracketing samples include a blank
+is blank, and the record says how many there were, in its notices and on the axis.
 
 LIGHT ON PURPOSE: nothing here imports ``core.diagnostics``, ``core.orchestrator`` or an ``sbi``
 submodule. A comparison draws saved numbers; the inference stack would cost every run about two
@@ -51,13 +51,13 @@ from core.refusals import refuse, require_finite, require_positive
 from core.runs import public_entry
 
 # The comparison's own report -- which records it drew, how much of the common grid was usable -- is
-# information (piece 3, V4); the record's log.txt keeps it beside the manifest.
+# information; the record's log.txt keeps it beside the manifest.
 log = logging.getLogger(__name__)
 
 #: ``mode -> (the study its records must carry, the fewest records it draws, the most or None)``.
 #: The arity is a real input class and not a nicety: one cell is not a comparison, and a sweep drawn
-#: as a single-cell run reads a layout that is not there. A ceiling as well as a floor (F59), because
-#: a mode that draws one record, or two, would otherwise be handed more and silently draw the first.
+#: as a single-cell run reads a layout that is not there. A ceiling as well as a floor, because a
+#: mode that draws one record, or two, would otherwise be handed more and silently draw the first.
 MODE_RULES: dict[str, tuple[str, int, "int | None"]] = {
     "cells": ("single", 2, None),
     "repeats": ("single", 2, None),
@@ -76,11 +76,11 @@ MODE_OPTIONS: dict[str, tuple[str, ...]] = {
 #: mode modules below as each lands; a mode with no drawer is refused, which also covers a mode
 #: string that reached here without passing through the tool's own choices. ``info``, when a drawer
 #: returns it, is sentences the record keeps in its notices that ``compare`` logs as information
-#: rather than as warnings (the whole-piece review's N11).
+#: rather than as warnings.
 #:
 #: A drawer runs inside the ENTERED writer and keeps its contract: every figure goes through
 #: ``sink`` and the numbers through ``write_curves``, and ``results`` holds finite numbers only
-#: (``_num``) -- a manifest refuses NaN, and this ratio legitimately carries it (spec §2.3).
+#: (``_num``) -- a manifest refuses NaN, and this ratio legitimately carries it.
 _DRAWERS: dict = {}
 
 #: ``mode -> check(records, **options)``: the refusals a mode can make only once it has READ the
@@ -93,7 +93,7 @@ _DRAWERS: dict = {}
 #: returns is ignored: the drawer contract above is unchanged, and a drawer settles its own inputs.
 _PREFLIGHT: dict = {}
 
-#: What a single-cell record's ``data.h5`` calls its two curves (spec §2.3). The names are
+#: What a single-cell record's ``data.h5`` calls its two curves. The names are
 #: ``cross_validation._fdt_measure``'s own vocabulary, which the sweep's file already uses, so one
 #: reader's words describe both files.
 OMEGA_GRID, RATIO = "omega_grid", "T_eff_over_T"
@@ -117,7 +117,7 @@ class Curve:
 
 def _num(x):
     """A finite float, or None -- a manifest refuses a non-finite number in the body
-    (``manifest._check_finite``) and this ratio legitimately carries NaN (spec §2.3). The same rule
+    (``manifest._check_finite``) and this ratio legitimately carries NaN. The same rule
     as ``orchestrator._num``, restated here so this module needs no orchestrator import."""
     try:
         v = float(x)
@@ -164,8 +164,8 @@ def _shortest_names(keys: list) -> dict:
 
 
 def _checked_options(mode: str, options: dict) -> dict:
-    """The mode's settings, judged BEFORE the record opens (F57) and returned as the floats the
-    record will carry. The first manifest is written at ``__enter__`` with these values in
+    """The mode's settings, judged BEFORE the record opens and returned as the floats the record
+    will carry. The first manifest is written at ``__enter__`` with these values in
     ``body.settings``, so one the manifest cannot hold -- a NaN -- would otherwise fail inside the
     writer and leave a folder behind, and a blank or non-positive constant would be refused only once
     the record existed. The drawers keep their own check as a backstop."""
@@ -194,9 +194,9 @@ def load_records(store, refs, mode: str) -> list:
     Refuses, each under ``compare_records`` and naming the record by its own name (or id), never by
     the ref it was given: too few or too many records for the mode, a ref that names no record, a
     record of the wrong study, a record whose run did not finish, and a record with no numbers beside
-    its manifest. An unfinished record (E2 leaves those on disk with a valid manifest) can reach here
-    only from the tool, by id or name: the window's picker offers finished records only. One run
-    named twice is refused too, so the arity counts distinct runs.
+    its manifest. An unfinished record (a cancel or a crash keeps its folder, marked unfinished, with
+    a valid manifest) can reach here only from the tool, by id or name: the window's picker offers
+    finished records only. One run named twice is refused too, so the arity counts distinct runs.
 
     A bare string for ``refs`` is a TypeError, not a refusal: iterated, it would be one ref per
     character. Neither front end can produce one (``--record`` appends to a list, and the window's
@@ -220,7 +220,7 @@ def load_records(store, refs, mode: str) -> list:
     for ref in refs:
         if not _held(store, ref):
             # The store's own refusal carries field="artifact", which would send the window to the
-            # Artifacts screen and name no flag at all; the control that answers it is this list (F58).
+            # Artifacts screen and name no flag at all; the control that answers it is this list.
             refuse("compare_records", f"The saved runs to compare must exist; {ref!r} names no fdt record.")
         rec = store.load_fdt(ref)
         who = rec.name or rec.id
@@ -285,7 +285,7 @@ def labelled_curves(records: list) -> tuple:
     as much of its path as tells them apart ("shm/default"): a legend showing one name twice would
     say one cell was measured twice. Two runs of the SAME cell share its name honestly, so their
     labels add the run ("default (run_a)") and each curve can still be found. ``cells`` is what a
-    mode reports as the cells it drew (P60), so it follows the same rule and counts cells, not runs.
+    mode reports as the cells it drew, so it follows the same rule and counts cells, not runs.
     """
     labels, cells = _record_labels(records)
     curves = [replace(curve_of(rec), label=label) for rec, label in zip(records, labels)]
@@ -294,8 +294,7 @@ def labelled_curves(records: list) -> tuple:
 
 def common_grid(curves: list) -> np.ndarray:
     """Log-spaced over the INTERSECTION of the curves' spans, with N the smallest point count among
-    them (spec §7.2). Curves that share no band at all are refused: an empty picture is not an
-    answer.
+    them. Curves that share no band at all are refused: an empty picture is not an answer.
 
     The two end points are the span's own numbers, not their round trip through the logarithm:
     ``exp(log(3.0))`` is one ulp above 3.0, and an end point one ulp outside a record's span is
@@ -337,7 +336,8 @@ def interpolate_onto(grid, omegas, values) -> np.ndarray:
 
     The blank mask is carried by an INDICATOR interpolated the same way, never by trusting NaN to
     propagate through ``np.interp``: numpy retries a non-finite result from the other bracket, so
-    "the NaN comes out anyway" is not a property to lean on for the guarantee §7.2 states.
+    "the NaN comes out anyway" is not a property to lean on for the guarantee that a blank is never
+    interpolated across.
     """
     x = np.log(np.asarray(omegas, dtype=np.float64))
     y = np.asarray(values, dtype=np.float64)
@@ -353,13 +353,12 @@ def interpolate_onto(grid, omegas, values) -> np.ndarray:
 
 def blank_notice(values: list, *, interpolated: bool = True) -> tuple:
     """``(blanks, notices)`` -- how many common-grid points are blank in at least one curve, and the
-    sentence the record keeps when there are any (spec §7.2: "the drawing says so, in the axis label
-    and in the record's notices").
+    sentence the record keeps when there are any: the drawing says so, in the axis label and in the
+    record's notices.
 
-    ``interpolated=False`` is renormalise's (the whole-piece review's N13): it draws the run on its
-    OWN grid and interpolates nothing, so the sentence about a common grid and bracketing samples
-    would describe a step that never ran. Its blanks are what the run did not measure, which is all
-    there is to say of them."""
+    ``interpolated=False`` is renormalise's: it draws the run on its OWN grid and interpolates
+    nothing, so the sentence about a common grid and bracketing samples would describe a step that
+    never ran. Its blanks are what the run did not measure, which is all there is to say of them."""
     stack = np.stack([np.asarray(v, dtype=np.float64) for v in values], axis=0)
     blanks = int((~np.isfinite(stack)).any(axis=0).sum())
     if blanks == 0:
@@ -377,7 +376,7 @@ def open_record(store, mode: str, records: list, *, name: str, note: str, settin
 
     ``create`` mints the id and runs ``assert_name_free`` before anything is spent, and the body is
     set between ``create()`` and the ``with``: the progressive mode's first manifest carries every
-    body key, so the facts already known have to be there before ``__enter__`` writes it (spec §2.2).
+    body key, so the facts already known have to be there before ``__enter__`` writes it.
     ``compared`` carries each LOADED record's own id and name, whatever ref reached ``compare``.
     """
     w = store.create("fdt", None, name=name, note=note)
@@ -397,13 +396,13 @@ def open_record(store, mode: str, records: list, *, name: str, note: str, settin
 
 def write_curves(w, grid, values: list, labels: list, *, constants: list) -> None:
     """The comparison's ``data.h5``: the common grid and one interpolated curve per record, each
-    carrying the label the picture used (spec §7.3).
+    carrying the label the picture used.
 
     ``constants`` is one ``(omega_0, prefactor)`` pair per curve -- the constants THAT curve's numbers
     were computed with, which for a renormalised curve is not its source's recorded prefactor. The
     layout contract puts ``omega_0`` and ``prefactor`` at the root of every ``data.h5``; a comparison
     has no single value for either, so the root holds NaN (not applicable) and each curve carries its
-    own (F55). Required, not defaulted: a drawer that forgot them would write NaN for every curve and
+    own. Required, not defaulted: a drawer that forgot them would write NaN for every curve and
     nothing would say so. ``strict``, so a drawer that hands one list short is a loud bug and never a
     curve silently dropped from the file.
     """
@@ -424,7 +423,7 @@ def write_curves(w, grid, values: list, labels: list, *, constants: list) -> Non
 
 def finish_record(w, *, results: dict, notices) -> None:
     """Fill in what the drawing found and re-write the manifest. ``complete`` is the writer's to set,
-    on the clean exit (spec §2.2 step 4).
+    on the clean exit.
 
     Called once, inside the entered writer and after the drawer has handed out its figures and its
     payload, so the one refresh a comparison makes never precedes what it records."""
@@ -478,8 +477,8 @@ def compare(mode: str, refs, *, name: str = "", note: str = "", fig_sink=None, s
         log.info(f"Writing comparison record {w.id} at {w.dir}")
         results, notices, *rest = drawer(w, records, sink=w.fig_sink(fig_sink), **options)
         # A drawer may hand back a third list: sentences the record keeps in its notices that are
-        # INFORMATION, not something to act on -- repeats' one-cell report (the whole-piece review's
-        # N11). Logged at info; the rest at warning, as before.
+        # INFORMATION, not something to act on -- repeats' one-cell report. Logged at info; the rest
+        # at warning, as before.
         info = list(rest[0]) if rest else []
         for sentence in notices:
             log.warning(sentence)
@@ -531,7 +530,7 @@ def _shares_a_band(records) -> None:
 
 
 def draw_cells(w, records, *, sink):
-    """Several single-cell records' ratio curves on one axis, labelled by cell (spec §7.1)."""
+    """Several single-cell records' ratio curves on one axis, labelled by cell."""
     curves, _cells = labelled_curves(records)
     grid = common_grid(curves)             # the backstop of the pre-flight's _shares_a_band
     values = [interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
@@ -552,7 +551,7 @@ def draw_cells(w, records, *, sink):
 
 
 def draw_repeats(w, records, *, sink):
-    """Repeats of one cell, with the spread ACROSS them as a band (spec §7.1, E7).
+    """Repeats of one cell, with the spread ACROSS them as a band.
 
     The band is the envelope -- the lowest and the highest repeat at each frequency -- and not a
     standard deviation: with the two or three repeats this is written for, an SD is a number computed
@@ -565,21 +564,21 @@ def draw_repeats(w, records, *, sink):
     values = [interpolate_onto(grid, c.omegas, c.ratio) for c in curves]
     blanks, notices = blank_notice(values)
     notices = list(notices)
-    # E7: repeats use DIFFERENT seeds, and their spread is the measurement error. Records that share
-    # one are one run drawn twice -- a reproducibility check, whose band has no width -- so the mode
-    # names them (the whole-piece review's N12; the owner ruled a notice, R-F6, never a refusal: the
-    # comparison is still a true picture of what was asked) and records every seed in `results`.
+    # Every run records the seed it used, and repeats use DIFFERENT seeds: their spread is the
+    # measurement error. Records that share one are one run drawn twice -- a reproducibility check,
+    # whose band has no width -- so the mode names them in a notice, never a refusal (the comparison
+    # is still a true picture of what was asked), and records every seed in `results`.
     seeds = [rec.body.get("seed") for rec in records]
     for seed in dict.fromkeys(s for s in seeds if s is not None and seeds.count(s) > 1):
         twins = " and ".join(repr(rec.name or rec.id) for rec, s in zip(records, seeds) if s == seed)
         notices.append(f"{twins} share seed {seed}: they are one run drawn twice, and their spread "
                        f"is not a measurement error.")
-    # P60: "the same cell" is not enforced -- a record's cell lives in its manifest's inputs and
-    # nothing stops a caller passing two -- so the mode REPORTS which cells it drew: in the legend
-    # (each curve is labelled by its cell) and here, in the record's notices (A1). Named by
-    # ``labelled_curves``' rule, so two different cells that share a file name count as two. With ONE
-    # cell the sentence is information, returned apart so ``compare`` logs it at INFO: logged as a
-    # warning it fired on every correct run of this mode (the whole-piece review's N11).
+    # "The same cell" is not enforced -- a record's cell lives in its manifest's inputs and nothing
+    # stops a caller passing two -- so the mode REPORTS which cells it drew: in the legend (each curve
+    # is labelled by its cell) and here, in the record's notices. Named by ``labelled_curves``' rule,
+    # so two different cells that share a file name count as two. With ONE cell the sentence is
+    # information, returned apart so ``compare`` logs it at INFO: logged as a warning it fired on
+    # every correct run of this mode.
     cells = sorted(set(cell_of))
     said = (f"The repeats drawn come from {len(cells)} cell(s): {', '.join(cells)}. The band is the "
             f"spread across these runs, and it is one cell's measurement error only when every run "
@@ -597,8 +596,8 @@ def draw_repeats(w, records, *, sink):
             band.create_dataset(key, data=np.asarray(arr, dtype=np.float64))
     fig, ax = ratio_axes("FDT ratio across repeats", blanks)
     ax.fill_between(grid, lo, hi, alpha=0.25, color="steelblue", label="spread across the repeats")
-    # Markers on every curve, as the other modes draw theirs (the whole-piece review's N11): a line
-    # alone draws nothing for a measured point with a blank on each side.
+    # Markers on every curve, as the other modes draw theirs: a line alone draws nothing for a
+    # measured point with a blank on each side.
     ax.plot(grid, mean, color="steelblue", linewidth=1.4, marker="o", markersize=4,
             label="mean of the repeats")
     for curve, vals in zip(curves, values):
@@ -638,7 +637,7 @@ def _renormalisable(records) -> Curve:
 
 def draw_renormalise(w, records, *, sink, prefactor):
     """One record's ratio recomputed with a supplied normalisation constant, drawn against the
-    original (spec §7.1).
+    original.
 
     An exact rescaling, not a re-measurement: ``spectral.eff_temp_ratio`` is
     ``prefactor * omega * G / (4 chi'')``, linear in the constant, so the new curve is the recorded
@@ -648,7 +647,7 @@ def draw_renormalise(w, records, *, sink, prefactor):
     and interpolating a curve onto a regenerated copy of its own grid would only add float error.
 
     Both constants were judged before the record opened: the supplied one with the options
-    (``_checked_options``, F57), the RECORDED one by the pre-flight (``_renormalisable``), once the
+    (``_checked_options``), the RECORDED one by the pre-flight (``_renormalisable``), once the
     record's numbers were read. Judging them again here is the backstop for a caller that reaches
     the drawer another way, and it still comes before anything is written, so a refusal here leaves
     no record behind either (the writer removes a progressive record refused before its first
@@ -664,9 +663,9 @@ def draw_renormalise(w, records, *, sink, prefactor):
               f"{curve.label} (renormalised, {want:g})"]
     values = [original, renormalised]
     blanks, notices = blank_notice(values, interpolated=False)
-    # Each curve carries the constant ITS numbers were computed with (F55): the original its
-    # record's own, the renormalised one the constant supplied -- so a reader of the file never has
-    # to know which of the two curves was rescaled to read either correctly.
+    # Each curve carries the constant ITS numbers were computed with: the original its record's own,
+    # the renormalised one the constant supplied -- so a reader of the file never has to know which
+    # of the two curves was rescaled to read either correctly.
     write_curves(w, grid, values, labels,
                  constants=[(curve.omega_0, curve.prefactor), (curve.omega_0, want)])
     fig, ax = ratio_axes("FDT ratio renormalised", blanks)
@@ -699,8 +698,8 @@ def _rounded(x: float) -> float:
 
 #: How an operating point is PRINTED: to the precision it is compared at (``_SLICE_DECIMALS``). With
 #: ``:g``'s six digits a slice point typed with more read as the row it was compared with -- "sliced
-#: at s = 0.1 ... slice point s = 0.1", a sentence that contradicts itself (the whole-piece review's
-#: N15). ``.12g`` still prints 0.1 as "0.1".
+#: at s = 0.1 ... slice point s = 0.1", a sentence that contradicts itself. ``.12g`` still prints 0.1
+#: as "0.1".
 _POINT = ".12g"
 
 
@@ -724,7 +723,7 @@ def _sweep_rows(rec) -> list:
     """One sweep record's usable operating points, in ``load_param_sweep``'s own shape -- the read-back
     the sweep's own figure (``plot_fdt_3d_vs_param``) is drawn from, so this mode reads the record
     exactly as the sweep that wrote it does. A point that failed carries an ``error`` and no response
-    data (spec §4.3), so it is not usable; nor is one without either axis this mode draws on -- the
+    data, so it is not usable; nor is one without either axis this mode draws on -- the
     normalised one of the surfaces (``cross_validation_plots._stack``'s own rule for a usable row)
     and the absolute one of the slice. The sweep writes both with the ratio, so a finished point has
     them."""
@@ -792,9 +791,9 @@ def sweep_slice(records, *, at=None) -> SweepSlice:
     lo = max(min(row["param_value"] for row in rr) for rr in rows)
     hi = min(max(row["param_value"] for row in rr) for rr in rows)
     if hi < lo:
-        # Each sweep and the range of its FINISHED points (the whole-piece review's N14): the ranges
-        # are taken over those alone, so two sweeps whose grids overlap on paper can be refused, and
-        # a sentence naming neither left the operator nothing to check.
+        # Each sweep and the range of its FINISHED points: the ranges are taken over those alone, so
+        # two sweeps whose grids overlap on paper can be refused, and a sentence naming neither left
+        # the operator nothing to check.
         spans = " and ".join(
             f"{(rec.name or rec.id)!r} covers [{min(r['param_value'] for r in rr):g}, "
             f"{max(r['param_value'] for r in rr):g}]" for rec, rr in zip(records, rows))
@@ -824,12 +823,12 @@ def sweep_slice(records, *, at=None) -> SweepSlice:
 
 
 def draw_sweeps(w, records, *, sink, at=None):
-    """Two sweep records together, and a slice of both at one operating point (spec §7.1).
+    """Two sweep records together, and a slice of both at one operating point.
 
     The surfaces answer "does FDT come back" along each sweep, each on that sweep's own normalised
     axis and marking the row it was sliced at; the slice is where the two can be read against each
     other, at one operating point on one common grid of ABSOLUTE frequency (``sweep_slice`` says
-    why). ``sweep_slice`` settles the slice before anything is written (P49), so a refusal here --
+    why). ``sweep_slice`` settles the slice before anything is written, so a refusal here --
     the backstop of the pre-flight that already ran it -- leaves no record behind: the writer removes
     a progressive record refused before its first figure or payload. Each curve in the file also
     carries its row's swept value and, as provenance, its sweep's ``omega_0_ref``. When a sweep was
@@ -896,8 +895,8 @@ _DRAWERS["renormalise"] = draw_renormalise
 _DRAWERS["sweeps"] = draw_sweeps
 
 # Each mode's pre-flight, called as ``check(records, **options)`` with the options the mode accepts:
-# renormalise's supplied constant was already judged with the options (F57), so its check reads only
-# the recorded one.
+# renormalise's supplied constant was already judged with the options, so its check reads only the
+# recorded one.
 _PREFLIGHT["cells"] = _PREFLIGHT["repeats"] = _shares_a_band
 _PREFLIGHT["renormalise"] = lambda records, *, prefactor: _renormalisable(records)
 _PREFLIGHT["sweeps"] = sweep_slice

@@ -16,7 +16,7 @@ from core.Simulator.hopf_simulator import HopfSimulator
 from core.Simulator.bp_simulator import BPSimulator
 from core.FDT.spectral import psd_welch, lock_in_chi
 
-# Progress is information and a memory-capped batching plan a warning (piece 3, V4).
+# Progress is information and a memory-capped batching plan a warning.
 log = logging.getLogger(__name__)
 
 # Model -> simulator class. Matches core/SBI/pipeline.py:VALID_SIMS so FDT and SBI
@@ -126,9 +126,9 @@ def observable_noise_prefactor(cfg: FDTConfig) -> float:
 
     def _noise(name: str) -> float:
         # The observable's noise term, refused unless finite and positive -- the user-model branch's
-        # rule and words below (the whole-piece review's N8). parse_cell does not range-check values
-        # on the FDT path, so a cell with sigma_x = 0 or eta_hb = 0 reached the division bare and
-        # raised ZeroDivisionError: a bug report in both front ends, for a cell value.
+        # rule and words below. parse_cell does not range-check values on the FDT path, so a cell
+        # with sigma_x = 0 or eta_hb = 0 reached the division bare and raised ZeroDivisionError: a
+        # bug report in both front ends, for a cell value.
         v = float(pd[name][0])
         if not (math.isfinite(v) and v > 0.0):
             raise FDTModelError(f"The {cfg.model} cell's observable noise {name} is {v:g}, not a "

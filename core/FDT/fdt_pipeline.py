@@ -35,13 +35,13 @@ from core.refusals import PreflightWarning, Refusal
 from core.rng import require_seed, seeded
 from core.runs import RUN_BOUNDARY_FILES, public_entry
 
-# Banners and saved-plot paths are information; a failed sanity verdict is a warning (piece 3, V4).
+# Banners and saved-plot paths are information; a failed sanity verdict is a warning.
 log = logging.getLogger(__name__)
 
 
 def _resolve_seed(seed, cfg) -> int:
-    """The seed this run used (E7): the one given, else the one the config was built with, else one
-    DRAWN and recorded. Drawn from Python's own ``random``, which is the one global stream neither
+    """The seed this run used: the one given, else the one the config was built with, else one DRAWN
+    and recorded. Drawn from Python's own ``random``, which is the one global stream neither
     the solver nor the spectrum reads -- ``torch.seed()`` would reseed every CUDA device as a side
     effect of being asked a question (the hazard core/SBI/decorrelate.py documents)."""
     if seed is not None:
@@ -52,7 +52,7 @@ def _resolve_seed(seed, cfg) -> int:
 
 
 def _settings_block(cfg, *, skip_sanity=None, confirm_production=None) -> dict:
-    """Every knob the run resolved, for ``body.settings`` (spec §2.3). The five that no front end
+    """Every knob the run resolved, for ``body.settings``. The five that no front end
     exposes -- freq_bounds, burn_in_nd, T_obs_periods, dt_nd, psd_T_obs_nd -- are recorded here even
     though no control and no flag names them, because without them a number is not reproducible.
     ``skip_sanity`` and ``confirm_production`` are run_fdt's ARGUMENTS, not FDTConfig fields, so the
@@ -70,7 +70,7 @@ def _results_block(omegas, ratio, omega_natural: float, blanks: int) -> dict:
     """The short summary the listing and the detail pane show. FINITE NUMBERS ONLY: manifest.validate
     refuses a non-finite float anywhere in the body, and T_eff/T legitimately carries NaN wherever the
     spectrum came back blank or chi'' crossed zero -- so a summary that would be NaN is recorded as
-    null (spec §2.3)."""
+    null."""
     r = ratio.detach().cpu().to(torch.float64)
     w = omegas.detach().cpu().to(torch.float64)
     usable = torch.isfinite(r)
@@ -91,16 +91,16 @@ def _results_block(omegas, ratio, omega_natural: float, blanks: int) -> dict:
 
 
 def _write_single_h5(path, cfg, omegas, ratio, chis, freqs_psd, G, omega_natural, prefactor) -> None:
-    """The single-cell layout of ``data.h5`` (spec §2.3, §3.8).
+    """The single-cell layout of ``data.h5``.
 
     ``study`` sits at the ROOT so a reader can check the layout before reading a dataset: a sweep's
     file and a comparison's file carry the same name inside their own records. The dataset names are
-    the sweep file's own vocabulary (and the dead single-point helper's, deleted in piece 5) --
-    ``omega_grid``, ``T_eff_over_T``, ``chi_prime``, ``chi_double_prime``, ``PSD_omegas``, ``PSD_G``,
-    all float64 -- so the comparison (T36, spec §7) reads one set of names whichever study wrote them
-    (P5, P71). The spontaneous spectrum keeps its OWN frequency axis -- it is a Welch grid, not the
-    log-spaced chi grid, and interpolating one onto the other is exactly the step §3.5's off-grid fix
-    made honest.
+    the sweep file's own vocabulary -- ``omega_grid``, ``T_eff_over_T``, ``chi_prime``,
+    ``chi_double_prime``, ``PSD_omegas``, ``PSD_G``, all float64 -- so the comparison reads one set of
+    names whichever study wrote them. The spontaneous spectrum keeps its OWN frequency axis -- it is
+    a Welch grid, not the log-spaced chi grid, and interpolating one onto the other is exactly the
+    step ``sanity._interp_log`` made honest: a frequency the spectrum does not resolve comes back
+    blank, never interpolated.
     """
     def _f64(t):
         return t.detach().cpu().numpy().astype(np.float64)
@@ -144,7 +144,7 @@ def _estimate_omega_0(cfg: FDTConfig) -> tuple[float, str]:
 
 
 def thin_notices(cfg: FDTConfig) -> list:
-    """The "too thin to trust" sentences for this run's settings; ``[]`` when there are none (E5).
+    """The "too thin to trust" sentences for this run's settings; ``[]`` when there are none.
 
     Pure, and shared by the single-cell run and the sweep, so both mark a quick look the same way
     and ``body.notices`` carries the same words the operator was shown. The thresholds are
@@ -187,17 +187,16 @@ def _refuse_a_diverged_spectrum(cfg, freqs_psd, G) -> None:
     """Refuse a spontaneous spectrum with no finite value at any positive frequency: the simulation
     diverged, and there is nothing to measure against it (field ``cell``).
 
-    ONE test and one sentence for both studies (the whole-piece review's M1). ``run_fdt`` raises it
-    straight after Campaign 1, before the peak search -- argmax takes NaN for the largest value, so
-    the search would return the first bin as the resonance, and the band check and the
-    nothing-measurable refusal would then describe a band that does not exist (the review of Task
-    16). The sweep raises it inside each operating point's guard, where it makes that point a FAILED
-    one with this sentence as its ``error``: before, the point's resonance search fell back to the
-    linearised estimate without a word, and the point was counted done with every probe booked as
-    off-grid. field="cell": neither the band nor the recording length can help; what diverged is the
-    cell's dynamics. A spectrum non-finite in only SOME bins is not this refusal -- its blanks are
-    counted like any other. A grid with no positive bin at all (a one-sample recording) is not a
-    divergence either, and is not called one.
+    ONE test and one sentence for both studies. ``run_fdt`` raises it straight after Campaign 1,
+    before the peak search -- argmax takes NaN for the largest value, so the search would return the
+    first bin as the resonance, and the band check and the nothing-measurable refusal would then
+    describe a band that does not exist. The sweep raises it inside each operating point's guard,
+    where it makes that point a FAILED one with this sentence as its ``error``: before, the point's
+    resonance search fell back to the linearised estimate without a word, and the point was counted
+    done with every probe booked as off-grid. field="cell": neither the band nor the recording length
+    can help; what diverged is the cell's dynamics. A spectrum non-finite in only SOME bins is not
+    this refusal -- its blanks are counted like any other. A grid with no positive bin at all (a
+    one-sample recording) is not a divergence either, and is not called one.
     """
     positive = freqs_psd > 0
     if bool(positive.any()) and not bool(torch.isfinite(G[positive]).any()):
@@ -210,19 +209,20 @@ def _refuse_a_diverged_spectrum(cfg, freqs_psd, G) -> None:
 
 
 def _nothing_measurable(cfg, n_probes: int, omega_lo: float, lo_res: float, hi_res: float) -> str:
-    """The refusal's words when every probe frequency came back blank (spec §3.6, E4).
+    """The refusal's words when every probe frequency came back blank: nothing measurable is a
+    refusal, never an empty result.
 
-    Every clause must be TRUE of the spectrum the run measured (the ruling after Task 14's review,
-    carried to every sentence about the resolution). By the time this is asked, the band check has
-    refused any grid reaching below the spectrum's first real bin, so a probe that blanks lies ABOVE
-    the spectrum's top -- and since the probes ascend, every probe blanks exactly when the lowest one
-    does. The resonance the grid is built around is itself a bin of the spectrum, so this happens only
-    when freq_bounds' lower multiplier exceeds top/omega_0, which is at least 1. Lowering the UPPER
-    multiplier alone would then bring no probe back, so the advice names the lower one first, with the
-    floor the band check enforces. The top is the Nyquist frequency pi/dt_nd, which the recording
-    length does not move, so a longer recording is named only to say it would not help: the one thing
-    a longer recording can lower is the BOTTOM, which is not what failed here (``_low_end_advice``
-    words that case).
+    Every clause must be TRUE of the spectrum the run measured, as every sentence about the
+    resolution must be: none offers a longer recording where that cannot help. By the time this is
+    asked, the band check has refused any grid reaching below the spectrum's first real bin, so a
+    probe that blanks lies ABOVE the spectrum's top -- and since the probes ascend, every probe
+    blanks exactly when the lowest one does. The resonance the grid is built around is itself a bin
+    of the spectrum, so this happens only when freq_bounds' lower multiplier exceeds top/omega_0,
+    which is at least 1. Lowering the UPPER multiplier alone would then bring no probe back, so the
+    advice names the lower one first, with the floor the band check enforces. The top is the Nyquist
+    frequency pi/dt_nd, which the recording length does not move, so a longer recording is named only
+    to say it would not help: the one thing a longer recording can lower is the BOTTOM, which is not
+    what failed here (``_low_end_advice`` words that case).
 
     The explanation is conditional on the lowest probe really lying above the top. A spectrum with no
     finite value at all never gets here -- run_fdt refuses it earlier, as a diverged simulation -- but
@@ -249,57 +249,57 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool,
     """End-to-end FDT analysis, written into one ``fdt`` record. Runs sanity checks first; gates on
     the caller's answer before the production sweep.
 
-    :param skip_sanity: skip the sanity checks. REQUIRED: there is no prompt to fall back to (D1
-                        retired the CLI), and the old None default meant an input() that a GUI worker
-                        thread could never answer.
+    :param skip_sanity: skip the sanity checks. REQUIRED: there is no prompt to fall back to (the
+                        interactive prompts were retired), and the old None default meant an input()
+                        that a GUI worker thread could never answer.
     :param confirm_production: proceed to the production sweep after sanity. REQUIRED, for the same
                         reason; only consulted when the sanity checks run.
     :param writer: the OPEN-BUT-NOT-ENTERED ArtifactWriter the front end minted with
                         ``store.create("fdt", cfg, ...)``. THIS function enters it, and that is not a
                         detail: ``log.txt`` is written from ``runs.current_run_log()``, which is
                         thread-local and only populated inside ``capture_run()`` on the worker thread
-                        -- a writer entered on the window's own thread would write no log at all
-                        (spec §1.2). The front end needs ``writer.dir`` before it dispatches, to point
-                        the figure watcher at the record's ``figures/``; hence the split.
-    :param seed: the seed, or None to draw one and record it (E7).
+                        -- a writer entered on the window's own thread would write no log at all.
+                        The front end needs ``writer.dir`` before it dispatches, to point the figure
+                        watcher at the record's ``figures/``; hence the split.
+    :param seed: the seed, or None to draw one and record it.
     :returns: the LoadedFdt for the record just written.
 
     The decorator hands the body ``cfg.copy_for_run()``, so the two ``cfg.omega_0 = ...`` writes below
     land on a private copy and the caller's settings object is exactly what it was, whether this
-    returned, refused or crashed (V1).
+    returned, refused or crashed.
     """
     # The per-model normalisation prefactor FIRST, before anything is simulated -- and before the
     # writer is entered, so a cell FDT cannot normalise opens no record at all. It reads the cell's
     # parameters and nothing else, and it used to sit at step 8 -- so a cell missing `n` or `beta`
-    # was refused only after BOTH campaigns had been spent (spec §3.4). Carried to step 8 of
-    # _measure. It also precedes the thin-setting notices (ruling F10): a run that is refused must
-    # not first print a warning about how far to trust its result.
+    # was refused only after BOTH campaigns had been spent. Carried to step 8 of _measure. It also
+    # precedes the thin-setting notices: a run that is refused must not first print a warning about
+    # how far to trust its result.
     prefactor = observable_noise_prefactor(cfg)
 
-    # The builders' seed rule, here too (the whole-piece review's N5): a direct call handed -1 was
-    # accepted and recorded, and 2**64 reached ``seeded`` inside the entered writer as a bare
-    # ValueError, leaving an unfinished husk. After the prefactor (ruling F10), before the writer.
+    # The builders' seed rule, here too: a direct call handed -1 was accepted and recorded, and 2**64
+    # reached ``seeded`` inside the entered writer as a bare ValueError, leaving an unfinished husk.
+    # After the prefactor and, like it, before the thin-setting warning and the writer.
     seed = require_seed(_resolve_seed(seed, cfg))
     cfg.seed = seed                                  # on the PRIVATE copy; recorded in the body below
-    # 0. The settings too thin to trust (T12, E5): warned now and KEPT in body.notices (P51). HERE, in
-    #    the decorated function itself: T12's pin reads inspect.getsource(fdt_pipeline.run_fdt), which
-    #    is this function's source (public_entry uses functools.wraps), not _measure's.
+    # 0. The settings too thin to trust: warned now and KEPT in body.notices. HERE, in the decorated
+    #    function itself: the thin-settings test reads inspect.getsource(fdt_pipeline.run_fdt), which
+    #    is this function's own source (public_entry uses functools.wraps), not _measure's.
     notices = warn_thin_settings(cfg)
-    # The first body is UPDATED IN PLACE, never replaced (P15): a front end may already have set the
-    # study and the notices (T25's panel does). The stage owns `settings` and the RESOLVED seed.
+    # The first body is UPDATED IN PLACE, never replaced: a front end may already have set the study
+    # and the notices (the FDT panel does). The stage owns `settings` and the RESOLVED seed.
     body = writer.body
     body.setdefault("study", "single")
-    # confirm_production is recorded only when it was CONSULTED (the whole-piece review's N6): with
-    # skip_sanity the production run goes ahead whatever its value, and the window can pass False
-    # there (a disabled box keeps its state), so recording it would pair "skip the checks" with "do
-    # not proceed" beside a production result.
+    # confirm_production is recorded only when it was CONSULTED: with skip_sanity the production run
+    # goes ahead whatever its value, and the window can pass False there (a disabled box keeps its
+    # state), so recording it would pair "skip the checks" with "do not proceed" beside a production
+    # result.
     body["settings"] = _settings_block(cfg, skip_sanity=skip_sanity,
                                        confirm_production=None if skip_sanity else confirm_production)
     body["seed"] = seed
     # The config block too, and before the writer is entered so the FIRST manifest carries it:
     # store.create computed that block from the caller's object before any seed was resolved, so it
     # holds the builder's seed (or none), and `artifacts show` would print that beside a body that
-    # names the one this run used (Task 17, fix round 1).
+    # names the one this run used.
     writer.config.update({"seed": seed})
     body["notices"] = [*(body.get("notices") or []), *notices]
     for key in ("grid", "points", "offgrid", "compared", "results"):
@@ -307,8 +307,8 @@ def run_fdt(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool,
     body["complete"] = False
     with writer:
         # The record's id, on screen and in its own log the moment it exists, as compare's `Writing
-        # comparison record` line does (the whole-piece review's N1, H3): a run cancelled or crashed
-        # in the long first stages otherwise never named the unfinished record it left behind.
+        # comparison record` line does: a run cancelled or crashed in the long first stages
+        # otherwise never named the unfinished record it left behind.
         log.info(f"Writing fdt record {writer.id} at {writer.dir}")
         with seeded(seed, cfg.hw.device):
             _measure(cfg, skip_sanity=skip_sanity, confirm_production=confirm_production,
@@ -323,9 +323,8 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
 
     ``prefactor`` is the normalisation run_fdt resolved before entering the writer, first read at
     step 8. Each figure path, and ``data.h5``'s, is asked of the writer at the moment its file is
-    written, never up front (P49): once one has been handed out the writer keeps a refused record
-    (spec §2.2 step 3), so a path asked for early would turn a pre-spend refusal into a kept, empty
-    record."""
+    written, never up front: once one has been handed out the writer keeps a refused record, so a
+    path asked for early would turn a pre-spend refusal into a kept, empty record."""
     # 1. Model-specific natural-frequency starting estimate; the production omega_0
     #    is refined from the Campaign 1 PSD peak below.
     cfg.omega_0, omega_0_desc = _estimate_omega_0(cfg)
@@ -338,7 +337,7 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     else:
         # The passive-baseline figure is drawn only where that check runs -- Nadrowski alone, a rule
         # sanity owns -- so its path is asked for only then: a path handed out is a figure the record
-        # lists, and a listed figure that is never drawn is a phantom (Task 17, fix round 1).
+        # lists, and a listed figure that is never drawn is a phantom.
         passive_plot_path = (writer.figure_path("Passive baseline ratio")
                              if _runs_nadrowski_only_checks(cfg) else None)
         results = run_all_sanity(cfg, passive_plot_path=passive_plot_path)
@@ -370,7 +369,7 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
 
     # A spontaneous simulation that diverged is refused HERE, before the peak search (the helper says
     # why), and after the trajectory figure, which is the picture that shows the divergence and which
-    # the folder keeps (E2).
+    # the folder keeps: a refused run keeps its folder, marked unfinished.
     _refuse_a_diverged_spectrum(cfg, freqs_psd, G)
 
     # 4. Find natural frequency from the PSD peak directly (no search band).
@@ -394,13 +393,12 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
 
     # The spectrum's own picture goes to disk BEFORE the band check and the driven campaign, because
     # it is what diagnoses both refusals that can follow -- a band reaching below what the spectrum
-    # resolves (just below) and nothing measurable (below that, still before the drive) -- and E2
-    # keeps the folder it is written into (spec §3.6, P22). It used to be written at the very end,
-    # where neither refusal could ever reach it. plot_psd draws the whole spectrum with the band
-    # shaded when the band holds no point of it -- the shape those refusals usually meet, but not
-    # exactly: a band straddling the first bin is refused beside the ordinary clipped figure, and a
-    # narrow band between two bins gets the whole spectrum and is not refused (the whole-piece
-    # review's N10).
+    # resolves (just below) and nothing measurable (below that, still before the drive) -- and a
+    # refused run keeps the folder it is written into, marked unfinished. It used to be written at
+    # the very end, where neither refusal could ever reach it. plot_psd draws the whole spectrum with
+    # the band shaded when the band holds no point of it -- the shape those refusals usually meet, but
+    # not exactly: a band straddling the first bin is refused beside the ordinary clipped figure, and
+    # a narrow band between two bins gets the whole spectrum and is not refused.
     psd_path = writer.figure_path("Spontaneous PSD")
     plot_psd(freqs_psd.cpu().numpy(), G.cpu().numpy(),
               save_path=psd_path,
@@ -411,13 +409,13 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     log.info(f"Saved spontaneous PSD plot to: {psd_path}")
 
     # The band, checked the first moment it is knowable and BEFORE the driven campaign -- the
-    # expensive half of the run (spec §3.4). The grid's lowest frequency is known only now, because
-    # it is built around the resonance Campaign 1 found; the spectrum's lowest RESOLVED frequency is
-    # its first non-zero bin, which the spectrum's Welch segment sets -- not the recording, which
-    # stops lengthening the segment at campaigns.WELCH_NPERSEG_CAP samples (the ruling after Task
-    # 14's review; _low_end_advice words it). A grid reaching below it comes back blank there (spec
-    # §3.5), and used to come back with a fabricated tail instead.
-    # field="freq_bounds" (P2, P75): the key is registered and BOTH front-end tables map it to None,
+    # expensive half of the run. The grid's lowest frequency is known only now, because it is built
+    # around the resonance Campaign 1 found; the spectrum's lowest RESOLVED frequency is its first
+    # non-zero bin, which the spectrum's Welch segment sets -- not the recording, which stops
+    # lengthening the segment at campaigns.WELCH_NPERSEG_CAP samples (_low_end_advice words it). A
+    # grid reaching below it comes back blank there, and used to come back with a fabricated tail
+    # instead.
+    # field="freq_bounds": the key is registered and BOTH front-end tables map it to None,
     # because neither the band nor the spontaneous duration is exposed by a front end -- so no table
     # offers a fix sentence and none pretends to.
     lo_res, hi_res = _resolved_span(freqs_psd)
@@ -432,32 +430,32 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
 
     # 6. Interpolate Welch G onto the chi frequency grid (log-omega, linear-y). BEFORE the drive: it
     #    reads only the grid and Campaign 1's spectrum, so whether anything is measurable is known
-    #    now, and Campaign 2 changes neither (the review of Task 16).
+    #    now, and Campaign 2 changes neither.
     G_at_omegas = _interp_log(omegas, freqs_psd, G)
 
-    # Nothing measurable is a refusal, not an empty picture (spec §3.6, E4). A probe the spontaneous
-    # spectrum does not resolve comes back blank; when EVERY probe is blank there is no ratio, and
-    # this used to divide blanks by blanks, save a figure with no points on it and report success --
-    # after spending the driven campaign, which it is refused before now. The low end is gated
-    # above, so what stays reachable here is the UPPER end: the grid tops out at
-    # freq_bounds[1]*omega_0 against a spectrum Nyquist of pi/dt_nd, which an active cell can exceed
-    # (spec §3.5). `blanks` and `of` are recorded as body.offgrid, which is how the record says what
-    # the blanks cost (_interp_log's docstring leaves that to its callers). Keyed "freq_bounds" like
-    # the band refusal above (F37): the same subject, and no front end offers a fix sentence for it.
+    # Nothing measurable is a refusal, not an empty picture. A probe the spontaneous spectrum does not
+    # resolve comes back blank; when EVERY probe is blank there is no ratio, and this used to divide
+    # blanks by blanks, save a figure with no points on it and report success -- after spending the
+    # driven campaign, which it is refused before now. The low end is gated above, so what stays
+    # reachable here is the UPPER end: the grid tops out at freq_bounds[1]*omega_0 against a spectrum
+    # Nyquist of pi/dt_nd, which an active cell can exceed. `blanks` and `of` are recorded as
+    # body.offgrid, which is how the record says what the blanks cost (_interp_log's docstring leaves
+    # that to its callers). Keyed "freq_bounds" like the band refusal above: the same subject, and no
+    # front end offers a fix sentence for it.
     # The warning says "no value", not "outside the band": a spectrum non-finite in some bins blanks
     # probes INSIDE the band too, and the sentence has to be true of those.
     blanks, of = int(torch.isnan(G_at_omegas).sum()), G_at_omegas.numel()
-    writer.body["offgrid"] = {"blanks": blanks, "of": int(of)}   # the Campaign-2 probe grid (P57)
+    writer.body["offgrid"] = {"blanks": blanks, "of": int(of)}   # the Campaign-2 probe grid
     if blanks == of:
         raise Refusal(_nothing_measurable(cfg, of, omega_lo, lo_res, hi_res), field="freq_bounds")
     if blanks:
         log.warning(f"{blanks}/{of} probe frequencies have no value in the spontaneous spectrum, whose "
                     f"resolved band is {lo_res:g}..{hi_res:g} (ND), and are blank in the ratio.")
-    # The spectrum's figure and the offgrid count on disk BEFORE the drive (spec §2.2 step 2; the
-    # whole-piece review's N2). ONE refresh, here, after both: Campaign 2 is the hours of the run, and
-    # a process that dies in it without an exception -- a closed window, a kill -- runs no __exit__,
-    # so this manifest is what it leaves. A refusal between the figure and here goes through the keep
-    # branch, whose final manifest lists the figure anyway.
+    # The spectrum's figure and the offgrid count on disk BEFORE the drive. ONE refresh, here, after
+    # both: Campaign 2 is the hours of the run, and a process that dies in it without an exception --
+    # a closed window, a kill -- runs no __exit__, so this manifest is what it leaves. A refusal
+    # between the figure and here goes through the keep branch, whose final manifest lists the figure
+    # anyway.
     writer.refresh()
 
     # 7. Campaign 2: forced chi via lock-in
@@ -468,19 +466,19 @@ def _measure(cfg: FDTConfig, *, skip_sanity: bool, confirm_production: bool, wri
     #    resolved by run_fdt before the writer was entered, before anything was spent.
     ratio = eff_temp_ratio(G_at_omegas, chis.imag, omegas.to(torch.float64), prefactor)
 
-    # The numbers (E1, spec §3.8), the moment they all exist and BEFORE the two figures below: they are
-    # hours of simulation and the figures minutes of matplotlib, so a figure that fails to draw must
-    # not cost them -- E2 keeps the folder, and this puts the numbers in it (Task 18's ruling). Still
-    # after both campaigns, never at the top of the run (P49): a path handed out is a payload the
-    # record lists, so a run that stops before this line leaves an unfinished record that lists no
-    # data.h5.
+    # The numbers -- saved, not just the pictures -- the moment they all exist and BEFORE the two
+    # figures below: they are hours of simulation and the figures minutes of matplotlib, so a figure
+    # that fails to draw must not cost them -- a failed run keeps its folder, marked unfinished, and
+    # this puts the numbers in it. Still after both campaigns, never at the top of the run: a path
+    # handed out is a payload the record lists, so a run that stops before this line leaves an
+    # unfinished record that lists no data.h5.
     _write_single_h5(writer.payload("data.h5"), cfg, omegas, ratio, chis, freqs_psd, G,
                      omega_natural, prefactor)
-    writer.refresh()          # the numbers are listed before a figure can fail (N2)
+    writer.refresh()          # the numbers are listed before a figure can fail
 
     # 9. Plot + save (the PSD went to disk before Campaign 2). Each figure's path is asked for just
     #    before it is drawn: the chi path, asked for up front, was listed by a record whose ratio
-    #    figure failed first (the whole-piece review's N2).
+    #    figure failed first.
     ratio_path = writer.figure_path("Effective temperature ratio")
     plot_eff_temp_ratio(omegas.cpu().numpy(), ratio.cpu().numpy(),
                         save_path=ratio_path,

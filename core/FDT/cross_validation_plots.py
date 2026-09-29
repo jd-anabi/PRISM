@@ -76,7 +76,7 @@ def plot_fdt_3d_vs_param(
     :param records: output of load_param_sweep.
     :param param_symbol: y-axis label, e.g. r"$S$" or r"$T_a/T$".
     :param title: figure title.
-    :param save_path: where to write the PNG -- since piece 5 a path inside the sweep's own record
+    :param save_path: where to write the PNG -- a path inside the sweep's own record
                       (``writer.figure_path(...)``), which is why this function no longer builds one.
                       None draws without saving.
     :param omega_norm_max: linear x-axis upper limit (crop). Full data is in the HDF5.

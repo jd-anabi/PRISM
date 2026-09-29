@@ -10,8 +10,8 @@ canonical sweeps probe FDT restoration:
   - T sweep (S = 0 fixed): calcium is decoupled, so the hot motor (T_a > T) is the
     only non-equilibrium source. As T_a/T -> 1, FDT is restored.
 
-Pure FDT measurement -- no reduction map. Output: one ``fdt`` record per sweep
-(spec §4.1), whose data.h5 holds one group per swept value. Downstream plotting
+Pure FDT measurement -- no reduction map. Output: one ``fdt`` record per sweep,
+whose data.h5 holds one group per swept value. Downstream plotting
 renders T_eff/T vs (omega/omega_0, param). The omega/omega_0 grid is identical
 across operating points by construction (Campaign 2's grid is omega_0 x fixed
 log-ratios), so rows stack with no interpolation.
@@ -31,7 +31,7 @@ import torch
 from ..config import FDTConfig
 # core.rng, never core.diagnostics.rng: importing anything under core.diagnostics runs its __init__,
 # which loads the orchestrator, sbi and pytensor -- two seconds and two false "g++" lines on every
-# sweep, for a context manager that needs none of them (Task 17, fix round 1).
+# sweep, for a context manager that needs none of them.
 from ..refusals import Refusal, describe
 from ..rng import require_seed, seeded
 from ..runs import public_entry
@@ -43,7 +43,7 @@ from .fdt_pipeline import (_estimate_omega_0, _refuse_a_diverged_spectrum, _reso
 from .cross_validation_plots import plot_fdt_3d_vs_param
 
 # Phase banners and per-point progress are information; an operating point that failed in either
-# campaign and was recorded rather than raised is an error record (piece 3, V4).
+# campaign and was recorded rather than raised is an error record.
 log = logging.getLogger(__name__)
 
 # The two canonical sweeps' labels, which used to live inline in run_param_study_cli's two plot calls.
@@ -51,12 +51,13 @@ _PARAM_SYMBOL = {"s": r"$S$", "temp": r"$T_a/T$"}
 #: Each sweep's name in plain text -- _PARAM_SYMBOL without the LaTeX -- as both front ends say it:
 #: the tool's "(the T_a/T sweep)", the window's "T_a/T grid". Every sentence a sweep says about itself
 #: uses it, and so does the record's summary line (core/gui/panels/record_view.py): "the temp sweep"
-#: named a parameter key that appears on no screen (the whole-piece review's N9).
+#: named a parameter key that appears on no screen.
 SWEEP_LABELS = {"s": "S", "temp": "T_a/T"}
 _PARAM_TITLE = {"s": r"FDT ratio vs $(\tilde\omega/\Omega_0,\ S)$  ($T_a/T=1$)",
                 "temp": r"FDT ratio vs $(\tilde\omega/\Omega_0,\ T_a/T)$  ($S=0$)"}
-# Which front-end setting an all-failed sweep names (spec §4.3, E4). The swept parameter IS the grid
-# the operator would change, and each grid has its own control and its own flag.
+# Which front-end setting an all-failed sweep names: a sweep that measured nothing is a refusal. The
+# swept parameter IS the grid the operator would change, and each grid has its own control and its
+# own flag.
 _GRID_FIELD = {"s": "s_grid", "temp": "t_grid"}
 # Each sweep's number in its points' stream derivation (_point_seed). FIXED values, never an
 # enumeration order: renumbering a sweep would silently change what every recorded seed reproduces.
@@ -142,7 +143,7 @@ def _build_common_grid(cfg: FDTConfig, omega0s: list[float], is_res: list[bool]
 
 def _point_seed(seed: int, sweep_param: str, phase: int, idx: int) -> int:
     """The seed of one operating point's stream in one phase (0 = Phase A's spontaneous campaign,
-    1 = Phase B's driven one), derived from the study's single seed (spec §4.1).
+    1 = Phase B's driven one), derived from the study's single seed.
 
     Through numpy's ``SeedSequence``, which hashes its whole entropy tuple, so every stream of one
     study has a derivation of its own -- two coincide only by a 32-bit hash collision -- and a point
@@ -150,8 +151,8 @@ def _point_seed(seed: int, sweep_param: str, phase: int, idx: int) -> int:
     replaces (``seed + idx`` in Phase A, ``seed + n_points + idx`` in Phase B) gave point k of the S
     sweep and point k of the T sweep the SAME Phase-A stream -- point 0 of both was bit-identical --
     let one sweep's Phase B land on the other's Phase A when the grids differ in length, and made
-    Phase B depend on how many points the grid held (Task 19's review). Noise shared across the two
-    records is exactly what a comparison of sweeps would read as signal.
+    Phase B depend on how many points the grid held. Noise shared across the two records is exactly
+    what a comparison of sweeps would read as signal.
 
     The seed must be non-negative -- ``SeedSequence``'s domain, and the rule both FDT builders, the
     study and each sweep apply before anything is spent.
@@ -179,8 +180,8 @@ def _peak_of(ratio) -> str:
 
     Over the finite values because ``np.nanmax`` of an all-blank ratio returns NaN with a
     ``RuntimeWarning: All-NaN slice encountered``, which reached the run log and stderr as if the
-    operator had something to act on (fix round 1). An EMPTY ratio still raises -- there is no point
-    here at all -- and the caller counts that as the point's failure.
+    operator had something to act on. An EMPTY ratio still raises -- there is no point here at all --
+    and the caller counts that as the point's failure.
     """
     r = ratio.detach().cpu().numpy()
     if r.size == 0:
@@ -190,29 +191,30 @@ def _peak_of(ratio) -> str:
 
 
 def _cell_name(cfg) -> str:
-    """The cell by its file name, as the measured-nothing refusals name it (F41)."""
+    """The cell by its file name, as the measured-nothing refusals name it."""
     cell = (getattr(cfg, "sources", None) or {}).get("cell")
     return Path(cell).name if cell else "this cell"
 
 
 def _finite_or_none(v):
     """A float the manifest can hold: finite, or None -- ``manifest.validate`` refuses a non-finite
-    number anywhere in the body (spec §2.3)."""
+    number anywhere in the body."""
     v = float(v)
     return v if math.isfinite(v) else None
 
 
 def _sweep_results(omegas, landed: list) -> dict:
     """A finished sweep's ``results``: one entry per LANDED operating point, and a peak that names its
-    point (the whole-piece review's M2, departing from P78/A6).
+    point.
 
-    P78 ran the single-cell summary, ``_results_block``, over every landed point's curve concatenated
-    on the repeated common grid. Its ``ratio_at_resonance`` was then the FIRST landed point's ratio
-    at the probe nearest the sweep's reference -- its LARGEST resonance -- which is no operating
-    point's ratio at its own resonance, and its peak did not say which point peaked. So the summary
-    is taken per point, each at its OWN resonance, and the top-level ``ratio_at_resonance`` is null:
-    a sweep has no one resonance to read a ratio at. ``usable_fraction`` and ``offgrid_blanks`` stay
-    over the landed points' probes, the population ``offgrid`` counts. Every float is finite or null.
+    An earlier version ran the single-cell summary, ``_results_block``, over every landed point's
+    curve concatenated on the repeated common grid. Its ``ratio_at_resonance`` was then the FIRST
+    landed point's ratio at the probe nearest the sweep's reference -- its LARGEST resonance --
+    which is no operating point's ratio at its own resonance, and its peak did not say which point
+    peaked. So the summary is taken per point, each at its OWN resonance, and the top-level
+    ``ratio_at_resonance`` is null: a sweep has no one resonance to read a ratio at.
+    ``usable_fraction`` and ``offgrid_blanks`` stay over the landed points' probes, the population
+    ``offgrid`` counts. Every float is finite or null.
 
     :param omegas: the common grid every landed point was driven on.
     :param landed: ``(param_value, omega_0_resonance, is_resonant, ratio, blanks)`` per landed point,
@@ -255,7 +257,7 @@ def _check_sweep_param(sweep_param: str) -> None:
 
 
 def _check_study_call(writers, keys) -> None:
-    """Refuse a malformed study call before either sweep spends (Task 19's review).
+    """Refuse a malformed study call before either sweep spends.
 
     Each of these used to surface only when the sweep that needed it got there: a missing writer as
     the T sweep's KeyError and an already-entered one as its FileExistsError, both after the whole S
@@ -303,15 +305,14 @@ def run_fdt_param_sweep(
     Phase B), so an interrupt still leaves a partially-populated, readable file.
 
     An operating point that fails in EITHER phase is logged, recorded in its group's ``error``
-    attribute and COUNTED, and the sweep goes on (spec §4.3, E4) -- and a point whose spontaneous
-    spectrum or driven susceptibility diverged (no finite value at all) is such a failure, not a
-    landed point with every probe blank (the whole-piece review's M1). ``body.points`` is refreshed after
-    every point, so the listings follow the counts while the sweep runs. Some points failed is a
-    completed record carrying the count. All points failed is a ``Refusal`` naming the grid and the
-    cell (field ``s_grid`` or ``t_grid``), raised AFTER the record's final refresh and from inside the
-    entered writer, so the folder and the spectra it does hold stay on disk (E2). A finished sweep
-    fills ``results`` (one entry per landed point, ``_sweep_results``) and ``offgrid`` over the
-    points that landed (the whole-piece review's M2, departing from P78).
+    attribute and COUNTED, and the sweep goes on -- and a point whose spontaneous spectrum or driven
+    susceptibility diverged (no finite value at all) is such a failure, not a landed point with every
+    probe blank. ``body.points`` is refreshed after every point, so the listings follow the counts
+    while the sweep runs. Some points failed is a completed record carrying the count. All points
+    failed is a ``Refusal`` naming the grid and the cell (field ``s_grid`` or ``t_grid``), raised
+    AFTER the record's final refresh and from inside the entered writer, so the folder and the
+    spectra it does hold stay on disk, marked unfinished. A finished sweep fills ``results`` (one
+    entry per landed point, ``_sweep_results``) and ``offgrid`` over the points that landed.
 
     DELIBERATELY NOT an atomic write, unlike the prior/posterior artifacts, and the reason is that
     the two situations are not alike. An atomic write buys exactly one thing: an existing good file is
@@ -322,9 +323,9 @@ def run_fdt_param_sweep(
     interrupted after Phase A still plots, and the all-failed refusal below points the reader at this
     record for the PSDs it does have. The record's directory is new -- the writer's ``__enter__``
     refuses one that exists -- so the ``"w"`` below never truncates an earlier run's file, which is
-    the one way the old explicit ``output_path`` could lose data. SINCE PIECE 5 the file lives inside
-    the record and E2 is what makes the incremental write safe: an interrupted sweep keeps its folder,
-    so the partial file is listed and deletable rather than invisible.
+    the one way the old explicit ``output_path`` could lose data. The file lives inside the record,
+    and what makes the incremental write safe is that an interrupted sweep keeps its folder, marked
+    unfinished, so the partial file is listed and deletable rather than invisible.
 
     :param cfg: baseline FDTConfig.
     :param sweep_param: NWK param name to vary, a key in params_dict: "s" or "temp", the two sweeps
@@ -335,7 +336,7 @@ def run_fdt_param_sweep(
                             (e.g. {"temp": 1.0} for the S sweep, {"s": 0.0} for the T sweep).
     :param writer: the OPEN-BUT-NOT-ENTERED ArtifactWriter for this sweep's own record. THIS function
                    enters it, so __enter__, every refresh() and __exit__ run on the thread whose run
-                   log becomes log.txt (spec §1.2, §4.1). Its seed comes from ``cfg.seed``; nothing
+                   log becomes log.txt. Its seed comes from ``cfg.seed``; nothing
                    here writes on ``cfg``.
     :returns: the LoadedFdt for the record just written.
     :raises Refusal: every operating point failed (field ``s_grid`` or ``t_grid``), and the unfinished
@@ -349,32 +350,30 @@ def run_fdt_param_sweep(
     # inside the per-point guard a negative seed would fail every point and end in a false "measured
     # nothing". The ceiling is the builders' too, so a direct call accepts no seed they refuse.
     seed = require_seed(_resolve_seed(None, cfg))
-    # The normalisation BEFORE the writer is entered, as run_fdt does (Task 17): a cell that cannot
+    # The normalisation BEFORE the writer is entered, as run_fdt does: a cell that cannot
     # supply it is then refused with no record opened, where resolving it after data.h5 had been
     # handed out would keep an unfinished record around an empty file. The study checks the same cell
     # once at its top; this is what covers a sweep called on its own.
     prefactor = float(observable_noise_prefactor(cfg))
-    # E5: the sentences for body.notices, and NO warning. The study raises it once, at its top, for
-    # both of its records: raised here it fired once per sweep, the second time only after the first
-    # sweep's whole spend (Task 12's review).
+    # The too-thin sentences for body.notices, and NO warning: the study warns once, at its top, for
+    # the whole spend.
     notices = thin_notices(cfg)
     fixed_str = ", ".join(f"{k}={v}" for k, v in fixed_overrides.items())
     n_points = int(len(sweep_grid))
-    # The first body is UPDATED IN PLACE, never replaced (P15): the front end may already have set the
-    # study, a seed and notices (T26's panel does). The stage owns settings, points and the RESOLVED
-    # seed; the swept parameter is recorded once, in points.param (spec §2.3). The grid is recorded as
-    # [min, max, N] (F40); every value it held is in data.h5.
+    # The first body is UPDATED IN PLACE, never replaced: the front end may already have set the
+    # study, a seed and notices (the CrossVal panel does). The stage owns settings, points and the
+    # RESOLVED seed; the swept parameter is recorded once, in points.param. The grid is recorded as
+    # [min, max, N]; every value it held is in data.h5.
     body = writer.body
     body.setdefault("study", "sweep")
     body["settings"] = {**_settings_block(cfg), "preset": cfg.preset_name,
                         "sweep_grid": [float(sweep_grid[0]), float(sweep_grid[-1]), n_points],
-                        # what the sweep held fixed is a knob it resolved too (spec §2.3; the
-                        # whole-piece review's N7): it used to live only in a data.h5 attribute
+                        # what the sweep held fixed is a knob it resolved too: it used to live
+                        # only in a data.h5 attribute
                         "held": {k: float(v) for k, v in fixed_overrides.items()}}
     body["seed"] = seed
     # The config block too, and before the writer is entered so the FIRST manifest carries it:
-    # store.create computed that block from the caller's object before any seed was resolved
-    # (Task 17, fix round 1).
+    # store.create computed that block from the caller's object before any seed was resolved.
     writer.config["seed"] = seed
     body["points"] = {"param": sweep_param, "planned": n_points, "done": 0, "failed": 0}
     body["notices"] = [*(body.get("notices") or []), *notices]
@@ -385,11 +384,11 @@ def run_fdt_param_sweep(
     # load_param_sweep at the end, and that plot must still be drawn inside the writer so its PNG
     # lands in the record's figures/.
     with writer:
-        # The record's id, on screen and in its own log the moment it exists (the whole-piece
-        # review's N1, H3), as run_fdt and compare do.
+        # The record's id, on screen and in its own log the moment it exists, as run_fdt and
+        # compare do.
         log.info(f"Writing fdt record {writer.id} at {writer.dir}")
         with h5py.File(writer.payload("data.h5"), "w") as h5:
-            # The contract's root attributes (P6), on every data.h5 so a reader can check the layout
+            # The contract's root attributes, on every data.h5 so a reader can check the layout
             # before reading a dataset. omega_0 is the common grid's reference, set once it exists.
             h5.attrs["study"] = "sweep"
             h5.attrs["prefactor"] = prefactor
@@ -405,9 +404,9 @@ def run_fdt_param_sweep(
             h5.attrs["n_operating_points"] = int(len(sweep_grid))
             h5.attrs["sweep_grid"] = np.asarray(sweep_grid, dtype=np.float64)
             ops = h5.create_group("operating_points")
-            # data.h5 listed from here, before the first point (spec §2.2 step 2; the whole-piece
-            # review's N2): until the first point's refresh no manifest named it, and a process that
-            # died without an exception in that first point's campaign left it unlisted.
+            # data.h5 listed from here, before the first point: until the first point's refresh no
+            # manifest named it, and a process that died without an exception in that first point's
+            # campaign left it unlisted.
             h5.flush()
             writer.refresh()
 
@@ -424,21 +423,22 @@ def run_fdt_param_sweep(
                 grp.attrs["failed"] = True     # flipped to False once Campaign 2 lands in Phase B
                 try:
                     omega_0_lin, _ = _estimate_omega_0(cfg_op)
-                    # One stream per operating point, derived from the study's single seed (spec §4.1): a
-                    # point is reproducible from the seed and its index, and seeding once for the whole sweep
+                    # One stream per operating point, derived from the study's single seed: a point is
+                    # reproducible from the seed and its index, and seeding once for the whole sweep
                     # would make point k's draw depend on how many points preceded it.
                     with seeded(_point_seed(seed, sweep_param, 0, idx), cfg.hw.device):
                         freqs_psd, G = run_campaign1_psd(cfg_op)
-                    # run_fdt's own test and sentence, BEFORE the resonance search (the whole-piece
-                    # review's M1): on a spectrum with no finite value that search falls back to the
-                    # linearised estimate without a word, and Phase B then counted the point DONE with
-                    # every probe booked as off-grid -- so a sweep whose every point diverged finished
-                    # as a success. Raised here, the point is a counted failure with this as its error.
+                    # run_fdt's own test and sentence, BEFORE the resonance search: on a spectrum with
+                    # no finite value that search falls back to the linearised estimate without a word,
+                    # and Phase B then counted the point DONE with every probe booked as off-grid -- so
+                    # a sweep whose every point diverged finished as a success. Raised here, the point
+                    # is a counted failure with this as its error.
                     _refuse_a_diverged_spectrum(cfg_op, freqs_psd, G)
                     w0, res = _detect_resonance(freqs_psd, G, omega_0_lin)
                 except Exception as e:         # noqa: BLE001 -- counted, recorded, and the sweep goes on
-                    # Phase A caught NOTHING before piece 5: one bad operating point ended the study with
-                    # a traceback and lost every point that had already worked. E4 makes it a count.
+                    # Phase A used to catch NOTHING: one bad operating point ended the study with a
+                    # traceback and lost every point that had already worked. Now a failed point is
+                    # counted, in a record that still completes.
                     log.error(f"      Campaign 1 FAILED: {e}")
                     grp.attrs["error"] = str(e)
                     n_failed += 1
@@ -466,7 +466,7 @@ def run_fdt_param_sweep(
 
             # --- Common grid covering every row's resonance band ---
             # One (param_value, omega_0, is_resonant, ratio, blanks) per LANDED point, for results and
-            # offgrid (the whole-piece review's M2).
+            # offgrid.
             landed = []
             if not omega0s:
                 # Every point failed in Phase A, each one counted there: with no resonance to build it
@@ -491,7 +491,7 @@ def run_fdt_param_sweep(
                 log.info(f"--- Phase B ({sweep_param} sweep): forced response on common grid ---")
                 # ``indices`` keeps Phase B's group keys aligned with Phase A's after a Phase-A point
                 # dropped out: enumerating the survivors would write point 2's response into point 1's
-                # group. Each point's own resonance travels with it, for its own summary (M2).
+                # group. Each point's own resonance travels with it, for its own summary.
                 for cfg_op, (freqs_psd, G), idx, w0, res in zip(cfg_ops, psds, indices, omega0s, is_res):
                     log.info(f"  [B {idx+1}/{n_points}] {sweep_param}={sweep_grid[idx]:.6g}")
                     grp = ops[f"{idx:03d}"]
@@ -505,8 +505,8 @@ def run_fdt_param_sweep(
                         log.info(f"      T_eff/T peak = {_peak_of(ratio)}")
                         # A susceptibility with no finite value at any probe is a driven simulation that
                         # diverged: the point measured nothing, whatever the spontaneous spectrum could
-                        # supply, and is a FAILED point (the whole-piece review's M1) rather than a
-                        # landed one whose probes all read as blank.
+                        # supply, and is a FAILED point rather than a landed one whose probes all read
+                        # as blank.
                         if not bool(torch.isfinite(chis).any()):
                             raise RuntimeError(
                                 "The driven simulation diverged: its susceptibility holds no finite "
@@ -552,12 +552,12 @@ def run_fdt_param_sweep(
                     stacklevel=2)
             if n_failed == n_points:
                 # AFTER the final refresh, so the spectra this message points at are on disk before the
-                # refusal unwinds (spec §4.3) -- and it puts the warning above into the record's log. A
-                # Refusal, not a RuntimeError: the command line reports one as an operator line naming
-                # the flag, the window as the yellow box naming the grid. Raised inside the entered
-                # writer after data.h5 was handed out, so E2 keeps the folder. Every clause is true of
-                # what the record holds, so the spectra clause depends on how many first campaigns
-                # landed (F41: the cell is named by its file name).
+                # refusal unwinds -- and it puts the warning above into the record's log. A Refusal,
+                # not a RuntimeError: the command line reports one as an operator line naming the
+                # flag, the window as the yellow box naming the grid. Raised inside the entered writer
+                # after data.h5 was handed out, so the folder is kept, marked unfinished. Every clause
+                # is true of what the record holds, so the spectra clause depends on how many first
+                # campaigns landed (the cell is named by its file name).
                 _refresh_points(writer, planned=n_points, done=n_done, failed=n_failed)
                 held = (f"The record holds the spontaneous spectra of the {len(omega0s)} points whose "
                         f"first campaign finished" if omega0s else
@@ -570,19 +570,19 @@ def run_fdt_param_sweep(
                     f"{held}; widen or move the grid, or choose a cell whose operating points are "
                     f"reachable.",
                     field=_GRID_FIELD[sweep_param])
-            # A FINISHED sweep fills results and offgrid (spec §2.3 "null only until the run
-            # finishes"): results one entry per landed point (_sweep_results says why), offgrid the
-            # blanks the landed points left on the common grid, OF THE PROBES THEY MEASURED -- the
-            # population blanks and usable_fraction count. P78 counted every planned point's slot,
-            # the failed points' never-measured ones included (the whole-piece review's M2). Reached
-            # only when a point landed, so the common grid exists and ``landed`` is not empty.
+            # A FINISHED sweep fills results and offgrid, which are null only until the run finishes:
+            # results one entry per landed point (_sweep_results says why), offgrid the blanks the
+            # landed points left on the common grid, OF THE PROBES THEY MEASURED -- the population
+            # blanks and usable_fraction count. An earlier count took every planned point's slot, the
+            # failed points' never-measured ones included. Reached only when a point landed, so the
+            # common grid exists and ``landed`` is not empty.
             writer.body["results"] = _sweep_results(omegas_common, landed)
             writer.body["offgrid"] = {"blanks": int(sum(blanks for *_, blanks in landed)),
                                       "of": int(n_done * omegas_common.numel())}
             log.info(f"{sweep_param} sweep complete ({n_done}/{n_points} points). "
                      f"Saved to: {writer.dir}")
         # The file is closed; the sweep's own figure is drawn from it, into this record, while the
-        # writer is still entered -- each sweep plots itself when it finishes (spec §4.1).
+        # writer is still entered -- each sweep plots itself when it finishes.
         plot_fdt_3d_vs_param(load_param_sweep(writer.payload("data.h5")),
                              param_symbol=_PARAM_SYMBOL[sweep_param], title=_PARAM_TITLE[sweep_param],
                              save_path=writer.figure_path(f"FDT ratio vs {sweep_param}"))
@@ -594,12 +594,12 @@ def run_fdt_param_sweep(
 @public_entry
 def run_param_study_cli(cfg: FDTConfig, *, s_grid: np.ndarray, t_grid: np.ndarray,
                         writers: dict, seed=None) -> "list[LoadedFdt]":
-    """The two canonical sweeps, as TWO records (spec §4.1).
+    """The two canonical sweeps, as TWO records.
 
     One record per swept parameter, each complete on its own, because an all-failed S sweep used to
     raise before the T sweep had started -- two measurements held hostage to one. It no longer costs
-    the other (P77, spec §4.3): a sweep that measured nothing refuses, its unfinished record stays on
-    disk (E2), the study logs that at error and runs the other sweep. One SEED, drawn once when none
+    the other: a sweep that measured nothing refuses, its unfinished record stays on disk, the study
+    logs that at error and runs the other sweep. One SEED, drawn once when none
     is given and recorded on both, because the study is one experiment: repeating half of it at a
     fresh seed answers a different question.
 
@@ -610,31 +610,32 @@ def run_param_study_cli(cfg: FDTConfig, *, s_grid: np.ndarray, t_grid: np.ndarra
     :param writers: {"s": ArtifactWriter, "temp": ArtifactWriter} -- two distinct writers, open and not
                     entered; each sweep enters its own. Anything else is a malformed call, refused
                     with a ValueError before either sweep spends.
-    :param seed: overrides ``cfg.seed``; None falls back to it, and None in both draws one (P12).
+    :param seed: overrides ``cfg.seed``; None falls back to it, and None in both draws one.
     :returns: the LoadedFdt of every sweep that finished, S first; a sweep that measured nothing is
               logged and left on disk unfinished, and the study refuses only when both did -- with
-              one refusal naming both grids (field ``s_grid``), after logging both at error
-              (F14/F45; the whole-piece review's N9).
+              one refusal naming both grids (field ``s_grid``), after logging both at error.
     """
     sweeps = (("s", s_grid, {"temp": 1.0},
                "# S sweep:  vary S, hold T_a/T = 1   (FDT restored as S -> 0)"),
               ("temp", t_grid, {"s": 0.0},
                "# T sweep:  vary T_a/T, hold S = 0   (FDT restored as T_a/T -> 1)"))
     # FIRST, before the cell is even judged: a programming error must not be reported as, or after,
-    # something about the operator's inputs (Task 19's review).
+    # something about the operator's inputs.
     _check_study_call(writers, [key for key, *_ in sweeps])
-    # §3.4's check, applied to the sweep for the same reason: a cell that cannot supply the
-    # normalisation constant would otherwise cost the whole first phase before anything noticed.
+    # run_fdt's normalisation check, applied to the sweep for the same reason: a cell that cannot
+    # supply the normalisation constant would otherwise cost the whole first phase before anything
+    # noticed.
     observable_noise_prefactor(cfg)
     # On the PRIVATE copy; both sweeps read it. The builders' seed rule (require_seed: 0 to 2**64 - 1,
     # the floor being _point_seed's domain), and checked HERE, before the notice below, for the same
-    # reason as the prefactor (F10; fix round 1): the seed given here overrides the one the builder
-    # checked. Each sweep checks it again for a direct caller.
+    # reason as the prefactor: the seed given here overrides the one the builder checked. Each sweep
+    # checks it again for a direct caller.
     cfg.seed = require_seed(_resolve_seed(seed, cfg))
-    # E5, ONCE for the whole study and before either sweep spends anything -- and HERE, in the public
-    # entry, so stacklevel=3 names the front end's call rather than a line of this module. After the
-    # prefactor and the seed (ruling F10): a refused study must not first warn about how far to trust
-    # its result. Each sweep keeps the same sentences in its own body.notices without warning again.
+    # The too-thin warning, ONCE for the whole study and before either sweep spends anything -- and
+    # HERE, in the public entry, so stacklevel=3 names the front end's call rather than a line of this
+    # module. After the prefactor and the seed: a refused study must not first warn about how far to
+    # trust its result. Each sweep keeps the same sentences in its own body.notices without warning
+    # again.
     warn_thin_settings(cfg)
 
     recs, refused = [], []
@@ -648,19 +649,18 @@ def run_param_study_cli(cfg: FDTConfig, *, s_grid: np.ndarray, t_grid: np.ndarra
         except Refusal as e:
             if e.field != _GRID_FIELD[key]:
                 raise                   # not "measured nothing": any other refusal ends the study
-            # P77, spec §4.3: a sweep that measured nothing costs ITSELF, never the other one. Its
-            # record stays on disk, unfinished (E2). Its own log.txt was written as its writer exited,
-            # so this line reaches only a record written after it: the T record's, when the S sweep
-            # refused.
+            # A sweep that measured nothing costs ITSELF, never the other one. Its record stays on
+            # disk, unfinished. Its own log.txt was written as its writer exited, so this line reaches
+            # only a record written after it: the T record's, when the S sweep refused.
             log.error(f"The {SWEEP_LABELS[key]} sweep measured nothing; its unfinished record is "
                       f"kept. {e}")
             refused.append(e)
     if len(refused) == len(sweeps):
-        # The study measured nothing at all: ONE refusal that names BOTH grids (the whole-piece
-        # review's N9). Re-raising the activity sweep's own sent the operator to the S grid alone,
-        # though the T_a/T grid had failed too. Keyed s_grid -- a refusal names one field, and each
-        # front end's fix line names that one control -- so the sentence names the other. Each
-        # sweep's own sentence is in the error line logged for it above.
+        # The study measured nothing at all: ONE refusal that names BOTH grids. Re-raising the
+        # activity sweep's own sent the operator to the S grid alone, though the T_a/T grid had
+        # failed too. Keyed s_grid -- a refusal names one field, and each front end's fix line names
+        # that one control -- so the sentence names the other. Each sweep's own sentence is in the
+        # error line logged for it above.
         raise Refusal(
             f"Both sweeps of {_cell_name(cfg)} measured nothing: every operating point of the "
             f"{SWEEP_LABELS['s']} sweep and of the {SWEEP_LABELS['temp']} sweep failed, and both "

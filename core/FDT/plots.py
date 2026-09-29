@@ -5,7 +5,7 @@ from os import PathLike
 import numpy as np
 from matplotlib import pyplot as plt
 
-# Dropped non-finite points are a warning record (piece 3, V4).
+# Dropped non-finite points are a warning record.
 log = logging.getLogger(__name__)
 
 
@@ -70,7 +70,7 @@ def plot_eff_temp_ratio(omegas: np.ndarray, ratio: np.ndarray,
     # dash pattern and width, which is matplotlib's own convention for reference lines and survives a
     # theme flip. `grid.color` was the obvious "dimmer neutral" and is WRONG: it is the border token
     # (#3D3D3D) and the dark theme paints axes on #2B2B2B, so the line and its legend swatch both
-    # disappear -- worse than the hardcoded gray it replaced. (B-c's last residue.)
+    # disappear -- worse than the hardcoded gray it replaced.
     ax.axhline(0.0, color=plt.rcParams['axes.edgecolor'], linestyle=':', linewidth=0.6,
                 label=r"$T_{\rm eff}/T = 0$ ($\chi''=0$ crossing)")
     if x_res is not None:
@@ -159,11 +159,11 @@ def plot_psd(omegas: np.ndarray, G: np.ndarray,
                       is drawn this way and not refused.
 
     The figure never raises for want of data. It is drawn BEFORE the FDT run's band refusals,
-    because it is the picture that diagnoses them (spec §3.6); a log axis cannot scale an empty data
-    set, so clipping to a band that misses the spectrum used to raise from ``tight_layout`` and the
-    refusal was never reached (the review of Task 16). Shading the band beside the whole spectrum
-    shows the distance between them, which is the diagnosis. A spectrum with no finite positive value
-    at all gets an annotated figure on linear axes.
+    because it is the picture that diagnoses them; a log axis cannot scale an empty data set, so
+    clipping to a band that misses the spectrum used to raise from ``tight_layout`` and the refusal
+    was never reached. Shading the band beside the whole spectrum shows the distance between them,
+    which is the diagnosis. A spectrum with no finite positive value at all gets an annotated figure
+    on linear axes.
     """
     omegas = np.asarray(omegas)
     G = np.asarray(G)

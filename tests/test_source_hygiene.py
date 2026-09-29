@@ -85,13 +85,6 @@ READER_DOCS_DIR = "docs/guide"
 # file has to leave it, and the last cleaning step deletes it together with the test that reads it.
 NOT_YET_CLEAN: frozenset[str] = frozenset({
     "conftest.py",
-    "core/FDT/campaigns.py",
-    "core/FDT/compare.py",
-    "core/FDT/cross_validation.py",
-    "core/FDT/cross_validation_plots.py",
-    "core/FDT/fdt_pipeline.py",
-    "core/FDT/plots.py",
-    "core/FDT/sanity.py",
     "core/diagnostics/__init__.py",
     "core/diagnostics/ablation.py",
     "core/diagnostics/feature_sets.py",

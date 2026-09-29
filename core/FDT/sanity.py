@@ -22,7 +22,7 @@ from core.FDT.spectral import (
 )
 from core.FDT.plots import plot_eff_temp_ratio
 
-# The checks' table is information records (piece 3, V4); the verdict warning is fdt_pipeline's.
+# The checks' table is information records; the verdict warning is fdt_pipeline's.
 log = logging.getLogger(__name__)
 
 
@@ -57,9 +57,8 @@ def _low_end_advice(cfg, lo_res: float, recording: str) -> str:
     recording is therefore offered only while this one is SHORTER than the cap, where it does
     lengthen the segment -- and with the floor the cap reaches, because a band below that floor needs
     the multiplier whatever the recording; otherwise the sentence says it would not help. Advice that
-    sends the operator to double a spontaneous campaign for an identical band is worse than none (the
-    ruling after Task 14's review, which measured 200, 4000, 8000 and 16000 ND giving the same first
-    bin).
+    sends the operator to double a spontaneous campaign for an identical band is worse than none:
+    recordings of 200, 4000, 8000 and 16000 ND were measured to give the same first bin.
 
     ``cfg`` is the configuration the spectrum was MEASURED with -- the passive check's private copy,
     not the caller's -- because its duration and step are what decide the segment.
@@ -87,8 +86,8 @@ def _interp_log(x_new: torch.Tensor, x_old: torch.Tensor, y_old: torch.Tensor) -
     T_eff/T tail. Out-of-range yields NaN and the callers report how many points that cost.
 
     The in-range test is against ``_resolved_span``, NOT against ``x_old[0]``, and that is the whole
-    of the piece-5 fix (spec §3.5, E9). A Welch grid's first entry is exactly 0.0, the clamp turns it
-    into 1e-30, and ``log_x_new >= log_x_old[0]`` was therefore true for EVERY positive frequency --
+    of the fix. A Welch grid's first entry is exactly 0.0, the clamp turns it into 1e-30, and
+    ``log_x_new >= log_x_old[0]`` was therefore true for EVERY positive frequency --
     so the promise above held at the top of the grid and was false at the bottom, where a probe
     returned a value blended off the zero-frequency bin and the callers counted no exclusions at all.
     """
@@ -355,8 +354,7 @@ def _runs_nadrowski_only_checks(cfg) -> bool:
     The ONE place the rule lives, because two callers act on it: ``run_all_sanity`` drops those checks
     for every other model, and ``fdt_pipeline.run_fdt`` asks its record for the passive-baseline
     figure's path only when that check will draw it. Asked separately, the two drifted: every HOPF,
-    BP and user-model sanity run listed a passive-baseline figure that was never drawn (Task 17, fix
-    round 1)."""
+    BP and user-model sanity run listed a passive-baseline figure that was never drawn."""
     return cfg.model.lower() == "nadrowski"
 
 
