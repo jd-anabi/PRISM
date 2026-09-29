@@ -1818,7 +1818,9 @@ def _gen_td(mode, *, seed=0, n_runs=3, run_size=4, prior=None, **over):
 @pytest.mark.parametrize("mode", ["chi", "forced", "spontaneous"])
 def test_a_probe_observer_leaves_seeded_training_rows_byte_identical(mode, monkeypatch):
     """Watching the probes changes nothing about the rows produced, and with no observer no record
-    is even built. Forced and spontaneous rows never reach the observer."""
+    is even built. Forced and spontaneous rows never reach the observer. The only warning a run may
+    raise is a chi batch's count of probes masked too short to lock in, zero or more times."""
+    import re
     from core.SBI import chi_probes
     from tests._fixtures import stand_in_gen_obs
     monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
@@ -1826,12 +1828,18 @@ def test_a_probe_observer_leaves_seeded_training_rows_byte_identical(mode, monke
     def _never(*a, **k):
         raise AssertionError("a probe record was built with no observer attached")
 
-    with monkeypatch.context() as m:
-        m.setattr(chi_probes, "ProbeRecord", _never)
-        x0, th0 = _gen_td(mode, n_runs=2, run_size=2)
     seen = []
-    x1, th1 = _gen_td(mode, n_runs=2, run_size=2, probe_observer=lambda rec: None)
-    x2, th2 = _gen_td(mode, n_runs=2, run_size=2, probe_observer=seen.append)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with monkeypatch.context() as m:
+            m.setattr(chi_probes, "ProbeRecord", _never)
+            x0, th0 = _gen_td(mode, n_runs=2, run_size=2)
+        x1, th1 = _gen_td(mode, n_runs=2, run_size=2, probe_observer=lambda rec: None)
+        x2, th2 = _gen_td(mode, n_runs=2, run_size=2, probe_observer=seen.append)
+    masked = re.compile(r"chi: \d+/\d+ probes masked")
+    others = [f"{w.category.__name__}: {w.message}" for w in caught
+              if not (w.category is UserWarning and masked.search(str(w.message)))]
+    assert not others, others
     assert torch.equal(x0, x1) and torch.equal(th0, th1)
     assert torch.equal(x0, x2) and torch.equal(th0, th2)
     assert bool(seen) == (mode == "chi"), len(seen)
