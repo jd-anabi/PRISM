@@ -842,22 +842,26 @@ _RULE_CALLS = ("describe", "refuse", "require_given", "require_finite", "require
                "require_at_least", "require_between", "require_below", "require_choice", "require_file",
                # require_note("note", ...) has call sites in both measurement panels and the tool,
                # which the scan once missed
-               "require_note")
+               "require_note",
+               # the probe checks' own routes to a key: the list rule and the sentence opener of
+               # core/diagnostics/probes.py, each taking the key first
+               "_positive_list", "_what")
 
 
 def _field_key_literals(tree) -> list:
     """Every string literal used as a refusal field key in a parsed module: the ``field="…"`` keyword
-    of ANY call, and the first positional argument of a call to one of ``_RULE_CALLS`` (by the
-    callee's bare name, whether ``require_file(...)`` or ``refusals.require_file(...)``).
-    ``(lineno, key)`` pairs. A ``field=None`` or a key passed as a variable is not a literal and is
-    not returned."""
+    of ANY call, the ``key="…"`` keyword a keyed rule takes (``require_seed(seed, key="probe_seed")``),
+    and the first positional argument of a call to one of ``_RULE_CALLS`` (by the callee's bare name,
+    whether ``require_file(...)`` or ``refusals.require_file(...)``). ``(lineno, key)`` pairs. A
+    ``field=None`` or a key passed as a variable is not a literal and is not returned."""
     import ast
     out = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         for kw in node.keywords:
-            if kw.arg == "field" and isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
+            if (kw.arg in ("field", "key") and isinstance(kw.value, ast.Constant)
+                    and isinstance(kw.value.value, str)):
                 out.append((node.lineno, kw.value.value))
         fn = node.func
         name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ""
@@ -1033,9 +1037,13 @@ def test_every_field_key_has_a_flag_and_every_key_literal_under_core_is_register
         'refuse(key, "w")\n'                                       # 7: a variable is not a literal
         'describe(cfg, cell="c")\n'                                # 8: config_args.describe's shape
         'other(field="not_a_refusal_kw")\n'                        # 9: field= on ANY call counts
-        'require_below("nor_this_pair", lo, hi)\n')                # 10: the ordered-pair rule
+        'require_below("nor_this_pair", lo, hi)\n'                 # 10: the ordered-pair rule
+        'require_seed(seed, key="nor_this_seed")\n'                # 11: a keyed rule's key=
+        '_positive_list("nor_this_list", values)\n'                # 12: the probe checks' list rule
+        'sorted(rows, key=len)\n')                                 # 13: a key= that is no literal
     assert [k for _, k in sorted(_field_key_literals(snippet))] == [
-        "t_obs", "no_such_box", "walk_step", "nor_this", "hpd_level", "not_a_refusal_kw", "nor_this_pair"]
+        "t_obs", "no_such_box", "walk_step", "nor_this", "hpd_level", "not_a_refusal_kw", "nor_this_pair",
+        "nor_this_seed", "nor_this_list"]
 
     # (f) the tree: every key literal under CODE_ROOTS and CODE_FILES is a registered key
     from tests._fixtures import CODE_FILES, CODE_ROOTS
