@@ -12,12 +12,13 @@ core-level settings PRISM does read are named in the --help epilog.
 
 Every ``core`` import that costs torch is inside a function: the parser is built before
 ``registry.load_user_models`` runs, and ``--help`` must not cost a torch import. ``core.refusals`` is
-torch-free and is the one top-level exception, for ``UsageError``'s base and the note's length limit.
+torch-free and is the one top-level exception, for ``UsageError``'s base, the note's length limit
+and the default clause every help ends with.
 """
 import argparse
 from pathlib import Path
 
-from core.refusals import NOTE_MAX_CHARS, Refusal
+from core.refusals import NOTE_MAX_CHARS, Refusal, default_clause, default_text
 
 
 class UsageError(Refusal):
@@ -37,16 +38,16 @@ def add_config_flags(p) -> None:
                         "must be the one any posterior this command loads was trained with -- the "
                         "store refuses a mismatch in model, order, box or mode.")
     p.add_argument("--model", default=None, metavar="NAME",
-                   help="model name (default: the --bounds parent folder, upper-cased)")
+                   help="model name" + default_text("the bounds file's parent folder, upper-cased"))
     p.add_argument("--chi", dest="chi_mode", default=None, action=argparse.BooleanOptionalAction,
-                   help="chi(omega) observation mode (default: config.CHI_MODE)")
+                   help="chi(omega) observation mode" + default_text("--no-chi"))
     p.add_argument("--chi-k", dest="chi_n_freqs", type=int, default=None, metavar="K",
-                   help="probe frequencies per observation (default: config.CHI_N_FREQS)")
+                   help="probe frequencies per observation" + default_clause("chi_n_freqs"))
     p.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto",
                    help="auto picks the card when CUDA is present with compute capability 8.0 or "
                         "above, else Apple's MPS when present, else the CPU; cpu forces the CPU; "
-                        "cuda requires the card and is refused when it is absent or below 8.0 "
-                        "(default: auto)")
+                        "cuda requires the card and is refused when it is absent or below 8.0"
+                        + default_text("%(default)s"))
 
 
 def add_name_flags(p, *, name_help: "str | None" = None) -> None:
@@ -71,27 +72,32 @@ def add_training_flags(p, *, fisher: bool) -> None:
     drill's sizes, and its ``--checkpoint`` is an on/off switch rather than a count of batches.
     """
     p.add_argument("--num-runs", type=int, default=None, metavar="N",
-                   help="training batches to simulate")
+                   help="training batches to simulate" + default_clause("num_runs"))
     p.add_argument("--run-size", dest="run_size_cap", type=int, default=None, metavar="N",
-                   help="ceiling on simulations per training batch; 0 = the hardware batch")
+                   help="ceiling on simulations per training batch; 0 = the hardware batch"
+                        + default_clause("run_size_cap"))
     p.add_argument("--hidden-features", type=int, default=None, metavar="N",
-                   help="flow width per transform")
-    p.add_argument("--num-transforms", type=int, default=None, metavar="N", help="flow depth")
+                   help="flow width per transform" + default_clause("hidden_features"))
+    p.add_argument("--num-transforms", type=int, default=None, metavar="N",
+                   help="flow depth" + default_clause("num_transforms"))
     p.add_argument("--learning-rate", type=float, default=None, metavar="X",
-                   help="Adam learning rate")
+                   help="Adam learning rate" + default_clause("learning_rate"))
     p.add_argument("--stop-after-epochs", type=int, default=None, metavar="N",
-                   help="early-stopping patience, in epochs")
+                   help="early-stopping patience, in epochs" + default_clause("stop_after_epochs"))
     p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=None, metavar="N",
-                   help="hard ceiling on training epochs")
+                   help="hard ceiling on training epochs" + default_clause("max_num_epochs"))
     if fisher:
         p.add_argument("--fisher-m", type=int, default=None, metavar="N",
-                       help="ensemble per latent perturbation for the Fisher rotation")
+                       help="ensemble per latent perturbation for the Fisher rotation"
+                            + default_clause("fisher_m"))
         p.add_argument("--fisher-dz", type=float, default=None, metavar="X",
-                       help="latent central-difference step")
+                       help="latent central-difference step" + default_clause("fisher_dz"))
         p.add_argument("--fisher-points", type=int, default=None, metavar="N",
-                       help="operating points the Fisher rotation is averaged over")
+                       help="operating points the Fisher rotation is averaged over"
+                            + default_clause("fisher_points"))
     p.add_argument("--checkpoint-every", type=int, default=None, metavar="N",
-                   help="batches between checkpoint commits; 0 = no cache, nothing resumable")
+                   help="batches between checkpoint commits; 0 = no cache, nothing resumable"
+                        + default_clause("checkpoint_every"))
 
 
 def add_resume_flags(p) -> None:
@@ -107,8 +113,8 @@ def add_resume_flags(p) -> None:
     """
     p.add_argument("--resume", choices=("auto", "require", "never"), default=None,
                    help="resume policy for the training cache: auto resumes this run's own cache; "
-                        "require refuses when there is none; never refuses to resume one "
-                        "(default: auto)")
+                        "require refuses when there is none; never refuses to resume one"
+                        + default_clause("resume"))
     p.add_argument("--new-run", action="store_true",
                    help="start a new simulation cache even though a committed one ONE setting away "
                         "exists; it silences that near-miss refusal and nothing else")

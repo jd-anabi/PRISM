@@ -7,6 +7,8 @@ posterior's own or a refusal, and the pairing is recorded in the artifact alread
 """
 from __future__ import annotations
 
+from core.refusals import default_clause, default_text
+
 from . import config_args
 # The helpers below come from config_args, imported by name so a test can monkeypatch them on THIS
 # module (tests patch ``tool_diag.load_posterior_and_prior``). Do not re-implement them here: the
@@ -50,15 +52,16 @@ def _identifiability(args, store) -> None:
 
 def _add_probe_flags(p) -> None:
     p.add_argument("--m", type=int, metavar="N",
-                   help="ensemble per perturbation arm (stage default 32)")
+                   help="ensemble per perturbation arm" + default_clause("m"))
     p.add_argument("--m-noise", type=int, dest="m_noise", metavar="N",
-                   help="ensemble for the single-trajectory feature-noise floor (stage default 128)")
+                   help="ensemble for the single-trajectory feature-noise floor"
+                        + default_clause("m_noise"))
     p.add_argument("--rel", type=float, metavar="X",
-                   help="perturbation as a fraction of the prior range")
+                   help="perturbation as a fraction of the prior range" + default_clause("rel"))
     p.add_argument("--min-valid", type=float, dest="min_valid", metavar="X",
-                   help="valid-member fraction an arm needs before it is used")
+                   help="valid-member fraction an arm needs before it is used" + default_text("0.5"))
     p.add_argument("--seed", type=int, metavar="N",
-                   help="the random seed for the whole run (stage default 0)")
+                   help="the random seed for the whole run" + default_text("0"))
 
 
 def _register_identifiability(sub) -> dict:
@@ -74,9 +77,9 @@ def _register_identifiability(sub) -> dict:
     rot.add_argument("--posterior", required=True, metavar="REF",
                      help="posterior artifact whose Fisher eigenbasis is decomposed, by name or id")
     rot.add_argument("--n-worst", type=int, dest="n_worst", metavar="N",
-                     help="worst directions totalled per parameter (stage default 3)")
+                     help="worst directions totalled per parameter" + default_clause("n_worst"))
     rot.add_argument("--top-n", type=int, dest="top_n", metavar="N",
-                     help="loadings shown per direction (stage default 4)")
+                     help="loadings shown per direction" + default_clause("top_n"))
     add_accept_flags(rot)
 
     text = ("Laplace marginal SD at the ground truth and at draws from the posterior's own training "
@@ -92,10 +95,10 @@ def _register_identifiability(sub) -> dict:
     lap.add_argument("--t-obs", type=float, dest="t_obs_s", required=True, metavar="S",
                      help="observation length, in seconds, the metric is measured at")
     lap.add_argument("--n-points", type=int, dest="n_points", metavar="N",
-                     help="evaluation points including the ground truth (stage default 6)")
+                     help="evaluation points including the ground truth" + default_clause("n_points"))
     _add_probe_flags(lap)
     lap.add_argument("--sd-identified", type=float, dest="sd_identified", metavar="X",
-                     help="SD below this counts as identified (stage default 0.3)")
+                     help="SD below this counts as identified" + default_text("0.3"))
     add_accept_flags(lap)
 
     text = ("degeneracy / sloppiness map over the mode's own feature set at the cell's ground truth "
@@ -111,10 +114,11 @@ def _register_identifiability(sub) -> dict:
     _add_probe_flags(jac)
     jac.add_argument("--zero-tol", type=float, dest="zero_tol", metavar="X",
                      help="a parameter whose sensitivity, in units of the feature noise, has a norm "
-                          "below this carries no local information (stage default 0.05)")
+                          "below this carries no local information" + default_text("0.05"))
     jac.add_argument("--noise-eps", type=float, dest="noise_eps", metavar="X",
                      help="a feature channel whose spread across the ensemble is below this fraction "
-                          "of its size is treated as dead and zeroed in the map (stage default 1e-6)")
+                          "of its size is treated as dead and zeroed in the map"
+                          + default_text("1e-06"))
 
     for mode in (rot, lap, jac):
         mode.set_defaults(handler=_identifiability)
@@ -140,9 +144,10 @@ def _register_ablation(sub) -> dict:
                    help="posterior artifact whose flow is probed, by name or id; the first rows of "
                         "its own simulation cache set each channel's range")
     p.add_argument("--rows", type=int, metavar="N",
-                   help="rows read from the posterior's own simulation cache (stage default 200000)")
+                   help="rows read from the posterior's own simulation cache"
+                        + default_clause("rows"))
     p.add_argument("--n-sweep", type=int, dest="n_sweep", metavar="N",
-                   help="points per channel sweep (stage default 33)")
+                   help="points per channel sweep" + default_clause("n_sweep"))
     add_accept_flags(p)
     p.set_defaults(handler=_ablation)
     return {"ablation": p}
@@ -158,19 +163,21 @@ def register(sub) -> dict:
     p.add_argument("--posterior", required=True, metavar="REF",
                    help="posterior artifact to calibrate repeatedly, by name or id")
     p.add_argument("--repeats", type=int, metavar="N",
-                   help="independent SBC runs (stage default 10)")
+                   help="independent SBC runs" + default_clause("repeats"))
     p.add_argument("--n-cal", type=int, dest="n_cal", metavar="N",
-                   help="calibration datasets to simulate per repeat (stage default 2000)")
+                   help="calibration datasets to simulate per repeat" + default_text("2000"))
     p.add_argument("--posterior-samples", type=int, dest="num_posterior_samples", metavar="N",
-                   help="posterior draws per calibration dataset (stage default 1000)")
+                   help="posterior draws per calibration dataset" + default_text("1000"))
     p.add_argument("--cal-n-scales", type=int, dest="cal_n_scales", metavar="N",
-                   help="(t_scale, T_obs) operating points the calibration set is spread over")
+                   help="(t_scale, T_obs) operating points the calibration set is spread over"
+                        + default_clause("cal_n_scales"))
     p.add_argument("--chi-k-fixed", type=int, dest="chi_k_fixed", metavar="K",
                    help="hold the chi probe count at K instead of pooling over the training mixture; "
-                        "chi mode only. Run once per count and once pooled, then compare")
+                        "chi mode only. Run once per count and once pooled, then compare"
+                        + default_text("pooled over the training mixture"))
     p.add_argument("--seed", type=int, metavar="N",
-                   help="the random seed for the whole run; repeat r runs at seed + r "
-                        "(stage default 0)")
+                   help="the random seed for the whole run; repeat r runs at seed + r"
+                        + default_text("0"))
     add_accept_flags(p)
     p.set_defaults(handler=_sbc)
     return {"sbc": p, **_register_identifiability(sub), **_register_ablation(sub)}

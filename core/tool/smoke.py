@@ -46,21 +46,8 @@ import time
 STAGES = ("prior", "posterior", "validate", "infer")
 
 EPILOG = """\
-Writes to --store-root, or a fresh temp directory when it is not given -- NEVER to PRISM_ARTIFACTS,
-which every OTHER subcommand follows but smoke does not. Reads PRISM_RESOURCES (the inputs root)
-like every subcommand, and two core-level settings read by core/SBI/pipeline.py, never by this
-tool: PRISM_VRAM_CEILING_GIB (GiB one simulation batch may plan to occupy, 0 = auto; read live, on
-every batch plan) and PRISM_MEM_LOG_EVERY (batches between memory log lines; read once, when
-core.SBI.pipeline is imported).
-
-What to watch: the masked-probe count (~37 % of TRAINING probes, and a single run within +/-12 pp
-is uninformative -- the effective sample size is the BATCH count, not the probe count); the mode
-banner's width; bounds= and rescale order= together. SBC at these sizes has no power: only a crash
-means anything.
-
---run-size caps the TRAINING batch only; the prior sweep keeps the hardware batch, because that
-sweep is iteration-bounded and shrinking its batch makes the prior worse for the same wall clock.
-
+What to watch in its output, and why it shows that the chain runs but not that
+it is calibrated: docs/guide/command-line.md#smoke
 A seeded run is not bitwise-reproducible on CUDA or across devices.
 """
 
@@ -82,6 +69,7 @@ def _stages_type(value: str) -> str:
 def register(subparsers):
     """The ``smoke`` subcommand. Its defaults are the drill's sizes, and they are the ONE place in
     the tool that restates a literal (every other subcommand leaves defaults to its stage)."""
+    from core.refusals import default_text
     from core.tool.config_args import add_config_flags, add_resume_flags
     text = ("every stage end to end at tiny sizes; run it on the card after changing code\n"
             "that moves tensors")
@@ -93,22 +81,22 @@ def register(subparsers):
                    help="the cell file whose ground truth the infer stage simulates")
     p.add_argument("--t-obs", dest="t_obs_s", type=float, default=None, metavar="S",
                    help="observation length, in seconds, of the observation the infer stage "
-                        "simulates (default: config.T_MIN_EXP_S)")
+                        "simulates" + default_text("1.0"))
     p.add_argument("--seed", type=int, default=0, metavar="N",
-                   help="the random seed for the whole run (default 0)")
+                   help="the random seed for the whole run" + default_text("%(default)s"))
     p.add_argument("--stages", default=",".join(STAGES), type=_stages_type,
                    metavar="STAGE[,STAGE...]",
-                   help=f"the stages to run, a comma-separated subset of {','.join(STAGES)} "
-                        "(default: all four)")
+                   help=f"the stages to run, a comma-separated subset of {','.join(STAGES)}"
+                        + default_text("%(default)s"))
     p.add_argument("--num-runs", dest="num_runs", type=int, default=4, metavar="N",
-                   help="training batches to simulate (default 4)")
+                   help="training batches to simulate" + default_text("%(default)s"))
     p.add_argument("--run-size", dest="run_size_cap", type=int, default=32, metavar="N",
                    help="ceiling on simulations per training batch; the prior sweep keeps the "
-                        "hardware batch (default 32)")
+                        "hardware batch" + default_text("%(default)s"))
     p.add_argument("--n-cal", dest="n_cal", type=int, default=40, metavar="N",
-                   help="calibration datasets to simulate (default 40)")
+                   help="calibration datasets to simulate" + default_text("%(default)s"))
     p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=5, metavar="N",
-                   help="hard ceiling on training epochs (default 5)")
+                   help="hard ceiling on training epochs" + default_text("%(default)s"))
     p.add_argument("--checkpoint", action="store_true",
                    help="checkpoint the training rows every max(1, num_runs // 2) batches; OFF by "
                         "default so a second run of one config re-runs the simulation path this "
@@ -119,7 +107,7 @@ def register(subparsers):
     p.add_argument("--store-root", dest="store_root", default=None, metavar="PATH",
                    help="the artifact store this run writes (prior, cache, posterior, observation, "
                         "calibration, inference); reuse one, with --prior and --checkpoint, to "
-                        "resume. Default: a fresh temp directory, left on disk.")
+                        "resume" + default_text("a fresh temporary directory, left on disk"))
     p.add_argument("--prior", dest="prior", default=None, metavar="REF",
                    help="prior artifact in --store-root to load instead of building, by name or id; "
                         "a resume needs it, because the cache is keyed on the prior's fit and two "

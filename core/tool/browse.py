@@ -49,6 +49,7 @@ tests/test_tool.py imports BOTH front ends and pins the two column sets against 
 """
 import argparse
 import sys
+import textwrap
 from pathlib import Path
 
 from core.refusals import NOTE_MAX_CHARS, Refusal
@@ -90,34 +91,19 @@ LOG_TAIL_BYTES = 1 << 20
 _FINGERPRINT_DEPENDENT = ("a training cache was generated against this prior and its rows are "
                           "meaningless without it")
 
+# The kinds line is built from KINDS, so it lists them in that order however the tuple changes, and
+# it is wrapped to the 79 columns every epilog keeps to.
 EPILOG = """\
-Reads PRISM_ARTIFACTS (the artifacts root, default <repo>/Artifacts) -- the same root as every
-subcommand but `smoke`. There is no --store-root, and there are no configuration flags: a listing
-must not be able to fail on a bounds file it does not need, and --help here costs no torch import.
-The consequence is that this family cannot tell you whether a posterior matches your bounds file --
-that is what LOADING it does (`python -m core validate --posterior ...`).
+Reads the artifacts root PRISM_ARTIFACTS names. There is no --store-root and
+there are no configuration flags: a listing must not be able to fail on a
+bounds file it does not need, and --help here costs no torch import. So this
+family cannot tell you whether a posterior matches your bounds file; loading
+it does (python -m core validate --posterior ...).
 
-  list [<kind>]         one line per artifact; with no kind, all eight under headings
-  show <kind> <ref>     the manifest, then the records of the run that wrote it
-  note <kind> <ref> --note TEXT
-                        set the note: one line, at most 200 characters; '' clears it
-  rm <kind> <ref>       delete one artifact. There is no --force: an artifact anything depends on
-                        cannot be deleted at all, so delete its children first
-  sweep [<kind>] [--yes]
-                        remove what no artifact accounts for: every directory with NO manifest at
-                        all, and every loose FILE sitting inside a kind directory. With no kind,
-                        all eight -- and then also a LEGACY DIRECTORY beside the kind directories,
-                        which is under no kind and so has no per-kind form. A DRY RUN without
-                        --yes: it prints exactly what it would remove and removes nothing. A
-                        directory that carries a manifest.json -- even one this build cannot read
-                        -- is reported and never removed, and nothing inside a record's own folder
-                        is ever offered
-  summary <kind> <ref> [--out PATH]
-                        the lineage report: this artifact, then its parents, oldest last
-
-<kind> is one of prior, simulation, posterior, observation, calibration, inference, diagnostic, fdt.
-<ref> is an artifact's name or its id. An empty listing exits 0: a script must be able to tell
-"nothing on disk" from "you asked for something wrong".
+""" + textwrap.fill("<kind> is one of " + ", ".join(KINDS) + "; list and sweep with no kind cover "
+                    "all eight.", 79) + """
+<ref> is an artifact's name or its id. An empty listing exits 0: a script must
+be able to tell "nothing on disk" from "you asked for something wrong".
 """
 
 
@@ -564,7 +550,7 @@ def register(subparsers) -> dict:
     modes = p.add_subparsers(dest="mode", required=True,
                              metavar="{list,show,note,rm,sweep,summary}")
 
-    text = "one line per artifact of a kind, or of all eight"
+    text = "one line per artifact of a kind, or, with no kind, of all eight under headings"
     ls = modes.add_parser("list", help=text, description=text)
     ls.add_argument("kind", nargs="?", default=None, metavar="<kind>", help=_KIND)
     ls.set_defaults(handler=_list)
@@ -584,7 +570,8 @@ def register(subparsers) -> dict:
                            f"with a newline, or a longer one, is refused rather than trimmed to fit")
     note.set_defaults(handler=_note)
 
-    text = "delete one artifact; refused when anything depends on it"
+    text = ("delete one artifact; there is no --force, so one that anything depends on is refused "
+            "until its children are deleted")
     rm = modes.add_parser("rm", help=text, description=text)
     rm.add_argument("kind", metavar="<kind>", help=_KIND)
     rm.add_argument("ref", metavar="<ref>", help=_REF)
@@ -602,7 +589,7 @@ def register(subparsers) -> dict:
                             "the window asks for in a dialog")
     sweep.set_defaults(handler=_sweep)
 
-    text = "the lineage report: this artifact, then its parents"
+    text = "the lineage report: this artifact, then its parents, oldest last"
     summary = modes.add_parser("summary", help=text, description=text)
     summary.add_argument("kind", metavar="<kind>", help=_KIND)
     summary.add_argument("ref", metavar="<ref>", help=_REF)

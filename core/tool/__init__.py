@@ -23,16 +23,20 @@ from .logging_console import console_handlers
 from .fields import fix_sentence
 
 EPILOG = """\
-environment -- the only variables PRISM reads, and none of them is a substitute for a flag:
-  PRISM_RESOURCES         inputs root: Bounds/ Cells/ Units/ Models/  (default <repo>/Resources)
-  PRISM_ARTIFACTS         artifacts root (default <repo>/Artifacts); every subcommand writes here
-                          but `smoke`, which makes a fresh temporary root per run. `smoke`, `fdt`
-                          and `crossval` also take --store-root, which names another root
-  PRISM_VRAM_CEILING_GIB  core-level: GiB one simulation batch may plan to occupy (0 = auto)
-  PRISM_MEM_LOG_EVERY     core-level: batches between memory log lines
-The last two are read by core/SBI/pipeline.py, never by this tool: PRISM_VRAM_CEILING_GIB live, on
-every batch plan; PRISM_MEM_LOG_EVERY once, when core.SBI.pipeline is imported. They are
-deliberately not flags: they change the memory PLAN for a batch, not the rows it produces.
+environment -- the only variables PRISM reads; none stands in for a flag:
+  PRISM_RESOURCES         the inputs root: Bounds/ Cells/ Units/ Models/
+                          (default <repo>/Resources)
+  PRISM_ARTIFACTS         the artifacts root (default <repo>/Artifacts). Every
+                          subcommand writes here except smoke, which makes a
+                          fresh temporary root for each run; smoke, fdt and
+                          crossval also take --store-root, naming another root
+  PRISM_VRAM_CEILING_GIB  GiB one simulation batch may plan to occupy
+                          (0 = automatic); read afresh for every batch plan
+  PRISM_MEM_LOG_EVERY     batches between memory log lines; read once, when the
+                          simulation pipeline is first imported
+The last two are read by the simulation pipeline, never by this tool, and are
+deliberately not flags: they change the memory plan for a batch, not the rows
+it produces.
 """
 
 

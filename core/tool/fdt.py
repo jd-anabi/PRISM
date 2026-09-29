@@ -20,30 +20,31 @@ of its own, and simulates nothing -- so it takes no cell, no knobs and no ``--st
 import argparse
 import math
 
-from core.refusals import Refusal
+from core.refusals import Refusal, default_clause, default_text
 
 from .config_args import UsageError, add_name_flags, knobs, model_from_path
 
 FDT_EPILOG = """\
-The model comes from the cell's parent folder (Resources/Cells/<model>/), or from --model. A model
-FDT cannot run is refused with the reason: FDT drives the observable itself, so a user model needs
-additive, non-zero observable noise and no intrinsic forcing.
+A model FDT cannot run is refused with the reason: FDT drives the observable
+itself, so a user model needs additive, non-zero observable noise and no
+intrinsic forcing.
 
-The run writes one `fdt` record: its figures (PSD, chi components, T_eff/T, the spontaneous
-trajectory), its numbers in data.h5, its settings and seed, and its log. Sanity checks run first
-unless --skip-sanity; --no-production stops after them.
+The run writes one fdt record: its figures (PSD, chi components, T_eff/T, the
+spontaneous trajectory), its numbers in data.h5, its settings and seed, and
+its log.
 """
 
 CROSSVAL_EPILOG = """\
-Two sweeps probe FDT restoration on the Nadrowski model (the model is fixed): the S sweep holds
-T_a/T = 1 and varies S (FDT restored as S -> 0), the T sweep holds S = 0 and varies T_a/T (restored
-as T_a/T -> 1). Each grid is MIN MAX N: N must be a whole number of at least 2, MIN must be below MAX,
-and the T_a/T grid's MIN may not be below 0 (a negative temperature ratio is unphysical).
+Two sweeps probe FDT restoration on the Nadrowski model (the model is fixed):
+the S sweep holds T_a/T = 1 and varies S (FDT restored as S -> 0), the T sweep
+holds S = 0 and varies T_a/T (restored as T_a/T -> 1). Each grid is MIN MAX N:
+N must be a whole number of at least 2, MIN must be below MAX, and the T_a/T
+grid's MIN may not be below 0 (a negative temperature ratio is unphysical).
 
---preset drives the resolution levers the flags do not expose (freq_bounds, T_obs_periods,
-psd_T_obs_nd) and supplies the defaults for --n-freqs and --ensemble-m. Each sweep writes its OWN
-`fdt` record -- its data.h5, its 3-D plot and its point counts -- so the S sweep is a finished,
-readable answer before the T sweep starts.
+--preset sets the resolution the flags do not expose: the drive frequency band,
+the drive window and the spontaneous recording length. Each sweep writes its
+own fdt record -- its data.h5, its 3-D plot and its point counts -- so the S
+sweep is a finished, readable answer before the T sweep starts.
 """
 
 # fdt/crossval keep no cache and take no --resume, so main's generic Ctrl-C advice -- "if a
@@ -136,27 +137,34 @@ def _add_store_root(p) -> None:
     ``smoke`` sets.
     """
     p.add_argument("--store-root", dest="store_root", default=None, metavar="PATH",
-                   help="the artifact store this run writes its record into (default: the "
-                        "PRISM_ARTIFACTS root, like every subcommand but `smoke`)")
+                   help="the artifact store this run writes its record into"
+                        + default_text("the artifacts root"))
 
 
-def _add_fdt_knobs(p) -> None:
+def _add_fdt_knobs(p, *, sweep: bool) -> None:
     """The four resolution knobs both subcommands share, and the seed. Each defaults to None and
     travels only when set; the dest is the builder's keyword, capital M and F0 included. ``--seed``
     is the command-line half of the rule that every run records the seed it used: a seed a record
     carries must be one the operator can supply back. Unset, the run draws one from [0, 2**31) and
-    records it."""
+    records it.
+
+    ``sweep`` is True for ``crossval``, whose unset --n-freqs takes the resolution preset's value
+    rather than the single run's, so the help states each preset's number instead."""
     p.add_argument("--n-freqs", dest="n_freqs", type=int, default=None, metavar="N",
-                   help="drive frequencies in the driven-response sweep")
+                   help="drive frequencies in the driven-response sweep"
+                        + default_text("the preset's: exploratory 30, production 60" if sweep
+                                       else "60"))
     p.add_argument("--ensemble-m", dest="ensemble_M", type=int, default=None, metavar="N",
-                   help="trajectories per frequency")
+                   help="trajectories per frequency" + default_text("256"))
     p.add_argument("--freqs-per-batch", dest="freqs_per_batch", type=int, default=None, metavar="N",
-                   help="frequencies packed into one simulator call")
+                   help="frequencies packed into one simulator call"
+                        + default_clause("freqs_per_batch"))
     p.add_argument("--f0", dest="F0", type=float, default=None, metavar="X",
-                   help="non-dimensional drive amplitude; keep it inside the linear regime")
+                   help="non-dimensional drive amplitude; keep it inside the linear regime"
+                        + default_clause("f0"))
     p.add_argument("--seed", type=int, default=None, metavar="N",
                    help="the random seed for the whole run, a whole number from 0; the record "
-                        "carries it, so the run can be repeated (default: draw one)")
+                        "carries it, so the run can be repeated" + default_clause("seed"))
 
 
 def register(subparsers):
@@ -167,10 +175,10 @@ def register(subparsers):
     fdt.add_argument("--cell", required=True, metavar="PATH",
                      help="the cell file whose ground truth the analysis runs at")
     fdt.add_argument("--model", default=None, metavar="NAME",
-                     help="model name (default: the cell's parent folder)")
+                     help="model name" + default_text("the cell file's parent folder, upper-cased"))
     _add_store_root(fdt)
     add_name_flags(fdt)
-    _add_fdt_knobs(fdt)
+    _add_fdt_knobs(fdt, sweep=False)
     fdt.add_argument("--skip-sanity", dest="skip_sanity", action="store_true",
                      help="skip the sanity checks and go straight to the production sweep")
     fdt.add_argument("--no-production", dest="no_production", action="store_true",
@@ -184,14 +192,14 @@ def register(subparsers):
     cv.add_argument("--cell", required=True, metavar="PATH",
                     help="a Nadrowski cell file whose ground truth the sweeps start from")
     cv.add_argument("--preset", choices=("exploratory", "production"), default="exploratory",
-                    help="resolution preset (default: exploratory)")
+                    help="resolution preset" + default_text("%(default)s"))
     cv.add_argument("--s-grid", dest="s_grid", nargs=3, type=float, required=True,
                     metavar=("MIN", "MAX", "N"), help="the S sweep grid")
     cv.add_argument("--t-grid", dest="t_grid", nargs=3, type=float, required=True,
                     metavar=("MIN", "MAX", "N"), help="the T_a/T sweep grid")
     _add_store_root(cv)
     add_name_flags(cv, name_help=CROSSVAL_NAME_HELP)
-    _add_fdt_knobs(cv)
+    _add_fdt_knobs(cv, sweep=True)
     cv.set_defaults(handler=run_crossval, interrupt_note=CROSSVAL_INTERRUPT_NOTE)
     return {"fdt": fdt, "crossval": cv, **_register_compare(subparsers)}
 
@@ -264,25 +272,23 @@ def run_crossval(args, store):
 
 
 COMPARE_EPILOG = """\
-Every mode draws SAVED records from the artifact store and writes a comparison record of its own
-(kind fdt, study "comparison"): its figures are its output and its data.h5 holds the common grid and
-the interpolated curves. Nothing is simulated, and no record it draws is modified.
+Every mode draws saved records from the artifact store and writes a comparison
+record of its own (kind fdt, study "comparison"): its figures are its output
+and its data.h5 holds the common grid and the interpolated curves. Nothing is
+simulated, no record it draws is modified, and an unfinished record is
+refused, naming it.
 
-  cells        two or more single-cell runs' ratio curves on one axis, labelled by cell
-  repeats      several runs of one cell, with the spread across them as a band
-  renormalise  one run's ratio recomputed with --prefactor, drawn against the original
-  sweeps       two sweep records together, and a slice of both at one operating point
-
---record is repeatable and names a record by name or id; an unfinished record is refused, naming it.
-Runs land on different frequencies (each detects its own resonance), so curves are interpolated onto
-a grid log-spaced over the intersection of their spans -- and a point whose bracketing samples
-include a blank stays blank rather than being drawn through.
+Runs land on different frequencies (each detects its own resonance), so curves
+are interpolated onto a grid log-spaced over the intersection of their spans,
+and a point whose bracketing samples include a blank stays blank rather than
+being drawn through.
 """
 
 _COMPARE_MODES = (
     ("cells", "two or more single-cell runs' ratio curves on one axis, labelled by cell"),
     ("repeats", "several runs of one cell, with the spread across them as a band"),
-    ("renormalise", "one run's ratio recomputed with a supplied normalisation constant"),
+    ("renormalise", "one run's ratio recomputed with a supplied normalisation constant, drawn "
+                    "against the original"),
     ("sweeps", "two sweep records together, and a slice of both at one operating point"),
 )
 
@@ -325,8 +331,8 @@ def _register_compare(sub) -> dict:
         help="the normalisation constant to recompute T_eff/T with")
     built["sweeps"].add_argument(
         "--at", type=float, default=None, metavar="X",
-        help="the operating point to slice both sweeps at (default: the middle of the range they "
-             "share)")
+        help="the operating point to slice both sweeps at; without it, the middle of the range "
+             "they share")
     return {"compare": p}
 
 

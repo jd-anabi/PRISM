@@ -194,6 +194,155 @@ def test_every_value_flag_has_a_house_placeholder():
     assert shown[("smoke", "--stages")] == "STAGE[,STAGE...]"
 
 
+def _value_actions(parser):
+    """The options that take a value, plus --chi/--no-chi, whose default is a value too; the on/off
+    switches and --help state no default."""
+    for a in parser._actions:
+        if a.option_strings and (a.nargs != 0 or isinstance(a, argparse.BooleanOptionalAction)):
+            yield a
+
+
+def _owned_defaults() -> dict:
+    """``{(leaf, flag): value}`` for every default the help table pins, read from what owns it."""
+    import dataclasses
+    import inspect
+    from core import cli
+    from core.config import FDTConfig
+    from core.diagnostics import identifiability, sbc
+
+    def sig(fn, name):
+        return str(inspect.signature(fn).parameters[name].default)
+
+    def preset(field):
+        values = {name: p[field] for name, p in cli.SWEEP_PRESETS.items()}
+        if len(set(values.values())) == 1:
+            return str(next(iter(values.values())))
+        return "the preset's: " + ", ".join(f"{name} {v}" for name, v in values.items())
+
+    fdt = {f.name: f.default for f in dataclasses.fields(FDTConfig)}
+    lap, jac = identifiability.identifiability_laplace, identifiability.identifiability_jacobian
+    return {
+        ("sbc", "--seed"): sig(sbc.sbc_repeats, "seed"),
+        ("sbc", "--n-cal"): sig(sbc.sbc_repeats, "n_cal"),
+        ("sbc", "--posterior-samples"): sig(sbc.sbc_repeats, "num_posterior_samples"),
+        ("identifiability laplace", "--seed"): sig(lap, "seed"),
+        ("identifiability laplace", "--min-valid"): sig(lap, "min_valid"),
+        ("identifiability laplace", "--sd-identified"): sig(lap, "sd_identified"),
+        ("identifiability jacobian", "--seed"): sig(jac, "seed"),
+        ("identifiability jacobian", "--min-valid"): sig(jac, "min_valid"),
+        ("identifiability jacobian", "--zero-tol"): sig(jac, "zero_tol"),
+        ("identifiability jacobian", "--noise-eps"): sig(jac, "noise_eps"),
+        ("smoke", "--t-obs"): str(config.T_MIN_EXP_S),
+        ("fdt", "--n-freqs"): str(fdt["n_freqs"]),
+        ("fdt", "--ensemble-m"): str(fdt["ensemble_M"]),
+        ("crossval", "--n-freqs"): preset("n_freqs"),
+        ("crossval", "--ensemble-m"): preset("ensemble_M"),
+    }
+
+
+def _default_problems(parser) -> list:
+    """One line per value flag whose help does not state its default the way its class requires."""
+    from core.refusals import FIELDS, default_text
+    from core.tool import fields as tool_fields
+    from core.tool.help_defaults import DEFAULT_CLASS, default_for
+
+    owned, chi_word = _owned_defaults(), ("--chi" if config.CHI_MODE else "--no-chi")
+    problems = []
+    for path, leaf in _leaves(parser):
+        for a in _value_actions(leaf):
+            opt = a.option_strings[0]
+            where = f"{path} {opt}"
+            if (path, opt) not in DEFAULT_CLASS:
+                problems.append(f"{where}: no entry in core/tool/help_defaults.py DEFAULT_CLASS")
+                continue
+            cls, text = DEFAULT_CLASS[(path, opt)]
+            shown = " ".join(leaf._get_formatter()._expand_help(a).split()) if a.help else ""
+            if not shown:
+                problems.append(f"{where}: no help")
+                continue
+            if cls == "none":
+                want = None if text is None else problems.append(f"{where}: class none carries {text!r}")
+            elif cls == "behaviour":
+                if not text:
+                    problems.append(f"{where}: a behaviour default needs its phrase")
+                    continue
+                want = default_text(text)
+            elif cls == "value":
+                if a.default not in (None, ""):
+                    source, pinned = str(a.default), None
+                elif opt == "--chi":
+                    source = pinned = chi_word
+                elif (path, opt) in owned:
+                    source = pinned = owned[(path, opt)]
+                else:
+                    keys = [k for k, f in tool_fields.FLAG.items() if f == opt]
+                    if len(keys) > 1:
+                        keys = [k for k in keys if k == a.dest.lower()]
+                    source, pinned = (FIELDS[keys[0]].default if len(keys) == 1 else None), None
+                if source is None:
+                    problems.append(f"{where}: a value default with no source; pin it in DEFAULT_CLASS")
+                    continue
+                if text != pinned:
+                    problems.append(f"{where}: DEFAULT_CLASS says {text!r}, the code's default is {source!r}")
+                want = default_text(source)
+            else:
+                problems.append(f"{where}: unknown class {cls!r}")
+                continue
+            if default_for(path, a) != want:
+                problems.append(f"{where}: default_for gives {default_for(path, a)!r}, not {want!r}")
+            count = shown.count("(default")
+            if want is None and count:
+                problems.append(f"{where}: states a default, but its class is none: {shown!r}")
+            if want is not None and (count != 1 or not shown.endswith(want.strip())):
+                problems.append(f"{where}: must end with {want.strip()!r}, stated once: {shown!r}")
+            if a.dest == "name" and a.default == "" and "unnamed" not in shown:
+                problems.append(f"{where}: must say what '' means (unnamed)")
+            if a.dest == "note" and a.default == "" and "no note" not in shown:
+                problems.append(f"{where}: must say what '' means (no note)")
+    return problems
+
+
+def test_every_value_flag_states_its_default_by_its_class():
+    """Every flag that takes a value states its default one way: "(default X)" with the value the
+    code really uses, "(default <phrase>)" where the default is a behaviour, or nothing for a
+    required flag, an input and --name/--note. The value is computed here from what owns it -- the
+    parser, the signature or constant the table pins, or the refusal registry through the flag's
+    field key -- and compared exactly. A flag added without an entry in the table fails, naming the
+    subcommand and the flag."""
+    import inspect
+    from core.diagnostics import identifiability
+    from core.refusals import FIELDS
+    from core.tool.help_defaults import DEFAULT_CLASS, LEAVES
+
+    parser = build_parser()
+    problems = _default_problems(parser)
+    assert not problems, "\n".join(problems)
+    walked = [path for path, _ in _leaves(parser)]
+    assert sorted(LEAVES) == sorted(walked), sorted(set(walked) ^ set(LEAVES))
+    present = {(path, a.option_strings[0]) for path, leaf in _leaves(parser) for a in _value_actions(leaf)}
+    assert not set(DEFAULT_CLASS) - present, sorted(set(DEFAULT_CLASS) - present)
+    # the registry pins these three against laplace only; the jacobian's help relies on them too
+    jac = inspect.signature(identifiability.identifiability_jacobian).parameters
+    for key in ("m", "m_noise", "rel"):
+        assert str(jac[key].default) == FIELDS[key].default, key
+
+    parser.subcommands["smoke"].add_argument("--brand-new", type=int, metavar="N", help="a new knob")
+    named = [p for p in _default_problems(parser) if p.startswith("smoke --brand-new:")]
+    assert named and "DEFAULT_CLASS" in named[0], _default_problems(parser)
+
+
+def test_every_epilog_and_raw_description_fits_in_79_columns():
+    """An epilog, and the description of a parser that prints it as typed, is wrapped by hand; a line
+    wider than 79 columns wraps raggedly on an 80-column console."""
+    wide = []
+    for path, p in _parsers():
+        texts = [p.epilog or ""]
+        if p.formatter_class is argparse.RawDescriptionHelpFormatter:
+            texts.append(p.description or "")
+        wide += [f"{path or 'python -m core'}: {ln!r}" for t in texts for ln in t.splitlines() if len(ln) > 79]
+    assert not wide, "\n".join(wide)
+
+
 def _env_reads_and_knob_writes(tree) -> list:
     """``[(lineno, what)]`` for every environment read and every knob write in a parsed module.
 

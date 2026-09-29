@@ -4,6 +4,8 @@ A handler resolves nothing of its own. Every value flag defaults to None and is 
 was given, so the stage's own default -- read from config.py, in one place -- is the default. The heavy
 imports live inside the handlers, so building the parser costs no torch.
 """
+from core.refusals import default_clause
+
 from .config_args import (UsageError, accept_from, add_accept_flags, add_config_flags, add_name_flags,
                           add_resume_flags, add_training_flags, build_cfg, close_sink, knobs,
                           load_posterior_and_prior, recording_set, report)
@@ -30,20 +32,23 @@ def register(subparsers) -> dict:
     add_config_flags(p)
     add_name_flags(p)
     p.add_argument("--num-iterations", type=int, default=None, metavar="N",
-                   help="stability sweep iterations")
+                   help="stability sweep iterations" + default_clause("num_iterations"))
     p.add_argument("--sweep-batch", type=int, default=None, metavar="N",
-                   help="candidate parameter sets per sweep iteration; 0 = automatic")
+                   help="candidate parameter sets per sweep iteration; 0 = automatic"
+                        + default_clause("sweep_batch"))
     p.add_argument("--max-sets", type=int, default=None, metavar="N",
-                   help="accepted sets the sweep stops at")
+                   help="accepted sets the sweep stops at" + default_clause("max_sets"))
     p.add_argument("--walk-step", type=float, default=None, metavar="X",
-                   help="random-walk step, as a fraction of each box side")
+                   help="random-walk step, as a fraction of each box side"
+                        + default_clause("walk_step"))
     p.add_argument("--stability-units", type=float, default=None, metavar="X",
-                   help="ND time units a candidate must stay bounded for")
+                   help="ND time units a candidate must stay bounded for"
+                        + default_clause("stability_units"))
     p.add_argument("--min-cluster-size", type=int, default=None, metavar="N",
-                   help="HDBSCAN minimum cluster size")
+                   help="HDBSCAN minimum cluster size" + default_clause("min_cluster_size"))
     p.add_argument("--min-samples", type=int, default=None, metavar="N",
                    help="HDBSCAN's min_samples: neighbours a point needs to count as a cluster "
-                        "core; larger declares more points noise")
+                        "core; larger declares more points noise" + default_clause("min_samples"))
     p.set_defaults(handler=_prior)
     out["prior"] = p
 
@@ -65,11 +70,14 @@ def register(subparsers) -> dict:
     p.add_argument("--posterior", required=True, metavar="REF",
                    help="posterior artifact to calibrate, by name or id")
     p.add_argument("--n-cal", type=int, default=None, metavar="N",
-                   help="calibration datasets to simulate")
+                   help="calibration datasets to simulate" + default_clause("n_cal"))
     p.add_argument("--cal-n-scales", type=int, default=None, metavar="N",
-                   help="(t_scale, T_obs) operating points the calibration set is spread over")
+                   help="(t_scale, T_obs) operating points the calibration set is spread over"
+                        + default_clause("cal_n_scales"))
     p.add_argument("--posterior-samples", dest="num_posterior_samples", type=int, default=None,
-                   metavar="N", help="posterior draws per calibration dataset")
+                   metavar="N",
+                   help="posterior draws per calibration dataset"
+                        + default_clause("num_posterior_samples"))
     add_accept_flags(p)
     p.set_defaults(handler=_validate)
     out["validate"] = p
@@ -100,7 +108,7 @@ def register(subparsers) -> dict:
                         "newtons")
     p.add_argument("--n-samples", type=int, default=None, metavar="N",
                    help="posterior draws for the corner plot, the posterior predictive check and "
-                        "the summary")
+                        "the summary" + default_clause("n_samples"))
     add_accept_flags(p, other_observation=True)
     p.set_defaults(handler=_infer)
     out["infer"] = p
@@ -115,10 +123,11 @@ def register(subparsers) -> dict:
     p.add_argument("--observation", required=True, metavar="REF",
                    help="the observation the region is drawn around, by name or id")
     p.add_argument("--directions", dest="n_directions", type=int, default=None, metavar="N",
-                   help="Fisher directions to truncate (the flat ones are left full width)")
+                   help="Fisher directions to truncate (the flat ones are left full width)"
+                        + default_clause("n_directions"))
     p.add_argument("--level", type=float, default=None, metavar="X",
                    help="HPD level of the region; below 0.99 warns, because truncation permanently "
-                        "deletes prior support")
+                        "deletes prior support" + default_clause("hpd_level"))
     add_training_flags(p, fisher=False)
     add_resume_flags(p)
     add_accept_flags(p)
