@@ -35,7 +35,7 @@ from core.Solvers import sdeint as _sdeint_mod              # noqa: E402
 from core.SBI.statistics import FEATURE_LABELS, SUMMARY_WIDTH    # noqa: E402
 from core.config import VALID_MODELS, VALID_LABELS               # noqa: E402
 from core.refusals import Refusal                                # noqa: E402
-from tests._fixtures import _tiny_gen_prior, code_only           # noqa: E402
+from tests._fixtures import _tiny_gen_prior, _tiny_nadrowski_gen_prior, code_only  # noqa: E402
 
 _N_GROUP_G = 11
 _N_SPONT = len(FEATURE_LABELS) - _N_GROUP_G   # 30
@@ -152,17 +152,6 @@ def test_builtin_forcing_path_unperturbed():
     assert obs_stats.shape[-1] == SUMMARY_WIDTH + 1 + n_forcing
     assert not torch.allclose(obs_stats[0, _N_SPONT:_N_SPONT + _N_GROUP_G], torch.zeros(_N_GROUP_G))
     assert torch.isfinite(obs_stats).all()
-
-
-def _tiny_nadrowski_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds,
-                              state_dep_drift=False, num_iterations=25, log_mask=None,
-                              dtype=torch.float32, device=torch.device("cpu"), **_kw):
-    """Tiny stand-in for pipeline.gen_prior on the built-in Nadrowski: same construct_prior, small sizes."""
-    from core.SBI.Priors import nadrowski_prior
-    p = nadrowski_prior.NadrowskiPrior(dtype, device)
-    return p.construct_prior(t, len(prior_bounds), 32, 8, segs, prior_bounds,
-                             t_global_scale=2, num_iterations=2, n_max=120, steady=False,
-                             state_dep_drift=state_dep_drift, log_mask=log_mask)
 
 
 def test_train_and_validate_without_a_loaded_cell():

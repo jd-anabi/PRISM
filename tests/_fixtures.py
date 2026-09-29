@@ -299,6 +299,17 @@ def _tiny_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_b
                              state_dep_drift=state_dep_drift, log_mask=log_mask)
 
 
+def _tiny_nadrowski_gen_prior(model, t, global_batch_size, local_batch_size, segs, prior_bounds,
+                              state_dep_drift=False, num_iterations=25, log_mask=None,
+                              dtype=torch.float32, device=torch.device("cpu"), **_kw):
+    """Tiny stand-in for pipeline.gen_prior on the built-in Nadrowski: same construct_prior, small sizes."""
+    from core.SBI.Priors import nadrowski_prior
+    p = nadrowski_prior.NadrowskiPrior(dtype, device)
+    return p.construct_prior(t, len(prior_bounds), 32, 8, segs, prior_bounds,
+                             t_global_scale=2, num_iterations=2, n_max=120, steady=False,
+                             state_dep_drift=state_dep_drift, log_mask=log_mask)
+
+
 def install_sbitest():
     """Register the SBITEST user model and emit its Bounds/Cells/Units triple; ``(bounds, cell, teardown)``.
 
