@@ -112,6 +112,15 @@ def _truth_outside_region(T_train, region, truth) -> list:
                    for d, v, a, b in zip(region.dims, sel, region.lo, region.hi)]
 
 
+def _parent_fisher_eigenvalues(parent_posterior) -> list[float] | None:
+    """The eigenvalues of the rotation a narrowing round reuses: its parent posterior's own record of
+    them. None when there is no parent, the parent carries no manifest, or its record holds none (an
+    unrotated parent, or one whose eigenvalues were themselves unknown)."""
+    body = getattr(getattr(parent_posterior, "manifest", None), "body", None) or {}
+    evals = (body.get("transform") or {}).get("fisher_eigenvalues")
+    return None if evals is None else [float(v) for v in evals]
+
+
 # ── Step 1: Synthetic data ──────────────────────────────────────────────────
 @public_entry
 def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig_sink=None,
@@ -836,7 +845,9 @@ def build_posterior(
                      runs the Fisher at all -- the box is measured in the parent's basis and is
                      meaningless in any other (the region-carries-its-basis rule).
                      Either way, and on an unrotated run, the manifest records all three as None:
-                     they are written only when the Fisher ran in this process.
+                     they are written only when the Fisher ran in this process. The rotation's
+                     EIGENVALUES travel with V instead -- the cache header's on a resume, the parent
+                     posterior's on a truncated round -- and are recorded whenever they are known.
     :return: a LoadedPosterior; ``.posterior`` is the TransformedPosterior every downstream stage samples.
 
     ⚠ THESE FOUR ARE WHAT A COMPLETE TRAINING CHECKPOINT (THE SIMULATION CACHE) IS FOR. Its own
@@ -1090,9 +1101,14 @@ def build_posterior(
                 raise Refusal(_near_miss_message(ckpt_dir, near), field="new_run")
 
     rotate = cfg.reparam_rotate
-    # Only the freshly-computed branch below knows the eigenvalues; a resumed checkpoint carries V but
-    # not them, and an unrotated run has no Fisher at all. None is recorded honestly in the sidecar.
+    # Two locals, kept apart on purpose. fisher_evals is set only by the freshly computed branch below,
+    # so it stays the one witness that the Fisher RAN in this process, and the record's three Fisher
+    # settings hang on it alone. evals_rec is what the record and the cache header carry: the same
+    # values on a fresh run, the cache header's on a resume (which reuses the stored V), the parent
+    # posterior's on a narrowing round (which reuses the parent's V), and None when the run is
+    # unrotated or the values are unknown.
     fisher_evals = None
+    evals_rec = None
     if truncation is not None:
         # ── TSNPE: THE BASIS COMES WITH THE REGION, AND THE FISHER IS NEVER RUN ─────────────────────
         # The region's dims are columns of the PARENT posterior's V, and V is not reproducible across
@@ -1151,6 +1167,8 @@ def build_posterior(
                         "fingerprint, or the loaded prior has no GMM) -- make sure the loaded prior is the "
                         "one the parent posterior was trained with.")
         V = None if truncation.V is None else truncation.V.to(device=cfg.hw.device, dtype=cfg.hw.dtype)
+        # The rotation is the parent's, so its eigenvalues are too; an unrotated region has none.
+        evals_rec = _parent_fisher_eigenvalues(parent_posterior) if truncation.V is not None else None
         if ckpt_resumed is not None:
             # Rows may be resumed only if they were DRAWN UNDER THIS REGION: the stored identity must
             # record it (the amortized parent's never does -- its rows are the full prior's, and
@@ -1190,6 +1208,19 @@ def build_posterior(
                  f"recomputing it: the rotation's operating points are not reproducible across "
                  f"processes, so a fresh V would put the reused rows in a different coordinate than the "
                  f"targets stored beside them.")
+        # The eigenvalues come from the header beside V. A header written before they were kept there
+        # has no such key: the run still resumes, and the record says they are unknown. The prefix is
+        # the checkpoint's, because no Fisher ran in this process.
+        _stored = ckpt_resumed.get("fisher_eigenvalues")
+        evals_rec = [float(v) for v in _stored] if _stored is not None and len(_stored) else None
+        if evals_rec is not None:
+            _stored_spread = evals_rec[0] / evals_rec[-1] if evals_rec[-1] > 0 else float("inf")
+            log.info(f"[checkpoint] the stored rotation's eigenvalues come with it (spread best/worst "
+                     f"{_stored_spread:.3g}); the Fisher settings stay unrecorded, since the Fisher did not "
+                     f"run in this process.")
+        else:
+            log.info("[checkpoint] this checkpoint stores no rotation eigenvalues (it was written before "
+                     "they were kept beside the rotation); the posterior records them as unknown.")
         T_train = build_rotated_bijection(T, V) if V is not None else T
         train_prior = RotatedLatentPrior(latent_inferred_prior, V) if V is not None else latent_inferred_prior
     elif rotate:
@@ -1204,6 +1235,7 @@ def build_posterior(
         # costs a full Fisher re-run. See `python -m core identifiability rotation`.
         _spread = float(fisher_evals[0] / fisher_evals[-1]) if float(fisher_evals[-1]) > 0 else float("inf")
         log.info(f"[fisher] eigenvalue spread (best/worst direction): {_spread:.3g}")
+        evals_rec = tensor_to_json(fisher_evals)
         T_train = build_rotated_bijection(T, V)
         train_prior = RotatedLatentPrior(latent_inferred_prior, V)
     else:
@@ -1219,6 +1251,7 @@ def build_posterior(
     #
     # No proposal correction is applied, and that is correct rather than an omission: truncation is a
     # RESTRICTION, not a reweighting, which is the property that distinguishes TSNPE from SNPE-A/B/C.
+    _containment = None                          # per direction, only when a known truth is loaded
     if truncation is not None:
         _P = len(cfg.params_dict) + len(cfg.rescale_params)
         # The region's own guard: the bijection this round trains in must be the one the box was
@@ -1227,6 +1260,19 @@ def build_posterior(
         # the parent never excluded.
         truncation.check_basis(T_train, dim=_P, device=cfg.hw.device)
         if cfg.has_ground_truth:
+            # Inside AS WELL AS outside, one information record per truncated direction, and the same
+            # answer on the child's record. The warning below speaks only when the truth is out, so a
+            # round whose truth sat inside used to say nothing about it either way.
+            with torch.no_grad():
+                _z_truth = T_train.inv(cfg.ground_truth_tensor.reshape(1, -1))
+            _containment = truncation.containment(_z_truth)
+            for _c in _containment:
+                if _c["value"] is None:
+                    log.info(f"[tsnpe] truth direction {_c['direction']}: not a finite number, so not inside "
+                             f"[{_c['lo']:.3g}, {_c['hi']:.3g}]")
+                else:
+                    log.info(f"[tsnpe] truth direction {_c['direction']}: {_c['value']:+.3g} "
+                             f"{'inside' if _c['inside'] else 'outside'} [{_c['lo']:.3g}, {_c['hi']:.3g}]")
             # The generous-region rule's honest failure rate, per run: does the box even contain the
             # loaded cell's truth? Warn, never refuse -- an experimental observation has no truth, and a
             # simulated one's lying outside is a finding about the parent posterior, not a reason to
@@ -1285,15 +1331,15 @@ def build_posterior(
         device=cfg.hw.device,
     )
     if ckpt_dir is not None:
-        # V and the probe go in AFTER the rotation, so a fresh run stores the V it just computed and
-        # a resumed one stores nothing new (create() is not called on a resume).
+        # V, its eigenvalues and the probe go in AFTER the rotation, so a fresh run stores the V it
+        # just computed and a resumed one stores nothing new (create() is not called on a resume).
         training_params.checkpoint = {
             "dir": ckpt_dir, "identity": ident,
             # device= is load-bearing: T_train holds the rotation V on cfg.hw.device, and a CPU grid
             # into a CUDA matmul is a hard RuntimeError inside build_posterior.
             "probe": training_checkpoint.bijection_probe(
                 T_train, len(cfg.params_dict) + len(cfg.rescale_params), device=cfg.hw.device),
-            "V": V, "every": ck_every, "resume": resume,
+            "V": V, "fisher_eigenvalues": evals_rec, "every": ck_every, "resume": resume,
             "parents": {"prior": prior.id},
             "inputs": _inputs_from_cfg(cfg), "hw": cfg.hw,
         }
@@ -1382,7 +1428,10 @@ def build_posterior(
         # resumed run reuses the checkpoint's V -- whose header carries no m, dz or points -- a truncated
         # round reuses the region's, and an unrotated run has no Fisher at all: each records None, never
         # the settings of a Fisher nobody computed. When it ran, the values are the ones it was called
-        # with, resolved at entry.
+        # with, resolved at entry. The eigenvalues are another matter: they describe the rotation, not
+        # the run that computed it, so they travel with V -- from the cache header on a resume, from
+        # the parent posterior's record on a narrowing round -- and are recorded whenever known, while
+        # the three settings are written only when the Fisher ran here.
         _fisher_ran = fisher_evals is not None
         w.config.update({"num_runs": n_runs, "run_size": run_size, "hidden_features": hf, "num_transforms": nt,
                          "learning_rate": lr, "stop_after_epochs": patience,
@@ -1400,7 +1449,7 @@ def build_posterior(
                           "rescale_lows": [float(b[0]) for _, b in cfg.rescale_params.values()],
                           "rescale_highs": [float(b[1]) for _, b in cfg.rescale_params.values()],
                           "V": tensor_to_json(V_rec), "V_orientation": "columns",
-                          "fisher_eigenvalues": tensor_to_json(fisher_evals), "V_digest": tensor_digest(V_rec)},
+                          "fisher_eigenvalues": evals_rec, "V_digest": tensor_digest(V_rec)},
             "amortized": truncation is None,
             "truncation": None if truncation is None else region_to_json(truncation),
             "training": {"n_runs": n_runs, "run_size": run_size,
@@ -1412,6 +1461,7 @@ def build_posterior(
                          "fisher_spread": (_spread if _spread is not None and math.isfinite(_spread) else None),
                          "tsnpe_acceptance": _acc,
                          "tsnpe_containment": None if _tot is None else {"inside": int(_in), "total": int(_tot)},
+                         "truth_containment": _containment,
                          "wall_seconds": time.time() - _t0},
         }
     # Read back through the loader: the freshly written artifact is verified exactly as a later load

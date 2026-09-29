@@ -164,6 +164,30 @@ class TruncationRegion:
         sel = z[:, self.dims]
         return ((sel >= lo) & (sel <= hi)).all(dim=1)
 
+    def containment(self, theta_latent: torch.Tensor) -> list[dict]:
+        """Where ONE latent point lies against each truncated direction, in ``dims`` order.
+
+        ``theta_latent`` is (P,) or (1, P), in the coordinate the box is measured in; it is read on
+        the CPU in float64, the dtype the bounds are stored in. One dict per direction: its index
+        ``direction``, the exact bounds ``lo`` and ``hi``, the coordinate ``value``, and ``inside`` --
+        the same closed interval ``contains`` tests. A coordinate that is not a finite number is
+        recorded as ``value`` None, because a manifest refuses a non-finite number, and is never
+        inside. It says nothing itself: the caller decides what the answer means and reports it.
+        """
+        z = torch.as_tensor(theta_latent).detach().to(device="cpu", dtype=torch.float64)
+        if z.dim() == 1:
+            z = z.unsqueeze(0)
+        if z.dim() != 2 or z.shape[0] != 1:
+            raise ValueError(f"TruncationRegion.containment takes one latent point, (P,) or (1, P); got "
+                             f"{tuple(torch.as_tensor(theta_latent).shape)}.")
+        out = []
+        for d, lo, hi in zip(self.dims, self.lo.tolist(), self.hi.tolist()):
+            v = float(z[0, d])
+            finite = math.isfinite(v)
+            out.append({"direction": d, "lo": float(lo), "hi": float(hi), "value": v if finite else None,
+                        "inside": bool(finite and lo <= v <= hi)})
+        return out
+
     def check_basis(self, T_train, *, dim: int, device=None, atol: float = 1e-6) -> None:
         """Refuse unless ``T_train`` is the bijection this region was measured in.
 

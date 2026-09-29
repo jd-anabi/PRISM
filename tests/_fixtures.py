@@ -221,6 +221,43 @@ class _FakeDP(DirectPosterior):
         pass
 
 
+def stubbed_training(store, monkeypatch, *, rotate: bool = False):
+    """A training stage that runs up to the network and no further, in seconds.
+
+    Builds a real NADROWSKI config off the master bounds (CPU, ``hw.batch_size`` 4, the rotation on
+    or off as ``rotate`` says) and a real prior written to ``store`` and loaded back. The training
+    call itself is replaced: the stand-in records the plan build_posterior hands it in
+    ``seen["plan"]`` and returns a bare posterior whose prior is the wrapper it was given, with a
+    one-epoch loss history, so no training row is simulated and no network is fitted. The Fisher
+    rotation is NOT replaced; a rotated caller installs its own stand-in.
+
+    Returns ``SimpleNamespace(cfg, prior, P, seen, budget)``: ``P`` is the latent width (ND plus
+    rescale parameters) and ``budget`` the smallest flow settings with a figure sink that closes what
+    it is handed. The caller passes ``num_runs`` and ``checkpoint_every`` itself.
+    """
+    from types import SimpleNamespace
+    from matplotlib import pyplot as plt
+    from core import orchestrator
+    cfg = _nad_cfg()
+    cfg.hw.batch_size = 4
+    cfg.reparam_rotate = rotate
+    prior = store.load_prior(cfg, _prior_artifact(store, cfg, name="p").id)
+    seen = {}
+
+    def fake_train_nn(plan, **kw):
+        seen["plan"] = plan
+        dp = _FakeDP()
+        dp.prior = kw["prior"]                    # the prior wrapper build_posterior passed in
+        return dp, {"training_loss": [1.0], "validation_loss": [1.0], "best_validation_loss": 1.0,
+                    "epochs_trained": 1, "stop_after_epochs": 1}
+
+    monkeypatch.setattr(orchestrator.pipeline, "train_nn", fake_train_nn)
+    budget = dict(run_size_cap=4, hidden_features=8, num_transforms=1, stop_after_epochs=1,
+                  fig_sink=lambda title, fig: plt.close(fig))
+    return SimpleNamespace(cfg=cfg, prior=prior, P=len(cfg.params_dict) + len(cfg.rescale_params),
+                           seen=seen, budget=budget)
+
+
 def _set_path(w, path, value):
     target = w.config if path[0] == "config" else w.body
     for key in path[1 if path[0] == "config" else 0:-1]:

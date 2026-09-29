@@ -291,8 +291,9 @@ def test_a_narrowing_round_on_a_tier1_parent_judges_the_truth_in_inferred_coordi
                                                                                        caplog):
     """A narrowing round on the tier-1 box keeps the derivation (its plan carries n and beta by name
     and k_B in cell units, and it announces the derived force scale), and it judges the truth against
-    its region in the inferred coordinates, temperature included: silent when the truth is inside, one
-    warning naming the temperature's direction when it is outside."""
+    its region in the inferred coordinates, temperature included: no warning when the truth is inside,
+    one warning naming the temperature's direction when it is outside, and each child records which
+    of the two it was, with the temperature's latent coordinate."""
     cfg = with_truth(tier1_cfg(chi=False))
     cfg.reparam_rotate = False
     cfg.hw.batch_size = 4
@@ -324,15 +325,20 @@ def test_a_narrowing_round_on_a_tier1_parent_judges_the_truth_in_inferred_coordi
     caplog.set_level("INFO", logger="core")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        orchestrator.build_posterior(cfg, lp, None, True, truncation=region(c - 0.5, c + 0.5), **budget)
+        inside = orchestrator.build_posterior(cfg, lp, None, True, truncation=region(c - 0.5, c + 0.5), **budget)
     assert not any("GROUND TRUTH" in str(w.message) for w in caught)
     assert plans[0].nd_idx == cfg.nd_idx and plans[0].k_b_cell == pytest.approx(cfg.k_b_cell)
     assert any(r.getMessage().startswith("[tier1] f_scale is DERIVED") for r in caplog.records)
+    cont = store.get("posterior", inside.id).body["training"]["truth_containment"]
+    assert [(e["direction"], e["inside"]) for e in cont] == [(12, True)], cont
+    assert cont[0]["value"] == pytest.approx(c, abs=1e-6), cont
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        orchestrator.build_posterior(cfg, lp, None, True, truncation=region(c + 1.0, c + 2.0), **budget)
+        outside = orchestrator.build_posterior(cfg, lp, None, True, truncation=region(c + 1.0, c + 2.0), **budget)
     truth = [w for w in caught if "GROUND TRUTH" in str(w.message)]
     assert len(truth) == 1 and "direction 12" in str(truth[0].message)
+    cont = store.get("posterior", outside.id).body["training"]["truth_containment"]
+    assert [(e["direction"], e["inside"]) for e in cont] == [(12, False)], cont
     # The region is judged in inferred coordinates: the same truth with its temperature replaced by
     # the force scale it implies is not a point of the box at all.
     sim_truth = cfg.ground_truth_tensor.clone()

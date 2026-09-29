@@ -1929,6 +1929,8 @@ def test_a_round_records_parent_posterior_and_observation_as_parents(tiny_run):
     with pytest.raises(ValueError, match="NOT AMORTIZED"):
         r.store.load_posterior(r.cfg, child.id)
     assert r.store.get("posterior", child.id).body["training"]["tsnpe_acceptance"] is not None
+    cont = m.body["training"]["truth_containment"]
+    assert [set(e) for e in cont] == [{"direction", "lo", "hi", "value", "inside"}], cont
     other = orchestrator.generate_observations(r.cfg, fig_sink=r.sink)   # new noise, new digest
     with pytest.raises(ValueError, match="does not match the observation"):
         orchestrator.build_posterior(r.cfg, r.prior, None, True, fig_sink=r.sink, num_runs=2, hidden_features=8,
@@ -3768,12 +3770,14 @@ def test_fisher_settings_are_recorded_only_when_the_rotation_ran(store, monkeypa
     ident = SimulationIdentity.from_cfg(cfg, lp, 4, 2).to_dict()
     d = tc.resolve_dir(ident, store.kind_dir("simulation"))
     tc.create(d, ident, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2), inits=torch.zeros(4, 3),
-              V=Q, probe=torch.zeros(0), run_size=4, n_runs=2)
+              V=Q, fisher_eigenvalues=[float(v) for v in range(P, 0, -1)], probe=torch.zeros(0), run_size=4,
+              n_runs=2)
     torch.save({"batches_done": 1, "complete": False, "rng": None}, d / "state.pt")
     got, m = recorded(orchestrator.build_posterior(cfg, lp, None, True, checkpoint_every=1, fisher_m=7,
                                                    **budget))
     assert m.body["training"]["resumed_from_batch"] == 1 and m.parents["simulation"] == d.name, m.body
-    assert got == (None, None, None) and m.body["transform"]["fisher_eigenvalues"] is None, (got, m.config)
+    assert got == (None, None, None), (got, m.config)
+    assert m.body["transform"]["fisher_eigenvalues"] == [float(v) for v in range(P, 0, -1)], m.body["transform"]
 
     # (d) TRUNCATED: the round trains in the region's basis and the Fisher is never reached
     cfg.reparam_rotate = False
@@ -3785,7 +3789,85 @@ def test_fisher_settings_are_recorded_only_when_the_rotation_ran(store, monkeypa
                                                    fisher_m=7, **budget))
     assert m.body["amortized"] is False, m.body["amortized"]
     assert got == (None, None, None) and m.body["transform"]["fisher_eigenvalues"] is None, (got, m.config)
+    assert m.body["training"]["truth_containment"] is None, m.body["training"]
     assert len(calls) == 2, "only the two rotated fresh runs may have computed a Fisher"
+
+
+def test_the_training_cache_header_keeps_the_rotation_eigenvalues_beside_the_rotation(tmp_path):
+    """The header written before the first simulation stores the rotation's eigenvalues next to V, so a
+    resumed run can record how strongly each direction is constrained without re-running the Fisher."""
+    from core.SBI import training_checkpoint as tc
+    Q, _ = torch.linalg.qr(torch.randn(3, 3))
+    for ident, V, evals, want in (({"model": "a"}, Q, torch.tensor([3.0, 2.0, 1.0]), [3.0, 2.0, 1.0]),
+                                  ({"model": "b"}, None, None, None)):
+        d = tc.resolve_dir(ident, tmp_path)
+        tc.create(d, ident, schedule_t_scales=torch.ones(2), schedule_Ts=torch.ones(2), inits=torch.zeros(1, 2),
+                  V=V, fisher_eigenvalues=evals, probe=torch.zeros(0), run_size=1, n_runs=2)
+        assert tc.read_header(d)["fisher_eigenvalues"] == want
+
+
+def test_a_fresh_rotated_run_hands_its_eigenvalues_to_the_cache_and_a_narrowing_child_inherits_them(store, monkeypatch):
+    """The Fisher's eigenvalues travel into the simulation cache's plan beside the rotation; a narrowing
+    round reuses its parent's rotation and never runs the Fisher, so it records the parent's
+    eigenvalues and no Fisher settings of its own."""
+    from types import SimpleNamespace
+    from core import orchestrator
+    from core.SBI import reparam, truncate, training_checkpoint as tc
+    from core.SBI.run_guards import _log_params_for
+    from tests._fixtures import stubbed_training
+    h = stubbed_training(store, monkeypatch, rotate=True)
+    Q, _ = torch.linalg.qr(torch.randn(h.P, h.P))
+    evals = [float(v) for v in range(h.P, 0, -1)]
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", lambda *a, **k: (Q, torch.tensor(evals)))
+    fresh = orchestrator.build_posterior(h.cfg, h.prior, None, True, num_runs=3, checkpoint_every=1, **h.budget)
+    assert h.seen["plan"].checkpoint["fisher_eigenvalues"] == evals
+    parent_m = store.get("posterior", fresh.id)
+    assert parent_m.body["transform"]["fisher_eigenvalues"] == evals
+
+    def fisher_must_not_run(*a, **k):
+        raise AssertionError("a narrowing round computed a Fisher")
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", fisher_must_not_run)
+    T = reparam.build_inferred_bijection(h.cfg, log_params=_log_params_for(h.cfg))
+    region = truncate.TruncationRegion(
+        [0], [-50.0], [50.0], n_latent=h.P, V=Q, x_obs_digest="d" * 16,
+        probe=tc.bijection_probe(reparam.build_rotated_bijection(T, Q), h.P, device=h.cfg.hw.device))
+    parent = SimpleNamespace(id=fresh.id, accepted=[], manifest=parent_m)
+    child = store.get("posterior", orchestrator.build_posterior(
+        h.cfg, h.prior, None, True, num_runs=2, checkpoint_every=0, truncation=region,
+        parent_posterior=parent, **h.budget).id)
+    assert child.body["transform"]["fisher_eigenvalues"] == evals
+    assert (child.config["fisher_m"], child.config["fisher_dz"], child.config["fisher_points"]) == (None, None, None)
+
+
+def test_a_resume_from_a_checkpoint_that_stores_no_eigenvalues_records_them_as_unknown(store, monkeypatch, caplog):
+    """A cache written before the eigenvalues were kept beside the rotation still resumes: the posterior
+    records them as unknown, says so in an information record, and records no Fisher settings."""
+    from core import orchestrator
+    from core.artifacts.identity import SimulationIdentity
+    from core.SBI import training_checkpoint as tc
+    from tests._fixtures import stubbed_training
+    h = stubbed_training(store, monkeypatch, rotate=True)
+
+    def fisher_must_not_run(*a, **k):
+        raise AssertionError("a resumed run recomputed the Fisher")
+    monkeypatch.setattr(orchestrator.decorrelate, "build_latent_fisher_rotation", fisher_must_not_run)
+    Q, _ = torch.linalg.qr(torch.randn(h.P, h.P))
+    ident = SimulationIdentity.from_cfg(h.cfg, h.prior, 4, 2).to_dict()
+    d = tc.resolve_dir(ident, store.kind_dir("simulation"))
+    tc.create(d, ident, schedule_t_scales=torch.zeros(2), schedule_Ts=torch.zeros(2), inits=torch.zeros(4, 3),
+              V=Q, probe=torch.zeros(0), run_size=4, n_runs=2)
+    header = torch.load(d / "header.pt", weights_only=False)
+    header.pop("fisher_eigenvalues", None)
+    torch.save(header, d / "header.pt")
+    torch.save({"batches_done": 1, "complete": False, "rng": None}, d / "state.pt")
+    caplog.clear()
+    m = store.get("posterior", orchestrator.build_posterior(
+        h.cfg, h.prior, None, True, num_runs=2, checkpoint_every=1, **h.budget).id)
+    assert m.body["training"]["resumed_from_batch"] == 1
+    assert m.body["transform"]["fisher_eigenvalues"] is None
+    assert (m.config["fisher_m"], m.config["fisher_dz"], m.config["fisher_points"]) == (None, None, None)
+    said = [r.getMessage() for r in caplog.records if r.name == "core.orchestrator" and r.levelname == "INFO"]
+    assert any(s.startswith("[checkpoint] ") and "unknown" in s for s in said), said
 
 
 def test_cal_n_scales_and_the_fisher_knobs_are_refused_not_clamped(store, monkeypatch):

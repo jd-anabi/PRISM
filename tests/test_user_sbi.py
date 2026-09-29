@@ -1911,6 +1911,25 @@ def _ck(tmp, **over):
     return d
 
 
+def test_the_training_generator_passes_the_eigenvalues_to_the_cache_header(monkeypatch, tmp_path):
+    """gen_training_data hands the checkpoint's eigenvalues to the header it creates before the first
+    simulation."""
+    from core.SBI import training_checkpoint as tc
+    handed = {}
+
+    class _Stop(Exception):
+        pass
+
+    def _create(path, identity, **kw):
+        handed.update(kw)
+        raise _Stop
+
+    monkeypatch.setattr(tc, "create", _create)
+    with pytest.raises(_Stop):
+        _gen_td("chi", seed=3, n_runs=2, run_size=4, checkpoint=_ck(tmp_path / "c", fisher_eigenvalues=[3.0, 2.0, 1.0]))
+    assert handed["fisher_eigenvalues"] == [3.0, 2.0, 1.0]
+
+
 def test_a_resumed_training_run_is_bit_identical_to_an_uninterrupted_one():
     """THE test the training checkpoint (the simulation cache) exists to pass.
 

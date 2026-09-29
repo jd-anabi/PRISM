@@ -27,7 +27,8 @@ WHAT IS DELIBERATELY NOT PERSISTED
 
 LAYOUT.  ``<Artifacts>/simulations/<digest12>/``   (core.artifacts.store.KIND_DIRS["simulation"])
     manifest.json  the store's record: identity, parents, batches_done, complete, rows, wall time
-    header.pt      write-once: identity + the (t_scale, T) schedule + inits + V + the bijection probe
+    header.pt      write-once: identity + the (t_scale, T) schedule + inits + V + V's eigenvalues
+                   + the bijection probe
     state.pt       rewritten atomically; its ``batches_done`` is THE COMMIT POINT
     state.prev.pt  one generation back, a few KB, for the case where state.pt is lost mid-write
     shards/x_<from>_<to>.pt, th_<from>_<to>.pt    write-once row blocks, never mutated after commit
@@ -162,13 +163,17 @@ def peek(path) -> dict | None:
     return None
 
 
-def create(path, identity: dict, *, schedule_t_scales, schedule_Ts, inits, V, probe,
-           run_size: int, n_runs: int, parents=None, inputs=None, hw=None) -> None:
+def create(path, identity: dict, *, schedule_t_scales, schedule_Ts, inits, V, fisher_eigenvalues=None,
+           probe, run_size: int, n_runs: int, parents=None, inputs=None, hw=None) -> None:
     """Write the write-once header and a zeroed state. Called BEFORE the first simulation.
 
     Doing this up front is the cheapest insurance in the feature: a read-only artifact root
     (``Artifacts/``, or ``PRISM_ARTIFACTS``), a permissions problem or a disk with no room surfaces
     in the first seconds rather than on day three when the first cadence write is attempted.
+
+    ``fisher_eigenvalues`` (a tensor or a list, or None) are V's eigenvalues, stored as a list of
+    floats beside it. A header written before they were kept has no such key, so every reader uses
+    ``.get`` and reads that as unknown; the format number does not change.
     """
     path = Path(path)
     (path / _SHARDS).mkdir(parents=True, exist_ok=True)
@@ -180,6 +185,9 @@ def create(path, identity: dict, *, schedule_t_scales, schedule_Ts, inits, V, pr
         "batch_Ts": schedule_Ts.detach().cpu(),
         "inits": inits.detach().cpu(),                     # numpy-drawn; torch seeds do not cover it
         "V": None if V is None else V.detach().cpu(),
+        # A resume reuses V and never re-runs the Fisher, so this is the only place a resumed run can
+        # read how strongly each of V's directions is constrained.
+        "fisher_eigenvalues": None if fisher_eigenvalues is None else [float(v) for v in fisher_eigenvalues],
         "probe": probe,
         "run_size": int(run_size),
         "n_runs": int(n_runs),

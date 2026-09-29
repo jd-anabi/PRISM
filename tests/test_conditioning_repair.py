@@ -1279,6 +1279,110 @@ def test_the_round_reads_this_observations_truth_and_no_other():
     assert said and said[0].startswith("direction 0:") and "outside [9" in said[0], said
 
 
+def test_a_region_reports_containment_per_truncated_direction():
+    """For one latent point: each truncated direction's bounds, the coordinate, and whether it lies in the
+    closed interval. A coordinate that is not a finite number is recorded as None and never inside."""
+    r = truncate.TruncationRegion([0, 2], [-1.0, 0.0], [1.0, 2.0], n_latent=4)
+    assert r.containment(torch.tensor([0.5, 9.0, 3.0, -9.0])) == [
+        {"direction": 0, "lo": -1.0, "hi": 1.0, "value": 0.5, "inside": True},
+        {"direction": 2, "lo": 0.0, "hi": 2.0, "value": 3.0, "inside": False}]
+    got = r.containment(torch.tensor([[float("nan"), 0.0, 2.0, 0.0]]))
+    assert got[0]["value"] is None and got[0]["inside"] is False and got[1]["inside"] is True
+
+
+def _truth_lines(caplog) -> list[str]:
+    """The narrowing round's per-direction truth records: INFO on core.orchestrator, in order."""
+    return [r.getMessage() for r in caplog.records
+            if r.name == "core.orchestrator" and r.levelname == "INFO"
+            and r.getMessage().startswith("[tsnpe] truth direction 0:")]
+
+
+def test_a_narrowing_round_reports_and_records_whether_the_truth_lies_inside_each_direction(store, monkeypatch,
+                                                                                          caplog):
+    """With a known cell loaded, a narrowing round says for every truncated direction whether the truth
+    lies inside the region, in one information record each, and records the same answer on the child
+    posterior. A truth inside raises no warning; a truth outside keeps the one warning that names the
+    direction."""
+    from core import cli, orchestrator
+    from core.config import CELL_PATH
+    from core.SBI.run_guards import _log_params_for
+    from tests._fixtures import stubbed_training
+    h = stubbed_training(store, monkeypatch)
+    cfg, P = h.cfg, h.P
+    cli.load_and_validate_gt(cfg, str(CELL_PATH / "nadrowski" / "master_weak.txt"))
+    assert cfg.has_ground_truth
+    T = reparam.build_inferred_bijection(cfg, log_params=_log_params_for(cfg))
+    with torch.no_grad():
+        z0 = float(T.inv(cfg.ground_truth_tensor.reshape(1, -1))[0, 0])
+        w0 = orchestrator._build_latent_prior_for_validation(cfg, h.prior.prior).sample((4000,))[:, 0].double()
+    q = {p: float(w0.quantile(p)) for p in (0.02, 0.1, 0.4, 0.5, 0.6, 0.9, 0.98)}
+    probe = training_checkpoint.bijection_probe(T, P, device=cfg.hw.device)
+    caplog.set_level("INFO", logger="core")
+
+    def round_in(lo, hi):
+        region = truncate.TruncationRegion([0], [lo], [hi], n_latent=P, probe=probe, x_obs_digest="d" * 16)
+        caplog.clear()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            out = orchestrator.build_posterior(cfg, h.prior, None, True, num_runs=2, checkpoint_every=0,
+                                               truncation=region, **h.budget)
+        cont = store.get("posterior", out.id).body["training"]["truth_containment"]
+        truth = [str(w.message) for w in caught if "GROUND TRUTH" in str(w.message)]
+        return cont, _truth_lines(caplog), truth
+
+    cont, lines, truth = round_in(min(z0, q[0.02]) - 0.5, max(z0, q[0.98]) + 0.5)
+    assert [(e["direction"], e["inside"]) for e in cont] == [(0, True)], cont
+    assert abs(cont[0]["value"] - z0) <= 1e-6, (cont, z0)
+    assert len(lines) == 1 and " inside [" in lines[0], lines
+    assert truth == [], truth
+
+    lo, hi = (q[0.6], q[0.9]) if z0 <= q[0.5] else (q[0.1], q[0.4])
+    cont, lines, truth = round_in(lo, hi)
+    assert [(e["direction"], e["inside"]) for e in cont] == [(0, False)], cont
+    assert len(lines) == 1 and " outside [" in lines[0], lines
+    assert len(truth) == 1 and "direction 0" in truth[0], truth
+
+
+def test_a_round_on_a_simulated_observation_reports_truth_containment_without_a_cell(store, monkeypatch, caplog):
+    """The command line's narrowing round takes no cell: the truth reaches the region check only because
+    the round installs a SIMULATED observation's context, its truth included, on its own copy of the
+    config. That path reports and records containment exactly as a loaded cell does."""
+    import copy
+    from types import SimpleNamespace
+    from core import cli, orchestrator
+    from core.artifacts import LoadedObservation
+    from core.SBI.run_guards import _log_params_for
+    from tests._fixtures import stubbed_training
+    h = stubbed_training(store, monkeypatch)
+    assert not h.cfg.has_ground_truth
+    fresh = orchestrator.build_posterior(h.cfg, h.prior, None, True, num_runs=2, checkpoint_every=0, **h.budget)
+    parent = SimpleNamespace(posterior=SimpleNamespace(x_obs_digest=None), id=fresh.id, name="", accepted=[],
+                             manifest=store.get("posterior", fresh.id))
+
+    cell = copy.deepcopy(h.cfg)
+    cli.load_and_validate_gt(cell, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
+    source = {"kind": "simulated", "cell": None,
+              "params": {k: float(v) for k, (v, _) in cell.params_dict.items()},
+              "rescale": {k: float(v) for k, (v, _) in cell.rescale_params.items()},
+              "forcing": {k: float(v) for k, (v, _) in cell.force_params_dict.items()},
+              "inits": {k: float(v) for k, v in cell.inits_dict.items()}}
+    body = {"T_obs_cell": 200.0, "n_obs": 200, "chi_obs_freqs": None, "forcing_vals": {}, "source": source}
+    obs = LoadedObservation(kind="observation", id="20300101T000000", name="", path=None,
+                            manifest=SimpleNamespace(body=body), digest="d" * 16)
+
+    T = reparam.build_inferred_bijection(h.cfg, log_params=_log_params_for(h.cfg))
+    monkeypatch.setattr(orchestrator, "build_truncation_region", lambda *a, **k: truncate.TruncationRegion(
+        [0], [-1e6], [1e6], n_latent=h.P, probe=training_checkpoint.bijection_probe(T, h.P, device=h.cfg.hw.device),
+        x_obs_digest=obs.digest))
+    caplog.set_level("INFO", logger="core")
+    caplog.clear()
+    child = orchestrator.tsnpe_round(h.cfg, parent, h.prior, obs, num_runs=2, checkpoint_every=0, store=store,
+                                     **h.budget)
+    cont = store.get("posterior", child.id).body["training"]["truth_containment"]
+    assert [(e["direction"], e["inside"]) for e in cont] == [(0, True)], cont
+    assert len(_truth_lines(caplog)) == 1, _truth_lines(caplog)
+
+
 def test_the_round_announces_the_region_it_drew(caplog):
     """This line is the operator's only view of which observation a multi-day round was drawn around.
     It is an INFO record on core.orchestrator: the tool's stdout handler prints exactly this text and

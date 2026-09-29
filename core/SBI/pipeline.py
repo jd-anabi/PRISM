@@ -1260,6 +1260,9 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                          V         the rotation to store, so a resume can reuse it rather than
                                    recompute it (V is NOT reproducible across processes: its
                                    operating points come from the caller's unseeded global RNG)
+                         fisher_eigenvalues
+                                   V's eigenvalues, stored beside it so a resumed run can record
+                                   them without the Fisher; None/absent => stored as unknown
                          every     batches between writes; None/absent => config.TRAINING_CHECKPOINT_EVERY
                          resume    "auto" (default) | "never" | "require"
     :param chi_k_fixed: hold the probe COUNT at this value instead of drawing it per batch, and skip
@@ -1426,7 +1429,8 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
             # this is also where the schedule becomes durable.
             _tc.create(_ck_dir, checkpoint["identity"],
                        schedule_t_scales=batch_t_scales, schedule_Ts=batch_Ts, inits=inits,
-                       V=checkpoint.get("V"), probe=checkpoint.get("probe"),
+                       V=checkpoint.get("V"), fisher_eigenvalues=checkpoint.get("fisher_eigenvalues"),
+                       probe=checkpoint.get("probe"),
                        run_size=run_size, n_runs=n_runs,
                        parents=checkpoint.get("parents"), inputs=checkpoint.get("inputs"),
                        hw=checkpoint.get("hw"))
