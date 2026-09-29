@@ -47,6 +47,7 @@ def _none(*flags) -> dict:
 _CONFIG = {"--bounds": (NONE, None),                       # add_config_flags
            "--model": (BEHAVIOUR, "the bounds file's parent folder, upper-cased"),
            "--chi": (VALUE, "--no-chi"), "--chi-k": (VALUE, None), "--device": (VALUE, None)}
+_CONFIG_NO_CHI = {f: e for f, e in _CONFIG.items() if f not in ("--chi", "--chi-k")}   # chi=False
 _NAMES = {"--name": (NONE, None), "--note": (NONE, None)}
 _TRAINING = _value("--num-runs", "--run-size", "--hidden-features", "--num-transforms",
                    "--learning-rate", "--stop-after-epochs", "--max-epochs", "--checkpoint-every")
@@ -83,6 +84,20 @@ _PER_LEAF = {
     "identifiability jacobian": {**_CONFIG, **_NAMES, **_none("--cell", "--t-obs"), **_PROBE,
                                  "--zero-tol": (VALUE, "0.05"), "--noise-eps": (VALUE, "1e-06")},
     "ablation": {**_CONFIG, **_NAMES, **_none("--posterior"), **_value("--rows", "--n-sweep")},
+    "probes band": {**_CONFIG_NO_CHI, **_NAMES, **_none("--cell"),
+                    "--lengths": (BEHAVIOUR, "five log-spaced from the shortest expected recording to "
+                                             "this cell's training ceiling"),
+                    "--multipliers": (BEHAVIOUR, "four across the configured band plus one control at "
+                                                 "twice its top"),
+                    "--drives": (BEHAVIOUR, "the configured chi drive"),
+                    "--repeats": (VALUE, "24"),
+                    "--cycle-caps": (BEHAVIOUR, "the configured cycle ceiling only"),
+                    "--cv-max": (VALUE, "0.2"),
+                    "--phase-max": (BEHAVIOUR, "not judged"),
+                    "--snr-min": (VALUE, "3.0"),
+                    "--sup-min": (VALUE, "0.5"),
+                    "--peak-window": (VALUE, "0.1"),
+                    "--seed": (VALUE, "0")},
     "smoke": {**_CONFIG, **_none("--cell", "--prior"), "--t-obs": (VALUE, "1.0"),
               **_value("--seed", "--stages", "--num-runs", "--run-size", "--n-cal", "--max-epochs",
                        "--hidden-features", "--num-transforms"),

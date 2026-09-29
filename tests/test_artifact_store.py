@@ -3510,6 +3510,17 @@ def _leg_channel_ablation(case, monkeypatch, tmp_path):
     return cfg, lambda: ablation.channel_ablation(cfg, post, rows=rows, n_sweep=3, store=_EntryStore(case))
 
 
+def _leg_probe_band(case, monkeypatch, tmp_path):
+    from core import cli
+    from core.diagnostics import probes
+    cfg = _nad_cfg(chi_mode=True)
+    cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / "master_spont.txt"))
+    monkeypatch.setattr(probes, "_simulate", _body_done)
+    repeats = 1 if case == "refusal" else 2
+    return cfg, lambda: probes.probe_band(cfg, lengths=[1.0], multipliers=[0.1], repeats=repeats,
+                                          store=_EntryStore(case))
+
+
 class _FdtWriter:
     """The writer surface run_fdt touches, over a real temp directory but no store.
 
@@ -3633,6 +3644,7 @@ _UNTOUCHED_LEGS = {
     "identifiability_laplace": _leg_identifiability_laplace,
     "identifiability_jacobian": _leg_identifiability_jacobian,
     "channel_ablation": _leg_channel_ablation,
+    "probe_band": _leg_probe_band,
     "run_fdt": _leg_run_fdt,
     "run_param_study_cli": _leg_run_param_study_cli,
     "compare": _leg_compare,
@@ -3660,6 +3672,7 @@ _REFUSAL_FIELDS = {
     "identifiability_laplace": "n_points",
     "identifiability_jacobian": "m_noise",
     "channel_ablation": "rows",
+    "probe_band": "band_repeats",
     "run_fdt": "cell",                               # a cell with no FDT normalisation constant
     "run_param_study_cli": "cell",                   # the same check, before the first phase's spend
     "compare": "compare_records",                    # one record, for a mode that draws at least two
@@ -3669,7 +3682,8 @@ _REFUSAL_FIELDS = {
 def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     """Every public stage works on a private copy of its config, and that copy is kept by ONE
     decorator on exactly the functions named below: the ten stages and compositions of
-    core/orchestrator.py, the five diagnostics, core/FDT's single-cell measurement, its two-record
+    core/orchestrator.py, the five diagnostics and the probe checks' band mode, core/FDT's single-cell
+    measurement, its two-record
     sweep study, and the comparison facility's one entry, core/FDT/compare.py. Read off the source
     (every `@public_entry` in CODE_ROOTS and CODE_FILES), not off `__wrapped__`, which any
     functools.wraps decorator sets: a public stage added without it hands its body the caller's config,
@@ -3693,6 +3707,7 @@ def test_the_public_entries_carry_public_entry_and_nothing_else_does():
     want |= {("core/diagnostics/sbc.py", "sbc_repeats"), ("core/diagnostics/ablation.py", "channel_ablation")}
     want |= {("core/diagnostics/identifiability.py", n) for n in (
         "identifiability_rotation", "identifiability_laplace", "identifiability_jacobian")}
+    want |= {("core/diagnostics/probes.py", "probe_band")}
     # The FDT measurement writes a record and must not write on the caller's FDTConfig --
     # `cfg.omega_0 = ...` twice in its own body would otherwise land on the caller's object, and
     # copy_for_run is what stops it reaching the panel's settings object. The sweep study writes

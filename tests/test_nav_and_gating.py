@@ -1612,6 +1612,9 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         "checkpoint_every", "resume", "device", "n_samples", "num_posterior_samples", "max_num_epochs",
         "repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
         "n_sweep", "chi_k_fixed",
+        # the probe checks: command line only
+        "probe_seed", "probe_lengths", "probe_multipliers", "probe_drives", "band_repeats",
+        "probe_cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "band_peak_window",
         # the five FDT settings neither front end exposes
         "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd"}
 

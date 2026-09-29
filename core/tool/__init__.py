@@ -17,7 +17,7 @@ from pathlib import Path
 from core import logging_root
 from core.refusals import Refusal, require_note
 
-from . import browse, config_args, diagnostics, fdt, smoke, stages
+from . import browse, config_args, diagnostics, fdt, probes, smoke, stages
 from .config_args import UsageError  # noqa: F401 -- part of this package's public surface
 from .logging_console import console_handlers
 from .fields import fix_sentence
@@ -47,7 +47,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="The PRISM command-line tool. The GUI is `python -m core.gui`.")
     sub = p.add_subparsers(dest="cmd", required=True, metavar="<subcommand>")
     p.subcommands = {}
-    for module in (stages, diagnostics, smoke, fdt, browse):
+    for module in (stages, diagnostics, probes, smoke, fdt, browse):
         p.subcommands.update(module.register(sub))
     return p
 

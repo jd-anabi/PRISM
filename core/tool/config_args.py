@@ -26,12 +26,16 @@ class UsageError(Refusal):
     (which recordings a mode takes, which drive keys exist). Raised after parsing; exit code 2."""
 
 
-def add_config_flags(p) -> None:
+def add_config_flags(p, *, chi: bool = True) -> None:
     """The config flags every SBI subcommand takes.
 
     ``--bounds`` is required on all of them, and it is one rule rather than a default: the bounds file
     declares WHICH parameters are inferred and in what order, and therefore the observation mode, so an
     unset one used to resolve the 12-dimensional spontaneous box behind the operator's back.
+
+    ``chi=False`` leaves out ``--chi`` and ``--chi-k`` and nothing else, for a subcommand that sets
+    the observation mode itself: a probe check measures the chi probes, so it builds its config in chi
+    mode through its own parser defaults, and a chi flag there could only contradict it.
     """
     p.add_argument("--bounds", required=True, metavar="PATH",
                    help="bounds file: which parameters are inferred, in what order, and the box. It "
@@ -39,10 +43,11 @@ def add_config_flags(p) -> None:
                         "store refuses a mismatch in model, order, box or mode.")
     p.add_argument("--model", default=None, metavar="NAME",
                    help="model name" + default_text("the bounds file's parent folder, upper-cased"))
-    p.add_argument("--chi", dest="chi_mode", default=None, action=argparse.BooleanOptionalAction,
-                   help="chi(omega) observation mode" + default_text("--no-chi"))
-    p.add_argument("--chi-k", dest="chi_n_freqs", type=int, default=None, metavar="K",
-                   help="probe frequencies per observation" + default_clause("chi_n_freqs"))
+    if chi:
+        p.add_argument("--chi", dest="chi_mode", default=None, action=argparse.BooleanOptionalAction,
+                       help="chi(omega) observation mode" + default_text("--no-chi"))
+        p.add_argument("--chi-k", dest="chi_n_freqs", type=int, default=None, metavar="K",
+                       help="probe frequencies per observation" + default_clause("chi_n_freqs"))
     p.add_argument("--device", choices=("auto", "cpu", "cuda"), default="auto",
                    help="auto picks the card when CUDA is present with compute capability 8.0 or "
                         "above, else Apple's MPS when present, else the CPU; cpu forces the CPU; "

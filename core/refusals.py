@@ -183,6 +183,20 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("rows", "the number of rows", "200000"),                                     # channel_ablation
     Field("n_sweep", "the number of sweep points", "33"),                              # channel_ablation
     Field("chi_k_fixed", "the fixed chi probe count", None),
+    # tool-only (the probe checks). The four grids and the phase threshold have no default value:
+    # without them the check follows a rule (the configured band and drive, this cell's lengths, the
+    # configured cycle ceiling; the phase not judged), which the help states in words.
+    Field("probe_seed", "the probe check's random seed", "0"),                         # probe_band
+    Field("probe_lengths", "the recording lengths, in seconds", None),
+    Field("probe_multipliers", "the probe frequencies, as multiples of the peak frequency", None),
+    Field("probe_drives", "the non-dimensional drive amplitudes", None),
+    Field("band_repeats", "the number of noise repeats per point", "24"),              # probe_band
+    Field("probe_cycle_caps", "the lock-in ceilings, in drive cycles", None),
+    Field("cv_max", "the largest amplitude spread that passes", "0.2"),                # probe_band
+    Field("phase_max", "the largest phase spread that passes, in radians", None),
+    Field("snr_min", "the smallest signal over the lock-in floor that passes", "3.0"), # probe_band
+    Field("sup_min", "the smallest own-peak power fraction that passes", "0.5"),      # probe_band
+    Field("band_peak_window", "the own-peak window, as a fraction of the peak frequency", "0.1"),  # probe_band
 )}
 
 

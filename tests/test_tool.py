@@ -208,7 +208,7 @@ def _owned_defaults() -> dict:
     import inspect
     from core import cli
     from core.config import FDTConfig
-    from core.diagnostics import identifiability, sbc
+    from core.diagnostics import identifiability, probes, sbc
 
     def sig(fn, name):
         return str(inspect.signature(fn).parameters[name].default)
@@ -232,6 +232,12 @@ def _owned_defaults() -> dict:
         ("identifiability jacobian", "--min-valid"): sig(jac, "min_valid"),
         ("identifiability jacobian", "--zero-tol"): sig(jac, "zero_tol"),
         ("identifiability jacobian", "--noise-eps"): sig(jac, "noise_eps"),
+        ("probes band", "--seed"): sig(probes.probe_band, "seed"),
+        ("probes band", "--repeats"): sig(probes.probe_band, "repeats"),
+        ("probes band", "--cv-max"): sig(probes.probe_band, "cv_max"),
+        ("probes band", "--snr-min"): sig(probes.probe_band, "snr_min"),
+        ("probes band", "--sup-min"): sig(probes.probe_band, "sup_min"),
+        ("probes band", "--peak-window"): sig(probes.probe_band, "peak_window"),
         ("smoke", "--t-obs"): str(config.T_MIN_EXP_S),
         ("fdt", "--n-freqs"): str(fdt["n_freqs"]),
         ("fdt", "--ensemble-m"): str(fdt["ensemble_M"]),
@@ -4035,3 +4041,146 @@ def test_the_tools_root_sink_routes_a_core_record_as_the_console_handlers_would(
                               "library: a_library: it failed\nTraceback (most recent call last):\n"), \
         cap.err
     assert cap.err.endswith("ValueError: the library's own failure\n"), cap.err
+
+
+def _probe_band_argv():
+    """``probes band`` on the master box and its spontaneous cell, CPU."""
+    bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")
+    cell = str(config.CELL_PATH / "nadrowski" / "master_spont.txt")
+    return ["probes", "band", "--bounds", bounds, "--device", "cpu", "--cell", cell]
+
+
+def test_probes_band_builds_a_chi_config_with_the_cell_and_forwards_every_knob(tmp_path, monkeypatch):
+    """Every flag reaches the stage as its keyword, a list flag as a list of floats, and nothing else
+    does; a bare call forwards only the four the handler always passes, so every default stays in the
+    stage's signature. The positional config is in chi mode with the cell loaded, and its band and drive
+    are config.py's: nothing on the command line reaches them."""
+    from core import tool
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    calls = []
+
+    def _rec(*a, **kw):
+        calls.append((a, kw))
+        return SimpleNamespace(kind="diagnostic", path=tmp_path / "diagnostics" / "b1__1")
+
+    monkeypatch.setattr("core.diagnostics.probe_band", _rec)
+    assert tool.main([*_probe_band_argv(), "--lengths", "1", "2.5", "--multipliers", "0.05", "0.3",
+                      "--drives", "0.2", "--repeats", "6", "--cycle-caps", "8", "12", "--cv-max", "0.25",
+                      "--phase-max", "0.6", "--snr-min", "2.5", "--sup-min", "0.4", "--peak-window", "0.08",
+                      "--seed", "3", "--name", "b1", "--note", "hello"]) == 0
+    (args, kw), = calls
+    assert set(kw) == {"name", "note", "fig_sink", "store", "lengths", "multipliers", "drives", "repeats",
+                       "cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "peak_window", "seed"}
+    lists = {k: kw[k] for k in ("lengths", "multipliers", "drives", "cycle_caps")}
+    assert lists == {"lengths": [1.0, 2.5], "multipliers": [0.05, 0.3], "drives": [0.2], "cycle_caps": [8.0, 12.0]}
+    assert all(isinstance(v, float) for vs in lists.values() for v in vs), lists
+    assert (kw["repeats"], kw["cv_max"], kw["phase_max"], kw["snr_min"], kw["sup_min"], kw["peak_window"],
+            kw["seed"], kw["name"], kw["note"]) == (6, 0.25, 0.6, 2.5, 0.4, 0.08, 3, "b1", "hello")
+    cfg = args[0]
+    assert cfg.chi_mode is True and cfg.ground_truth is not None
+    assert (cfg.chi_f0, cfg.chi_freq_bounds) == (config.CHI_F0, config.CHI_FREQ_BOUNDS)
+
+    calls.clear()
+    assert tool.main(_probe_band_argv()) == 0
+    (_, kw), = calls
+    assert set(kw) == {"name", "note", "fig_sink", "store"}, kw
+
+
+def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(tmp_path, monkeypatch, capsys):
+    """The family's one mode so far takes no chi flag and no training flag: it builds its own chi
+    configuration, and the band and drive it judges are config.py's. No parser in the family matches an
+    abbreviated option, so a prefix of one of its flags is an error rather than that flag. Ctrl-C gets
+    the family's own note -- nothing is kept and nothing resumes. ``--help`` costs no torch import,
+    checked in a FRESH interpreter because this process imported torch long ago."""
+    import argparse
+    import subprocess
+    import sys
+
+    from core.tool import probes as tool_probes
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    p = build_parser().subcommands["probes"]
+    modes = {name: sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
+             for name, sub in a.choices.items()}
+    assert set(modes) == {"band"}, sorted(modes)
+    assert p.allow_abbrev is False and all(m.allow_abbrev is False for m in modes.values())
+    band = modes["band"]
+    for flag in ("--chi", "--no-chi", "--chi-k", "--chi-f0", "--chi-band", "--f0", "--prior", "--posterior",
+                 "--num-runs", "--strengths", "--t-obs"):
+        assert flag not in band._option_string_actions, flag
+    assert band.get_default("chi_mode") is True
+    assert band.get_default("interrupt_note") == tool_probes.PROBES_INTERRUPT_NOTE
+
+    capsys.readouterr()
+    assert main([*_probe_band_argv(), "--chi"]) == 2
+    assert main([*_probe_band_argv(), "--sup", "0.4"]) == 2, "a prefix of --sup-min is not --sup-min"
+    assert main([*_probe_band_argv(), "--cycle", "8"]) == 2, "a prefix of --cycle-caps is not --cycle-caps"
+
+    def _interrupted(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("core.diagnostics.probe_band", _interrupted)
+    capsys.readouterr()
+    assert main(_probe_band_argv()) == 130
+    err = capsys.readouterr().err
+    assert err.startswith("prism probes: interrupted: a probe check writes its record only when it "
+                          "finishes"), err
+    assert "--resume" not in err, err
+
+    probe = ("import sys\n"
+             "from core.tool import main\n"
+             "rc = [main(['probes', '--help']), main(['probes', 'band', '--help'])]\n"
+             "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.'))\n"
+             "sys.exit(0 if rc == [0, 0] and not bad else repr((rc, bad[:3])))\n")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=str(config.REPO_ROOT),
+                       capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "--cycle-caps" in r.stdout and "band" in r.stdout, r.stdout
+
+
+def _grid_leaks(tree) -> list:
+    """``[(lineno, what)]`` for every way a probe grid could reach training in a parsed module: a
+    ``replace``/``dataclasses.replace`` or ``make_sim_config`` call, a ``chi_f0``/``chi_freq_bounds``
+    keyword anywhere but ``gen_training_data`` with config's own value, and an assignment to a
+    ``chi_``/``CHI_`` attribute."""
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = ast.unparse(node.func)
+            if fn in ("replace", "dataclasses.replace") or fn.endswith("make_sim_config"):
+                found.append((node.lineno, f"calls {fn}"))
+            for kw in node.keywords:
+                if kw.arg in ("chi_f0", "chi_freq_bounds") and not (
+                        fn.endswith("gen_training_data") and ast.unparse(kw.value) == f"cfg.{kw.arg}"):
+                    found.append((node.lineno, f"passes {kw.arg}={ast.unparse(kw.value)} to {fn}"))
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [node.target]
+        else:
+            targets = []
+        for target in targets:
+            for sub in ast.walk(target):
+                if isinstance(sub, ast.Attribute) and sub.attr.lower().startswith("chi_"):
+                    found.append((node.lineno, f"assigns {sub.attr}"))
+    return found
+
+
+def test_the_probe_modules_write_no_setting_and_hand_no_grid_to_training():
+    """The probe checks measure with their own grids, and those grids reach the simulator only as a
+    drive's frequency and amplitude. So the family's modules read no environment, assign no setting,
+    build no configuration of their own, and hand the training generator nothing but the config's own
+    band and drive."""
+    root = Path(__file__).resolve().parents[1]
+    for rel in ("core/diagnostics/probes.py", "core/diagnostics/probe_math.py", "core/tool/probes.py"):
+        tree = ast.parse((root / rel).read_text(encoding="utf-8"))
+        assert _env_reads_and_knob_writes(tree) == [], rel
+        assert _grid_leaks(tree) == [], rel
+
+    # the checker's teeth: each form it claims to catch, and the one call it allows
+    teeth = ast.parse("cfg2 = dataclasses.replace(cfg, chi_f0=0.3)\n"
+                      "cli.make_sim_config('NADROWSKI', labels, drift, bounds)\n"
+                      "pipeline.gen_training_data(chi_f0=0.3, chi_freq_bounds=cfg.chi_freq_bounds)\n"
+                      "cfg.chi_freq_bounds = (0.1, 0.5)\n"
+                      "config.CHI_F0 += 1\n"
+                      "pipeline.gen_training_data(chi_f0=cfg.chi_f0, chi_freq_bounds=cfg.chi_freq_bounds)\n")
+    assert sorted({ln for ln, _ in _grid_leaks(teeth)}) == [1, 2, 3, 4, 5], _grid_leaks(teeth)

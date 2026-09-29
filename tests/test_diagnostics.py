@@ -1755,3 +1755,264 @@ def test_the_harmonic_flag_marks_a_probe_whose_low_harmonic_lands_in_the_own_pea
     assert probe_math.harmonic_flags([0.189, 0.25, 0.5, 1.0, 1.4], 0.10) == [True, True, True, True, False]
     assert probe_math.harmonic_flags([0.189], 0.10, max_order=4) == [False]
     assert probe_math.harmonic_flags([1.4], 0.02) == [False]
+
+
+def _probe_cfg(bounds="master.txt", cell="master_spont.txt", *, chi=True):
+    """A CPU Nadrowski config with a cell loaded, built the way the probe checks build one."""
+    from core import cli, config, registry
+    from core.config import VALID_LABELS, VALID_MODELS
+    cfg = cli.make_sim_config("NADROWSKI", VALID_LABELS[VALID_MODELS.index("NADROWSKI")],
+                              registry.state_dep_drift("NADROWSKI"),
+                              str(config.BOUNDS_PATH / "nadrowski" / bounds), chi_mode=chi)
+    cfg.hw = config.cpu_device()
+    cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / cell))
+    return cfg
+
+
+def _probe_stand_in(*, f_own=0.025, own_factor=None, gain=2.0, noise=0.01, seen=None, nan_driven=False):
+    """In place of probes._simulate, a cell of known response. Its own oscillation sits at f_own (cell
+    frequency units, one value or one per row) with a random phase per row. A drive adds a response of
+    |chi| = gain in phase with it, and scales the own oscillation by own_factor(strength in model units)."""
+    import math
+    own_factor = own_factor or (lambda a: torch.where(a >= 1.0, 0.1, 1.0))
+
+    def _sim(cfg, geom, nd, res_sim, sim_idx, inits, *, amp_dim=None, freq=None):
+        B, n = nd.shape[0], geom.n_obs
+        t = torch.arange(n, dtype=torch.float64) * cfg.dt_exp
+        f = torch.as_tensor(f_own, dtype=torch.float64).reshape(-1, 1)
+        own = torch.sin(2 * math.pi * f * t + 2 * math.pi * torch.rand(B, 1, dtype=torch.float64))
+        x = own + noise * torch.randn(B, n, dtype=torch.float64)
+        if amp_dim is not None:
+            amp = amp_dim.double().reshape(-1, 1)
+            strength = amp / res_sim[:, sim_idx["f_scale"]].double().reshape(-1, 1)
+            if seen is not None:
+                seen.append((strength.flatten().tolist(), freq.double().flatten().tolist()))
+            x = x + (own_factor(strength) - 1.0) * own + gain * amp * torch.cos(2 * math.pi * freq.double().reshape(-1, 1) * t)
+            x = torch.full_like(x, float("nan")) if nan_driven else x
+        return x.to(cfg.hw.dtype)
+    return _sim
+
+
+def _diagnostic_dirs(store):
+    d = store.kind_dir("diagnostic")
+    return sorted(p.name for p in d.iterdir()) if d.is_dir() else []
+
+
+def test_probes_band_judges_the_configured_band_and_drive_on_a_cell_of_known_response(store, monkeypatch, caplog):
+    import math
+    import numpy as np
+    from core.diagnostics import probes, probe_band
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in())
+    d = probe_band(_probe_cfg(), lengths=[1.0, 2.0], multipliers=[0.05, 0.3, 0.6], repeats=4, name="band1")
+    s, r = d.settings, d.results
+    assert (d.diagnostic, d.variant, d.manifest.parents) == ("probes", "band", {})
+    assert s["drives"] == [0.15] and s["cycle_caps"] == [20.0] and s["phase_max"] is None
+    assert s["drive_phase"] == pytest.approx(math.pi / 2)
+    assert s["configured"] == {"chi_f0": 0.15, "chi_freq_bounds": [0.03, 0.3], "chi_k_pad": 12,
+                               "chi_min_cycles": 2.0, "chi_max_cycles": 20.0, "probe_count": 6}
+    assert r["band_holds"] is True and r["drive_holds"] is True
+    assert [(f["multiplier"], f["in_band"], f["harmonic"], f["passes_capped"]) for f in r["frequencies"]] == [
+        (0.05, True, False, True), (0.3, True, True, True), (0.6, False, False, True)]
+    assert len(r["points"]) == 6 and all(p["n_valid"] == 4 and p["nyquist_masked"] == 0 for p in r["points"])
+    slow = r["points"][0]                      # 0.05 x 25 Hz over 1 s is 1.25 drive cycles
+    assert (slow["length_s"], slow["multiplier"], slow["drive"]) == (1.0, 0.05, 0.15)
+    assert slow["full"]["floor_masked"] == 1.0 and slow["full"]["verdict"] == "pass"   # reported, not judged
+    assert r["lengths"][0]["omega0_hz"] == pytest.approx(25.0) and r["training_ceiling_s"] == pytest.approx(26.909)
+    assert len(r["caveats"]) == 2
+    z = np.load(d.path / "probe_band.npz")
+    assert z["cv_capped"].shape == z["snr_full"].shape == (2, 3, 1) and d.manifest.figures
+    said = [m.getMessage() for m in caplog.records if m.name == "core.diagnostics.probes" and m.levelname == "INFO"]
+    assert any(m.startswith("[band] the configured band (0.03, 0.3) holds for this cell") for m in said), said
+    assert any(m.startswith("[band] the configured drive 0.15 holds for this cell") for m in said), said
+
+
+def test_probes_band_fails_a_frequency_captured_at_any_drive_and_judges_the_configured_drive_alone(store, monkeypatch, caplog):
+    from core.diagnostics import probes, probe_band
+    kw = dict(lengths=[1.0], multipliers=[0.12, 0.2], repeats=4)        # drives on exact bins: no leakage
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in())        # captures from strength 1.0
+    r = probe_band(_probe_cfg(), drives=[0.15, 2.0], name="band2", **kw).results
+    assert r["band_holds"] is False and r["drive_holds"] is True
+    assert all(not f["passes_capped"] and any("captured" in why for why in f["reasons"]) for f in r["frequencies"])
+    assert [(x["drive"], x["configured"], len(x["captured_in_band"])) for x in r["drives"]] == [(0.15, True, 0), (2.0, False, 2)]
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(own_factor=lambda a: torch.where(a >= 0.1, 0.1, 1.0)))
+    r = probe_band(_probe_cfg(), name="band3", **kw).results
+    assert r["band_holds"] is False and r["drive_holds"] is False
+    said = [m.getMessage() for m in caplog.records if m.name == "core.diagnostics.probes"]
+    assert any(m.startswith("[band] the configured drive 0.15 does not hold for this cell") for m in said), said
+    assert any("core/config.py" in m for m in said)
+
+
+def test_probes_band_reports_a_probe_past_the_sampling_limit_as_masked_and_never_clamps_it(store, monkeypatch):
+    from core.diagnostics import probes, probe_band
+    seen = []
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(f_own=[0.2, 0.2, 0.4, 0.4], seen=seen))
+    d = probe_band(_probe_cfg(), lengths=[1.0], multipliers=[0.05, 1.5, 3.0], repeats=4, name="fast")
+    pts = {p["multiplier"]: p for p in d.results["points"]}
+    assert (pts[0.05]["n_valid"], pts[0.05]["nyquist_masked"]) == (4, 0)
+    assert (pts[1.5]["n_valid"], pts[1.5]["nyquist_masked"]) == (2, 2) and pts[1.5]["full"]["cv"] is not None
+    assert (pts[3.0]["n_valid"], pts[3.0]["nyquist_masked"]) == (0, 4)
+    assert pts[3.0]["full"]["verdict"] == pts[3.0]["capped"]["verdict"] == "masked"
+    assert pts[3.0]["full"]["cv"] is None and pts[3.0]["sup"] is None
+    fast = next(f for f in d.results["frequencies"] if f["multiplier"] == 3.0)
+    assert not fast["passes_capped"] and any("masked" in why for why in fast["reasons"])
+    assert max(f for _, freqs in seen for f in freqs) == pytest.approx(0.6, rel=1e-6)   # driven where asked
+    assert store.load_diagnostic(d.id).results == d.results
+
+
+def test_probes_band_brackets_the_wall_only_when_caps_are_given(store, monkeypatch):
+    from core.diagnostics import probes, probe_band
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in())
+    kw = dict(lengths=[2.0], multipliers=[0.3], repeats=2)             # 0.3 x 25 Hz over 2 s is 15 cycles
+    assert probe_band(_probe_cfg(), name="nowall", **kw).results["wall"] is None
+    d = probe_band(_probe_cfg(), cycle_caps=[8, 12], name="wall", **kw)
+    wall = d.results["wall"]
+    assert d.settings["cycle_caps"] == [8.0, 12.0, 20.0]
+    assert [c["cap"] for c in wall["caps"]] == [8.0, 12.0, 20.0]
+    assert [c["n_truncated"] for c in wall["caps"]] == [1, 1, 0]
+    assert all(c["n_fail"] == 0 for c in wall["caps"] if c["n_truncated"]), wall["caps"]
+    assert "above 12" in wall["reading"], wall["reading"]
+    assert d.results["points"][0]["full"]["cycles"] == pytest.approx(15.0)
+
+
+def test_the_wall_reading_brackets_the_first_failing_cap_from_below():
+    """The four readings of the cap grid: nothing binds; nothing fails; the smallest binding cap fails;
+    and a clean cap below the first failing one, which brackets the wall."""
+    from core.diagnostics import probes
+
+    def caps(*rows):
+        return [{"cap": c, "n_truncated": t, "n_fail": f} for c, t, f in rows]
+
+    assert probes._wall(caps((8.0, 0, 0), (20.0, 0, 0)))["reading"] == "no cap binds any point"
+    got = probes._wall(caps((8.0, 2, 0), (12.0, 1, 0), (20.0, 0, 0)))
+    assert got["reading"] == "no cap in the grid fails: the wall lies above 12 cycles"
+    assert got["first_failing"] is None and got["largest_clean_below"] is None
+    got = probes._wall(caps((8.0, 2, 1), (12.0, 1, 1), (20.0, 0, 0)))
+    assert got["reading"] == ("the smallest cap that binds (8 cycles) already fails: the grid does not "
+                              "bracket the wall from below")
+    assert got["first_failing"] == 8.0 and got["largest_clean_below"] is None
+    got = probes._wall(caps((8.0, 3, 0), (12.0, 2, 0), (28.0, 2, 1), (36.0, 1, 1)))
+    assert got["reading"] == "the wall lies between 12 and 28 cycles"
+    assert (got["first_failing"], got["largest_clean_below"]) == (28.0, 12.0)
+
+
+def test_probes_band_turns_non_finite_measures_into_null(store, monkeypatch):
+    """A lock-in that returns NaN is not measured: a NaN compares false against every threshold and
+    would otherwise read as a pass, and a manifest refuses it."""
+    from core.diagnostics import probes, probe_band
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(nan_driven=True))
+    d = probe_band(_probe_cfg(), lengths=[1.0], multipliers=[0.12], repeats=2, name="nan")
+    p = d.results["points"][0]
+    assert p["full"]["cv"] is None and p["full"]["snr"] is None and p["sup"] is None
+    assert p["full"]["verdict"] == p["capped"]["verdict"] == "not measured"
+    assert d.results["band_holds"] is False and d.results["drive_holds"] is None
+    assert store.load_diagnostic(d.id).results == d.results
+
+
+_BAND_BASE = dict(lengths=[1.0], multipliers=[0.1], repeats=2)
+
+
+@pytest.mark.parametrize("kw, field", [
+    ({"repeats": 1}, "band_repeats"),
+    ({"lengths": [0.0]}, "probe_lengths"),
+    ({"lengths": [1e-7]}, "probe_lengths"),
+    ({"lengths": []}, "probe_lengths"),
+    ({"multipliers": [0.0]}, "probe_multipliers"),
+    ({"multipliers": [float("nan")]}, "probe_multipliers"),
+    ({"drives": [-1.0]}, "probe_drives"),
+    ({"cycle_caps": [0.0]}, "probe_cycle_caps"),
+    ({"cv_max": float("nan")}, "cv_max"),
+    ({"snr_min": float("inf")}, "snr_min"),
+    ({"sup_min": 0.0}, "sup_min"),
+    ({"sup_min": 1.5}, "sup_min"),
+    ({"phase_max": float("nan")}, "phase_max"),
+    ({"peak_window": 0.0}, "band_peak_window"),
+    ({"peak_window": 1.0}, "band_peak_window"),
+    ({"seed": -1}, "probe_seed"),
+    ({"name": "taken"}, "name"),
+])
+def test_probes_band_refuses_before_the_writer_opens(store, monkeypatch, kw, field):
+    from core.diagnostics import probes, probe_band
+    cfg = _probe_cfg()
+    _diagnostic(store, cfg, name="taken")
+    monkeypatch.setattr(probes, "_simulate", lambda *a, **k: pytest.fail("simulated before the refusal"))
+    before = _diagnostic_dirs(store)
+    with pytest.raises(Refusal) as e:
+        probe_band(cfg, **{**_BAND_BASE, **kw})
+    assert e.value.field == field, (kw, e.value.field, str(e.value))
+    assert _diagnostic_dirs(store) == before
+
+
+def test_probes_band_refuses_a_config_without_chi_mode(store, monkeypatch):
+    from core.diagnostics import probes, probe_band
+    monkeypatch.setattr(probes, "_simulate", lambda *a, **k: pytest.fail("simulated before the refusal"))
+    with pytest.raises(Refusal) as e:
+        probe_band(_probe_cfg(chi=False), **_BAND_BASE)
+    assert e.value.field is None and "chi" in str(e.value), str(e.value)
+    assert _diagnostic_dirs(store) == []
+
+
+def test_a_probes_run_leaves_a_training_configuration_and_config_py_untouched(store, monkeypatch):
+    """What the check measures with reaches the simulator and nothing else: a training configuration
+    built in the same process is unchanged, so are config.py's chi constants, a fresh one still opens at
+    config.py's band and drive, and every drive the stand-in saw is the one the grid asked for."""
+    from core import config
+    from core.diagnostics import probes, probe_band
+    from tests._fixtures import assert_cfg_unchanged, snapshot_cfg
+    training = _nad_cfg(chi_mode=True)
+    snap = snapshot_cfg(training)
+    constants = {k: getattr(config, k) for k in dir(config) if k.startswith("CHI_")}
+    seen = []
+    monkeypatch.setattr(probes, "_simulate", _probe_stand_in(seen=seen))
+    probe_band(_probe_cfg(), lengths=[1.0], multipliers=[0.05, 0.6], drives=[0.5], repeats=2, name="untouched")
+    assert_cfg_unchanged(training, snap)
+    assert {k: getattr(config, k) for k in dir(config) if k.startswith("CHI_")} == constants
+    fresh = _nad_cfg(chi_mode=True)
+    assert (fresh.chi_f0, fresh.chi_freq_bounds) == (config.CHI_F0, config.CHI_FREQ_BOUNDS)
+    assert seen and all(v == pytest.approx(0.5) for strengths, _ in seen for v in strengths), seen
+
+
+def test_the_probe_simulator_drives_a_tier1_cell_at_its_derived_force_scale(monkeypatch):
+    """A real two-row driven run of the tier-1 twin: the drive is built against the simulator's index,
+    whose force scale is the one derived from the temperature, never the box's temperature column."""
+    from core.diagnostics import probe_math, probes
+    from core.SBI import derived, pipeline
+    cfg = _probe_cfg("master_tier1.txt", "master_spont_tier1.txt")
+    seen = []
+    real = pipeline.build_nondim_sin_force_tensor
+
+    def _spy(fp, t, rescale, fidx, ridx):
+        seen.append((rescale.detach().clone(), dict(ridx)))
+        return real(fp, t, rescale, fidx, ridx)
+
+    monkeypatch.setattr(pipeline, "build_nondim_sin_force_tensor", _spy)
+    res = torch.tensor([[v for v, _ in cfg.rescale_params.values()]], dtype=cfg.hw.dtype)
+    res_sim, sim_idx = derived.for_simulation(cfg, cfg.params_tensor, res)
+    geom = probe_math.recording_geometry(cfg, 0.2, float(res_sim[0, sim_idx["t_scale"]]))
+    nd, rs, inits = (v.expand(2, -1).contiguous() for v in (cfg.params_tensor, res_sim, cfg.inits_tensor))
+    amp = (cfg.chi_f0 * rs[:, sim_idx["f_scale"]]).contiguous()
+    freq = torch.full((2,), 0.005, dtype=torch.float64)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        x = probes._simulate(cfg, geom, nd, rs, sim_idx, inits, amp_dim=amp, freq=freq)
+    assert x.shape == (2, geom.n_obs) and bool(torch.isfinite(x).all())
+    assert len(seen) == 1
+    rescale, idx = seen[0]
+    assert "f_scale" in idx and "T" not in idx, idx
+    assert float(rescale[0, idx["f_scale"]]) == pytest.approx(50 * 14.1 * cfg.k_b_cell * 300 / 62.14, rel=1e-5)
+
+
+@pytest.mark.slow
+def test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin(store):
+    """The master cell and its tier-1 twin are one cell, declared two ways: the same seed gives the same
+    reproducibility, phase, signal and capture, and |chi| scales by the ratio of their force scales."""
+    from core.diagnostics import probe_band
+    kw = dict(lengths=[1.0], multipliers=[0.1392], repeats=8, seed=0)
+    a = probe_band(_probe_cfg(), name="twin_master", **kw).results["points"][0]
+    b = probe_band(_probe_cfg("master_tier1.txt", "master_spont_tier1.txt"), name="twin_tier1",
+                   **kw).results["points"][0]
+    for col in ("full", "capped"):
+        for m in ("cv", "phase", "snr"):
+            assert a[col][m] == pytest.approx(b[col][m], rel=1e-3, abs=1e-6), (col, m, a[col], b[col])
+    assert a["sup"] == pytest.approx(b["sup"], rel=1e-3)
+    assert a["full"]["chi_mag"] / b["full"]["chi_mag"] == pytest.approx(
+        50 * 14.1 * 1.380649e-2 * 300 / 62.14 / 10.0, rel=1e-3)

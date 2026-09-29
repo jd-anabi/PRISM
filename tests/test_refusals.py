@@ -53,7 +53,11 @@ BASE_KEYS = (
     "compare_records", "prefactor", "slice_at",
 )
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
-                  "n_sweep", "chi_k_fixed")
+                  "n_sweep", "chi_k_fixed",
+                  # the probe checks: the seed, the band check's four grids, its repeat count and its
+                  # five pass thresholds
+                  "probe_seed", "probe_lengths", "probe_multipliers", "probe_drives", "band_repeats",
+                  "probe_cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "band_peak_window")
 
 
 def _shape(exc, key):
@@ -104,7 +108,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     reader and refuses an unknown key with a KeyError: a message can only be built for a field a
     front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 88, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 99, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -441,6 +445,22 @@ def test_refuse_appends_the_default_clause_to_the_callers_sentence_and_binds_the
     assert default_clause("new_run") == ""
 
 
+def test_the_seed_rule_carries_the_field_key_it_is_given():
+    """One seed rule for every seeded run, keyed on the field the caller names: the probe checks'
+    seed has its own key, whose default is 0, while every other caller keeps ``seed``. Both ends of the
+    range refuse under the key given, with that key's default in the sentence."""
+    from core.rng import SEED_MAX, require_seed
+    for bad in (-1, SEED_MAX + 1):
+        with pytest.raises(Refusal) as e:
+            require_seed(bad, key="probe_seed")
+        assert e.value.field == "probe_seed", (bad, e.value.field)
+        assert str(e.value).rstrip(".").endswith("(default 0)"), str(e.value)
+    with pytest.raises(Refusal) as e:
+        require_seed(-1)
+    assert e.value.field == "seed"
+    assert require_seed(7, key="probe_seed") == 7
+
+
 def test_the_module_is_torch_free_and_imports_only_the_standard_library():
     """The window runs the rules on the GUI thread at the click and the tool before any stage import,
     so ``core.refusals`` must cost nothing: no torch, no ``core.config`` (which imports torch). Two
@@ -478,7 +498,7 @@ def test_every_registry_default_is_the_trees_own_default():
     import inspect
 
     from core import config, orchestrator
-    from core.diagnostics import ablation, identifiability, sbc
+    from core.diagnostics import ablation, identifiability, probes, sbc
     from core.SBI import truncate
     from core.tool import config_args
 
@@ -521,6 +541,12 @@ def test_every_registry_default_is_the_trees_own_default():
         "min_valid": str(_default(identifiability.identifiability_laplace, "min_valid")),
         "rows":str(_default(ablation.channel_ablation, "rows")),
         "n_sweep": str(_default(ablation.channel_ablation, "n_sweep")),
+        "probe_seed": str(_default(probes.probe_band, "seed")),
+        "band_repeats": str(_default(probes.probe_band, "repeats")),
+        "cv_max": str(_default(probes.probe_band, "cv_max")),
+        "snr_min": str(_default(probes.probe_band, "snr_min")),
+        "sup_min": str(_default(probes.probe_band, "sup_min")),
+        "band_peak_window": str(_default(probes.probe_band, "peak_window")),
     }
     for key, expected in owned_by_a_signature.items():
         assert FIELDS[key].default == expected, (key, expected, FIELDS[key].default)

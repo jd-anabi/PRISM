@@ -54,11 +54,13 @@ def calibration_seed(seed: int) -> int:
     return int(np.random.SeedSequence([int(seed), CALIBRATION_TAG]).generate_state(1)[0])
 
 
-def require_seed(seed) -> int:
-    """The one rule for a seed an FDT run or a calibration is handed: a whole number from 0 to
-    ``SEED_MAX``, refused under the field key ``seed`` before anything is spent. Both FDT builders,
-    the sweep study, each sweep and a seeded calibration apply it, so the five cannot disagree;
-    ``--seed`` is ``type=int`` and takes any integer.
+def require_seed(seed, *, key: str = "seed") -> int:
+    """The one rule for a seed a run is handed: a whole number from 0 to ``SEED_MAX``, refused under
+    the field key ``key`` before anything is spent. Both FDT builders, the sweep study, each sweep, a
+    seeded calibration and the probe checks apply it, so none of them can disagree; ``--seed`` is
+    ``type=int`` and takes any integer. The key is ``seed`` for every caller but the probe checks,
+    whose seed has its own key because its default is 0 rather than one drawn and recorded -- so the
+    refusal states the default of the seed actually refused.
 
     The floor is ``require_at_least``'s, sentence and all: 0 is ``SeedSequence``'s floor, and the
     sweep derives every per-point stream through one. The ceiling is its own sentence through
@@ -67,11 +69,11 @@ def require_seed(seed) -> int:
     between 0 and 1.84467e+19; got 1.84467e+19"), and ``float(2**64 - 1)`` rounds up to 2**64, so it
     would refuse ``SEED_MAX`` itself.
     """
-    seed = require_at_least("seed", seed, 0)
+    seed = require_at_least(key, seed, 0)
     if seed > SEED_MAX:
-        what = describe("seed")
-        refuse("seed", f"{what[0].upper()}{what[1:]} must be at most {SEED_MAX}, the largest the "
-                       f"random number generator accepts; got {seed}.")
+        what = describe(key)
+        refuse(key, f"{what[0].upper()}{what[1:]} must be at most {SEED_MAX}, the largest the "
+                    f"random number generator accepts; got {seed}.")
     return seed
 
 

@@ -33,7 +33,9 @@ BODY_KEYS = {
                     "chi_obs_freqs", "source"),
     "calibration": ("results",),
     "inference": ("results",),
-    # A measurement ABOUT other artifacts (SBC repeats, identifiability, channel ablation).
+    # A measurement ABOUT other artifacts (SBC repeats, identifiability, channel ablation), or about a
+    # cell (``identifiability jacobian``, and the probe checks' ``band`` and ``drive``, which name no
+    # parent) or a prior (the probe checks' ``mask``, whose parent is that prior).
     # ``diagnostic`` names the function that wrote it, ``variant`` its mode (None when it has only
     # one), ``settings`` the knobs it ran under and ``results`` a SHORT summary -- the arrays stay in
     # payloads beside the manifest. There is deliberately NO closed registry of diagnostic names

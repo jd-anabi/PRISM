@@ -178,6 +178,10 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # tool-only: the diagnostics' knobs; no window sentence
     "repeats": None, "n_points": None, "n_worst": None, "top_n": None, "m": None, "m_noise": None,
     "rel": None, "min_valid": None, "rows": None, "n_sweep": None, "chi_k_fixed": None,
+    # tool-only: the probe checks run from the command line alone
+    "probe_seed": None, "probe_lengths": None, "probe_multipliers": None, "probe_drives": None,
+    "band_repeats": None, "probe_cycle_caps": None, "cv_max": None, "phase_max": None, "snr_min": None,
+    "sup_min": None, "band_peak_window": None,
 }
 
 

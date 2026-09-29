@@ -1497,8 +1497,10 @@ class ArtifactStore:
                                samples_path=sub / "samples.pt")
 
     def load_diagnostic(self, ref: str) -> LoadedDiagnostic:
-        """A diagnostic is a MEASUREMENT about other artifacts, so this verifies nothing and refuses
-        nothing: there is no configuration it has to match, and nothing is ever trained from it.
+        """A diagnostic is a MEASUREMENT -- about other artifacts, or about a cell (``identifiability
+        jacobian``, the probe checks' ``band`` and ``drive``) or a prior (the probe checks' ``mask``)
+        -- so this verifies nothing and refuses nothing: there is no configuration it has to match,
+        and nothing is ever trained from it.
         The one failure is a ref that names no complete diagnostic.
 
         From the manifest body, like load_calibration and load_inference: the manifest is the
