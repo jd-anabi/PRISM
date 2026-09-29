@@ -13,13 +13,22 @@ nothing else: they MEASURE, and never change a setting. Each writes one ordinary
         peak power survives the drive. Only capture is physical evidence; the other three thresholds
         are conventions, and the record says so.
 
+  mask  Why are training probes thrown out, over a prior? It runs a few batches of the training
+        generator itself over the prior -- its schedule, probe draw, placement, duration draw and
+        lock-in -- reads each committed row range through the generator's probe observer, and
+        splits every masked probe by cause: too slow for the cycle floor even at the band's top over
+        the full recording, shortened below the floor by the duration draw, or a lock-in the packer
+        found non-finite. It checks its count against the generator's own masked-probe warning, row
+        range by row range. No simulation cache is written.
+
 MEASURING IS NOT OVERRIDING. A check takes its own recording lengths, frequencies, drive strengths and
 lock-in ceilings, and they reach the simulator only as the drive builder's frequency and amplitude,
 inside this module. None of them passes through a configuration field, through the training
 generator's band and drive keywords, or through an assignment to a configuration constant, so a
-training run in the same process uses exactly what it would have used without them. Every record
-states the configured band, drive, pad, cycle floor, cycle ceiling and probe count it judged; a
-deliberate change to any of them is made in core/config.py.
+training run in the same process uses exactly what it would have used without them. The mask audit
+hands the training generator the configuration's own band and drive, after the check that they are
+core/config.py's. Every record states the configured band, drive, pad, cycle floor, cycle ceiling and
+probe count it judged; a deliberate change to any of them is made in core/config.py.
 
 FAITHFUL TO TRAINING. A check measures what training measures: each run's own peak from the chi peak
 estimator; a probe at or above 0.9 x Nyquist, non-finite or not positive is MASKED, never moved to a
@@ -33,6 +42,9 @@ from __future__ import annotations
 
 import logging
 import math
+import re
+import warnings
+from contextlib import contextmanager
 from typing import NamedTuple
 
 import numpy as np
@@ -123,6 +135,15 @@ class _Criteria(NamedTuple):
 def _what(key: str) -> str:
     what = describe(key)
     return what[0].upper() + what[1:]
+
+
+def _configured(cfg) -> dict:
+    """The configured chi settings a check judged, as its record states them: the drive, the band,
+    the slot count, the cycle floor and ceiling, and the probe count an observation supplies."""
+    from core import config
+    return {"chi_f0": float(cfg.chi_f0), "chi_freq_bounds": [float(v) for v in cfg.chi_freq_bounds],
+            "chi_k_pad": int(cfg.chi_k_pad), "chi_min_cycles": float(config.CHI_MIN_CYCLES),
+            "chi_max_cycles": float(cfg.chi_max_cycles), "probe_count": int(cfg.chi_n_freqs)}
 
 
 def _positive_list(key: str, values) -> list[float] | None:
@@ -493,7 +514,6 @@ def probe_band(cfg, *, lengths=None, multipliers=None, drives=None, repeats: int
                        ceiling is always added. None = the configured ceiling only, and no wall report.
     :param seed: the whole run is seeded with it, and it is recorded.
     """
-    from core import config
     from core.SBI import derived
     store = resolve_store(store)
     store.assert_name_free("diagnostic", name)
@@ -537,9 +557,7 @@ def probe_band(cfg, *, lengths=None, multipliers=None, drives=None, repeats: int
     configured_cap = float(cfg.chi_max_cycles)
     caps = sorted(set(cycle_caps or ()) | {configured_cap})
     band = tuple(float(v) for v in cfg.chi_freq_bounds)
-    configured = {"chi_f0": float(cfg.chi_f0), "chi_freq_bounds": list(band),
-                  "chi_k_pad": int(cfg.chi_k_pad), "chi_min_cycles": float(config.CHI_MIN_CYCLES),
-                  "chi_max_cycles": configured_cap, "probe_count": int(cfg.chi_n_freqs)}
+    configured = _configured(cfg)
     settings = {"lengths": lengths, "multipliers": multipliers, "drives": drives, "repeats": repeats,
                 "cycle_caps": caps, "cv_max": cv_max, "phase_max": phase_max, "snr_min": snr_min,
                 "sup_min": sup_min, "peak_window": peak_window, "seed": seed, "drive_phase": DRIVE_PHASE,
@@ -653,4 +671,356 @@ def probe_band(cfg, *, lengths=None, multipliers=None, drives=None, repeats: int
         w.parents = {}
         w.config.update(settings)
         w.body = {"diagnostic": "probes", "variant": "band", "settings": settings, "results": results}
+    return store.load_diagnostic(w.id)
+
+
+# ── mask: why training probes are thrown out ─────────────────────────────────────────────────────────
+
+#: The training generator's masked-probe warning: the batch tag, then one row range's masked and
+#: simulated probe counts.
+_MASKED_WARNING = re.compile(r"(?P<tag>.+?): chi: (?P<masked>\d+)/(?P<total>\d+) probes masked")
+
+#: What a mask record says about its seed.
+PROBE_LAYOUT = ("the probe count, placement and duration draw come from training's own fixed "
+                "probe-generator seed, so they do not change with the seed")
+
+#: The three causes a masked probe is attributed to, in the order a tie between them is broken. The
+#: cycle floor is the sum of the first two.
+_LEAF_CAUSES = ("too_slow_at_band_top", "shortened_by_duration_draw", "non_finite_lock_in")
+_OMEGA0_QUANTILES = [0.05, 0.25, 0.5, 0.75, 0.95]
+_SPAN_QUANTILES = [0.25, 0.5, 0.75]
+_MULTIPLIER_QUANTILES = [0.05, 0.5, 0.95]
+
+#: Each cause in words, and what to change when it dominates. The audit itself changes nothing.
+_READINGS = {
+    "too_slow_at_band_top": ("too slow even at the band's top", "the lever is the prior's "
+                             "peak-frequency range"),
+    "shortened_by_duration_draw": ("shortened by the duration draw", "the lever is the duration draw"),
+    "non_finite_lock_in": ("a non-finite lock-in", "no setting is its lever: probes that cleared the "
+                           "floor came back from the lock-in non-finite or zero, which points at the "
+                           "simulated traces"),
+}
+
+
+@contextmanager
+def _capture_masked_warnings():
+    """Collect ``(batch_tag, masked, total)`` from every masked-probe warning raised inside the block,
+    in the order raised, into the list it yields.
+
+    Every warning, matched or not, is still handed to the hook in force when the block began, so it
+    reaches the console and the run's log exactly as it would have. The filter is "always" inside:
+    the two halves of a batch the row halving splits can warn identical text, and the default
+    once-per-message registry would swallow the second."""
+    seen = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("always")
+        previous = warnings.showwarning
+
+        def _tee(message, category, filename, lineno, file=None, line=None):
+            found = _MASKED_WARNING.match(str(message))
+            if found:
+                seen.append((found["tag"], int(found["masked"]), int(found["total"])))
+            previous(message, category, filename, lineno, file, line)
+
+        warnings.showwarning = _tee          # restored by catch_warnings on the way out
+        yield seen
+
+
+class _Tally(NamedTuple):
+    counts: dict              # probe and row counts, summed over the records
+    batches: dict             # batch tag -> [masked, total], in the order first seen
+    ranges: list              # per record: (batch tag, lo, hi, masked, total)
+    f_peak: np.ndarray        # (rows,) each row's own peak frequency, cell units
+    span: np.ndarray          # (rows with a valid probe,) max / min of the frequencies driven
+    multipliers: np.ndarray   # (valid probes,) each driven frequency over its row's peak
+
+
+def _tally(cfg, records) -> _Tally:
+    """Count every probe of every record by what happened to it.
+
+    A probe's driven frequency is ``f_peak * exp(u)``, in float64. Not finite or not positive, or at
+    or above 0.9 x Nyquist, it was masked before any lock-in (causes that cannot fire in training).
+    Otherwise a probe the generator marked invalid failed the cycle floor: too slow even at the
+    band's top over the full recording when its ROW's peak times the full length times the band's top
+    falls short of the floor, else shortened below it by the duration draw. The packer then drops
+    valid probes outside the band, and those whose lock-in is non-finite or zero (a non-finite lock-in,
+    here); ``packed_mask`` is in slot order, so it is compared with ``valid`` only through per-row
+    counts of its first ``k`` columns."""
+    from core import config
+    from core.SBI import chi
+    top = float(cfg.chi_freq_bounds[1])
+    u_mid, u_half = chi.band_norm(tuple(float(v) for v in cfg.chi_freq_bounds))
+    n = dict.fromkeys(("probes", "live", "masked", "floor", "too_slow", "packer", "out_of_band",
+                       "non_finite_frequency", "at_or_above_nyquist", "rows", "zero_live", "one_live",
+                       "span_rows", "single_probe_rows"), 0)
+    batches, ranges, f_peaks, spans, mults = {}, [], [], [], []
+    for rec in records:
+        k, lo, hi = int(rec.k), int(rec.lo), int(rec.hi)
+        f_peak, u, valid = rec.f_peak.double(), rec.u.double(), rec.valid.bool()
+        packed = rec.packed_mask[:, :k].bool()
+        freq = f_peak.unsqueeze(1) * torch.exp(u)
+        bad = ~torch.isfinite(freq) | (freq <= 0)
+        nyq = (freq >= _NYQUIST_SHARE * (0.5 / rec.dt_exp)) & ~bad
+        floor = ~valid & ~bad & ~nyq
+        too_slow = (f_peak * (rec.n_points * rec.dt_exp) * top < config.CHI_MIN_CYCLES).unsqueeze(1)
+        out_of_band = valid & torch.isfinite(u) & (((u - u_mid) / u_half).abs() > config.CHI_UHAT_MAX)
+        live, n_valid = packed.sum(1), valid.sum(1)
+        masked, total = int((~packed).sum()), (hi - lo) * k
+        for key, value in (("probes", total), ("live", live.sum()), ("masked", masked),
+                           ("floor", floor.sum()), ("too_slow", (floor & too_slow).sum()),
+                           ("packer", (n_valid - live).clamp(min=0).sum()),
+                           ("out_of_band", out_of_band.sum()), ("non_finite_frequency", bad.sum()),
+                           ("at_or_above_nyquist", nyq.sum()), ("rows", hi - lo),
+                           ("zero_live", (live == 0).sum()), ("one_live", (live == 1).sum()),
+                           ("span_rows", (n_valid > 0).sum()), ("single_probe_rows", (n_valid == 1).sum())):
+            n[key] += int(value)
+        batch = batches.setdefault(rec.batch_tag, [0, 0])
+        batch[0] += masked
+        batch[1] += total
+        ranges.append((rec.batch_tag, lo, hi, masked, total))
+        f_peaks.append(f_peak.numpy())
+        # each row's highest over its lowest driven frequency, over its valid probes; one probe spans 1
+        highest = torch.where(valid, freq, torch.full_like(freq, -math.inf)).amax(1)
+        lowest = torch.where(valid, freq, torch.full_like(freq, math.inf)).amin(1)
+        spans.append((highest / lowest)[n_valid > 0].numpy())
+        mults.append(torch.exp(u)[valid].numpy())
+
+    def _cat(parts):
+        return np.concatenate(parts).astype(float) if parts else np.zeros(0)
+
+    return _Tally(n, batches, ranges, _cat(f_peaks), _cat(spans), _cat(mults))
+
+
+def _quantiles(values: np.ndarray, qs: list) -> list:
+    """The ``qs`` quantiles of the finite values, each a float, or all None when there are none."""
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return [None] * len(qs)
+    return [orch._num(v) for v in np.quantile(finite, qs)]
+
+
+def _cross_check(ranges: list, warned: list) -> dict:
+    """The audit's masked count of each committed row range against the training generator's own
+    warning for it, tag by tag.
+
+    The committed ranges of a tag that masked anything, in range order, must equal the LAST that many
+    warnings captured under that tag: the whole-batch retry and the row halving both re-run work that
+    already warned, so earlier warnings of a tag -- and every warning of a tag with no masked record --
+    are an abandoned attempt's, counted and set aside. Any other difference is a mismatch; a range
+    left with no warning to match reads production None."""
+    expected, captured = {}, {}
+    for tag, lo, hi, masked, total in ranges:
+        expected.setdefault(tag, [])
+        if masked:
+            expected[tag].append((lo, hi, masked, total))
+    for tag, masked, total in warned:
+        captured.setdefault(tag, []).append((masked, total))
+    mismatches, abandoned = [], 0
+    for tag in [*expected, *(t for t in captured if t not in expected)]:
+        want, got = expected.get(tag, []), captured.get(tag, [])
+        spare = len(got) - len(want)
+        abandoned += max(spare, 0)
+        got = got[spare:] if spare >= 0 else [None] * -spare + got
+        for (lo, hi, masked, total), seen in zip(want, got):
+            if seen != (masked, total):
+                mismatches.append({"batch_tag": tag, "lo": lo, "hi": hi, "audit": masked,
+                                   "production": None if seen is None else seen[0]})
+    return {"row_ranges": len(ranges), "mismatches": mismatches, "abandoned_attempt_warnings": abandoned}
+
+
+def _audit(cfg, records, warned) -> dict:
+    """The mask record's results, from the committed probe records and the masked-probe warnings
+    captured beside them. Pure: nothing is logged, written or changed; every float goes through
+    ``orchestrator._num``. Each cause's share is taken of every probe simulated."""
+    tally = _tally(cfg, records)
+    n = tally.counts
+    probes = n["probes"]
+
+    def share(count):
+        return orch._num(count / probes) if probes else None
+
+    counts = {"cycle_floor": n["floor"], "too_slow_at_band_top": n["too_slow"],
+              "shortened_by_duration_draw": n["floor"] - n["too_slow"],
+              "non_finite_lock_in": n["packer"] - n["out_of_band"]}
+    invariants = {key: n[key] for key in ("non_finite_frequency", "at_or_above_nyquist", "out_of_band")}
+    invariants["hold"] = not any(invariants.values())
+    fractions = [orch._num(m / t) if t else None for m, t in tally.batches.values()]
+    finite = [f for f in fractions if f is not None]
+    per_s = cfg.get_unit_conversion_factor("s")                  # cell time units per second
+    cell = _quantiles(tally.f_peak, _OMEGA0_QUANTILES)
+    first = max(_LEAF_CAUSES, key=lambda c: counts[c])          # a tie goes to the earlier cause
+    return {
+        "probes": probes, "live": n["live"], "masked": n["masked"], "masked_fraction": share(n["masked"]),
+        "causes": {c: {"count": v, "share": share(v)} for c, v in counts.items()},
+        "invariants": invariants,
+        "per_batch": {"fractions": fractions,
+                      "mean": orch._num(np.mean(finite)) if finite else None,
+                      "sd": orch._num(np.std(finite, ddof=1)) if len(finite) > 1 else None,
+                      "n_batches": len(tally.batches)},
+        "omega0": {"quantiles": list(_OMEGA0_QUANTILES), "cell_units": cell,
+                   "hz": [None if v is None else orch._num(v * per_s) for v in cell]},
+        "rows": {"total": n["rows"], "zero_live": n["zero_live"], "one_live": n["one_live"]},
+        "span": {"quantiles": list(_SPAN_QUANTILES), "values": _quantiles(tally.span, _SPAN_QUANTILES),
+                 "rows": n["span_rows"], "single_probe_rows": n["single_probe_rows"]},
+        "driven_multipliers": {"quantiles": list(_MULTIPLIER_QUANTILES),
+                               "values": _quantiles(tally.multipliers, _MULTIPLIER_QUANTILES)},
+        "dominant_cause": first if n["masked"] and counts[first] > 0 else None,
+        "cross_check": _cross_check(tally.ranges, warned),
+    }
+
+
+def _of(count: int, total: int) -> str:
+    return f"{count:,} ({100.0 * count / total:.1f}%)" if total else f"{count:,}"
+
+
+def _joined(values, spec: str, unit: str = "") -> str:
+    names = {0.05: "p5", 0.25: "p25", 0.5: "median", 0.75: "p75", 0.95: "p95"}
+    return ", ".join(f"{names[q]} {_fmt(v, spec)}{unit}" for q, v in values)
+
+
+def _log_mask(res: dict) -> None:
+    """The mask report: information records, and one warning record per finding that needs acting on
+    -- a cause that cannot fire in training firing, a count the generator's own warning disagrees with."""
+    probes, c = res["probes"], res["causes"]
+    log.info(f"[mask] {_of(res['masked'], probes)} of {probes:,} probes masked, {res['live']:,} live; "
+             f"by cause, each a share of every probe:")
+    log.info(f"[mask]   the cycle floor: {_of(c['cycle_floor']['count'], probes)}")
+    log.info(f"[mask]     too slow even at the band's top over the full recording: "
+             f"{_of(c['too_slow_at_band_top']['count'], probes)}")
+    log.info(f"[mask]     shortened below the floor by the duration draw: "
+             f"{_of(c['shortened_by_duration_draw']['count'], probes)}")
+    log.info(f"[mask]   a non-finite lock-in, dropped by the packer: "
+             f"{_of(c['non_finite_lock_in']['count'], probes)}")
+    cause = res["dominant_cause"]
+    if cause is None:
+        log.info("[mask] reading: no probe was masked by any of the three causes")
+    else:
+        what, lever = _READINGS[cause]
+        log.info(f"[mask] reading: {what} dominates -- {lever}; this audit changes nothing")
+    om = res["omega0"]
+    log.info(f"[mask] each row's own peak frequency: "
+             f"{_joined(zip(om['quantiles'], om['hz']), '.3g', ' Hz')}")
+    pb = res["per_batch"]
+    mean = "--" if pb["mean"] is None else f"{100 * pb['mean']:.1f}%"
+    sd = "undefined for one batch" if pb["sd"] is None else f"{100 * pb['sd']:.1f}%"
+    log.info(f"[mask] masked per batch: mean {mean}, sd {sd}, over {pb['n_batches']} batches -- the "
+             f"batch count is the effective sample size")
+    rows = res["rows"]
+    log.info(f"[mask] rows left with no live probe: {_of(rows['zero_live'], rows['total'])} of "
+             f"{rows['total']:,}; with exactly one: {_of(rows['one_live'], rows['total'])}")
+    span, dm = res["span"], res["driven_multipliers"]
+    log.info(f"[mask] span of the frequencies each row was driven at, max over min of its valid probes: "
+             f"{_joined(zip(span['quantiles'], span['values']), '.3g', 'x')}, over {span['rows']:,} rows, "
+             f"{span['single_probe_rows']:,} of them with a single probe")
+    log.info(f"[mask] each valid probe's frequency over its row's peak: "
+             f"{_joined(zip(dm['quantiles'], dm['values']), '.3g')}")
+    inv = res["invariants"]
+    if inv["hold"]:
+        log.info("[mask] invariants hold: no probe frequency was non-finite, at or above 0.9 x Nyquist, "
+                 "or outside the band")
+    else:
+        log.warning(f"[mask] a cause that cannot fire in training fired: {inv['non_finite_frequency']:,} "
+                    f"probe frequencies non-finite or not positive, {inv['at_or_above_nyquist']:,} at or "
+                    f"above 0.9 x Nyquist, {inv['out_of_band']:,} outside the band")
+    check = res["cross_check"]
+    set_aside = check["abandoned_attempt_warnings"]
+    aside = (f"; {set_aside:,} warning{'s' if set_aside != 1 else ''} from an abandoned attempt set aside"
+             if set_aside else "")
+    if check["mismatches"]:
+        log.warning(f"[mask] the audit's masked count does not match the training generator's own "
+                    f"warning for {len(check['mismatches'])} of {check['row_ranges']} row ranges{aside}:\n"
+                    + "\n".join(f"  {m['batch_tag']}, rows {m['lo']}-{m['hi']}: the audit counts "
+                                f"{m['audit']}, the generator "
+                                + ("warned nothing" if m["production"] is None else f"{m['production']}")
+                                for m in check["mismatches"]))
+    else:
+        log.info(f"[mask] cross-check: the training generator's own warnings confirm every row range's "
+                 f"masked count ({_count(check['row_ranges'], 'row range', 'row ranges')}){aside}")
+
+
+@public_entry
+def probe_mask(cfg, prior, *, num_runs: int = 12, run_size: int = 32, chi_k_fixed=None, seed: int = 0,
+               name: str = "", note: str = "", fig_sink=None, store=None):
+    """Why are training probes thrown out, over this prior?
+
+    Runs ``num_runs`` batches of ``run_size`` rows through the training generator itself, at the
+    configuration's own band and drive, over the physical prior -- the (t_scale, recording length)
+    schedule, the per-batch probe count, placement and duration draw, the lock-in and the packer are
+    all training's -- with the generator's probe observer attached. Each committed row range's record
+    is then audited: every masked probe is attributed to the cycle floor (too slow even at the band's
+    top over the full recording, or shortened below the floor by the duration draw) or to a
+    non-finite lock-in the packer dropped, and the three causes that cannot fire in training are
+    checked as invariants. The count of each row range is compared with the generator's own
+    masked-probe warning for it, and a disagreement is recorded and warned, never accepted silently.
+    Nothing is written but the diagnostic record: no simulation cache.
+
+    :param prior: the LoadedPrior audited, its parent in the record; loaded, never built.
+    :param num_runs: training batches to audit, at least 1. The batch count is the per-batch masked
+                     fraction's effective sample size.
+    :param run_size: rows per batch, at least 1.
+    :param chi_k_fixed: audit one probe count, from 2 to the number of probe slots; None audits
+                        training's own mixture of counts.
+    :param seed: the whole run is seeded with it, and it is recorded. The probe layout comes from
+                 training's own fixed probe-generator seed and does not change with it.
+    :param fig_sink: taken as every diagnostic takes it; the audit draws no figure.
+    """
+    from core import config
+    from core.SBI import pipeline, run_guards
+    store = resolve_store(store)
+    store.assert_name_free("diagnostic", name)
+    if not cfg.chi_mode:
+        raise Refusal(
+            f"The mask audit reads the chi probes training draws, so it needs a configuration in chi "
+            f"observation mode; this one is in {cfg.observation_mode} mode.", field=None)
+    run_guards._assert_chi_config_is_deliberate(cfg)
+    seed = require_seed(seed, key="probe_seed")
+    num_runs = require_at_least("mask_num_runs", num_runs, 1)
+    run_size = require_at_least("mask_run_size", run_size, 1)
+    if chi_k_fixed is not None:
+        # both ends before the spend: the generator's own range check fires only inside the first batch
+        chi_k_fixed = require_at_least("chi_k_fixed", chi_k_fixed, config.CHI_K_MIN_TRAIN)
+        if chi_k_fixed > cfg.chi_k_pad:
+            refuse("chi_k_fixed", f"{_what('chi_k_fixed')} must be at most the number of chi probe slots "
+                                  f"({cfg.chi_k_pad}); got {chi_k_fixed}.")
+
+    configured = _configured(cfg)
+    settings = {"num_runs": num_runs, "run_size": run_size, "chi_k_fixed": chi_k_fixed, "seed": seed,
+                "configured": configured, "probe_layout": PROBE_LAYOUT}
+    stratum = "pooled over the training mixture" if chi_k_fixed is None else f"fixed at {chi_k_fixed}"
+    n_vars = orch._observation_inits(cfg).shape[-1]         # training is truth-free: no cell needed
+    records = []
+    with store.create("diagnostic", cfg, name=name, note=note) as w:
+        log.info(f"[mask] auditing {_count(num_runs, 'training batch', 'training batches')} of "
+                 f"{run_size} rows over the prior {prior.name or prior.id}, the probe count {stratum}")
+        band = configured["chi_freq_bounds"]
+        log.info(f"[mask] at the configured band ({band[0]:g}, {band[1]:g}) x the peak frequency and drive "
+                 f"{configured['chi_f0']:g} ({configured['chi_k_pad']} slots, cycle floor "
+                 f"{configured['chi_min_cycles']:g}, ceiling {configured['chi_max_cycles']:g})")
+        log.info(f"[mask] {PROBE_LAYOUT}")
+        with seeded(seed, cfg.hw.device), _capture_masked_warnings() as warned:
+            pipeline.gen_training_data(
+                cfg.model, prior.prior, prior.force_prior, cfg.t, run_size=run_size, n_runs=num_runs,
+                steady_idx=cfg.steady_idx, dt_nd_min=cfg.dt_nd_min, nd_dim=len(cfg.params_dict),
+                forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx, dt_exp=cfg.dt_exp,
+                t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp, t_scale_bounds=cfg.t_scale_bounds,
+                state_dep_drift=cfg.state_dep_drift, chi_mode=True, chi_f0=cfg.chi_f0,
+                chi_freq_bounds=cfg.chi_freq_bounds, chi_k_pad=cfg.chi_k_pad, chi_k_fixed=chi_k_fixed,
+                chi_max_cycles=cfg.chi_max_cycles, n_vars=n_vars, checkpoint=None,
+                nd_idx=cfg.tier1_args[0], k_b_cell=cfg.tier1_args[1], dtype=cfg.hw.dtype,
+                device=cfg.hw.device, probe_observer=records.append)
+        if not records:
+            raise RuntimeError("the training generator committed no probe record for the audit to read: "
+                               "its probe observer was never called")
+        results = _audit(cfg, records, warned)
+        _log_mask(results)
+        tally = _tally(cfg, records)
+        file_manager.atomic_savez(w.payload("probe_mask.npz"), {
+            "f_peak": tally.f_peak,
+            "batch_masked": np.asarray([m for m, _ in tally.batches.values()], dtype=np.int64),
+            "batch_total": np.asarray([t for _, t in tally.batches.values()], dtype=np.int64),
+            "span": tally.span})
+        w.parents = {"prior": prior.id}
+        w.fingerprints["gmm"] = prior.fingerprint
+        w.config.update(settings)
+        w.body = {"diagnostic": "probes", "variant": "mask", "settings": settings, "results": results}
     return store.load_diagnostic(w.id)

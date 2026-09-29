@@ -238,6 +238,9 @@ def _owned_defaults() -> dict:
         ("probes band", "--snr-min"): sig(probes.probe_band, "snr_min"),
         ("probes band", "--sup-min"): sig(probes.probe_band, "sup_min"),
         ("probes band", "--peak-window"): sig(probes.probe_band, "peak_window"),
+        ("probes mask", "--num-runs"): sig(probes.probe_mask, "num_runs"),
+        ("probes mask", "--run-size"): sig(probes.probe_mask, "run_size"),
+        ("probes mask", "--seed"): sig(probes.probe_mask, "seed"),
         ("smoke", "--t-obs"): str(config.T_MIN_EXP_S),
         ("fdt", "--n-freqs"): str(fdt["n_freqs"]),
         ("fdt", "--ensemble-m"): str(fdt["ensemble_M"]),
@@ -4086,12 +4089,19 @@ def test_probes_band_builds_a_chi_config_with_the_cell_and_forwards_every_knob(t
     assert set(kw) == {"name", "note", "fig_sink", "store"}, kw
 
 
+def _probe_mask_argv(prior="mp"):
+    """``probes mask`` on the master box against a prior by reference, CPU."""
+    bounds = str(config.BOUNDS_PATH / "nadrowski" / "master.txt")
+    return ["probes", "mask", "--bounds", bounds, "--device", "cpu", "--prior", prior]
+
+
 def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(tmp_path, monkeypatch, capsys):
-    """The family's one mode so far takes no chi flag and no training flag: it builds its own chi
+    """The family's modes take no chi flag and no flag of another mode: each builds its own chi
     configuration, and the band and drive it judges are config.py's. No parser in the family matches an
-    abbreviated option, so a prefix of one of its flags is an error rather than that flag. Ctrl-C gets
-    the family's own note -- nothing is kept and nothing resumes. ``--help`` costs no torch import,
-    checked in a FRESH interpreter because this process imported torch long ago."""
+    abbreviated option, so a prefix of one of its flags is an error rather than that flag -- a habitual
+    --chi-k on mask is refused, never read as --chi-k-fixed. Ctrl-C gets the family's own note --
+    nothing is kept and nothing resumes. ``--help`` costs no torch import, checked in a FRESH
+    interpreter because this process imported torch long ago."""
     import argparse
     import subprocess
     import sys
@@ -4101,22 +4111,27 @@ def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(t
     p = build_parser().subcommands["probes"]
     modes = {name: sub for a in p._actions if isinstance(a, argparse._SubParsersAction)
              for name, sub in a.choices.items()}
-    assert set(modes) == {"band"}, sorted(modes)
+    assert set(modes) == {"band", "mask"}, sorted(modes)
     assert p.allow_abbrev is False and all(m.allow_abbrev is False for m in modes.values())
-    band = modes["band"]
+    band, mask = modes["band"], modes["mask"]
     for flag in ("--chi", "--no-chi", "--chi-k", "--chi-f0", "--chi-band", "--f0", "--prior", "--posterior",
                  "--num-runs", "--strengths", "--t-obs"):
         assert flag not in band._option_string_actions, flag
-    assert band.get_default("chi_mode") is True
-    assert band.get_default("interrupt_note") == tool_probes.PROBES_INTERRUPT_NOTE
+    for flag in ("--chi", "--no-chi", "--chi-k", "--cell", "--lengths", "--strengths", "--posterior"):
+        assert flag not in mask._option_string_actions, flag
+    for mode in (band, mask):
+        assert mode.get_default("chi_mode") is True
+        assert mode.get_default("interrupt_note") == tool_probes.PROBES_INTERRUPT_NOTE
 
     capsys.readouterr()
     assert main(["probes"]) == 2
     err = capsys.readouterr().err
-    assert "{band}" in err and "variant" not in err, "a bare probes names its modes, not the dest"
+    assert "{band,mask}" in err and "variant" not in err, "a bare probes names its modes, not the dest"
     assert main([*_probe_band_argv(), "--chi"]) == 2
     assert main([*_probe_band_argv(), "--sup", "0.4"]) == 2, "a prefix of --sup-min is not --sup-min"
     assert main([*_probe_band_argv(), "--cycle", "8"]) == 2, "a prefix of --cycle-caps is not --cycle-caps"
+    assert main([*_probe_mask_argv(), "--chi-k", "6"]) == 2, "--chi-k is not a prefix of --chi-k-fixed"
+    assert main([*_probe_mask_argv(), "--chi", "6"]) == 2
 
     def _interrupted(*a, **k):
         raise KeyboardInterrupt
@@ -4131,13 +4146,50 @@ def test_the_probes_family_keeps_its_modes_apart_and_its_help_imports_no_torch(t
 
     probe = ("import sys\n"
              "from core.tool import main\n"
-             "rc = [main(['probes', '--help']), main(['probes', 'band', '--help'])]\n"
+             "rc = [main(['probes', '--help']), main(['probes', 'band', '--help']),\n"
+             "      main(['probes', 'mask', '--help'])]\n"
              "bad = sorted(m for m in sys.modules if m == 'torch' or m.startswith('torch.'))\n"
-             "sys.exit(0 if rc == [0, 0] and not bad else repr((rc, bad[:3])))\n")
+             "sys.exit(0 if rc == [0, 0, 0] and not bad else repr((rc, bad[:3])))\n")
     r = subprocess.run([sys.executable, "-c", probe], cwd=str(config.REPO_ROOT),
                        capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "--cycle-caps" in r.stdout and "band" in r.stdout, r.stdout
+    assert "--cycle-caps" in r.stdout and "band" in r.stdout and "--chi-k-fixed" in r.stdout, r.stdout
+
+
+def test_probes_mask_loads_its_prior_by_reference_and_forwards_every_knob(tmp_path, monkeypatch):
+    """The prior is loaded from the store by name, never built: an unknown one is refused and nothing
+    is written. Every flag reaches the stage as its keyword, a bare call forwards only the four the
+    handler always passes, and the configuration is in chi mode with no cell."""
+    from core import tool
+    from core.artifacts import ArtifactStore
+    from tests._fixtures import _nad_cfg, _prior_artifact
+    monkeypatch.setenv("PRISM_ARTIFACTS", str(tmp_path / "A"))
+    _prior_artifact(ArtifactStore(tmp_path / "A"), _nad_cfg(chi_mode=True), name="mp")
+    calls = []
+
+    def _rec(*a, **kw):
+        calls.append((a, kw))
+        return SimpleNamespace(kind="diagnostic", path=tmp_path / "diagnostics" / "m1__1")
+
+    monkeypatch.setattr("core.diagnostics.probe_mask", _rec)
+    assert tool.main([*_probe_mask_argv(), "--num-runs", "3", "--run-size", "5", "--chi-k-fixed", "6",
+                      "--seed", "4", "--name", "m1"]) == 0
+    (args, kw), = calls
+    assert set(kw) == {"name", "note", "fig_sink", "store", "num_runs", "run_size", "chi_k_fixed", "seed"}
+    assert (kw["num_runs"], kw["run_size"], kw["chi_k_fixed"], kw["seed"], kw["name"]) == (3, 5, 6, 4, "m1")
+    cfg, prior = args
+    assert prior.name == "mp" and cfg.chi_mode is True and not cfg.inits_dict
+    assert (cfg.chi_f0, cfg.chi_freq_bounds) == (config.CHI_F0, config.CHI_FREQ_BOUNDS)
+
+    calls.clear()
+    assert tool.main(_probe_mask_argv()) == 0
+    (_, kw), = calls
+    assert set(kw) == {"name", "note", "fig_sink", "store"}, kw
+
+    calls.clear()
+    assert tool.main(_probe_mask_argv("nope")) == 1 and calls == []
+    assert [d.name.split("__")[0] for d in (tmp_path / "A" / "priors").iterdir()] == ["mp"]
+    assert tool.main([*_probe_mask_argv(), "--cell", "x"]) == 2 and calls == []
 
 
 def _grid_leaks(tree) -> list:

@@ -181,7 +181,7 @@ CONTROL: dict[str, tuple[str | tuple[str, ...], str] | str | None] = {
     # tool-only: the probe checks run from the command line alone
     "probe_seed": None, "probe_lengths": None, "probe_multipliers": None, "probe_drives": None,
     "band_repeats": None, "probe_cycle_caps": None, "cv_max": None, "phase_max": None, "snr_min": None,
-    "sup_min": None, "band_peak_window": None,
+    "sup_min": None, "band_peak_window": None, "mask_num_runs": None, "mask_run_size": None,
 }
 
 

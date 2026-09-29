@@ -55,9 +55,10 @@ BASE_KEYS = (
 TOOL_ONLY_KEYS = ("repeats", "n_points", "n_worst", "top_n", "m", "m_noise", "rel", "min_valid", "rows",
                   "n_sweep", "chi_k_fixed",
                   # the probe checks: the seed, the band check's four grids, its repeat count and its
-                  # five pass thresholds
+                  # five pass thresholds, and the mask audit's batch count and batch size
                   "probe_seed", "probe_lengths", "probe_multipliers", "probe_drives", "band_repeats",
-                  "probe_cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "band_peak_window")
+                  "probe_cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "band_peak_window",
+                  "mask_num_runs", "mask_run_size")
 
 
 def _shape(exc, key):
@@ -108,7 +109,7 @@ def test_the_registry_holds_exactly_the_initial_keys_with_neutral_descriptions()
     reader and refuses an unknown key with a KeyError: a message can only be built for a field a
     front end can map."""
     assert set(FIELDS) == set(BASE_KEYS) | set(TOOL_ONLY_KEYS)
-    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 99, "a key is listed twice above"
+    assert len(FIELDS) == len(BASE_KEYS) + len(TOOL_ONLY_KEYS) == 101, "a key is listed twice above"
     control_words = re.compile(r"\b(tab|box|flag|button|click|tick|dialog)\b")
     for key, f in FIELDS.items():
         assert isinstance(f, Field) and f.key == key, key
@@ -547,6 +548,8 @@ def test_every_registry_default_is_the_trees_own_default():
         "snr_min": str(_default(probes.probe_band, "snr_min")),
         "sup_min": str(_default(probes.probe_band, "sup_min")),
         "band_peak_window": str(_default(probes.probe_band, "peak_window")),
+        "mask_num_runs": str(_default(probes.probe_mask, "num_runs")),
+        "mask_run_size": str(_default(probes.probe_mask, "run_size")),
     }
     for key, expected in owned_by_a_signature.items():
         assert FIELDS[key].default == expected, (key, expected, FIELDS[key].default)

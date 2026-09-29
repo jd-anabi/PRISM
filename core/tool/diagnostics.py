@@ -2,8 +2,10 @@
 
 Every handler here loads its posterior THROUGH the store's own loader (so a mode, box, order or
 width mismatch is refused before anything is spent) and takes the prior from that posterior's
-manifest. There is no ``--prior`` on a diagnostic: an explicitly supplied one could only ever be the
-posterior's own or a refusal, and the pairing is recorded in the artifact already.
+manifest. No diagnostic that reads a posterior takes ``--prior``: an explicitly supplied one could
+only ever be the posterior's own or a refusal, and the pairing is recorded in the artifact already.
+The one diagnostic with no posterior, ``probes mask`` (core/tool/probes.py), takes the prior it
+audits as its input and records it as its parent.
 """
 from __future__ import annotations
 

@@ -2096,3 +2096,180 @@ def test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_tw
     assert a["sup"] == pytest.approx(b["sup"], rel=1e-3)
     assert a["full"]["chi_mag"] / b["full"]["chi_mag"] == pytest.approx(
         50 * 14.1 * 1.380649e-2 * 300 / 62.14 / 10.0, rel=1e-3)
+
+
+def _mask_record(tag, lo, hi, *, n_points=5000, k_pad=12):
+    """Rows lo..hi of a designed four-row batch: row 2 is too slow for the band's top, row 1 loses one
+    probe to a shortened lock-in, row 3 loses one to the packer -- 5 of 12 probes masked in all."""
+    from core.SBI.chi_probes import ProbeRecord
+    f_peak = torch.tensor([0.02, 0.02, 0.0001, 0.02], dtype=torch.float64)[lo:hi]
+    u = torch.log(torch.tensor([0.1, 0.2, 0.3], dtype=torch.float64)).expand(4, 3)[lo:hi]
+    valid = torch.tensor([[1, 1, 1], [0, 1, 1], [0, 0, 0], [1, 1, 1]], dtype=torch.bool)[lo:hi]
+    live = torch.tensor([3, 2, 0, 2])[lo:hi]
+    return ProbeRecord(batch_tag=tag, lo=lo, hi=hi, f_peak=f_peak, duration_frac=torch.ones(3), k=3, u=u,
+                       logcyc=torch.log(f_peak.unsqueeze(1) * u.exp() * n_points), valid=valid,
+                       packed_mask=torch.arange(k_pad).unsqueeze(0) < live.unsqueeze(1),
+                       dt_exp=1.0, n_points=n_points)
+
+
+def _mask_generator(script, calls):
+    """In place of pipeline.gen_training_data: per batch, the warnings an abandoned attempt left, then
+    each committed range's own masked-probe warning, then the records, handed over at commit."""
+    import warnings
+
+    def _gen(*a, probe_observer=None, **kw):
+        calls.append(kw)
+        for tag, stale, records in script:
+            for text in stale:
+                warnings.warn(text)
+            for rec in records:
+                n = int((~rec.packed_mask[:, :rec.k]).sum())
+                if n:
+                    warnings.warn(f"{tag}: chi: {n}/{(rec.hi - rec.lo) * rec.k} probes masked (below 2.0 drive cycles).")
+            for rec in records:
+                probe_observer(rec)
+        return torch.zeros(1, 1), torch.zeros(1, 1)
+    return _gen
+
+
+def _mask_prior(store, cfg):
+    from tests._fixtures import _prior_artifact
+    _prior_artifact(store, cfg, name="mp")
+    return store.load_prior(cfg, "mp")
+
+
+def test_probes_mask_splits_the_thrown_out_probes_by_cause_over_the_committed_row_ranges(store, monkeypatch):
+    from core import config
+    from core.diagnostics import probe_mask
+    from core.SBI import pipeline
+    from tests._fixtures import only_masked_probe_warnings
+    cfg = _nad_cfg(chi_mode=True)
+    prior = _mask_prior(store, cfg)
+    t1, t2 = (f"training batch {k}/2 [t_scale=3.73, T=5000, n_fine=59000, N_points=5000, rows=4]" for k in (1, 2))
+    script = [(t1, [], [_mask_record(t1, 0, 4)]),
+              (t2, [f"{t2}: chi: 5/12 probes masked (an attempt the row halving abandoned)"],
+               [_mask_record(t2, 0, 2), _mask_record(t2, 2, 4)])]
+    calls = []
+    monkeypatch.setattr(pipeline, "gen_training_data", _mask_generator(script, calls))
+    with only_masked_probe_warnings() as caught:
+        d = probe_mask(cfg, prior, num_runs=2, run_size=4, name="mask1")
+    assert len(caught) == 4, "every warning still reaches the hook that was in force"
+    r, kw = d.results, calls[0]
+    assert kw["checkpoint"] is None and kw["chi_mode"] is True and kw.get("theta_transform") is None
+    assert (kw["chi_f0"], kw["chi_freq_bounds"]) == (config.CHI_F0, config.CHI_FREQ_BOUNDS)
+    assert (kw["n_runs"], kw["run_size"]) == (2, 4)
+    assert store.list("simulation") == []
+    assert (d.variant, d.manifest.parents, d.manifest.fingerprints["gmm"]) == ("mask", {"prior": prior.id}, prior.fingerprint)
+    assert (r["probes"], r["live"], r["masked"]) == (24, 14, 10)
+    c = r["causes"]
+    assert (c["cycle_floor"]["count"], c["too_slow_at_band_top"]["count"],
+            c["shortened_by_duration_draw"]["count"], c["non_finite_lock_in"]["count"]) == (8, 6, 2, 2)
+    assert r["invariants"] == {"non_finite_frequency": 0, "at_or_above_nyquist": 0, "out_of_band": 0, "hold": True}
+    assert r["per_batch"]["fractions"] == [pytest.approx(5 / 12)] * 2 and r["per_batch"]["sd"] == 0.0
+    assert r["omega0"]["hz"][2] == pytest.approx(20.0)
+    assert r["rows"] == {"total": 8, "zero_live": 2, "one_live": 0}
+    assert r["span"]["values"][1] == pytest.approx(3.0) and r["span"]["single_probe_rows"] == 0
+    assert r["dominant_cause"] == "too_slow_at_band_top"
+    assert r["cross_check"] == {"row_ranges": 3, "mismatches": [], "abandoned_attempt_warnings": 1}
+    assert "fixed probe-generator seed" in d.settings["probe_layout"]
+
+
+def test_probes_mask_records_and_warns_a_count_the_production_warning_does_not_confirm(store, monkeypatch,
+                                                                                     caplog):
+    import warnings
+    from core.diagnostics import probe_mask
+    from core.SBI import pipeline
+    from tests._fixtures import only_masked_probe_warnings
+    cfg = _nad_cfg(chi_mode=True)
+    prior = _mask_prior(store, cfg)
+    t1 = "training batch 1/1 [t_scale=3.73, T=5000, n_fine=59000, N_points=5000, rows=4]"
+
+    def _gen(*a, probe_observer=None, **kw):
+        warnings.warn(f"{t1}: chi: 4/12 probes masked (below 2.0 drive cycles).")
+        probe_observer(_mask_record(t1, 0, 4))
+        return torch.zeros(1, 1), torch.zeros(1, 1)
+
+    monkeypatch.setattr(pipeline, "gen_training_data", _gen)
+    with only_masked_probe_warnings():
+        d = probe_mask(cfg, prior, num_runs=1, run_size=4, name="mask2")
+    check = d.results["cross_check"]
+    assert check["mismatches"] == [{"batch_tag": t1, "lo": 0, "hi": 4, "audit": 5, "production": 4}]
+    assert (check["row_ranges"], check["abandoned_attempt_warnings"]) == (1, 0)
+    said = [m.getMessage() for m in caplog.records
+            if m.name == "core.diagnostics.probes" and m.levelname == "WARNING"]
+    assert sum("does not match" in m for m in said) == 1, said
+
+
+def test_the_mask_audit_agrees_with_the_production_warnings_on_real_training_rows(monkeypatch):
+    """The training generator itself -- its schedule, probe draw, placement, lock-in, packer and
+    masked-probe warning -- on a stand-in cell, audited from what its observer handed over."""
+    from core import cli, config
+    from core.diagnostics import probes
+    from core.rng import seeded
+    from core.SBI import pipeline
+    from tests._fixtures import only_masked_probe_warnings, stand_in_gen_obs
+    cfg = _nad_cfg(chi_mode=True)
+    cli.load_and_validate_gt(cfg, str(config.CELL_PATH / "nadrowski" / "master_weak.txt"))
+    monkeypatch.setattr(pipeline, "gen_obs", stand_in_gen_obs)
+    truth = cfg.ground_truth_tensor.reshape(1, -1)
+
+    class _Fixed:
+        def sample(self, shape):
+            return truth.expand(shape[0], -1).clone()
+
+    n_grid = 12_000
+    t = torch.linspace(0, n_grid * cfg.dt_nd_min, n_grid, dtype=cfg.hw.dtype)
+    records = []
+    with only_masked_probe_warnings(), seeded(0, cfg.hw.device), probes._capture_masked_warnings() as warned:
+        pipeline.gen_training_data(
+            cfg.model, _Fixed(), None, t, run_size=4, n_runs=2, steady_idx=500, dt_nd_min=cfg.dt_nd_min,
+            nd_dim=len(cfg.params_dict), forcing_idx=cfg.forcing_idx, rescale_idx=cfg.rescale_idx,
+            dt_exp=cfg.dt_exp, t_min_exp=cfg.t_min_exp, t_max_exp=cfg.t_max_exp,
+            t_scale_bounds=cfg.t_scale_bounds, state_dep_drift=cfg.state_dep_drift, chi_mode=True,
+            chi_f0=config.CHI_F0, chi_freq_bounds=config.CHI_FREQ_BOUNDS, chi_k_pad=4,
+            chi_max_cycles=config.CHI_MAX_CYCLES, n_vars=cfg.inits_tensor.shape[-1],
+            dtype=cfg.hw.dtype, device=cfg.hw.device, probe_observer=records.append)
+    res = probes._audit(cfg, records, warned)
+    assert res["probes"] > 0 and res["masked"] > 0, res
+    assert res["cross_check"]["mismatches"] == [] and res["cross_check"]["row_ranges"] == len(records)
+    assert res["masked"] == sum(int((~r.packed_mask[:, :r.k]).sum()) for r in records)
+    inv, c = res["invariants"], res["causes"]
+    assert (c["cycle_floor"]["count"] + c["non_finite_lock_in"]["count"] + inv["non_finite_frequency"]
+            + inv["at_or_above_nyquist"] + inv["out_of_band"]) == res["masked"]
+
+
+@pytest.mark.parametrize("kw, field", [
+    ({"num_runs": 0}, "mask_num_runs"),
+    ({"run_size": 0}, "mask_run_size"),
+    ({"chi_k_fixed": 1}, "chi_k_fixed"),
+    ({"chi_k_fixed": 13}, "chi_k_fixed"),
+    ({"seed": -1}, "probe_seed"),
+    ({"name": "taken"}, "name"),
+])
+def test_probes_mask_refuses_before_the_writer_opens(store, monkeypatch, kw, field):
+    from core.diagnostics import probe_mask
+    from core.SBI import pipeline
+    cfg = _nad_cfg(chi_mode=True)
+    prior = _mask_prior(store, cfg)
+    _diagnostic(store, cfg, name="taken")
+    monkeypatch.setattr(pipeline, "gen_training_data", lambda *a, **k: pytest.fail("simulated before the refusal"))
+    before = _diagnostic_dirs(store)
+    with pytest.raises(Refusal) as e:
+        probe_mask(cfg, prior, **{"num_runs": 1, "run_size": 1, **kw})
+    assert e.value.field == field, (kw, e.value.field, str(e.value))
+    assert _diagnostic_dirs(store) == before
+
+
+def test_probes_mask_refuses_a_config_that_is_not_chi_or_not_config_pys_band(store, monkeypatch):
+    """A non-chi config, and a chi one whose band is not config.py's: training would refuse the second
+    before its first simulation, so the audit does too, and neither refusal names a setting to change."""
+    from core.diagnostics import probe_mask
+    from core.SBI import pipeline
+    prior = _mask_prior(store, _nad_cfg(chi_mode=True))
+    monkeypatch.setattr(pipeline, "gen_training_data", lambda *a, **k: pytest.fail("simulated before the refusal"))
+    for cfg, words in ((_nad_cfg(chi_mode=False), "chi"),
+                       (_nad_cfg(chi_mode=True, chi_freq_bounds=(0.1, 10.0)), "does not match config.py")):
+        with pytest.raises(Refusal) as e:
+            probe_mask(cfg, prior, num_runs=1, run_size=1)
+        assert e.value.field is None and words in str(e.value), str(e.value)
+    assert _diagnostic_dirs(store) == []

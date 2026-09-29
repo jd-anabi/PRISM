@@ -122,8 +122,8 @@ FLAG: dict[str, str | None] = {
     "rows": "--rows",
     "n_sweep": "--n-sweep",
     "chi_k_fixed": "--chi-k-fixed",
-    # tool-only: the probe checks. Their own flag names, never the training drive's; --seed and
-    # --repeats answer two keys each, as --drive answers three
+    # tool-only: the probe checks. Their own flag names, never the training drive's; --seed,
+    # --repeats, --num-runs and --run-size answer two keys each, as --drive answers three
     "probe_seed": "--seed",
     "probe_lengths": "--lengths",
     "probe_multipliers": "--multipliers",
@@ -135,6 +135,8 @@ FLAG: dict[str, str | None] = {
     "snr_min": "--snr-min",
     "sup_min": "--sup-min",
     "band_peak_window": "--peak-window",
+    "mask_num_runs": "--num-runs",
+    "mask_run_size": "--run-size",
 }
 
 

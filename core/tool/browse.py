@@ -27,9 +27,9 @@ would have changed all three for a root this family does not want. ``fdt`` and `
 ``--store-root`` of their own now, and those three behaviours were reworked deliberately rather
 than left to flip: the throwaway root, its cleanup and smoke's Ctrl-C advice are now keyed on
 ``temp_store_root``, a property only ``smoke``'s parser sets (``set_defaults(temp_store_root=True)``),
-never on the flag's presence; ``fdt``, ``crossval`` and ``compare`` print their own
-``interrupt_note``, which ``main`` checks first. The absence here is now what it says on the face of
-it -- this family wants one root, the environment's.
+never on the flag's presence; ``fdt``, ``crossval``, ``compare`` and the ``probes`` checks print
+their own ``interrupt_note``, which ``main`` checks first. The absence here is now what it says on the
+face of it -- this family wants one root, the environment's.
 
 (No line numbers into ``core/tool/__init__.py`` on purpose: the four this paragraph used to carry
 went stale as that file changed.)

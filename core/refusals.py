@@ -197,6 +197,10 @@ FIELDS: dict[str, Field] = {f.key: f for f in (
     Field("snr_min", "the smallest signal over the lock-in floor that passes", "3.0"), # probe_band
     Field("sup_min", "the smallest own-peak power fraction that passes", "0.5"),      # probe_band
     Field("band_peak_window", "the own-peak window, as a fraction of the peak frequency", "0.1"),  # probe_band
+    # the mask audit's own sizes: training's batch count and rows per batch keys state training's
+    # defaults, which are not the audit's
+    Field("mask_num_runs", "the number of training batches to audit", "12"),         # probe_mask
+    Field("mask_run_size", "the rows per audited batch", "32"),                       # probe_mask
 )}
 
 

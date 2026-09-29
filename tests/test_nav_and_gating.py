@@ -1615,6 +1615,7 @@ def test_every_field_key_has_a_window_control_and_the_fix_sentences_name_it():
         # the probe checks: command line only
         "probe_seed", "probe_lengths", "probe_multipliers", "probe_drives", "band_repeats",
         "probe_cycle_caps", "cv_max", "phase_max", "snr_min", "sup_min", "band_peak_window",
+        "mask_num_runs", "mask_run_size",
         # the five FDT settings neither front end exposes
         "freq_bounds", "burn_in_nd", "t_obs_periods", "dt_nd", "psd_t_obs_nd"}
 
