@@ -1265,6 +1265,10 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                                    them without the Fisher; None/absent => stored as unknown
                          every     batches between writes; None/absent => config.TRAINING_CHECKPOINT_EVERY
                          resume    "auto" (default) | "never" | "require"
+                         parents / inputs / hw
+                                   what the cache's own manifest records when the header is first
+                                   written: its parent artifacts, its input files and the hardware
+                                   its environment block describes; each optional
     :param chi_k_fixed: hold the probe COUNT at this value instead of drawing it per batch, and skip
                         the per-row subsetting. **For a STRATIFIED CALIBRATION, not for training** --
                         training's whole point is that K varies, and fixing it would train a network

@@ -95,18 +95,28 @@ def identifiability_rotation(cfg, posterior, *, n_worst: int = 3, top_n: int = 4
 
     ev = tr.get("fisher_eigenvalues")
     if ev is None:
-        # REPORTED, not refused: every TSNPE round carries None (it reuses the parent's V and never
-        # runs a Fisher), and the ordering plus the loadings are still the answer to "which direction
-        # is worst, and what it is made of" -- just not to "how much worse". Run this diagnostic on
-        # the amortized PARENT, which carries them.
-        # ONE warning record for the six lines: the pane's triangle and the tool's "warning: " prefix
+        # REPORTED, not refused: the ordering plus the loadings are still the answer to "which
+        # direction is worst, and what it is made of" -- just not to "how much worse". An unrotated
+        # posterior never gets here (it is refused above), so None means a rotation whose eigenvalues
+        # did not reach this record. Training records the eigenvalues it computed, the ones a resumed
+        # checkpoint's header holds, or, for a narrowing round, its parent posterior's; so None comes
+        # from a resume of a checkpoint written before the header kept them, or from a narrowing round
+        # trained before rounds inherited them or whose parent held none. A narrowing round reuses the
+        # rotation of the amortized posterior it descends from, so that record answers when it has
+        # them. Otherwise no stored record holds them: V is not reproducible, so a new training run
+        # computes a new rotation, and only its eigenvalues get recorded.
+        # ONE warning record for all the lines: the pane's triangle and the tool's "warning: " prefix
         # mark the block once, and log.txt puts one timestamp over it.
         log.warning("[eigenvalues] NOT STORED for this artifact.\n"
                     "  Everything below is an ORDERING and a set of LOADINGS -- which direction is worst,\n"
                     "  and what it is made of -- but NOT how much worse it is. That scale is the question:\n"
                     "  a 3x spread means the experiment measures everything tolerably; 1e6 means it\n"
                     "  measures a handful of directions and returns the prior for the rest.\n"
-                    "  Run this diagnostic on the amortized PARENT, which carries them.")
+                    "  They go unrecorded when training resumed a checkpoint written before they were kept beside\n"
+                    "  the rotation, and on a narrowing round trained before rounds inherited them or whose parent\n"
+                    "  held none. For a narrowing round, the amortized posterior it descends from shares its\n"
+                    "  rotation: if that posterior records them, run this diagnostic on it. Otherwise no record has them,\n"
+                    "  and only a new training run that computes its own rotation records any.")
         ev_a = None
     else:
         ev_a = np.asarray(ev, dtype=float)

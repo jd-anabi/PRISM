@@ -37,8 +37,9 @@ class TrainingPlan:
 
     ``chi_k_fixed`` belongs to the ``sbc`` diagnostic: ``orchestrator.build_posterior`` never sets
     it; the stratified SBC path does (one probe count per calibration stratum). ``checkpoint`` stays
-    a plain dict -- its key set (dir/identity/probe/V/fisher_eigenvalues/every/resume) is the
-    resumable-checkpoint contract, and ``gen_training_data``'s own signature is unchanged.
+    a plain dict -- its key set (dir/identity/probe/V/fisher_eigenvalues/every/resume, plus the
+    parents/inputs/hw the cache's own manifest records) is the resumable-checkpoint contract, and
+    ``gen_training_data``'s own signature is unchanged.
     """
     model: str
     prior: object
