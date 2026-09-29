@@ -1917,10 +1917,12 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
                      A whole number from 0 makes the calibration repeatable: every draw -- the set,
                      the rank test's posterior draws and reference sample, the coverage test's draws
                      and the informativeness estimate -- runs on a stream derived from it and a fixed
-                     calibration tag (``core.rng.calibration_seed``), so the same seed gives the same
-                     set and the same verdict, and never replays the stream a training run seeded
-                     with the same number started on. Refused before anything is written when out of
-                     range; recorded in ``results["seed"]``.
+                     calibration tag (``core.rng.calibration_seed``), so on one device the same seed
+                     repeats the calibration -- the same set and the same verdict bit for bit on the
+                     CPU; on a CUDA card a kernel's reduction order is not fixed, so the numbers are
+                     not bitwise and a verdict at its threshold can differ -- and it never replays the
+                     stream a training run seeded with the same number started on. Refused before
+                     anything is written when out of range; recorded in ``results["seed"]``.
     """
     store = resolve_store(store)
     store.assert_name_free("calibration", name)   # before the calibration set is simulated
@@ -1940,8 +1942,9 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
         dtype = cfg.hw.dtype
         # Everything that draws runs in ONE block: the set, the rank test's posterior draws and its
         # reference sample, the coverage test's draws and the informativeness estimate. With a seed it
-        # is the calibration's own stream, so the same seed gives the same set AND the same verdict;
-        # with none it is a no-op and the draws run on in the caller's streams.
+        # is the calibration's own stream, so on one device the same seed gives the same set AND the
+        # same verdict (bit for bit on the CPU, not bitwise on a CUDA card, where a verdict at its
+        # threshold can differ); with none it is a no-op and the draws run on in the caller's streams.
         with (contextlib.nullcontext() if seed_used is None
               else seeded(calibration_seed(seed_used), cfg.hw.device)):
             # The draw is three helpers so that core.diagnostics.sbc_repeats runs through the same code --

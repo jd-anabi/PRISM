@@ -83,9 +83,9 @@ def register(subparsers) -> dict:
                    help="posterior draws per calibration dataset"
                         + default_clause("num_posterior_samples"))
     p.add_argument("--seed", type=int, default=None, metavar="N",
-                   help="the calibration set's random seed: the same seed draws the same set and "
-                        "reaches the same verdict, and never replays the stream a training run with "
-                        "that seed used" + default_clause("seed"))
+                   help="the calibration set's random seed: on one device the same seed repeats the "
+                        "calibration -- on the CPU bit for bit, on a CUDA card not bitwise -- and never "
+                        "replays the stream a training run with that seed used" + default_clause("seed"))
     add_accept_flags(p)
     p.set_defaults(handler=_validate)
     out["validate"] = p
