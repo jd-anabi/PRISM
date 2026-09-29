@@ -20,12 +20,13 @@ from core.SBI import chi
 from core.SBI import pipeline as _pipeline
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class ProbeRecord:
     """What one ``gen_chi_block`` call inside the training generator measured, for a probe observer
     (``pipeline.gen_training_data``'s ``probe_observer``). Built only while an observer is attached,
     and handed to it only once the batch's rows are stored. Every tensor is detached, on the CPU and
-    a copy of its own, so nothing the observer does can touch the batch.
+    a copy of its own, so nothing the observer does can touch the batch. Records compare by identity:
+    a field-by-field comparison of tensor fields has no single truth value.
 
     :param batch_tag: the batch the rows belong to, as the generator's messages name it.
     :param lo: first row of this call's range within its training batch.
@@ -48,6 +49,11 @@ class ProbeRecord:
     ``gen_chi_raw`` returns only ``valid``, so an audit that wants to know WHY a probe failed
     recomputes the non-finite and Nyquist predicates itself, from the driven frequency
     ``f_peak * exp(u)`` and ``dt_exp``.
+
+    ``u``, ``logcyc`` and ``valid`` are in PROBE order; ``packed_mask`` is in SLOT order -- the packer
+    moves each row's live probes to the front, ascending in frequency, and every column from ``k`` on
+    is padding, always False. So ``packed_mask[:, j]`` is not probe ``j``, and the two compare only
+    through per-row counts of ``packed_mask[:, :k]``.
     """
     batch_tag: str
     lo: int
