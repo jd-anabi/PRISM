@@ -2171,6 +2171,24 @@ def test_a_probe_record_compares_by_identity():
     assert r == r and (r == dataclasses.replace(r)) is False
 
 
+def test_the_probe_checks_default_settings_are_the_agreed_numbers():
+    """The refusal table and the tool's help read each probe check's defaults off its signature, so a
+    changed default moves all three together and nothing fails. The numbers themselves are pinned here,
+    so that changing what a check judges by default is a deliberate edit of this test too."""
+    import inspect
+    from core.diagnostics import probes
+
+    def defaults(fn, *names):
+        sig = inspect.signature(fn).parameters
+        return tuple(sig[n].default for n in names)
+
+    assert defaults(probes.probe_band, "repeats", "cv_max", "snr_min", "sup_min", "peak_window", "phase_max",
+                    "seed") == (24, 0.20, 3.0, 0.50, 0.10, None, 0)
+    assert defaults(probes.probe_mask, "num_runs", "run_size", "chi_k_fixed", "seed") == (12, 32, None, 0)
+    assert defaults(probes.probe_drive, "t_obs_s", "repeats", "detune", "free_min", "captured_max", "peak_window",
+                    "clarity_min", "seed") == (5.0, 16, 1.4, 0.70, 0.10, 0.02, 3.0, 0)
+
+
 def _mask_generator(script, calls):
     """In place of pipeline.gen_training_data: per batch, the warnings an abandoned attempt left, then
     each committed range's own masked-probe warning, then the records, handed over at commit. Each call's
