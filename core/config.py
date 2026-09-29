@@ -463,14 +463,19 @@ CHI_FREQ_BOUNDS = (0.03, 0.3)  # log-spaced multipliers of the measured spontane
                                # and the high-multiplier CV did NOT improve from T_obs 5 s to 25 s,
                                # where a noise-limited lock-in would fall by sqrt(5) ~ 2.2x.
                                # That was first read as a frequency limit -- same theta, different
-                               # noise seed, genuinely different chi -- and the reading was later
-                               # overturned: re-locking the same traces over a shorter prefix
-                               # recovers every one of those probes. The in-band failures were a
-                               # drive-cycle limit of the lock-in (a fixed 5 s slice reaches the
-                               # cycle wall soonest at the high multipliers), not a frequency limit,
-                               # and CHI_MAX_CYCLES below is the fix. The high edge 0.3 still
-                               # stands: capped, it stays marginal on phase coherence, and above it
-                               # the drive entrains the bundle.
+                               # noise seed, genuinely different chi -- and for the probes inside
+                               # the band the reading was later overturned. Every in-band probe that
+                               # failed at full length had been locked in over more than about 31
+                               # drive cycles (a fixed 5 s slice reaches the cycle wall soonest at
+                               # the high multipliers), and re-locking the same trace over a prefix
+                               # of at most 20 cycles recovers every one of them: a drive-cycle
+                               # limit of the lock-in, not a frequency limit, and CHI_MAX_CYCLES
+                               # below is the fix. Capped, the band's interior (0.03-0.14x) clears
+                               # outright, and its top edge 0.3x stays marginal on phase coherence.
+                               # At and above resonance it is different: the drive entrains the
+                               # bundle, or its response is smaller than the bundle's own activity,
+                               # and no shortening fixes that. Entrainment's knee sits at
+                               # 0.35-0.4x, which is why the top edge stays at 0.3.
                                #
                                # The old (0.1, 10.0) put 8 of 10 probes at K=10 above ~0.25x
                                # Omega_0 -- each costing a full simulation per observation, and each
