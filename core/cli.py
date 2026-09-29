@@ -103,7 +103,7 @@ def load_and_validate_gt(cfg: SimConfig, cell_path: str) -> list:
 # DERIVED from config.FORCING_SI_UNITS, the authoritative conversion table, so the two cannot drift.
 INFERENCE_PROMPT_UNITS = config.FORCING_DISPLAY_UNITS
 
-# ── Cell-file parsing (shared by FDT/REDUCTION/CROSSVAL modes + the scripts) ─────────────────
+# ── Cell-file parsing (shared by the FDT/REDUCTION/CROSSVAL builders + the CrossVal panel) ───
 def _merge_vals_bounds(vals: dict, bounds: OrderedDict,
                        label: str, cell_file: str) -> OrderedDict:
     """
@@ -181,8 +181,9 @@ def cell_sources(cell_file: str, model: str | None = None) -> dict:
 
 def parse_cell(cell_file: str, model: str | None = None):
     """
-    Parse a cell file into the 7-tuple used by the FDT/REDUCTION/CROSSVAL config builders and the
-    diagnostic scripts, then run pint unit conversion.
+    Parse a cell file into the 7-tuple used by the FDT/REDUCTION/CROSSVAL config builders
+    (``make_fdt_config``, ``make_reduction_config``, ``make_param_sweep_config``) and by the CrossVal
+    panel's prefill from the chosen cell, then run pint unit conversion.
 
     Cell files hold VALUES only (bounds + units are decoupled) and live in per-model subfolders:
     Resources/Cells/<model>/<cell>.txt. If a bounds file RESOLVES for the cell (see
@@ -245,7 +246,9 @@ def parse_cell(cell_file: str, model: str | None = None):
 def units_to_factors(units: tuple) -> tuple[list[float], float]:
     """
     From a set of unit strings compute (si_factors, s_to_cell). Standalone so `parse_cell` stays
-    byte-for-byte untouched (it is shared by the FDT/REDUCTION/CROSSVAL builders + the scripts).
+    byte-for-byte untouched (it is shared by the FDT/REDUCTION/CROSSVAL builders + the CrossVal
+    panel). Also called by ``make_sim_config``, and by the Config tab to refuse a typed unit token it
+    cannot resolve before a run starts.
     """
     ureg = config.unit_registry()      # shared singleton: building one parses pint's full unit file
     try:
