@@ -564,9 +564,9 @@ prior that training draws from and never infers (`core.orchestrator.build_forcin
    over the linear box, and simulates them; a candidate is accepted when its trajectory stays
    finite. At the defaults on a CUDA card that is 50 rounds of 2,048 candidates.
 2. **A flood-fill of the stable region.** Every accepted point seeds a random walk: a batch of normal
-   steps of one fixed size in the parameters' own units, each simulated and accepted on the same
-   test, every accepted step seeding more, until the accepted set passes its limit (175,000 by
-   default) or nothing is left to walk from.
+   steps with one fixed standard deviation (0.01 by default) in the parameters' own units, each
+   simulated and accepted on the same test, every accepted step seeding more, until the accepted set
+   passes its limit (175,000 by default) or nothing is left to walk from.
 3. **A mixture fitted to the accepted set.** The points are mapped into the box's unbounded latent
    coordinate, HDBSCAN clusters them there, and a Gaussian mixture with one component per cluster is
    fitted. Pushed back through the box, it is a prior whose support is exactly the box.
@@ -581,8 +581,8 @@ What the screen does, read from the code:
   the flood-fill integrates all of it. The census's accepted points go straight into the
   flood-fill's accepted set and are never screened again, so part of the fitted set passed only the
   half-length test. How large a part is not known: at the defaults on a CUDA card the census screens
-  102,400 candidates against the flood-fill's limit of 175,000, and the prior's record stores the
-  census's accepted count as unknown.
+  102,400 candidates against the flood-fill's limit of 175,000; the prior's record stores its
+  accepted count as unknown, and the census's share is not recorded.
 - **The walk is not confined to the box.** A step past a bound is simulated and accepted like any
   other if it stays finite. Before the fit such points are clamped just inside the box, at 10⁻⁶ of
   the range from the bound (`core.SBI.reparam.clamp_to_box`), which puts them near ±13.8 in the
@@ -603,9 +603,10 @@ The second and third points are an open question ([Open questions](#open-questio
 positive and span one to three decades, and a uniform prior would over-weight the high end.
 Temperature, T, on the tier-1 box, is uniform.
 
-**The box coordinate is linear.** `core.config.REPARAM_LOG_PARAMS` is empty, so every parameter's box
-bijection, the coordinate the mixture is fitted in and the flow trains in, is linear. That coordinate
-is not how prior mass is spread: the rescale block is sampled log-uniformly all the same.
+**The box coordinate is linear.** `core.config.REPARAM_LOG_PARAMS` is empty, so for the built-in
+models every parameter's box bijection, the coordinate the mixture is fitted in and the flow trains
+in, is linear (a user model may declare its own log box). That coordinate is not how prior mass is
+spread: the rescale block is sampled log-uniformly all the same.
 
 - A geometric (log) box for f_scale was tried, to cure a mild tilt in its rank test, and the
   posterior trained under it was worse, in its coverage and in f_scale's own rank test.
@@ -648,8 +649,8 @@ needs moves with it. On the card run of 29 September 2026, over a prior built at
 size, the derived scale's median was about 714 pN, against about 32 pN for the master box's
 log-uniform f_scale.
 
-- A training run on the box prints two `[tier1]` lines before its first simulation: the derived
-  force scale over the prior's draws at the 1st, 50th and 99th percentiles, and, in chi mode, the
+- A training run on the box prints a `[tier1]` line before its first simulation: the derived force
+  scale over the prior's draws at the 1st, 50th and 99th percentiles. In chi mode a second gives the
   drive amplitudes they imply ([train](command-line.md#train)).
 - The lines report and never refuse. Whether a drive of that size is reasonable is a judgement about
   the preparation, not a threshold for the code.
@@ -676,23 +677,18 @@ size, not the retrain's result:
   temperature a gradient norm of 0.214 per kelvin, in units of the feature noise, and a unique handle
   of 0.134. Its |cos| with n is 0.92, a near-degenerate pair, as the product n · T predicts; with
   t_scale it is 0.49, and with x_scale 0.44. Its strongest features are the chi log-magnitudes.
-- The Fisher eigenvalues span many decades. A small tier-1 rotation in a test run on the CPU logged a
-  spread of about 5.8e18, and the card run's thirteen ran from 7.949e16 down to 0.1652. One direction
-  carries almost no information.
 - The calibration verdict was FAIL, which is expected at that size. Temperature's own rank test
-  passed (KS p 0.479).
+  passed there (KS p 0.479) and failed in the calibration of the narrowing round on the same card, a
+  five-epoch round; neither reading decides anything at this size.
 
-Together they say that temperature is weakly informed in chi mode and nearly degenerate with n. The
-data inform it a little, so it is not left out of any test; its estimate is still not a measurement
-of the bath temperature, so every report marks it.
+The Jacobian column and the product n · T together say that temperature is weakly informed in chi
+mode and nearly degenerate with n, so its estimate is not a measurement of the bath temperature.
 
 **Reported as an assumed input.** On a box that declares T,
-`core.sim_config.SimConfig.assumed_params` is `("T",)`, and every report marks it: "(assumed input)"
-in the calibration's tables and the informativeness breakdown, "T (assumed input, K)" on the corner
-plot and in the posterior summary (`SimConfig.report_labels`;
-[What a run shows](window.md#what-a-run-shows)). It is still inferred, and it stays in the
-calibration verdict and in the joint coverage test
-([Reading calibration honestly](#reading-calibration-honestly) says why).
+`core.sim_config.SimConfig.assumed_params` is `("T",)`, and every report marks temperature as an
+assumed input ([What a run shows](window.md#what-a-run-shows) says where). It is still inferred, and
+it stays in the calibration verdict and in the joint coverage test whether or not the data inform it;
+[Reading calibration honestly](#reading-calibration-honestly) says why.
 
 **Records carry the constraint.** Every record written from a tier-1 configuration has, in its
 manifest's `config` block, a `"tier1"` entry (the relation, k_B in the cell's units and T's range)
@@ -729,8 +725,9 @@ data. Both are open, and so is the alternative of fixing T at 300 K for a 12-dim
 Three things follow:
 
 - **A FAIL is a result, not an error.** The calibration is written and returned all the same.
-- **Temperature is judged like every other parameter.** Its rank test is valid, and a temperature the
-  flow mis-models is a real flaw. It is marked, not excused.
+- **Temperature is judged like every other parameter** (`calibration_verdict`). Its rank test is
+  valid whether or not the data inform it, and a temperature the flow mis-models is a real flaw. It
+  is marked, not excused.
 - **Every verdict carries one caveat.** t_scale's rank test rests on the calibration's
   (t_scale, T_obs) operating points, 200 by default, not on its 2,000 datasets, because every
   dataset in a batch shares its batch's t_scale. It has less power than the others
@@ -796,10 +793,10 @@ each count is miscalibrated in compensating directions.
   `validate`.
 - Every repeat draws the same probe layout ([Open questions](#open-questions)).
 
-**Repeating a calibration.** `validate --seed` repeats one. Every draw runs on a stream derived from
-the seed and a fixed calibration tag (`core.rng.calibration_seed`), so the stream never replays the
-one a training run seeded with the same number started on. The repeat is bit for bit on the CPU, and
-not bitwise on a CUDA card, where a verdict at its threshold can differ.
+**Repeating a calibration.** `validate --seed` repeats one. Every draw but the chi probe layout runs
+on a stream derived from the seed and a fixed calibration tag (`core.rng.calibration_seed`), so the
+stream never replays the one a training run seeded with the same number started on.
+[validate](command-line.md#validate) says how exactly a repeat reproduces.
 
 ## Narrowing rounds
 
@@ -829,8 +826,8 @@ and the test that pins it. The reasoning:
 - **The observation-digest rule** (a round refuses unless the stored observation matches): a region
   deletes prior support for good, so it must be drawn around data that were recorded and are
   verifiably the same.
-- **The narrowed-model rule** (a narrowed posterior never loads or infers as a broad one): its flow
-  saw rows only inside its region, so anywhere else it extrapolates.
+- **The narrowed-model rule** (a narrowed posterior is marked as such and never loads or infers as a
+  broad one): its flow saw rows only inside its region, so anywhere else it extrapolates.
 - **The eigenbasis rule** (the region is cut in the rotation's leading directions, flat ones left
   full width): a box in the physical parameters would cut the barely constrained ones on noise, and
   deleted support never comes back. In the Fisher eigenbasis the posterior is close to
@@ -838,21 +835,17 @@ and the test that pins it. The reasoning:
 - **The unweighted-draws rule** (the region comes from unweighted posterior draws, not best fits):
   choosing the best fits applies a second, undeclared likelihood, with the discrepancy measure as a
   hidden setting.
-- **The generous-region rule** (a 99.9 % region, with the truth-outside rate watched): too wide a
-  region costs simulations, too tight a one deletes support no later round can recover. How often a
-  simulated truth falls outside is the honest failure rate.
+- **The generous-region rule** (a 99.9 % region, with the truth-outside rate watched): a region too
+  wide costs only simulations, one too tight deletes support for good, and the truths outside are
+  the honest failure rate.
 - **The cost-on-screen rule:** a round is a full simulation campaign, so its budget is on screen
   before it starts.
 - **The region-carries-its-basis rule** (the child reuses the parent's rotation, never recomputes it,
   skips directions loaded on t_scale, and names its base prior): the rotation is not reproducible
-  from one process to the next, so a box over the leading directions means nothing without the
-  rotation it was measured in. One round, drawn in one rotation and enforced in another, kept 0.01 %
-  of its parent posterior's mass and excluded the truth. The base prior is named because the box
-  restricts the parent's prior and no other.
+  from one process to the next, so a box means nothing outside the rotation it was measured in.
 - **The calibrate-on-the-region rule:** the flow converges to the posterior under the restricted
-  prior, so calibration draws from that prior; against the full prior the rank test would report a
-  miscalibration that is not one. A flat result certifies calibration on the region only, and cannot
-  tell whether the region cut real mass at the observation.
+  prior, so calibration draws from that prior, and a flat result certifies calibration on the region
+  only.
 
 **The t_scale override turns a box into a reweighting.** Every training batch shares one
 (t_scale, T_obs) pair from a stratified Sobol schedule, and overwrites each row's t_scale with it
@@ -861,8 +854,8 @@ after the draw (`core.SBI.pipeline.gen_training_data`).
 - Along a direction that loads on t_scale, that carries rows out of the box. The proposal becomes the
   smooth reweighting p(θ) · P(A | θ₋ₜ) / P(A), θ₋ₜ being every parameter but t_scale, and NPE does
   not correct a reweighting.
-- The box stays an exact restriction only when no truncated direction loads on t_scale, and becomes a
-  no-op when a truncated direction is the t_scale axis itself.
+- The box stays an exact restriction only when no truncated direction loads on t_scale, and its
+  interval along a direction that is the t_scale axis itself is a no-op.
 - So a direction whose |V[t_scale, j]| exceeds 1/√d, the root-mean-square entry of a random rotation
   (0.277 at d = 13), is left full width, and the next eligible direction is truncated instead
   (`core.SBI.truncate.t_scale_loading_max`). On the card run's tier-1 round the first direction
@@ -879,8 +872,8 @@ warning, never a refusal (`core.orchestrator.tsnpe_round`).
 **Every round reports its truth, inside and outside.** A round drawn around an observation simulated
 from a cell reports, for every truncated direction, where the truth lies against the interval
 (`core.SBI.truncate.TruncationRegion.containment`), and records the answers in the new posterior's
-`training.truth_containment`; a truth outside also warns. Each round's answer is kept, and a rate
-across rounds is not. The round also prints how many of its recorded training targets lie inside the
+`training.truth_containment` ([tsnpe](command-line.md#tsnpe) lists what the round records and warns).
+Each round's answer is kept, and a rate across rounds is not. The round also prints how many of its recorded training targets lie inside the
 region after the t_scale override, beside the fraction the rejection sampler accepted before it.
 
 **The −log P(A) inflation is printed, not corrected.** A narrowed posterior's informativeness is
@@ -898,19 +891,19 @@ each.
 n, temp (the adaptation motors' temperature relative to the bath, 1 being thermal) and tau_c appear
 in no drift term.
 
-- n and temp enter only the noise amplitudes of the bundle and adaptation rows, √(2/(n·beta)) and
-  √(2·temp/(n·beta·lam)).
-- tau_c enters only the calcium row's, √(2·tau_c·p·(1 − p)/n)/tau.
+- n enters all three noise amplitudes: the bundle row's √(2/(n·beta)), the adaptation row's
+  √(2·temp/(n·beta·lam)) and the calcium row's √(2·tau_c·p·(1 − p)/n)/tau.
+- temp enters only the adaptation row's, and tau_c only the calcium row's.
 - The observable is state column 0, the bundle's displacement.
 
 So the data see these three only as latent noise propagating into the displacement. No retraining,
 feature repair or reparameterisation gives them a handle the observable lacks. In the August 2026
 retrain they dominated the three least-constrained directions
 ([The August 2026 retrain](#the-august-2026-retrain)). What could reach them is a different
-observation: replicate recordings, the thermal tail or new drive protocols
-([Open questions](#open-questions)). On the tier-1 box n gains a second route, through the derived
-force scale, which it shares with the bath temperature T as the product n · T
-([The tier-1 constraint and temperature](#the-tier-1-constraint-and-temperature)).
+observation: replicate recordings for all three, and the thermal tail's level for n
+([Open questions](#open-questions)). On the tier-1 box, in forced and chi mode, n gains a second
+route, through the derived force scale, which it shares with the bath temperature T as the product
+n · T ([The tier-1 constraint and temperature](#the-tier-1-constraint-and-temperature)).
 
 **The Fisher analysis is measured on clean features.** The rotation, its eigenvalues and the
 directions `identifiability rotation` decomposes come from a Jacobian standardised by feature noise
@@ -925,10 +918,13 @@ standardisation that the conditioning repair replaced ([Conditioning features](#
   never held.
 
 **A clean loss plateau reads as a limit in the data.** Train and validation losses that track each
-other and plateau well before early stopping say the wide marginals are an identifiability limit, not
-under-fitting, as in the August 2026 retrain. Not for every axis: for t_scale, T_obs and the probe
-design, whose effective sample size is the batch count, a plateau says nothing about convergence
-([Open questions](#open-questions)).
+other and plateau well before the best epoch, the validation loss no longer descending as it nears
+its best, say the wide marginals are an identifiability limit, not under-fitting
+(`core.Helpers.visualizers.plot_training_loss`), as in the August 2026 retrain. The epochs between
+the best one and the stop show no improvement by construction, so they are not the plateau to read.
+Not for every
+axis either: for t_scale, T_obs and the probe design, whose effective sample size is probably the
+batch count, a plateau may say nothing about convergence ([Open questions](#open-questions)).
 
 ## The August 2026 retrain
 
@@ -936,16 +932,20 @@ The last full chi retrain before the conditioning repair and the tier-1 box: 5,0
 rows, 10.24 million simulations, finished on 23 August 2026. It ran on the master box with f_scale
 inferred, at the chi band, drive and lock-in ceiling that [Chi probe design](#chi-probe-design)
 settles, with six probes supplied into twelve slots. Its artifacts no longer exist, so none of this
-can be re-run; the numbers stand as a record.
+can be re-run; the numbers stand as a record. A second run, 10,000 × 2,048 on the master box with the
+repaired conditioning, completed on 29 August 2026 and was never characterised: no calibration or
+informativeness exists for the repaired features, and its artifacts are gone too.
 
-- **Calibration was excellent.** The SBC rank histograms were flat on all 13 parameters, and the rank
-  CDFs and TARP sat on the diagonal.
+- **Calibration was excellent.** The SBC rank histograms were flat on all 13 parameters, t_scale's
+  on fewer independent values than the rest
+  ([Reading calibration honestly](#reading-calibration-honestly)), and the rank CDFs and TARP sat on
+  the diagonal.
 - **Prediction was over-dispersed.** The posterior predictive check covered 99.1 % at a nominal 90 %
   (mean |z| 0.490), and its 95 % band was 2 to 3 times the observation's envelope. The intervals were
   honest and far too wide.
 - **The loss ruled out under-fitting.** Train and validation loss tracked each other and plateaued
   from about epoch 90; the best validation loss came at epoch 110, and training stopped at 130 on its
-  20-epoch patience. A clean plateau well before early stopping points to an identifiability limit,
+  20-epoch patience. A clean plateau well before the best epoch points to an identifiability limit,
   not to too few epochs.
 - **t_scale alone is the best-constrained direction**, with nothing else loading above 0.02.
   - k loads on the second and fifth directions (with s and f_max on the second, beta and s on the
@@ -954,8 +954,9 @@ can be re-run; the numbers stand as a record.
     ([Identifiability limits](#identifiability-limits)).
   - The eigenvalues were not stored, so this is an ordering and a set of loadings without a scale:
     whether the best direction is ten or a million times better constrained than the worst cannot be
-    recovered. Every rotated posterior now records them, under `"fisher_eigenvalues"`, in its
-    simulation cache's header and in its own record.
+    recovered. A rotated posterior now records them in its own record, and a simulation cache keeps
+    them in its header under `"fisher_eigenvalues"`, so a resume carries them. One resumed from an
+    older cache, or a narrowing round whose parent has none, records them as unknown.
 - **Eigenvectors are columns.** V holds one direction per column (w = z @ V), and
   `core.SBI.reparam.rotation_of` is the one place that convention is decoded. This run's rotation was
   first read from a copy saved transposed, which has the same shape and is just as orthogonal, so
@@ -975,9 +976,9 @@ can be re-run; the numbers stand as a record.
 The solver replays its Euler–Maruyama step loop from captured CUDA graphs by default
 (`core.config.SOLVER_CUDA_GRAPHS`;
 [The solver, CUDA graphs and reproducibility](architecture.md#the-solver-cuda-graphs-and-reproducibility)).
-Measured on the card (an RTX 5070 Ti, a batch of 2,048, 100,000 steps), it runs 123,349 steps/s
-against 12,639 for the eager loop, about ten times faster. Two checks stand behind trusting it with
-the physics:
+Measured in August 2026 on the card (an RTX 5070 Ti, a batch of 2,048, 100,000 steps), it ran
+123,349 steps/s against 12,639 for the eager loop, about ten times faster. Two checks stand behind
+trusting it with the physics:
 
 - **A bitwise test, with the noise off.** `test_the_cuda_graph_step_matches_the_eager_step_bitwise`
   (gpu-marked) integrates a Nadrowski model with every noise channel zeroed and a time-varying drive,
@@ -1021,17 +1022,19 @@ degeneracy.
 an absolute reading of those scales, and no feature takes it: every Group B feature is a ratio or a
 fraction, normalised by the spectrum's own frequencies or power, so the spectral block is blind to
 the tail's level. The proposal is one new feature, the mean of log(ω² S_X(ω)) over about a decade
-above the corner, with a valid flag for rows whose tail is unresolved. It pairs with tier 1, whose constraint
-is what makes the prefactor absolute. What would settle it: add the feature and read its handles in
-the degeneracy map; a change to the feature set forces a full re-simulation.
+above the corner, with a valid flag for rows whose tail is unresolved. It pairs with tier 1, whose
+constraint is what makes the prefactor absolute. What would settle it: add the feature and read its
+handles in the degeneracy map; a change to the feature set forces a full re-simulation.
 
 **The strata test.** Every row of a training batch shares one t_scale, T_obs and probe set, so along
 those axes the effective sample size is probably the batch count (5,000 at the August 2026 retrain,
-10,000 at the next), not the row count, 2,048 times smaller. If so, a clean loss plateau says nothing
-about whether those axes converged. The test: train 5,000 × 2,048 and 10,000 × 1,024, the same
-10.24 million rows over 5,000 and over 10,000 operating points, and compare t_scale's rank test and
-posterior width ([The solver's physics check](#the-solvers-physics-check) has count against width).
-It needs its own simulation.
+10,000 at the next), not the row count, which is 2,048 times larger. If so, a clean loss plateau says
+nothing about whether those axes converged. The test: train 5,000 × 2,048 and 10,000 × 1,024, the
+same 10.24 million rows over 5,000 and over 10,000 operating points, and compare t_scale's rank test
+and posterior width ([The solver's physics check](#the-solvers-physics-check) has count against
+width). With today's tool each arm keys its own simulation cache, so the test needs its own
+simulation, although both arms are subsets of a 10,000 × 2,048 cache's rows: a way to train on part
+of a cache would run it without simulating.
 
 **New observables: a step for k, intermodulation for the nonlinearity.** Only after the M-replicate
 study.
@@ -1039,8 +1042,8 @@ study.
 - For k, a step or force-clamp transient. A transient never meets the wall at about 30 drive cycles
   ([Chi probe design](#chi-probe-design)), because that wall belongs to a steady-state lock-in.
 - For the parameters that shape the model's nonlinearity (delta_E and beta in the channels' open
-  probability, s in the calcium feedback on the motor force), two-tone intermodulation at 2ω₁ − ω₂,
-  with both drives inside the sub-resonance band. The measured frequency is not driven, which avoids
+  probability, and f_max and s in the motor force and its calcium feedback, which set where on it the
+  bundle sits), two-tone intermodulation at 2ω₁ − ω₂, with both drives inside the sub-resonance band. The measured frequency is not driven, which avoids
   entrainment, and the product's amplitude reads the nonlinearity directly.
 
 Nothing in the tool measures either. Settling each means simulating the protocol and reading its
@@ -1053,12 +1056,14 @@ differ only there, compared by informativeness, would settle it.
 
 **Tiers 2 and 3, and fixing T.** Tier 2 would take x_scale from the instrument's calibration and the
 sampling interval and recording length from the protocol; tier 3 would restrict the prior to the Ω₀
-band a preparation actually produces, recorded as derived from data. Neither is built. The
+band a preparation actually produces, recorded as derived from data. Neither is built. Tier 2 needs
+the lab's calibration of its displacement measurement (a bead or photodiode calibration) and its
+recording protocol; tier 3 needs Ω₀ measured across a population of the preparation's cells. The
 alternative to tier 1's inferred temperature is to fix T at 300 K and infer 12 parameters: a cleaner
 reading, since T is weakly informed and nearly degenerate with n
 ([The tier-1 constraint and temperature](#the-tier-1-constraint-and-temperature)), and a larger
-change. The retrain's own measurement would settle it: how far temperature's marginal moves from its
-prior, read in the informativeness breakdown.
+change. The retrain's own measurement would settle it: how much temperature's marginal narrows
+against its prior (its line in the informativeness breakdown), and where the truth falls in it.
 
 **The stability screen's two gaps.** The census accepts points on half the stability duration, and
 they seed the flood-fill's accepted set without being screened again; the walk can also step outside
@@ -1083,8 +1088,8 @@ override, and a test with a known answer like the one that pins the truncated-pr
 
 **The batch-by-scale t_scale override.** Training draws one (t_scale, T_obs) pair per batch and
 overwrites every row's t_scale with it ([Narrowing rounds](#narrowing-rounds)). It is why
-t_scale-loaded directions cannot be truncated, and why t_scale's effective sample size is the batch
-count. A schedule that respected a round's region along those directions would let them be cut.
+t_scale-loaded directions cannot be truncated, and why t_scale sees only one value per batch. A
+schedule that respected a round's region along those directions would let them be cut.
 Settling it means changing how batches draw their t_scale, and showing, with the post-override
 containment a round already prints, that the recorded training targets stay inside the box.
 
@@ -1109,14 +1114,15 @@ noise, stops moving.
   looking at them decides whether a prior screen is right for them;
 - the wander of the bundle's response over tens of drive cycles, inferred from re-locking the same
   traces, whose mechanism is untested; phase diffusion of the free-running oscillation is the
-  candidate.
+  candidate, and comparing how fast the undriven oscillation's phase scatter grows with how fast the
+  lock-in wanders, over the same lengths, would test it.
 
-**Clarity against the whole band.** `probes drive` counts the undriven cell as an oscillation when
-the power of its spectrum's highest bin above zero frequency, over the median power of the whole
-band, reaches the clarity threshold, 3 by default (`core.diagnostics.probes`).
+**Clarity against the whole band.** [probes drive](command-line.md#probes-drive) counts the undriven
+cell as an oscillation when the power of its spectrum's highest bin above zero frequency, over the
+median power of the whole band, reaches the clarity threshold (`core.diagnostics.probes.probe_drive`).
 
 - An overdamped, low-pass spectrum has its power at low frequency and its median far down the tail,
-  so its highest bin can clear 3 with no oscillation at all.
+  so its highest bin can clear the threshold with no oscillation at all.
 - The one guard that catches it is the window's reach: a drive less than one frequency bin from the
   own-peak window is not judged. That fires only when the maximum sits in the lowest bins (the lowest
   seven, at the default detune and window), so it catches a monotone low-pass spectrum, whose maximum
@@ -1142,9 +1148,10 @@ allows one probe, while the window's Config tab refuses fewer than two, and trai
 two per batch (`core.config.CHI_K_MIN_TRAIN`). Training rows do end with a single live probe, since
 half of each batch's rows keep only a random number of their live probes
 (`core.SBI.chi_probes._subset_probe_rows`), and a one-probe simulated observation puts its probe at
-the band's low edge. Whether such an observation is in distribution is not established. If it is
-not, a floor of 2 in the configuration's check would close it; the bench path, which rightly takes a
-single recording, never re-runs that check.
+the band's low edge. Whether such an observation is in distribution is not established;
+`sbc --chi-k-fixed 1`, the rank test on one-probe calibration sets, would say
+([sbc](command-line.md#sbc)). If it is not, a floor of 2 in the configuration's check would close
+it; the bench path, which rightly takes a single recording, never re-runs that check.
 
 **Truncating every direction.** A round may ask for as many directions as the posterior's latent
 width, and is refused only above that. It then truncates every direction the t_scale rule allows,
