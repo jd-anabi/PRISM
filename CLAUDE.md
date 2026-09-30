@@ -37,11 +37,16 @@ what is on disk, the last gate). Update it at the end of every session.
 
 - pytest. Fast gate: `pytest -m "not slow"` (the recorded one-process target is 16 minutes, piece-3
   spec §8.4). Full: `pytest` (never timed in one process; the two halves at the piece-5 gates were
-  14 min 42 s + 38 min 6 s, so budget about 55 minutes. The slow set is three tests: the chi
-  full-pipeline test in `tests/test_user_sbi.py` (1397 s), and in `tests/test_tool.py` the
-  Nadrowski sanity-path run `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (562 s) and the
-  FDT/crossval tiny-size run `test_fdt_and_crossval_run_at_tiny_size` (323 s), 38 min 6 s at
-  `c29320c`; the slow set alone is `pytest -m slow`). Count: `pytest --collect-only -q`.
+  14 min 42 s + 38 min 6 s, so budget about 55 minutes. The slow set is five tests: the chi
+  full-pipeline test `test_chi_mode_full_sbi_pipeline` in `tests/test_user_sbi.py` (1397 s), in
+  `tests/test_tool.py` the Nadrowski sanity-path run
+  `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (562 s) and the FDT/crossval tiny-size run
+  `test_fdt_and_crossval_run_at_tiny_size` (323 s) — 38 min 6 s for those three at `c29320c` — the
+  tier-1 tiny `smoke` `test_smoke_runs_every_stage_on_the_tier1_box` in `tests/test_tier1.py`
+  (timed at the final gate) and the probes twin-cell check
+  `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` in
+  `tests/test_diagnostics.py` (timed at the final gate); the slow set alone is `pytest -m slow`).
+  Count: `pytest --collect-only -q`.
 - Markers: `slow`; `gpu` (skipped when CUDA is absent); `display` (skipped offscreen). The
   display-marked tests run on the real screen with `QT_QPA_PLATFORM=windows pytest -m display`
   (the root conftest only DEFAULTS the variable); they create hidden native windows, nothing shows.
@@ -112,8 +117,8 @@ what is on disk, the last gate). Update it at the end of every session.
   measurement, not a failure). Against an empty scratch store: `probes band @B @C` and `probes drive
   @B @C`. Against `$S/smoke`: `probes mask @B --prior smoke_prior`. Each exits 0 and writes one
   record under `diagnostics/`. Delete `$S` afterwards.
-  The last result, with its stage timings, is in `docs/STATE.md`'s gate table; STATE carries this
-  block verbatim under that table ("The GPU gate, as command lines").
+  The last result, with its stage timings, is in `docs/STATE.md`'s gate table; that table and
+  `docs/guide/testing.md` carry this block verbatim.
 - A foreground `python` check that imports torch and touches the prior or checkpoint machinery
   can hang the tool call for good. Write such checks to a script and run them with a timeout.
 - Do not pipe large Python or Markdown through a bash heredoc (`cat <<EOF`); it dies on
@@ -132,6 +137,14 @@ what is on disk, the last gate). Update it at the end of every session.
   the converted modules no message names a box, tab, flag or button. Stage messages are
   `logging` records at info/warning/error; never print or log between steps 1 and 3 of a
   checkpoint save.
+- Nothing shippable cites the working record (piece 6, H4): no file under `core/` or `tests/`, nor
+  `conftest.py`, `README.md`, `requirements.txt`, `pytest.ini`, `run.bat`, `run.sh` or
+  `docs/guide/`, may cite the handoff, `docs/STATE.md`, this file, the specs or the plans, or their
+  labels (piece numbers, "§N", decision, ruling and review ids, "Task N", trap ids, walkthrough row
+  ids). A provenance tag is deleted; a reason given by reference is written out in words.
+  `tests/test_source_hygiene.py` enforces it; a legitimate new token shaped like a label (a paper's
+  section, a new feature id) gets an allowlist entry there in the commit that introduces it. The
+  working record may cite code and each other; no test or code reads it.
 - The inference tabs remember SELECTIONS — the pickers, the mode, and the boxes that describe the
   recording (the three observation lengths, the physical drive amplitude `Drive F₀ (N)`, the
   recording paths) — plus the training budget (piece 3, V5). Every science knob opens at
@@ -166,8 +179,9 @@ what is on disk, the last gate). Update it at the end of every session.
   `Artifacts/` path (a test pins it). The old `Resources/{Priors,Posteriors,Checkpoints,Observations,
   Plots,CrossValidation,ReductionMap}` trees were deleted by the clean-break runbook on 2026-09-11
   (design spec §9); `Resources/` holds only the four input folders and `Artifacts/` started empty.
-- The science guardrails are in `PRISM_HANDOFF.md` §11.6 (TSNPE) and the traps in §5; the
-  handoff is being split into `docs/` by piece 6 but is still the reference until then.
+- The narrowing-round safety rules (where each is enforced and the test that pins it) and the traps
+  that still bite are in `docs/guide/rules-and-traps.md`; the reasoning behind the science settings
+  is in `docs/guide/science.md`. The handoff they were written from is archived (see `docs/STATE.md`).
 - Git: work directly on the local `main` branch — no feature branches, no worktrees (decided
   2026-09-11 after piece 1's merge). Claude makes the local commits, one per logical step, never
   amended, ending with the Co-Authored-By line the harness provides. Commit messages are SHORT:
@@ -187,19 +201,28 @@ what is on disk, the last gate). Update it at the end of every session.
 - `.superpowers/sdd/<date>-<slug>/` — a piece's gitignored execution workspace: the ledger
   (`progress.md`), the task briefs and reports, the review reports and the per-task gate logs.
   Piece 2 is `2026-09-12-one-flow`, piece 3 `2026-09-16-validation-and-logging`, piece 5
-  `2026-09-22-secondary-analyses`. Untracked, so no git command finds them.
+  `2026-09-22-secondary-analyses`, piece 6 `2026-09-25-documentation-and-retrain-readiness`.
+  Untracked, so no git command finds them.
 - `docs/checklists/display-walkthrough.md` — GUI features never exercised on a real screen.
-- `tests/` — the nineteen suites (`test_artifact_store.py` is the store's, `test_tool.py` the
-  command-line tool's, `test_diagnostics.py` the five diagnostics', `test_refusals.py` the
-  torch-free rules', tables' and run-buffer's, `test_artifact_browser.py` the artifact browser's,
-  `test_fdt_compare.py` the comparison facility's; `_fixtures.py` holds the shared stand-ins, the
+- `docs/guide/` — the reader pages, starting at its `README.md`: getting started, the window, the
+  command line, bringing recordings, the science, the architecture, the rules and traps, testing,
+  and the retrain runbook. They cite no working document (the source scan walks them), and each
+  opens with the commit it was checked against.
+- `tests/` — the twenty-two suites (`test_artifact_store.py` is the store's, `test_tool.py` the
+  command-line tool's, `test_diagnostics.py` the diagnostics' (the five and the three `probes`
+  modes), `test_refusals.py` the torch-free rules', tables' and run-buffer's,
+  `test_artifact_browser.py` the artifact browser's, `test_fdt_compare.py` the comparison
+  facility's, `test_source_hygiene.py` the reference scan over the shippable files, `test_tier1.py`
+  the tier-1 box's path, and `test_docs.py` the guide's links and the command-line page against the
+  parser; `_fixtures.py` holds the shared stand-ins, the
   tiny real prior+posterior, `build_fdt_record` (a single-cell or sweep `fdt` record, finished or
   not, written in seconds) and `compare_preflight_refusals` (every comparison refusal made after
   the records are read, shared by the API's and the tool's tests), and `CODE_ROOTS` plus
   `CODE_FILES`, the directories and top-level files the source scans walk); `core/Reduction/tests/`
   — the reduction map's (out of scope).
 - `core/tool/` — the command-line tool: `python -m core --help` lists every subcommand (the stages
-  `prior train validate infer tsnpe`, the diagnostics `sbc identifiability ablation`, plus `smoke`,
+  `prior train validate infer tsnpe`, the diagnostics `sbc identifiability ablation probes`
+  (band/mask/drive), plus `smoke`,
   `fdt`, `crossval`, `compare` (cells/repeats/renormalise/sweeps) and `artifacts`
   (list/show/note/rm/sweep/summary)); `fdt` and `crossval` take `--store-root`, `--seed`, `--name`
   and `--note`, and a `crossval` study's two records are named `<name>-s` and `<name>-temp`.
