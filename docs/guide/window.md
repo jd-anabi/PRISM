@@ -22,7 +22,8 @@ every screen opens the appearance menu and, through **Full settings…**, the Se
 | Simulate | Live simulation | a live view of a cell's hair-bundle motion, streamed as it is simulated, which **Save video…** writes to an animation |
 | Artifacts | none: one screen | browses the record store, as [Browsing the store](getting-started.md#browsing-the-store) describes |
 
-Two screens are reached from Settings rather than from Home:
+Two more screens are not on Home: the gear's **Full settings…** opens Settings, and Settings opens
+the model builder.
 
 - **Settings**: the appearance (Follow system, Light, Dark or Auto (time of day), the Windows accent
   colour, the Inter font), the list of user-defined models with **Open model builder**, **Edit** and
@@ -119,12 +120,12 @@ Each tab has a log pane, a progress pane and the run's figures, which appear as 
   its recorded seed to the command line's `validate --seed N`
   ([validate](command-line.md#validate)). The log ends on the stage's `[verdict]` record: a head line
   with PASS or FAIL, the rule and the seed; one row per inferred parameter with its rank test's KS p
-  and whether it passes, temperature marked "(assumed input)" on a box that infers it; the joint
-  coverage row; and a caveat about t_scale's test. The tab then adds its own line naming the verdict
-  and the seed it drew. A FAIL is a result, not an error.
+  and whether it passes, temperature marked "(assumed input)" on a box that declares temperature
+  in place of the force scale; the joint coverage row; and a caveat about t_scale's test. The tab
+  then adds its own line naming the verdict and the seed it drew. A FAIL is a result, not an error.
 - **Infer** logs a summary of the posterior (the 5 %, 50 % and 95 % quantiles of each parameter) and
-  draws a corner plot; on a box that infers temperature, both mark it "T (assumed input, K)"
-  (`core.sim_config.SimConfig.report_labels`). [The tier-1 constraint and
+  draws a corner plot; on a box that declares temperature in place of the force scale, both mark it
+  "T (assumed input, K)" (`core.sim_config.SimConfig.report_labels`). [The tier-1 constraint and
   temperature](science.md#the-tier-1-constraint-and-temperature) explains why.
 - **TSNPE**, for a round drawn around an observation simulated from a known cell, logs for every
   truncated direction whether the cell's truth lies inside or outside the region, with its interval,
@@ -132,12 +133,12 @@ Each tab has a log pane, a progress pane and the run's figures, which appear as 
 
 ## The inference settings
 
-Every setting on these tabs reaches its stage as a keyword argument, never as an assignment to a
+Every setting on these tabs reaches its stage as an argument, never as an assignment to a
 `core.config` constant. `core.orchestrator` imports the constants by name when it is first imported,
 so assigning a new value to one afterwards would change nothing, and the run would use the default
 without a word. The VRAM ceiling is the one exception, described after the table.
 
-In the table, **flag** is the command-line tool's flag; **argument** is the keyword that receives
+In the table, **flag** is the command-line tool's flag; **argument** is the parameter that receives
 the value: a stage's in `core.orchestrator`, `core.cli.make_sim_config`'s for a setting that shapes
 the configuration, or a field of `core.SBI.observations.RecordingSet` for a recording. **Default**
 is the value a box opens at and a flag falls back to: `core/config.py`'s constant, or, where there
@@ -147,7 +148,7 @@ simulation cache instead of resuming the old one.
 
 | tab | field | flag | argument | default | what it really changes |
 |---|---|---|---|---|---|
-| Config | Model | `--model` | `make_sim_config(model)` | window: NADROWSKI; tool: the bounds file's folder name, upper-cased | Which model's equations are simulated and inferred. Applying a different one starts a new session. |
+| Config | Model | `--model` | `make_sim_config(model)` | window: NADROWSKI; tool: the bounds file's folder name, upper-cased | Which model's equations are simulated and inferred. Each press of **Apply model & options** starts a new session, even with the same model; when the session holds work it asks first ([the dialogs](#the-dialogs)). |
 | Config | Units | none: the tool always reads the model's units file | `make_sim_config(units_override=)` | the model's units file | Declares what the numbers in the bounds and cell files mean. It never converts them, so a change reinterprets the files rather than rescaling them. Part of the cache's identity. |
 | Config | Multi-frequency χ(ω) conditioning | `--chi` / `--no-chi` | `make_sim_config(chi_mode=)` | off | Chi mode: an observation is a passive recording plus single-tone driven recordings, and the network conditions on the χ(ω) curve they give. Training takes about (K+1)/2 times as long for K probes, and a posterior loads only in the mode it was trained in. |
 | Config | χ probes per observation | `--chi-k` | `make_sim_config(chi_n_freqs=)` | 6 | The probes one observation is measured at: the number a simulated observation gets, the number the Fisher rotation is computed with, and the number of probe rows the Infer tab starts with. Training draws its own count for every batch, so a posterior accepts any count up to its slots. The Config tab accepts 2 up to the slots. |
@@ -159,7 +160,7 @@ simulation cache instead of resuming the old one.
 | Config | VRAM ceiling per batch (GiB, 0 = off) | none: the `PRISM_VRAM_CEILING_GIB` environment variable | none: the field sets `core.config.SIM_VRAM_CEILING_GIB` | 0 (off) | A hard ceiling on the card memory one simulation batch may plan to hold. See below the table. |
 | Prior | Bounds | `--bounds` | `make_sim_config(bounds_file)`; with **Edit values**, `bounds_dicts=` | none | Which parameters are inferred, in what order and over what box, and so the observation mode. **Edit values** starts from the selected file and lets you change only the numbers. |
 | Prior | Prior | `--prior` on `train`; `prior` always builds | `build_prior(ref, build_new)` | (from scratch) | A saved prior to load, or "(from scratch)" to build one. Choosing an entry does nothing until **Build / Load prior**. |
-| Prior | Global rounds | `--num-iterations` | `build_prior(num_iterations=)` | 50 | The rounds of the global census; the candidates screened are the rounds times the candidates per round, and each round integrates one full stability trajectory, so rounds cost time. |
+| Prior | Global rounds | `--num-iterations` | `build_prior(num_iterations=)` | 50 | The rounds of the global census; the candidates screened are the rounds times the candidates per round, and each round integrates its candidates over the first half of the Stability duration (the flood-fill integrates the whole of it), so rounds cost time. |
 | Prior | Candidates per round (0 = auto) | `--sweep-batch` | `build_prior(sweep_batch=)` | 0: the hardware batch | Not a speed dial: see [below](#settings-that-are-not-speed-dials). |
 | Prior | Max accepted sets | `--max-sets` | `build_prior(max_sets=)` | 175000 | The accepted sets that stop the flood-fill: the point cloud the prior is fitted to. Not a speed dial. |
 | Prior | Random-walk step | `--walk-step` | `build_prior(walk_step=)` | 0.01 | The size of the flood-fill's random step, in the parameters' own units: the same absolute size for every non-dimensional parameter, not a fraction of each one's range. Too small and the walk never leaves its seed points; too large and it steps across the stable region instead of tracing it. |
@@ -217,9 +218,8 @@ otherwise Windows pages the batch into shared system memory and it runs up to ni
 nothing in the log to say why. Set it to about the free memory `nvidia-smi` reports, minus about
 1 GiB for the CUDA context; 0, the default, is right on an idle card. On the command line the same
 ceiling is the `PRISM_VRAM_CEILING_GIB` environment variable, which the planner reads in the same
-way; when it is set it wins over the field, and the note under the field says so. The field is never
-remembered: it opens at `core/config.py`'s 0 on every launch, or at the environment variable's value
-when that is set.
+way; when it is set it wins over the field, and the note under the field says so. The field opens
+at the environment variable's value when that is set, else at 0.
 
 ## Settings that are not speed dials
 
@@ -228,15 +228,16 @@ or the measurement. [The prior](science.md#the-prior) and
 [Reading calibration honestly](science.md#reading-calibration-honestly) give the science behind them.
 
 - **Candidates per round** (Prior tab, `--sweep-batch`). The global census runs a fixed number of
-  rounds (Global rounds), and each round integrates one full stability trajectory whatever its
-  width, so a narrower round screens fewer candidates in about the same time. Half this number is
-  also the batch of the local flood-fill, which runs until Max accepted sets are accepted. Shrinking
-  it makes the prior worse without making it faster: measured, a prior build took 527 s at 2,048
-  candidates per round, and at 32 it was still unfinished after more than 70 minutes.
+  rounds (Global rounds), and each round integrates its candidates over the first half of the
+  Stability duration whatever the round's width, so a narrower round screens fewer candidates in
+  about the same time. Half this number is also the batch of the local flood-fill, which runs until
+  Max accepted sets are accepted. Shrinking it makes the prior worse without making it faster:
+  measured, a prior build took 527 s at 2,048 candidates per round, and at 32 it was still
+  unfinished after more than 70 minutes.
 - **Stability duration** (Prior tab, `--stability-units`). How long, in non-dimensional time units,
-  the screen integrates each candidate. It defines what "stable" means: a longer screen rejects
-  slow instabilities that a shorter one accepts, so it moves the prior's support, not only the time
-  the sweep takes.
+  the flood-fill integrates each candidate; the census integrates the first half of it. It defines
+  what "stable" means: a longer screen rejects slow instabilities that a shorter one accepts, so it
+  moves the prior's support, not only the time the sweep takes.
 - **Min cluster size and Min samples** (Prior tab, `--min-cluster-size`, `--min-samples`). HDBSCAN
   clusters the accepted point cloud, and the number of clusters it finds is passed straight to the
   Gaussian mixture as its component count (`core.SBI.Priors.prior.Prior.construct_prior`), so these
@@ -304,7 +305,7 @@ an older build wrote and this one does not read is ignored, never restored.
 
 On the Parameter Inference tabs, then, the window remembers selections (the pickers, the model, the
 units, the chi and rotation ticks), the boxes that describe a recording, and the training budget;
-every other setting opens at its `core/config.py` value on every launch. The reasons, one per rule:
+every other setting opens at its default on every launch. The reasons, one per rule:
 
 - **A science setting on the inference tabs is never remembered**, because a remembered one
   outlives a change to `core/config.py`: a chi band retired in `core/config.py` was once restored
