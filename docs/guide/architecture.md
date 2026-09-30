@@ -47,7 +47,7 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   inputs root, and which screens accept a user model (`is_sbi_user_model`, `fdt_support`).
 - `forcing.py`: the drive builders (`build_nondim_force_tensor`, `build_nondim_sin_force_tensor`,
   `build_user_force_tensor`), the zero drive, the drive-channel rule (`n_force_channels`) and the
-  check that refuses an inferred rescale index (`require_simulator_index`).
+  check that raises `RuntimeError` on an inferred rescale index (`require_simulator_index`).
 - `progress.py`: `SOLVER`, the step counter the solver publishes and the window's solver meter reads.
 
 ### `core/SBI`
@@ -99,21 +99,21 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 
 ### `core/Simulator`, `core/Solvers` and `core/Models`
 
-- `Simulator/simulator.py`: `Simulator`, which integrates a batch segment by segment and picks the
-  eager or the graphed solver, and `SimulationError`.
+- `Simulator/simulator.py`: `Simulator`, which integrates a batch segment by segment and picks
+  `euler` or `euler_compiled`, and `SimulationError`.
 - `Simulator/nadrowski_simulator.py`: binds the Nadrowski parameter columns, by position, to
   `NadrowskiModel`.
 - `Simulator/hopf_simulator.py`: the same for `HopfModel`.
 - `Simulator/bp_simulator.py`: the same for the BP model, choosing the full or the steady-state form
   by the number of parameters.
 - `Simulator/user_simulator.py`: the same for a user model.
-- `Solvers/sdeint.py`: the Itô Euler–Maruyama solver: an eager loop, and a TorchScript step
-  replayed from CUDA graphs.
+- `Solvers/sdeint.py`: the Itô Euler–Maruyama solver: a plain Python loop (`euler`), and a
+  TorchScript step (`euler_compiled`) replayed from CUDA graphs where it can be.
 - `Models/nadrowski_model.py`: the Nadrowski model's drift and noise, and its TorchScript step
   (`compiled_step`).
 - `Models/hopf_model.py`: the same for the Hopf normal form.
-- `Models/bp_model.py`: the BP model in full; it has no TorchScript step, so BP runs the eager loop
-  on every device.
+- `Models/bp_model.py`: the BP model in full; it has no TorchScript step, so BP runs the plain Python
+  loop on every device.
 - `Models/bp_model_steady.py`: the BP model with its fourth time constant at zero.
 - `Models/user_model.py`: a user model: its equations parsed with sympy into a torch model that meets
   the solver's contract.
@@ -257,7 +257,8 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `model_store.py`: saving and loading user models.
 - `visualizers.py`: shared plotting: `save_figure`, the predictive-check, overlay and loss figures,
   and `emit_figure`.
-- `fdt.py`: older numpy helpers for spectra and the lock-in; nothing in `core` imports it.
+- `fdt.py`: two old torch helpers (`gen_freqs`, `force`) above a disabled block of numpy spectrum
+  and lock-in helpers; nothing in `core` imports it.
 - `model_helpers.py`: rescaling helpers; nothing in `core` imports it.
 
 ### `core/Reduction`
@@ -276,33 +277,45 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 
 - **`core.SBI.pipeline` is a façade.** Its extracted siblings (`train`, `prior_screen`,
   `chi_probes`, `summaries`, and the sine drive builder from `core.forcing`) are re-imported at the
-  end of the module, so every consumer reaches them as `pipeline.<name>` and a test that rebinds
-  `pipeline.<name>` changes the object the code reads at call time. The same load-bearing re-export
-  holds in `core/config.py` (its re-export of `SimConfig`), `core/gui/panels/inference_tabs.py`, the
-  end of `core/orchestrator.py` (the bench-recording builders) and `core/diagnostics/rng.py`.
-  Removing a re-import that looks redundant fails silently: a patch stops landing, so tests go slow
-  or quiet, not red.
+  end of the module, because tests rebind names on it: a test that rebinds `pipeline.<name>` changes
+  what code reads through the module at call time, and nothing else. So every consumer must read
+  these names as `pipeline.<name>`, and the siblings call back through the module object
+  (`_pipeline.<name>`), never through a `from` import. A consumer that bypasses the seam fails
+  silently: the patch stops landing, and tests go slow or quiet, not red. Deleting a re-import
+  outright fails loudly (an `ImportError` or `AttributeError`), with one exception: Settings reads
+  `core/gui/panels/inference_tabs.py`'s `HELP` by string path and skips it when it is absent. The
+  same re-export pattern holds in `core/config.py` (its re-export of `SimConfig`), in
+  `inference_tabs.py`, at the end of `core/orchestrator.py` (the bench-recording builders, which the
+  suites patch there) and in `core/diagnostics/rng.py`.
 - **Reduction is not used by inference.** Only the Reduction Map panel imports `core.Reduction`.
 
 ## Stages and compositions
 
-**The flow.** A bounds file, a cell file and a units file become one configuration, and four stages
-in `core.orchestrator` run on it in order:
+**The flow.** A bounds file and a units file become one configuration, and four stages in
+`core.orchestrator` run on it in order:
 
 ```
-bounds + cell + units -> cli.make_sim_config -> build_prior -> build_posterior
-                                             -> validate_calibration -> infer_and_visualize
+bounds + units -> cli.make_sim_config (a bounds-only configuration) -> build_prior
+               -> build_posterior -> validate_calibration -> infer_and_visualize
 ```
+
+A cell's truth enters only where it is needed, through `cli.load_and_validate_gt`: inside
+`simulated_inference` (which takes hand-entered values through `SimConfig.inject_ground_truth`
+instead), in the tool's `build_cfg(load_gt=True)` (the Laplace and Jacobian identifiability checks
+and the probe checks' `band` and `drive`), and in the live simulation's runner. A narrowing round
+puts back its observation's recorded truth (`LoadedObservation.install`), which it uses only to
+report whether the truth lies inside the region. The training rows never depend on the cell.
 
 - `build_prior` builds the stability-screened prior over the ND box (`pipeline.gen_prior`) and
   writes a prior record.
 - `build_posterior` trains a neural posterior in latent coordinates and writes a posterior record.
-  Its rows come from `pipeline.gen_training_data`: each batch takes one (t_scale, T_obs) pair from a
-  Sobol schedule, shared by every row of the batch, simulates at a fine ND step and downsamples to
-  the experiment's sampling; in chi mode each batch draws its probe count, placement and lock-in
-  lengths, and `chi_probes.gen_chi_block` builds the probe block. `statistics.conditioning_rows`
-  assembles every row. The Fisher rotation (`decorrelate`), when it is on, runs before the
-  simulation, and `train.train_nn` trains the flow after it.
+  With the rotation on, it first computes the Fisher rotation (`decorrelate`). Then
+  `train.train_nn`, handed a `TrainingPlan`, runs `pipeline.gen_training_data` and trains the flow
+  on its rows. Each batch takes one (t_scale, T_obs) pair from a Sobol schedule, shared by every row
+  of the batch, simulates at a fine ND step and downsamples to the experiment's sampling; in chi
+  mode each batch draws its probe count, placement and lock-in lengths, and
+  `chi_probes.gen_chi_block` builds the probe block. `statistics.conditioning_rows` assembles every
+  row.
 - `validate_calibration` runs SBC and the joint coverage test (TARP) on data simulated from the
   posterior's own prior (`analysis.gen_cal_data`, which calls `gen_training_data` with no cache) and
   writes a calibration record.
@@ -324,10 +337,12 @@ them spends anything.
   observation.
 - `tsnpe_round`: `build_truncation_region`, then `build_posterior(truncation=region)` on the same
   prior; the proposal is the truncated prior, never the posterior.
-- Two readers serve the Posterior tab and write nothing: `training_preview`, which reports what
-  `build_posterior` would do at a budget (the width, the peak memory against the planner's budget,
-  whether it resumes) and never raises, and `fresh_run_near_misses`, which asks the near-miss question
-  of [The artifact store](#the-artifact-store) before Train is pressed.
+- Two readers serve the window: `training_preview`, behind the Posterior and TSNPE tabs' budget
+  lines, which reports what `build_posterior` would do at a budget (the width, the peak memory
+  against the planner's budget, whether it resumes) and never raises; and `fresh_run_near_misses`,
+  through which the Posterior tab asks the near-miss question of
+  [The artifact store](#the-artifact-store) before Train is pressed. Neither is a public entry: they
+  copy nothing and write nothing.
 
 A composition looks its stages up in the module's globals at call time, so a patched stage takes
 effect inside it.
@@ -358,10 +373,10 @@ per-segment progress bar, and `config.SIM_VRAM_CEILING_GIB`, the memory ceiling 
 [Memory planning](#memory-planning-and-out-of-memory-recovery). Neither is a science setting.
 
 **Refusals.** A bad input is refused before anything is spent, as a `core.refusals.Refusal` whose
-`field` is a key registered in `FIELDS`. The core's message names the setting in plain words and
-never a box, tab, flag or button; each front end appends the control or flag that answers the key,
-from its own table: `core/gui/fields.py` in the window, `FLAG` in `core/tool/fields.py` on the
-command line. A renamed control is renamed in one place. A programming error is a plain exception,
+`field`, when one setting is at fault, is a key registered in `FIELDS`. The core's message names
+the setting in plain words and never a box, tab, flag or button; each front end appends the control
+or flag that answers the key, from its own table: `core/gui/fields.py` in the window, `FLAG` in
+`core/tool/fields.py` on the command line. A renamed control is renamed in one place. A programming error is a plain exception,
 such as the `RuntimeError` of `forcing.require_simulator_index`, never a refusal. A judgement that
 does not stop the run is a `PreflightWarning`. [Rules and traps](rules-and-traps.md) lists the rules
 the code keeps.
@@ -370,8 +385,11 @@ the code keeps.
 level `core.runs` sets once. The handlers belong to the front ends: the window's
 `streams._PumpLogHandler` for one run, the tool's `logging_console.console_handlers` for one handler
 call, `runs._RunLogHandler` for the record's `log.txt`, and `core.logging_root`'s one root handler for
-library records. The only prints left under `core` are the command-line tool's framing lines, the
-two asset build scripts under `core/gui/assets`, and the reduction map's report (`Reduction.sweep`).
+library records. A judgement or a count that must not stop the run is a Python warning (a
+`PreflightWarning` among them, or the masked-probe notice), and the run log captures those too. The
+only prints left under `core` are the command-line tool's own output (its banner, record and success
+lines, and the `artifacts` family's listings), the two asset build scripts under `core/gui/assets`,
+and the reduction map's report (`Reduction.sweep`).
 
 **The force scale on a tier-1 box.** A bounds file that declares temperature in place of the force
 scale puts T in the force scale's column, and the force scale is derived from it
@@ -395,10 +413,11 @@ names that column `f_scale`.
 
 - `gen_training_data(probe_observer=...)` takes an optional callable that receives one
   `chi_probes.ProbeRecord` per committed chi row range, in batch order: the rows' own peak
-  frequencies, the probe frequencies, the cycles each probe was locked in over, each probe's verdict
-  and the packer's mask, all detached copies on the CPU. The probe checks' `mask` mode is its user.
-  Attached, it adds one peak estimate per range on the device, so on a card short of memory the rows
-  match an unobserved run bit for bit only when no halving happens.
+  frequencies, each probe's log frequency over that peak (`u`), the log of the cycles it was locked
+  in over (`logcyc`), each probe's verdict and the packer's mask, all detached copies on the CPU.
+  The probe checks' `mask` mode is its user. Attached, it adds one peak estimate per range on the
+  device, so on a card short of memory the rows match an unobserved run bit for bit only when no
+  halving happens.
 - The tally is `pipeline._BatchProbeLedger`, installed as `pipeline._ACTIVE_LEDGER` for the life of
   one chi-mode `gen_training_data` call. It is a module global for the reason the batch tag is one:
   its producer, `gen_chi_block`, sits several calls below the batch loop.
@@ -407,9 +426,11 @@ names that column `f_scale`.
   The batch-level retry calls `discard` before it re-runs an abandoned attempt. The batch loop calls
   `commit` only after it has stored the batch's rows, which is also when the observer is handed the
   batch's records.
-- Every cache commit stores the per-batch counts in `state.pt` as `"chi_masked"`
-  (`training_checkpoint.save`). A resume restores them when they describe exactly the committed
-  batches; otherwise the tally starts at the resume point.
+- A cache commit stores the per-batch counts in `state.pt` as `"chi_masked"`
+  (`training_checkpoint.save`) only when the tally covers every committed batch
+  (`pipeline._chi_counts`). A resume restores them when they describe exactly the committed batches;
+  otherwise, after a resume of a cache committed without counts or with a list of another length,
+  the tally starts at the resume point, and that cache stores no counts from then on.
 - At the end of the call the tally logs the masked-probe run total, the `[chi] masked probes` line,
   and names its scope: every committed batch of the simulation cache, only the batches this process
   generated, or this process alone when there is no cache. The calibration logs one of its own,
@@ -433,11 +454,13 @@ is how the store is built, in `core/artifacts/`.
   stage's settings start from `config_from_cfg` and it adds its resolved knobs; a posterior's and an
   observation's conditioning geometry is `conditioning_block`.
 - **Writing.** `ArtifactStore.create` refuses a taken name and returns an `ArtifactWriter`. The writer
-  creates the directory on entry and writes the payloads and figures, then `log.txt`, then the
-  manifest, last and atomically. For every kind but `fdt`, any exception removes the directory. A
-  directory with no manifest is therefore incomplete by definition, and it is the only thing the
-  sweeps remove; one written in the last five minutes is refused as possibly live
-  (`RECENT_WRITE_SECONDS`).
+  creates the directory on entry and hands out payload and figure paths (`payload`, `figure_path`);
+  at the commit it hashes the payloads, writes `log.txt`, then the manifest, last and atomically. For
+  every kind but `fdt`, any exception removes the directory. A directory with no manifest is
+  therefore incomplete by definition, and it is the only record directory a sweep removes; the
+  sweeps also clear loose files inside a kind directory and the legacy `crossval/` directory
+  (`remove_loose`, `remove_legacy`). Anything written in the last five minutes is refused as
+  possibly live (`RECENT_WRITE_SECONDS`).
 - **Saving is a rename.** `ArtifactStore.rename` rewrites the manifest's name, then renames the
   directory. A directory rename that Windows refuses is tolerated, because the manifest is what
   resolves.
@@ -449,10 +472,11 @@ is how the store is built, in `core/artifacts/`.
 - **The simulation cache** has no writer. `training_checkpoint` commits it batch by batch, and
   `store.write_simulation_manifest` keeps its manifest. `header.pt` is written once: the identity,
   the (t_scale, T_obs) schedule, the initial conditions, the rotation and its eigenvalues, and a probe
-  of the bijection. `state.pt` holds `batches_done`, the commit point, and `"chi_masked"`. The shards
-  are written once. A commit writes and flushes the shards, copies `state.pt` to `state.prev.pt`, then
-  replaces `state.pt`, all inside `runs.cancel_deferred()`, so a cancel cannot land between the shards
-  and the state that points at them. A complete cache is kept: it lets the flow be retrained without
+  of the bijection. `state.pt` holds `batches_done` (the commit point), `complete`, the restore point
+  and, when the tally covered every batch, `"chi_masked"`. The shards are written once. A commit
+  writes and flushes the shards, copies `state.pt` to `state.prev.pt`, then replaces `state.pt`, all
+  inside `runs.cancel_deferred()`, so a cancel cannot land between the shards and the state that
+  points at them. A complete cache is kept: it lets the flow be retrained without
   simulating again.
 - **The cache's identity** (`core.artifacts.identity.SimulationIdentity`, `FORMAT` =
   `"training-rows/3"`) names its directory by a 12-character digest of these fields: the format; the
@@ -468,11 +492,12 @@ is how the store is built, in `core/artifacts/`.
     rotation is stored in.
   - The flow's network settings are not in it, nor the Fisher settings, the checkpoint cadence or the
     memory ceiling, so a complete cache can be refit at another capacity, and a resumed run reuses the
-    stored rotation ([The Fisher settings on a resumed run](window.md#the-fisher-settings-on-a-resumed-run)).
+    stored rotation
+    ([The Fisher settings on a resumed run](window.md#the-fisher-settings-on-a-resumed-run)).
   - On a resume, `training_checkpoint.verify` re-checks the header field by field and names the field
     that differs, and the bijection probe catches a changed box.
-- **Loading** refuses a mismatch it can verify: the manifest's checks run before the payload is
-  read, and the payload's own checks after it.
+- **Loading** refuses these mismatches: the manifest's checks run before the payload is read, and
+  the payload's own checks after it.
   - `load_prior`: the model, the ND parameter set and its order, the ND box and the log-box mask; then
     the payload's mixture must be the one the manifest fingerprinted. The mode is not checked, so one
     prior serves every mode over its box.
@@ -484,9 +509,14 @@ is how the store is built, in `core/artifacts/`.
     gate.
   - `load_observation`: the model, the parameter order, the mode, the width, and in chi mode the
     layout and slots; then the payload must hash to the manifest's digest and have the declared width.
-  - A posterior's or an observation's `feature_set_version` and summary flags are recorded in its
-    conditioning block but not compared when it is loaded; only a change of width is caught.
-  - One known gap: the cycle floor below which a probe is masked (`CHI_MIN_CYCLES`, read by
+  - Recorded but never compared on load:
+    - a posterior's and an observation's `feature_set_version` and `summary_flags`; only a change of
+      width is caught;
+    - an observation's chi drive, band and lock-in ceiling (a posterior's are compared), so a
+      narrowing round can be drawn around an observation made at another drive;
+    - a posterior's and an observation's time grid (the configuration block) and units file hash
+      (`inputs`); only the simulation cache's identity carries them.
+  - Not recorded at all: the cycle floor below which a probe is masked (`CHI_MIN_CYCLES`, read by
     `chi_probes.gen_chi_raw` when it runs) is neither part of `SimulationIdentity` nor recorded in a
     posterior's manifest, so a change to it is not caught at load, and a retrain could reuse a cache
     simulated at the old floor.
@@ -509,7 +539,9 @@ is how the store is built, in `core/artifacts/`.
 - **Reports.** `core.artifacts.report` renders a record as text (`render_manifest`) and its lineage
   back through its parents (`render_lineage`), for both front ends. Both are pure functions of the
   manifests, deterministic, and written to files, never stored as a kind.
-- **The default store.** Every stage takes `store=` and starts with `resolve_store(store)`. The tool
+- **The default store.** Every stage that writes a record takes `store=` and starts with
+  `resolve_store(store)`; the two FDT measurements (`run_fdt`, `run_param_study_cli`) are handed
+  writers the front end created instead. The tool
   passes the store at every call inside `use_store`, which puts the previous default back on exit;
   nothing calls `set_default_store` in a run.
 
@@ -522,8 +554,8 @@ This section is how `core/tool/` is put together.
   `stages`, `diagnostics`, `probes`, `smoke`, `fdt` (for `fdt`, `crossval` and `compare`) and
   `browse` (for `artifacts`). `config_args`, `fields`, `help_defaults` and `logging_console` are
   shared.
-- **Parsers are built torch-free.** Each handler imports its heavy modules inside its own body, and
-  `help_defaults` and `fields` import only the standard library and `core.refusals`; `main` loads the
+- **Parsers are built torch-free.** Each handler imports its heavy modules inside its own body;
+  `fields` imports nothing, and `help_defaults` only `core.refusals` and `fields`; `main` loads the
   user models only after the parse. So `--help` never imports torch.
 - **Knobs are forwarded only when given** (`config_args.knobs`), so each default lives in the stage
   that owns it, read from `core/config.py` or the stage's signature. The exception is
@@ -540,12 +572,14 @@ This section is how `core/tool/` is put together.
   and gives 1. `core.__main__` exits with the code. The printed shapes are in
   [Exit codes](command-line.md#exit-codes).
 - **`core/tool/fields.py`** is the only place a refusal key is paired with a flag (`FLAG`);
-  `tests/test_refusals.py` pins every value against the parser's real option strings, both ways.
+  `tests/test_refusals.py` pins every value against the parser's real option strings, and the key
+  set against the refusal registry, both ways.
 - **The console handlers** (`logging_console.console_handlers`) live for one handler call:
   information to stdout as the bare message, warnings and errors to stderr with the level as a prefix.
   Each resolves its stream when it emits, because the suite swaps the streams per test. Library
-  records reach stderr through `main`'s root-logger sink. The tool's framing lines are prints, never
-  records ([Conventions](command-line.md#conventions)).
+  records reach stderr through `main`'s root-logger sink. The tool's own output (its banner, record
+  and success lines, and the `artifacts` family's listings) is printed, never logged
+  ([Conventions](command-line.md#conventions)).
 - **`help_defaults`** is the one table of the default clauses: every value flag of every subcommand
   has an entry, and a flag added without one fails the help-walking test, which names the subcommand
   and the flag. `tests/test_docs.py` checks that the command-line page states each default as the
@@ -554,8 +588,9 @@ This section is how `core/tool/` is put together.
   parser sets. Without `--store-root` it makes a fresh temporary root per run
   (`tempfile.mkdtemp`), and a failed run's root that is still empty is removed with `rmdir`, which
   cannot remove anything that was written. `fdt` and `crossval` take `--store-root` too, but default
-  to the `PRISM_ARTIFACTS` root and must never be given a temporary one, which is why the key is
-  `smoke`'s own property and neither the flag's presence nor the subcommand's name.
+  to the `PRISM_ARTIFACTS` root, and `main` must never make a temporary root for them or `rmdir`
+  theirs, which is why the key is `smoke`'s own property and neither the flag's presence nor the
+  subcommand's name.
 
 ## The window
 
@@ -564,11 +599,12 @@ stage without freezing, shows its output and stops it.
 
 - **Screens and panels.** `MainWindow` is a navigation shell over Home, the four section screens, the
   Artifacts screen, Settings and the model builder ([Screens](window.md#screens)). Every tab is a
-  `BasePanel`: a controls column, a results area (a figure stack over a progress pane and a log
-  pane), and `dispatch()`, which runs a callable on a worker thread with its output wired to those
-  panes. The six inference tabs share one `SbiSession`, owned by `InferenceScreen`, which greys the
-  tabs through `refresh_gates`. `BasePanel._running` is class-level, so one run is live in the whole
-  window ([One run at a time](window.md#one-run-at-a-time)); the `_REDIRECT` lock in `streams` is the
+  `BasePanel`: a controls column, a results area (a figure stack over a log pane, with the progress
+  pane and its Cancel button beneath them), and `dispatch()`, which runs a callable on a worker
+  thread with its output wired to those panes. The six inference tabs share one `SbiSession`, owned
+  by `InferenceScreen`, which greys the tabs through `refresh_gates`. `BasePanel._running` is
+  class-level, so one run is live in the whole window
+  ([One run at a time](window.md#one-run-at-a-time)); the `_REDIRECT` lock in `streams` is the
   backstop.
 - **Worker threads.** `Worker` is a `QRunnable` on the global thread pool.
   - `BasePanel` keeps each worker in `_workers`, with auto-delete off, until the worker reports
@@ -578,7 +614,8 @@ stage without freezing, shows its output and stops it.
   - A figure is rendered to PNG on the worker (`base_panel._png_fig_sink`), and pickled for the
     pop-out window; the GUI thread shows the image and never paints a figure built on the worker,
     which deadlocks on matplotlib's global lock. A run that saves its figures to disk instead is shown
-    through `plot_watcher`, which watches the record's `figures/` folder.
+    through `plot_watcher`, which watches the folder the run writes its figures into: an `fdt`
+    record's `figures/`, or the Reduction map's own folder.
   - `core.gui.__main__` forces matplotlib's Agg backend before any `core` import, so a stray
     `plt.show()` in a stage is a no-op on a worker thread.
 - **Stream routing.** `streams.redirect_streams` swaps `sys.stdout` and `sys.stderr` for two
@@ -635,13 +672,14 @@ stage without freezing, shows its output and stops it.
   Euler–Maruyama with diagonal noise. `Simulator` integrates a batch one time segment at a time and
   chooses `euler_compiled` when the device is CUDA and the model exposes a TorchScript
   `compiled_step` (Nadrowski, Hopf, and a user model whose step could be generated; never BP), and
-  the eager `euler` otherwise.
+  the plain Python loop, `euler`, otherwise.
 - **CUDA graphs.** `euler_compiled` captures `SOLVER_GRAPH_CHUNK` (50) Euler steps into a CUDA graph
-  and replays it; the last steps that do not fill a chunk run eagerly, and a call shorter than one
-  chunk runs eagerly throughout. `config.SOLVER_CUDA_GRAPHS` turns it off, and is read at each call.
-  The reason: TorchScript removes Python overhead but not kernel-launch overhead, and launch overhead
-  was 88 % of solver time; an end-to-end simulator call at a batch of 2,048 and 100,000 steps went
-  from 5,520 ms to 698 ms, a 7.9× gain. The physics checks on the graphed path are in
+  and replays it; the last steps that do not fill a chunk run the TorchScript step without a graph,
+  and so does the whole of a call shorter than one chunk. `config.SOLVER_CUDA_GRAPHS` turns the
+  graphs off, and is read at each call. The reason: TorchScript removes Python overhead but not
+  kernel-launch overhead, and launch overhead was 88 % of solver time. Per step, at a batch of 2,048,
+  54.87 µs became 6.65 µs (8.25×); end to end, a simulator call at a batch of 2,048 and 100,000
+  steps went from 5,520 ms to 698 ms, a 7.9× gain. The physics checks on the graphed path are in
   [The solver's physics check](science.md#the-solvers-physics-check).
 - **The graph path's invariants.**
   - The parameters are static buffers copied in on every call, never captured by reference, which is
@@ -652,11 +690,13 @@ stage without freezing, shows its output and stops it.
     `SOLVER_GRAPH_CACHE_MAX` (8) because graph memory lives in private pools `empty_cache` cannot
     reclaim. It is not held on `Solver`, which is built once per segment and must stay patchable
     (`test_the_graph_cache_is_not_hung_off_the_solver_class`).
-  - The progress bar and the step counter advance together, by the chunk, through `sdeint._advance`,
-    so neither can be updated without the other.
+  - The graphed path advances the progress bar and the step counter together, by the chunk, through
+    `sdeint._advance`; never call `bar.update` alone. The ungraphed loops count through
+    `sdeint._step_iter`.
   - The state is carried forward inside the graph: its state buffer is both the capture's input and
     its output, so consecutive chunks need no copy between replays.
-- **A capture failure falls back to eager**, with a warning, for the rest of the process
+- **A capture failure falls back to the ungraphed TorchScript loop**, with a warning, for the rest
+  of the process
   (`_acquire_graph`): a solver that refuses to run is worse than a slow one. On an out-of-memory path
   `drop_graph_cache` releases the captured graphs, because the halving retry is about to capture
   another at the smaller width.
@@ -667,29 +707,34 @@ stage without freezing, shows its output and stops it.
 - **The segment seam duplicates one sample.** Each segment starts from the previous segment's last
   state and writes it again as its first sample, so every boundary repeats a sample: a run of k
   segments advances k − 1 fewer steps than its time grid implies, and the grid and the solution are
-  not exactly co-indexed.
-  This is negligible for the spectral and autocorrelation features at three segments or fewer; a
-  feature that read an instantaneous phase or a finite difference across a seam would see a
-  zero-length step.
+  not exactly co-indexed. This is negligible for the spectral and autocorrelation features at three
+  segments or fewer; a feature that read an instantaneous phase or a finite difference across a seam
+  would see a zero-length step.
 - **Seeding.** `core.rng.seeded(seed, device)` seeds torch and numpy for a block and restores both
-  afterwards; `smoke`, every diagnostic, the FDT measurement and a seeded calibration run inside it.
+  afterwards; `smoke`, every diagnostic that draws (SBC, the Laplace and Jacobian checks, the probe
+  checks), the FDT measurement and a seeded calibration run inside it.
   A run is seeded once and its streams run on: seeding each stage would start draws that must be
   independent from the same state. A seeded calibration derives its own seed (`calibration_seed`), so
   it never replays the strata of a training run seeded with the same number.
 - **Runs are not bitwise-reproducible on CUDA or across devices.** A kernel's reduction order is not
-  fixed, and the graphed path draws its noise in a different order from the eager one. A seed buys a
-  repeatable experiment on one device, and a bitwise repeat on the CPU only.
+  fixed; the graphed path draws its noise in a different order from the ungraphed loop; and on a card
+  the planner and the halving ladders split a batch by the memory free at that moment, which redraws
+  its noise in other blocks. A seed buys a repeatable experiment on one device, and a bitwise repeat
+  on the CPU only.
 - **TorchScript is not bitwise-reproducible on its first runs.** Its profiling executor runs the first
   calls of a scripted step unoptimised, then fuses them, and the fused kernel differs by about one
-  unit in the last place: three eager runs of one deterministic model gave a first run that differed
-  from the second, and a second equal to the third. Warm up, three runs, before any bitwise
+  unit in the last place: three ungraphed runs of one deterministic model gave a first run that
+  differed from the second, and a second equal to the third. Warm up, three runs, before any bitwise
   comparison on the card (`test_the_cuda_graph_step_matches_the_eager_step_bitwise` does). The
   TorchScript path runs only on CUDA, so the CPU suite's reproducibility checks are untouched.
 
 ## Memory planning and out-of-memory recovery
 
-Everything here is in `core.SBI.pipeline` unless named otherwise, and the constants are in
-`core/config.py`.
+Everything here is in `core.SBI.pipeline` unless named otherwise. The settings
+(`SIM_VRAM_CEILING_GIB`, the batch-retry attempts and delays, the allocator policy) are in
+`core/config.py`; the planner's own constants (`_SIM_MEM_FRACTION`, `_MIN_SIM_CHUNK`,
+`_FORCE_BUILD_PEAK_MULTIPLE`, the learned budget's back-off and recovery, `_MEM_LOG_EVERY`) are
+module constants of `core.SBI.pipeline`.
 
 - **The planner.** `gen_obs` asks `_max_sim_batch` for the largest batch whose peak fits the budget.
   - The peak is `peak_sim_elements`: the solution buffer and the drive, which live throughout, plus
@@ -703,7 +748,8 @@ Everything here is in `core.SBI.pipeline` unless named otherwise, and the consta
     [The inference settings](window.md#the-inference-settings).
   - A batch that does not fit is split into power-of-two chunks, because the solver specialises on the
     batch width, no smaller than `_MIN_SIM_CHUNK` (256), each writing into one preallocated result.
-    When not even a 256-row chunk fits beside the result, the batch runs as asked and fails loudly.
+    When not even a 256-row chunk fits beside the result, the batch runs as asked, and an
+    out-of-memory error is left to the ladders below.
     Off CUDA the planner never splits.
 - **The learned budget.** On Windows, `torch.cuda.mem_get_info` counts other processes' evictable
   surfaces as free (measured: 15,037 MiB reported against the 5,814 MiB `nvidia-smi` showed), so the
@@ -747,13 +793,13 @@ Everything here is in `core.SBI.pipeline` unless named otherwise, and the consta
   and releases after the `except` clause has closed, when the failed attempt's tensors are gone.
   `_release_device_memory` never raises: the allocator cache, the cuFFT plan cache and the captured
   graphs are released under separate guards. A hot loop passes `plans=False, graphs=False`, and the
-  per-batch tail keeps the plan clear and leaves the graphs.
-- **"The rows outrank the restore point."** Resuming without a restore point draws fresh noise from
-  that batch on, a reproducibility loss; a skipped write throws away hours of simulation. So a failed
-  per-batch snapshot leaves that batch with no restore point rather than a wrong one (`_pending_rng`
-  is paired with its batch index), a failed snapshot at a cadence boundary defers the write to the
-  next one, and the rescue write on a cancel or crash commits the completed batches without a restore
-  point rather than skipping them.
+  per-batch tail clears the cuFFT plan cache but keeps the captured graphs.
+- **The rows matter more than the restore point.** Resuming without a restore point draws fresh
+  noise from that batch on, a reproducibility loss; a skipped write throws away hours of simulation.
+  So a failed per-batch snapshot leaves that batch with no restore point rather than a wrong one
+  (`_pending_rng` is paired with its batch index), a failed snapshot at a cadence boundary defers the
+  write to the next one, and the rescue write on a cancel or crash commits the completed batches
+  without a restore point rather than skipping them.
 - **`_we_are_the_holder`.** Waiting helps only when someone else holds the memory. When this process's
   reserved pool is larger than every other process's usage combined, the retry goes straight back to
   the halving ladders instead of sleeping; a run was once found waiting for memory it held itself.
@@ -764,17 +810,18 @@ Everything here is in `core.SBI.pipeline` unless named otherwise, and the consta
   when the desktop takes the memory, which is why waiting beats shrinking; the ceiling's value is
   keeping a batch inside the card's own memory.
 - **The `[mem]` line** (`_log_memory`) reports peak allocated and peak reserved, then resets both
-  peaks: on batch 0, every `PRISM_MEM_LOG_EVERY` batches (250 by default), and after every
-  out-of-memory error that reaches the batch-level retry or `retry_on_oom`. Peak reserved against
-  peak allocated separates a batch too big for the card from an allocator that cannot hand memory
-  back. It is best-effort: a diagnostic must never kill the run.
-- **The allocator policy.** `core.config` sets `PYTORCH_CUDA_ALLOC_CONF` to
-  `roundup_power2_divisions:8,garbage_collection_threshold:0.6` when it is imported, unless one is
-  exported, and it recovers about 6 GiB: a batch's fine-step count runs from a median of about 40,000
-  to a 99th percentile of about 283,000, and without the policy one large batch carved segments the
-  smaller ones could not reuse. torch's own deprecation warning names a different variable, which
-  this build ignores silently, so test any allocator experiment with a deliberately invalid value
-  first ([Environment variables](command-line.md#environment-variables)).
+  peaks: on batch 0, every `PRISM_MEM_LOG_EVERY` batches (its default is under
+  [Environment variables](command-line.md#environment-variables)), and after every out-of-memory
+  error that reaches the batch-level retry or `retry_on_oom`. Peak reserved against peak allocated
+  separates a batch too big for the card from an allocator that cannot hand memory back. It is
+  best-effort: a diagnostic must never kill the run.
+- **The allocator policy.** `core.config` gives `PYTORCH_CUDA_ALLOC_CONF` an allocator policy when
+  it is imported, unless one is exported (the value is under
+  [Environment variables](command-line.md#environment-variables)). It recovers about 6 GiB: a
+  batch's fine-step count runs from a median of about 40,000 to a 99th percentile of about 283,000,
+  and without the policy one large batch carved segments the smaller ones could not reuse. torch's
+  own deprecation warning names a different variable, which this build ignores silently, so test any
+  allocator experiment with a deliberately invalid value first.
 - **Accepted gaps.**
   - The prior's stability sweep simulates through `Simulator.simulate` directly
     (`core/SBI/Priors/*_prior.py`), so no out-of-memory ladder protects it.
@@ -800,8 +847,8 @@ Everything here is in `core.SBI.pipeline` unless named otherwise, and the consta
   - Campaign 2 (`campaigns.run_campaign2_chi`): a driven ensemble at each frequency, and χ(ω) by
     `spectral.lock_in_chi`;
   - `spectral.eff_temp_ratio`: T_eff/T = p ω G(ω) / (4 χ″(ω)), where p is the model's prefactor,
-    the drive's coupling over the observable's diffusion coefficient (N β for the Nadrowski model);
-    `plots` draws the figures.
+    the drive's coupling over the observable's diffusion coefficient (n · beta for the Nadrowski
+    model); `plots` draws the figures.
 - **`cross_validation.run_param_study_cli`** is the sweep study: `run_fdt_param_sweep` runs twice,
   the S sweep at T_a/T = 1 and the T_a/T sweep at S = 0, each into its own `fdt` record, with each
   point's seed derived from the study's (`_point_seed`). `cross_validation_plots` draws the surfaces.
@@ -809,8 +856,10 @@ Everything here is in `core.SBI.pipeline` unless named otherwise, and the consta
   puts them on a common grid and writes an `fdt` record whose body names what it compared
   (`compared`), not its `parents`.
 - **The CPU only.** `cli.make_fdt_config` and `cli.make_param_sweep_config` set the device to
-  `config.cpu_device()`. The solver steps a small ensemble one time step at a time, and at M ≈ 256
-  that sequential SDE loop is about 3.4× faster on the CPU than on a card, where it is bound by kernel
-  launches; the crossover is near M ≈ 4096.
+  `config.cpu_device()`, because the solver steps a small ensemble (M ≈ 256, three to five state
+  variables) one time step at a time, so each step is a handful of tiny tensor operations. The figure
+  the code gives, about 3.4× faster on the CPU at M ≈ 256 with a crossover near M ≈ 4096, dates from
+  before CUDA graphs existed, so it measured the ungraphed loop, and it has not been re-measured
+  since.
 - **Its records are progressive.** Each is refreshed as the run goes, a cancel or a crash keeps the
   folder marked unfinished, and nothing resumes ([The artifact store](#the-artifact-store)).
