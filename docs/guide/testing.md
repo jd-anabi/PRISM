@@ -36,12 +36,12 @@ is who sets which, for a check.
 - `QT_QPA_PLATFORM=offscreen` is for headless checks that import PySide6, and only those. The root
   `conftest.py` defaults it; the launchers do not set it, because the window needs a real platform
   plugin.
-- `PRISM_RESOURCES` and `PRISM_ARTIFACTS` move the inputs root and the records root. Point
-  `PRISM_ARTIFACTS` at a scratch folder, or wrap the code in `core.artifacts.use_store`, to keep a
-  check's records out of the real `Artifacts/`. `PRISM_RESOURCES` is read once, when `core.config`
-  is imported, and `PRISM_ARTIFACTS` when a process first builds its default store (the tool reads it
-  as each command starts), so inside a running process set them before importing `core`, or use
-  `core.artifacts.use_store`.
+- `PRISM_RESOURCES` and `PRISM_ARTIFACTS` move the inputs root and the records root
+  ([Inputs and records](getting-started.md#inputs-and-records) says when each is read, and which root
+  each run writes to). Point `PRISM_ARTIFACTS` at a scratch folder, or wrap the code in
+  `core.artifacts.use_store`, to keep a check's records out of the real `Artifacts/`. Inside a running
+  process, the default store keeps the root it was first built with, so set the variable before
+  anything builds it, or use `core.artifacts.use_store`.
 - `PRISM_VRAM_CEILING_GIB` is read afresh for every batch plan.
 - `PRISM_MEM_LOG_EVERY` is read once, when `core.SBI.pipeline` is first imported, so setting it
   inside a running window changes nothing.

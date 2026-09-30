@@ -1,6 +1,6 @@
 # The retrain runbook
 
-Checked against commit d908eb5.
+Checked against commit 20a3cba.
 
 The next full-size training run: a chi posterior on the tier-1 box, 10,000 batches of 2,048 rows,
 with a flow of 256 hidden features × 10 transforms, followed by one narrowing round that certifies
@@ -10,8 +10,8 @@ reasoning behind each setting in [The science behind the settings](science.md).
 
 The commands use these PowerShell variables, set once in the session that runs them. Replace
 `<scratch>` with a new, empty folder outside the repository that nothing else uses: the pre-flight
-writes its throwaway records there, and deletes the whole folder at the end. Every command takes
-`--model` from the bounds file's folder, NADROWSKI, and no command below gives it.
+writes its throwaway records there, and deletes the whole folder at the end. Every command that
+names a bounds file takes `--model` from its folder, NADROWSKI, and none below gives it.
 
 ```powershell
 $py   = "C:\Users\J\anaconda3\envs\biophys-env\python.exe"
@@ -110,13 +110,16 @@ command that names it finds the old cache. If one is there, take one of two rout
 
 - **A new prior, the recommended route.** Build it in pre-flight step 4 under a new name,
   `retrain_prior_2` say, because the old prior keeps its name for as long as the old cache depends on
-  it, and use the new name wherever this page says `retrain_prior`. A rebuild is a new fit, and a
-  cache is keyed on its prior's fit, so the old cache is now exactly one setting away
-  (`prior_fingerprint`): the first `train` is refused naming it, and the same command with
-  `--new-run` starts the new cache; a resume needs no `--new-run`, since it finds its own cache
-  first. Nothing is deleted, and every record stays in the real store. Any
-  other name the earlier attempt took (`retrain_band`, `retrain_mask`, and `retrain` if it finished)
-  needs a new one too.
+  it. Every other name the earlier attempt took (`retrain_band`, `retrain_mask`, and `retrain` if it
+  finished) needs a new one too, and each new name is used wherever this page uses the old one,
+  `--posterior retrain` above all: an old input name loads the earlier attempt's record without a
+  word. A rebuild is a new fit, and a cache is keyed on its prior's fit. When the prior is the only
+  difference, as it is after a change to the cycle floor or the smallest probe count, the old cache
+  is exactly one setting away (`prior_fingerprint`): the first `train` is refused naming it, and the
+  same command with `--new-run` starts the new cache. Otherwise the first `train` starts the new
+  cache at once. A resume needs no `--new-run` once the new cache has committed its first batch
+  ([Resuming](#resuming) covers a first process that committed nothing). Nothing is deleted, and
+  every record stays in the real store.
 - **Or delete the old cache.** Delete the records that depend on it from the leaves up (the
   calibrations, inferences, diagnostics and narrowing rounds built on each posterior trained from it,
   then those posteriors), then the cache itself with
@@ -344,10 +347,13 @@ it keeps beyond that depends on how it stopped:
   same, at most the batches since the last commit. When the rescue save matters more than the
   capture, run the command without the pipe.
 - **A run that dies while the flow trains** loses the fit and none of the rows.
+- **A process that stopped before its first commit**, in the Fisher step or the first 50 batches (on
+  Ctrl-C under the pipe, say), left nothing to resume, and `--resume require` is refused. Run the
+  first command again instead, with `--new-run` again on the new-prior route of
+  [Decisions](#decisions), and never set the prior back to the one that refusal points at.
 
-The resume is the same in every case. Open a PowerShell session, set the variables at the top of this
-page and the first four lines of step 6 of the pre-flight, and run the same command with
-`--resume require`:
+In every other case, open a PowerShell session, set the variables at the top of this page and the
+first four lines of step 6 of the pre-flight, and run the same command with `--resume require`:
 
 ```powershell
 & $py -m core train @Box --chi --device cuda --prior retrain_prior --num-runs 10000 --hidden-features 256 --num-transforms 10 --checkpoint-every 50 --name retrain --note "<one line>" --resume require 2>&1 | Plain | Tee-Object -FilePath $Log -Append
@@ -363,25 +369,30 @@ $LASTEXITCODE
   - `[checkpoint] resuming at batch <k>/10000 from <dir> (reusing the stored rotation V)`, from the
     simulation;
   - only when a save was cut off between writing its shards and committing them,
-    `[checkpoint] removed <n> uncommitted shard files past batch <k> (batches [<a>, <b>), …): a save wrote them and stopped before its commit`
-    ("file" and "it" when there is only one): those shards are deleted before anything is committed
-    (`core.SBI.training_checkpoint.remove_uncommitted`), so they cannot overlap the rows committed
-    after them.
+    `[checkpoint] moved <n> uncommitted shard files past batch <k> (batches [<a>, <b>), …) aside to <dir>\uncommitted\<m>, which no load reads`
+    ("file" when there is only one): before anything is committed, those shards are moved, never
+    deleted, into a numbered folder of their own
+    (`core.SBI.training_checkpoint.set_aside_uncommitted`), so they cannot overlap the rows committed
+    after them. A resume that had to read its commit from the older state file moves nothing, and
+    warns instead ([What to watch](#what-to-watch)).
 
   A resumed process prints no `[fisher]` line, and its record writes the three Fisher settings as
   null ([The Fisher settings on a resumed run](window.md#the-fisher-settings-on-a-resumed-run)).
 - **Keep the prior.** Resume with the same `retrain_prior`: the cache is keyed on its fit, and a
   rebuilt prior is another fit.
 - **The two refusals** ([Training-cache flags](command-line.md#training-cache-flags)):
-  - with `--resume require` and no cache of this run's own,
+  - with `--resume require` and no committed batch in this run's own cache,
     `prism train: refused: resume='require' but there is no resumable cache at <dir>.`, followed by
-    any committed cache one setting away. Something in the command differs from the first run's, and
-    the cache it lists names the setting;
+    any committed cache one setting away. Either the first process committed nothing (above), or the
+    command differs from the first run's in the setting a listed cache names. A listed cache that
+    differs in `prior_fingerprint`, on the new-prior route, is the earlier attempt's: never set the
+    prior back to reach it;
   - without `require`, a run one setting away from a committed cache is refused before the Fisher
     step: `This run would start a NEW simulation cache at <dir> from zero, but a committed cache ONE setting away exists:`,
     a line naming the setting and both values, and a line ending `(--new-run)`. Set the setting back
-    to continue that cache. `--new-run` is right only when that one setting was changed on purpose
-    and a new run from zero is what you want; it never forces a fresh start over this run's own cache.
+    to continue that cache, unless it is the earlier attempt's. `--new-run` is right only when that
+    one setting was changed on purpose and a new run from zero is what you want; it never forces a
+    fresh start over this run's own cache.
 - **Capture every process, with `-Append`.** The posterior's `log.txt` holds only the last
   process's records, so a resumed run's first process's lines, its `[fisher]` lines among them, exist
   nowhere but in the captured file.
@@ -409,8 +420,11 @@ as well ([Conventions](command-line.md#conventions)).
   cache starts; a `UserWarning: Only <free> GiB free …` after it means the disk is short. A resume
   prints `[checkpoint] resuming at batch <k>/10000 from <dir> (reusing the stored rotation V)` in its
   place.
-- `[checkpoint] removed <n> uncommitted shard files past batch <k> (batches [<a>, <b>), …): a save wrote them and stopped before its commit`,
+- `[checkpoint] moved <n> uncommitted shard files past batch <k> (batches [<a>, <b>), …) aside to <dir>\uncommitted\<m>, which no load reads`,
   only when an earlier process's save was cut off before its commit ([Resuming](#resuming)).
+- `warning: [checkpoint] state.pt could not be read, so this run resumes from state.prev.pt, …`:
+  the cache's commit file could not be read, so the run resumed from the one before it and left the
+  shards past that point where they are. Do what the warning says, before the first batch ends.
 - For each batch that masks any probe, a notice on the error stream:
   `<file>:<line>: UserWarning: training batch <k>/10000 [t_scale=<…>, T=<…>, n_fine=<…>, N_points=<…>, rows=2048]: chi: <m>/<n> probes masked (below 2.0 drive cycles, at/above Nyquist, out of band, or a non-finite lock-in).`
   Here T is the batch's recording length, not the temperature.
@@ -498,9 +512,9 @@ A narrowing round from `retrain`, drawn around the simulated tier-1 cell at 4.5 
   region again from a seed taken from the observation and the round's settings, so that the same
   command finds its own cache (`core.SBI.truncate.region_from_posterior`). No round has been resumed
   on the card yet, so check for the `[checkpoint] resuming at batch …` line before leaving it. If the
-  resume is refused for want of a cache, the region did not come out the same; the refusal names no
-  cache one setting away, because a different region never counts as one. Start the round again
-  without `--resume require`.
+  resume is refused for want of a cache, either the round's first process committed nothing or its
+  region did not come out the same; the refusal names no cache one setting away, because a different
+  region never counts as one. Either way, start the round again without `--resume require`.
 - An optional child inference records the narrowed posterior on the cell. Re-simulating the cell
   draws new noise, so the observation is never the region's own, and the command needs both
   acceptances. Left at their defaults, as for `cert_parent`: `--chi-k 6` and `--n-samples 1000`.
@@ -543,8 +557,8 @@ Which record answers each gate. The keys are under each record's manifest `body`
 | the revived channels | diagnostic `retrain_ablation` | `results.channels`, the `A1_mean` and `D3_bimodality` entries and their `verdict`; `results.median_disp` |
 | the masked total | posterior `retrain` | the `[chi] masked probes` record in its `log.txt` |
 | the eigenvalues | posterior `retrain`; diagnostic `retrain_rotation` | `transform.fisher_eigenvalues`; `results.eigenvalues` |
-| the loss curve | posterior `retrain` | `figures/training_loss.png`, `loss.npz`, `training.epochs_trained`, `training.best_validation_loss` |
-| informativeness | calibration `retrain_cal` | `results.informativeness` (`total_nats`, `sem_nats`, `per_param`, `per_direction`) |
+| the loss curve, a reading | posterior `retrain` | `figures/training_loss.png`, `loss.npz`, `training.epochs_trained`, `training.best_validation_loss` |
+| informativeness, a reading | calibration `retrain_cal` | `results.informativeness` (`total_nats`, `sem_nats`, `per_param`, `per_direction`) |
 | the stratified SBC, a characterisation | diagnostics `retrain_sbc_k2`, `retrain_sbc_k6`, `retrain_sbc_k12`, `retrain_sbc_pooled` | `results.rank_verdict` |
 | the round's truth | posterior `cert_round` | `training.truth_containment` |
 | the round's calibration | calibration `cert_cal` | `results.verdict`, `results.accepted` |
