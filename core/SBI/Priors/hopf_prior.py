@@ -1,4 +1,3 @@
-from collections import deque
 
 import numpy as np
 import torch
@@ -56,19 +55,15 @@ class HopfPrior(prior.Prior):
         added_params_progress_bar.close()
         return stable_params
 
-    def _local_map(self, t: torch.Tensor, stable_params: list, batch_size: int,
-                   n_params: int, n_max: int, step: float, segs: int, steady: bool, state_dep_drift: bool) -> list:
-        # cpu variables
+    def _local_map(self, t: torch.Tensor, stable_params: list, batch_size: int, n_params: int,
+                   n_max: int, step: float, segs: int, steady: bool, state_dep_drift: bool,
+                   prior_bounds: list[tuple]) -> list:
         # self.sweep_device, not a hardcoded CPU. This method used to be a @staticmethod pinned to
         # torch.device('cpu'); measured 6.32 s per iteration there against 0.357 s on CUDA (17.7x),
-        # and the flood-fill is the dominant cost of a prior build. construct_prior resolves the
-        # device once and falls back to the CPU when there is no accelerator.
+        # and the walk is the larger share of a prior build's simulation. construct_prior resolves
+        # the device once and falls back to the CPU when there is no accelerator.
         dtype, device = self.dtype, self.sweep_device
         t = t.to(dtype=dtype, device=device)
-
-        # algorithm variables
-        queue = deque(stable_params)
-        accepted_params = set([tuple(p) for p in stable_params])
 
         # check if steady-state
         if steady:
@@ -80,31 +75,9 @@ class HopfPrior(prior.Prior):
         # Dual-channel forcing for ND Hopf: shape (batch, 2, T). Channel 0 -> x, channel 1 -> y.
         force = torch.zeros((batch_size, 2, t.shape[0]), dtype=dtype, device=device)
 
-        # begin algorithm
-        num_added = 0
-        added_params_progress_bar = tqdm(total=batch_size, desc=f"Added {num_added} sets to accepted parameters during local sweep. Total parameter sets: {len(accepted_params)}. Number of parameter sets to check: {len(queue)}", leave=False)
-        with torch.no_grad():
-            while len(queue) != 0 and len(accepted_params) <= n_max:
-                thetas = torch.tensor(queue.popleft(), dtype=dtype, device=device) + torch.randn((batch_size, n_params), dtype=dtype, device=device) * step
-                sim = hopf_simulator.HopfSimulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
-                x = sim.simulate(state_dep_drift=state_dep_drift)[0, 0, :, :] # shape: (batch_size, len(t))
-                is_valid = torch.isfinite(x).all(dim=1)
-                # ONE host transfer per iteration, not 2048. Indexing `is_valid[i]` and calling
-                # `thetas[i].tolist()` per row forces a device-to-host SYNC per row -- free on the
-                # CPU, and on CUDA it would have handed back most of the 17.7x the device move buys.
-                # Gathering the valid rows first makes the transfer a single contiguous copy.
-                for row in thetas[is_valid].detach().cpu().tolist():
-                    stable_point = tuple(row)
-                    if stable_point not in accepted_params:
-                        accepted_params.add(stable_point)
-                        queue.append(stable_point)
-                        num_added += 1
-                added_params_progress_bar.update(added_params_progress_bar.total or 0)
-                added_params_progress_bar.reset()
-                added_params_progress_bar.set_description(f"Added {num_added} sets to accepted parameters during local sweep. Total parameter sets: {len(accepted_params)}. Number of parameter sets to check: {len(queue)}")
-                del x
-        added_params_progress_bar.close()
+        def finite(thetas: torch.Tensor) -> torch.Tensor:
+            sim = hopf_simulator.HopfSimulator(thetas, force, inits, t, segs=segs, batch_size=batch_size, device=device)
+            x = sim.simulate(state_dep_drift=state_dep_drift)[0, 0, :, :]  # shape: (batch_size, len(t))
+            return torch.isfinite(x).all(dim=1)
 
-        # SORTED, not list(): see nadrowski_prior for the rationale -- set iteration order over float
-        # tuples is unspecified, and this feeds the clustering + GMM fit in prior.py.
-        return sorted(accepted_params)
+        return self._walk(stable_params, prior_bounds, batch_size, n_params, n_max, step, finite)

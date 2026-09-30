@@ -18,11 +18,10 @@ Differences from the built-ins, by design:
   * The dead ``BoxUniform`` list and the (never-taken) ``steady`` branch from the built-ins are dropped.
 
 ``_local_map`` implements the base's abstract INSTANCE method, reading ``self.spec`` and
-``self.sweep_device``; ``construct_prior`` calls it as ``self._local_map(...)``. Unlike the built-ins,
-which return ``sorted(accepted_params)``, it returns its accepted set unsorted, in the set's own order,
-which is the order the GMM's k-means init then sees.
+``self.sweep_device``; ``construct_prior`` calls it as ``self._local_map(...)``. Like the built-ins, it
+hands its simulation to the base's shared walk (``prior.Prior._walk``), which returns the kept points
+sorted, so a user model's prior is reproducible from its points as a built-in's is.
 """
-from collections import deque
 
 import torch
 from tqdm import tqdm
@@ -81,46 +80,23 @@ class UserPrior(prior.Prior):
         return stable_params
 
     def _local_map(self, t: torch.Tensor, stable_params: list, batch_size: int, n_params: int,
-                   n_max: int, step: float, segs: int, steady: bool, state_dep_drift: bool) -> list:
+                   n_max: int, step: float, segs: int, steady: bool, state_dep_drift: bool,
+                   prior_bounds: list[tuple]) -> list:
         # self.sweep_device, not a hardcoded CPU. This method used to be a @staticmethod pinned to
         # torch.device('cpu'); measured 6.32 s per iteration there against 0.357 s on CUDA (17.7x),
-        # and the flood-fill is the dominant cost of a prior build. construct_prior resolves the
-        # device once and falls back to the CPU when there is no accelerator.
+        # and the walk is the larger share of a prior build's simulation. construct_prior resolves
+        # the device once and falls back to the CPU when there is no accelerator.
         dtype, device = self.dtype, self.sweep_device
         t = t.to(dtype=dtype, device=device)
-
-        queue = deque(stable_params)
-        accepted_params = set(tuple(p) for p in stable_params)
 
         inits = declared_inits(self.spec).to(dtype=dtype, device=device).expand(batch_size, -1)
         force = torch.zeros((batch_size, self.spec.n_vars, t.shape[0]), dtype=dtype, device=device)
 
-        num_added = 0
-        bar = tqdm(total=batch_size, leave=False,
-                   desc=f"Local sweep: {len(accepted_params)} accepted, {len(queue)} to check")
-        with torch.no_grad():
-            while len(queue) != 0 and len(accepted_params) <= n_max:
-                thetas = (torch.tensor(queue.popleft(), dtype=dtype, device=device)
-                          + torch.randn((batch_size, n_params), dtype=dtype, device=device) * step)
-                sim = registry.make_user_simulator(
-                    self.spec, thetas, force, inits, t,
-                    segs=segs, batch_size=batch_size, device=device)
-                x = sim.simulate(state_dep_drift=state_dep_drift)[0, 0, :, :]
-                is_valid = torch.isfinite(x).all(dim=1)
-                # ONE host transfer per iteration, not 2048. Indexing `is_valid[i]` and calling
-                # `thetas[i].tolist()` per row forces a device-to-host SYNC per row -- free on the
-                # CPU, and on CUDA it would have handed back most of the 17.7x the device move buys.
-                # Gathering the valid rows first makes the transfer a single contiguous copy.
-                for row in thetas[is_valid].detach().cpu().tolist():
-                    stable_point = tuple(row)
-                    if stable_point not in accepted_params:
-                        accepted_params.add(stable_point)
-                        queue.append(stable_point)
-                        num_added += 1
-                bar.update(bar.total or 0)
-                bar.reset()
-                bar.set_description(
-                    f"Local sweep: {len(accepted_params)} accepted, {len(queue)} to check")
-                del x
-        bar.close()
-        return list(accepted_params)
+        def finite(thetas: torch.Tensor) -> torch.Tensor:
+            sim = registry.make_user_simulator(
+                self.spec, thetas, force, inits, t,
+                segs=segs, batch_size=batch_size, device=device)
+            x = sim.simulate(state_dep_drift=state_dep_drift)[0, 0, :, :]
+            return torch.isfinite(x).all(dim=1)
+
+        return self._walk(stable_params, prior_bounds, batch_size, n_params, n_max, step, finite)

@@ -62,7 +62,7 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
         # arrive as arguments -- the same fix that made num_iterations (and the sweep's batch) its own
         # argument.
         prior = prior.construct_prior(t, n_params, global_batch_size, local_batch_size, segs, prior_bounds,
-                                      t_global_scale=2, num_iterations=num_iterations,
+                                      num_iterations=num_iterations,
                                       n_max=config.PRIOR_SWEEP_MAX_SETS if n_max is None else int(n_max),
                                       step=config.PRIOR_SWEEP_STEP if step is None else float(step),
                                       steady=False,

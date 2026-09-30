@@ -615,8 +615,9 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     :param ref: a prior artifact's name or id; None when building.
     :param build_new: True to construct from scratch.
     :param name: the artifact's name ("" = unnamed) when building. A name already taken is refused
-                     HERE, at the entry, not by the write at the end: the stability sweep is ~9
-                     minutes and there is no reason to spend it to learn the name is in use.
+                     HERE, at the entry, not by the write at the end: the stability sweep takes
+                     about a minute and a half on the card, far longer on the CPU, and there is
+                     no reason to spend it to learn the name is in use.
     :param note: free-text note recorded on the artifact when building.
     :param fig_sink: Optional (title, fig) -> None display callback for the corner plot. Every front end
                      passes one; a stage given None closes what it draws (a build saves the PNG into
@@ -648,7 +649,7 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     # sweep. Uniform across every stage (see build_posterior, the observation stages, validate and
     # infer), and a no-op for the unnamed default.
     store.assert_name_free("prior", name)
-    # FIRST, before the ~9-minute stability sweep: is this chi configuration the one you meant? The
+    # FIRST, before the stability sweep: is this chi configuration the one you meant? The
     # prior itself is chi-independent, so this is here purely to fail at the START of a session
     # rather than after its first expensive stage.
     _assert_chi_config_is_deliberate(cfg)
@@ -672,10 +673,10 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
 
     # 3. ND parameter prior (stability-filtered GMM)
     # Stability is a per-parameter property — screen on a short fixed-length trajectory
-    # (STABILITY_SWEEP_ND_UNITS) rather than the full master grid. Global sweep uses
-    # half this (t_global_scale=2 inside gen_prior), local sweep uses the full t_stab.
+    # (STABILITY_SWEEP_ND_UNITS) rather than the full master grid. The global sweep and the
+    # local walk both integrate the whole of t_stab, so every kept point passed one test.
     # THE SEVEN SWEEP AND CLUSTERING KNOBS, resolved here (None -> the config constant) and refused here,
-    # before cfg.t is sliced and before the ~9-minute sweep. Four of them used to travel as
+    # before cfg.t is sliced and before the sweep. Four of them used to travel as
     # None and be resolved -- min_cluster_size and min_samples CLAMPED, max(2, ...) -- inside gen_prior,
     # so a 1 became a 2 nobody chose and the manifest's knobs recorded None for values the sweep did
     # use. gen_prior and the manifest now get the resolved numbers. The load branch above returned

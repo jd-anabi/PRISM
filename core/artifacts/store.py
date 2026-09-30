@@ -817,7 +817,7 @@ class ArtifactStore:
         would raise at the END of the stage.
 
         PUBLIC, and called at every stage's entry, because ``create`` runs after the expensive part:
-        a prior sweep is ~9 minutes and a training run is days, and learning that the name is taken
+        a prior sweep is minutes and a training run is days, and learning that the name is taken
         only once the writer opens is how a finished run gets thrown away. Cheap (it reads the kind's
         manifests) and idempotent, so a stage may call it and ``create`` may check again.
 

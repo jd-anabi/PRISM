@@ -3972,6 +3972,173 @@ def test_the_sweep_device_degrades_to_the_cpu_instead_of_raising(caplog):
         f"is the failure this whole change removed: {said}")
 
 
+# ── the prior's fill: the random walk that densifies the stable set the sweep found ──────────────
+def _walker():
+    """A concrete prior whose shared walk can be driven with a stand-in stability test."""
+    from core.SBI.Priors.nadrowski_prior import NadrowskiPrior
+    p = NadrowskiPrior(torch.float32, torch.device("cpu"))
+    p.sweep_device = torch.device("cpu")          # construct_prior sets this before the walk runs
+    return p
+
+
+def _always_finite(thetas):
+    return torch.ones(thetas.shape[0], dtype=torch.bool)
+
+
+def test_the_fill_keeps_no_point_outside_the_box():
+    """A step past a bound is outside the prior's support, however stable its simulation.
+
+    The walk once accepted any step whose trajectory stayed finite, so a step from a point near a
+    bound could land outside the box; the fit then clamped it to just inside the bound, where a pile
+    of such points became a spike component at the box's edge. Seeds sitting ON the edges and corners
+    send about half of every step outside, so a missing box check cannot hide here."""
+    bounds = [(0.0, 1.0), (-2.0, 3.0)]
+    seeds = [[0.0, -2.0], [1.0, 3.0], [0.0, 0.5], [1.0, -2.0], [0.5, 3.0]]
+    torch.manual_seed(0)
+    got = _walker()._walk(seeds, bounds, 64, 2, 400, 0.05, _always_finite)
+    assert len(got) > 400, f"the walk stopped at {len(got)} points, short of its limit"
+    pts = torch.tensor(got)
+    lo = torch.tensor([b[0] for b in bounds])
+    hi = torch.tensor([b[1] for b in bounds])
+    outside = int((~((pts >= lo) & (pts <= hi)).all(dim=1)).sum())
+    assert outside == 0, f"{outside} of {len(got)} kept points lie outside the box"
+
+
+def test_the_fill_spreads_its_steps_across_every_kept_point():
+    """The fill must densify the stable set evenly, never pile its steps onto a few points.
+
+    It once popped kept points one at a time and gave each a whole batch of steps, so at the default
+    sizes its budget ran out after the first ~72 of ~100,000 swept points: about a quarter of the
+    prior's weight ended up in tight clumps around them. Here every new point is attributed to its
+    nearest seed (the steps are far smaller than the seeds' spacing), and no seed may take more than
+    a handful, while most seeds take at least one."""
+    torch.manual_seed(1)
+    n_seed = 200
+    seeds = torch.rand(n_seed, 3).tolist()
+    seed_set = {tuple(s) for s in seeds}
+    got = _walker()._walk(seeds, [(0.0, 1.0)] * 3, 32, 3, n_seed + 256, 1e-4, _always_finite)
+    new = torch.tensor([p for p in got if p not in seed_set])
+    assert new.shape[0] >= 256, f"the walk added only {new.shape[0]} points"
+    parent = torch.cdist(new, torch.tensor(seeds)).argmin(dim=1)
+    per_seed = torch.bincount(parent, minlength=n_seed)
+    assert int(per_seed.max()) <= 8, (
+        f"one seed took {int(per_seed.max())} of {new.shape[0]} new points: the walk is clumping")
+    assert int((per_seed > 0).sum()) >= n_seed // 2, (
+        f"only {int((per_seed > 0).sum())} of {n_seed} seeds took a step: the walk is not spreading")
+
+
+def test_the_fill_keeps_no_step_whose_simulation_diverged():
+    """Stability is the walk's test: a step whose trajectory went non-finite is never kept."""
+    seeds = [[0.40, 0.5], [0.44, 0.5]]
+    diverges_at = 0.45
+    torch.manual_seed(2)
+    got = _walker()._walk(seeds, [(0.0, 1.0), (0.0, 1.0)], 32, 2, 200, 0.02,
+                          lambda th: th[:, 0] < diverges_at)
+    new = [p for p in got if list(p) not in seeds]
+    assert new, "the walk kept nothing, so the test proves nothing"
+    assert all(p[0] < diverges_at for p in new), "a step whose simulation diverged was kept"
+
+
+def test_the_fill_stops_when_a_round_keeps_nothing():
+    """With nothing stable to step to, the walk must end, not spin until its limit."""
+    calls = []
+
+    def never(thetas):
+        calls.append(thetas.shape[0])
+        return torch.zeros(thetas.shape[0], dtype=torch.bool)
+
+    seeds = [[0.2, 0.2], [0.8, 0.8]]
+    got = _walker()._walk(seeds, [(0.0, 1.0), (0.0, 1.0)], 16, 2, 10_000, 0.01, never)
+    assert got == sorted(tuple(s) for s in seeds)
+    assert calls == [16], f"the walk ran {len(calls)} rounds after one that kept nothing"
+
+
+def test_the_fill_returns_its_points_sorted_and_says_what_it_kept(caplog):
+    """The fit sees the kept points in one order for every model (a set's own order varies with its
+    values, which made a user model's prior unreproducible from its points), and the prior's log
+    says how many steps the walk tried and why it rejected the rest."""
+    import logging
+    import re
+    caplog.set_level(logging.INFO, logger="core.SBI.Priors.prior")
+    seeds = [[0.0, 0.1], [0.5, 0.78], [0.9, 0.2]]      # one on an edge, one beside the instability
+    torch.manual_seed(3)
+    got = _walker()._walk(seeds, [(0.0, 1.0), (0.0, 1.0)], 32, 2, 150, 0.05,
+                          lambda th: th[:, 1] < 0.8)
+    assert got == sorted(got), "the walk's points are not sorted"
+    said = [r.getMessage() for r in caplog.records
+            if r.name == "core.SBI.Priors.prior" and "[prior] fill" in r.getMessage()]
+    assert len(said) == 1, said
+    m = re.search(r"kept (\d+) new sets from (\d+) steps \((\d+) outside the box, (\d+) unstable\); "
+                  r"(\d+) sets in all", said[0])
+    assert m, said[0]
+    kept, tried, outside, unstable, total = map(int, m.groups())
+    assert total == len(got) and kept == total - len(seeds)
+    assert kept + outside + unstable == tried and tried % 32 == 0
+    assert outside > 0 and unstable > 0, "the stand-in should have produced both rejections"
+
+
+def test_every_prior_class_fills_through_the_shared_walk_with_its_box(monkeypatch):
+    """One walk serves all four model classes, so the box check and the even spread cannot drift
+    apart between them; each class supplies only its own simulation."""
+    from types import SimpleNamespace
+    from core.SBI.Priors import bp_prior, hopf_prior, nadrowski_prior, prior as prior_mod
+    from core.SBI.Priors.user_prior import UserPrior
+
+    seen = []
+
+    def spy(self, stable_params, prior_bounds, batch_size, n_params, n_max, step, finite):
+        seen.append((type(self).__name__, prior_bounds, callable(finite)))
+        return sorted(tuple(p) for p in stable_params)
+
+    monkeypatch.setattr(prior_mod.Prior, "_walk", spy)
+    bounds = [(0.0, 1.0), (0.0, 2.0)]
+    seeds = [[0.5, 1.0], [0.2, 0.3]]
+    t = torch.linspace(0.0, 1.0, 11)
+    user = UserPrior(SimpleNamespace(n_vars=1, variables=[{"init": 0.0}]),
+                     torch.float32, torch.device("cpu"))
+    for p in (nadrowski_prior.NadrowskiPrior(), hopf_prior.HopfPrior(), bp_prior.BPPrior(), user):
+        p.sweep_device = torch.device("cpu")
+        out = p._local_map(t, seeds, 4, 2, 10, 0.01, 1, False, False, bounds)
+        assert out == sorted(tuple(s) for s in seeds), type(p).__name__
+    assert [s[0] for s in seen] == ["NadrowskiPrior", "HopfPrior", "BPPrior", "UserPrior"], seen
+    assert all(s[1] == bounds and s[2] for s in seen), seen
+
+
+def test_the_stability_sweep_screens_the_full_duration_and_says_what_it_kept(monkeypatch, caplog):
+    """Every kept point passes one test: finite over the whole stability duration.
+
+    The sweep once simulated only the first half of the duration, and its points went into the kept
+    set without a second look, so part of the prior had passed a shorter test than the rest. Checked
+    through gen_prior, the call the prior stage makes."""
+    import logging
+    from core.SBI import prior_screen
+    from core.SBI.Priors import nadrowski_prior
+
+    seen = {}
+    seeds = np.random.default_rng(0).uniform(0.1, 0.9, size=(100, 2)).tolist()
+
+    def fake_sweep(self, t, n_params, prior_bounds, segs, batch_size, num_iterations, steady, sdd):
+        seen["sweep"] = t.shape[0]
+        return seeds
+
+    def fake_fill(self, t, stable, batch_size, n_params, n_max, step, segs, steady, sdd,
+                  prior_bounds=None):
+        seen["fill"] = t.shape[0]
+        return sorted(tuple(p) for p in stable)
+
+    monkeypatch.setattr(nadrowski_prior.NadrowskiPrior, "_global_map", fake_sweep)
+    monkeypatch.setattr(nadrowski_prior.NadrowskiPrior, "_local_map", fake_fill)
+    caplog.set_level(logging.INFO, logger="core.SBI.Priors.prior")
+    t = torch.linspace(0.0, 10.0, 1001)
+    prior_screen.gen_prior("NADROWSKI", t, 64, 32, 1, [(0.0, 1.0), (0.0, 1.0)], num_iterations=2,
+                           dtype=torch.float32, device=torch.device("cpu"))
+    assert seen == {"sweep": 1001, "fill": 1001}, (
+        f"the sweep and the fill must both screen the whole grid: {seen}")
+    said = [r.getMessage() for r in caplog.records
+            if r.name == "core.SBI.Priors.prior" and "[prior] stability sweep" in r.getMessage()]
+    assert said == ["[prior] stability sweep: kept 100 of 128 candidates over 1001 steps"], said
+
+
 def test_the_sweep_and_flow_knobs_are_ARGUMENTS_because_the_constants_are_snapshotted():
     """EVERY KNOB MUST BE AN ARGUMENT, and it must reach the thing it configures.
 

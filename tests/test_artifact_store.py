@@ -1306,7 +1306,7 @@ def test_build_prior_reloads_a_gmm_whose_weights_do_not_renormalise_exactly(stor
 
 def test_a_taken_name_is_refused_before_the_spend(store, tiny_run, monkeypatch):
     """A duplicate name is refused at the stage's ENTRY, not by the write at the end. store.create is
-    where the collision used to surface, and it runs after the ~9-minute sweep / the days of
+    where the collision used to surface, and it runs after the stability sweep / the days of
     training -- so the stage would do all of its work and then throw it away. monkeypatch restores
     both stubs on its own, including on failure."""
     from core import orchestrator
@@ -4181,7 +4181,7 @@ def test_cal_n_scales_and_the_fisher_knobs_are_refused_not_clamped(store, monkey
 
 def test_build_prior_resolves_its_knobs_refuses_them_before_the_sweep_and_records_what_it_used(store, monkeypatch):
     """At build_prior, the seven sweep and clustering knobs are resolved AT THE STAGE (None -> the
-    config constant) and refused there, before cfg.t is sliced and the ~9-minute sweep starts. Only
+    config constant) and refused there, before cfg.t is sliced and the sweep starts. Only
     num_iterations was checked before; max_sets, walk_step, min_cluster_size and min_samples travelled
     as None into gen_prior, which resolved and clamped them out of sight while the prior's manifest
     recorded None. So: every out-of-rule value is refused with its field; gen_prior receives numbers,
