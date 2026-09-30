@@ -1,12 +1,12 @@
 # PRISM — state
 
 **Last updated:** 2026-09-30. **Piece 6, "the reference cleanup, retrain readiness, the probe checks and the
-documents", is DONE**: commits `779c73c`..`067eddc` (115, counted by `git log --oneline 779c73c^..067eddc`) plus this closing
-documents commit, on the local `main` branch, UNPUSHED (the owner pushes). Its design is
-`docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md` (`907098d`; decisions H1–H13 in
-§1.1; §11 now 30 deviations, rows 1–14 ruled at planning and 15–30 during execution, each with what it costs if
-wrong) and its plan `docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md` (`779c73c`, 39
-tasks). **What landed, part by part:** (1) the reference cleanup — nothing shippable (`core/`, `tests/`,
+documents", is DONE**: commits `779c73c`..`067eddc` (115, counted by `git log --oneline 779c73c^..067eddc`) plus the
+closing documents commits (`de52b79` and the closing check's fixes after it), on the local `main` branch, UNPUSHED
+(the owner pushes). Its design is `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
+(`907098d`; decisions H1–H13 in §1.1; §11 now 34 deviations, rows 1–14 ruled at planning and 15–34 during execution,
+each with what it costs if wrong) and its plan `docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md`
+(`779c73c`, 39 tasks). **What landed, part by part:** (1) the reference cleanup — nothing shippable (`core/`, `tests/`,
 `conftest.py`, the launchers, `README.md`, `requirements.txt`, `pytest.ini`, `docs/guide/`) cites a working
 document or its labels, and `tests/test_source_hygiene.py` enforces it; (2) the help tidy — one default convention
 in every help line, pinned by `core.tool.help_defaults`; (3) the readiness fixes — the tier-1 path tested end to
@@ -18,18 +18,31 @@ of letting them refuse the whole cache at its final load (row 25); (4) `python -
 measuring the chi band, the masking and how hard a cell can be driven; (5) the reader guide `docs/guide/` (ten
 pages, each stamped with the commit it was checked against) and the root README's command-line summary; the handoff
 archived at `bf5dd92` (read back with `git show bf5dd92^:PRISM_HANDOFF.md`). **Execution (2026-09-28/30, Opus 5.5,
-subagent-driven, controller rulings in the gitignored ledger):** every task had a review and its own one-process
-fast gate, started together; the whole-code review (Task 25: five lenses, each with an adversarial verifier) found 0
-Critical, 2 Important and 23 Minor (+3 from the verifiers) — both Importants and 12 Minors fixed in 25 commits
+subagent-driven, controller rulings in the gitignored ledger):** every code-changing task had a review and its own
+one-process fast gate, started together (a documents-only commit before the final gates was covered by the next
+gate); the whole-code review (Task 25: five lenses, each with an adversarial verifier) found 0 Critical, 2 Important
+and 23 Minor (20 from the lenses, 3 added by the verifiers) — both Importants and 12 Minors fixed in 25 commits
 `8fef76f`..`04fbe54`, the rest parked with reasons ("Owed" item 7); the card run of record (2026-09-29, at `16e5bae`)
 passed every leg, with the tier-1 run, the narrowing leg, the diagnostic card and the probes (the gate table); the
-documents review (Task 37: an only-record checklist of 157 rows, three accuracy lenses, completeness and reading
-paths, a verifier each) found 2 Critical and 39 Important page errors and 55 false code texts, all fixed, with the
-checklist closed (103 found, 19 appended, 35 dropped). The final fast gate, the slow set and the card judgement are
-in the gate table below.
-**Next:** the owner runs rows F1–F5 of `docs/checklists/display-walkthrough.md` on a real screen; then the retrain
-("Owed" item 8) from `docs/guide/retrain.md` — its stop point (about 740 hours) waits for the owner's confirmation
-(the open list).
+documents review (Task 37: an only-record checklist of 157 rows, three accuracy lenses, code texts, completeness and
+reading paths, a verifier each) found 2 Critical and 39 Important page errors and 55 false code texts, all fixed
+except the runbook's stop point, which waits for the owner (the recordings page's choice of stand-in values is written
+neutrally for the owner to settle), with the checklist closed (103 found, 19 appended, 35 dropped). The final fast
+gate, the slow set and the card judgement are in the gate table below.
+**Next, in order:** (1) the owner runs rows F1–F5 of `docs/checklists/display-walkthrough.md` on a real screen and
+reports each result; the next session records them in that table and in the gate table below. (2) The owner pushes
+(`main` is 119 commits ahead of `origin/main` `8556546` at `de52b79`: piece 6's 116 plus its three design commits
+`7ad6498`, `907098d` and `b24973e`; each later commit adds one, and `git status -sb` gives the live count). (3) Before
+the retrain, the owner settles three items on the open list: the runbook's stop point (about 740 hours); the
+masked-probe band the retrain's gates read (±12 points was derived for a four-batch smoke run); and whether the prior
+screen's two gaps (the census screens only the first half of the stability duration; the flood-fill walk has no box
+check) are fixed before the retrain prior is built. (4) The retrain ("Owed" item 8) from `docs/guide/retrain.md`. A
+recommendation for the owner, not yet settled: its pre-flight step 1 owes run 4's resume as well (the shard set-aside
+entered the resume path after the 29 September card run, and the 30 September re-run covered runs 1, 2 and 2b only),
+not the diagnostic card (`core/diagnostics` changed only in a docstring since); and it runs on the installed sbi
+0.25.0 unless the owner syncs to the pinned 0.26.1 first, after which the two loop behaviours on the open list are
+re-read before the epoch timing. The load-check audit and the rest of "Owed" item 7 can follow the retrain; do the
+audit before any later change to `core/config.py` or to the features.
 **Piece 5, "the secondary analyses", is DONE**: commits
 `a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus the documents
 commits that close it (this file's `fec2cde`, its review fixes `6c68a22`, and a count correction), on
@@ -195,13 +208,13 @@ Piece 3
   budget lines (V6); the Fisher settings recorded only when the rotation ran (V7); a loaded prior
   closes its figure (V8); sbi's summary writer is switched off, and the repository root's `sbi-logs/` tree
   (1359 run directories under `NPE_C`) was deleted (V9).
-- **Piece 6 is DONE** (2026-09-28/30, commits `779c73c`..`067eddc`, on the local `main` branch, unpushed). It follows the
-  design `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md` (§1.1 holds decisions
-  H1–H13; §11 lists 30 deviations, 1–14 ruled at planning and 15–30 during execution) and the 39 tasks of
-  `docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md`. Each task had its brief, an implementer,
-  a review (a workflow of scoped reviewers and adversarial verifiers for every large page and for the whole-code
-  review) and a one-process fast gate started with the review; behaviour changes were test-first. The execution
-  ledger, the pre-flight scan, the reviews and the gate logs are gitignored scratch under
+- **Piece 6 is DONE** (2026-09-28/30, commits `779c73c`..`de52b79` (116) plus the closing check's fixes, on the local `main`
+  branch, unpushed). It follows the design `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
+  (§1.1 holds decisions H1–H13; §11 lists 34 deviations, 1–14 ruled at planning and 15–34 during execution) and the 39
+  tasks of `docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md`. Each implemented task had its
+  brief, an implementer, a review (a workflow of scoped reviewers and adversarial verifiers for every large page and for
+  the whole-code review) and a one-process fast gate started with the review; behaviour changes were test-first. The
+  execution ledger, the pre-flight scan, the reviews and the gate logs are gitignored scratch under
   `.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/`; their rulings live on in the decisions log
   below and in spec §11, and what they hand on is in "Owed" item 7's open list. What landed is in the paragraph at
   the top.
@@ -345,8 +358,8 @@ Piece 3
      - ~~Rows E1–E17 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done by the
        USER, reported 2026-09-25: **all seventeen pass**, recorded in that file's last two columns and
        in the gate table below.
-   - **Piece 6** — DONE 2026-09-30 (`779c73c`..`067eddc`; BRAINSTORMED 2026-09-25, design `907098d`, plan
-     `779c73c`, 39 tasks; the paragraph at the top; spec
+   - **Piece 6** — DONE 2026-09-30 (`779c73c`..`de52b79`, 116, plus the closing check's fixes; BRAINSTORMED 2026-09-25,
+     design `907098d`, plan `779c73c`, 39 tasks; the paragraph at the top; spec
      `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`). Everything
      carried into it is closed:
      - ~~The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes false
@@ -404,7 +417,8 @@ Piece 3
        measurement against 1181 s recorded for piece 3, on code this piece's diff does not reach on
        that test's path (the root handler and the cancel deferral are consulted only by the two front
        ends, never by a bare `core` pipeline run). It passed both times; worth watching at the
-       retrain, where the same test runs for real. (Piece 5's slow set: 1397 s.)
+       retrain, where the same test runs for real. (Piece 5's slow set: 1397 s. Superseded by piece 6's final-slow-set
+       item below: 2618 s.)
      - *From piece 4, declined by the owner or left unsound (design spec §1.3).* Figures in the
        browser, an open-the-folder button and "use this" jumps into a stage tab — considered and
        declined 2026-09-17. A session summary at quit — declined in favour of Apply's session line
@@ -518,8 +532,12 @@ Piece 3
        `.contiguous()` and deletes the solution (`core/FDT/sanity.py`).
      - *From the handoff's retirement.* The Fisher's `feats` closure in
        `decorrelate.build_latent_fisher_rotation` re-derives `subs`, `n_fine`, `t_fine` and `n_segs` on
-       every call, and its `s()` rebuilds `base_inits.expand(mm, -1).contiguous()` on every simulation;
-       hoisting them is free and has not been done (`core/SBI/decorrelate.py`).
+       every call, and its `s()` rebuilds `base_inits.expand(mm, -1).contiguous()` on every simulation.
+       They are not constants: all four follow from the row's own `t_scale`, which the rotation's `t_scale`
+       arms and each operating point move, and the expansion depends on the ensemble width (`max(4m, 128)`
+       or `m`). Caching the four per `t_scale` value and the expansion per width would save the work;
+       moving them out of `feats` would simulate the `t_scale` arms on the anchor's grid and silently
+       corrupt the rotation. Not done (`core/SBI/decorrelate.py`).
      - *From the handoff's retirement.* Four speed-ups stay open, each gated: (1) running `gen_chi_raw`'s
        1+K probe simulations as one wider call (up to 8× on the dominant cost) waits on the drive
        builder's 4× transient — `forcing.build_nondim_force_tensor` materialises a full (batch, T) time
@@ -560,22 +578,25 @@ Piece 3
      - *From piece 6 — the load-check audit, for the owner.* Recorded but never compared when a record
        loads: a posterior's and an observation's `feature_set_version` and `summary_flags` (only a width
        change is caught); an observation's box; an observation's chi drive, band and lock-in ceiling (a
-       posterior's are compared); a posterior's and an observation's time grid and units-file hash (only
-       the simulation cache's identity carries them). Two constants are recorded in no record a load
+       check belongs on simulated observations only: an experimental one records config.py's drive, not
+       the lab's; a posterior's are compared); a posterior's and an observation's time grid and
+       units-file hash (only the simulation cache's identity compares them; the grid sits in the
+       configuration block, the units file in `inputs`). Two constants are recorded in no record a load
        compares (only a `probes` diagnostic record carries them) and are not in
        `SimulationIdentity`: the cycle floor `CHI_MIN_CYCLES` and the smallest probe count training
        draws, `CHI_K_MIN_TRAIN`, so a retrain after changing either reuses a cache simulated under the
        old value. Settle this before any post-retrain change to `core/config.py` or to the features
        (`core/artifacts/store.py`, `core/artifacts/identity.py`).
-     - *From piece 6.* A simulated chi observation made before an edit to `CHI_F0` or
-       `CHI_FREQ_BOUNDS` loads unchecked beside the new configuration: `ArtifactStore.load_observation`
-       compares neither. A check belongs on simulated observations only (an experimental one records
-       config.py's drive, not the lab's) (`core/artifacts/store.py`).
-     - *From piece 6 — science, for the owner.* The prior's stability screen: the census integrates
-       only the first half of the stability duration, and its accepted points seed the flood-fill
-       without a second screen; the flood-fill's walk has no box check, so walked points outside the
-       box are fitted clamped near ±13.8 in the latent coordinate. How many points each affects is
-       unmeasured (`core/SBI/prior_screen.py`, `core/SBI/Priors/prior.py`, `core/SBI/reparam.py`).
+     - *From piece 6 — science, for the owner before the retrain.* The prior's stability screen: the
+       census integrates only the first half of the stability duration, and its accepted points seed the
+       flood-fill without a second screen; the flood-fill's walk has no box check, so walked points
+       outside the box are fitted clamped near ±13.8 in the latent coordinate. How many points each
+       affects is unmeasured, and the prior's record keeps no census share, so a count needs a throwaway
+       script over a full-size tier-1 prior (scratch under Temp). `docs/guide/science.md`'s open
+       question "The stability screen's two gaps" gives the census's options (screen it over the full
+       duration, or re-screen its points over the full duration before they seed the fill); the walk's
+       would be a box check. Count first to learn whether either gap matters
+       (`core/SBI/prior_screen.py`, `core/SBI/Priors/prior.py`, `core/SBI/reparam.py`).
      - *From piece 6.* A prior rebuild is not reproducible: `prior` seeds nothing (the Sobol scramble,
        the numpy start points and the flood-fill walk draw from unseeded streams); only the mixture's
        random state is fixed. A seed flag would make rebuilds repeatable — and would then break the
@@ -594,7 +615,8 @@ Piece 3
        field maps to no flag (`core/tool/fields.py`); `--chi-k`'s shared help reads as a training
        setting, though training draws its own count (`core/tool/config_args.py`); the `identifiability
        laplace` and `jacobian` help omits their mode and model refusals (`core/tool/diagnostics.py`);
-       argparse accepts abbreviated flags on every subcommand but `probes`.
+       argparse accepts abbreviated flags on every subcommand but `probes`, whose parsers alone set
+       `allow_abbrev=False` (`core/tool/probes.py`; the other parsers are under `core/tool/`).
      - *From piece 6.* `core.Helpers.file_manager.parse_units_file` collects the unit tokens in a set,
        so `cfg.units_dict` and the `units` list each manifest's config block records
        (`core/artifacts/manifest.py`) come out in hash order, different in each process.
@@ -630,12 +652,17 @@ Piece 3
        256 × 10 flow; the plan had set twice about 92 hours (the 128 × 8 fit scaled to the retrain's
        rows), which would stop a normally costed run, and asked the owner to confirm. Confirm 740 hours
        or choose another before pre-flight step 2 (`docs/guide/retrain.md`).
-     - *From piece 6's documents review — science, for the owner.* The runbook judges both the
-       12-batch `probes mask` audit and the 10,000-batch run total against 37 % ± 12 points. That band
-       was derived as about two standard deviations of a four-batch smoke run; by the same model, with
-       the batch count as the effective sample size, the standard deviation is about 3.5 points at 12
-       batches and about 0.12 at 10,000. A systematic shift of the tier-1 prior's masked fraction may
-       justify a wide band, but nothing says so. Decide the band for each (`docs/guide/retrain.md`,
+     - *From piece 6's documents review — science, for the owner before the retrain.* The runbook judges
+       both the 12-batch `probes mask` audit and the 10,000-batch run total against 37 % ± 12 points.
+       That band was derived as about two standard deviations of a four-batch smoke run; by the same
+       model, with the batch count as the effective sample size, the standard deviation is about 3.5
+       points at 12 batches and about 0.12 at 10,000. A systematic shift of the tier-1 prior's masked
+       fraction may justify a wide band, but nothing says so. The only tier-1 reading of record is card
+       run 4's 285 of 704 (40.5 %, four batches); `probes mask` has not run over a tier-1 prior. Options:
+       keep ±12 as a systematic tolerance; statistical bands, about ±7 points at 12 batches and about
+       ±0.25 at 10,000; or judge the 10,000-batch total against the retrain's own 12-batch `probes mask`
+       reading. A change touches `docs/guide/retrain.md` pre-flight step 4 and gate 3, and perhaps
+       `docs/guide/science.md`'s chi-probe section. Decide the band for each (`docs/guide/retrain.md`,
        `core/diagnostics/probes.py`).
      - *From piece 6's documents review.* `UserPrior._local_map` returns its accepted set unsorted
        (`list(accepted_params)`) where the built-in models return `sorted(...)`, so a user model's prior
@@ -661,16 +688,23 @@ Piece 3
      - *From piece 6.* A calibration's caveat line and its `results["cal_n_scales"]` record the
        REQUESTED number of operating points (200 by default) while fewer are drawn when `n_cal` is
        small, because a batch is at least 10 datasets wide (at `n_cal` 40, ceil(40/10) = 4 are drawn),
-       so the record misstates what ran. Harmless at the retrain's 2000 / 200 (`core/SBI/analysis.py`,
-       `core/orchestrator.py`).
+       so the record misstates what ran (piece 3's minor below has `sbc` record None; fix the two
+       together). Harmless at the retrain's 2000 / 200 (`core/SBI/analysis.py`, `core/orchestrator.py`).
+     - *From piece 6, for the owner (the plan's question 4, never answered; the default kept).* A narrowed
+       (truncated) posterior's load records every acceptance flag passed, not only the ones the load used:
+       `ArtifactStore.load_posterior` sets `accepted` from `Accept.used()`, which lists every flag set (an
+       amortized posterior's load records none). So an inference on a narrowed posterior's own observation,
+       loaded with both flags, records an `other_observation` it did not use. Record only the flags used, or
+       keep it (`core/artifacts/store.py`, `core/orchestrator.py`).
    - *From piece 6's whole-code review (Task 25), parked with reasons* (the full list, with each reason and
      cost, is `review/synthesis.md` "Parked" in the gitignored ledger folder):
      - A tier-1 box whose units file declares no force token fails with a bare `ValueError` at the prior's
        `store.create`, after the stability sweep — about 9 minutes lost before what should be a pre-spend
        refusal; not on the card's or the retrain's path, whose units declare a force unit
        (`core/artifacts/store.py`, `core/sim_config.py`).
-     - `probes drive`: a drive harmonic past Nyquist aliases (detune 1.4's second harmonic, for a peak above
-       about a quarter of Nyquist) and is not flagged — a fast lab cell's check could miss a sub-harmonic
+     - `probes drive`: a drive harmonic past Nyquist aliases and is not flagged (at detune 1.4 the second
+       harmonic's alias lands on the peak itself for a peak near 0.53 × Nyquist; the review put the affected
+       cells at a peak above about a quarter of Nyquist) — a fast lab cell's check could miss a sub-harmonic
        caveat (`core/diagnostics/probes.py`).
      - Band's `_NYQUIST_SHARE = 0.9` is a literal separate from training's `0.9 * nyq` (and eight
        user-visible "0.9 x Nyquist" strings): after a change to training's share, band masks at the old share
@@ -680,9 +714,27 @@ Piece 3
      - Inherited Fisher eigenvalues are not checked against the parent's V (an API-only risk); a narrowing
        child without them records None silently; a non-finite header eigenvalue fails a resume
        (`core/SBI/training_checkpoint.py`, `core/orchestrator.py`).
-     - The rest are test-coverage gaps (an observer on the resume branch, the mask audit's absorption case
-       at ≥1024 rows, the real-rows too-slow side), wording drift and stale line numbers in comments the
-       documents review later removed.
+     - Behaviour items the ledger routed here: the Config tab accepts two typed unit tokens of one
+       dimension (`nm um`), and the two orders of such a pair key one cache (the fingerprint sorts the
+       tokens) while resolving differently — a validation refusal would remove it
+       (`core/gui/panels/inference/config_tab.py`); the cache identity reads the units file when the identity
+       is built, not when it was parsed, so an edit between Apply and Train keys the run by the edited file
+       (`core/artifacts/identity.py`); with no units fingerprint, `near_miss_siblings` can offer a
+       `training-rows/2` cache that differs only in `format` — it refuses and never reuses, and excluding
+       `format` as `truncation` is excluded would drop the offer (`core/SBI/training_checkpoint.py`); an
+       in-band "not measured" point makes `band_holds` False where `drive_holds` reads None, and
+       `_cross_check` does not count a warning under a tag with no committed record as abandoned, so the
+       abandoned count under-reports in a run that already fails (`core/diagnostics/probes.py`); the training
+       run-total `[chi] masked probes` line is logged before the final save, widening an existing window by
+       one call (`core/SBI/pipeline.py`).
+     - Wording owed in code: `probes band`'s `--lengths` default says "to this cell's training ceiling", but
+       the default stops at the shorter of 60 s (`T_MAX_EXP_S`) and that ceiling (`core/tool/help_defaults.py`,
+       `docs/guide/command-line.md`); the FDT module docstring still gives the Nadrowski-only `N * beta`
+       prefactor, where the code uses `campaigns.observable_noise_prefactor` (`core/FDT/fdt_pipeline.py`).
+     - The rest are test-coverage gaps — an observer on the resume branch (`core/SBI/pipeline.py`), the mask
+       audit's absorption case at ≥1024 rows and the real-rows too-slow side (`core/diagnostics/probes.py`,
+       `tests/test_diagnostics.py`) — plus wording drift and stale line numbers in comments the documents
+       review later removed.
    - *From piece 6's documents review (Task 37), parked with reasons* (`docs-review/synthesis.md` §(6) and
      `docs-review/recheck.md`, gitignored): "sidecar" survives as history mentions of the retired `.rot.pt`
      file (`core/SBI/reparam.py`, `ArtifactStore.load_posterior`'s docstring), in "so this needs no sidecar"
@@ -692,8 +744,10 @@ Piece 3
      `docs/guide/recordings.md` for the owner to settle.
    - *From piece 6's final slow set.* The chi full-pipeline slow test ran 2618 s at the piece's close (quiet machine),
      against 1397 s at piece 5, 1610 at piece 4 and 1181 at piece 3; its body changed only in a comment. The two FDT
-     slow tests also ran longer than at piece 5 (619 s against 562, 452 against 323), though all of them ran faster
-     than at Task 25 on a loaded machine; the card run's GPU stage timings matched piece 4's. Profile it if it grows again
+     slow tests also ran longer than at piece 5 (619 s against 562, 452 against 323). The other four slow tests ran
+     faster than at Task 25 on a loaded machine (828 s against 1159, 619 against 905, 452 against 519, 7 against 11),
+     but this one ran 332 s SLOWER on the quiet machine than on the loaded one (2618 s against 2286), which argues
+     against load as the cause; the card run's GPU stage timings matched piece 4's. Profile it if it grows again
      (`tests/test_user_sbi.py::test_chi_mode_full_sbi_pipeline`, `core/SBI/pipeline.py`).
    - Piece 3 did not take the optional tidy-up of `decorrelate.py`'s `or` fallbacks and `prior.py`'s
      clamps (spec §1.3 "the plan, if cheap; else none"); it stays unowned.
@@ -710,8 +764,9 @@ Piece 3
      ledger `.superpowers/sdd/2026-09-16-validation-and-logging/progress.md`.
    - The rest of piece 2's final review's 46 "left open" items are test-coverage gaps and cosmetics,
      each with its reason, in the gitignored `.superpowers/sdd/2026-09-12-one-flow/final-review.md`.
-8. **The retrain — NEXT.** From `docs/guide/retrain.md`, after the owner's rows F1–F5 and the
-   stop-point confirmation (the open list).
+8. **The retrain — NEXT.** From `docs/guide/retrain.md`, after steps (1)–(3) of "Next, in order" at
+   the top: the owner's rows F1–F5, the push, and the owner's three decisions on the open list (the
+   stop point, the masked-probe band, the prior screen's two gaps).
 
 ## Clean break — EXECUTED 2026-09-11 (design spec §9 / plan Task 14)
 
@@ -797,11 +852,11 @@ Piece 3
 | slow set of record, `pytest -m slow -q --durations=5` (piece 5) | 2026-09-24 at `c29320c` (the same code as `7e51275`, which changed documents and two docstrings only), beside the read-only Task 41 document review: **3 passed**, 965 deselected, 102 warnings, **38 min 6 s** (2286.51 s; wall 38 min 8 s), exit 0, against design spec §9's ~45-minute budget. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1396.87 s (piece 4: 1610 s); **new**, `test_tool.py::test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (Task 33) 562.38 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size`, rewritten by Task 34 to assert records and on the fixed seed 20260925 since the review's N40, 322.93 s (302 s solo at Task 36). Afterwards no `Resources/*/sbitest` (the two slow tool tests no longer request `tool_env`, which installed SBITEST into the real `Resources/`; they set `PRISM_ARTIFACTS` themselves, N38), no `sbi-logs/`, tree clean, the real `Artifacts/` unchanged |
 | **GPU smoke gate, piece 5** | 2026-09-24: **judged NOT REQUIRED; the card was not run.** The judgement was re-made against the whole piece, `a0d85da^..c29320c`. The changed lines that create or move a tensor are in `core/FDT/cross_validation.py`, `fdt_pipeline.py` and `sanity.py` — all on the FDT and sweep path, pinned to `cpu_device()` by `cli.make_fdt_config` and `make_param_sweep_config` — in `core/gui/panels/simulate_runner.py` (N17's zero-forcing tensor, on the Live simulation's CPU-pinned path, which the gate does not reach), and in `core/rng.py`: `seeded`'s CUDA branch (fork the device, `torch.manual_seed`) is the base's byte for byte, and its new CPU branch seeds `torch.default_generator`, the CPU half of `manual_seed`, so no CPU draw changes. `core/diagnostics/rng.py` re-exports the same object, and `core/orchestrator.py` only re-imports `PreflightWarning` from `core/refusals.py`. **T28's change to `core/tool/__init__.py` and `core/tool/smoke.py` IS on `smoke`'s path**: it chooses the store root through `temp_store_root` (set by `set_defaults` on smoke's parser) instead of the flag's presence, creates or moves no tensor, and T28's tests pin the root choice; the gate always passes `--store-root` anyway. The fix range `d13ca96..6be832c` touched nothing under `core/SBI`, `core/diagnostics`, `core/orchestrator.py` or `core/tool/smoke.py`, and `core/rng.py` only in its docstring (the re-review verified); nothing under `core/SBI`, `core/Simulator`, `core/Solvers` or `core/Models` changed in the piece. The diagnostic card is not needed either: no line under `core/diagnostics` that moves a tensor changed (only `rng.py`'s re-export). Piece 4's run (`d1f0b98`) remains the last card measurement |
 | display walkthrough, piece-5 rows E1–E17 (`docs/checklists/display-walkthrough.md`) | reported 2026-09-25, the user on the real screen (piece 5 as it stands; the code is `7e51275`, every later commit being documents only): **rows E1–E17 all pass** — the date and result columns of each row record it |
-| **GPU card run, piece 6** (`python -m core smoke`, the five command lines of `CLAUDE.md`, run 4's resume, the narrowing leg, the diagnostic card and the probe checks, at `16e5bae` — the code of the whole-code review's fixed head `04fbe54`; the later commits are documents only) | 2026-09-29, alone on the card (after the drive parity run the same evening: `probes drive` on `master_spont` at window 0.018 over the archived sixteen strengths, exit 0 in 13.8 s, Ω₀ 22.600 Hz, clarity 1.41e+04, strongest free-running **0.02**, weakest captured **0.2** — the 0.02 default window accepted): **run 1** chi `master_spont`: prior 92 s, posterior 194 s, validate 22 s, infer 76 s, exit 0 (piece 4: 92.3/198.5/22.3/85.9), training `[chi] masked probes` 254 of 704 (36.1 %: 79/224, 15/96, 102/192, 58/192), cache `5d89e2242bd2` (the identity format moved it from `4d8022b100db`); **run 2** the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 7.7 s, masked line equal to run 1's; **run 2b** exit 1 in 5.8 s, "differs only in n_runs: this run 2, that cache 4 … (--new-run)", no `[fisher]` line, `simulations/` unchanged; **run 3** forced `master_weak`: 91/60/13/20 s, exit 0 (piece 4: 100.4/63.9/15.0/19.3); **run 4** tier-1, 256 × 10: 92/150/20/45 s, exit 0, both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']`, masked 285 of 704 (40.5 %), T in the posterior's keys, `config.tier1` (`k_b_cell` 0.01380649, `T_range` [280.0, 310.0]) and `assumed_params` ["T"], 13 eigenvalues (7.949e+16 … 0.1652), T marked "(assumed input)" in the calibration table, `[verdict] FAIL` (a result at this size), observation `simulated_f_scale` 46.99; **run 4 resume** exit 0 in 7.8 s, `[checkpoint] the stored rotation's eigenvalues come with it`, eigenvalues carried, Fisher settings null, `resumed_from_batch` 4; **narrowing leg** (`PRISM_ARTIFACTS` at run 4's store) tsnpe 12.6 s exit 0 (direction 0 left full width: t_scale-loaded), truth inside all five truncated directions, `t1_round` carries the parent's eigenvalues; validate 2571 s (the stage's default size on a truncated posterior) exit 0, `[verdict] FAIL` (T's rank test fails at this size, a 5-epoch round), seed 401191828; infer 42 s exit 0; accepted [] (round) / ["truncated"] (calibration) / ["truncated", "other_observation"] (inference); **diagnostic card** sbc 18 s (rank verdict 0/1 repeats), jacobian 85 s, ablation 6 s, laplace 128 s, tier-1 jacobian 85 s with T column (a measurement) ‖g‖ 0.214, unique 0.134, |cos| with n 0.92 (degenerate pair n~T: the force scale is proportional to n·T), with t_scale 0.49, with x_scale 0.44; **probes** band: the configured (0.03, 0.3) and drive 0.15 hold, the 0.6× control captured at every length (own-peak share 0.12–0.18); drive (default grid, the configured 0.15 included): free-running 0.02, captured from 0.15 (0.1 in between); mask over `smoke_prior`: 753 of 2,144 masked (35.1 %), the cycle floor the only cause (too slow at the band's top 31.2 %, shortened by the duration draw 4.0 %), invariants hold, cross-check confirms all 12 row ranges. No OOM line and no Traceback in any run; `warning:` lines only the expected ones (a non-amortized load, three pathological-trajectory notices in the round's calibration). **Run 1's masked count is not reproducible across processes on the card:** pieces 2–4 recorded 260 three times; an export of this piece's first commit gave 260 again, but a bisect over the piece's commits found batch 3 at 108 or 102 (one row's six probes) flipping between TEST-ONLY commits, always together with the Fisher step's eigenvalue spread (≈1.7e+14 with 102; inf or 3.78e+16 with 108) — the Fisher's smallest eigenvalue is near zero and its simulation is not bitwise stable on CUDA, and one borderline row follows it. Either count is inside the ±12 pp band. Scratch stores deleted |
-| `pytest --collect-only -q` after piece 6 | 2026-09-30 at `067eddc`: **1178** collected (the fast gate's 1172 passed and 1 skipped, plus the 5 slow tests), 210 more than the 968 at `7e51275`, against design spec §7's budget of about 80 ± 25 added (above by 105: every behaviour fix was test-first, the probes family and the tier-1 path needed their own, and two new suites landed; §11 row 22). `tests/test_*.py` holds twenty-two suites (new: `test_source_hygiene.py`, `test_tier1.py`, `test_docs.py`) |
-| **final fast gate, piece 6**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-30 at `067eddc`, on a quiet machine: **1172 passed, 1 skipped**, 5 deselected, **181 warnings**, **15 min 24 s** (inside the 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing; no `sbi-logs/`; `Resources/Models` holds only `SHM.json` and `SHM2.json`. Warnings 181 → 181: unchanged. Slowest: `test_train_and_validate_without_a_loaded_cell` 87.2 s, `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 73.7 s, `test_no_forcing_user_model_full_sbi_pipeline` 43.7 s. Every task had its own one-process gate, recorded in the execution ledger |
+| **GPU card run, piece 6** (`python -m core smoke`, the five command lines of `CLAUDE.md`, run 4's resume, the narrowing leg, the diagnostic card and the probe checks, at `16e5bae` — the code of the whole-code review's fixed head `04fbe54`, the commits between them changing no file under `core/` (documents and the guide's tests only); the code after `16e5bae` is judged in the "stands" row below) | 2026-09-29, alone on the card (after the drive parity run the same evening: `probes drive` on `master_spont` at window 0.018 over the archived sixteen strengths, exit 0 in 13.8 s, Ω₀ 22.600 Hz, clarity 1.41e+04, strongest free-running **0.02**, weakest captured **0.2** — the 0.02 default window accepted): **run 1** chi `master_spont`: prior 92 s, posterior 194 s, validate 22 s, infer 76 s, exit 0 (piece 4: 92.3/198.5/22.3/85.9), training `[chi] masked probes` 254 of 704 (36.1 %: 79/224, 15/96, 102/192, 58/192), cache `5d89e2242bd2` (the identity format moved it from `4d8022b100db`); **run 2** the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 7.7 s, masked line equal to run 1's; **run 2b** exit 1 in 5.8 s, "differs only in n_runs: this run 2, that cache 4 … (--new-run)", no `[fisher]` line, `simulations/` unchanged; **run 3** forced `master_weak`: 91/60/13/20 s, exit 0 (piece 4: 100.4/63.9/15.0/19.3); **run 4** tier-1, 256 × 10: 92/150/20/45 s, exit 0, both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']`, masked 285 of 704 (40.5 %), T in the posterior's keys, `config.tier1` (`k_b_cell` 0.01380649, `T_range` [280.0, 310.0]) and `assumed_params` ["T"], 13 eigenvalues (7.949e+16 … 0.1652), T marked "(assumed input)" in the calibration table, `[verdict] FAIL` (a result at this size), observation `simulated_f_scale` 46.99; **run 4 resume** exit 0 in 7.8 s, `[checkpoint] the stored rotation's eigenvalues come with it`, eigenvalues carried, Fisher settings null, `resumed_from_batch` 4; **narrowing leg** (`PRISM_ARTIFACTS` at run 4's store) tsnpe 12.6 s exit 0 (direction 0 left full width: t_scale-loaded), truth inside all five truncated directions, `t1_round` carries the parent's eigenvalues; validate 2571 s (the stage's default size on a truncated posterior) exit 0, `[verdict] FAIL` (T's rank test fails at this size, a 5-epoch round), seed 401191828; infer 42 s exit 0; accepted [] (round) / ["truncated"] (calibration) / ["truncated", "other_observation"] (inference); **diagnostic card** sbc 18 s (rank verdict 0/1 repeats), jacobian 85 s, ablation 6 s, laplace 128 s, tier-1 jacobian 85 s with T column (a measurement) ‖g‖ 0.214, unique 0.134, |cos| with n 0.92 (degenerate pair n~T: the force scale is proportional to n·T), with t_scale 0.49, with x_scale 0.44; **probes** band: the configured (0.03, 0.3) and drive 0.15 hold, the 0.6× control captured at every length (own-peak share 0.12–0.18); drive (default grid, the configured 0.15 included): free-running 0.02, captured from 0.15 (0.1 in between); mask over `smoke_prior`: 753 of 2,144 masked (35.1 %), the cycle floor the only cause (too slow at the band's top 31.2 %, shortened by the duration draw 4.0 %), invariants hold, cross-check confirms all 12 row ranges. No OOM line and no Traceback in any run; `warning:` lines only the expected ones (a non-amortized load, three pathological-trajectory notices in the round's calibration). **Run 1's masked count is not reproducible across processes on the card:** pieces 2–4 recorded 260 three times; an export of this piece's first commit gave 260 again, but a bisect over the piece's commits found batch 3 at 108 or 102 (one row's six probes) flipping between TEST-ONLY commits, always together with the Fisher step's eigenvalue spread (≈1.7e+14 with 102; inf or 3.78e+16 with 108) — the Fisher's smallest eigenvalue is near zero and its simulation is not bitwise stable on CUDA, and one borderline row follows it. Either count is inside the ±12 pp band. Scratch stores deleted |
+| `pytest --collect-only -q` after piece 6 | 2026-09-30 at `067eddc`: **1178** collected (the fast gate's 1172 passed and 1 skipped, plus the 5 slow tests), 210 more than the 968 at `7e51275`, against design spec §7's budget of about 80 ± 25 added (above by 105: every behaviour fix was test-first, the probes family and the tier-1 path needed their own, and three new suites landed; §11 row 22). `tests/test_*.py` holds twenty-two suites (new: `test_source_hygiene.py`, `test_tier1.py`, `test_docs.py`) |
+| **final fast gate, piece 6**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-30 at `067eddc`, on a quiet machine: **1172 passed, 1 skipped**, 5 deselected, **181 warnings**, **15 min 24 s** (inside the 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing; no `sbi-logs/`; `Resources/Models` holds only `SHM.json` and `SHM2.json`. Warnings 181 → 181: unchanged. Slowest: `test_train_and_validate_without_a_loaded_cell` 87.2 s, `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 73.7 s, `test_no_forcing_user_model_full_sbi_pipeline` 43.7 s. Every code-changing task had its own one-process gate, recorded in the execution ledger |
 | slow set of record, `pytest -m slow -q --durations=5` (piece 6) | 2026-09-30 at `067eddc`: **5 passed**, 1173 deselected, 153 warnings, **1 h 15 min 27 s**, exit 0. `test_chi_mode_full_sbi_pipeline` 2618 s — OVER piece 5's 1397 s: its body is unchanged but for a comment, the other slow tests ran faster than Task 25's loaded reading and the card run's GPU stages matched piece 4's, and this test has varied 1181–2618 s across pieces, so it is recorded on the open list rather than chased; `test_smoke_runs_every_stage_on_the_tier1_box` 828 s; `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 619 s; `test_fdt_and_crossval_run_at_tiny_size` 452 s; `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` 7 s. Tree clean afterwards |
-| GPU card run, piece 6 — stands | `git diff --name-only 16e5bae..067eddc -- core conftest.py` lists 41 files, judged: every change is a comment, docstring, help string or message, plus the chi_f0 load comparison (floats read from a manifest), the shard set-aside (file renames) and a return annotation — none creates or moves a tensor, so the card run at `16e5bae` is the piece's card measurement. Insurance, because the set-aside sits in the training resume path: the recipe's runs 1, 2 and 2b re-run on the card on 2026-09-30 at `067eddc` — run 1 exit 0 in 412.8 s (prior 102 s, posterior 196 s, validate 25 s, infer 85 s; training masked probes 260 of 704, 36.9 % — 260 again, where the card run of record read 254: the count moves by one row between processes); run 2 printed the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 8.7 s, nothing set aside; run 2b exit 1 in 6.6 s naming `n_runs`, no `[fisher]` line, no new cache directory |
+| GPU card run, piece 6 — stands | `git diff --name-only 16e5bae..067eddc -- core conftest.py` lists 41 files, judged: every change is a comment, docstring, help string or message, plus the chi_f0 load comparison (floats read from a manifest), the shard set-aside (file renames) and a return annotation — none creates or moves a tensor, so the card run at `16e5bae` is the piece's card measurement. Insurance, because the set-aside sits in the training resume path: the recipe's runs 1, 2 and 2b re-run on the card on 2026-09-30 at `067eddc` — run 1 exit 0 in 412.8 s (prior 102 s, posterior 196 s, validate 25 s, infer 85 s; training masked probes 260 of 704, 36.9 % — 260 again, where the card run of record read 254: the count moves by one row between processes; cache `856a5f26ce2e`, not the record's `5d89e2242bd2`, with the identity code and `Resources/` unchanged between them — the one identity input a run builds is the fresh prior's fingerprint, so that is the likely difference (not traced; pieces 2–4 read `4d8022b100db` three times), and a card run's cache digest is no fixed expectation); run 2 printed the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 8.7 s, nothing set aside; run 2b exit 1 in 6.6 s naming `n_runs`, no `[fisher]` line, no new cache directory |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the copies identical (the documents review compares them). Run it from the
@@ -1189,11 +1244,12 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
       posterior trained at another drive (§11 row 24; cost: none — it fires only after a `CHI_F0` edit); a
       training run sets aside shards a killed save left uncommitted, never after a fallback read of the
       previous state file (row 25; cost: a few set-aside files on disk).
-    - **The runbook's stop point** is twice the EXPECTED cost at 256 × 10 (about 740 hours), not twice the
-      92-hour 128 × 8 reference; the owner has not confirmed it (row 26; the open list asks).
-    - **Part 5 changed code texts, not behaviour**: every false or stale help string, tooltip, message,
-      comment and docstring the page reviews found was corrected (rows 23, 27), with the comment-only checker
-      on each commit.
+    - **The runbook's stop point** is more than twice the EXPECTED cost at 256 × 10 (about 370 hours, so a stop above
+      about 740), not twice the 92-hour 128 × 8 reference; the owner has not confirmed it (row 26; the open list asks).
+    - **Part 5's page work changed code texts only** (its two behaviour changes are the readiness fixes
+      above): every help string, tooltip, message, comment and docstring the page reviews judged false or
+      stale was corrected (rows 23, 27), with the comment-only checker on each commit, except the
+      `--chi-k` shared help and the `identifiability laplace`/`jacobian` help gaps (the open list).
     - **The load-check audit is NOT done here**: the documents review found recorded keys no loader compares
       (the feature-set version, the summary flags, an observation's box, drive, band and ceiling, the time
       grid, the units file) and two constants in no compared record and not in the cache identity (the cycle
@@ -1201,10 +1257,11 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
       the owner (cost: a post-retrain change to one of them loads an old record silently until it lands).
     - **Pre-flight rulings** S-01..S-23 (the scan of all 39 tasks before Task 1) were folded into the tasks
       they bind; owner questions 2, 3 and 5 took their recommended answers (a fresh tier-1 prior; stratified SBC
-      as a characterisation; the stash note in CLAUDE.md), question 4 its default, question 1 is row 26.
+      as a characterisation; the stash note in CLAUDE.md), question 4 (whether a load records only the
+      acceptances it used) its default — unanswered, on the open list; question 1 is row 26.
   - **The whole-code review** (Task 25): 0 Critical, 2 Important (the smoke run labels "run 1"/"the drill" that
-    reached a usage error; the "Phase 2/3" banners), 23 Minor + 3 from the verifiers; one fix dispatch of 25
-    commits (`8fef76f`..`04fbe54`) and a scoped re-review; the rest parked with reasons (the open list).
+    reached a usage error; the "Phase 2/3" banners), 23 Minor (3 of them added by the verifiers); one fix dispatch of
+    25 commits (`8fef76f`..`04fbe54`) and a scoped re-review; the rest parked with reasons ("Owed" item 7).
   - **The card run's judgement**: the card run at `16e5bae` stands for the piece (the gate table); run 1's masked
     count is not reproducible across processes on CUDA (§11 row 30).
-  - Spec §11 holds 30 rows (1–14 planning, 15–30 execution).
+  - Spec §11 holds 34 rows (1–14 planning, 15–34 execution; row 32 a planning-time departure found at execution).
