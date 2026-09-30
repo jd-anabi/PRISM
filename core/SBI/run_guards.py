@@ -119,8 +119,10 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     every launch afterwards with nothing to say so. A persisted preference is the right behaviour;
     a persisted MEASUREMENT DEFINITION needs comparing against the module default before the spend.
 
-    ``store.load_posterior`` already catches the same disagreement -- but only when a posterior is
-    LOADED, i.e. after the days are spent. This fires before the first simulation.
+    ``store.load_posterior`` runs this same check and then compares the band and drive a posterior
+    records with the loading config's, so a posterior trained at another band or drive is refused
+    too -- but only when a posterior is LOADED, i.e. after the days are spent. This fires before the
+    first simulation.
 
     SCOPE IS DELIBERATELY NARROW. Only the band and the drive amplitude are checked, because only
     they shape the TRAINING distribution and are baked into the encoder's weights.

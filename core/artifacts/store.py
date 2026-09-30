@@ -1359,6 +1359,11 @@ class ArtifactStore:
             if abs(float(cond["chi_max_cycles"]) - float(cfg.chi_max_cycles)) > 1e-9:
                 _bad(f"was trained with a {float(cond['chi_max_cycles']):g}-cycle lock-in ceiling, but this "
                      f"config declares {float(cfg.chi_max_cycles):g}; logcyc is how the encoder weighs a probe.")
+            if abs(float(cond["chi_f0"]) - float(cfg.chi_f0)) > 1e-9:
+                _bad(f"was trained at chi drive amplitude {float(cond['chi_f0']):g}, but this config declares "
+                     f"{float(cfg.chi_f0):g}. The drive sets every probe's response amplitude, so a posterior "
+                     f"trained at another drive reads a probe's |chi| on the wrong scale. Retrain, or set "
+                     f"CHI_F0 in config.py back to {float(cond['chi_f0']):g}.")
         if int(cond["forcing_dim"]) != want_dim or int(cond["width"]) != SUMMARY_WIDTH + 1 + want_dim:
             _bad(f"conditions on {cond['width']} features (forcing/chi block {cond['forcing_dim']}), but this "
                  f"config expects {SUMMARY_WIDTH + 1 + want_dim} (block {want_dim}). Conditioning widths are "

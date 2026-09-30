@@ -1421,12 +1421,43 @@ def test_load_posterior_refuses_each_mismatch_class(store):
         "elem_w": ({("conditioning", "chi_elem_w"): 5}, "channels per slot"),
         "band": ({("conditioning", "chi_freq_bounds"): [0.1, 10.0]}, "band"),
         "cycles": ({("conditioning", "chi_max_cycles"): 5.0}, "cycle"),
+        "drive": ({("conditioning", "chi_f0"): float(cfg.chi_f0) * 2}, "drive amplitude"),
         "width": ({("conditioning", "forcing_dim"): 3, ("conditioning", "width"): 53}, "incompatible"),
     }
     for tag, (over, why) in cases.items():
         _posterior_artifact(store, cfg, name=tag, over=over)
         with pytest.raises(ValueError, match=why):
             store.load_posterior(cfg, tag)
+
+
+def test_load_posterior_refuses_a_chi_posterior_trained_at_another_drive(store, monkeypatch):
+    """A chi posterior's manifest records the drive amplitude it was trained at, and the load compares
+    it with the config's before the payload is unpickled. The drive sets every probe's response
+    amplitude, so a flow trained at another drive would read a probe's |chi| on the wrong scale --
+    and the config-against-config.py guard cannot see it, because it never reads the posterior. The
+    same posterior loads when the two drives agree, a float round-off apart included."""
+    cfg = _nad_cfg(chi_mode=True)
+    want, other = float(cfg.chi_f0), float(cfg.chi_f0) * 2
+    _posterior_artifact(store, cfg, name="other-drive", over={("conditioning", "chi_f0"): other})
+    real_load, unpickled = torch.load, []
+
+    def spy_load(*a, **k):
+        unpickled.append(a[0] if a else k.get("f"))
+        return real_load(*a, **k)
+
+    monkeypatch.setattr(torch, "load", spy_load)
+    with pytest.raises(Refusal, match="drive amplitude") as excinfo:
+        store.load_posterior(cfg, "other-drive")
+    assert excinfo.value.field == "posterior"
+    msg = str(excinfo.value)
+    assert f"{other:g}" in msg and f"{want:g}" in msg, msg
+    assert "Retrain" in msg and "CHI_F0" in msg, msg
+    assert unpickled == [], f"the drive was compared only after the payload was unpickled: {unpickled}"
+
+    _posterior_artifact(store, cfg, name="same-drive", over={("conditioning", "chi_f0"): want + 1e-12})
+    lp = store.load_posterior(cfg, "same-drive")
+    assert lp.name == "same-drive" and lp.latent is not None
+    assert unpickled, "the agreeing posterior loaded without reading its payload"
 
 
 def test_manifest_V_must_equal_the_rotation_in_the_pickled_prior(store):
