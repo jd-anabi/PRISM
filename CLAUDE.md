@@ -173,6 +173,9 @@ what is on disk, the last gate). Update it at the end of every session.
   amended, ending with the Co-Authored-By line the harness provides. Commit messages are SHORT:
   a one-line subject, a brief body only when the subject cannot carry the why. The user pushes
   and handles every other remote operation.
+  Undo an edit with `git stash`, never `git checkout -- <file>`, and read `git status` before
+  touching a file you did not create: `checkout --` once discarded about seventy lines of
+  uncommitted test work.
 - Archiving a file means MOVING it on disk into the gitignored `archive/` and then `git rm
   --cached` — never `git mv`, which would re-create a tracked-but-ignored file. A script that was
   folded into a subcommand is `git rm`'d instead: git history is its archive.

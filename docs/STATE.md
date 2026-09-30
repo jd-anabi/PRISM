@@ -500,6 +500,151 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
           `PRISM_ARTIFACTS`.
        9. Process: several fix-dispatch commit subjects are longer than the house's short subject
           (no amend is allowed).
+     - *From the handoff's retirement.* The FDT sanity checks keep the whole solution alive while they
+       measure: `check_ensemble_convergence` and `check_psd_window` take `x_steady = sol[0, 0, :, burn_idx:]`,
+       a view, and never delete `sol`, where `campaigns.run_campaign1_psd` copies channel 0 with
+       `.contiguous()` and deletes the solution (`core/FDT/sanity.py`).
+     - *From the handoff's retirement.* The Fisher's `feats` closure in
+       `decorrelate.build_latent_fisher_rotation` re-derives `subs`, `n_fine`, `t_fine` and `n_segs` on
+       every call, and its `s()` rebuilds `base_inits.expand(mm, -1).contiguous()` on every simulation;
+       hoisting them is free and has not been done (`core/SBI/decorrelate.py`).
+     - *From the handoff's retirement.* Four speed-ups stay open, each gated: (1) running `gen_chi_raw`'s
+       1+K probe simulations as one wider call (up to 8× on the dominant cost) waits on the drive
+       builder's 4× transient — `forcing.build_nondim_force_tensor` materialises a full (batch, T) time
+       tensor and three more, which `pipeline.peak_sim_elements` and `_max_sim_batch` still count as
+       `n_ch * n_fine`; (2) strided single-variable solver output (about 23 % of time, 6× peak) must
+       reproduce the segment-seam duplication, keep every variable's final state and take the
+       predictive check's per-row subsample; (3) binning the predictive check by a step budget instead
+       of `PPC_BIN_SIZE` (bins are t_scale-sorted and keyed on their smallest t_scale); (4)
+       `SummaryStatistics`'s duplicate `_acf` and `_analytic_bandpass` calls and `chi.peak_freq`'s
+       repeated peak search, about 6 minutes of a production run. A fifth, stacking the Fisher's arms,
+       was dropped: 15–30 minutes of about 38 hours, at a high risk to its common random numbers
+       (`core/SBI/pipeline.py`, `core/forcing.py`, `core/SBI/ppc.py`, `core/SBI/statistics.py`).
+     - *From the handoff's retirement.* Two renames were deferred and never made: `core/gui/vt.py`,
+       whose name does not say that it turns tqdm's output into progress rows and log lines, and the
+       mixed casing of `core/`'s packages (`SBI`, `Simulator`, `Solvers`, `Models`, `Helpers`, `FDT`,
+       `Reduction` against `gui`, `artifacts`, `diagnostics`, `tool`, with spaces in three folder names
+       under `core/SBI/Priors/`). Either touches every import of what it renames.
+     - *From the handoff's retirement.* `.claude/worktrees/` holds two orphaned copies of the
+       repository, `jolly-jang` and `trusting-einstein`, each with a full `core/` that a search over the
+       working tree also hits, and an empty `upbeat-rhodes-c8d30f`; `git worktree list` shows none of
+       them. Removing them is the owner's call.
+     - *From the handoff's retirement.* The FDT and reduction-map figures still save with
+       `plt.savefig`/`fig.savefig` rather than `core.Helpers.visualizers.save_figure`, so an appearance
+       change during a long run can save them with unreadable colours: `core/FDT/plots.py`
+       (`plot_eff_temp_ratio`, `plot_spontaneous_trajectory`, `plot_psd`, `plot_chi_components`),
+       `core/FDT/cross_validation_plots.py` (`plot_fdt_3d_vs_param`) and `core/Reduction/plots.py`
+       (`plot_sweep_summary`, `plot_cross_validation_3d`).
+     - *From the handoff's retirement.* In-repository `file:line` citations came back into comments
+       and docstrings and rot as files move; piece 6's documents review replaced every one it found in
+       `core/` with a function name (`e965fa0`), but nothing stops new ones: no source scan looks for
+       `<file>.py:<n>` in a comment. Citations of third-party files (tqdm, sbi, torch) are a separate
+       question.
+     - *From the handoff's retirement.* `core.SBI.training_checkpoint.checkpoints_using_prior` has had
+       no caller in `core` since the prior-save path it served was retired (the store refuses to delete
+       a prior a cache depends on); only `tests/test_artifact_store.py` calls it, and its docstring tells
+       an overwrite story the store made impossible. Possibly dead code
+       (`core/SBI/training_checkpoint.py`).
+     - *From piece 6 — the load-check audit, for the owner.* Recorded but never compared when a record
+       loads: a posterior's and an observation's `feature_set_version` and `summary_flags` (only a width
+       change is caught); an observation's chi drive, band and lock-in ceiling (a posterior's are
+       compared); a posterior's and an observation's time grid and units-file hash (only the simulation
+       cache's identity carries them). Two constants are recorded nowhere and are not in
+       `SimulationIdentity`: the cycle floor `CHI_MIN_CYCLES` and the smallest probe count training
+       draws, `CHI_K_MIN_TRAIN`, so a retrain after changing either reuses a cache simulated under the
+       old value. Settle this before any post-retrain change to `core/config.py` or to the features
+       (`core/artifacts/store.py`, `core/artifacts/identity.py`).
+     - *From piece 6.* A simulated chi observation made before an edit to `CHI_F0` or
+       `CHI_FREQ_BOUNDS` loads unchecked beside the new configuration: `ArtifactStore.load_observation`
+       compares neither. A check belongs on simulated observations only (an experimental one records
+       config.py's drive, not the lab's) (`core/artifacts/store.py`).
+     - *From piece 6 — science, for the owner.* The prior's stability screen: the census integrates
+       only the first half of the stability duration, and its accepted points seed the flood-fill
+       without a second screen; the flood-fill's walk has no box check, so walked points outside the
+       box are fitted clamped near ±13.8 in the latent coordinate. How many points each affects is
+       unmeasured (`core/SBI/prior_screen.py`, `core/SBI/Priors/prior.py`, `core/SBI/reparam.py`).
+     - *From piece 6.* A prior rebuild is not reproducible: `prior` seeds nothing (the Sobol scramble,
+       the numpy start points and the flood-fill walk draw from unseeded streams); only the mixture's
+       random state is fixed. A seed flag would make rebuilds repeatable — and would then break the
+       runbook's new-cache route, which relies on a rebuilt prior's new fingerprint
+       (`core/SBI/prior_screen.py`, `docs/guide/retrain.md`).
+     - *From piece 6, for the owner.* `probes drive` judges an undriven cell as oscillating when its
+       highest spectral bin, over the whole band's median power, reaches the clarity threshold, so a
+       low-pass spectrum whose maximum sits above the lowest few bins can pass as an oscillation. A
+       local-baseline clarity, or a test on a quiescent cell with a mid-band hump, would settle it
+       (`core/diagnostics/probes.py`, `probe_drive`).
+     - *From piece 6 — tool code gaps.* A Ctrl-C in an `artifacts` command prints the training cache's
+       resume advice, since that family sets no `interrupt_note` (`core/tool/browse.py`); `ablation`'s
+       two simulation-cache refusals and `make_cfg`'s unsupported-model refusal are plain `ValueError`s
+       (`core/diagnostics/ablation.py`, `core/tool/config_args.py`); the store's error for a reference
+       that resolves to no record carries no field (`core/artifacts/store.py`); the `units` refusal
+       field maps to no flag (`core/tool/fields.py`); `--chi-k`'s shared help reads as a training
+       setting, though training draws its own count (`core/tool/config_args.py`); the `identifiability
+       laplace` and `jacobian` help omits their mode and model refusals (`core/tool/diagnostics.py`);
+       argparse accepts abbreviated flags on every subcommand but `probes`.
+     - *From piece 6.* `core.Helpers.file_manager.parse_units_file` collects the unit tokens in a set,
+       so `cfg.units_dict` and the `units` list each manifest's config block records
+       (`core/artifacts/manifest.py`) come out in hash order, different in each process.
+     - *From piece 6.* Probably dead: `core/Helpers/fdt.py`, `core/Helpers/model_helpers.py` and
+       `core/SBI/Priors/Forcing Priors/sin_prior.py` — nothing in `core/` or `tests/` imports them.
+       Archive or keep: the owner's call.
+     - *From piece 6.* The BP model: `BPModelSteady.g` returns (batch, 4, 4) diagonal matrices, which
+       the Euler step cannot use — it fails loudly, and only a 16-parameter BP box reaches it (every
+       shipped BP box has 17); and the shipped cells `Resources/Cells/bp/cell_1.txt` and `cell_3.txt`
+       set `tau_t = 0`, which the 17-parameter branch refuses (read in the code, not run)
+       (`core/Models/bp_model_steady.py`, `core/Simulator/bp_simulator.py`).
+     - *From piece 6.* No flag or control says "start a new simulation cache here" under an unchanged
+       identity: `--resume never` refuses when the run's own cache holds batches, and `artifacts rm`
+       refuses a cache while any record names it. The routes that exist: building a new prior, which
+       re-keys the cache (the first run is refused as one setting away and goes ahead with `--new-run`);
+       deleting from the leaves up, which the Artifacts screen can also do; a fresh records root; and
+       `--checkpoint-every 0`, which cannot resume and leaves the old cache for the next run at the
+       default cadence to reuse. It joins the load-check audit, since a change to the cycle floor needs
+       exactly this (`core/orchestrator.py`, `core/artifacts/store.py`).
+     - *From piece 6.* Smoke run 1's masked-probe count is not reproducible across processes on the
+       card: 260 and 254 of 704 have both been read with identical settings, one borderline row
+       flipping together with the Fisher's near-zero eigenvalue. The gate reads a ±12-point band, so it
+       passes either way (`core/SBI/pipeline.py`, `core/SBI/decorrelate.py`).
+     - *From piece 6's documents review.* Two sbi behaviours the guide and the `--max-epochs` help now
+       state were read in the installed sbi 0.25.0 only: its loop counts the ceiling inclusively, so
+       `--max-epochs N` trains up to N + 1 epochs; and a run the ceiling stops keeps its LAST epoch's
+       network, not its best, because sbi restores the best only when the early-stop patience runs
+       out. Re-read both in `sbi/inference/trainers/npe/npe_base.py` and `trainers/base.py` when the
+       pinned 0.26.1 is installed (the sbi pin item above), and correct the pages and the help if
+       either changed (`core/SBI/train.py`, `core/tool/config_args.py`).
+     - *From piece 6's documents review, for the owner before the retrain.* The runbook stops the
+       retrain when the projected fit exceeds about 740 hours, twice the 370 hours expected for the
+       256 × 10 flow; the plan had set twice about 92 hours (the 128 × 8 fit scaled to the retrain's
+       rows), which would stop a normally costed run, and asked the owner to confirm. Confirm 740 hours
+       or choose another before pre-flight step 2 (`docs/guide/retrain.md`).
+     - *From piece 6's documents review — science, for the owner.* The runbook judges both the
+       12-batch `probes mask` audit and the 10,000-batch run total against 37 % ± 12 points. That band
+       was derived as about two standard deviations of a four-batch smoke run; by the same model, with
+       the batch count as the effective sample size, the standard deviation is about 3.5 points at 12
+       batches and about 0.12 at 10,000. A systematic shift of the tier-1 prior's masked fraction may
+       justify a wide band, but nothing says so. Decide the band for each (`docs/guide/retrain.md`,
+       `core/diagnostics/probes.py`).
+     - *From piece 6's documents review.* `UserPrior._local_map` returns its accepted set unsorted
+       (`list(accepted_params)`) where the built-in models return `sorted(...)`, so a user model's prior
+       fit is not reproducible from its accepted points although the mixture's random state is fixed;
+       adding `sorted()` is a behaviour change (`core/SBI/Priors/user_prior.py`).
+     - *From piece 6's documents review.* A narrowing round from an unrotated parent truncates the
+       first eligible parameter axes in box order (`eye(p)`), which has nothing to do with how well each
+       is constrained. Refuse unrotated rounds, or order their axes? The owner decides
+       (`core/SBI/truncate.py`, `core/orchestrator.py`).
+     - *From piece 6's documents review.* When neither state file of a simulation cache reads, or
+       `state.pt` fails and `state.prev.pt` reads 0, the next run takes the fresh path: `create()`
+       rewrites `header.pt` (a new schedule, initial states and rotation) and every shard is set aside
+       into `uncommitted/`. The set-aside rows then belong to a header that no longer exists, so
+       `set_aside_uncommitted`'s "moving them back is a plain move" restores nothing in that case.
+       Refuse the fresh path over a cache that holds shards, or keep the old header beside them? A
+       Windows file lock that refuses the set-aside move fails the run at start (nothing is lost; no
+       retry) (`core/SBI/pipeline.py`, `core/SBI/training_checkpoint.py`).
+     - *From piece 6's documents review.* A calibration repeated with `validate --seed N` reproduces
+       its set only on the device the record names (`config.device`). `ArtifactStore.load_posterior`
+       loads onto whatever device the run uses and compares no device, so a repeat on another device
+       runs without a word; the reviewer's page now says to pass the recorded device, and a check
+       would make it a refusal (`core/artifacts/store.py`).
    - Piece 3 did not take the optional tidy-up of `decorrelate.py`'s `or` fallbacks and `prior.py`'s
      clamps (spec §1.3 "the plan, if cheap; else none"); it stays unowned.
    - Piece 3's other open minors, each judged not worth a change now: the decorator scan matches only
