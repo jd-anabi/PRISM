@@ -1,6 +1,6 @@
 # Getting started
 
-Checked against commit 04fbe54.
+Checked against commit 3c4e393.
 
 This page takes you from a fresh installation to a first run in each front end, and shows where
 PRISM keeps what it reads and what it writes.
@@ -61,7 +61,8 @@ Which records root a run writes to:
 - **the window**: the `PRISM_ARTIFACTS` root, resolved once, when the window starts
   (`core.gui.app.build_app`);
 - **`smoke`**: the root `--store-root` names; without it, a fresh temporary directory made for that run,
-  whose path the first `[smoke]` line prints and which is left on disk afterwards;
+  whose path the first `[smoke]` line prints and which is left on disk unless the run failed before
+  writing anything;
 - **`fdt` and `crossval`**: the root `--store-root` names; without it, the `PRISM_ARTIFACTS` root;
 - **every other subcommand**, the `artifacts` family included: the `PRISM_ARTIFACTS` root, and no
   other (`core.tool.main`).
@@ -79,11 +80,10 @@ export PRISM_ARTIFACTS="$HOME/prism-scratch"
 
 ## A first run in the window
 
-The window opens on Home, which offers five sections (`core.gui.screens.home_screen.SECTIONS`):
-Reduction Map, FDT Analysis, Parameter Inference, Simulate and Artifacts. The inference chain lives in
-Parameter Inference, whose six tabs are used in order: Config, Prior, Posterior, Validate, Infer and
-TSNPE. A tab stays greyed until the tabs before it have produced what it needs; hovering over a greyed
-tab says what is missing (`core.gui.screens.inference_screen.InferenceScreen.refresh_gates`).
+The window opens on Home. The inference chain lives in Parameter Inference, whose tabs are used in
+order ([Screens](window.md#screens) lists every section and tab, and
+[The Parameter Inference tabs](window.md#the-parameter-inference-tabs) says when each tab is
+enabled).
 
 1. **Config.** Choose the model and its options (tick "Multi-frequency χ(ω) conditioning" for chi
    mode), then press **Apply model & options**.
@@ -166,10 +166,14 @@ named in the singular; seven have a plural directory, and `fdt` keeps its own na
 | `fdt` | `fdt/` | `fdt`, `crossval`, `compare` | the FDT Analysis screen |
 
 `smoke` writes the first six kinds into its own root; it writes a simulation cache only with
-`--checkpoint`. Three things are saved outside the kinds: the Reduction Map writes plain files, with
-no manifest, into `reduction/` under the records root (`core.config.artifacts_root()`); Simulate
-saves a video wherever you choose; and the model builder writes into the inputs root, as described
-under [Inputs and records](#inputs-and-records).
+`--checkpoint`. A few things are saved outside the kinds, with no manifest:
+
+- the Reduction Map writes plain files into `reduction/` under the records root
+  (`core.config.artifacts_root()`);
+- Simulate's video, a figure window's **Save As…**, the Artifacts screen's **Save…** and **Lineage
+  report…**, and `artifacts summary --out` each write where you choose;
+- the model builder writes into the inputs root, as described under
+  [Inputs and records](#inputs-and-records).
 
 **What a record holds.** A record's directory holds:
 
@@ -205,10 +209,12 @@ two exceptions:
 - Naming a record after the fact (the window's Save) is a rename: the manifest is rewritten, then the
   directory is renamed.
 
-**Loading refuses a mismatch.** Loading a record refuses any mismatch it can verify against the
-configuration in use, before anything is spent: the model, the parameter set and its order, the box,
-the observation mode, the conditioning width. The load path has exactly two escape hatches, the
-fields of `core.artifacts.Accept`, and neither lets a mismatch through:
+**Loading refuses a mismatch.** Loading checks a record against the configuration in use before
+anything is spent: the model, the parameter set and its order and the box, and for a posterior or an
+observation the mode and the conditioning width.
+[The artifact store](architecture.md#the-artifact-store) lists every check each loader makes, and
+the recorded settings it leaves unchecked. The load path has exactly two escape hatches, the fields
+of `core.artifacts.Accept`, and neither lets a mismatch through:
 
 - `truncated`: load a posterior that a narrowing round (TSNPE) trained, which is valid only near the
   observation its region was drawn around (`--accept-truncated`; in the window, a confirmation on the

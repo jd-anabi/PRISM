@@ -1,6 +1,6 @@
 # The PRISM guide
 
-Checked against commit 04fbe54.
+Checked against commit 3c4e393.
 
 This guide explains how to use PRISM, how to run it at full size, and how it is built. Each fact is
 written once, on the page it belongs to; the reading paths below take each kind of reader through the
@@ -26,16 +26,18 @@ Three models are built in (Nadrowski, Hopf and BP), and a user can define more.
 PRISM has two front ends over one core.
 
 - **The window**, a PySide6 desktop application: `run.bat` on Windows, `bash run.sh` on macOS and
-  Linux, or `python -m core.gui`. Its Artifacts screen browses the store of everything PRISM has
-  generated.
+  Linux, or a direct launch ([Launching PRISM](getting-started.md#launching-prism)). Its Artifacts
+  screen browses the store of everything PRISM has generated.
 - **The command-line tool**, `python -m core <subcommand>`, which takes flags only and never
   prompts. `python -m core --help` lists the subcommands; its `artifacts` family is the command-line
   twin of the Artifacts screen.
 
 Both front ends call the same stages (`core.orchestrator`) and the same FDT analysis (`core.FDT`);
 the diagnostics (`core.diagnostics`) are reached from the tool alone. Every setting either front end
-offers reaches its stage as an argument, never as an edit to `core.config`, so a run started
-from the window and the same run started from the tool do the same thing.
+offers reaches its stage as an argument, never as an edit to `core.config`, except the window's VRAM
+ceiling. That one changes only how a batch is planned in memory
+([The inference settings](window.md#the-inference-settings)). So a run started from the window and
+the same run started from the tool do the same thing.
 
 ## Reading paths
 
@@ -110,9 +112,9 @@ You want to judge what a trained model can claim, and check it for yourself.
 4. [Gates](retrain.md#gates) and [Afterwards](retrain.md#afterwards): the gates a retrained model must
    pass, and which record answers each one.
 5. [artifacts](command-line.md#artifacts) and [validate](command-line.md#validate): to reproduce a
-   calibration, print its record with `python -m core artifacts show calibration <ref>`, read the
-   posterior among its parents and the seed among its results, then run `validate` on that posterior
-   with `--seed` set to that seed and the calibration settings the record lists.
+   calibration, print its record with `python -m core artifacts show calibration <ref>` and run
+   `validate` again with the posterior, the settings, the seed and the device it records; the
+   `validate` section lists the fields to read and gives the command.
 
 ## The pages
 
