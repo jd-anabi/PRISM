@@ -72,6 +72,14 @@ a round drawn from this posterior keeps the truth inside every direction it trun
 on its region; on today's code a round has run only at smoke size
 ([Narrowing rounds](science.md#narrowing-rounds)).
 
+**A budget of four weeks of the card, 672 hours, for the retrain and its certification round**, set
+by the owner on 30 September 2026. The round is a second full-size training, so the two cost about
+twice the flow's fit plus about 95 hours for the rest (two generations, the calibrations and the
+stratified `sbc` runs), which leaves each fit about 290 hours. The epoch timing's projection reaches
+that at about 16 s per epoch, so a reading above it stops the retrain before anything is simulated,
+when a stop costs only the timing (pre-flight step 2); while the flow trains, the same limit reads as
+about 2.2 hours per full-size epoch and about 290 hours of fitting ([What to watch](#what-to-watch)).
+
 **The verdict rule.** The calibration gate is one fixed rule, `validate`'s verdict: PASS when every
 parameter's rank test reaches KS p ≥ 0.05 ÷ 13 and the joint coverage test reaches KS p ≥ 0.05
 ([Reading calibration honestly](science.md#reading-calibration-honestly)). It is fixed before the run,
@@ -144,16 +152,19 @@ build, and again before the run. Nothing here trains the retrain, and any step c
    [The diagnostic card](testing.md#the-diagnostic-card) passes as well.
 
 2. **The epoch timing**, in a scratch store: how long one epoch of the 256 × 10 flow takes on this
-   card, before anything costs weeks.
+   card, and one of the current default flow, 128 × 8, on the same prior, before anything costs
+   weeks.
 
    ```powershell
    $env:PRISM_ARTIFACTS = "$S/timing"
    & $py -m core prior @Box --chi --device cuda --name timing_prior
-   & $py -m core train @Box --chi --device cuda --prior timing_prior --num-runs 20 --hidden-features 256 --num-transforms 10 --max-epochs 3 --checkpoint-every 0 --name timing
+   & $py -m core train @Box --chi --device cuda --prior timing_prior --num-runs 20 --hidden-features 256 --num-transforms 10 --max-epochs 9 --checkpoint-every 0 --name timing
+   & $py -m core train @Box --chi --device cuda --prior timing_prior --num-runs 20 --hidden-features 128 --num-transforms 8 --max-epochs 9 --checkpoint-every 0 --name timing_small
    ```
 
-   Twenty batches of 2,048 rows are 40,960 rows, 1/500 of the retrain's. The fit's span is read from
-   the posterior's record:
+   Twenty batches of 2,048 rows are 40,960 rows, 1/500 of the retrain's. The 128 × 8 run shows
+   whether the card is as fast as it was in August 2026, and measures directly how much slower the
+   larger flow is. Each fit's span is read from its posterior's record:
 
    - It starts when generation ends. Generation's last line in the record's `log.txt`, from
      `core.SBI.pipeline.gen_training_data`, is the `[chi] masked probes` run total; then
@@ -163,37 +174,78 @@ build, and again before the run. Nothing here trains the retrain, and any step c
      (`core.artifacts.store.ArtifactWriter`), so the directory's creation time marks the fit's end to
      within about a second.
    - sbi 0.25's loop runs while its epoch count, counted from zero, is at most the ceiling, so
-     `--max-epochs 3` trains four epochs. Divide by the count the record keeps,
+     `--max-epochs 9` trains ten epochs. Divide by the count the record keeps,
      `training.epochs_trained`, never by `--max-epochs`.
 
    ```powershell
-   $dir = (Get-ChildItem "$S/timing/posteriors" -Directory -Filter "timing__*").FullName
-   Select-String -Path "$dir/log.txt" -Pattern "masked probes"
-   (Get-Item $dir).CreationTime.ToString("HH:mm:ss")
-   (Get-Content "$dir/manifest.json" -Raw | ConvertFrom-Json).body.training.epochs_trained
+   foreach ($name in "timing", "timing_small") {
+       $dir = (Get-ChildItem "$S/timing/posteriors" -Directory -Filter "${name}__*").FullName
+       $name
+       Select-String -Path "$dir/log.txt" -Pattern "masked probes"
+       (Get-Item $dir).CreationTime.ToString("HH:mm:ss")
+       (Get-Content "$dir/manifest.json" -Raw | ConvertFrom-Json).body.training.epochs_trained
+   }
    ```
+
+   A record's folder is its name, two underscores and its id, so `timing__*` never matches
+   `timing_small__…`; the braces in `${name}` are needed, because PowerShell would read `$name__` as
+   a variable of that name. The loop was checked on this machine's Windows PowerShell 5.1 against
+   stand-in folders of both names.
 
    Seconds per epoch is the span from the `[chi] masked probes` stamp to the directory's creation
    time, divided by the epoch count; add 24 hours to a span that crosses midnight. The span also
-   holds the flow's set-up, so it slightly overstates an epoch, which errs toward stopping. As a
-   guide, the August 2026 fit works out at about 5 s per epoch for a 128 × 8 flow at this size, so
-   about 20 s is expected at 256 × 10, and the stop point below lies above about 41 s.
+   holds a few seconds of set-up, the flow's construction and the card's warm-up on first use, so it
+   slightly overstates an epoch, which errs toward stopping; ten epochs keep that share small. As a
+   guide: about 5.1 s per epoch for the 128 × 8 flow, as in August 2026; for the 256 × 10 flow about
+   6 to 8 s is likely and about 19 s the upper bound; the stop point is about 16 s.
 
    - **The projection**, in hours, is seconds per epoch × 500 × 130 ÷ 3,600: about 18 hours for
      every second an epoch takes. 500 is 20,480,000 ÷ 40,960, the retrain's rows over the timing
-     run's, and 130 is the epoch count the last full run trained to at a patience of 20 epochs.
+     run's, and 130 is the epoch count the August 2026 fit trained to at a patience of 20 epochs, the
+     only count measured at full size, on 10.24 million rows. At 20.48 million rows each epoch holds
+     twice the steps, so the count may be lower; it is not known.
    - **The reference.** The August 2026 retrain fitted its 128 × 8 flow on 10.24 million rows in 46.1
-     hours, so the same flow on 20.48 million rows would take about 92 hours. At 256 × 10 the fit is
-     expected to cost about four times that, about 370 hours: sbi's spline flow at 256 × 10 has about
-     3.9 times the trainable parameters of the 128 × 8 one (3.7 million against 0.96 million, for
-     thirteen parameters), and a training step's work grows with them. The projection covers the
-     fit alone. Generation comes on top: 11.4 hours for the August retrain's 5,000 batches
-     (generation was about a fifth of that run, the flow's fit about four fifths), and about 31 for
-     the 10,000-batch run of 29 August 2026. A narrowing round that re-simulated 5,000 batches under
-     a fresh rotation took 8.1 hours (2 September 2026). The certification round comes on top too,
-     and costs about as much as the whole retrain again.
-   - **The stop point.** If the projection is more than twice the expected cost, about 740 hours,
-     **stop for the owner's decision**.
+     hours, 130 epochs with the best at 110: about 5.1 s per epoch at the timing's size
+     (46.1 × 3,600 ÷ 130 ÷ 250), and about 92 hours for the same flow on 20.48 million rows. Counted
+     on the network the code builds for this box in chi mode, 256 × 10 has about 3.7 times the
+     trainable parameters of 128 × 8 (3.79 million against 1.04 million, of which the embedding net
+     is 74 thousand; the flows alone, 3.72 million against 0.96 million, are 3.9 times), but a step's
+     time does not follow them. The August fit took about 64 ms per 512-row minibatch, about a
+     hundred times its arithmetic on this card: a step's time is set by a fixed overhead per
+     operation, the kernel launches and the two host-device synchronisations sbi's loop makes each
+     step, not by the arithmetic. (The training data stay in host memory and go to the card one
+     minibatch at a time.) The larger flow adds about a quarter more operations per step, and on the
+     CPU its step took 1.2 to 1.6 times as long. So the likely fit is about 110 to 145 hours, about 6
+     to 8 s per epoch in the timing; about 340 hours, about 19 s per epoch, is the upper bound,
+     reached only if a step's time grew with its arithmetic. None of this was timed on the card: the
+     timing decides.
+   - **The rest of the programme.** The projection covers the fit alone. Generation is planned at 31
+     hours for 10,000 batches, the wall clock of the full-size run of 29 August 2026, which holds a
+     gap of about 15 hours after an out-of-memory stop: its simulation ran at about 5.9 s per batch,
+     about 16 hours for 10,000 batches, and a narrowing round that re-simulated 5,000 batches under a
+     fresh rotation took 8.1 hours at the same pace (2 September 2026). A full-size `validate`, 2,000
+     calibration datasets over 200 operating points, took 43 minutes on the card (29 September 2026,
+     on this box); each `sbc` repeat costs about as much, so the four stratified runs of ten repeats
+     take about 28 hours. The certification round is a second full-size training. So the whole
+     programme, the retrain and its certification round, costs about twice the fit plus about 95
+     hours: the two generations at the planning figure, the calibrations and the stratified `sbc`
+     runs, and a few hours for the rest.
+   - **The stop point.** The owner's budget is four weeks of the card, 672 hours, for the whole
+     programme ([Decisions](#decisions)), so each fit may take at most about 290 hours,
+     (672 − 95) ÷ 2, which the projection reaches at about 16 s per epoch (290 ÷ 18).
+     - If the 256 × 10 reading is above about 16 s per epoch, **stop for the owner's decision**.
+     - Whatever the reading, report the projected programme total, twice the projection plus about
+       95 hours, to the owner before the run starts.
+     - If the 128 × 8 reading is above about 7 s per epoch, the card is slower than it was in August
+       2026: report that to the owner before the run, even when the 256 × 10 reading is under 16 s.
+   - **If the stop fires**, nothing has been simulated yet. The owner's options: look for a cause,
+     another program on the card or host memory short (step 5), and time again; a batch width of
+     1,024 (`--run-size 1024`), which about halves the fit but halves the replication at each
+     operating point, a science choice ([Decisions](#decisions), under 10,000 batches × 2,048 rows),
+     and which changes this page where it assumes 2,048 rows: the `[budget]` line the run must print,
+     the projection's factor of 500 (250 at that width) and the cache's size; or fit the 128 × 8 flow
+     first from the complete cache, about 92 hours, and refit at 256 × 10 later without simulating
+     again.
 
 3. **The recording-length check**, still in the scratch store.
 
@@ -222,7 +274,7 @@ build, and again before the run. Nothing here trains the retrain, and any step c
    Remove-Item Env:PRISM_ARTIFACTS -ErrorAction SilentlyContinue
    & $py -m core prior @Box --chi --device cuda --name retrain_prior
    & $py -m core probes band @Box @Cell --device cuda --name retrain_band
-   & $py -m core probes mask @Box --prior retrain_prior --device cuda --name retrain_mask
+   & $py -m core probes mask @Box --prior retrain_prior --num-runs 100 --device cuda --name retrain_mask
    ```
 
    - `probes band` must report that the configured band (0.03, 0.3) and the configured drive 0.15
@@ -230,9 +282,27 @@ build, and again before the run. Nothing here trains the retrain, and any step c
      scale, and every probe is driven at the same non-dimensional amplitude, so the verdicts should
      read as they do on `master_spont` ([Chi probe design](science.md#chi-probe-design)); one that
      does not hold stops the retrain until it is understood.
-   - `probes mask` must find the masked probes within ±12 points of 37 %, with the cycle floor the
-     only cause, over the retrain's own prior ([Chi probe design](science.md#chi-probe-design) says
-     where the figure and the band come from).
+   - `probes mask` runs training's own generator over the retrain's own prior, 100 batches of 32 rows
+     (`--run-size` at its default). Twelve batches took 43 s on the card (29 September 2026), so 100
+     should take about six minutes, an estimate. First the mechanism, as the report prints it: the
+     cycle floor is the only cause (its line, `the cycle floor: …`, counts every masked probe, and the
+     packer's reads `a non-finite or zero lock-in, dropped by the packer: 0 (0.0%)`),
+     `[mask] invariants hold: …`, and
+     `[mask] cross-check: every batch and row asked for reached the audit, and the training generator's own warnings confirm every row range's masked count (…)`.
+     Any `warning: [mask] …` line stops the retrain until it is understood. Then the masked share P,
+     the percentage on the report's first line, `[mask] <m> (<p>%) of <n> probes masked, …`:
+     - within 8 points of 37 %, 29 % to 45 %, it passes;
+     - further than 8 points but within 12, 25 % to 29 % or 45 % to 49 %, the owner reads the
+       per-row peak-frequency quantiles, `[mask] each row's own peak frequency: …`, and the split by
+       cause printed under the first line, and decides;
+     - further than 12 points from 37 %, stop.
+
+     Do not run it again with another seed to average: the seed changes neither the prior nor the
+     probe layout. Write P down: gate 3 is read against it. Why these widths: the reference 37 % is
+     itself uncertain by about 3 points, this reading by about 1.2, and the prior's build may move
+     the fraction by up to about 2; combined, about 3.5 to 4 points, so ±8 is about two standard
+     deviations and ±12 about three ([Chi probe design](science.md#chi-probe-design) says where
+     each comes from).
 
    Then delete the scratch folder: `Remove-Item -Recurse -Force $S`.
 
@@ -351,7 +421,8 @@ it keeps beyond that depends on how it stopped:
   holds, prints neither line, and `$LASTEXITCODE` reads -1. A power cut or a killed process loses the
   same, at most the batches since the last commit. When the rescue save matters more than the
   capture, run the command without the pipe.
-- **A run that dies while the flow trains** loses the fit and none of the rows.
+- **A run that dies, or is stopped, while the flow trains** loses the fit and none of the rows: its
+  cache is complete, so the resumed run skips generation and fits the flow from the start.
 - **A process that stopped before its first commit**, in the Fisher step or the first 50 batches (on
   Ctrl-C under the pipe, say), left nothing to resume, and `--resume require` is refused. Run the
   first command again instead, with `--new-run` again on the new-prior route of
@@ -447,13 +518,30 @@ as well ([Conventions](command-line.md#conventions)).
   allocator cannot hand memory back. A few `OOM at simulation batch …` warnings are survivable; a
   steady stream means the card is fuller than the splitting absorbs.
 - `[chi] masked probes: <m> of <n> (<p>%) over 10000 batches, every committed batch of the simulation cache; per batch <lo>-<hi>%, median <med>%`,
-  the run total the gate reads.
+  the run total gate 3 reads. It is logged when generation ends: judge it then, against
+  `retrain_mask`'s reading, before the fit has gone far ([Gates](#gates)).
 - `[checkpoint] complete: 10000 batches in <dir>. Safe to delete once the posterior is saved; keeping it lets you retrain the flow without re-simulating.`
   Keep it: `ablation` reads it.
 - `[winsor] clipped <n> of <m> summary elements (<p>%) to their per-column 0.1%/99.9% percentiles`:
   a few tenths of a percent.
 - sbi's epoch counter, `Training neural network. Epochs trained: <n>`, and at the end
   `Neural network successfully converged after <n> epochs.`: prints of sbi's, on the console only.
+  sbi redraws the counter in place, so under the capture each count reaches the file only when the
+  next one starts. A full-size epoch takes about 500 times the timing's seconds per epoch: about 2.2
+  hours at the budget's limit of 16 s. Read the file's latest count at two times a few hours apart,
+  noting the clock each time, from any PowerShell session with `$Log` set as in step 6 of the
+  pre-flight (the file can be read while the run appends to it):
+
+  ```powershell
+  (Select-String -Path $Log -Pattern "Epochs trained" | Select-Object -Last 1).Line
+  ```
+
+  Hours elapsed over epochs gained is the hours per epoch; the further apart the readings, the finer
+  it is. More than about 2.2 hours per epoch, stop the run for the owner. The budget also assumes
+  about 130 epochs: a fit still running about 290 hours after generation ended stops for the owner's
+  decision too. Either way the simulation cache is complete, so stopping loses only the fit's hours,
+  never a simulated row, and the same command with `--resume require` goes straight to fitting
+  ([Resuming](#resuming)).
 - `[prism] posterior retrain__<id>  <path>`: the record is written.
 - In the record: `figures/training_loss.png`, the loss curve with the best epoch and the early-stop
   window marked, and `loss.npz`, its numbers.
@@ -461,7 +549,8 @@ as well ([Conventions](command-line.md#conventions)).
 ## Gates
 
 Four gates pass or fail, and two readings are recorded; [Afterwards](#afterwards) says which record
-answers each. A retrained model passes when all four gates hold.
+answers each. A retrained model passes when all four gates hold. Gate 3 is read when generation
+ends, before the flow's fit has gone far; the other three once the run and its diagnostics are done.
 
 1. **The calibration verdict passes.** `retrain_cal`'s `[verdict]` record reads
    `[verdict] PASS: every parameter's rank test at KS p >= 0.05/13 = 0.003846 and the joint coverage test at KS p >= 0.05 (calibration seed <N>)`.
@@ -471,9 +560,22 @@ answers each. A retrained model passes when all four gates hold.
    ([Conditioning features](science.md#conditioning-features)), read `healthy`: each moves the
    embedding at least a tenth as far as the median channel, the same order as this run's healthy
    channels.
-3. **The masked total is within ±12 points of 37 %**, read from the training run's
-   `[chi] masked probes` line, the one scoped to every committed batch of the simulation cache
-   ([Chi probe design](science.md#chi-probe-design) says where the figure and the band come from).
+3. **The masked total is within 3 points of the retrain prior's own `probes mask` reading**, the
+   masked share P that pre-flight step 4 wrote down, and not of 37 %. It is read from the training
+   run's `[chi] masked probes` line, the one scoped to every committed batch of the simulation cache,
+   which is logged when generation ends, so it is judged then, before the flow's fit, tens to
+   hundreds of hours, has gone far. With D the difference between that total and P, in points:
+   - D at most 3: the fit goes on.
+   - D above 3 and at most 5: look closer before leaving the fit to run. Compare the line's per-batch
+     range and median, and the per-batch masking notices in the captured file, with the audit's
+     per-batch figures (its `[mask] masked per batch: …` line, and `results.per_batch` in its record).
+   - D above 5: stop the run and investigate. The simulation cache is complete, so the fit can be run
+     later without simulating again ([Resuming](#resuming)).
+
+   D spreads as the audit's reading does, about 1.2 to 1.6 points: the full run's own total, over
+   10,000 batches, is far steadier, and neither the reference's uncertainty nor the prior's build
+   enters, since both readings are of the same prior. So 3 points is at least about two standard
+   deviations and 5 at least about three ([Chi probe design](science.md#chi-probe-design)).
    `validate` logs a line of its own, scoped to its own process, which is not this gate.
 4. **The eigenvalues are recorded.** `retrain_rotation` prints `[eigenvalues] max … min … spread …`
    and the participation ratio; `[eigenvalues] NOT STORED for this artifact.` fails the gate.
@@ -524,8 +626,11 @@ A narrowing round from `retrain`, drawn around the simulated tier-1 cell at 4.5 
   count, so both are passed ([tsnpe](command-line.md#tsnpe)). Its region is part of its cache's
   identity, so it simulates a cache of its own, and it costs about what the whole retrain does. Its
   roughly 31 hours of generation is the planning figure, taken from the full-size 10,000-batch run of
-  29 August 2026; the one measured narrowing-round generation is the 8.1 hours for 5,000 batches
-  (pre-flight step 2).
+  29 August 2026, a wall clock that holds a gap after an out-of-memory stop; the one measured
+  narrowing-round generation is the 8.1 hours for 5,000 batches, at that run's simulation pace
+  (pre-flight step 2, under the rest of the programme). Its fit falls under the same budget as the
+  retrain's: watch its epoch counter the same way, with the same limits of about 2.2 hours per epoch
+  and about 290 hours of fitting ([What to watch](#what-to-watch)).
 - Left at their defaults: `infer`'s `--chi-k 6`, the probes the simulated cell is measured at, and
   `--n-samples 1000`; `tsnpe`'s `--chi-k 6`, which the observation's own probe count replaces,
   `--run-size 0`, `--learning-rate 0.001`, `--stop-after-epochs 20`, `--max-epochs` with no ceiling,
@@ -581,7 +686,7 @@ Which record answers each gate. The keys are under each record's manifest `body`
 |---|---|---|
 | the calibration verdict | calibration `retrain_cal` | `results.verdict` (`passed`, one row per parameter, the coverage row), `results.seed`; the `[verdict]` record in its `log.txt` |
 | the revived channels | diagnostic `retrain_ablation` | `results.channels`, the `A1_mean` and `D3_bimodality` entries and their `verdict`; `results.median_disp` |
-| the masked total | posterior `retrain` | the `[chi] masked probes` record in its `log.txt` |
+| the masked total | posterior `retrain`; diagnostic `retrain_mask` | the `[chi] masked probes` record in the posterior's `log.txt`; the audit's `results.masked_fraction`, P as a fraction, not a percentage |
 | the eigenvalues | posterior `retrain`; diagnostic `retrain_rotation` | `transform.fisher_eigenvalues`; `results.eigenvalues` |
 | the loss curve, a reading | posterior `retrain` | `figures/training_loss.png`, `loss.npz`, `training.epochs_trained`, `training.best_validation_loss` |
 | informativeness, a reading | calibration `retrain_cal` | `results.informativeness` (`total_nats`, `sem_nats`, `per_param`, `per_direction`) |

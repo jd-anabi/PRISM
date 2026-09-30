@@ -434,6 +434,35 @@ On the GPU a single run's count can also move by one row's probes from process t
 ±12-point band and not an exact count. [probes mask](command-line.md#probes-mask) measures the same
 fraction over any prior, with its batch count as the effective sample size.
 
+The reference is itself uncertain, by about 3 points (one standard deviation). It rests on short
+smoke-size runs, four batches of 32 rows each, most with the same seed and, because the probe
+generator is seeded with a fixed number whatever the run's seed, with the same probe layouts, so the
+runs are far from independent. No band around 37 % can be much narrower than about ±8 points.
+
+The [tier-1 box](#the-tier-1-constraint-and-temperature) cannot move the fraction. Every probe is
+driven at the same non-dimensional amplitude, so the force scale that temperature sets cancels, and
+whether a probe is masked depends only on its row's own oscillation frequency (from the row's
+non-dimensional parameters and the batch's `t_scale`), the recording length and the probe layout.
+The two boxes share the non-dimensional block, the `t_scale` range and the recording lengths. Only a
+new prior fit can shift the fraction, as any rebuild of a prior can; how much two builds differ has
+not been measured, and up to about 2 points is not excluded.
+
+The retrain checks the fraction twice ([Pre-flight](retrain.md#pre-flight) and
+[Gates](retrain.md#gates) in the runbook):
+
+- **Before the run, against 37 %.** `probes mask` runs training's own generator over the retrain's
+  own prior for 100 batches, which brings its reading's own spread from about 3.5 points at the
+  default 12 batches to about 1.2. With the reference's 3 points and up to 2 for the prior's build,
+  the combined uncertainty is about 3.5 to 4 points: within ±8 points, about two standard
+  deviations, the reading passes; beyond ±12, about three, the retrain stops; in between, the owner
+  decides from the audit's per-row peak frequencies and its split by cause.
+- **When generation ends, against that audit.** The full run's total is judged against the audit's
+  reading, not against 37 %. Both read the same prior, so neither the reference's uncertainty nor the
+  prior's build enters, and the full run's own spread over 10,000 batches is far smaller: the
+  difference spreads as the audit does, about 1.2 to 1.6 points. Within 3 points the fit goes on;
+  between 3 and 5 it is looked at more closely; beyond 5 the run stops, its simulation cache
+  complete, so the fit can be run later without simulating again.
+
 The posterior predictive check at inference masks about 80 %, by design, because it reads the
 posterior rather than the probe machinery. It drives every posterior sample at the observation's
 own absolute frequencies, deliberately never re-placed, since moving the probes would simulate a
