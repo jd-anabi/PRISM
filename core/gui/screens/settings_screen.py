@@ -159,7 +159,7 @@ class SettingsScreen(QWidget):
                 w.deleteLater()
         names = registry.user_model_names()
         if not names and not registry.load_errors:
-            empty = QLabel("No user-defined models yet. Build one to add it to the Simulate model list.")
+            empty = QLabel("No user-defined models yet. Build one to add it to every model list.")
             empty.setProperty("type", "caption")
             self._models_list.addWidget(empty)
         for name in names:

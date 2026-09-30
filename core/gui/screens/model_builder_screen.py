@@ -1,9 +1,11 @@
 """The user-defined model builder (reached from Settings -> "User-defined models").
 
 Declare state variables, then per variable type the deterministic RHS of dx/dt, the white-noise
-strength D (the solver diffusion is g = sqrt(2*D); parameters only -- additive noise), and optionally
-one time-driven forcing. Equations are NONDIMENSIONAL (nothing auto-nondimensionalizes); x_scale /
-t_scale only label + redimensionalize the Simulate axes. Variable 1 is the observable Simulate plots.
+strength D (the solver diffusion is g = sqrt(2*D); parameters and numbers give additive noise, a state
+variable multiplicative noise), and optionally one time-driven forcing. Equations are NONDIMENSIONAL
+(nothing auto-nondimensionalizes). x_scale / t_scale redimensionalize the Simulate axes, and for a model
+eligible for inference (no forcing, at least one parameter) both are also inferred, within half to twice
+the values given. Variable 1 is the observable Simulate plots.
 
 Everything here is light (sympy parse + a 100-step batch-1 smoke integration, milliseconds), so it all
 runs on the GUI thread -- no BasePanel/dispatch. Saving is refused while a task runs anywhere in the
@@ -49,8 +51,12 @@ HELP = {
     "init": "Initial condition for this variable (nondimensional).",
     "forcing": "Optional time-driven external force added to this variable's RHS. For a restoring "
                "(spring) force, put -k*(x - x0) directly in the RHS instead -- it depends on state.",
-    "x_scale": "Length scale (nm per ND unit) used to redimensionalize the Simulate displacement axis.",
-    "t_scale": "Time scale (seconds per ND time unit) used to map ND time to the seconds axis.",
+    "x_scale": "Length scale (nm per ND unit). It redimensionalizes the Simulate displacement axis, and "
+               "for a model eligible for inference (no forcing, at least one parameter) it is also "
+               "inferred, within half to twice this value.",
+    "t_scale": "Time scale (seconds per ND time unit). It maps ND time to the Simulate seconds axis, and "
+               "for a model eligible for inference (no forcing, at least one parameter) it is also "
+               "inferred, within half to twice this value.",
 }
 
 # (kind key, display label); "" = no forcing.
@@ -523,7 +529,7 @@ class ModelBuilderScreen(QWidget):
             return
         registry.load_user_models()                  # (re-)register; combos are refreshed by on_saved
         self._editing_name = doc["name"]
-        self._set_status(f"Saved '{doc['name']}'. It is now available in the Simulate model list.")
+        self._set_status(f"Saved '{doc['name']}'. It is now in every model list.")
         if self._on_saved:
             self._on_saved(doc["name"])
 

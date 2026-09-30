@@ -108,8 +108,10 @@ HELP = {
                 "for this only if you see splitting on most batches. ⚠ Also part of the checkpoint "
                 "identity.",
     "infer_mode": "Simulated: infer on a synthetic observation from a cell’s ground truth. "
-                  "Experimental: infer on your own recording (a driven spontaneous+forced pair, or — "
-                  "for a no-forcing model — a single passive recording).",
+                  "Experimental: infer on your own recordings — in χ mode, one passive recording plus "
+                  "single-tone forced ones, each at the frequency it was driven at; otherwise a "
+                  "spontaneous+forced pair, or a single passive recording when the bounds file has no "
+                  "Forcing section.",
     "infer_other_obs": "A TSNPE posterior is valid only NEAR the observation its region was drawn "
                        "around: elsewhere the flow has never seen a training row and extrapolates "
                        "confidently rather than returning the prior. Ticking this runs it anyway and "

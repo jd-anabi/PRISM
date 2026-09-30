@@ -1,9 +1,10 @@
 """User-defined SDE models: sympy parsing + a generic torch model satisfying the solver contract.
 
 A user declares state variables and, per variable, types (1) the deterministic RHS of dx/dt (first-order,
-nondimensional), (2) a white-noise strength D (parameters only -- additive noise; the solver diffusion is
-g = sqrt(2*D), matching <xi(t)xi(t')> = 2 D delta(t-t')), and (3) optionally a time-driven forcing (built
-separately in core/forcing.py). ``parse_user_model`` compiles the typed expressions into a
+nondimensional), (2) a white-noise strength D (parameters and numbers give additive noise; a D that
+references a state variable gives multiplicative noise and sets ``state_dep_noise``; the solver diffusion
+is g = sqrt(2*D), matching <xi(t)xi(t')> = 2 D delta(t-t')), and (3) optionally a time-driven forcing
+(built separately in core/forcing.py). ``parse_user_model`` compiles the typed expressions into a
 ``CompiledUserModel``; ``UserModel`` is the ONE generic runtime class every user model shares -- it mirrors
 the duck-typed contract of core/Models/hopf_model.py (f(x, t) with the integer step index, g() returning a
 (batch, d) diagonal vector, a settable public ``force`` (batch, n_vars, T) attribute, device/dtype applied

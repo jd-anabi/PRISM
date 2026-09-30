@@ -303,7 +303,8 @@ def _check_schema(doc: dict) -> None:
         raise ValueError("'rescale' must contain exactly x_scale and t_scale.")
     for key in ("x_scale", "t_scale"):
         if _finite(rescale[key], key) <= 0:
-            raise ValueError(f"{key} must be > 0 (it scales the display axes).")
+            raise ValueError(f"{key} must be > 0 (it redimensionalizes the model's output, and a model "
+                             f"eligible for inference infers it within half to twice this value).")
     problem = t_scale_problem(float(rescale["t_scale"]))
     if problem:
         raise ValueError(problem)
