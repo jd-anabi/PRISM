@@ -1,6 +1,6 @@
 # The retrain runbook
 
-Checked against commit 30ff8a3.
+Checked against commit b2d73c2.
 
 The next full-size training run: a chi posterior on the tier-1 box, 10,000 batches of 2,048 rows,
 with a flow of 256 hidden features × 10 transforms, followed by one narrowing round that certifies
@@ -277,6 +277,13 @@ build, and again before the run. Nothing here trains the retrain, and any step c
    & $py -m core probes mask @Box --prior retrain_prior --num-runs 100 --device cuda --name retrain_mask
    ```
 
+   - `prior` logs the two stages' counts, `[prior] stability sweep: kept <n> of <m> candidates …`
+     and `[prior] fill: kept <n> new sets from <m> steps (<a> outside the box, <b> unstable); …`,
+     both also in `retrain_prior`'s `log.txt`. On this box nearly the whole box is stable: the census
+     keeps about 99 % of its 102,400 candidates, and the walk's outside-the-box count is a small share
+     of its steps. HDBSCAN then finds one or two broad clusters or none, so
+     `warning: No clusters found. Defaulting to 1 cluster` is expected here and does not stop the
+     retrain ([The prior](science.md#the-prior)).
    - `probes band` must report that the configured band (0.03, 0.3) and the configured drive 0.15
      both hold for the tier-1 cell. The cell shares the master cell's non-dimensional values and time
      scale, and every probe is driven at the same non-dimensional amplitude, so the verdicts should
@@ -301,8 +308,9 @@ build, and again before the run. Nothing here trains the retrain, and any step c
      probe layout. Write P down: gate 3 is read against it. Why these widths: the reference 37 % is
      itself uncertain by about 3 points, this reading by about 1.2, and the prior's build may move
      the fraction by up to about 2; combined, about 3.5 to 4 points, so ±8 is about two standard
-     deviations and ±12 about three ([Chi probe design](science.md#chi-probe-design) says where
-     each comes from).
+     deviations and ±12 about three. The reference was read on priors of the older construction,
+     before the prior's walk was made even and confined to the box, so this is the first reading on
+     the new one ([Chi probe design](science.md#chi-probe-design) says where each comes from).
 
    Then delete the scratch folder: `Remove-Item -Recurse -Force $S`.
 

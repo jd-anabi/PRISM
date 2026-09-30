@@ -1,6 +1,6 @@
 # The window
 
-Checked against commit 30ff8a3.
+Checked against commit b2d73c2.
 
 This page describes the PySide6 window screen by screen: what each screen is for, every setting on
 the Parameter Inference tabs and what it really changes, what the window remembers between sessions,
@@ -160,10 +160,10 @@ simulation cache instead of resuming the old one.
 | Config | VRAM ceiling per batch (GiB, 0 = off) | none: the `PRISM_VRAM_CEILING_GIB` environment variable | none: the field sets `core.config.SIM_VRAM_CEILING_GIB` | 0 (off) | A hard ceiling on the card memory one simulation batch may plan to hold. See below the table. |
 | Prior | Bounds | `--bounds` | `make_sim_config(bounds_file)`; with **Edit values**, `bounds_dicts=` | none | Which parameters are inferred, in what order and over what box, and so the observation mode. **Edit values** starts from the selected file and lets you change only the numbers. |
 | Prior | Prior | `--prior` on `train`; `prior` always builds | `build_prior(ref, build_new)` | (from scratch) | A saved prior to load, or "(from scratch)" to build one. Choosing an entry does nothing until **Build / Load prior**. |
-| Prior | Global rounds | `--num-iterations` | `build_prior(num_iterations=)` | 50 | The rounds of the global census; the candidates screened are the rounds times the candidates per round, and each round integrates its candidates over the first half of the Stability duration (the flood-fill integrates the whole of it), so rounds cost time. |
+| Prior | Global rounds | `--num-iterations` | `build_prior(num_iterations=)` | 50 | The rounds of the global census; the candidates screened are the rounds times the candidates per round, and each round integrates its candidates over the whole Stability duration, as the random walk does, so rounds cost time. |
 | Prior | Candidates per round (0 = auto) | `--sweep-batch` | `build_prior(sweep_batch=)` | 0: the hardware batch | Not a speed dial: see [below](#settings-that-are-not-speed-dials). |
-| Prior | Max accepted sets | `--max-sets` | `build_prior(max_sets=)` | 175000 | The accepted sets that stop the flood-fill: the point cloud the prior is fitted to. Not a speed dial. |
-| Prior | Random-walk step | `--walk-step` | `build_prior(walk_step=)` | 0.01 | The size of the flood-fill's random step, in the parameters' own units: the same absolute size for every non-dimensional parameter, not a fraction of each one's range. Too small and the walk never leaves its seed points; too large and it steps across the stable region instead of tracing it. |
+| Prior | Max accepted sets | `--max-sets` | `build_prior(max_sets=)` | 175000 | The accepted sets that stop the random walk: the point cloud the prior is fitted to. Not a speed dial. |
+| Prior | Random-walk step | `--walk-step` | `build_prior(walk_step=)` | 0.01 | The size of the random walk's step, in the parameters' own units: the same absolute size for every non-dimensional parameter, not a fraction of each one's range. Too small and the walk never leaves its seed points; too large and it steps across the stable region instead of tracing it. |
 | Prior | Stability duration (ND units) | `--stability-units` | `build_prior(stability_units=)` | 1000 | Not a speed dial. |
 | Prior | Min cluster size | `--min-cluster-size` | `build_prior(min_cluster_size=)` | 50 | Not a speed dial. |
 | Prior | Min samples | `--min-samples` | `build_prior(min_samples=)` | 10 | Not a speed dial. |
@@ -228,21 +228,22 @@ or the measurement. [The prior](science.md#the-prior) and
 [Reading calibration honestly](science.md#reading-calibration-honestly) give the science behind them.
 
 - **Candidates per round** (Prior tab, `--sweep-batch`). The global census runs a fixed number of
-  rounds (Global rounds), and each round integrates its candidates over the first half of the
-  Stability duration whatever the round's width, so a narrower round screens fewer candidates in
-  about the same time. Half this number is also the batch of the local flood-fill, which runs until
-  Max accepted sets are accepted. Shrinking it makes the prior worse without making it faster:
-  measured, a prior build took 527 s at 2,048 candidates per round, and at 32 it was still
-  unfinished after more than 70 minutes.
+  rounds (Global rounds), and each round integrates its candidates over the whole Stability
+  duration whatever the round's width, so a narrower round screens fewer candidates in about the
+  same time. Half this number is also the batch of the random walk, which runs until Max accepted
+  sets are accepted. Shrinking it makes the prior worse without making it faster: measured in August
+  2026, when the walk still ran on the CPU, a prior build took 527 s at 2,048 candidates per round,
+  and at 32 it was still unfinished after more than 70 minutes.
 - **Stability duration** (Prior tab, `--stability-units`). How long, in non-dimensional time units,
-  the flood-fill integrates each candidate; the census integrates the first half of it. It defines
+  the census and the random walk integrate each candidate. It defines
   what "stable" means: a longer screen rejects slow instabilities that a shorter one accepts, so it
   moves the prior's support, not only the time the sweep takes.
 - **Min cluster size and Min samples** (Prior tab, `--min-cluster-size`, `--min-samples`). HDBSCAN
   clusters the accepted point cloud, and the number of clusters it finds is passed straight to the
   Gaussian mixture as its component count (`core.SBI.Priors.prior.Prior.construct_prior`), so these
-  two decide how many modes the prior has. Measured on a small prior build, changing nothing else:
-  a minimum cluster size of 5 gave 15 components, and 60 gave 1. Min samples sets how conservative
+  two decide how many modes the prior has. Measured on a small prior build of the older
+  construction (before 30 September 2026, when the walk still left clumps; [The prior](science.md#the-prior)),
+  changing nothing else: a minimum cluster size of 5 gave 15 components, and 60 gave 1. Min samples sets how conservative
   HDBSCAN's density estimate is, and so how many points it calls noise and how many clusters it
   finds; the mixture itself is then fitted to every accepted point, noise included. A different
   component count is a different prior, not a faster one.
@@ -252,7 +253,9 @@ or the measurement. [The prior](science.md#the-prior) and
   number is t_scale's effective sample size: lowering it does not buy the same calibration faster,
   it buys a different and weaker one. The verdict's caveat line says so on every calibration.
 - **Max accepted sets** (Prior tab, `--max-sets`). The accepted sets are the point cloud HDBSCAN
-  clusters and the mixture is fitted to. More of them buy coverage of the stable region, not
+  clusters and the mixture is fitted to. Past the census, the random walk adds points within a few
+  steps of those already accepted, so where nearly the whole box is stable, as on the master and
+  tier-1 boxes, more of them re-weight the stable region rather than extend it. They do not buy
   statistical precision: a mixture of a few components needs nothing like 175,000 points.
 
 ## The Fisher settings on a resumed run

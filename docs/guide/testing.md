@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit 30ff8a3.
+Checked against commit b2d73c2.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -207,6 +207,12 @@ an exact count is never the criterion.
 | 4 | 92 | 150 | 20 | 45 | 285 of 704 (40.5 %) |
 
 Run 2 exited 0 in 7.7 s, its masked line equal to run 1's, and run 2b exited 1 in 5.8 s.
+
+The prior column predates the prior's current construction (30 September 2026): its census now
+integrates the whole stability duration instead of the first half, so the prior stage runs longer
+than these figures, and on the master and tier-1 boxes, where nearly the whole box is stable, it may
+log `warning: No clusters found. Defaulting to 1 cluster`, which is expected there
+([The prior](science.md#the-prior)).
 
 Delete the scratch folder when the gate, and the diagnostic card if you run it, are done:
 `Remove-Item -Recurse -Force $S`.

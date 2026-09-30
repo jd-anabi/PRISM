@@ -1,6 +1,6 @@
 # The command-line tool
 
-Checked against commit 30ff8a3.
+Checked against commit b2d73c2.
 
 `python -m core <subcommand> [<mode>] <flags>` is PRISM's command-line tool (`core.tool`). It takes
 flags only and never prompts, so a run can be written down and repeated. This page lists every
@@ -233,8 +233,9 @@ Two more are set rather than read as settings:
 ## prior
 
 Builds a stability-screened prior over the bounds file's parameters: a global census of the box, a
-random-walk flood-fill of the stable region, then a Gaussian mixture fitted to the accepted sets,
-with as many components as HDBSCAN finds clusters among them.
+random walk inside the box that densifies the stable set the census found, then a Gaussian mixture
+fitted to the accepted sets, with as many components as HDBSCAN finds clusters among them (one when
+it finds none).
 
 - `--bounds PATH` — required; see [Configuration flags](#configuration-flags).
 - `--model NAME` — see [Configuration flags](#configuration-flags) (default the bounds file's parent folder, upper-cased).
@@ -243,10 +244,10 @@ with as many components as HDBSCAN finds clusters among them.
 - `--device auto|cpu|cuda` — see [Configuration flags](#configuration-flags) (default auto).
 - `--name NAME` — see [Naming flags](#naming-flags).
 - `--note TEXT` — see [Naming flags](#naming-flags).
-- `--num-iterations N` — rounds of the global census; each round screens its candidates over the first half of the stability duration, so rounds cost time (default 50).
+- `--num-iterations N` — rounds of the global census; each round screens its candidates over the whole stability duration, so rounds cost time (default 50).
 - `--sweep-batch N` — candidate parameter sets per round; 0 = automatic, the hardware batch (default 0).
-- `--max-sets N` — accepted sets at which the flood-fill stops: the point cloud the prior is fitted to (default 175000).
-- `--walk-step X` — the flood-fill's random-walk step, in the parameters' own units: one absolute size for every parameter, not a fraction of its range (default 0.01).
+- `--max-sets N` — accepted sets at which the random walk stops: the point cloud the prior is fitted to (default 175000).
+- `--walk-step X` — the random walk's step, in the parameters' own units: one absolute size for every parameter, not a fraction of its range (default 0.01).
 - `--stability-units X` — ND time units a candidate must stay bounded for (default 1000).
 - `--min-cluster-size N` — HDBSCAN's minimum cluster size (default 50).
 - `--min-samples N` — HDBSCAN's min_samples: the neighbours a point needs to count as a cluster core; larger declares more points noise (default 10).
@@ -255,7 +256,11 @@ Several of these change the prior rather than the time it takes:
 [Settings that are not speed dials](window.md#settings-that-are-not-speed-dials).
 
 **Writes** one prior record and prints `[prism] prior <name>__<id>  <path>`. `train --prior`,
-`smoke --prior` and `probes mask --prior` load it by name or id.
+`smoke --prior` and `probes mask --prior` load it by name or id. On the way it logs the two stages'
+counts, `[prior] stability sweep: kept <n> of <m> candidates over <steps> steps` and
+`[prior] fill: kept <n> new sets from <m> steps (<a> outside the box, <b> unstable); <total> sets in all`,
+both also in the record's `log.txt`
+([The prior](science.md#the-prior) says what they mean).
 
 **Refuses**, before the sweep starts, a taken name and any setting out of range, naming its flag: a
 count below 1, a `--min-cluster-size` below 2, a negative `--sweep-batch`, a `--walk-step` or

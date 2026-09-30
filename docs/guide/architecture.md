@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit 30ff8a3.
+Checked against commit b2d73c2.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -80,11 +80,13 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `overlay.py`: the figures that set posterior-predictive traces against the observation.
 - `analysis.py`: the calibration data generator (`gen_cal_data`), the predictive-check statistic and
   the informativeness measure.
-- `Priors/prior.py`: `Prior`, the stability-screened prior: a global census of the box, a random-walk
-  flood-fill of the stable region, HDBSCAN, then a Gaussian mixture (`construct_prior`).
-- `Priors/nadrowski_prior.py`: the Nadrowski model's census and flood-fill.
-- `Priors/hopf_prior.py`: the Hopf model's census and flood-fill.
-- `Priors/bp_prior.py`: the BP model's census and flood-fill.
+- `Priors/prior.py`: `Prior`, the stability-screened prior: a global census of the box, a random
+  walk inside the box that densifies it (`_walk`, shared by every model), HDBSCAN, then a Gaussian
+  mixture (`construct_prior`).
+- `Priors/nadrowski_prior.py`: the Nadrowski model's census, and the simulation its walk tests each
+  step with.
+- `Priors/hopf_prior.py`: the Hopf model's census and walk simulation.
+- `Priors/bp_prior.py`: the BP model's census and walk simulation.
 - `Priors/user_prior.py`: the same screen for a user model.
 - `Priors/log_uniform.py`: a log-uniform distribution that sbi's `MultipleIndependent` can move
   between devices.

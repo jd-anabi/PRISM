@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit 30ff8a3.
+Checked against commit b2d73c2.
 
 ## Nondimensionalisation
 
@@ -445,7 +445,11 @@ whether a probe is masked depends only on its row's own oscillation frequency (f
 non-dimensional parameters and the batch's `t_scale`), the recording length and the probe layout.
 The two boxes share the non-dimensional block, the `t_scale` range and the recording lengths. Only a
 new prior fit can shift the fraction, as any rebuild of a prior can; how much two builds differ has
-not been measured, and up to about 2 points is not excluded.
+not been measured, and up to about 2 points is not excluded. Every reading behind 37 % was also made
+on priors of the older construction, before the prior's walk was made even and confined to the box
+([The prior](#the-prior)), so the retrain's own audit is the first reading on the new construction.
+The older walk's clumps sat on census points spread evenly over the box, so no systematic shift is
+expected, but that is reasoning, not a measurement.
 
 The retrain checks the fraction twice ([Pre-flight](retrain.md#pre-flight) and
 [Gates](retrain.md#gates) in the runbook):
@@ -594,42 +598,50 @@ prior that training draws from and never infers (`core.orchestrator.build_forcin
 1. **A census of the box.** Each round draws candidates from a scrambled Sobol sequence, uniformly
    over the linear box, and simulates them; a candidate is accepted when its trajectory stays
    finite. At the defaults on a CUDA card that is 50 rounds of 2,048 candidates.
-2. **A flood-fill of the stable region.** Every accepted point seeds a random walk: a batch of normal
-   steps with one fixed standard deviation (0.01 by default) in the parameters' own units, each
-   simulated and accepted on the same test, every accepted step seeding more, until the accepted set
-   passes its limit (175,000 by default) or nothing is left to walk from.
+2. **A random walk that densifies the accepted set** (`core.SBI.Priors.prior.Prior._walk`, shared by
+   every model). Each round draws a batch of parents at random, with replacement, from every point
+   accepted so far, and moves each by one normal step with one fixed standard deviation (0.01 by
+   default) in the parameters' own units. A step is accepted when it lies inside the box and its
+   trajectory stays finite. Rounds repeat until the accepted set passes its limit (175,000 by
+   default) or a round accepts nothing.
 3. **A mixture fitted to the accepted set.** The points are mapped into the box's unbounded latent
    coordinate, HDBSCAN clusters them there, and a Gaussian mixture with one component per cluster is
-   fitted. Pushed back through the box, it is a prior whose support is exactly the box.
+   fitted (one component when HDBSCAN finds none). Pushed back through the box, it is a prior whose
+   support is exactly the box.
 
 What the screen does, read from the code:
 
 - **Stable means finite.** The only test is that the simulated trajectory stays finite over the
   screen. A draw that diverges inside the screen is rejected; one that runs away more slowly is
   accepted. That is why the screen's duration defines what "stable" means.
-- **The census screens half as long as the flood-fill.** The census integrates only the first half
-  of the stability duration (`core.SBI.prior_screen.gen_prior` asks `construct_prior` for that), and
-  the flood-fill integrates all of it. The census's accepted points go straight into the
-  flood-fill's accepted set and are never screened again, so part of the fitted set passed only the
-  half-length test. How large a part is not known: at the defaults on a CUDA card the census screens
-  102,400 candidates against the flood-fill's limit of 175,000; the prior's record stores its
-  accepted count as unknown, and the census's share is not recorded.
-- **The walk is not confined to the box.** A step past a bound is simulated and accepted like any
-  other if it stays finite. Before the fit such points are clamped just inside the box, at 10⁻⁶ of
-  the range from the bound (`core.SBI.reparam.clamp_to_box`), which puts them near ±13.8 in the
-  latent coordinate the mixture is fitted in. How many accepted points that affects has not been
-  counted.
+- **Every accepted point passed one test.** The census and the walk both integrate the whole
+  stability duration, and the walk keeps only steps inside the box, so the clamp before the fit, to
+  10⁻⁶ of the range inside a bound (`core.SBI.reparam.clamp_to_box`), moves only a point lying
+  exactly on a bound. The prior's `log.txt` records both stages' counts:
+  `[prior] stability sweep: kept <n> of <m> candidates over <steps> steps` and
+  `[prior] fill: kept <n> new sets from <m> steps (<a> outside the box, <b> unstable); <total> sets in all`.
+  The record itself stores its accepted count as unknown.
+- **The walk spreads evenly.** Its parents are drawn from everything accepted, so no point takes more
+  than a few steps, and the walk can go on from the points it added. Before 30 September 2026 it
+  took the accepted points one at a time and gave each a whole batch of steps; at the defaults its
+  budget ran out after the first ~72 census points, and about a quarter of the prior's weight sat in
+  tight clumps around them. The census then screened only the first half of the duration, and the
+  walk had no box check. A prior built before that date is that older construction.
 - **The clusters set only the component count.** HDBSCAN's labels are used for their number alone;
-  the mixture is fitted to every accepted point, the ones HDBSCAN calls noise included.
-- **For a built-in model, one accepted set gives one prior.** The mixture's fit starts from a fixed
-  random state (`core.SBI.Priors.prior.GMM_RANDOM_STATE`), and the built-in models sort the accepted
-  set first, so the fit is reproducible from its points; a user model's accepted set is not sorted.
-  Nothing before the fit is seeded: the census's Sobol scramble, the walk's steps and a built-in
-  model's random starting points draw from the global random streams, and `prior` seeds none of
-  them, so two builds over one box differ. That is why a simulation cache names its prior by the
-  mixture's fingerprint, not by its box.
+  the mixture is fitted to every accepted point, the ones HDBSCAN calls noise included. On the
+  master and tier-1 boxes nearly the whole box is stable, so the accepted set is close to even over
+  it, and HDBSCAN finds one or two broad clusters or none, logging
+  `No clusters found. Defaulting to 1 cluster` as a warning: expected there, and the prior comes out
+  near-uniform over the box either way.
+- **For every model, one accepted set gives one prior.** The mixture's fit starts from a fixed
+  random state (`core.SBI.Priors.prior.GMM_RANDOM_STATE`), and the walk returns the accepted set
+  sorted, so the fit is reproducible from its points. Nothing before the fit is seeded: the census's
+  Sobol scramble, the walk's parent picks and steps and a built-in model's random starting points
+  draw from the global random streams, and `prior` seeds none of them, so two builds over one box
+  differ. That is why a simulation cache names its prior by the mixture's fingerprint, not by its
+  box.
 
-The second and third points are an open question ([Open questions](#open-questions)).
+The walk's step is an open question ([Open questions](#open-questions)).
 
 **The rescale block is log-uniform for every name containing "scale"**
 (`core.orchestrator.build_rescale_prior`). x_scale, t_scale and, on the master box, f_scale are
@@ -1102,12 +1114,13 @@ reading, since T is weakly informed and nearly degenerate with n
 change. The retrain's own measurement would settle it: how much temperature's marginal narrows
 against its prior (its line in the informativeness breakdown), and where the truth falls in it.
 
-**The stability screen's two gaps.** The census accepts points on half the stability duration, and
-they seed the flood-fill's accepted set without being screened again; the walk can also step outside
-the box, and those points are fitted clamped at its edge ([The prior](#the-prior)). A science
-question: should the census screen the full duration, or should its points be re-screened over the
-full duration before they seed the fill? A count, on a prior built at full size, of how many fitted
-points each affects would say whether it matters.
+**The walk's step.** The prior's random walk steps 0.01 in every parameter's own units, whatever
+its range (from 2 for tau to 290 for n), so on the master and tier-1 boxes it adds near-copies of the
+census's points rather than exploring: the accepted set is the census, re-weighted slightly
+([The prior](#the-prior)). That is harmless where nearly the whole box is stable. For a model whose
+stable region is thin, a step sized to each parameter's range would follow the region further.
+Whether to size it so is a decision about the prior's shape; the `[prior] fill` line in a prior's
+`log.txt` gives the walk's counts.
 
 **Log-sampling the non-dimensional census.** The census draws uniformly in the linear box (the
 `_global_map` of every prior, `core.SBI.Priors.user_prior.UserPrior._global_map` included). A user
