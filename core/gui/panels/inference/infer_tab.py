@@ -65,7 +65,10 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
     this tab. In chi mode the experimental page grows one file-picker row per probe frequency, which
     is why K is bounded at ``config.CHI_K_MAX``.
 
-    Persists (group "inference_infer"): the mode, the cell picker, and the experimental file paths.
+    Persists (group "inference_infer"): the mode, the cell picker, the three T_obs boxes (one per
+    page), the chi page's physical drive amplitude (``chi_f0_si``), and the experimental file paths
+    (the spontaneous, forced and passive recordings). The drive boxes and the chi probe rows are
+    built from the config, so they are not persisted.
     """
     def __init__(self, screen, parent=None):
         super().__init__(screen, parent)

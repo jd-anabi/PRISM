@@ -43,7 +43,8 @@ def register(subparsers) -> dict:
     p.add_argument("--max-sets", type=int, default=None, metavar="N",
                    help="accepted sets the sweep stops at" + default_clause("max_sets"))
     p.add_argument("--walk-step", type=float, default=None, metavar="X",
-                   help="random-walk step, as a fraction of each box side"
+                   help="flood-fill random-walk step, in physical parameter units: one absolute "
+                        "size for every parameter, not a fraction of its range"
                         + default_clause("walk_step"))
     p.add_argument("--stability-units", type=float, default=None, metavar="X",
                    help="ND time units a candidate must stay bounded for"

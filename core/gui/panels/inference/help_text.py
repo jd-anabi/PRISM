@@ -67,8 +67,10 @@ HELP = {
                     "MODES the prior has — a different component count is a different prior, not "
                     "a faster one.",
     "cluster_samples": "How conservative HDBSCAN's density estimate is. Higher declares more "
-                       "points NOISE, which it leaves unassigned and the GMM never sees — so this "
-                       "thins the cloud the prior is fitted to as well as splitting it.",
+                       "points NOISE and so changes how many clusters it finds. The cluster labels "
+                       "set only the GMM's component count: the GMM is then fitted to EVERY "
+                       "accepted point, noise included, so this changes how many modes the prior "
+                       "has, never which points it is fitted to.",
     "fisher_m": "Ensemble size per latent perturbation in the Fisher rotation. Cost is linear in "
                 "this; under chi each evaluation already pays (1+K) simulations instead of 2.",
     "fisher_dz": "Latent central-difference step for the Fisher Jacobian.",

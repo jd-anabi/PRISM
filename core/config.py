@@ -645,7 +645,8 @@ PRIOR_SWEEP_ON_ACCELERATOR = True
 # different question from how the manifold was mapped. Both were hardcoded in
 # prior.construct_prior. min_cluster_size is the floor on what counts as an island of stable
 # parameters; min_samples is how conservative the density estimate is (higher = more points
-# declared noise, which HDBSCAN then leaves unassigned and the GMM never sees).
+# declared noise, and so a different cluster count). The labels set only the component count:
+# the GMM is then fitted to every accepted point, noise included.
 PRIOR_CLUSTER_MIN_SIZE = 50
 PRIOR_CLUSTER_MIN_SAMPLES = 10
                                 # (the historical behaviour, and still the right default -- the sweep
