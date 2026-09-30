@@ -17,7 +17,7 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
               state_dep_drift: bool = False, num_iterations: int = 25, log_mask: torch.Tensor | None = None,
               n_max: int | None = None, step: float | None = None,
               min_cluster_size: int | None = None, min_samples: int | None = None,
-              dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> torch.distributions.MixtureSameFamily:
+              dtype: torch.dtype = torch.float32, device: torch.device = torch.device('cpu')) -> torch.distributions.TransformedDistribution:
     """
     Construct the stability-screened GMM prior for ``model`` over ``prior_bounds``.
 

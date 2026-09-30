@@ -344,8 +344,9 @@ class ConfigPanel(_StagePanel):
             lo, hi = config.CHI_FREQ_BOUNDS          # config.py's, not the boxes': the values the run gets
             extras.append(f"χ(ω) on — {v['chi_n_freqs']} frequencies over {lo:g}–{hi:g}×Ω₀ at ND "
                           f"amplitude {config.CHI_F0:g}, ≤{v['chi_max_cycles']:g} cycles per probe, "
-                          f"so expect ~{(v['chi_n_freqs'] + 1) / 2:.1f}× the "
-                          f"usual training time and train a NEW posterior")
+                          "so expect more simulation per row than forced mode (1 + K recordings "
+                          "against 2, K drawn per batch from 2 to the probe slots) and train a NEW "
+                          "posterior")
         elif draft.reparam_rotate:
             extras.append("decorrelating Fisher rotation on")
         self.log_pane.append_line(
