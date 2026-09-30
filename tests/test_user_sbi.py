@@ -1608,9 +1608,10 @@ def test_nadrowski_compiled_step_matches_eager_and_keeps_its_arity():
 
     euler_compiled splats compiled_params() POSITIONALLY into compiled_step, and every entry is a
     same-shaped tensor -- so an inserted, dropped or reordered parameter mis-binds silently: wrong
-    physics, no error. That path is CUDA-only, so nothing else in this suite exercises it on a CPU
-    box and a break would ship straight into a multi-hour GPU run. torch.jit.script compiles on CPU,
-    so the contract is checkable here.
+    physics, no error. That path is selected only on CUDA in a real run, and the one other CPU test
+    that calls it (test_each_compiled_step_follows_its_models_registered_noise_flag) compares whole
+    trajectories, not this arity, so a break here would ship straight into a multi-hour GPU run.
+    torch.jit.script compiles on CPU, so the contract is checkable here.
     """
     import math as _math
     from core.Models.nadrowski_model import NadrowskiModel, _nadrowski_compiled_step
@@ -3773,7 +3774,9 @@ def test_the_cuda_graph_step_matches_the_eager_step_bitwise():
     comparisons (eager/eager, graph/graph, graph/eager, replayed-region) are exactly 0.0.
 
     This is CUDA-only and TorchScript-only, so it does not touch the CPU suite's seeded-reproducibility
-    gates: `euler_compiled` is selected only on CUDA, and every CPU test runs the plain eager `euler`.
+    gates: `euler_compiled` is selected only on CUDA in a real run, and the one CPU test that calls it
+    directly (test_each_compiled_step_follows_its_models_registered_noise_flag) compares it with the
+    eager `euler` under one seed, not with a seeded reference.
     """
     from core import config as _cfg
     from core.Solvers import sdeint as _sd
@@ -4010,8 +4013,10 @@ def test_the_fill_spreads_its_steps_across_every_kept_point():
     It once popped kept points one at a time and gave each a whole batch of steps, so at the default
     sizes its budget ran out after the first ~72 of ~100,000 swept points: about a quarter of the
     prior's weight ended up in tight clumps around them. Here every new point is attributed to its
-    nearest seed (the steps are far smaller than the seeds' spacing), and no seed may take more than
-    a handful, while most seeds take at least one."""
+    nearest seed (the steps are far smaller than the seeds' spacing, so a seed's count includes the
+    points its own new points went on to seed). The limits come from the defect, not from one
+    stream's draw: the old walk gives a whole batch of 32 steps to one seed and reaches 9 seeds,
+    while over 200 streams the even walk's busiest seed took at most 17 and it reached at least 108."""
     torch.manual_seed(1)
     n_seed = 200
     seeds = torch.rand(n_seed, 3).tolist()
@@ -4021,10 +4026,23 @@ def test_the_fill_spreads_its_steps_across_every_kept_point():
     assert new.shape[0] >= 256, f"the walk added only {new.shape[0]} points"
     parent = torch.cdist(new, torch.tensor(seeds)).argmin(dim=1)
     per_seed = torch.bincount(parent, minlength=n_seed)
-    assert int(per_seed.max()) <= 8, (
+    assert int(per_seed.max()) < 24, (
         f"one seed took {int(per_seed.max())} of {new.shape[0]} new points: the walk is clumping")
-    assert int((per_seed > 0).sum()) >= n_seed // 2, (
+    assert int((per_seed > 0).sum()) >= n_seed // 4, (
         f"only {int((per_seed > 0).sum())} of {n_seed} seeds took a step: the walk is not spreading")
+
+
+def test_the_fill_steps_from_the_points_it_added_as_well_as_from_the_seeds():
+    """Parents are drawn from every point kept so far, so the walk can go on from its own points,
+    which is how it follows a thin stable region instead of staying one step from the sweep's points.
+    From one seed, a single step of 0.01 lands more than 0.06 away with a probability of about
+    e^-18; only a chain of steps through points the walk itself added gets that far. (Over 100
+    streams the farthest of 2,000 kept points was never nearer than 0.08.)"""
+    torch.manual_seed(4)
+    seed = [0.5, 0.5]
+    got = _walker()._walk([seed], [(0.0, 1.0), (0.0, 1.0)], 16, 2, 2000, 0.01, _always_finite)
+    far = max(math.dist(p, seed) for p in got)
+    assert far > 0.06, f"no kept point is more than one step from the seed (farthest {far:.3f})"
 
 
 def test_the_fill_keeps_no_step_whose_simulation_diverged():
@@ -4888,10 +4906,12 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
             ("falling back to the CPU.", "WARNING"),
             ("No clusters found. Defaulting to 1 cluster", "WARNING"),
             ("clusters (in latent space)", "INFO"),
+            ("[prior] stability sweep:", "INFO"),
+            ("[prior] fill:", "INFO"),
         ),
         _sdeint_mod: (("[solver] CUDA graph capture unavailable", "WARNING"),),
     }
-    assert sum(len(rows) for rows in table.values()) == 38
+    assert sum(len(rows) for rows in table.values()) == 40
 
     def _template(node) -> str:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):

@@ -615,9 +615,10 @@ def build_prior(cfg: SimConfig, ref: str | None, build_new: bool,
     :param ref: a prior artifact's name or id; None when building.
     :param build_new: True to construct from scratch.
     :param name: the artifact's name ("" = unnamed) when building. A name already taken is refused
-                     HERE, at the entry, not by the write at the end: the stability sweep takes
-                     about a minute and a half on the card, far longer on the CPU, and there is
-                     no reason to spend it to learn the name is in use.
+                     HERE, at the entry, not by the write at the end: the stage (the stability
+                     screen, then the clustering and the mixture fit) takes minutes on the card and
+                     far longer on the CPU, and there is no reason to spend it to learn the name is
+                     in use.
     :param note: free-text note recorded on the artifact when building.
     :param fig_sink: Optional (title, fig) -> None display callback for the corner plot. Every front end
                      passes one; a stage given None closes what it draws (a build saves the PNG into

@@ -1051,9 +1051,17 @@ def test_the_local_sweep_is_no_longer_a_staticmethod_pinned_to_the_cpu():
         assert "torch.device('cpu')" not in code and 'torch.device("cpu")' not in code, \
             f"{cls}._local_map still hardcodes the CPU"
         assert "self.sweep_device" in code, f"{cls}._local_map does not use self.sweep_device"
-        # and the accept loop must not sync per row -- that would hand back most of the device move
-        assert "for i in range(batch_size)" not in code, \
-            f"{cls}._local_map still walks rows one at a time (a device-to-host sync per row)"
+
+    # The walk every class hands its simulation to holds the stepped tensors and the accept loop: it
+    # must build them on the sweep device, and must not sync per row -- that would hand back most of
+    # the device move.
+    from core.SBI.Priors import prior as prior_mod
+    walk = ast.unparse(ast.parse(textwrap.dedent(inspect.getsource(prior_mod.Prior._walk))))
+    assert "self.sweep_device" in walk, "Prior._walk does not use self.sweep_device"
+    assert "torch.device('cpu')" not in walk and 'torch.device("cpu")' not in walk, \
+        "Prior._walk hardcodes the CPU"
+    assert "for i in range(batch_size)" not in walk, \
+        "Prior._walk walks rows one at a time (a device-to-host sync per row)"
 
 
 # ── tsnpe_round: the one round path ──────────────────────────────────────────────────────────────

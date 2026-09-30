@@ -130,7 +130,7 @@ class Prior(ABC):
         progress_bar = tqdm(total=5, desc="Constructing latent prior...")
         # random_state pins the k-means init; without it the fit was seeded from the global NumPy RNG,
         # so a prior (and every posterior trained from it) could not be reproduced even under a fixed
-        # torch seed. Paired with the sorted() in the *_prior samplers -- both are needed.
+        # torch seed. Paired with the sorted() at the end of Prior._walk -- both are needed.
         gmm = GaussianMixture(n_components=n_clusters, covariance_type='full',
                               random_state=GMM_RANDOM_STATE).fit(latent_params)
         progress_bar.update()
@@ -199,8 +199,9 @@ class Prior(ABC):
                 outside += int((~in_box).sum())
                 unstable += int((in_box & ~is_finite).sum())
                 added = 0
-                # ONE host transfer per round, not one per row: indexing a CUDA tensor row by row
-                # forces a device-to-host sync each time and would hand back most of the device move.
+                # One gather of the kept rows per round, not one transfer per row: indexing a CUDA
+                # tensor row by row forces a device-to-host sync each time and would hand back most
+                # of the device move.
                 for row in thetas[in_box & is_finite].detach().cpu().tolist():
                     point = tuple(row)
                     if point not in kept:
