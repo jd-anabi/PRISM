@@ -22,11 +22,12 @@ flag's entry here ends with the same clause. The examples are run from the repos
   are not records, so no `log.txt` holds them. A stage's messages are records: information goes to
   stdout as the bare message, and warnings and errors go to stderr with the prefix `warning: ` or
   `error: ` (`core.tool.logging_console`); the record the run writes keeps them all in its
-  `log.txt`. A library's records go to stderr whatever their level
-  (`core.tool._library_record_sink`), so stdout carries only PRISM's own lines. A Python warning,
-  such as a masked-probe notice or a pre-flight warning about a recording length, prints in
-  Python's own form on stderr, and the run's `log.txt` keeps it too. Refusals and usage errors go to
-  stderr ([Exit codes](#exit-codes)).
+  `log.txt`. A library's logging records go to stderr whatever their level
+  (`core.tool._library_record_sink`), but a library's own prints still reach stdout: during `train`,
+  `tsnpe` and `smoke`'s posterior stage, sbi prints its epoch counter, its convergence line and its
+  training summary there, and no log keeps them. A Python warning, such as a masked-probe notice or
+  a pre-flight warning about a recording length, prints in Python's own form on stderr, and the
+  run's `log.txt` keeps it too. Refusals and usage errors go to stderr ([Exit codes](#exit-codes)).
 - **The parameter order is printed on every run.** Every command that builds a configuration opens
   with its `[cfg]` lines: the model, the observation mode and the device; the cell and bounds files;
   in chi mode the probe settings; then the ND order, the rescale order and the forcing order
@@ -60,9 +61,11 @@ each sets its own observation mode. `fdt`, `crossval`, `compare` and `artifacts`
 - `--bounds PATH` — required. The bounds file declares which parameters are inferred, in what order
   and over what box, and whether a drive is declared (a Forcing section). With `--no-chi`, a bounds
   file with a Forcing section gives forced mode and one without gives spontaneous mode; `--chi` gives
-  chi mode either way ([Observation modes](recordings.md#observation-modes)). Every prior and
-  posterior a command loads is checked against it: the store refuses a mismatch in model, parameter
-  order, box or mode.
+  chi mode either way ([Observation modes](recordings.md#observation-modes)). What a command loads
+  is checked against it. A posterior is refused on a mismatch in model, parameter set or order, box
+  or mode (`core.artifacts.store.ArtifactStore.load_posterior`). A prior is refused on a mismatch in
+  model, ND parameter set or order, ND box or log-box mask; its mode is not checked, so one prior
+  serves every mode over the same box (`core.artifacts.store.ArtifactStore.load_prior`).
 - `--model NAME` — the model. Without it, the bounds file's parent folder, upper-cased:
   `Bounds/nadrowski/` gives NADROWSKI. A name that is neither a built-in model nor a user model
   eligible for inference is refused (`core.tool.config_args.make_cfg`).
@@ -120,18 +123,22 @@ identity finds that cache; the flow's settings are not part of it.
   different experiment: the run starts its own cache with a warning that lists the other caches and
   the first setting each differs in.
 
-A resume never simulates a committed batch again. A rotated run's resume reuses the Fisher rotation
-stored with the cache instead of computing a new one, because the rotation is not reproducible
-across processes and a new one would put the stored rows in another coordinate. It prints
-`Reusing the Fisher rotation stored with the training checkpoint (...)`, then
-`[checkpoint] resuming at batch <k>/<N> from <dir> (...)`.
+A resume never simulates a committed batch again, and prints
+`[checkpoint] resuming at batch <k>/<N> from <dir> (...)`. On `train` and `smoke`, a rotated run's
+resume reuses the Fisher rotation stored with the cache instead of computing a new one, because the
+rotation is not reproducible across processes and a new one would put the stored rows in another
+coordinate; it prints `Reusing the Fisher rotation stored with the training checkpoint (...)` before
+the resume line. A `tsnpe` round never computes a rotation, resumed or not: it prints
+`[tsnpe] basis: reusing the PARENT posterior's rotation ...` instead.
 
 ### Acceptance flags
 
-The tool refuses to load a posterior that a narrowing round (`tsnpe`) trained unless it is told to:
-such a posterior is valid only near the observation its region was drawn around. These two flags
-are the only way past that refusal. They map one to one onto `core.artifacts.Accept`, and each use
-is recorded in what the run writes ([The artifact store](getting-started.md#the-artifact-store)).
+A posterior that a narrowing round (`tsnpe`) trained is valid only near the observation its region
+was drawn around, so the tool refuses to load one, and refuses to run one on any other observation,
+unless it is told to. These two flags are the only ways past those two refusals: `--accept-truncated`
+answers the load refusal (`core.artifacts.store.ArtifactStore.load_posterior`), and
+`--accept-other-observation` the other. They map one to one onto `core.artifacts.Accept`, and each
+use is recorded in what the run writes ([The artifact store](getting-started.md#the-artifact-store)).
 
 - `--accept-truncated` — load a non-amortized (narrowed) posterior. Taken by `validate`, `infer`,
   `tsnpe`, `sbc`, `identifiability rotation`, `identifiability laplace` and `ablation`, the commands
@@ -148,14 +155,14 @@ The tool reads no environment variable itself; every setting is a flag. PRISM re
 | variable | what it sets | when it is read |
 |---|---|---|
 | `PRISM_RESOURCES` | the inputs root | see [Inputs and records](getting-started.md#inputs-and-records) |
-| `PRISM_ARTIFACTS` | the records root | see [Inputs and records](getting-started.md#inputs-and-records); the tool resolves it once, when a command starts |
+| `PRISM_ARTIFACTS` | the records root | see [Inputs and records](getting-started.md#inputs-and-records); the tool resolves it once, when a command starts, except for `smoke`, and for `fdt` and `crossval` given `--store-root`, which use another root |
 | `PRISM_VRAM_CEILING_GIB` | the GiB one simulation batch may plan to hold on the card; 0 or unset is automatic | afresh for every batch plan |
 | `PRISM_MEM_LOG_EVERY` | the batches between `[mem]` memory lines, 250 when unset | once, when the simulation pipeline is first imported |
 
 The last two are read by the simulation pipeline (`core.SBI.pipeline`), never by the tool, and are
-deliberately not flags: they change how a batch is planned in memory, never the rows it produces.
-[The inference settings](window.md#the-inference-settings) says what the ceiling buys and how to
-size it.
+deliberately not flags: they change how a batch is planned in memory, or how often memory is
+reported, never the rows it produces. [The inference settings](window.md#the-inference-settings)
+says what the ceiling buys and how to size it.
 
 Two more are set rather than read as settings:
 
@@ -189,23 +196,31 @@ Two more are set rather than read as settings:
   of [smoke](#smoke), `fdt --skip-sanity` with `--no-production`, and a `crossval` grid whose point
   count is not a whole number of at least 2.
 - **1, a refusal.** A refusal prints one line, `prism <subcommand>: refused: <message> (<flag>)`,
-  ending with the flag that answers it, for example `(--n-cal)` (`core.tool.fields.FLAG`). A
-  refusal no single flag answers ends at the message: a record named positionally to an
-  `artifacts` mode, or a rule two settings answer together. An error raised as a plain
-  `ValueError`, or a missing file, prints
-  `prism <subcommand>: refused: <error class>: <message> [raised at <file>:<line>]`. Anything else
-  is a bug: the traceback, then `prism <subcommand>: *** FAILED ***`. An `artifacts sweep` that
-  could not read or remove something exits 1 too.
-- **130, Ctrl-C.** `prism <subcommand>: interrupted: ` and advice for what was cut short, from the
-  family's own `interrupt_note` where it sets one:
-  - `smoke`: the command line that continues its cache, naming `--store-root`, `--prior`,
-    `--checkpoint`, `--stages prior,posterior` and `--resume require` (`_smoke_interrupt_advice`);
+  ending with the flag that answers it, for example `(--n-cal)` (`core.tool.fields.FLAG`). A missing
+  or blank `--bounds`, `--cell`, `--spont` or `--forced` file is such a refusal, and names its flag
+  (`core.refusals.require_file`). A refusal that carries no flag ends at the message: a record
+  reference that resolves to nothing (`--prior`, `--posterior`, `--observation`, or an `artifacts`
+  mode's `<ref>`), `--resume require` with no cache to resume, the narrowed-parent rule of
+  [tsnpe](#tsnpe), a missing units file (the tool has no units flag), and a rule two settings answer
+  together. An error raised as a plain `ValueError`, such as an unsupported `--model`
+  (`core.tool.config_args.make_cfg`) or the cache refusals of [ablation](#ablation), prints
+  `prism <subcommand>: refused: <error class>: <message> [raised at <file>:<line>]`, and so does a
+  missing file that no check covers. Anything else is a bug: the traceback, then
+  `prism <subcommand>: *** FAILED ***`. An `artifacts sweep` that could not read or remove something
+  exits 1 too.
+- **130, Ctrl-C.** `prism <subcommand>: interrupted: ` and advice for what was cut short: the
+  `interrupt_note` a family's parser sets, where it sets one (`core.tool.fdt`, `core.tool.probes`),
+  else the generic advice.
+  - `smoke`: for the case where a `[checkpoint]` line said batches were saved, the flags to re-run
+    with to continue them ([smoke](#smoke), `core.tool._smoke_interrupt_advice`);
   - `fdt`, `crossval` and `compare`: the record is kept, marked unfinished, and nothing resumes
     ([fdt](#fdt));
   - the `probes` modes: a check writes its record only when it finishes, so nothing is left, and the
     same command starts it again;
-  - every other command: the record being written was removed, and if a `[checkpoint]` line said
-    batches were saved, the same command with `--resume require` continues them.
+  - every other command: the generic advice, that the record being written was removed and, if a
+    `[checkpoint]` line said batches were saved, the same command with `--resume require` continues
+    them. The `artifacts` family prints it too, although it fits none of its modes
+    ([artifacts](#artifacts)).
 
 ## prior
 
@@ -249,7 +264,7 @@ training rows batch by batch, and fits the flow.
 - `--bounds PATH` — required; see [Configuration flags](#configuration-flags).
 - `--model NAME` — see [Configuration flags](#configuration-flags) (default the bounds file's parent folder, upper-cased).
 - `--chi` / `--no-chi` — see [Configuration flags](#configuration-flags) (default --no-chi).
-- `--chi-k K` — see [Configuration flags](#configuration-flags); it does not reach training (default 6).
+- `--chi-k K` — see [Configuration flags](#configuration-flags); in chi mode it sets the Fisher rotation's probe count only, and the training rows draw their own (default 6).
 - `--device auto|cpu|cuda` — see [Configuration flags](#configuration-flags) (default auto).
 - `--name NAME` — see [Naming flags](#naming-flags).
 - `--note TEXT` — see [Naming flags](#naming-flags).
@@ -276,19 +291,20 @@ cache, then prints `[prism] posterior <name>__<id>  <path>`. The cache itself is
 run goes and keeps no `log.txt`. On the way it prints:
 
 - `[budget] <N> batches x <R> rows = <T> training rows`, always, before anything is simulated;
-- `[checkpoint] writing to <dir> every <n> batches (...)`, with the cache's expected size and the
-  free disk;
-- on a new cache, the Fisher rotation's lines (`Computing decorrelating Fisher rotation ...` and the
-  `[fisher]` lines); on a resume, the resume lines of [Training-cache flags](#training-cache-flags)
-  instead;
+- when it starts a new cache, `[checkpoint] writing to <dir> every <n> batches (...)`, with the
+  cache's expected size and the free disk;
+- on a run that resumes nothing, the Fisher rotation's lines
+  (`Computing decorrelating Fisher rotation ...` and the `[fisher]` lines); on a resume, the resume
+  lines of [Training-cache flags](#training-cache-flags) instead;
 - in chi mode, `[chi] masked probes: ...`, the run total of masked probes over the batches its scope
   names;
-- on a box that declares temperature in place of the force scale, the `[tier1]` lines: the force
-  scale it derives over the prior and the chi drive amplitude that follows from it.
+- on a box that declares temperature in place of the force scale, `[tier1]` lines: the force scale
+  it derives over the prior and, in chi mode, the chi drive amplitude that follows from it.
 
 **Rules**, each checked before the Fisher step and before any simulation:
 
-- the prior is loaded against `--bounds` and refused on any mismatch;
+- the prior is loaded against `--bounds` and refused on a mismatch in model, ND parameter set or
+  order, ND box or log-box mask;
 - every setting above is refused out of range, naming its flag;
 - a committed cache one setting away is refused unless `--new-run` is given, and one two or more
   settings away gives a warning only ([Training-cache flags](#training-cache-flags));
@@ -298,8 +314,10 @@ run goes and keeps no `log.txt`. On the way it prints:
 - a resume reuses the cache's stored rotation, so `--fisher-m`, `--fisher-dz` and `--fisher-points`
   have no effect on it, and the record writes them as null.
 
-**Exit codes** as in [Exit codes](#exit-codes). After Ctrl-C, the same command with
-`--resume require` continues from the last committed batch.
+**Exit codes** as in [Exit codes](#exit-codes). After Ctrl-C, if a `[checkpoint]` line said
+batches were saved (`[checkpoint] stopping: saving ...` is the one an interrupt prints), the same
+command with `--resume require` continues from the last saved batch; with checkpointing off, nothing
+simulated is kept.
 
 ## validate
 
@@ -356,7 +374,7 @@ measured recordings (`--spont` and its companions).
 - `--bounds PATH` — required; see [Configuration flags](#configuration-flags).
 - `--model NAME` — see [Configuration flags](#configuration-flags) (default the bounds file's parent folder, upper-cased).
 - `--chi` / `--no-chi` — see [Configuration flags](#configuration-flags) (default --no-chi).
-- `--chi-k K` — see [Configuration flags](#configuration-flags) (default 6).
+- `--chi-k K` — see [Configuration flags](#configuration-flags); in chi mode, the probes a simulated cell is measured at, while recordings bring their own count, one per `--forced` (default 6).
 - `--device auto|cpu|cuda` — see [Configuration flags](#configuration-flags) (default auto).
 - `--name NAME` — names the inference only; see [Naming flags](#naming-flags).
 - `--note TEXT` — see [Naming flags](#naming-flags).
@@ -380,23 +398,27 @@ does not declare (ignored), a simulated truth outside the training distribution,
 a narrowed posterior's region.
 
 **Rules** for the recordings, set by the observation mode the bounds file and `--chi` give
-([Observation modes](recordings.md#observation-modes)). They are checked before the posterior loads
-(`core.tool.config_args.recording_set`), and each is a usage error:
+([Observation modes](recordings.md#observation-modes)). They are checked before the posterior loads,
+and each is a usage error. The three mode rules are `core.tool.config_args.recording_set`'s:
 
 - chi mode: at least one `--forced PATH@HZ`, every one with the frequency it was driven at, plus
   `--f0-si`; `--drive` is not taken. The path is split at its last `@`.
 - spontaneous mode: `--spont` alone; `--forced`, `--drive` and `--f0-si` are not taken.
 - forced mode: exactly one `--forced PATH` without `@HZ`, plus `--drive NAME=VALUE` naming exactly
   the forcing parameters the bounds file declares; `--f0-si` is not taken.
-- a simulated cell: `--cell` excludes `--forced`, `--drive` and `--f0-si`, which describe measured
-  recordings, because the cell is re-simulated with its own drive.
+
+The fourth is `core.tool.stages._infer`'s: `--cell` excludes `--forced`, `--drive` and `--f0-si`,
+which describe measured recordings. A simulated cell brings its own drive: in forced mode it is
+re-simulated with the drive its cell file states, and in chi mode it is probed at the configured
+multiples of its own peak frequency, and the drive in its cell file is ignored.
 
 [Recording files and drive frequencies](recordings.md#recording-files-and-drive-frequencies) and
 [Recording length](recordings.md#recording-length) say what the recordings must be.
 
-**Refuses** a taken name, a `--t-obs` of 0 or less, a posterior that does not match `--bounds`, a
-narrowed posterior without `--accept-truncated`, and a narrowed posterior run on any observation but
-its region's own without `--accept-other-observation`, which a simulated cell always is.
+**Refuses** a taken name, a `--t-obs` of 0 or less, an `--n-samples` below 1, a posterior that does
+not match `--bounds`, a narrowed posterior without `--accept-truncated`, and a narrowed posterior run
+on any observation but its region's own without `--accept-other-observation`, which a simulated cell
+always is.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -409,7 +431,7 @@ result is valid only near that observation.
 - `--bounds PATH` — required; see [Configuration flags](#configuration-flags).
 - `--model NAME` — see [Configuration flags](#configuration-flags) (default the bounds file's parent folder, upper-cased).
 - `--chi` / `--no-chi` — see [Configuration flags](#configuration-flags) (default --no-chi).
-- `--chi-k K` — see [Configuration flags](#configuration-flags) (default 6).
+- `--chi-k K` — see [Configuration flags](#configuration-flags); in chi mode the observation's own probe count replaces it (default 6).
 - `--device auto|cpu|cuda` — see [Configuration flags](#configuration-flags) (default auto).
 - `--name NAME` — see [Naming flags](#naming-flags).
 - `--note TEXT` — see [Naming flags](#naming-flags).
@@ -444,8 +466,7 @@ inside it, then `[prism] posterior <name>__<id>  <path>`.
 - A round does not inherit its parent's network size or batch count: `--hidden-features`,
   `--num-transforms` and `--num-runs` fall back to the defaults above, so pass them to match a parent
   trained at another size.
-- A `--level` below 0.99 raises a pre-flight warning, and a `--directions` above the posterior's
-  latent width is refused `(--directions)`.
+- A `--level` below 0.99 raises a pre-flight warning.
 - A narrowed parent drawn around another observation is refused, and no flag overrides it: a region
   drawn from it around another observation would sit where its flow extrapolates. Start from an
   amortized posterior, or draw the round around the parent's own observation.
@@ -455,6 +476,11 @@ inside it, then `[prism] posterior <name>__<id>  <path>`.
   A truth outside also raises a pre-flight warning. A recording has no truth, and nothing is said.
 - The observation is checked against the configuration's mode and conditioning width when it loads,
   and the cache rules are those of [train](#train).
+
+**Refuses**, before any simulation: a taken name; a `--directions` below 1 or above the posterior's
+latent width `(--directions)`; a `--level` not strictly between 0 and 1 `(--level)`; a training
+setting out of range, naming its flag, as [train](#train) does; a parent posterior or an observation
+that does not match `--bounds`; and a narrowed parent without `--accept-truncated`.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -504,9 +530,12 @@ number of parameters. The record keeps each repeat's answer and the fraction tha
 ## identifiability
 
 What a posterior measured (`rotation`), or whether the information is there at all (`laplace`,
-`jacobian`). Each mode is a parser of its own, so a flag that means nothing to a mode is a usage
-error rather than a setting silently ignored. Each writes a diagnostic record whose variant is the
-mode's name, and prints `[prism] diagnostic <name>__<id>  <path>`.
+`jacobian`). Each mode is a parser of its own, so a flag that belongs to another mode, such as
+`--posterior` on `jacobian` or `--zero-tol` on `laplace`, is a usage error rather than a setting
+silently ignored. The configuration flags are shared by all three, though, so `--chi-k` is accepted
+and ignored where a mode has no use for it: by `rotation`, and by `laplace`, which runs only without
+chi. Each mode writes a diagnostic record whose variant is the mode's name, and prints
+`[prism] diagnostic <name>__<id>  <path>`.
 
 `laplace` and `jacobian` simulate at the cell's ground truth, so both need `--cell` and `--t-obs`,
 and their configuration loads the cell's values: the `[cfg]` lines name any cell value the bounds
@@ -539,8 +568,10 @@ When the posterior's record holds no eigenvalues, the mode warns
 `[eigenvalues] NOT STORED for this artifact.`, and what follows is an ordering and a set of
 loadings without the scale. The eigenvalues go unrecorded when training resumed a cache written
 before caches kept them, and on a narrowing round trained before rounds inherited them, built with
-no parent posterior, or whose parent held none. The warning names the records that may hold the
-same rotation with its eigenvalues.
+no parent posterior, or whose parent held none. The warning names no record, but says which records
+may hold the same rotation with its eigenvalues: the amortized posterior a narrowing round descends
+from, and, for a resumed run, the posterior of the run that started its cache, if that run computed
+the rotation and finished.
 
 **Refuses** a posterior that records no rotation `(--posterior)`, and an `--n-worst` above the
 posterior's latent width `(--n-worst)`.
@@ -572,7 +603,11 @@ whatever the posterior learned.
 - `--sd-identified X` — an SD below this counts as identified (default 0.3).
 - `--accept-truncated` — see [Acceptance flags](#acceptance-flags).
 
-**Writes** a record whose parent is the posterior.
+**Writes** a record whose parent is the posterior. For each evaluation point it prints how many
+parameters were measurable there, then a table with one row per parameter: its SD at every point,
+the median, and the fraction of points where it falls below `--sd-identified`. A rescale parameter
+whose name contains `scale` is log-uniform in the prior, so its SD is in log-range units; every
+other SD is in range units, and the record names which is which.
 
 **Rules:** the mode measures the single-frequency feature set and reads the cell's own drive, so it
 runs in forced mode only: chi mode is refused, and so is a bounds file with no Forcing section. It
@@ -588,7 +623,7 @@ parameter moves the features the posterior conditions on, and which parameters m
 needs no posterior.
 
 - `--bounds PATH` — required; see [Configuration flags](#configuration-flags).
-- `--model NAME` — see [Configuration flags](#configuration-flags) (default the bounds file's parent folder, upper-cased).
+- `--model NAME` — see [Configuration flags](#configuration-flags); this mode takes the Nadrowski model only (default the bounds file's parent folder, upper-cased).
 - `--chi` / `--no-chi` — see [Configuration flags](#configuration-flags) (default --no-chi).
 - `--chi-k K` — see [Configuration flags](#configuration-flags); in chi mode, the probes the map is measured at (default 6).
 - `--device auto|cpu|cuda` — see [Configuration flags](#configuration-flags) (default auto).
@@ -612,9 +647,18 @@ floor and the longest at which its high edge stays under the ceiling:
 `low edge <m>x clears 2 cycles at T_obs >= <s> s; high edge <m>x stays under the <n>-cycle ceiling below T_obs = <s> s.`
 A dead feature channel is warned and zeroed.
 
-**Rules:** without `--chi` the mode reads the cell's own drive, so it needs a bounds file with a
-Forcing section; spontaneous mode is refused. It also refuses a setting out of range, naming its
-flag, and a `--t-obs` too short to give a single sample `(--t-obs)`.
+**Rules:**
+
+- It is refused for every model but Nadrowski, because the parameter names it prints are
+  Nadrowski's (`core.diagnostics.feature_sets.assert_nadrowski`).
+- Without `--chi` the mode reads the cell's own drive, so it needs a bounds file with a Forcing
+  section; spontaneous mode is refused.
+- It refuses a setting out of range, naming its flag, and a `--t-obs` too short to give a single
+  sample `(--t-obs)`.
+- Two failures can come after the simulation has begun, and leave no record: fewer than 10 finite
+  baseline runs at the truth is a refusal, and in chi mode a probe measurement that is not finite,
+  not positive, or at or above 0.9 times Nyquist is an error, where [probes band](#probes-band)
+  would mask that probe instead.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -699,7 +743,9 @@ other thresholds are conventions.
 **Writes** a record with no parent: every point's four measures and verdict, the band verdict, the
 drive verdict and the configured settings it judged. A probe at or above 0.9 times Nyquist is
 masked, never moved to a frequency the cell can be sampled at, and the check warns which points it
-masked.
+masked. A length longer than the pre-simulated time grid holds is measured over the part that fits,
+with a warning that gives the length measured; [probes drive](#probes-drive) refuses such a length
+instead.
 
 **Refuses** a setting out of range, naming its flag, before anything is simulated.
 
@@ -774,8 +820,8 @@ strength in the grid captures the cell, the check says so, and that too is a res
 **Refuses**, before anything is simulated, a bounds file with no Forcing section (the check states
 each strength as a force in the cell's unit, so it needs one); a `--t-obs` longer than the
 pre-simulated time grid holds `(--t-obs)`; a `--detune` within the own-peak window of 1
-`(--detune)`; strengths that do not increase; and a captured threshold not below the free-running
-one.
+`(--detune)`; strengths that do not increase; a captured threshold not below the free-running one;
+and any other setting out of range, naming its flag.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -794,7 +840,7 @@ the command lines and what each must print.
 - `--cell PATH` — required: the cell file whose ground truth the infer stage simulates; when that stage runs, the cell is checked against `--bounds` before the prior is built.
 - `--t-obs S` — observation length, in seconds, of the observation the infer stage simulates; in chi mode give it a few seconds, as [A first run on the command line](getting-started.md#a-first-run-on-the-command-line) explains (default 1.0).
 - `--seed N` — the random seed for the whole run: one seeded stream through every stage (default 0).
-- `--stages STAGE[,STAGE...]` — the stages to run, a comma-separated subset of prior,posterior,validate,infer; each one left out prints `[skip] <stage>` (default prior,posterior,validate,infer).
+- `--stages STAGE[,STAGE...]` — the stages to run, a comma-separated subset of prior,posterior,validate,infer. A stage left out prints `[skip] <stage>`; the prior stage is also where `--prior` is loaded, so a run without `prior` stops there and a run without `posterior` stops after the prior, both with exit 0 (default prior,posterior,validate,infer).
 - `--num-runs N` — training batches to simulate (default 4).
 - `--run-size N` — ceiling on simulations per training batch; the prior sweep keeps the hardware batch (default 32).
 - `--n-cal N` — calibration datasets to simulate (default 40).
@@ -804,15 +850,14 @@ the command lines and what each must print.
 - `--checkpoint` — keep a simulation cache, committed every max(1, num_runs // 2) batches. Off unless given, so a second run of one configuration simulates again, which is the path this command exists to exercise.
 - `--save` — name what this run builds `smoke_prior` and `smoke_posterior`; a second `--save` run against the same store is refused by name.
 - `--store-root PATH` — the store this run writes; reuse one, with `--prior` and `--checkpoint`, to resume (default a fresh temporary directory, left on disk).
-- `--prior REF` — a prior in the store to load instead of building, by name or id; a resume needs it, because the cache is keyed on the prior's fit and two fits of one box differ.
+- `--prior REF` — a prior in the store to load instead of building, by name or id, loaded by the prior stage; a resume needs it, because the cache is keyed on the prior's fit and two fits of one box differ.
 - `--resume auto|require|never` — see [Training-cache flags](#training-cache-flags) (default auto).
 - `--new-run` — see [Training-cache flags](#training-cache-flags).
 
-**Writes** into a store of its own, never the `PRISM_ARTIFACTS` root: the one `--store-root` names,
-or a fresh temporary directory whose path the first `[smoke]` line prints (`store=...`) and which is
-left on disk. There it writes a prior, with `--checkpoint` a simulation cache, a posterior, a
-calibration, an observation and an inference. A failed run removes the temporary directory it made
-only when nothing was written into it.
+**Writes** into a store of its own, never the `PRISM_ARTIFACTS` root:
+[Inputs and records](getting-started.md#inputs-and-records) says which, and
+[The artifact store](getting-started.md#the-artifact-store) what it writes there. A failed run
+removes the temporary directory it made only when nothing was written into it.
 
 **What to watch.** The run shows that the chain runs, not that it is calibrated:
 
@@ -850,11 +895,16 @@ A seeded run is not bitwise-reproducible on a CUDA card or across devices.
   without `--prior`, since a new prior's fit is part of the cache's identity and no cache can match.
   Both are refused before the prior is built.
 - A resume uses the same store, the same `--num-runs` and `--run-size`, and `--prior` naming the
-  prior the first run built (`smoke_prior` under `--save`). A run one setting away is refused unless
+  prior the first run built (`smoke_prior` under `--save`), with `prior` in `--stages`, because the
+  prior stage is what loads it. The usage checks above do not ask for `prior`: without it the run
+  prints `[skip] prior`, trains nothing and exits 0. A run one setting away is refused unless
   `--new-run` is given ([Training-cache flags](#training-cache-flags)).
 - Given `--store-root` without `--checkpoint`, the run prints that nothing will be resumable.
-- After Ctrl-C it prints the command line that continues the cache: the same store and prior, with
-  `--checkpoint`, `--stages prior,posterior`, `--resume require` and the same sizes.
+- After Ctrl-C it prints advice for the case where a `[checkpoint]` line said batches were saved:
+  the flags to re-run with to continue them, `--store-root` and `--prior` naming this run's store
+  and prior, `--checkpoint`, `--stages prior,posterior`, `--resume require`, and the same
+  `--num-runs` and `--run-size` (`core.tool._smoke_interrupt_advice`). It names no configuration
+  flag and no `--cell`: those stay as they were.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -876,11 +926,14 @@ of driven responses, set against the cell's spontaneous fluctuations.
 - `--skip-sanity` — skip the sanity checks and go straight to the production sweep.
 - `--no-production` — stop after the sanity checks.
 
-**Writes** one fdt record, progressively: its directory and a first manifest exist from the moment
-the run starts. It prints `[prism fdt] writing record <id> at <dir>` before anything is spent, and
-`[prism fdt] record <id> at <path>` when it finishes. The record holds the figures (the power
-spectrum, the chi components, T_eff/T and the spontaneous trajectory), the numbers in `data.h5`,
-the settings and seed, and the log. A cancel or a crash keeps the folder, marked unfinished.
+**Writes** one fdt record, progressively. It prints `[prism fdt] writing record <id> at <dir>`
+before anything is spent and before the folder exists. The folder and a first manifest appear when
+the run opens the record, which it logs as `Writing fdt record <id> at <dir>`, and the manifest is
+rewritten as the run goes. It prints `[prism fdt] record <id> at <path>` when it finishes. The
+record holds the figures (the power spectrum, the chi components, T_eff/T and the spontaneous
+trajectory), the numbers in `data.h5`, the settings and seed, and the log. A cancel or a crash after
+the record opens keeps the folder, marked unfinished; a cancel or a refusal before then leaves
+nothing (`core.FDT.fdt_pipeline.run_fdt`).
 
 **Rules:**
 
@@ -894,10 +947,12 @@ the settings and seed, and the log. A cancel or a crash keeps the folder, marked
   with the reason `(--model)`: FDT drives the observable itself, so a user model needs additive,
   non-zero observable noise and no intrinsic forcing.
 - The pair `--skip-sanity` and `--no-production` is a usage error: together they run nothing.
-- A resolution setting of 0 is refused, naming its flag.
+- An `--n-freqs`, `--ensemble-m` or `--freqs-per-batch` below 1, an `--f0` of 0 or less, and a
+  `--seed` outside 0 to 2^64 − 1 are refused, naming the flag (`core.cli.make_fdt_config`).
 
 **Exit codes** as in [Exit codes](#exit-codes). After Ctrl-C the record named by the
-`writing record` line is kept, marked unfinished: `python -m core artifacts list fdt` lists it and
+`writing record` line is kept, marked unfinished, unless the run was stopped before its folder
+existed; then there is nothing to clear. `python -m core artifacts list fdt` lists it and
 `python -m core artifacts rm fdt <id>` removes it. Nothing resumes; the same command starts the
 analysis again, and with `--name` only once the unfinished record is removed, because it keeps the
 name. The `artifacts` family reads only the `PRISM_ARTIFACTS` root, so after a run given
@@ -916,7 +971,7 @@ varying T_a/T (restored as T_a/T goes to 1).
 - `--store-root PATH` — the store this run writes its records into (default the artifacts root).
 - `--name NAME` — a base name for the study's two records, `NAME-s` and `NAME-temp`, one per swept parameter; `''` leaves both unnamed. Both names are claimed before anything is spent, so a taken one is refused before either sweep starts.
 - `--note TEXT` — see [Naming flags](#naming-flags).
-- `--n-freqs N` — drive frequencies in each driven-response sweep (default the preset's: exploratory 30, production 60).
+- `--n-freqs N` — drive frequencies of each sweep's one common grid, as a floor: the grid covers every resonant operating point's band, and its point count grows with the span of their resonances (default the preset's: exploratory 30, production 60).
 - `--ensemble-m N` — trajectories per frequency (default 256).
 - `--freqs-per-batch N` — frequencies packed into one simulator call (default 1).
 - `--f0 X` — non-dimensional drive amplitude; keep it inside the linear regime (default 0.05).
@@ -925,10 +980,14 @@ varying T_a/T (restored as T_a/T goes to 1).
 **The presets** set the resolution the flags do not expose, and two flags' defaults
 (`core.cli.SWEEP_PRESETS`):
 
-| preset | drive band, times the cell's ω₀ | drive window, in drive periods | spontaneous recording, ND time | `--n-freqs` | `--ensemble-m` |
+| preset | drive band, in multiples of ω₀ | drive window, in drive periods | spontaneous recording, ND time | `--n-freqs` | `--ensemble-m` |
 |---|---|---|---|---|---|
 | exploratory | 0.2 to 30 | 20 | 4000 | 30 | 256 |
 | production | 0.1 to 30 | 30 | 8000 | 60 | 256 |
+
+The operating points' resonances set ω₀, not the cell's: a sweep's one grid runs from the band's
+low multiple of the lowest resonant operating point's ω₀ to its high multiple of the highest's
+(`core.FDT.cross_validation._build_common_grid`).
 
 **Writes** two fdt records, `NAME-s` and `NAME-temp`, each progressive like the record of
 [fdt](#fdt), and each with its `data.h5`, its 3-D plot and its point counts. The S sweep's record is
@@ -939,7 +998,12 @@ one `[prism crossval] sweep record <id> at <path>` line per finished record.
 **Rules** for each grid, `MIN MAX N`: N must be a whole number of at least 2, else a usage error;
 MIN must be below MAX; and the T_a/T grid's MIN may not be below 0, because a negative temperature
 ratio is unphysical and the simulation diverges there. The last two are refusals naming the grid's
-flag; S has no floor. Like `fdt`, the study runs on the CPU only and takes no configuration flags.
+flag; S has no floor. The resolution settings and the seed are refused as [fdt](#fdt) refuses them
+(`core.cli.make_param_sweep_config`). A sweep whose every operating point failed keeps its
+unfinished record and lets the other sweep run; when both sweeps measured nothing, the study is
+refused `(--s-grid)`, exit 1, with both unfinished records kept
+(`core.FDT.cross_validation.run_param_study_cli`). Like `fdt`, the study runs on the CPU only and
+takes no configuration flags.
 
 **Exit codes** as in [Exit codes](#exit-codes). After Ctrl-C a sweep that had finished keeps its
 finished record, the one in progress keeps an unfinished one, and a sweep not yet started left
@@ -952,13 +1016,17 @@ figures are its output, and its `data.h5` holds the common grid and the interpol
 
 - Nothing is simulated, and no record it draws is modified. It has no `--store-root` and no
   configuration flags: it reads and writes the `PRISM_ARTIFACTS` root.
-- Runs land on different frequencies, since each detects its own resonance, so the curves are
-  interpolated onto a grid log-spaced over the intersection of their spans; a point whose
-  bracketing samples include a blank stays blank rather than being drawn through. Runs that share no
-  frequency band are refused.
+- Runs land on different frequencies, since each detects its own resonance, so the modes that draw
+  two or more runs interpolate the curves onto a grid log-spaced over the intersection of their
+  spans; a point whose bracketing samples include a blank stays blank rather than being drawn
+  through. Runs that share no frequency band are refused. `renormalise` draws its one run on the
+  run's own grid and interpolates nothing.
 - Every mode takes each record with its own `--record REF`, by name or id. A record whose run did
   not finish is refused, naming it `(--record)`, as are one run named twice, a record of the wrong
   study (a single-cell run or a sweep) and a record with no data file.
+- A comparison names the records it drew in its body, not as its parents, so it does not protect
+  them: [artifacts rm](#artifacts-rm) of one succeeds, and the comparison's lineage report then
+  prints that record as `MISSING`.
 - It logs `Writing comparison record <id> at <dir>` when it opens its record and prints
   `[prism] fdt <name>__<id>  <path>` when it finishes. After Ctrl-C the opened record is kept,
   marked unfinished, and nothing resumes.
@@ -975,7 +1043,9 @@ Two or more single-cell runs' ratio curves on one axis, labelled by cell.
 
 ### compare repeats
 
-Several runs of one cell, with the spread across them drawn as a band.
+Several runs of one cell, with the spread across them drawn as a band. The mode does not enforce one
+cell: it names the cells it drew, as a notice in the record when there is more than one. It also
+notes records that share a seed: they are one run drawn twice, and their spread measures nothing.
 
 - `--record REF` — required, once per record: a saved single-cell fdt record, by name or id; at least two.
 - `--name NAME` — see [Naming flags](#naming-flags).
@@ -990,7 +1060,7 @@ One run's T_eff/T recomputed with a supplied normalisation constant, drawn again
 - `--record REF` — required: exactly one saved single-cell fdt record, by name or id; it must record the constant it used.
 - `--name NAME` — see [Naming flags](#naming-flags).
 - `--note TEXT` — see [Naming flags](#naming-flags).
-- `--prefactor X` — required: the normalisation constant to recompute T_eff/T with.
+- `--prefactor X` — required: the normalisation constant to recompute T_eff/T with; one that is not greater than 0 is refused `(--prefactor)`.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -1019,6 +1089,9 @@ screen. [Browsing the store](getting-started.md#browsing-the-store) sets the two
   usage error. `<ref>` is a record's name or its id.
 - Its output is plain aligned text on stdout, meant for a person or a script. It is not a record and
   reaches no `log.txt`.
+- After Ctrl-C the family prints the generic advice of [Exit codes](#exit-codes), about a removed
+  record and `--resume require`. It does not apply here: these modes write no record and keep no
+  cache, so there is nothing to resume.
 
 ### artifacts list
 
@@ -1063,7 +1136,9 @@ A reference that names a leftover directory, rather than a record, is refused wi
 
 It is refused while any other record depends on it. The refusal names every dependent and why: it
 names this record as a parent, or, for a prior, it is a training cache generated against it, found
-by the prior's fit alone. Delete those first; no flag overrides the refusal.
+by the prior's fit alone. Delete those first; no flag overrides the refusal. A comparison is not a
+dependent: deleting a record a comparison drew succeeds, and the comparison's lineage report then
+prints it as `MISSING` ([compare](#compare)).
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -1105,15 +1180,18 @@ rather than raised.
 
 ## Worked examples
 
-**A stage chain at small sizes.** The chain writes into a scratch store, so the real one gains
-nothing; delete the folder afterwards. The prior builds at its full default size, which takes
-several minutes. Training, calibration and inference run at sizes that show the chain working and
-mean nothing more.
+The three examples write into whatever records root is current when they run, so the first line
+points `PRISM_ARTIFACTS` at a scratch folder. Run all three in that same shell, so it stays set and
+the real store gains nothing.
+
+**A stage chain at small sizes.** The prior builds at its full default size, which takes about a
+minute and a half on the graphics card and longer on the CPU. Training, calibration and inference
+run at sizes that show the chain working and mean nothing more.
 
 ```bash
 export PRISM_ARTIFACTS="$HOME/prism-scratch"    # PowerShell: $env:PRISM_ARTIFACTS = "$HOME\prism-scratch"
 python -m core prior    --chi --bounds Resources/Bounds/nadrowski/master.txt --name demo_prior
-python -m core train    --chi --bounds Resources/Bounds/nadrowski/master.txt --prior demo_prior --num-runs 8 --max-epochs 5 --name demo_posterior
+python -m core train    --chi --bounds Resources/Bounds/nadrowski/master.txt --prior demo_prior --num-runs 8 --run-size 32 --max-epochs 5 --name demo_posterior
 python -m core validate --chi --bounds Resources/Bounds/nadrowski/master.txt --posterior demo_posterior --n-cal 100 --seed 7
 python -m core infer    --chi --bounds Resources/Bounds/nadrowski/master.txt --posterior demo_posterior --cell Resources/Cells/nadrowski/master_spont.txt --t-obs 4.5 --name demo_inference
 python -m core artifacts summary inference demo_inference
@@ -1136,15 +1214,18 @@ verdicts and the settings it judged. The bounds file must declare a Forcing sect
 `probes drive`, and this one does.
 
 **An FDT run twice, then compared.** Each run draws and records a seed of its own, so the two are
-independent repeats of one cell:
+independent repeats of one cell. The sizes here (4 drive frequencies, 8 trajectories each, no
+sanity checks) show the commands working and mean nothing more. A real run takes its defaults, 60
+frequencies of 256 trajectories after the sanity checks, and is long: it runs on the CPU only.
 
 ```bash
-python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --name spont_fdt_a
-python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --name spont_fdt_b
+python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --n-freqs 4 --ensemble-m 8 --skip-sanity --name spont_fdt_a
+python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --n-freqs 4 --ensemble-m 8 --skip-sanity --name spont_fdt_b
 python -m core compare repeats --record spont_fdt_a --record spont_fdt_b --name spont_fdt_repeats
 ```
 
-The comparison record draws both ratio curves on one axis, with their spread as a band.
+The comparison record draws both ratio curves on one axis, with their spread as a band. When you
+are done, delete the scratch folder.
 
 ## Where the old scripts went
 
