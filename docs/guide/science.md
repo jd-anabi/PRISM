@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit f5c491c.
+Checked against commit 3c4e393.
 
 ## Nondimensionalisation
 
@@ -369,7 +369,8 @@ probes. An audit that separated the masking predicates, over a real screened pri
   declared with it.
 - **Raising the longest recording was rejected.** Resolving the whole band on a 0.1 Hz bundle takes
   two cycles at 0.003 Hz, about 670 s (a single probe at the band's top would need about 67 s, still
-  past the longest recording, and would measure no spread): outside experimental reality, and it
+  past the longest recording, and would measure no frequency spread): outside experimental reality,
+  and it
   would dominate the simulation budget.
 
 **Per-row placement** (`core.SBI.chi.resolvable_multipliers`, training only). Each row's multipliers
@@ -491,8 +492,9 @@ gradients cannot explain: 1 alone, 0 fully aliased.
   magnitude channels are three of `t_scale`'s top five, the top two above `A3_log_fpeak`.
 - **`lam`~`t_scale` was never degenerate on this cell**: their gradients' |cos| is 0.59 in forced
   mode, before chi does anything.
-- **`k`~`x_scale` survives chi**: |cos| 0.98 forced; 0.95 under chi in the first map and 0.97 in
-  the one tabulated above. The two keep the worst unique handles. Both are led by `A1_mean`:
+- **`k`~`x_scale` survives chi**: |cos| 0.98 forced; under chi, 0.95 in an earlier map made at
+  another band, probe count and recording length, and 0.97 in the one tabulated above. The two keep
+  the worst unique handles. Both are led by `A1_mean`:
   stiffness and displacement scale move the trace's mean together, and a sub-resonance
   susceptibility does not touch the mean. Three measurements agree. Chi will not break this pair,
   and no retraining will change that.
@@ -526,8 +528,8 @@ already attacks the degeneracy the rotation targets. The measurement above shows
 
 **Six probes into twelve slots is an untested lever.** A simulated observation supplies
 `CHI_N_FREQS` = 6 probes into `CHI_K_PAD` = 12 slots, so half the chi block is padding before
-anything is masked, while training draws its probe count from 2 to 12. Whether more probes, or a
-slot count matched to what is supplied, would buy information has never been measured.
+anything is masked, while training draws its probe count from 2 to 12. What would settle it is
+under [Open questions](#open-questions), "Probes against slots".
 
 **Running the comparison.** `identifiability jacobian` measures the map at a cell's ground truth and
 needs no posterior; its flags are in
@@ -590,11 +592,13 @@ What the screen does, read from the code:
   counted.
 - **The clusters set only the component count.** HDBSCAN's labels are used for their number alone;
   the mixture is fitted to every accepted point, the ones HDBSCAN calls noise included.
-- **One accepted set gives one prior.** The mixture's fit starts from a fixed random state
-  (`core.SBI.Priors.prior.GMM_RANDOM_STATE`), and the built-in models sort the accepted set before
-  it, so the fit is reproducible from its points. The census and the walk draw from the global
-  random streams, which `prior` does not seed, so two builds over one box differ. That is why a
-  simulation cache names its prior by the mixture's fingerprint, not by its box.
+- **For a built-in model, one accepted set gives one prior.** The mixture's fit starts from a fixed
+  random state (`core.SBI.Priors.prior.GMM_RANDOM_STATE`), and the built-in models sort the accepted
+  set first, so the fit is reproducible from its points; a user model's accepted set is not sorted.
+  Nothing before the fit is seeded: the census's Sobol scramble, the walk's steps and a built-in
+  model's random starting points draw from the global random streams, and `prior` seeds none of
+  them, so two builds over one box differ. That is why a simulation cache names its prior by the
+  mixture's fingerprint, not by its box.
 
 The second and third points are an open question ([Open questions](#open-questions)).
 
@@ -679,7 +683,8 @@ size, not the retrain's result:
   t_scale it is 0.49, and with x_scale 0.44. Its strongest features are the chi log-magnitudes.
 - The calibration verdict was FAIL, which is expected at that size. Temperature's own rank test
   passed there (KS p 0.479) and failed in the calibration of the narrowing round on the same card, a
-  five-epoch round; neither reading decides anything at this size.
+  round capped at `--max-epochs 5`, which trains six epochs ([train](command-line.md#train));
+  neither reading decides anything at this size.
 
 The Jacobian column and the product n · T together say that temperature is weakly informed in chi
 mode and nearly degenerate with n, so its estimate is not a measurement of the bath temperature.
@@ -770,8 +775,8 @@ calibration set just simulated, so it costs no simulation. `validate` prints it 
 `Informativeness` block and records it.
 
 - **Read its sign first.** It is not bounded below by zero: a flow that gives the truth less density
-  than the prior does scores negative. A five-epoch smoke train on 40 rows measured −23.1 nats, the
-  right answer for it: worse than the prior.
+  than the prior does scores negative. A smoke-sized train (`--max-epochs 5`, which trains six
+  epochs) measured −23.1 nats, the right answer for it: worse than the prior.
 - **Never compare it with a figure measured on training rows.** The flow has fitted those rows, so a
   figure there is optimistic by an unknown amount. Compare posteriors on fresh calibration sets only.
 - **It is joint:** one log-density ratio over every parameter together, temperature included.
@@ -994,8 +999,9 @@ trusting it with the physics:
   simulated physics.
 
 **Batch count against width.** The solver's time is set by its sequential steps, not by its rows, so
-a batch's width is nearly free in time ([The inference settings](window.md#the-inference-settings)
-gives the timings). The two budget numbers are therefore not interchangeable.
+a batch's width is nearly free in simulation time
+([The inference settings](window.md#the-inference-settings) gives the timings). The flow's fit is
+not: its time grows with the rows. The two budget numbers are therefore not interchangeable.
 
 - The batch count sets the diversity of (t_scale, T_obs): every row of a batch shares its batch's
   pair.
@@ -1033,12 +1039,12 @@ those axes the effective sample size is probably the batch count (5,000 at the A
 plateau says nothing about whether those axes converged. The test: train 5,000 × 2,048 and
 10,000 × 1,024, the same 10.24 million rows over 5,000 and over 10,000 operating points, and compare
 t_scale's rank test and posterior width ([The solver's physics check](#the-solvers-physics-check)
-has count against width). With today's tool each arm keys its own simulation cache, so the test needs its own
-simulation, although both arms are subsets of a 10,000 × 2,048 cache's rows: a way to train on part
-of a cache would run it without simulating.
+has count against width). With today's tool each arm keys its own simulation cache, so the test
+needs its own simulation, although both arms are subsets of a 10,000 × 2,048 cache's rows: a way to
+train on part of a cache would run it without simulating.
 
-**New observables: a step for k, intermodulation for the nonlinearity.** Only after the M-replicate
-study.
+**New observables: a step for k, intermodulation for the nonlinearity.** Only after the
+M-replicate study.
 
 - For k, a step or force-clamp transient. A transient never meets the wall at about 30 drive cycles
   ([Chi probe design](#chi-probe-design)), because that wall belongs to a steady-state lock-in.
@@ -1152,8 +1158,9 @@ half of each batch's rows keep only a random number of their live probes
 (`core.SBI.chi_probes._subset_probe_rows`), and a one-probe simulated observation puts its probe at
 the band's low edge. Whether such an observation is in distribution is not established.
 `sbc --chi-k-fixed 1`, the rank test on one-probe calibration sets ([sbc](command-line.md#sbc)),
-would say whether one-probe rows are calibrated at all, but only in part: a calibration set jitters
-its single probe across the band, and the low edge is one placement among many. If such an
+answers this only in part: a calibration set jitters its single probe across the band, while a
+one-probe simulated observation always puts it at the band's low edge, one placement among many. If
+such an
 observation is not in distribution, a floor of 2 in the configuration's check would close it; the
 bench path, which rightly takes a single recording, never re-runs that check.
 
@@ -1161,6 +1168,10 @@ bench path, which rightly takes a single recording, never re-runs that check.
 width, and is refused only above that. It then truncates every direction the t_scale rule allows,
 the flat ones included, which is what the eigenbasis rule exists to prevent. Whether the largest
 count should be lower is still to decide.
+
+**Correcting the −log P(A) inflation.** A narrowed posterior's informativeness is inflated by
+−log P(A), which is printed and never subtracted ([Narrowing rounds](#narrowing-rounds)); whether to
+subtract it has not been decided.
 
 **The FDT passive baseline's Ω₀.** The FDT analysis's passive-baseline check
 (`core.FDT.sanity.check_passive_baseline`) sets s = 0 and temp = 1, which puts the bundle's

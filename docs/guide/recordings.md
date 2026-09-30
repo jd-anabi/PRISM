@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit c0c1801.
+Checked against commit 3c4e393.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, how a cell is matched to its bounds file, the three observation modes and
@@ -173,7 +173,9 @@ that find a bounds file themselves find `master.txt` for it, and refuse it: `mas
 
 The bounds file and the chi switch together choose the observation mode
 (`core.sim_config.SimConfig.observation_mode`), and the mode fixes what one observation is. A
-posterior loads only in the mode it was trained in, so choose the mode before you record.
+posterior loads only in the mode it was trained in, so choose the mode before you record. A
+posterior's bounds file and mode are in its record: `python -m core artifacts show posterior <ref>`
+prints `inputs.bounds` and `config.mode`.
 
 | mode | chosen by | what you record | what you note at the bench |
 |---|---|---|---|
@@ -185,11 +187,13 @@ posterior loads only in the mode it was trained in, so choose the mode before yo
   from that box, and nothing checks a recording's drive against it. The box is written in the
   cell's units; `master.txt`'s spans 0 to 6 pN and 2.26 to 226 Hz.
 - **Chi mode.** A Forcing section, if the bounds file has one, is ignored: the probes sit at the
-  frequencies you drove at. χ is the response divided by the drive, so the amplitude you give only
-  normalises the lock-in, but how hard you drive still matters. Training drove every probe at the
-  configured chi drive; a much stronger drive can capture the bundle, which then abandons its own
-  rhythm and follows the drive, so that χ measures the drive rather than the bundle
-  ([The chi assumptions, and checking them](#the-chi-assumptions-and-checking-them)).
+  frequencies you drove at. χ is the response divided by the drive: the lock-in divides by the
+  amplitude you give, so give the amplitude actually applied. Training drove every probe at the
+  configured chi drive, and an active bundle does not respond linearly, so the |χ| a cell gives, and
+  its scatter, change with the amplitude: drive as near that amplitude, in newtons for this cell, as
+  you can ([The chi assumptions, and checking them](#the-chi-assumptions-and-checking-them) gives
+  it). A much stronger drive can also capture the bundle, which then abandons its own rhythm and
+  follows the drive, so that χ measures the drive rather than the bundle.
 
 In the window, the Config tab's "Multi-frequency χ(ω) conditioning" tick is the chi switch, and the
 Prior tab's Bounds picker the bounds file. The Infer tab's "Experimental data" mode then shows the
@@ -253,7 +257,8 @@ cell's own oscillation, measured from the passive recording.
 
 The window's **Plan probes…**, on the Infer tab's chi page, applies the same rules before you make
 the driven recordings: from the passive recording it measures Ω₀, gives the band in hertz, and says
-how long a probe must be at each edge of it.
+how long a probe must be at each edge of it. The command line has no equivalent: no subcommand
+measures Ω₀ from a recording.
 
 ## Recording length
 
@@ -310,7 +315,7 @@ Chi mode rests on four settings in `core/config.py`, chosen by measurements on t
 | setting | value | what it means for a recording |
 |---|---|---|
 | `CHI_FREQ_BOUNDS` | (0.03, 0.3) | the band: probes lie between 0.03 and 0.3 times the observation's own Ω₀, so the band moves with each cell |
-| `CHI_F0` | 0.15 | the drive amplitude in model units: 0.15 times the cell's force scale, 1.5 pN on the master cells, whose `f_scale` is 10 pN. Strong enough for a reproducible lock-in, and weak enough to leave the bundle oscillating on its own |
+| `CHI_F0` | 0.15 | the drive amplitude in model units: 0.15 times the cell's force scale, 1.5 pN on `master.txt`'s cells, whose `f_scale` is 10 pN. On the tier-1 box the force scale is derived from the temperature ([The tier-1 constraint and temperature](science.md#the-tier-1-constraint-and-temperature)), so for the values in `master_spont_tier1.txt` it is about 47.0 pN and the drive about 7.0 pN; a chi training run prints the drive its prior implies on its second `[tier1]` line. Strong enough for a reproducible lock-in, and weak enough to leave the bundle oscillating on its own |
 | `CHI_MIN_CYCLES` | 2 | the floor: a probe with fewer drive cycles is masked |
 | `CHI_MAX_CYCLES` | 20 | the lock-in ceiling: each probe is locked in over at most its first 20 cycles, because on this model a longer lock-in is not a better one |
 
@@ -327,6 +332,12 @@ replaced the scripts that first measured the values
 that describes your preparation, or, for `mask`, a prior. The file names below are the master
 examples.
 
+A cell file must give a value for every parameter the bounds file declares, each inferred one inside
+its box (`core.sim_config.SimConfig.inject_ground_truth` refuses otherwise). The checks judge the
+values you give, not the preparation. For a preparation whose values are not known, a master cell or
+the medians an earlier inference recorded (`results.posterior_summary`) are stand-ins, and each
+verdict, and the physical drive in newtons, is only as good as the stand-in.
+
 **Do the band and the drive hold for this cell?**
 
 ```bash
@@ -338,7 +349,8 @@ above it, at several recording lengths. It judges every point on three criteria:
 varies between runs, the signal over the same lock-in on undriven runs, and capture, how much of the
 cell's own oscillation survives the drive. It also reports the scatter of χ's phase, which it judges
 only when given a threshold. Its two verdicts read "the configured band (0.03, 0.3) holds for this
-cell" or "does not hold for this cell", and the same for the configured drive, 0.15. Read them with
+cell" or "does not hold for this cell" (or "was not judged", when nothing measured could decide
+it), and the same for the configured drive, 0.15. Read them with
 the two caveats the record carries: the spread, signal and phase thresholds are conventions, and
 only capture is physical evidence against a probe; and a probe with a low harmonic near the cell's
 own peak is marked, because the harmonic's power inflates the not-captured measure and can hide
@@ -354,8 +366,8 @@ The bounds file must have a Forcing section. The check drives the cell off its o
 of strengths, and reports the strongest at which the bundle still oscillates freely and the weakest
 at which the drive captures it, each in model units and in the cell's force unit. It logs and
 records suggested Forcing lines for a cell file, for a forced-mode preparation; copy them by hand,
-because the check never writes a file. To judge the chi drive, use
-[probes band](command-line.md#probes-band).
+because the check never writes a file ([probes drive](command-line.md#probes-drive)). To judge the
+chi drive, use [probes band](command-line.md#probes-band).
 
 **Why are training probes masked?**
 
@@ -369,7 +381,8 @@ shortened below it by training's draw of lock-in durations, or a lock-in that ca
 or zero. It reports the spread of the rows' own peak frequencies, and names the lever the dominant
 cause points at. The probe count, the multipliers and the lock-in durations come from training's own
 fixed seed, so they do not change with `--seed`; where the probes land depends on each row's own
-peak and recording length, and that placement does.
+peak and recording length, and that placement does change with `--seed`
+([probes mask](command-line.md#probes-mask)).
 
 Each check writes one diagnostic record ([probes](command-line.md#probes) has every flag and every
 line of output), into the store's `diagnostics/` folder
@@ -386,9 +399,13 @@ floor change only by a deliberate edit of `core/config.py`, followed by a retrai
 too, or on the window's Config tab, and a change to either also means a retrain. The store refuses
 to load a chi posterior trained at another band, drive, lock-in ceiling or number of probe slots
 (`core.artifacts.store.ArtifactStore.load_posterior`). The cycle floor is neither recorded with a
-posterior nor compared when one loads, so after changing it, retrain before you infer again. The
-grids a check takes (`--multipliers`, `--drives`, `--cycle-caps`) measure alternatives and nothing
-more: none of them reaches a training run.
+posterior nor part of the simulation cache's identity
+([The artifact store](architecture.md#the-artifact-store)). So after changing it, retrain against a
+new simulation cache, and rebuild any chi observation saved before the change: a plain `train`
+would resume the cache simulated at the old floor
+([The chi probe set and its Fisher](rules-and-traps.md#the-chi-probe-set-and-its-fisher) gives the
+routes). The grids a check takes (`--multipliers`, `--drives`, `--cycle-caps`) measure
+alternatives and nothing more: none of them reaches a training run.
 
 ## Defining a model of your own
 
@@ -415,6 +432,10 @@ Full settings…) with Open model builder, or with Edit on a saved model
    `Units/<name>/units.txt`, which always declares `nm s`. The bounds file keeps the boxes you set,
    and gives `x_scale` and `t_scale` boxes from half to twice their values. The cell finds that
    bounds file by its name ([How a cell finds its bounds file](#how-a-cell-finds-its-bounds-file)).
+
+Training, the prior's stability sweep and the Fisher rotation start a user model from the initial
+conditions its definition declares; Simulate, FDT and a simulated observation start it from its cell
+file's (`core.registry`). So an edit to the cell file's initial conditions does not reach training.
 
 The rules the builder keeps (`core.Models.user_model.parse_user_model`,
 `core.Helpers.model_store.save_user_model`), which a hand edit can break:
