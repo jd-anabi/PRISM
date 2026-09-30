@@ -612,8 +612,10 @@ STABILITY_SWEEP_ND_UNITS = 1000  # ND time units used to screen parameter stabil
 
 PRIOR_SWEEP_ITERATIONS = 50     # sweep ROUNDS inside gen_prior's global stability map. Total
                                 # candidates screened = PRIOR_SWEEP_BATCH x this, and each round pays
-                                # a full STABILITY_SWEEP_ND_UNITS trajectory whatever the batch is --
-                                # so rounds cost wall-clock and batch costs memory. Was a bare literal
+                                # a trajectory over the first HALF of STABILITY_SWEEP_ND_UNITS
+                                # whatever the batch is (Prior.construct_prior hands the global map
+                                # half the stability grid; the local sweep gets all of it) -- so
+                                # rounds cost wall-clock and batch costs memory. Was a bare literal
                                 # at the gen_prior call site until 2026-08-10.
                                 # (Prior.construct_prior passes batch*iterations down as `batch_size`,
                                 # so the subclasses' `batch_size % num_iterations` guard is vacuous by

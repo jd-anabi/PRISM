@@ -34,7 +34,7 @@ PRISM has two front ends over one core.
 
 Both front ends call the same stages (`core.orchestrator`) and the same FDT analysis (`core.FDT`);
 the diagnostics (`core.diagnostics`) are reached from the tool alone. Every setting either front end
-offers reaches its stage as a keyword argument, never as an edit to `core.config`, so a run started
+offers reaches its stage as an argument, never as an edit to `core.config`, so a run started
 from the window and the same run started from the tool do the same thing.
 
 ## Reading paths
@@ -48,7 +48,8 @@ You decide the science and run the full-size training.
 2. [The retrain runbook](retrain.md): the decisions, the pre-flight checks, the exact commands, what
    to watch while it runs, and the gates a new model must pass.
 3. [The inference settings](window.md#the-inference-settings): every setting on the Parameter
-   Inference tabs, with its flag, its keyword argument, its default and what it really changes.
+   Inference tabs, with its flag, the argument that receives it, its default and what it really
+   changes.
 4. [Settings that are not speed dials](window.md#settings-that-are-not-speed-dials): the settings
    that look like a trade of time for precision but change the prior or the measurement instead.
 5. [validate](command-line.md#validate), [tsnpe](command-line.md#tsnpe) and
