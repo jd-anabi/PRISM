@@ -538,8 +538,8 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
      - *From the handoff's retirement.* In-repository `file:line` citations came back into comments
        and docstrings and rot as files move; piece 6's documents review replaced every one it found in
        `core/` with a function name (`e965fa0`), but nothing stops new ones: no source scan looks for
-       `<file>.py:<n>` in a comment. Citations of third-party files (tqdm, sbi, torch) are a separate
-       question.
+       `<file>.py:<n>` in a comment (such a scan would join `tests/test_source_hygiene.py`). Citations
+       of third-party files (tqdm, sbi, torch) are a separate question.
      - *From the handoff's retirement.* `core.SBI.training_checkpoint.checkpoints_using_prior` has had
        no caller in `core` since the prior-save path it served was retired (the store refuses to delete
        a prior a cache depends on); only `tests/test_artifact_store.py` calls it, and its docstring tells
@@ -547,9 +547,10 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
        (`core/SBI/training_checkpoint.py`).
      - *From piece 6 — the load-check audit, for the owner.* Recorded but never compared when a record
        loads: a posterior's and an observation's `feature_set_version` and `summary_flags` (only a width
-       change is caught); an observation's chi drive, band and lock-in ceiling (a posterior's are
-       compared); a posterior's and an observation's time grid and units-file hash (only the simulation
-       cache's identity carries them). Two constants are recorded nowhere and are not in
+       change is caught); an observation's box; an observation's chi drive, band and lock-in ceiling (a
+       posterior's are compared); a posterior's and an observation's time grid and units-file hash (only
+       the simulation cache's identity carries them). Two constants are recorded in no record a load
+       compares (only a `probes` diagnostic record carries them) and are not in
        `SimulationIdentity`: the cycle floor `CHI_MIN_CYCLES` and the smallest probe count training
        draws, `CHI_K_MIN_TRAIN`, so a retrain after changing either reuses a cache simulated under the
        old value. Settle this before any post-retrain change to `core/config.py` or to the features
@@ -575,7 +576,7 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
        (`core/diagnostics/probes.py`, `probe_drive`).
      - *From piece 6 — tool code gaps.* A Ctrl-C in an `artifacts` command prints the training cache's
        resume advice, since that family sets no `interrupt_note` (`core/tool/browse.py`); `ablation`'s
-       two simulation-cache refusals and `make_cfg`'s unsupported-model refusal are plain `ValueError`s
+       three simulation-cache refusals and `make_cfg`'s unsupported-model refusal are plain `ValueError`s
        (`core/diagnostics/ablation.py`, `core/tool/config_args.py`); the store's error for a reference
        that resolves to no record carries no field (`core/artifacts/store.py`); the `units` refusal
        field maps to no flag (`core/tool/fields.py`); `--chi-k`'s shared help reads as a training
@@ -645,6 +646,11 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
        loads onto whatever device the run uses and compares no device, so a repeat on another device
        runs without a word; the reviewer's page now says to pass the recorded device, and a check
        would make it a refusal (`core/artifacts/store.py`).
+     - *From piece 6.* A calibration's caveat line and its `results["cal_n_scales"]` record the
+       REQUESTED number of operating points (200 by default) while fewer are drawn when `n_cal` is
+       small, because a batch is at least 10 datasets wide (at `n_cal` 40, ceil(40/10) = 4 are drawn),
+       so the record misstates what ran. Harmless at the retrain's 2000 / 200 (`core/SBI/analysis.py`,
+       `core/orchestrator.py`).
    - Piece 3 did not take the optional tidy-up of `decorrelate.py`'s `or` fallbacks and `prior.py`'s
      clamps (spec §1.3 "the plan, if cheap; else none"); it stays unowned.
    - Piece 3's other open minors, each judged not worth a change now: the decorator scan matches only

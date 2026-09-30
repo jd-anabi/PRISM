@@ -284,9 +284,10 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   `chi_probes` and `summaries`) do so through the module object (`_pipeline.<name>`), never through a
   `from` import. A consumer that bypasses the seam fails silently: the patch stops landing, and tests
   go slow or quiet, not red. Deleting a re-import fails when the name is next read:
-  - a `NameError` from the façade's own code, which uses several as module globals (`gen_stats`,
-    `gen_chi_block`, `count_pathological`, and `_PATHO_MAG` only in its `[patho]` lines, the last of
-    them after generation ends);
+  - a `NameError` from the façade's own code, which uses several as module globals (among them
+    `gen_stats`, `gen_chi_block`, `_subset_probe_rows`, `build_nondim_sin_force_tensor`,
+    `count_pathological`, and `_PATHO_MAG` only in its `[patho]` lines, the last of them after
+    generation ends);
   - an `AttributeError` for a consumer that reads `pipeline.<name>`;
   - an `ImportError` for one that imports it.
 
@@ -530,11 +531,12 @@ is how the store is built, in `core/artifacts/`.
   - Recorded but never compared on load:
     - a posterior's and an observation's `feature_set_version` and `summary_flags`; only a change of
       width is caught;
+    - an observation's box (the configuration block);
     - an observation's chi drive, band and lock-in ceiling (a posterior's are compared), so a
       narrowing round can be drawn around an observation made at another drive;
     - a posterior's and an observation's time grid (the configuration block) and units file hash
       (`inputs`); only the simulation cache's identity carries them.
-  - Not recorded at all:
+  - Recorded in no record a load compares (only a `probes` diagnostic record carries them):
     - the cycle floor below which a probe is masked (`CHI_MIN_CYCLES`, read by
       `chi_probes.gen_chi_raw` when it runs);
     - the smallest probe count training draws (`CHI_K_MIN_TRAIN`, read by `gen_training_data`).

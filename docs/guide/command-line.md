@@ -719,9 +719,9 @@ invisible, constant in training, or non-finite), and a count of the usable chann
 
 **Rules:** the ranges must be the ones this network was trained on, so the mode reads the
 posterior's own simulation cache: the posterior must have trained with checkpointing on. One that
-names no cache is refused, as is a cache whose rows are not as wide as the posterior's conditioning,
-and a cache whose shards overlap, whose summary block has another width, or that holds no committed
-rows.
+names no cache is refused, as is a posterior whose summary block has another width than this
+build's, and a cache whose rows are not as wide as the posterior's conditioning, whose shards
+overlap, or that holds no committed rows.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 

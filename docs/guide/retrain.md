@@ -190,7 +190,7 @@ build, and again before the run. Nothing here trains the retrain, and any step c
      fit alone. Generation comes on top: 11.4 hours for the August retrain's 5,000 batches
      (generation was about a fifth of that run, the flow's fit about four fifths), and about 31 for
      the 10,000-batch run of 29 August 2026. A narrowing round that re-simulated 5,000 batches under
-     a fresh rotation took 8.1 hours (9 September 2026). The certification round comes on top too,
+     a fresh rotation took 8.1 hours (2 September 2026). The certification round comes on top too,
      and costs about as much as the whole retrain again.
    - **The stop point.** If the projection is more than twice the expected cost, about 740 hours,
      **stop for the owner's decision**.

@@ -146,7 +146,7 @@ the cycle floor below which a probe is masked come only from `core/config.py` (`
   ([The inference settings](window.md#the-inference-settings)).
 - `ArtifactStore.load_posterior` refuses a chi posterior whose band, drive, lock-in ceiling or slot
   count differs from the loading configuration's.
-- The cycle floor is outside the cache's identity and every record
+- The cycle floor is outside the cache's identity and every record a load compares
   ([The artifact store](architecture.md#the-artifact-store)); see
   [The chi probe set and its Fisher](#the-chi-probe-set-and-its-fisher).
 - The `probes` checks may take their own frequency, drive and ceiling grids because they only
@@ -550,8 +550,9 @@ seconds with no simulation: run it first after touching anything chi.
 - **After changing a constant or a feature definition that no loader compares, retrain against a
   new simulation cache, and reuse neither the old cache nor the posteriors and observations made
   before the change.** The cycle floor comes first: it is outside the cache's identity and every
-  record ([The artifact store](architecture.md#the-artifact-store)), so a plain retrain finds the
-  old cache under the same identity and reuses rows simulated at the old floor, while an old
+  record a load compares ([The artifact store](architecture.md#the-artifact-store)), so a plain
+  retrain finds the old cache under the same identity and reuses rows simulated at the old floor,
+  while an old
   posterior, or a chi observation whose probes were masked at the old floor, loads beside the new
   configuration without a word. The prior is unaffected: its stability screen does not read the
   floor. Three routes:

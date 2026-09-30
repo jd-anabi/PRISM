@@ -210,8 +210,8 @@ two exceptions:
   directory is renamed.
 
 **Loading refuses a mismatch.** Loading checks a record against the configuration in use before
-anything is spent: the model, the parameter set and its order and the box, and for a posterior or an
-observation the mode and the conditioning width.
+anything is spent: the model and the parameter set and its order; for a prior or a posterior also
+the box; for a posterior or an observation the mode and the conditioning width.
 [The artifact store](architecture.md#the-artifact-store) lists every check each loader makes, and
 the recorded settings it leaves unchecked. The load path has exactly two escape hatches, the fields
 of `core.artifacts.Accept`, and neither lets a mismatch through:
