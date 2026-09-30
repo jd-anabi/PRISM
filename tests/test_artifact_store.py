@@ -1432,12 +1432,17 @@ def test_load_posterior_refuses_each_mismatch_class(store):
 
 def test_load_posterior_refuses_a_chi_posterior_trained_at_another_drive(store, monkeypatch):
     """A chi posterior's manifest records the drive amplitude it was trained at, and the load compares
-    it with the config's before the payload is unpickled. The drive sets every probe's response
-    amplitude, so a flow trained at another drive would read a probe's |chi| on the wrong scale --
-    and the config-against-config.py guard cannot see it, because it never reads the posterior. The
-    same posterior loads when the two drives agree, a float round-off apart included."""
+    it with the config's before the payload is unpickled. An active bundle does not respond linearly
+    to the drive, so the |chi| a parameter set produces, and its noise, depend on it -- and the
+    config-against-config.py guard cannot see a posterior trained at another drive, because it never
+    reads the posterior.
+
+    The message prints both drives exactly: the value it says to set CHI_F0 back to is one that
+    loads, not a six-digit rounding the tolerance would refuse again. The tolerance is pinned from
+    both sides: a drive 1e-8 away is refused, one 1e-10 away loads."""
     cfg = _nad_cfg(chi_mode=True)
-    want, other = float(cfg.chi_f0), float(cfg.chi_f0) * 2
+    want = float(cfg.chi_f0)
+    other = 0.3000001234567                 # more significant digits than a :g format keeps
     _posterior_artifact(store, cfg, name="other-drive", over={("conditioning", "chi_f0"): other})
     real_load, unpickled = torch.load, []
 
@@ -1450,13 +1455,20 @@ def test_load_posterior_refuses_a_chi_posterior_trained_at_another_drive(store, 
         store.load_posterior(cfg, "other-drive")
     assert excinfo.value.field == "posterior"
     msg = str(excinfo.value)
-    assert f"{other:g}" in msg and f"{want:g}" in msg, msg
+    assert repr(other) in msg and repr(want) in msg, msg
     assert "Retrain" in msg and "CHI_F0" in msg, msg
+    typed_back = float(msg.rsplit("back to ", 1)[1].rstrip("."))
+    assert typed_back == other, f"the value to set CHI_F0 back to ({typed_back!r}) is not the recorded {other!r}"
     assert unpickled == [], f"the drive was compared only after the payload was unpickled: {unpickled}"
 
-    _posterior_artifact(store, cfg, name="same-drive", over={("conditioning", "chi_f0"): want + 1e-12})
-    lp = store.load_posterior(cfg, "same-drive")
-    assert lp.name == "same-drive" and lp.latent is not None
+    _posterior_artifact(store, cfg, name="just-outside", over={("conditioning", "chi_f0"): want + 1e-8})
+    with pytest.raises(Refusal, match="drive amplitude"):
+        store.load_posterior(cfg, "just-outside")
+    assert unpickled == [], "a refused drive still unpickled the payload"
+
+    _posterior_artifact(store, cfg, name="just-inside", over={("conditioning", "chi_f0"): want + 1e-10})
+    lp = store.load_posterior(cfg, "just-inside")
+    assert lp.name == "just-inside" and lp.latent is not None
     assert unpickled, "the agreeing posterior loaded without reading its payload"
 
 

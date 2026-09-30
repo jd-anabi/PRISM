@@ -10,7 +10,9 @@ MainWindow directly and must keep seeing pristine registries.
 gate on their own predicates: inference, in the window and on the command line, takes only a model
 ``is_sbi_user_model`` admits (no forcing, at least one ND parameter), and FDT only one ``fdt_support``
 admits (no forcing, and additive, non-zero noise on the observable). A user model has no INIT_SHAPES
-row: its initial conditions come from its cell file.
+row. Training, the prior's stability sweep and the Fisher rotation start it from the initial
+conditions its definition declares; Simulate, FDT and a simulated observation start it from its cell
+file's.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
