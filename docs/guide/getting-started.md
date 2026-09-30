@@ -1,6 +1,6 @@
 # Getting started
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 This page takes you from a fresh installation to a first run in each front end, and shows where
 PRISM keeps what it reads and what it writes.

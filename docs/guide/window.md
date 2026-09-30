@@ -1,6 +1,6 @@
 # The window
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 This page describes the PySide6 window screen by screen: what each screen is for, every setting on
 the Parameter Inference tabs and what it really changes, what the window remembers between sessions,
@@ -191,7 +191,7 @@ simulation cache instead of resuming the old one.
 | Infer | Run on a different observation | `--accept-other-observation` | `accept=Accept(other_observation=True)` | off | See [the dialogs](#the-dialogs). |
 | TSNPE | Observation | `--observation` | `tsnpe_round(observation)` | none | The observation the region is drawn around. Pressing **Run TSNPE round** loads it and checks its mode and conditioning width against the configuration before anything is spent. |
 | TSNPE | HPD level | `--level` | `tsnpe_round(level=)` | 0.999 | The credible level of the region's interval along each truncated direction. Generous on purpose: truncation deletes prior support that no later round can recover, while a region too wide costs only simulations. A level below 0.99 warns. |
-| TSNPE | Directions truncated | `--directions` | `tsnpe_round(n_directions=)` | 5 | How many directions are truncated: the leading Fisher directions of a rotated posterior, best-constrained first, or the leading parameters, in box order, of an unrotated one. The rest keep the full prior width, so the least-constrained directions are not cut on noise, and a direction whose t_scale loading is above a fixed threshold is skipped and the next one taken. At most the posterior's latent width. |
+| TSNPE | Directions truncated | `--directions` | `tsnpe_round(n_directions=)` | 5 | How many directions are truncated: the leading Fisher directions of a rotated posterior, best-constrained first, or the leading parameters, in box order, of an unrotated one. The rest keep the full prior width, so the least-constrained directions are not cut on noise, and a direction whose t_scale loading is above 1/√d, d being the latent width (the number of inferred parameters), is skipped and the next one taken. At most the posterior's latent width. |
 | TSNPE | Batches | `--num-runs` | `tsnpe_round(num_runs=)` | 5000 | As on the Posterior tab, for this round. |
 | TSNPE | Max rows per batch (0 = auto) | `--run-size` | `tsnpe_round(run_size_cap=)` | 0: the hardware batch | As on the Posterior tab, for this round. |
 | TSNPE | Start a new simulation even if a cache one setting away exists | `--new-run` | `tsnpe_round(new_run=)` | off | See [the dialogs](#the-dialogs). |

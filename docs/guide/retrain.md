@@ -1,6 +1,6 @@
 # The retrain runbook
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 The next full-size training run: a chi posterior on the tier-1 box, 10,000 batches of 2,048 rows,
 with a flow of 256 hidden features × 10 transforms, followed by one narrowing round that certifies

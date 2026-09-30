@@ -1,6 +1,6 @@
 # The PRISM guide
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 This guide explains how to use PRISM, how to run it at full size, and how it is built. Each fact is
 written once, on the page it belongs to; the reading paths below take each kind of reader through the

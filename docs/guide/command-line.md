@@ -1,6 +1,6 @@
 # The command-line tool
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 `python -m core <subcommand> [<mode>] <flags>` is PRISM's command-line tool (`core.tool`). It takes
 flags only and never prompts, so a run can be written down and repeated. This page lists every
@@ -470,7 +470,7 @@ result is valid only near that observation.
 - `--note TEXT` — see [Naming flags](#naming-flags).
 - `--posterior REF` — required: the parent posterior the region is measured in, by name or id.
 - `--observation REF` — required: the observation the region is drawn around, by name or id; [infer](#infer) prints its id.
-- `--directions N` — directions to truncate: the leading Fisher directions of a rotated posterior, or the leading parameters, in box order, of an unrotated one; the rest keep the full prior width, and a direction whose t_scale loading is above a fixed threshold is skipped and the next one taken (default 5).
+- `--directions N` — directions to truncate: the leading Fisher directions of a rotated posterior, or the leading parameters, in box order, of an unrotated one; the rest keep the full prior width, and a direction whose t_scale loading is above 1/√d, d being the latent width (the number of inferred parameters), is skipped and the next one taken (default 5).
 - `--level X` — HPD level of the region along each truncated direction; below 0.99 warns, because truncation permanently deletes prior support (default 0.999).
 - `--num-runs N` — training batches to simulate for this round (default 5000).
 - `--run-size N` — ceiling on simulations per training batch; 0 = the hardware batch (default 0).

@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 ## Nondimensionalisation
 

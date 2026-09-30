@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once

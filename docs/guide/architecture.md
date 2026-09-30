@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.

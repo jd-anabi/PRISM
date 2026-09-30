@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green

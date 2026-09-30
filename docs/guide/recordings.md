@@ -1,6 +1,6 @@
 # Bringing recordings
 
-Checked against commit 3c4e393.
+Checked against commit 30ff8a3.
 
 This page is for a lab member who brings a preparation and its recordings to PRISM. It covers the
 files that describe a cell, how a cell is matched to its bounds file, the three observation modes and
