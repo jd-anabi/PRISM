@@ -1,6 +1,6 @@
 # PRISM
 
-Research for running GFDT theory and experiments on a simulated biophysical model of the inner-ear hair-cell bundles. The application (**PRISM**) is a PySide6 desktop GUI.
+Research for running GFDT theory and experiments on a simulated biophysical model of the inner-ear hair-cell bundles. The application (**PRISM**) has two front ends over one core: a PySide6 desktop GUI and the command-line tool `python -m core`.
 
 Start with the guide in [docs/guide/](docs/guide/): it explains how to use, run and maintain PRISM, with a reading path for each kind of reader.
 
@@ -154,4 +154,85 @@ Use the launchers below (they `cd` to the repository root for you). The working 
 
 The launchers set `KMP_DUPLICATE_LIB_OK=TRUE` for you (on Windows, `set KMP_DUPLICATE_LIB_OK=TRUE` first, or `$env:KMP_DUPLICATE_LIB_OK="TRUE"` in PowerShell); torch and MKL ship two OpenMP runtimes under conda and without it the first simulation aborts with OMP Error #15 and no traceback.
 
-`python -m core --help` lists the command-line tool's subcommands. On macOS/Linux, remember to activate the environment (`conda activate biophys-env`, or the `source .../activate biophys-env` line if you set up Miniforge by full path) before launching.
+On macOS/Linux, remember to activate the environment (`conda activate biophys-env`, or the `source .../activate biophys-env` line if you set up Miniforge by full path) before launching.
+
+## The command-line tool
+
+PRISM has two front ends over one core: the desktop window and the command-line tool, `python -m core <subcommand> [<mode>] <flags>`. The tool takes flags only and never prompts, so a run can be written down and repeated. Both call the same stages and the same FDT analysis and write the same kinds of record; the diagnostics are reached from the tool alone, and its `artifacts` family is the twin of the window's Artifacts screen. Run it from the repository root, in the environment the window uses. Every flag reaches its stage as an argument, never as an edit to the configuration, so a flag you leave off gives the stage's own default. `--bounds` is required by every command that builds a configuration (all but `fdt`, `crossval`, `compare` and `artifacts`): the bounds file declares which parameters are inferred and in what order, and what a stored prior or posterior is checked against. `--chi` is off by default, so every chi command passes it, and a chain keeps it the same from prior to inference.
+
+One row per subcommand, and per mode where a subcommand has modes; each name links to its section of the command-line page. The store's kinds are `prior`, `simulation`, `posterior`, `observation`, `calibration`, `inference`, `diagnostic` and `fdt`.
+
+| command | what it does | what it writes |
+|---|---|---|
+| [`prior`](docs/guide/command-line.md#prior) | Builds a stability-screened prior over the bounds file's parameters | `prior` |
+| [`train`](docs/guide/command-line.md#train) | Trains an amortized posterior on a stored prior | `posterior`, and the `simulation` cache as it runs |
+| [`validate`](docs/guide/command-line.md#validate) | Calibrates a posterior without an observation: SBC, TARP, one verdict | `calibration` |
+| [`infer`](docs/guide/command-line.md#infer) | Runs a posterior on one observation, simulated from a cell or built from recordings | `observation`, `inference` |
+| [`tsnpe`](docs/guide/command-line.md#tsnpe) | One narrowing round: a region around an observation, then training on the prior restricted to it | `posterior` (not amortized), and its `simulation` cache |
+| [`sbc`](docs/guide/command-line.md#sbc) | SBC repeated on one posterior, to show its run-to-run spread | `diagnostic` |
+| [`identifiability rotation`](docs/guide/command-line.md#identifiability-rotation) | Decomposes a trained posterior's Fisher eigenbasis; simulates nothing | `diagnostic` |
+| [`identifiability laplace`](docs/guide/command-line.md#identifiability-laplace) | Laplace marginal SD of every parameter at a cell's ground truth and at draws from the training prior | `diagnostic` |
+| [`identifiability jacobian`](docs/guide/command-line.md#identifiability-jacobian) | The degeneracy map at a cell's ground truth; needs no posterior | `diagnostic` |
+| [`ablation`](docs/guide/command-line.md#ablation) | Which conditioning channels the trained flow can see; simulates nothing | `diagnostic` |
+| [`probes band`](docs/guide/command-line.md#probes-band) | Do the configured chi band and drive hold for this cell? | `diagnostic` |
+| [`probes mask`](docs/guide/command-line.md#probes-mask) | Why training throws probes out, over a prior | `diagnostic` |
+| [`probes drive`](docs/guide/command-line.md#probes-drive) | How hard a lab can drive this cell | `diagnostic` |
+| [`smoke`](docs/guide/command-line.md#smoke) | Every stage end to end at tiny sizes; run it on the card after changing code that moves tensors | records in a store of its own (a fresh temporary folder unless `--store-root`), never in the records root |
+| [`fdt`](docs/guide/command-line.md#fdt) | The effective-temperature analysis for one cell: sanity checks, then the production sweep | `fdt`, kept unfinished after a cancel |
+| [`crossval`](docs/guide/command-line.md#crossval) | The FDT parameter-sweep study on the Nadrowski model: an S sweep, then a `T_a/T` sweep | two `fdt` records |
+| [`compare cells`](docs/guide/command-line.md#compare-cells) | Two or more single-cell runs' ratio curves on one axis | `fdt` (a comparison) |
+| [`compare repeats`](docs/guide/command-line.md#compare-repeats) | Several runs of one cell, their spread drawn as a band | `fdt` (a comparison) |
+| [`compare renormalise`](docs/guide/command-line.md#compare-renormalise) | One run's ratio recomputed with a supplied normalisation constant | `fdt` (a comparison) |
+| [`compare sweeps`](docs/guide/command-line.md#compare-sweeps) | Two sweep records together, and a slice of both at one operating point | `fdt` (a comparison) |
+| [`artifacts list`](docs/guide/command-line.md#artifacts-list) | One line per record of a kind, or of all eight | nothing |
+| [`artifacts show`](docs/guide/command-line.md#artifacts-show) | One record's manifest and the log of the run that wrote it | nothing |
+| [`artifacts note`](docs/guide/command-line.md#artifacts-note) | Sets or clears one record's note | nothing new (the note in the manifest) |
+| [`artifacts rm`](docs/guide/command-line.md#artifacts-rm) | Deletes one record; refused while another record depends on it | nothing (removes a record) |
+| [`artifacts sweep`](docs/guide/command-line.md#artifacts-sweep) | Removes leftover directories with no manifest; a dry run until `--yes` | nothing (removes leftovers) |
+| [`artifacts summary`](docs/guide/command-line.md#artifacts-summary) | The lineage report: a record, then its parents back | nothing (`--out` writes the report to a file) |
+
+Four groups of flags mean the same wherever they appear:
+
+- [Configuration](docs/guide/command-line.md#configuration-flags): `--bounds`, `--model`, `--chi` / `--no-chi`, `--chi-k`, `--device`. Every command that builds a configuration takes them; the `probes` modes take `--bounds`, `--model` and `--device` only.
+- [Naming](docs/guide/command-line.md#naming-flags): `--name`, `--note`. Every command that writes a record but `smoke`; a taken name is refused before anything is spent.
+- [Training cache](docs/guide/command-line.md#training-cache-flags): `--resume auto|require|never`, `--new-run`. On `train`, `tsnpe` and `smoke`; a run resumes its own simulation cache, and `--new-run` consents to a new one beside a cache exactly one setting away.
+- [Acceptance](docs/guide/command-line.md#acceptance-flags): `--accept-truncated`, `--accept-other-observation` (`infer` only). The only ways past the two refusals on a narrowed (`tsnpe`) posterior; each use is recorded in what the run writes.
+
+Four environment variables, the ones `python -m core --help` names; the last two are never flags, because they change how a batch is planned in memory and never the rows it produces ([details](docs/guide/command-line.md#environment-variables)):
+
+- `PRISM_RESOURCES`: the inputs root (default `<repo>/Resources`).
+- `PRISM_ARTIFACTS`: the records root (default `<repo>/Artifacts`). Every subcommand writes there except `smoke`; `smoke`, `fdt` and `crossval` also take `--store-root`.
+- `PRISM_VRAM_CEILING_GIB`: the GiB one simulation batch may plan to occupy; 0 or unset is automatic; read afresh for every batch plan.
+- `PRISM_MEM_LOG_EVERY`: the batches between memory log lines; read once, when the simulation pipeline is first imported.
+
+Exit codes ([details](docs/guide/command-line.md#exit-codes)): `0` success, and a result the command judged, such as a calibration whose verdict is FAIL; `1` a refusal, printed as `prism <subcommand>: refused: <message> (<flag>)`, or a bug; `2` a usage error; `130` Ctrl-C.
+
+Three examples, run from the repository root in one shell. The first line points `PRISM_ARTIFACTS` at a scratch folder, so the real `Artifacts/` gains nothing; delete that folder when you are done.
+
+**A stage chain.** The prior builds at its full default size, about a minute and a half on the card and longer on the CPU; training, calibration and inference run at sizes that show the chain working and mean nothing more. The last line prints the inference's lineage back to the prior.
+
+```bash
+export PRISM_ARTIFACTS="$HOME/prism-scratch"    # PowerShell: $env:PRISM_ARTIFACTS = "$HOME\prism-scratch"
+python -m core prior    --chi --bounds Resources/Bounds/nadrowski/master.txt --name demo_prior
+python -m core train    --chi --bounds Resources/Bounds/nadrowski/master.txt --prior demo_prior --num-runs 8 --run-size 32 --max-epochs 5 --name demo_posterior
+python -m core validate --chi --bounds Resources/Bounds/nadrowski/master.txt --posterior demo_posterior --n-cal 100 --seed 7
+python -m core infer    --chi --bounds Resources/Bounds/nadrowski/master.txt --posterior demo_posterior --cell Resources/Cells/nadrowski/master_spont.txt --t-obs 4.5 --name demo_inference
+python -m core artifacts summary inference demo_inference
+```
+
+**A probe check on one cell.** Do the configured chi band and drive hold for it, and how hard can it be driven? Each writes one `diagnostic` record, and `python -m core artifacts show diagnostic spont_band` prints its manifest.
+
+```bash
+python -m core probes band  --bounds Resources/Bounds/nadrowski/master.txt --cell Resources/Cells/nadrowski/master_spont.txt --name spont_band
+python -m core probes drive --bounds Resources/Bounds/nadrowski/master.txt --cell Resources/Cells/nadrowski/master_spont.txt --name spont_drive
+```
+
+**An FDT run twice, then compared.** Each run draws and records a seed of its own, so the two are independent repeats of one cell. The sizes here (4 drive frequencies, 8 trajectories each, no sanity checks) show the commands working and mean nothing more; a real run takes the defaults, 60 frequencies of 256 trajectories after the sanity checks, and is long, on the CPU only.
+
+```bash
+python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --n-freqs 4 --ensemble-m 8 --skip-sanity --name spont_fdt_a
+python -m core fdt --cell Resources/Cells/nadrowski/master_spont.txt --n-freqs 4 --ensemble-m 8 --skip-sanity --name spont_fdt_b
+python -m core compare repeats --record spont_fdt_a --record spont_fdt_b --name spont_fdt_repeats
+```
+
+[The command-line page](docs/guide/command-line.md) lists every subcommand, mode and flag with what each writes, refuses and prints. `python -m core <subcommand> --help` (`python -m core <family> <mode> --help` for a mode) lists a command's flags with their defaults, imports no torch and needs no graphics card.
