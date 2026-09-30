@@ -1,6 +1,6 @@
 # The command-line tool
 
-Checked against commit 878109c.
+Checked against commit 3c4e393.
 
 `python -m core <subcommand> [<mode>] <flags>` is PRISM's command-line tool (`core.tool`). It takes
 flags only and never prompts, so a run can be written down and repeated. This page lists every
@@ -24,10 +24,12 @@ flag's entry here ends with the same clause. The examples are run from the repos
   `error: ` (`core.tool.logging_console`); the record the run writes keeps them all in its
   `log.txt`. A library's logging records go to stderr whatever their level
   (`core.tool._library_record_sink`), but a library's own prints still reach stdout: during `train`,
-  `tsnpe` and `smoke`'s posterior stage, sbi prints its epoch counter, its convergence line and its
-  training summary there, and no log keeps them. A Python warning, such as a masked-probe notice or
-  a pre-flight warning about a recording length, prints in Python's own form on stderr, and the
-  run's `log.txt` keeps it too. Refusals and usage errors go to stderr ([Exit codes](#exit-codes)).
+  `tsnpe` and `smoke`'s posterior stage, sbi prints its epoch counter and its training summary
+  there. It prints its convergence line when the early-stop patience ends training, which a run the
+  `--max-epochs` ceiling stops rarely does. No log keeps them. A Python warning, such as a
+  masked-probe notice or a pre-flight warning about a recording length, prints in Python's own form
+  on stderr, and the run's `log.txt` keeps it too. Refusals and usage errors go to stderr
+  ([Exit codes](#exit-codes)).
 - **The parameter order is printed on every run.** Every command that builds a configuration opens
   with its `[cfg]` lines: the model, the observation mode and the device; the cell and bounds files;
   in chi mode the probe settings; then the ND order, the rescale order and the forcing order
@@ -62,10 +64,9 @@ each sets its own observation mode. `fdt`, `crossval`, `compare` and `artifacts`
   and over what box, and whether a drive is declared (a Forcing section). With `--no-chi`, a bounds
   file with a Forcing section gives forced mode and one without gives spontaneous mode; `--chi` gives
   chi mode either way ([Observation modes](recordings.md#observation-modes)). What a command loads
-  is checked against it. A posterior is refused on a mismatch in model, parameter set or order, box
-  or mode (`core.artifacts.store.ArtifactStore.load_posterior`). A prior is refused on a mismatch in
-  model, ND parameter set or order, ND box or log-box mask; its mode is not checked, so one prior
-  serves every mode over the same box (`core.artifacts.store.ArtifactStore.load_prior`).
+  is checked against it before anything is spent
+  ([The artifact store](architecture.md#the-artifact-store) lists every check each loader makes). A
+  prior's mode is not checked, so one prior serves every mode over the same box.
 - `--model NAME` — the model. Without it, the bounds file's parent folder, upper-cased:
   `Bounds/nadrowski/` gives NADROWSKI. A name that is neither a built-in model nor a user model
   eligible for inference is refused (`core.tool.config_args.make_cfg`).
@@ -123,22 +124,26 @@ identity finds that cache; the flow's settings are not part of it.
   different experiment: the run starts its own cache with a warning that lists the other caches and
   the first setting each differs in.
 
-A resume never simulates a committed batch again, and prints
-`[checkpoint] resuming at batch <k>/<N> from <dir> (...)`. On `train` and `smoke`, a rotated run's
-resume reuses the Fisher rotation stored with the cache instead of computing a new one, because the
-rotation is not reproducible across processes and a new one would put the stored rows in another
-coordinate; it prints `Reusing the Fisher rotation stored with the training checkpoint (...)` before
-the resume line. A `tsnpe` round never computes a rotation, resumed or not: it prints
+A resume never simulates again a batch that the state file it read commits, and prints
+`[checkpoint] resuming at batch <k>/<N> from <dir> (...)`. When `state.pt` cannot be read, it
+resumes from `state.prev.pt`, a generation back, with a warning
+([the retrain runbook](retrain.md#resuming) says what to do). On `train` and `smoke`, a rotated
+run's resume reuses the Fisher rotation stored with the cache instead of computing a new one
+([Randomness and reproducibility](rules-and-traps.md#randomness-and-reproducibility) says why); it
+prints `Reusing the Fisher rotation stored with the training checkpoint (...)` before the resume
+line. A `tsnpe` round never computes a rotation, resumed or not: it prints
 `[tsnpe] basis: reusing the PARENT posterior's rotation ...` instead.
 
 ### Acceptance flags
 
 A posterior that a narrowing round (`tsnpe`) trained is valid only near the observation its region
-was drawn around, so the tool refuses to load one, and refuses to run one on any other observation,
-unless it is told to. These two flags are the only ways past those two refusals: `--accept-truncated`
-answers the load refusal (`core.artifacts.store.ArtifactStore.load_posterior`), and
-`--accept-other-observation` the other. They map one to one onto `core.artifacts.Accept`, and each
-use is recorded in what the run writes ([The artifact store](getting-started.md#the-artifact-store)).
+was drawn around, so the tool refuses to load one unless told to, and `infer` refuses to run one on
+any other observation unless told to. These two flags are the only ways past those two refusals:
+`--accept-truncated` answers the load refusal (`core.artifacts.store.ArtifactStore.load_posterior`),
+and `--accept-other-observation` the other. They map one to one onto `core.artifacts.Accept`, and
+each use is recorded in what the run writes
+([The artifact store](getting-started.md#the-artifact-store)). A narrowing round drawn from a
+narrowed parent around another observation is refused outright ([tsnpe](#tsnpe)).
 
 - `--accept-truncated` — load a non-amortized (narrowed) posterior. Taken by `validate`, `infer`,
   `tsnpe`, `sbc`, `identifiability rotation`, `identifiability laplace` and `ablation`, the commands
@@ -198,7 +203,10 @@ Two more are set rather than read as settings:
 - **1, a refusal.** A refusal prints one line, `prism <subcommand>: refused: <message> (<flag>)`,
   ending with the flag that answers it, for example `(--n-cal)` (`core.tool.fields.FLAG`). A missing
   or blank `--bounds`, `--cell`, `--spont` or `--forced` file is such a refusal, and names its flag
-  (`core.refusals.require_file`). A refusal that carries no flag ends at the message: a record
+  (`core.refusals.require_file`), once the model is known. Without `--model`, the model is read from
+  the file's parent folder. So a `--bounds` that is blank or outside a `Bounds/<model>/` folder is
+  refused first as an unsupported model, in the `ValueError` form below, and `fdt`'s `--cell` in the
+  same case ends `(--model)`. A refusal that carries no flag ends at the message: a record
   reference that resolves to nothing (`--prior`, `--posterior`, `--observation`, or an `artifacts`
   mode's `<ref>`), `--resume require` with no cache to resume, the narrowed-parent rule of
   [tsnpe](#tsnpe), a missing units file (the tool has no units flag), and a rule two settings answer
@@ -264,7 +272,7 @@ training rows batch by batch, and fits the flow.
 - `--bounds PATH` — required; see [Configuration flags](#configuration-flags).
 - `--model NAME` — see [Configuration flags](#configuration-flags) (default the bounds file's parent folder, upper-cased).
 - `--chi` / `--no-chi` — see [Configuration flags](#configuration-flags) (default --no-chi).
-- `--chi-k K` — see [Configuration flags](#configuration-flags); in chi mode it sets the Fisher rotation's probe count only, and the training rows draw their own (default 6).
+- `--chi-k K` — see [Configuration flags](#configuration-flags); in chi mode it sets the Fisher rotation's probe count, and the posterior's record keeps it (`identifiability rotation` reports it as the probes supplied), while the training rows draw their own (default 6).
 - `--device auto|cpu|cuda` — see [Configuration flags](#configuration-flags) (default auto).
 - `--name NAME` — see [Naming flags](#naming-flags).
 - `--note TEXT` — see [Naming flags](#naming-flags).
@@ -275,7 +283,7 @@ training rows batch by batch, and fits the flow.
 - `--num-transforms N` — flow depth (default 8).
 - `--learning-rate X` — Adam learning rate (default 0.001).
 - `--stop-after-epochs N` — early-stopping patience, in epochs (default 20).
-- `--max-epochs N` — hard ceiling on training epochs (default no ceiling).
+- `--max-epochs N` — a ceiling on training epochs, handed to sbi. sbi counts epochs from 0, so at most N + 1 run. A run the ceiling stops keeps its last epoch's network, not its best, unless the early-stop patience ran out on that epoch too: sbi restores the best network only when the patience ends training (default no ceiling).
 - `--fisher-m N` — ensemble per latent perturbation for the Fisher rotation (default 48).
 - `--fisher-dz X` — latent central-difference step of the Fisher rotation (default 0.1).
 - `--fisher-points N` — operating points the Fisher rotation is averaged over (default 8).
@@ -299,7 +307,10 @@ run goes and keeps no `log.txt`. On the way it prints:
 - in chi mode, `[chi] masked probes: ...`, the run total of masked probes over the batches its scope
   names;
 - on a box that declares temperature in place of the force scale, `[tier1]` lines: the force scale
-  it derives over the prior and, in chi mode, the chi drive amplitude that follows from it.
+  it derives over the prior and, in chi mode, the chi drive amplitude that follows from it;
+- when the cache holds shards an earlier save left uncommitted, the line that sets them aside, or,
+  on a resume that could not read `state.pt`, a warning instead;
+  [What to watch](retrain.md#what-to-watch) quotes both and says what each asks of you.
 
 **Rules**, each checked before the Fisher step and before any simulation:
 
@@ -357,9 +368,28 @@ prior draws the region kept is printed.
 - With `--seed`, a calibration set repeats: on one device the same seed draws the same set and
   reaches the same verdict, bit for bit on the CPU and not bitwise on a CUDA card, where a verdict at
   its threshold can differ. The stream never replays the one a training run with that seed used.
-  [For a reviewer](README.md#for-a-reviewer) gives the procedure for repeating a calibration from
-  its record.
 - The prior is always the posterior's own, read from its manifest, so `validate` takes no `--prior`.
+
+**Repeating a calibration from its record.** `python -m core artifacts show calibration <ref>`
+prints:
+
+- the posterior under Parents (`parents.posterior`, an id);
+- the calibration's settings under Knobs (`config.n_cal`, `config.cal_n_scales`,
+  `config.num_posterior_samples`, and again in `results`);
+- the seed, under Body, as `results.seed`.
+
+A repeat also needs four things:
+
+- the bounds file the calibration ran with, `inputs.bounds`, printed relative to the inputs root, so
+  put `Resources/` in front of it;
+- chi mode, given as `--chi`, when `config.chi_mode` is true;
+- the device the record names, `config.device`, given as `--device`: a seed repeats only on one
+  device, and nothing checks the device;
+- the acceptance `--accept-truncated`, when `results.accepted` lists `truncated`.
+
+```bash
+python -m core validate --bounds Resources/<inputs.bounds> [--chi] --device <config.device> --posterior <parents.posterior> --n-cal <n_cal> --cal-n-scales <cal_n_scales> --posterior-samples <num_posterior_samples> --seed <results.seed> [--accept-truncated]
+```
 
 **Refuses** a taken name; a count below 1; a seed outside its range `(--seed)`; a posterior that
 does not match `--bounds`; and a narrowed posterior without `--accept-truncated`.
@@ -392,7 +422,10 @@ measured recordings (`--spont` and its companions).
 **Writes** two records, an observation and an inference, and prints one line for each:
 `[prism] observation _unnamed__<id>  <path>`, then `[prism] inference <name>__<id>  <path>`. The
 observation is never named on this path, so refer to it by the `<id>` part of its line, as
-`tsnpe --observation` does; `python -m core artifacts list observation` lists it too. Pre-flight
+`tsnpe --observation` does; `python -m core artifacts list observation` lists it too. The
+per-parameter summary is logged as `[infer] posterior summary (5 % / median / 95 %):` and kept as
+`results.posterior_summary` (`q05`, `median`, `q95`), with `results.ground_truth` for a simulated
+cell. Pre-flight
 warnings go to stderr: a recording length outside the training range, a cell value the bounds file
 does not declare (ignored), a simulated truth outside the training distribution, and a truth outside
 a narrowed posterior's region.
@@ -437,7 +470,7 @@ result is valid only near that observation.
 - `--note TEXT` — see [Naming flags](#naming-flags).
 - `--posterior REF` — required: the parent posterior the region is measured in, by name or id.
 - `--observation REF` — required: the observation the region is drawn around, by name or id; [infer](#infer) prints its id.
-- `--directions N` — Fisher directions to truncate; the flat ones keep the full prior width (default 5).
+- `--directions N` — directions to truncate: the leading Fisher directions of a rotated posterior, or the leading parameters, in box order, of an unrotated one; the rest keep the full prior width, and a direction whose t_scale loading is above a fixed threshold is skipped and the next one taken (default 5).
 - `--level X` — HPD level of the region along each truncated direction; below 0.99 warns, because truncation permanently deletes prior support (default 0.999).
 - `--num-runs N` — training batches to simulate for this round (default 5000).
 - `--run-size N` — ceiling on simulations per training batch; 0 = the hardware batch (default 0).
@@ -445,7 +478,7 @@ result is valid only near that observation.
 - `--num-transforms N` — flow depth (default 8).
 - `--learning-rate X` — Adam learning rate (default 0.001).
 - `--stop-after-epochs N` — early-stopping patience, in epochs (default 20).
-- `--max-epochs N` — hard ceiling on training epochs (default no ceiling).
+- `--max-epochs N` — as for [train](#train) (default no ceiling).
 - `--checkpoint-every N` — batches between commits of the round's simulation cache; 0 keeps no cache (default 50).
 - `--resume auto|require|never` — see [Training-cache flags](#training-cache-flags) (default auto).
 - `--new-run` — see [Training-cache flags](#training-cache-flags).
@@ -686,7 +719,9 @@ invisible, constant in training, or non-finite), and a count of the usable chann
 
 **Rules:** the ranges must be the ones this network was trained on, so the mode reads the
 posterior's own simulation cache: the posterior must have trained with checkpointing on. One that
-names no cache is refused, as is a cache whose rows are not as wide as the posterior's conditioning.
+names no cache is refused, as is a cache whose rows are not as wide as the posterior's conditioning,
+and a cache whose shards overlap, whose summary block has another width, or that holds no committed
+rows.
 
 **Exit codes** as in [Exit codes](#exit-codes).
 
@@ -844,7 +879,7 @@ the command lines and what each must print.
 - `--num-runs N` — training batches to simulate (default 4).
 - `--run-size N` — ceiling on simulations per training batch; the prior sweep keeps the hardware batch (default 32).
 - `--n-cal N` — calibration datasets to simulate (default 40).
-- `--max-epochs N` — hard ceiling on training epochs (default 5).
+- `--max-epochs N` — as for [train](#train); the default trains six epochs, under the default patience of 20 (default 5).
 - `--hidden-features N` — flow width per transform (default 128).
 - `--num-transforms N` — flow depth (default 8).
 - `--checkpoint` — keep a simulation cache, committed every max(1, num_runs // 2) batches. Off unless given, so a second run of one configuration simulates again, which is the path this command exists to exercise.
@@ -854,7 +889,7 @@ the command lines and what each must print.
 - `--resume auto|require|never` — see [Training-cache flags](#training-cache-flags) (default auto).
 - `--new-run` — see [Training-cache flags](#training-cache-flags).
 
-**Writes** into a store of its own, never the `PRISM_ARTIFACTS` root:
+**Writes** into a store of its own: a fresh temporary folder, or the one `--store-root` names.
 [Inputs and records](getting-started.md#inputs-and-records) says which, and
 [The artifact store](getting-started.md#the-artifact-store) what it writes there. A failed run
 removes the temporary directory it made only when nothing was written into it.
@@ -877,8 +912,8 @@ removes the temporary directory it made only when nothing was written into it.
   included; without it, both lines are scoped to this process only, and the training line is the
   first. The calibration stage logs a line of its own, which is not the training figure. The
   reference is about 37 % of training probes, and one run within about 12 percentage points of it
-  says nothing either way: every row of a batch shares one operating point and one probe set, so the
-  effective sample size is the batch count, not the probe count. Compare the mean of a few runs.
+  says nothing either way. [Chi probe design](science.md#chi-probe-design) says why the band is
+  that wide and why the mean of a few runs is the comparison.
 - The pre-flight warnings on stderr: a recording length outside the training range, and a truth
   outside the training distribution.
 - The calibration at these sizes has no power, so its verdict means nothing; the last `[smoke]`
@@ -886,7 +921,8 @@ removes the temporary directory it made only when nothing was written into it.
 - `[ok] <stage> in <s>s` after each stage and `[smoke] ALL STAGES COMPLETED in ...` at the end; on
   a failure, `[smoke] *** FAILED in stage <stage> ***` before the traceback.
 
-A seeded run is not bitwise-reproducible on a CUDA card or across devices.
+A seeded run is not bitwise-reproducible on a CUDA card or across devices. `smoke`'s calibration
+records no seed (`results.seed` is null); only re-running `smoke` with its `--seed` repeats it.
 
 **Rules:**
 
@@ -986,7 +1022,8 @@ varying T_a/T (restored as T_a/T goes to 1).
 | production | 0.1 to 30 | 30 | 8000 | 60 | 256 |
 
 The operating points' resonances set ω₀, not the cell's: a sweep's one grid runs from the band's
-low multiple of the lowest resonant operating point's ω₀ to its high multiple of the highest's
+low multiple of the lowest resonant operating point's ω₀ to its high multiple of the highest's, or,
+when no operating point is resonant, of every operating point's linearised ω₀ estimate
 (`core.FDT.cross_validation._build_common_grid`).
 
 **Writes** two fdt records, `NAME-s` and `NAME-temp`, each progressive like the record of

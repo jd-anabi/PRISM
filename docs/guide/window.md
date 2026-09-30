@@ -1,6 +1,6 @@
 # The window
 
-Checked against commit 5b19895.
+Checked against commit 3c4e393.
 
 This page describes the PySide6 window screen by screen: what each screen is for, every setting on
 the Parameter Inference tabs and what it really changes, what the window remembers between sessions,
@@ -35,7 +35,8 @@ the model builder.
 
 The six tabs share one session: the configuration, the prior, the posterior and the observation
 currently loaded (`core.gui.screens.inference_screen.InferenceScreen`). A tab is greyed until the
-session holds what it needs, by this rule (`InferenceScreen.refresh_gates`):
+session holds what it needs, and hovering over a greyed tab says what is missing, by this rule
+(`InferenceScreen.refresh_gates`):
 
 | tab | what it does | enabled when |
 |---|---|---|
@@ -134,9 +135,8 @@ Each tab has a log pane, a progress pane and the run's figures, which appear as 
 ## The inference settings
 
 Every setting on these tabs reaches its stage as an argument, never as an assignment to a
-`core.config` constant. `core.orchestrator` imports the constants by name when it is first imported,
-so assigning a new value to one afterwards would change nothing, and the run would use the default
-without a word. The VRAM ceiling is the one exception, described after the table.
+`core.config` constant ([Stages and compositions](architecture.md#stages-and-compositions) says
+why). The VRAM ceiling is the one exception, described after the table.
 
 In the table, **flag** is the command-line tool's flag; **argument** is the parameter that receives
 the value: a stage's in `core.orchestrator`, `core.cli.make_sim_config`'s for a setting that shapes
@@ -150,11 +150,11 @@ simulation cache instead of resuming the old one.
 |---|---|---|---|---|---|
 | Config | Model | `--model` | `make_sim_config(model)` | window: NADROWSKI; tool: the bounds file's folder name, upper-cased | Which model's equations are simulated and inferred. Each press of **Apply model & options** starts a new session, even with the same model; when the session holds work it asks first ([the dialogs](#the-dialogs)). |
 | Config | Units | none: the tool always reads the model's units file | `make_sim_config(units_override=)` | the model's units file | Declares what the numbers in the bounds and cell files mean. It never converts them, so a change reinterprets the files rather than rescaling them. Part of the cache's identity. |
-| Config | Multi-frequency χ(ω) conditioning | `--chi` / `--no-chi` | `make_sim_config(chi_mode=)` | off | Chi mode: an observation is a passive recording plus single-tone driven recordings, and the network conditions on the χ(ω) curve they give. Training takes about (K+1)/2 times as long for K probes, and a posterior loads only in the mode it was trained in. |
+| Config | Multi-frequency χ(ω) conditioning | `--chi` / `--no-chi` | `make_sim_config(chi_mode=)` | off | Chi mode: an observation is a passive recording plus single-tone driven recordings, and the network conditions on the χ(ω) curve they give. Training simulates 1 + K recordings per row where forced mode simulates 2, with K drawn for each batch from 2 to the probe slots, and a posterior loads only in the mode it was trained in. |
 | Config | χ probes per observation | `--chi-k` | `make_sim_config(chi_n_freqs=)` | 6 | The probes one observation is measured at: the number a simulated observation gets, the number the Fisher rotation is computed with, and the number of probe rows the Infer tab starts with. Training draws its own count for every batch, so a posterior accepts any count up to its slots. The Config tab accepts 2 up to the slots. |
 | Config | χ probe slots (capacity) | none: the tool takes `CHI_K_PAD` | `make_sim_config(chi_k_pad=)` | 12 | The network's probe capacity, frozen into every posterior trained with it; training draws from 2 up to this many probes per batch. Raising it later means retraining. It costs input columns only. Part of the cache's identity. |
 | Config | χ lock-in ceiling (cycles) | none: the tool takes `CHI_MAX_CYCLES` | `make_sim_config(chi_max_cycles=)` | 20.0 | The longest lock-in, in drive cycles, used for any one probe; a longer recording is truncated to it, not refused. Past about 30 cycles χ stops being reproducible at fixed parameters, so a longer lock-in adds noise, not signal. It must exceed the 2-cycle floor below which a probe is masked. Part of the cache's identity. |
-| Config | χ drive F₀ (ND), read-only | none | none: `CHI_F0` | 0.15 | The non-dimensional drive amplitude of every probe, fixed by measurement and baked into every trained posterior. A display of `core/config.py`: no run can change it, and the prior and training stages refuse a configuration that disagrees with it (`core.SBI.run_guards._assert_chi_config_is_deliberate`). |
+| Config | χ drive F₀ (ND), read-only | none | none: `CHI_F0` | 0.15 | The non-dimensional drive amplitude of every probe, fixed by measurement and baked into every trained posterior. A display of `core/config.py`: no run can change it; the prior and training stages, `probes mask` and every posterior load refuse a configuration that disagrees with it (`core.SBI.run_guards._assert_chi_config_is_deliberate`), and loading refuses a chi posterior trained at another drive. |
 | Config | χ frequency range, read-only | none | none: `CHI_FREQ_BOUNDS` | 0.03 to 0.3 | The band the probes are log-spaced across, as multiples of each observation's own measured spontaneous peak Ω₀, so the probes follow the resonance wherever t_scale puts it. Fixed by measurement and guarded like the amplitude. |
 | Config | Decorrelating Fisher rotation | none: the tool takes `REPARAM_ROTATE` | `make_sim_config(reparam_rotate=)` | on | Rotates the flow's latent coordinates into the eigenbasis of a simulated Fisher matrix, so that strongly correlated parameters become axis-aligned. The rotation is orthogonal, so it adds and removes no information; computing it costs extra simulations before training. Part of the cache's identity. |
 | Config | VRAM ceiling per batch (GiB, 0 = off) | none: the `PRISM_VRAM_CEILING_GIB` environment variable | none: the field sets `core.config.SIM_VRAM_CEILING_GIB` | 0 (off) | A hard ceiling on the card memory one simulation batch may plan to hold. See below the table. |
@@ -186,21 +186,21 @@ simulation cache instead of resuming the old one.
 | Infer | Spontaneous; on the χ page, Passive | `--spont` | `RecordingSet(spont=)` | none | The undriven recording. |
 | Infer | Forced | `--forced PATH` | `RecordingSet(forced=)` | none | Forced mode's one driven recording; the row is hidden when the bounds file declares no Forcing section. |
 | Infer | A (N), f (Hz), φ (rad) | `--drive NAME=VALUE` | `RecordingSet(forcing_params_si=)` | window: 0, which is refused for A and f; tool: none | The drive the forced recording was made at, in SI units: one box per forcing parameter the bounds file declares. |
-| Infer | Drive F₀ (N) | `--f0-si` | `RecordingSet(F0_si=)` | window: 1; tool: none, required in chi mode | The physical drive amplitude of the chi recordings. χ cancels the amplitude in the linear regime, so it sets only the lock-in's normalisation. |
+| Infer | Drive F₀ (N) | `--f0-si` | `RecordingSet(F0_si=)` | window: 1; tool: none, required in chi mode | The physical drive amplitude every chi recording was made at, in newtons, one value for every probe. The lock-in divides each response by it, so it must be the amplitude actually applied; nothing checks the value you give. An active bundle does not respond linearly, so how hard you drive also matters ([Observation modes](recordings.md#observation-modes)). |
 | Infer | Forced probes, the χ probe table | `--forced PATH@HZ`, repeated | `RecordingSet(forced=)` | as many rows as χ probes per observation | One row per single-tone recording: the file, and the frequency you actually drove at, in Hz. Any count from 1 to the posterior's slots works. **Plan probes…** measures Ω₀ from the passive recording and says what is in band for this cell and how long each probe must be. |
 | Infer | Run on a different observation | `--accept-other-observation` | `accept=Accept(other_observation=True)` | off | See [the dialogs](#the-dialogs). |
 | TSNPE | Observation | `--observation` | `tsnpe_round(observation)` | none | The observation the region is drawn around. Pressing **Run TSNPE round** loads it and checks its mode and conditioning width against the configuration before anything is spent. |
 | TSNPE | HPD level | `--level` | `tsnpe_round(level=)` | 0.999 | The credible level of the region's interval along each truncated direction. Generous on purpose: truncation deletes prior support that no later round can recover, while a region too wide costs only simulations. A level below 0.99 warns. |
-| TSNPE | Directions truncated | `--directions` | `tsnpe_round(n_directions=)` | 5 | How many of the best-constrained Fisher directions are truncated; the rest keep the full prior width, so flat directions are not cut on noise. At most the posterior's latent width. |
+| TSNPE | Directions truncated | `--directions` | `tsnpe_round(n_directions=)` | 5 | How many directions are truncated: the leading Fisher directions of a rotated posterior, best-constrained first, or the leading parameters, in box order, of an unrotated one. The rest keep the full prior width, so the least-constrained directions are not cut on noise, and a direction whose t_scale loading is above a fixed threshold is skipped and the next one taken. At most the posterior's latent width. |
 | TSNPE | Batches | `--num-runs` | `tsnpe_round(num_runs=)` | 5000 | As on the Posterior tab, for this round. |
 | TSNPE | Max rows per batch (0 = auto) | `--run-size` | `tsnpe_round(run_size_cap=)` | 0: the hardware batch | As on the Posterior tab, for this round. |
 | TSNPE | Start a new simulation even if a cache one setting away exists | `--new-run` | `tsnpe_round(new_run=)` | off | See [the dialogs](#the-dialogs). |
 | command line only | none | `--checkpoint-every` | `build_posterior(checkpoint_every=)`, `tsnpe_round(checkpoint_every=)` | 50 | Batches between commits of the simulation cache; 0 keeps no cache, so nothing can resume. The window always uses the default. |
-| command line only | none | `--resume` | `build_posterior(resume=)`, `tsnpe_round(resume=)` | auto | auto resumes this run's own cache, require refuses when there is none, never refuses to resume one. The window always uses auto. |
-| command line only | none | `--max-epochs` | `build_posterior(max_num_epochs=)`, `tsnpe_round(max_num_epochs=)` | no ceiling | A hard ceiling on training epochs. |
+| command line only | none | `--resume` | `build_posterior(resume=)`, `tsnpe_round(resume=)` | auto | What a training run does with its own cache: see [Training-cache flags](command-line.md#training-cache-flags). The window always uses auto. |
+| command line only | none | `--max-epochs` | `build_posterior(max_num_epochs=)`, `tsnpe_round(max_num_epochs=)` | no ceiling | A ceiling on training epochs; see [train](command-line.md#train) for how many run and which network is kept. |
 | command line only | none | `--posterior-samples` | `validate_calibration(num_posterior_samples=)` | 1000 | Posterior draws per calibration dataset. |
 | command line only | none | `--n-samples` | `simulated_inference(n_samples=)`, `experimental_inference(n_samples=)` | 1000 | Posterior draws for the corner plot, the posterior predictive check and the summary. |
-| command line only | none | `--device` | the configuration's device (`core.tool.config_args.make_cfg`) | auto | auto takes a CUDA card of compute capability 8.0 or above, else Apple's MPS, else the CPU; the window always takes auto. The device and its number type are part of the cache's identity. |
+| command line only | none | `--device` | the configuration's device (`core.tool.config_args.make_cfg`) | auto | Where the run computes: see [Configuration flags](command-line.md#configuration-flags). The window always takes auto. |
 
 A narrowing round started from the TSNPE tab trains its flow at `core/config.py`'s network settings:
 the Posterior tab's network boxes do not reach it. On the command line, `tsnpe` takes
@@ -260,10 +260,9 @@ or the measurement. [The prior](science.md#the-prior) and
 A training run whose settings match a committed simulation cache resumes it; the Posterior tab's
 checkpoint line says so before you press **Train / Load posterior**. With the Fisher rotation on, a
 resumed run reuses the rotation stored in the cache's header and does not run the Fisher step
-(`core.orchestrator.build_posterior`). That is required, not an optimisation: the rotation is not
-reproducible from one process to the next, so a freshly computed one would put the reused rows in a
-different coordinate from the targets stored beside them. The log says "Reusing the Fisher rotation
-stored with the training checkpoint".
+(`core.orchestrator.build_posterior`). That is required, not an optimisation
+([Randomness and reproducibility](rules-and-traps.md#randomness-and-reproducibility) says why). The
+log says "Reusing the Fisher rotation stored with the training checkpoint".
 
 - **The three Fisher settings do nothing on a resume.** Ensemble per perturbation, Central-difference
   step and Operating points (`--fisher-m`, `--fisher-dz`, `--fisher-points`) are not part of the
