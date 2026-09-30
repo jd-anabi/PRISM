@@ -107,12 +107,13 @@ def sbc_repeats(cfg, posterior, prior, *, repeats: int = 10, n_cal: int = 2000,
     ⚠ FOR A TSNPE POSTERIOR, reproducibility is WHOLE-RUN, not per-repeat. ``val_latent_prior`` (the
     region-restricted proposal built once below, before the loop) is ONE ``TruncatedLatentPrior``
     shared by every repeat, and its rejection sampler sizes each draw's over-draw from the acceptance
-    rate ACCUMULATED over every repeat run on it so far (core/SBI/truncate.py:434-436), not from that
-    repeat alone. A full run at one seed reproduces bit-for-bit -- each repeat still reseeds at
-    ``seed + r`` -- but repeat r's own draw is sized differently when it is the FIRST repeat of a
-    fresh run (``--repeats 1 --seed r``) than when it is repeat r of a longer ``--seed 0`` run: the
-    earlier repeats there have already fed the shared prior's running acceptance estimate. So
-    ``--repeats 1 --seed r`` does NOT reproduce repeat r pulled out of a ``--repeats K --seed 0`` run.
+    rate ACCUMULATED over every repeat run on it so far (``TruncatedLatentPrior.sample`` reads
+    ``acceptance_rate``), not from that repeat alone. A full run at one seed reproduces bit-for-bit
+    -- each repeat still reseeds at ``seed + r`` -- but repeat r's own draw is sized differently when
+    it is the FIRST repeat of a fresh run (``--repeats 1 --seed r``) than when it is repeat r of a
+    longer ``--seed 0`` run: the earlier repeats there have already fed the shared prior's running
+    acceptance estimate. So ``--repeats 1 --seed r`` does NOT reproduce repeat r pulled out of a
+    ``--repeats K --seed 0`` run.
     """
     store = resolve_store(store)
     store.assert_name_free("diagnostic", name)            # before K x n_cal simulations

@@ -132,7 +132,9 @@ def register(subparsers) -> dict:
     p.add_argument("--observation", required=True, metavar="REF",
                    help="the observation the region is drawn around, by name or id")
     p.add_argument("--directions", dest="n_directions", type=int, default=None, metavar="N",
-                   help="Fisher directions to truncate (the flat ones are left full width)"
+                   help="directions to truncate: the leading Fisher directions of a rotated posterior, "
+                        "the leading parameters, in box order, of an unrotated one; the rest are left "
+                        "full width"
                         + default_clause("n_directions"))
     p.add_argument("--level", type=float, default=None, metavar="X",
                    help="HPD level of the region; below 0.99 warns, because truncation permanently "

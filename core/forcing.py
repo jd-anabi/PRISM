@@ -24,8 +24,9 @@ FORCE_KINDS = ("sin", "step", "triangular", "exponential")
 
 # Force channels each BUILT-IN drift actually indexes (see core/Models/*.f_pure). This is a property
 # of the MODEL, not of the cell's forcing params: HopfModel reads force_step[:, 1] unconditionally
-# (hopf_model.py:15, :49), so a driveless Hopf config still needs 2 channels even though no "amp_y"
-# is declared. Nadrowski (nadrowski_model.py:18, :68) and BP (bp_model.py:50) read channel 0 only.
+# (``_hopf_compiled_step`` and ``HopfModel.f_pure``), so a driveless Hopf config still needs 2
+# channels even though no "amp_y" is declared. Nadrowski (``_nadrowski_compiled_step`` and
+# ``NadrowskiModel.f_pure``) and BP (``BPModel.f``) read channel 0 only.
 _BUILTIN_FORCE_CHANNELS = {"nadrowski": 1, "bp": 1, "hopf": 2}
 
 # Forcing parameter names per kind (the <name>_<var> suffix convention is applied by the caller).

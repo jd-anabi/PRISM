@@ -104,7 +104,9 @@ def register(subparsers):
     p.add_argument("--n-cal", dest="n_cal", type=int, default=40, metavar="N",
                    help="calibration datasets to simulate" + default_text("%(default)s"))
     p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=5, metavar="N",
-                   help="hard ceiling on training epochs" + default_text("%(default)s"))
+                   help="epoch ceiling handed to sbi, whose loop counts epochs from 0 and so trains at "
+                        "most N+1; a run the ceiling stops keeps the last epoch's network, not the best, "
+                        "unless the patience ran out on that epoch too" + default_text("%(default)s"))
     # No default here: an absent flag forwards nothing, so the stage keeps its own network size.
     p.add_argument("--hidden-features", dest="hidden_features", type=int, default=None, metavar="N",
                    help="flow width per transform" + default_clause("hidden_features"))
@@ -172,7 +174,7 @@ def run_smoke(args, store):
     want = SUMMARY_WIDTH + 1 + fdim
 
     print(f"[smoke] stages={','.join(stages)} num_runs={args.num_runs} "
-          f"run_size={args.run_size_cap} n_cal={args.n_cal} epochs={args.max_num_epochs} "
+          f"run_size={args.run_size_cap} n_cal={args.n_cal} max_epochs={args.max_num_epochs} "
           f"seed={args.seed} save={args.save} checkpoint={args.checkpoint} "
           f"prior={args.prior or '(build new)'} store={store.root}")
     if cfg.chi_mode:

@@ -69,7 +69,8 @@ def is_sbi_user_model(name: str) -> bool:
     """A user model eligible for the SBI (Parameter Inference) path in v2: user-defined, NO forcing
     (spontaneous dynamics only), and at least one ND parameter to infer. A forced model keeps the
     sinusoid machinery out of scope; a zero-parameter model (e.g. pure SHM) has nothing to infer and
-    can't build a stability-screened GMM prior -- both stay Simulate-only."""
+    can't build a stability-screened GMM prior -- both stay out of inference (FDT has its own gate,
+    fdt_support)."""
     spec = get(name)
     return bool(
         spec and spec.is_user_model

@@ -304,9 +304,11 @@ TRAINING_CHECKPOINT_EVERY = 50
 # of somebody else's surfaces right now -- a browser opening a video, a game launcher waking up. That
 # is transient by nature and the correct response is a pause, not a smaller batch.
 #
-# The re-run is EXACT: gen_training_data restores the batch's opening RNG snapshot first, so the
-# retried batch is the batch that would have been produced. See the retry loop for why that matters
-# to the checkpoint rather than merely being tidy.
+# The re-run restores the RNG snapshot taken just before the batch's rows are simulated (after its
+# thetas are drawn), so when the restore succeeds it consumes randomness as the failed attempt did.
+# It is best-effort, not a correctness gate: a re-run whose restore failed, or that the halving
+# ladders split differently, is a different but equally valid iid draw, and the checkpoint records
+# the actual RNG state at each batch boundary either way. See the retry loop in gen_training_data.
 #
 # 0 attempts disables it and restores the pre-2026-08-27 behaviour (fail as soon as both halving
 # ladders are exhausted).
@@ -321,12 +323,14 @@ TRAINING_BATCH_RETRY_DELAYS_S = (15.0, 60.0, 180.0)
 TRAINING_RUN_SIZE = 0   # CEILING on simulations per training batch; 0 = follow DeviceConfig.batch_size.
                         #
                         # DEFAULTS TO OFF, and should normally stay off. Batch width is nearly free in
-                        # wall-clock -- the SDE solver is a kernel-launch-bound sequential time loop, so
-                        # a batch costs about the same whatever its width (measured on a 5070 Ti at
-                        # n_fine=100k: 7.37 s at 2048 against 7.74 s at 1024, i.e. the SMALLER batch is
-                        # slightly slower). Lowering this therefore does NOT speed anything up; it trades
-                        # training rows for peak VRAM at roughly 1:1, and TRAINING_NUM_RUNS has to rise to
-                        # compensate, which DOES cost wall-clock proportionally.
+                        # SIMULATION wall-clock -- the SDE solver is a kernel-launch-bound sequential
+                        # time loop, so a batch costs about the same whatever its width (measured on a
+                        # 5070 Ti at n_fine=100k: 7.37 s at 2048 against 7.74 s at 1024, i.e. the
+                        # SMALLER batch is slightly slower). Lowering this therefore does not speed the
+                        # simulation up; it trades training rows for peak VRAM at roughly 1:1 (the
+                        # flow's fit, which grows with the rows, is the one stage it shortens), and
+                        # TRAINING_NUM_RUNS has to rise to compensate, which DOES cost wall-clock
+                        # proportionally.
                         #
                         # It is an ESCAPE HATCH, not the memory fix. The memory fix is per-geometry: a
                         # training batch's cost is width x n_fine, and n_fine swings from a median ~40k to
@@ -358,7 +362,8 @@ TRAINING_NUM_ROUNDS = 1                  # 1 = amortized NPE; >1 = sequential NP
 TRAINING_BATCH_SIZE = 512                # density-estimator minibatch size
 TRAINING_LEARNING_RATE = 1e-3            # Adam learning rate (sbi default)
 TRAINING_STOP_AFTER_EPOCHS = 20          # early-stopping patience in epochs (sbi default)
-TRAINING_MAX_NUM_EPOCHS = 2_147_483_647  # hard epoch cap (sbi default: effectively unbounded)
+TRAINING_MAX_NUM_EPOCHS = 2_147_483_647  # epoch ceiling handed to sbi, which trains at most N+1
+                                         # (sbi's default: effectively unbounded)
 TRAINING_SHOW_SUMMARY = True             # print sbi's train/validation-loss summary (check convergence)
 
 # === PROGRESS BARS ===
@@ -422,14 +427,15 @@ REPARAM_LOG_PARAMS = []   # ALL-LINEAR box. Log-scaling
 # Knots in the per-channel rank-Gaussian standardizer EmbeddedNet fits over the summary block.
 # The transform IS the (knot, probit) pair, so this is its resolution: 1024 knots put the finest
 # quantile step at ~0.1%, which resolves every point mass measured on the 10.24M-row cache (the
-# smallest flagged one is E2_log_h2 at 2.8%) with two decades of margin, for 42x1024 floats.
+# smallest flagged one is E2_log_h2 at 2.8%) with two decades of margin, for 50x1024 floats (the 49
+# summary columns and log T).
 RANK_GAUSS_KNOTS = 1024
 
 # Per-column winsorisation of the SUMMARY BLOCK before the flow sees it, replacing train_nn's global
 # `abs(data) < 1e15` ROW filter. A row filter is the wrong instrument: one pathological channel threw
-# away all 114 of that row's values, and at 1e15 it caught 10 rows in 10.24M while A1_mean still
-# reached -1.7e29 -- three decades of outlier under the threshold, which is what dragged its fitted
-# std to 4.19e11.
+# away every other value in its row, and at 1e15 it caught 10 rows in 10.24M while the outliers under
+# the threshold survived and dragged A1_mean's fitted std to 4.19e11, against a physical range of
+# about 1e3.
 #   ⚠ THE SUMMARY BLOCK ONLY, NEVER THE CHI BLOCK. A pad slot is exactly 0.0 in all six channels and
 #   is required to be BITWISE inert (pinned by tests/test_chi_set_encoder.py). Clipping a probe column whose 0.1th
 #   percentile is non-zero would move that 0.0 and silently turn every pad into a phantom probe.
@@ -441,11 +447,12 @@ WINSOR_PCT = (0.001, 0.999)
 # recordings at omega_k = CHI_FREQ_BOUNDS-spaced multipliers * Omega_0, where Omega_0 is the
 # spontaneous-oscillation peak measured from the passive trace (mirrors the FDT pipeline's
 # data-driven grid; see core/FDT/spectral.gen_freqs_log / find_spectral_peak). Each chi(omega_k)
-# enters as [log|chi|, cos(arg chi), sin(arg chi)] -> 3K features, routed through the EmbeddedNet's
-# second pathway (forcing_dim = 3K). A single passive trace only sees the products D*A_nd (amplitude)
-# and (lambda_hb/k_gs)*tau_nd (timescale); the chi(omega) SHAPE over frequency separates
-# kappa/lambda/x_scale/t_scale INDIVIDUALLY -- the only lever on the information ceiling + the
-# x_scale location bias. CHI_MODE=False = the exact current pipeline
+# enters as six channels in one of CHI_K_PAD slots (the SET CONDITIONING block below), routed through
+# the EmbeddedNet's second pathway (forcing_dim = CHI_ELEM_W x CHI_K_PAD, 72 at these values). A single
+# passive trace only sees the products D*A_nd (amplitude) and (lambda_hb/k_gs)*tau_nd (timescale); the
+# chi(omega) SHAPE over frequency carries lambda and f_scale in its phase and t_scale in its magnitude,
+# but it does not separate k from x_scale (identifiability jacobian: |cos| 0.95-0.97 under chi, 0.98
+# forced). CHI_MODE=False = the exact current pipeline
 # (single-frequency forcing, or spontaneous-only), so this is fully optional and additive.
 CHI_MODE = False
 CHI_N_FREQS = 6                # K: number of single-tone drive frequencies (recordings) per observation.
@@ -484,11 +491,13 @@ CHI_FREQ_BOUNDS = (0.03, 0.3)  # log-spaced multipliers of the measured spontane
                                # the flow correctly learned those features carry nothing, while
                                # every ND marginal stayed at the prior.
                                #
-                               # OPEN: the sub-resonance branch is close to the static compliance, so it may
-                               # carry chi's MAGNITUDE (x_scale/f_scale, already well identified) without the
-                               # SHAPE that was supposed to separate kappa/lambda -- the shape lives near and
-                               # above resonance, which this band leaves out. Check with
-                               # `python -m core identifiability jacobian` before spending another run.
+                               # MEASURED since, with `python -m core identifiability jacobian` (master
+                               # cell, T_obs 4.5 s, forced mode against chi at six probes): the band carries
+                               # SHAPE as well as magnitude. The phase channels carry lam and f_scale and
+                               # the magnitude channel t_scale, and every parameter's unique handle
+                               # improves. It does not separate k from x_scale (|cos| 0.95-0.97 under chi,
+                               # 0.98 forced): both move the trace's mean, which a sub-resonance
+                               # susceptibility does not touch. Compare such maps only at matched T_obs.
 CHI_K_MAX = 24         # upper bound on CHI_K_PAD accepted by the GUI -- a CAPACITY knob. It used to
                        # bound K itself; under the set layout K is a property of an OBSERVATION and is
                        # bounded by the pad, not by this.
@@ -528,11 +537,13 @@ CHI_MAX_CYCLES = 20.0  # CEILING on the drive cycles a probe is locked in over. 
                        # that, so the response is non-stationary on the scale of tens of drive cycles
                        # and the lock-in accumulates that wander instead of averaging it away.
                        # This is NOT a filter: no probe is masked or dropped by it. It shortens the
-                       # SEGMENT the lock-in runs over, which is a property of the measurement, so it
-                       # lives in gen_chi_raw where every caller -- training, the Fisher rotation, the
-                       # PPC and the experimental path -- goes through it. Applying it in one caller
-                       # would make the network condition on a different observable than it was
-                       # trained on, which is silent.
+                       # SEGMENT the lock-in runs over, which is a property of the measurement, so
+                       # every path applies it: training, the Fisher rotation, the PPC and the
+                       # simulated observation through gen_chi_raw, and the experimental path through
+                       # chi.probe_verdict, which truncates a longer recording to its first
+                       # cfg.chi_max_cycles drive cycles (the run's lock-in ceiling, this value by
+                       # default). Applying it in one caller would make the network condition on a
+                       # different observable than it was trained on, which is silent.
                        # WHY 20. scripts/chi_f0_sweep.py at 7433ced^ brackets the wall by re-locking the same
                        # traces over every prefix length (M=48, in-band probes only so frequency
                        # effects cannot confound it). Worst |chi| CV by cap:

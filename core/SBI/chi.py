@@ -37,7 +37,8 @@ _PEAK_FREQ_BATCH = 256
 # The THREE chi feature sets. They are different widths for different consumers and conflating them is
 # silent, so they are named once here and every consumer asks for one by name.
 #
-#   CONDITIONING  6 channels x K_PAD slots  -> the network, expected_forcing_dim, the sidecar
+#   CONDITIONING  6 channels x K_PAD slots  -> the network, expected_forcing_dim, the manifest's
+#                                              conditioning block
 #   FISHER        3 channels x K probes     -> decorrelate.feats, `identifiability jacobian`
 #   (the labels in core/diagnostics/feature_sets.py are the FISHER set minus the 11 Group-G columns)
 #
@@ -393,8 +394,8 @@ def lock_in_batched(x: torch.Tensor, omega: torch.Tensor, F0, T_obs, dt: float,
     :param x: (B, n) response traces (physical), sampled at dt.
     :param omega: (B,) drive ANGULAR frequencies (cell freq units, rad/cell-time).
     :param F0: drive amplitude the response was driven with -- a scalar OR a (B,) per-sample tensor
-               (chi is drive-amplitude-independent in the linear regime, but F0 must MATCH the drive
-               so the units are physical).
+               (F0 must MATCH the drive the response was driven with, so the units are physical; an
+               active bundle does not respond linearly, so |chi| itself also depends on the amplitude).
     :param T_obs: observation duration covered by the trace, cell time units. Scalar, or (B,) to go
                   with a per-row ``n_samples``.
     :param dt: sampling interval (scalar, cell time units).

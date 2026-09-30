@@ -202,14 +202,14 @@ class ConfigPanel(_StagePanel):
         # repointed via InferenceScreen.on_draft_set when the model is APPLIED -- not on every combo
         # change, so a half-changed selection cannot leave the two tabs disagreeing.
         # User models are inferable only when SBI-eligible: no forcing (spontaneous dynamics) AND at
-        # least one ND parameter. Forced / zero-parameter user models stay Simulate-only.
+        # least one ND parameter. Forced / zero-parameter user models stay out of parameter inference.
         ineligible_user = registry.is_user_model(model) and not registry.is_sbi_user_model(model)
         self.btn_config.setEnabled(not ineligible_user)
         if ineligible_user:
             reason = ("has external forcing" if registry.user_model_has_forcing(model)
                       else "has no free parameters to infer")
             self.log_pane.append_line(
-                f"'{model}' {reason}, so it is Simulate-only. Parameter inference supports "
+                f"'{model}' {reason}, so parameter inference cannot take it: it supports "
                 "user-defined models with no forcing and at least one parameter.", "warning")
 
     def _read_inputs(self) -> dict:
@@ -306,8 +306,8 @@ class ConfigPanel(_StagePanel):
         model = self.model_combo.currentText()
         if registry.is_user_model(model) and not registry.is_sbi_user_model(model):   # backstop
             self.log_pane.append_line(
-                "This user-defined model is Simulate-only (needs no forcing + ≥1 parameter for "
-                "inference).", "warning")
+                "This user-defined model cannot be inferred (inference needs no forcing and ≥1 "
+                "parameter).", "warning")
             return
         try:
             v = self._read_inputs()

@@ -1,10 +1,12 @@
 """Generic Simulator for user-defined models (core/Models/user_model.py).
 
-Mirrors the concrete subclasses' positional ``Model(*torch.unbind(params, dim=1), force, ...)``
-construction, raising RuntimeError on failure. This was the pattern the built-in subclasses were
-later brought in line with -- they used to ``print + exit()`` and now raise
-``simulator.SimulationError`` (itself a RuntimeError). Unlike them it does NOT repeat the redundant
-second ``_set_up_model()`` call -- the base ``Simulator.__init__`` already runs it once.
+Splits ``params`` into columns with ``torch.unbind(params, dim=1)`` as the concrete subclasses do,
+but hands them to ``UserModel`` as ONE tuple (``UserModel(compiled, torch.unbind(params, dim=1),
+force, ...)``) where the built-ins splat them positionally, and raises RuntimeError on failure.
+Raising was the pattern the built-in subclasses were later brought in line with -- they used to
+``print + exit()`` and now raise ``simulator.SimulationError`` (itself a RuntimeError). Unlike them it
+does NOT repeat the redundant second ``_set_up_model()`` call -- the base ``Simulator.__init__``
+already runs it once.
 """
 import torch
 

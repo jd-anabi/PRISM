@@ -369,20 +369,24 @@ class SimConfig:
         """Which of the THREE observation protocols this config describes.
 
           "spontaneous"  chi off, no drive     -- ONE passive trace. Groups A-F, Group G zero-padded;
-                                                  conditioning [S(41) | log T]. f_scale is inert here
+                                                  conditioning [S(49) | log T], S being the 41
+                                                  features and the 8 valid flags. f_scale is inert here
                                                   (it only ever divides a force) so it should not be in
                                                   the inferred set -- give such a cell a bounds file with
                                                   neither a Forcing section nor f_scale.
           "forced"       chi off, has_forcing  -- passive + ONE forced trace at the cell's own drive.
-                                                  Conditioning [S(41) | log T | forcing].
+                                                  Conditioning [S(49) | log T | forcing].
           "chi"          chi on                -- passive + K single-tone forced traces. Conditioning
-                                                  [S(41, G=0) | log T | chi(3K)]. The cell's own drive is
-                                                  IGNORED (chi probes at mult_k * measured Omega_0), so
-                                                  this is independent of has_forcing.
+                                                  [S(49, G=0) | log T | chi block, 6 channels x
+                                                  chi_k_pad slots]. The cell's own drive is IGNORED
+                                                  (chi probes at mult_k * measured Omega_0), so this
+                                                  is independent of has_forcing.
 
         The mode is chosen by which BOUNDS file is picked (has_forcing == "it declares a Forcing
-        section") plus the chi toggle. The three conditioning widths cannot collide (K >= 2 is enforced),
-        so loading a posterior trained in a different mode fails loudly on shape rather than silently.
+        section") plus the chi toggle. The three widths cannot collide (spontaneous adds no block, a
+        built-in drive declares at most five parameters, and the chi block is 6 x chi_k_pad columns, at
+        least 12, whatever K is), and loading refuses a posterior trained in another mode by the mode
+        its manifest records (``ArtifactStore.load_posterior``), before any shape is read.
         """
         if self.chi_mode:
             return "chi"
@@ -680,12 +684,12 @@ class FDTConfig:
         """A private deep copy for one run: what `core.runs.public_entry` hands a public entry in
         place of the caller's config.
 
-        NOT optional, and not cosmetic: `public_entry` is duck-typed on this method
-        (core/runs.py:243-247, `if hasattr(kwargs["cfg"], "copy_for_run")`), so a config class
-        without it gets the run log and silently NO copy -- and run_fdt writes `cfg.omega_0` twice.
-        A plain deep copy suffices, unlike SimConfig's: this class carries no cached_property, so
-        there is no 2.4M-point grid and no pint registry to pop off a shallow copy first (a test
-        pins that it still carries none). Everything a run writes on -- omega_0, seed, sources and
+        NOT optional, and not cosmetic: `public_entry` is duck-typed on this method (its wrapper
+        tests `if hasattr(kwargs["cfg"], "copy_for_run")`), so a config class without it gets the
+        run log and silently NO copy -- and run_fdt writes `cfg.omega_0` twice. A plain deep copy
+        suffices, unlike SimConfig's: this class carries no cached_property, so there is no
+        2.4M-point grid and no pint registry to pop off a shallow copy first (a test pins that it
+        still carries none). Everything a run writes on -- omega_0, seed, sources and
         the four OrderedDicts through with_overrides -- is an independent equal object on the copy.
         """
         return copy.deepcopy(self)

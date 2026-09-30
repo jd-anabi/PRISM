@@ -89,7 +89,7 @@ def _progress(s) -> str:
 
     The fraction, and it still costs no second read: BOTH halves are on the Summary, because the
     store carries the planned total across as ``batches_planned`` (from
-    ``body["identity"]["n_runs"]``, ``core/artifacts/identity.py:54``) beside ``batches_done``. A
+    ``body["identity"]["n_runs"]``, ``SimulationIdentity.from_cfg``) beside ``batches_done``. A
     manifest that records no planned count -- nothing writes one without it today, but a hand-edited
     or an older manifest can -- falls back to the count alone rather than printing "3/None".
 

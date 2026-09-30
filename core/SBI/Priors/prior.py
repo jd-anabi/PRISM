@@ -58,9 +58,10 @@ class Prior(ABC):
         those latent points, and returns a TransformedDistribution that pushes the latent
         GMM forward into the physical box via per-parameter scaled sigmoid.
 
-        The resulting prior has support exactly the cell-file box — no tails leaking into
-        nonphysical θ. HDBSCAN's island topology and the GMM's covariance structure are
-        preserved; they just live in unbounded latent coordinates.
+        The resulting prior's support is exactly the bounds file's box -- no tails leak into
+        nonphysical θ. HDBSCAN sets only the GMM's component count; the GMM is then fitted to every
+        accepted latent point, noise included, so its components need not coincide with HDBSCAN's
+        islands. Both live in unbounded latent coordinates.
         """
         self.sweep_device = resolve_sweep_device(self.device)
 

@@ -34,8 +34,8 @@ LAYOUT.  ``<Artifacts>/simulations/<digest12>/``   (core.artifacts.store.KIND_DI
                    absent when a batch was committed without them, so readers use ``.get``
     state.prev.pt  one generation back, a few KB, for the case where state.pt is lost mid-write
     shards/x_<from>_<to>.pt, th_<from>_<to>.pt    write-once row blocks, never mutated after commit
-    uncommitted/<n>/   shards a continuing run set aside because they end past the commit (see
-                   below), one numbered folder per set-aside; never read
+    uncommitted/<n>/   shards a run set aside before its first commit because they end past the
+                   count it starts from (see below), one numbered folder per set-aside; never read
 
 The directory NAME is a digest of the declared identity, so "same config" resolves to the same place by
 construction and two different configs can never share one. The digest is only a ROUTER: ``verify``
@@ -47,12 +47,15 @@ ORDERING, which is what makes a crash safe:
     2. copy state.pt -> state.prev.pt
     3. atomically replace state.pt with batches_done = k
 A load skips every shard that ends past ``batches_done``, so orphans from step 1 are never read as
-rows. A run that continues the cache also MOVES them out of ``shards/`` before it commits anything
-(``set_aside_uncommitted``): its own first commit starts at ``batches_done`` too, and when the orphan
-came from a cancel's save -- which ends at the batch the cancel reached, off the cadence -- that
-commit has another name, so once ``batches_done`` passed the orphan's end a load would read both.
-They are moved, never deleted, and not at all when ``batches_done`` was read from state.prev.pt:
-that count is a generation old, and state.pt may commit what lies past it.
+rows. A run that uses the cache -- a resume, or a fresh start whose create() has just written a zero
+state -- also MOVES every shard past its starting count out of ``shards/`` before it commits anything
+(``set_aside_uncommitted``): its own first commit starts there too, and when the orphan came from a
+cancel's save -- which ends at the batch the cancel reached, off the cadence -- that commit has
+another name, so once ``batches_done`` passed the orphan's end a load would read both. They are
+moved, never deleted. A resume whose count was read from state.prev.pt moves nothing: that count is a
+generation old, and state.pt may commit what lies past it. A fresh start moves them even after a
+fallback read, because create() has already replaced state.pt; the rows are kept in
+``uncommitted/``.
 Shards are durable before the state that references them, so no commit can point at data still in
 the page cache.
 
@@ -74,8 +77,10 @@ import torch
 from core.Helpers.file_manager import atomic_torch_save
 from core.runs import cancel_deferred
 
-# Bumped when the on-disk layout changes in a way an older/newer PRISM cannot read. It rides in the
-# identity, so a bump routes to a fresh directory rather than misreading an existing one.
+# Bumped when the on-disk layout changes in a way an older/newer PRISM cannot read. It is written
+# into header.pt, not the identity, so a bump keeps the directory name and ``verify`` refuses a
+# header of any other format. The identity's own format string (``core.artifacts.identity.FORMAT``)
+# is what routes a changed identity to a fresh directory.
 CHECKPOINT_FORMAT = 1
 
 _HEADER = "header.pt"
@@ -433,15 +438,15 @@ def set_aside_uncommitted(path, batches_done: int) -> tuple:
     one past the highest number already there; return ``(that folder, [the names moved])``, or
     ``(None, [])`` when nothing ends past it.
 
-    Called by the run that continues the cache, before its first commit. That commit starts at
-    ``batches_done`` and ends on the run's own cadence, so an orphan left by a cancel's save has a
-    different name and, left among the shards, would sit beside it once ``batches_done`` passes the
-    orphan's end. Moved, not deleted: if the count is ever wrong the rows are still on disk. A folder
-    per call, so the files keep their own names -- each x_ beside its th_ twin, and moving them back
-    is a plain move -- and a range set aside twice keeps both copies instead of overwriting the
-    first. Nothing at or below ``batches_done`` is touched.
+    Called by every run that uses the cache, a resume or a fresh start, before its first commit. That
+    commit starts at ``batches_done`` and ends on the run's own cadence, so an orphan left by a
+    cancel's save has a different name and, left among the shards, would sit beside it once
+    ``batches_done`` passes the orphan's end. Moved, not deleted: if the count is ever wrong the rows
+    are still on disk. A folder per call, so the files keep their own names -- each x_ beside its th_
+    twin, and moving them back is a plain move -- and a range set aside twice keeps both copies
+    instead of overwriting the first. Nothing at or below ``batches_done`` is touched.
 
-    The caller must not call this when ``batches_done`` came from state.prev.pt (``peek``'s
+    A resume must not call this when its ``batches_done`` came from state.prev.pt (``peek``'s
     ``_state_file``): state.pt may commit the shards past it. Silent: the caller reports what moved.
     """
     files = uncommitted_shards(path, batches_done)
@@ -475,9 +480,10 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
 
     This globs the shard directory and walks it in name order. A shard that ends past
     ``batches_done`` is an orphan (a crash between the shard write and the state commit) and is
-    skipped; the run that continues the cache moves such shards to ``uncommitted/`` before it
-    commits (``set_aside_uncommitted``), and nothing reads that folder. Two shards that overlap are
-    refused, naming both, even under a row cap: reading both would repeat their shared batches' rows.
+    skipped; a run that uses the cache moves such shards to ``uncommitted/`` before it commits
+    (``set_aside_uncommitted``), except a resume whose count came from state.prev.pt, and nothing
+    reads that folder. Two shards that overlap are refused, naming both, even under a row cap:
+    reading both would repeat their shared batches' rows.
 
     :param x_only: skip the ``th_`` shards entirely and return ``(x, None)``. The conditioning-channel
                    diagnostics read only x, and the targets are half the bytes on disk.
@@ -513,7 +519,9 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
             th = _shard(path, "th", a, b)
             if not th.exists():
                 raise ValueError(f"Training checkpoint at {path} is missing {th.name}, the targets for "
-                                 f"batches [{a}, {b}). Delete the directory to start fresh.")
+                                 f"batches [{a}, {b}). If it was moved into this cache's uncommitted "
+                                 f"folder, move it back into the shards folder beside its x_ twin and "
+                                 f"load again; otherwise delete the directory to start fresh.")
             th_part = torch.load(str(th), map_location="cpu", weights_only=False)
         x_part = torch.load(str(f), map_location="cpu", weights_only=False)
         want = (b - a) * run_size
@@ -534,7 +542,10 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
     # short of it here.
     if not capped and got != batches_done:
         raise ValueError(f"Training checkpoint at {path} commits {batches_done} batches but only "
-                         f"{got} are present on disk. Delete the directory to start fresh.")
+                         f"{got} are present on disk. If a shard was moved into this cache's "
+                         f"uncommitted folder, move it and its th_ twin back into the shards folder "
+                         f"and load again; otherwise the missing rows are gone, and deleting the "
+                         f"directory starts the cache fresh.")
     if not xs:
         return None, None
     x = torch.cat(xs, dim=0)

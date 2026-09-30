@@ -31,8 +31,8 @@ def count_pathological(x: torch.Tensor, acc: dict) -> None:
       * an EXACTLY CONSTANT trace makes `_group_d`'s `std.clamp(1e-12)` fire, so `z == 0`,
         `kurt == 0`, and D3_bimodality comes back as exactly 1/1e-12 -- a flatlined simulation, not
         an underflow;
-      * a ~1e29-magnitude trace drags A1_mean's fitted std to 4.19e11, which is what made the
-        channel invisible to the flow;
+      * huge-magnitude traces drag A1_mean's fitted std: the ones that survived the old 1e15 row
+        guard took it to 4.19e11, which is what made the channel invisible to the flow;
       * divergent draws erased the posterior-predictive PSD band entirely (torch.quantile
         propagates a single non-finite entry across the whole reduction, so one bad draw in a
         thousand blanked the figure).

@@ -241,7 +241,7 @@ def generate_observations(cfg: SimConfig, *, name: str = "", note: str = "", fig
     # Summary statistics + conditioning vector. Layout: [S | log(T) | forcing]; log(T) is grouped
     # with the summary pathway. Keep this order in sync with gen_training_data and build_posterior.
     if cfg.chi_mode:
-        # [S(41, Group G zeroed) | log(T) | padded probe SET] -- probes at mult_k * Omega_0.
+        # [S(49), Group G zeroed | log(T) | padded probe SET] -- probes at mult_k * Omega_0.
         # An OBSERVATION uses the deterministic grid, not the training sampler's jitter: this is a
         # specific measurement, and the PPC has to be able to reproduce its exact drive frequencies.
         obs_stats = pipeline.gen_stats(x_spont_dim, None, cfg.dt_exp, None, None, None,
@@ -423,11 +423,13 @@ def fresh_run_near_misses(cfg: SimConfig, prior, *, num_runs=None, run_size_cap=
                           checkpoint_every=None, store=None) -> list:
     """training_checkpoint.near_miss_siblings for the identity build_posterior WOULD use. [] when
     checkpointing resolves to off, when the run's own cache already holds batches (a resume), or when
-    no committed sibling is one field away. Pure; fails open for a stub prior (identity.py:30-32).
+    no committed sibling is one field away. Pure; fails open for a stub prior
+    (``SimulationIdentity.from_cfg`` records its fingerprint as None).
 
-    ONE DETECTOR, shared by the training stage and the Posterior tab's dialog, so the question the
-    user is asked and the refusal that follows can never disagree about which directory this run will
-    touch. Its answer is advisory for the tab and binding inside the stage.
+    The Posterior tab's detector. build_posterior asks ``training_checkpoint.near_miss_siblings`` the
+    same question itself, of the same identity at the same run size (``_training_run_size``) under the
+    same store root, so the question the user is asked and the refusal that follows can never disagree
+    about which directory this run will touch. This answer is advisory; the stage's own is binding.
     """
     ck_every = TRAINING_CHECKPOINT_EVERY if checkpoint_every is None else int(checkpoint_every)
     if not ck_every:
@@ -760,7 +762,7 @@ def build_rescale_prior(cfg: SimConfig) -> Distribution:
 
 def build_forcing_prior(cfg: SimConfig) -> Distribution:
     """
-    Construct the forcing-parameter prior from cell file bounds.
+    Construct the forcing-parameter prior from the bounds file's Forcing section (cfg.force_params_dict).
 
     'freq' uses log-uniform — hair bundle resonances span decades of Hz, and uniform
     over-weights the high end. All other forcing params (amp, phase, offset) use
@@ -828,7 +830,8 @@ def build_posterior(
     :param num_transforms: flow depth; None = config.NSF_NUM_TRANSFORMS.
     :param learning_rate: Adam LR; None = config.TRAINING_LEARNING_RATE.
     :param stop_after_epochs: early-stopping patience; None = config.TRAINING_STOP_AFTER_EPOCHS.
-    :param max_num_epochs: hard epoch cap; None = config.TRAINING_MAX_NUM_EPOCHS.
+    :param max_num_epochs: the epoch ceiling handed to sbi, which trains at most N+1 epochs; None =
+                     config.TRAINING_MAX_NUM_EPOCHS.
     :param checkpoint_every: training batches between checkpoint writes, 0 = checkpointing OFF (no
                      simulation cache is read or written); None = config.TRAINING_CHECKPOINT_EVERY.
                      NOT part of the simulation identity -- the checkpoint header stores no cadence
@@ -875,9 +878,10 @@ def build_posterior(
     ⚠ AND THEY ARE NOT INTERCHANGEABLE BUDGET KNOBS. Each batch shares ONE Sobol (t_scale_k, T_k)
     pair, overridden for every row in it -- so `num_runs` is the (t_scale, T) DIVERSITY count and the
     run size is rows per operating point. 5000x2048 and 10000x1024 have equal totals and different
-    statistics (calibration has the same property). Batch WIDTH is also nearly free in
+    statistics (calibration has the same property). Batch WIDTH is also nearly free in SIMULATION
     wall-clock -- the solver is kernel-launch-bound; measured 7.37 s at 2048 against 7.74 s at 1024 --
-    so narrowing it does not speed anything up, it trades training rows for peak VRAM about 1:1.
+    so narrowing it does not speed the simulation up: it trades training rows for peak VRAM about 1:1,
+    and the one stage it shortens is the flow's fit, whose time grows with the rows.
     """
     store = resolve_store(store)
     # Before anything is spent, on BOTH branches. A LOAD with a name is not a thing the GUI does, but
@@ -1075,8 +1079,9 @@ def build_posterior(
     # pre-training cost.
     ckpt_dir = ckpt_resumed = None
     if ck_every and train_new:
-        # The region is part of the identity (omitted for an amortized run), so a TSNPE round has its
-        # OWN directory and can never resume the amortized run's rows, nor the other way round.
+        # The region is part of the identity (the key is always present, None for an amortized run),
+        # so a TSNPE round has its OWN directory and can never resume the amortized run's rows, nor
+        # the other way round.
         from .artifacts.identity import SimulationIdentity
         ident = SimulationIdentity.from_cfg(cfg, prior, run_size, n_runs, truncation=truncation).to_dict()
         ckpt_dir = training_checkpoint.resolve_dir(ident, store.kind_dir("simulation"))
@@ -1089,13 +1094,13 @@ def build_posterior(
             ckpt_resumed = training_checkpoint.read_header(ckpt_dir)
         else:
             # The near-miss cache refusal, plus the hoisted resume='require'. HERE: after the
-            # taken-name refusal (:700) and before the truncation-branch refusals (:898-933) and the
-            # Fisher rotation (:999) -- before any simulation, and before the cache's own create()
-            # (pipeline.py:1414), so every refusal
-            # still lands before any spend. One consequence of the order: a caller who consents with
-            # new_run=True can still be refused moments later by an unrelated truncation check (a
-            # region with no observation digest, a rotation mismatch) -- harmless, since nothing has
-            # been simulated yet. That refusal's own pin
+            # taken-name refusal (``store.assert_name_free``, at the top of this function) and before
+            # the truncation branch's refusals and the Fisher rotation below -- before any
+            # simulation, and before the cache's own create() (``pipeline.gen_training_data``), so
+            # every refusal still lands before any spend. One consequence of the order: a caller who
+            # consents with new_run=True can still be refused moments later by an unrelated truncation
+            # check (a region with no observation digest, a rotation mismatch) -- harmless, since
+            # nothing has been simulated yet. That refusal's own pin
             # (test_a_round_whose_region_names_no_observation_is_refused_before_the_spend) runs with
             # checkpointing off, so it never reaches this block. The pipeline's copy
             # of the require refusal fires only after a freshly computed rotation, which is the most
@@ -1236,9 +1241,10 @@ def build_posterior(
         V, fisher_evals = decorrelate.build_latent_fisher_rotation(
             cfg, T, latent_prior=latent_inferred_prior, force_prior=force_prior, with_values=True,
             m=fm, dz=fdz, n_points=fp)
-        # The eigenvalues ride into the sidecar with V. Without them the saved rotation only says
-        # WHICH direction is least constrained, never BY HOW MUCH -- and recovering them afterwards
-        # costs a full Fisher re-run. See `python -m core identifiability rotation`.
+        # The eigenvalues ride into the posterior's manifest with V (body.transform.fisher_eigenvalues).
+        # Without them the saved rotation only says WHICH direction is least constrained, never BY
+        # HOW MUCH -- and recovering them afterwards costs a full Fisher re-run. See
+        # `python -m core identifiability rotation`.
         _spread = float(fisher_evals[0] / fisher_evals[-1]) if float(fisher_evals[-1]) > 0 else float("inf")
         log.info(f"[fisher] eigenvalue spread (best/worst direction): {_spread:.3g}")
         evals_rec = tensor_to_json(fisher_evals)
@@ -1591,7 +1597,9 @@ def build_truncation_region(posterior, observation, *,
 
 def expected_forcing_dim(cfg: SimConfig) -> int:
     """Width of the conditioning vector's forcing/chi block for this config. Single source of truth,
-    shared by build_posterior's EmbeddedNet, the save-side sidecar and the load-side mode guard.
+    shared by build_posterior's EmbeddedNet, the conditioning block every posterior and observation
+    manifest records (``manifest.conditioning_block``) and the load-side checks in
+    ``ArtifactStore.load_posterior`` and ``load_observation``.
 
     Under chi this is a function of the PAD, not of the probe count -- which is the one line that buys
     K-agnosticism. A posterior trained with K drawn over 2..K_PAD loads against a config declaring any
@@ -1741,7 +1749,7 @@ def _draw_calibration_set(cfg: SimConfig, val_latent_prior, T, force_prior, *, n
                           cal_n_scales: "int | None", chi_k_fixed: "int | None" = None):
     """Simulate the calibration set: ``(x_cal, theta_star)``, theta* PHYSICAL. ``T`` is always given
     here, and ``gen_cal_data`` applies it to the latent draw before returning --
-    ``theta_transform(theta_star_latent)`` (core/SBI/analysis.py:197-202) -- so the caller must NOT
+    ``theta_transform(theta_star_latent)`` (``analysis.gen_cal_data``) -- so the caller must NOT
     push theta* through ``T`` again; a caller that trusted "latent" here would transform it twice.
 
     ``n_cal`` is already RESOLVED -- validate_calibration applies its SBC_N_CAL default before calling,

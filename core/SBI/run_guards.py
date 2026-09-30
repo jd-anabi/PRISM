@@ -124,8 +124,12 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     too -- but only when a posterior is LOADED, i.e. after the days are spent. This fires before the
     first simulation.
 
-    SCOPE IS DELIBERATELY NARROW. Only the band and the drive amplitude are checked, because only
-    they shape the TRAINING distribution and are baked into the encoder's weights.
+    SCOPE IS DELIBERATELY NARROW. Only the band and the drive amplitude are checked: they are
+    measurement definitions that config.py fixes and no run may change. The lock-in ceiling shapes the
+    training distribution too (every probe's segment and its logcyc channel), but it is a per-run
+    setting that every posterior records and a load compares. The cycle floor, CHI_MIN_CYCLES, also
+    shapes it (it masks probes); it is a module constant, outside the simulation identity and a
+    posterior's record, so nothing compares it.
     ``chi_n_freqs`` is deliberately NOT an error: it is the count an OBSERVATION supplies, training
     draws K per batch so one posterior serves any count (see build_posterior's training_params, which
     omits it on purpose), and failing on it would refuse a perfectly good 7-recording experiment. It
@@ -154,9 +158,10 @@ def _assert_chi_config_is_deliberate(cfg: SimConfig) -> None:
     raise Refusal(
         f"This chi run's configuration does not match config.py, and the difference decides what the "
         f"network is trained on:\n{detail}{k_note}\n\n"
-        f"  The band and drive amplitude fix the encoder's frequency normalization and are baked into "
-        f"its weights, so a run at the wrong values cannot be reinterpreted afterwards -- it has to be "
-        f"redone. This has cost a ~5-day run once already.\n"
+        f"  The band fixes the encoder's frequency normalization, and the drive sets the |chi| every "
+        f"probe produces (an active bundle does not respond linearly to it); both are baked into the "
+        f"network's weights, so a run at the wrong values cannot be reinterpreted afterwards -- it has "
+        f"to be redone. This has cost a ~5-day run once already.\n"
         f"  A non-default band or drive amplitude is not supported: edit config.py itself, deliberately, "
         f"for every future run.")
 
@@ -194,10 +199,11 @@ def _log_params_for(cfg: SimConfig):
     so the built-in path is byte-identical to what it did before user models could express this.
 
     ONE resolver, called at every site that decides a box coordinate: build_prior's gen_prior mask,
-    build_posterior's loaded-prior mask GUARD, the training bijection, and the sidecar. If two of
-    those disagreed, the mismatch would surface as build_posterior's "REBUILD the ND prior" error
-    against a prior that is in fact correct -- or, worse, not surface at all and train the flow in a
-    different coordinate than the GMM was fitted in.
+    build_posterior's loaded-prior mask GUARD, the training bijection, and the log params the
+    simulation identity and the posterior's manifest record. If two of those disagreed, the mismatch
+    would surface as build_posterior's "REBUILD the ND prior" error against a prior that is in fact
+    correct -- or, worse, not surface at all and train the flow in a different coordinate than the
+    GMM was fitted in.
     """
     from core import registry                       # lazy: registry imports config, config imports us
     spec = registry.get(cfg.model)

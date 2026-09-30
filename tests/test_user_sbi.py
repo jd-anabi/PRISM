@@ -139,7 +139,7 @@ def test_a_failing_tiny_run_build_undoes_its_install(tmp_path, monkeypatch):
 
 def test_builtin_forcing_path_unperturbed():
     """The spontaneous-only branching must leave the Nadrowski forcing path byte-compatible: a full-width
-    conditioning vector [S(41) | log(T) | forcing] with Group G populated by the drive response."""
+    conditioning vector [S(49) | log(T) | forcing] with Group G populated by the drive response."""
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
     cfg = cli.make_sim_config("NADROWSKI", labels, True,
                               str(config.BOUNDS_PATH / "nadrowski" / "master.txt"))
@@ -391,7 +391,7 @@ def test_spontaneous_fisher_rotation_is_orthogonal():
 
 
 def test_chi_mode_observation_width():
-    """CHI_MODE: generate_observations yields [S(41, Group G zeroed) | log(T) | chi(3K)], all finite.
+    """CHI_MODE: generate_observations yields [S(49), Group G zeroed | log(T) | chi block], all finite.
     Uses the Nadrowski cell (which HAS a forcing section) to pin that chi-mode ignores it and uses the
     passive trajectory + the K-frequency chi block instead."""
     labels = VALID_LABELS[VALID_MODELS.index("NADROWSKI")]
@@ -1441,10 +1441,10 @@ def test_gen_training_data_recovers_from_an_oom_outside_the_simulator():
 def test_zscore_check_is_capped_and_reaches_sbis_own_binding():
     """sbi calls warn_if_zscoring_changes_data UNCONDITIONALLY on the full training tensor.
 
-    At the retrain's size (10.24M x 114 float32) that is torch.unique(x, dim=0), then a full z-score,
-    then torch.unique AGAIN -- >= 13 GiB, on the GPU, at the END of a multi-day generation run that is
-    not checkpointed. Capping it to a strided subsample keeps the diagnostic (it is a PROPORTION test
-    with a 10% tolerance) at a fraction of the cost.
+    At the retrain's size (10.24M x 122 float32) that is torch.unique(x, dim=0), then a full z-score,
+    then torch.unique AGAIN -- about 14 GiB, on the GPU, at the END of a multi-day generation run.
+    Capping it to a strided subsample keeps the diagnostic (it is a PROPORTION test with a 10%
+    tolerance) at a fraction of the cost.
 
     The patch has to reach npe_base's OWN binding: it does `from sbi.utils import
     warn_if_zscoring_changes_data`, so its call resolves against npe_base's globals and patching
@@ -3404,7 +3404,7 @@ def test_checkpoint_shards_do_not_serialize_the_whole_accumulator():
     torch.save of a slice VIEW serialises the entire underlying storage -- measured 8,001,492 bytes
     for a 100-row view of a 200k-row buffer against 5,566 for the same rows cloned, and
     .contiguous() does NOT help because a row-slice of a contiguous 2-D tensor is already contiguous
-    and stays a view. At the production shape that is the difference between ~47 MB and ~4.35 GiB per
+    and stays a view. At the production shape that is the difference between ~50 MB and ~4.65 GiB per
     checkpoint, i.e. hundreds of GiB over a run, and it presents as "checkpointing is slow" rather
     than as a correctness failure, so nothing else would catch it.
     """

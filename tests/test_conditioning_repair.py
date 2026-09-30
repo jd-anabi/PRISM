@@ -3,9 +3,9 @@
 Pure torch, no simulation, no Qt -- seconds. Deliberately a separate suite in the spirit of
 test_chi_set_encoder: the invariants here are the kind whose violation is INVISIBLE. A contaminated
 standardiser trains perfectly happily and produces a posterior nobody can explain (that is exactly
-what `posterior_08232026` is), and a TSNPE round that proposes from the posterior instead of the
-truncated prior contracts its credible intervals with no new information and passes SBC while doing
-it. Neither shows up as a crash.
+what `posterior_08232026`, since deleted, was), and a TSNPE round that proposes from the posterior
+instead of the truncated prior contracts its credible intervals with no new information and passes
+SBC while doing it. Neither shows up as a crash.
 
 Every test below was checked to FAIL against the pre-change code.
 
@@ -129,7 +129,8 @@ def test_the_contaminated_channel_becomes_visible_to_the_network():
 def test_a_legacy_posterior_still_loads_and_evaluates():
     """A pre-2026-08-26 posterior unpickles with sum_mean/sum_std and no rank buffers. Without a
     branch on which buffers are present, EVERY existing artifact becomes unloadable -- including
-    posterior_08232026, which is the baseline every conditioning-repair gate is measured against."""
+    every posterior trained before 2026-08-26, such as the one the conditioning repair was first
+    measured on."""
     torch.manual_seed(3)
     n_sum = 42
     net = EmbeddedNet(input_dim=n_sum, output_dim=8, layer_dims=(16, 12),
@@ -393,8 +394,8 @@ def test_the_proposal_is_the_TRUNCATED_PRIOR_and_not_the_posterior():
 
 def test_the_region_is_built_over_the_leading_fisher_directions_only():
     """The eigenbasis rule: the region is cut in the rotation's leading directions, and flat ones are
-    left full width. k, delta_E and temp sit at or near prior, so cutting every axis would delete
-    support on noise -- and deleted support is a one-way ratchet."""
+    left full width. The trailing directions sit at or near the prior, so cutting every axis would
+    delete support on noise -- and deleted support is a one-way ratchet."""
     torch.manual_seed(8)
 
     class _P:

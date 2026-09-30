@@ -298,7 +298,8 @@ def make_sim_config(model: str, labels: list[str], state_dep_drift: bool, bounds
 
     ``hw`` is the DeviceConfig to run on; None detects one. The GUI passes nothing and keeps
     detect_device(); the command-line tool builds it from --device. It is not a cosmetic setting --
-    the device and dtype are part of the simulation identity (core/artifacts/identity.py:72-73).
+    the device and dtype are part of the simulation identity (``SimulationIdentity.from_cfg`` records
+    both).
     """
     if (bounds_file is None) == (bounds_dicts is None):
         raise Refusal("make_sim_config needs exactly one of bounds_file or bounds_dicts.")

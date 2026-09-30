@@ -39,8 +39,9 @@ class Simulator(ABC):
         self.freqs_per_batch = freqs_per_batch
         self.segs = segs
 
-        # Auto-enable the torch.compile path on CUDA when the model exposes
-        # `compiled_step`. Explicitly pass False to force the eager loop.
+        # Auto-enable the compiled path on CUDA when the model exposes `compiled_step`: sdeint's
+        # euler_compiled, the model's TorchScript step replayed from a CUDA graph where capture
+        # works. Explicitly pass False to force the eager loop.
         self._use_compile = use_compile
 
         # check if we are using the steady-state solution (all zeros for the 4th parameter)
@@ -160,11 +161,12 @@ class Simulator(ABC):
         ts = (t[0], t[-1])
 
         # Solving a system of SDEs. Constructed per call ON PURPOSE, despite this running once per
-        # time segment: Solver builds its three methods as closures in __init__, so resolving
-        # sdeint.Solver at CALL time is the seam that lets a caller swap the solver out (see
+        # time segment: Solver builds its two methods (euler and euler_compiled) as closures in
+        # __init__, so resolving sdeint.Solver at CALL time is the seam that lets a caller swap the
+        # solver out (see
         # tests/test_user_sbi.py::test_solver_failure_raises_instead_of_killing_the_process, which
         # patches the class to make every method raise). Hoisting this to a module-level singleton
-        # saves ~3 closure allocations per ~10-second segment -- far too little to be worth losing
+        # saves two closure allocations per ~10-second segment -- far too little to be worth losing
         # the seam over.
         solver = sdeint.Solver()
 

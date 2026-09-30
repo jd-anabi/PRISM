@@ -205,9 +205,11 @@ def build_experiment_obs_chi(
     wrong frequency decays like a sinc -- a mismatch of a fraction of 1/T_obs destroys the estimate.
     It also demanded exactly K recordings, with no substitution if one failed.
 
-    chi = response/drive is drive-amplitude-independent in the linear regime, so any linear physical
-    drive the experiment used works -- it is reported (F0_si) only so the lock-in divides by it to yield
-    the true physical susceptibility (x_scale/f_scale)*chi_nd, matching training.
+    chi = response/drive, but an active bundle does not respond linearly to the drive, so the |chi| a
+    recording gives depends on the amplitude too; training drove every probe at CHI_F0 times the force
+    scale. F0_si is the physical amplitude the experiment used: the lock-in divides by it to yield the
+    physical susceptibility (x_scale/f_scale)*chi_nd, matching training, and nothing checks it against
+    training's drive.
 
     :param X_spont: 1D passive recording (N_obs,), sampled at 1/cfg.dt_exp.
     :param X_forced_list: the forced recordings as ``(recording, drive_frequency_Hz)`` pairs -- every

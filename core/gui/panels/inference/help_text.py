@@ -15,10 +15,10 @@ HELP = {
             "simulator uses them to generate a synthetic observation.",
     "tobs": "Observation duration in seconds. Longer traces carry more information but cost more to "
             "simulate.",
-    "prior": "Load a saved prior (.pt), or choose “(from scratch)” to construct a new "
+    "prior": "Load a saved prior from the store, or choose “(from scratch)” to construct a new "
              "stability-screened parameter prior.",
-    "posterior": "Load a trained posterior (.pt), or “(from scratch)” to train a new one. Training "
-                 "from scratch needs a prior; loading an existing posterior does not.",
+    "posterior": "Load a trained posterior from the store, or “(from scratch)” to train a new one. "
+                 "Training from scratch needs a prior; loading an existing posterior does not.",
     "tsnpe_obs": "The observation to refine around. Written by the Infer tab at INFERENCE time -- "
                  "an amortized posterior has none when it is SAVED, which is why there is a picker "
                  "here rather than an automatic choice. The round refuses unless the stored "
@@ -27,9 +27,13 @@ HELP = {
                  "0.999 by default and deliberately generous: truncation permanently deletes prior "
                  "support, and no later round can recover it. A region that is too WIDE only costs "
                  "simulations.",
-    "tsnpe_dirs": "How many of the best-constrained Fisher directions to truncate; the rest keep "
-                  "full prior width. Truncating every axis would cut the FLAT directions (k, "
-                  "delta_E, temp sit at or near prior) on noise rather than on information.",
+    "tsnpe_dirs": "How many directions to truncate: the leading Fisher directions of a rotated "
+                  "posterior, best-constrained first, or the leading parameters, in box order, of an "
+                  "unrotated one; the rest keep full prior width. Truncating every axis would cut the "
+                  "least-constrained directions, which sit at or near the prior (in the last measured "
+                  "retrain n, temp and tau_c, which the recording sees only through noise, dominated "
+                  "them), on noise rather than on information. A direction whose t_scale loading is "
+                  "above a fixed threshold is skipped and the next one taken.",
     "tsnpe_new_run": "Tick this only after a round has been REFUSED for starting a new simulation "
                      "cache while a committed one sits exactly one setting away. The refusal names the "
                      "setting and both values: if you meant to continue that cache, change the setting "
@@ -133,8 +137,10 @@ HELP = {
                 "observation is a passive recording plus K single-tone driven recordings, and the "
                 "conditioning carries the χ(ω) curve. This is the only lever on the information "
                 "ceiling: a single passive trace sees only the PRODUCTS D·A_nd and (λ/k)·τ, whereas "
-                "the shape of χ(ω) separates κ, λ, x_scale and t_scale individually. Costs about "
-                "(K+1)/2× the training time. Training and inference must both use it.",
+                "the shape of χ(ω) adds handles on λ and f_scale (its phase) and on t_scale (its "
+                "magnitude), though it does not separate κ from x_scale. Each training row simulates "
+                "1 + K recordings where forced mode simulates 2, with K drawn per batch from 2 to the "
+                "probe slots. Training and inference must both use it.",
     "chi_k": "How many drive frequencies THIS observation is measured at, and therefore how many "
              "forced recordings an experiment must supply. More probes resolve the curve better but "
              "cost linearly more simulation. It does NOT have to match the posterior: the network "
@@ -170,8 +176,12 @@ HELP = {
                   "to the posterior's probe slots works, at any frequencies in band: the encoder is "
                   "permutation-invariant and carries each probe's frequency explicitly. Use "
                   "'Plan probes…' to see what is in band for this cell and how long each must be.",
-    "chi_f0_si": "The physical drive amplitude used for the forced recordings. χ cancels the amplitude "
-                 "in the linear regime, so this only sets the lock-in normalisation.",
+    "chi_f0_si": "The physical drive amplitude of the forced recordings, one value for every probe. "
+                 "χ is the response over this drive, but an oscillating bundle does not respond "
+                 "linearly to it, so the |χ| a recording gives depends on the amplitude too. Training "
+                 "drove every probe at config.CHI_F0 times the force scale, which models an "
+                 "experimenter who scales the drive to the cell; nothing checks the value typed here "
+                 "against it.",
     "bounds_source": "Pick a bounds file, or edit the numbers directly. Direct entry starts FROM the "
                      "selected file, because the parameter names and their order are fixed by the model "
                      "(simulators bind parameter columns by position) — only the numbers are yours to "

@@ -36,8 +36,9 @@ went stale as that file changed.)
 
 OUTPUT IS ``print``. The tool's framing prints are deliberately outside the no-print pin -- "The
 tool's framing prints (core/tool) stay prints and are deliberately outside this set"
-(tests/test_tool.py:1701) -- and a browse command's output IS framing: it is the result a script
-reads, not the pipeline's own voice, and it must never reach an artifact's log.txt.
+(test_no_print_call_remains_in_the_converted_modules) -- and a browse command's output IS framing:
+it is the result a script reads, not the pipeline's own voice, and it must never reach an
+artifact's log.txt.
 
 HEAVY IMPORTS INSIDE THE HANDLERS, per core/tool/stages.py's rule, so building the parser costs no
 torch import.

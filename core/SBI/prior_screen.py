@@ -35,14 +35,16 @@ def gen_prior(model: str, t: torch.Tensor, global_batch_size: int, local_batch_s
                  ``config.PRIOR_CLUSTER_MIN_SIZE``. Its label count IS the GMM's component count.
     :param min_samples: HDBSCAN's density conservatism; None reads
                  ``config.PRIOR_CLUSTER_MIN_SAMPLES``. Higher declares more points noise.
-    :return: the fitted ``torch.distributions.MixtureSameFamily``.
-    :raises ValueError: unknown model, or a user model that is Simulate-only.
+    :return: the fitted prior, a ``torch.distributions.TransformedDistribution`` that pushes the
+        latent GMM (a ``MixtureSameFamily``) through the box bijection into physical units
+        (``Prior.construct_prior``).
+    :raises ValueError: unknown model, or a user model inference cannot take.
     """
     from core import registry
     if registry.is_user_model(model):
         if not registry.is_sbi_user_model(model):
             raise ValueError(
-                f"'{model}' is a user-defined model that is Simulate-only (it has forcing or no free "
+                f"'{model}' is a user-defined model inference cannot take (it has forcing or no free "
                 "parameters). Parameter inference supports user models with no forcing and >=1 parameter.")
         from core.SBI.Priors.user_prior import UserPrior
         prior = UserPrior(registry.get(model), dtype, device)

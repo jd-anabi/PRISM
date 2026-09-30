@@ -317,7 +317,8 @@ def gen_chi_block(*args, k_pad: int = None, bounds: tuple = None,
     """
     # `bounds` goes to BOTH: the packer normalises u_hat by it, and adapt_placement compresses into
     # it. Forwarding to only one would let a probe be placed against one band and screened against
-    # another -- the same class of mismatch the sidecar band check exists to catch.
+    # another -- the same class of mismatch the load-time band check (``ArtifactStore.load_posterior``)
+    # exists to catch.
     chi_stack, u, logcyc, valid = _pipeline.gen_chi_raw(*args, bounds=bounds, **kwargs)
     block, mask = chi.pack_probe_block(chi_stack, u, logcyc, valid, k_pad=k_pad, bounds=bounds)
     B, K = chi_stack.shape

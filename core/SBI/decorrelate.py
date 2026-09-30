@@ -75,8 +75,10 @@ def build_latent_fisher_rotation(cfg, T=None, m: int = None, dz: float = None,
     Decorrelating rotation V (P, P), P = ND + rescale dims, from the latent Fisher, AVERAGED over
     n_points operating points (GT + prior draws). Averaging makes the (single, linear) rotation
     valid across the prior rather than only at GT — the multiplicative degeneracies curve away from
-    GT, so a GT-only V re-correlates off-GT (see the K=10 SBC redistribution finding). Pairs with
-    the log-space box (REPARAM_LOG_PARAMS), which linearizes those degeneracies in the first place.
+    GT, so a GT-only V re-correlates off-GT (see the K=10 SBC redistribution finding). It does not
+    lean on a log box to linearize those degeneracies: REPARAM_LOG_PARAMS is empty, so a built-in
+    model's box is all-linear (a log box over the degeneracy parameters was tried and over-mixed them;
+    see its comment in config.py).
 
     :param cfg: SimConfig (provides model, params, rescale, forcing, time grid, device).
     :param T: the box bijection (build_inferred_bijection(cfg)); rebuilt if None.

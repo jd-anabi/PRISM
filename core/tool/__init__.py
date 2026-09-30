@@ -1,8 +1,9 @@
 """``python -m core <subcommand>``: the flags-only command-line tool.
 
-One of the two front ends over the orchestrator stages and compositions; the other is the GUI. Every
-flag reaches its stage as a keyword argument, and this package reads no environment variable at all --
-the four PRISM does read are named in the epilog below and nowhere else.
+One of the two front ends over the orchestrator stages and compositions; the other is the GUI. No flag
+writes a config constant: each becomes a stage's keyword, an argument to the config or the store the
+tool builds, or, for smoke's --stages, the choice of which stages run -- and this package reads no
+environment variable at all; the four PRISM does read are named in the epilog below and nowhere else.
 
 ``main(argv) -> int`` never calls ``sys.exit``: the suite drives it in process, which is the only way
 to catch a handler that swaps the process default store and never puts it back.

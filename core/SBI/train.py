@@ -77,12 +77,13 @@ def _capped_zscore_check(max_rows: int = _ZSCORE_CHECK_MAX_ROWS):
 
     WHY IT HAS TO BE CAPPED AT ALL. append_simulations calls it UNCONDITIONALLY on the full training
     tensor (sbi/inference/trainers/npe/npe_base.py:189). At the chi retrain's size -- 5000 x 2048 =
-    10.24M rows x 114 columns float32, 4.35 GiB -- it runs ``torch.unique(x, dim=0)``, then builds
-    ``zx = (x - x.mean(0)) / x.std(0)``, then runs ``torch.unique`` AGAIN. That is >= 13 GiB, and
-    since unique over dim=0 is a lexicographic sort of 10.24M rows by 114 keys it is also minutes of
+    10.24M rows x 122 columns float32, 4.65 GiB -- it runs ``torch.unique(x, dim=0)``, then builds
+    ``zx = (x - x.mean(0)) / x.std(0)``, then runs ``torch.unique`` AGAIN. That is about 14 GiB, and
+    since unique over dim=0 is a lexicographic sort of 10.24M rows by 122 keys it is also minutes of
     single-threaded work. On a 16 GB card it is a guaranteed OOM at the END of a multi-day generation
-    run -- the worst possible moment, because nothing is checkpointed. It fires on ANY successful run,
-    chi or not, and no retry can help because it is one indivisible allocation.
+    run -- the worst possible moment: when checkpointing is on the simulation cache keeps the rows,
+    but the fit never starts. It fires on ANY successful run, chi or not, and no retry can help
+    because it is one indivisible allocation.
 
     WHY CAPPING RATHER THAN DISABLING. In chi mode the check is inapplicable: train_nn sets
     ``z_score_x="none"`` whenever the embedding owns its standardization, and sbi's own warning text
@@ -266,9 +267,9 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
         theta_finite_mask = torch.isfinite(thetas).all(dim=1)
         # WINSORISATION REPLACES THE OLD `abs(data) < 1e15` ROW FILTER, and
         # the change of instrument is the point. A row filter answers one bad channel by discarding
-        # that row's other 113 good values, and at a 1e15 threshold it caught 10 rows in 10.24M while
-        # A1_mean still reached -1.7e29 -- three decades of outlier sat under the threshold, and that
-        # is what dragged A1_mean's fitted std to 4.19e11 and made the channel invisible to the flow.
+        # every other value in that row, and at a 1e15 threshold it caught 10 rows in 10.24M while the
+        # outliers under the threshold survived: they are what dragged A1_mean's fitted std to
+        # 4.19e11 and made the channel invisible to the flow.
         # Clipping each COLUMN at its own 0.1/99.9 percentile removes the leverage without removing
         # any row, and it protects sbi's own z-scoring on the non-chi paths too, which is why it is
         # not conditioned on who owns the standardisation.
@@ -292,7 +293,7 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
             )
         # Only pay for the gather when it actually drops something. `data[valid_idx]` is a boolean
         # gather: it allocates a SECOND full-size tensor while the first is still live, which at the
-        # production shape is another 4.35 GiB and reinstates exactly the 8.7 GiB host peak
+        # production shape is another 4.65 GiB and reinstates exactly the 9.3 GiB host peak
         # gen_training_data's preallocated accumulators were introduced to remove. The mask is
         # all-true in practice (the box round-trip cannot produce a non-finite latent on torch 2.9;
         # SigmoidTransform._inverse clamps internally), so this is behaviour-identical and is what
@@ -314,18 +315,19 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
             assert embedding_net.standardization_fitted, "chi standardization silently did not fit"
 
         # data_device="cpu": sbi otherwise defaults it to the TRAINING device (npe_base.py:174-175)
-        # and moves the whole conditioning tensor onto the GPU -- 10.24M x 114 float32 = 4.35 GiB
-        # resident, an 8.7 GiB transient for the `x = x[is_valid_x]` filter, two (10.24M,) bool masks
-        # from handle_invalid_x, and later a ~3.9 GiB gather when it slices the training split. All of
+        # and moves the whole conditioning tensor onto the GPU -- 10.24M x 122 float32 = 4.65 GiB
+        # resident, a 9.3 GiB transient for the `x = x[is_valid_x]` filter, two (10.24M,) bool masks
+        # from handle_invalid_x, and later a ~4.2 GiB gather when it slices the training split. All of
         # that on the same card that has to hold the flow, and all of it AFTER a multi-day generation
-        # run that is not checkpointed. The data is ALREADY on the CPU here (gen_training_data appends
-        # .cpu() tensors), so this also silences validate_theta_and_x's "Moving x to the data_device"
-        # warning, which describes a 4.35 GiB copy nobody asked for.
+        # run (whose rows the simulation cache keeps when checkpointing is on). The data is ALREADY on
+        # the CPU here (gen_training_data appends .cpu() tensors), so this also silences
+        # validate_theta_and_x's "Moving x to the data_device" warning, which describes a 4.65 GiB
+        # copy nobody asked for.
         #
         # Training does not care: sbi's loop moves each minibatch to the training device itself, so a
-        # CPU-resident dataset costs one host-to-device copy of (training_batch_size, 114) float32 --
+        # CPU-resident dataset costs one host-to-device copy of (training_batch_size, 122) float32 --
         # tens of KB -- against a flow forward+backward that dominates it by orders of magnitude. It
-        # hands 4.35 GiB of VRAM back to the flow, which is a straight win.
+        # hands 4.65 GiB of VRAM back to the flow, which is a straight win.
         with _capped_zscore_check():
             infer.append_simulations(thetas, data, proposal=proposal, data_device="cpu")
         density_estimator = infer.train(

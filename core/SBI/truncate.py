@@ -112,7 +112,8 @@ class TruncationRegion:
     whenever the parent's prior has a GMM to fingerprint; ``build_posterior`` reuses the
     V, refuses through ``check_basis`` to apply the box in any other coordinate, and refuses a
     supplied prior whose fingerprint verifiably differs. They are optional here only so a
-    hand-built region (tests, legacy sidecars) still constructs.
+    hand-built region (tests, records written before the basis travelled with the region) still
+    constructs.
     """
 
     def __init__(self, dims, lo, hi, *, level: float = DEFAULT_HPD, n_latent: int | None = None,
@@ -143,7 +144,8 @@ class TruncationRegion:
         # The GMM fingerprint of the parent's TRAINING prior -- the base prior this box restricts.
         # check_basis compares V and the box but not the GMM, so without this a round started with
         # another prior loaded would train that prior restricted to a box nobody measured on it,
-        # with every basis check green. None for a hand-built region or a pre-2026-09-10 sidecar.
+        # with every basis check green. None for a hand-built region or a region recorded before
+        # 2026-09-10.
         self.prior_fingerprint = None if prior_fingerprint is None else str(prior_fingerprint)
         if self.V is not None:
             if self.V.dim() != 2 or self.V.shape[0] != self.V.shape[1]:
@@ -204,8 +206,8 @@ class TruncationRegion:
         """
         if self.probe is None or self.probe.numel() == 0:
             raise Refusal(
-                "This TruncationRegion carries no bijection probe (built by hand, or from a sidecar "
-                "written before the basis travelled with the region), so the coordinate its box refers "
+                "This TruncationRegion carries no bijection probe (built by hand, or recorded before "
+                "the basis travelled with the region), so the coordinate its box refers "
                 "to cannot be verified. Rebuild it with orchestrator.build_truncation_region.")
         V_train = _reparam.rotation_of(T_train)
         if (V_train is None) != (self.V is None):
@@ -286,8 +288,8 @@ class TruncationRegion:
     def to_dict(self) -> dict:
         return {"basis": "fisher-latent", "dims": list(self.dims), "level": self.level,
                 "lo": self.lo.clone(), "hi": self.hi.clone(), "n_latent": self.n_latent,
-                # The basis itself, so a sidecar can say which coordinate its box is in and a later
-                # round can reuse it. Absent from sidecars written before 2026-09-09 -> None.
+                # The basis itself, so the posterior's record can say which coordinate its box is in
+                # and a later round can reuse it. Absent from records written before 2026-09-09 -> None.
                 "V": None if self.V is None else self.V.clone(),
                 "probe": None if self.probe is None else self.probe.clone(),
                 "V_digest": rotation_digest(self.V),
@@ -371,7 +373,8 @@ def region_from_posterior(posterior_latent, x_obs: torch.Tensor, *,
     tail = (1.0 - float(level)) / 2.0
     q = torch.tensor([tail, 1.0 - tail], dtype=torch.float64)
     if t_scale_idx is None:
-        dims, excluded = list(range(k)), []     # latent axes are already sorted best-constrained first
+        # the first k latent axes: best-constrained first in a rotated latent, box order in an unrotated one
+        dims, excluded = list(range(k)), []
     else:
         i_t = int(t_scale_idx)
         if not 0 <= i_t < p:

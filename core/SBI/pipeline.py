@@ -42,12 +42,13 @@ INIT_SHAPES: dict = {"bp":        (2, 3),
 
 def sim_class(model: str):
     """The Simulator class for a BUILT-IN model name, with a clear error for anything else (a user
-    model leaking past the Simulate-only gate would otherwise surface as a bare KeyError)."""
+    model leaking past the routing that sends it to registry.make_user_simulator would otherwise
+    surface as a bare KeyError)."""
     cls = VALID_SIMS.get(model.lower())
     if cls is None:
         raise ValueError(
             f"No simulator is registered for model '{model}' (valid: {list(VALID_SIMS)}). "
-            "User-defined models are Simulate-only in this version.")
+            "User-defined models are simulated through registry.make_user_simulator, not this table.")
     return cls
 
 # Fraction of the available pool one simulation batch may plan to use. Higher than the FDT default
@@ -1075,7 +1076,8 @@ def _chi_rows(g: _BatchGeometry, nd, resc, init_rows, x_scale, x_offset, _patho,
     chi_max_cycles, chi_k_fixed, chi_gen = g.chi_max_cycles, g.chi_k_fixed, g.chi_gen
     b_mults, dfrac = g.b_mults, g.dfrac
     # chi(omega) mode: spontaneous run (Groups A-F + Omega_0) + K single-tone forced runs.
-    # Conditioning [S(41, Group G zeroed) | log(T) | chi(3K)] -- chi replaces the forcing block.
+    # Conditioning [S(49): the 41 features, Group G zeroed, and the 8 valid flags | log(T) | the
+    # padded probe block, CHI_ELEM_W x chi_k_pad] -- chi replaces the forcing block.
     force0 = _forcing.zero_force(n, n_force_ch, t_fine.shape[0], dtype, device)
     x_nd_spont_fine = gen_obs(
         model=model, params=nd, t=t_fine, inits=init_rows,
@@ -1089,8 +1091,9 @@ def _chi_rows(g: _BatchGeometry, nd, resc, init_rows, x_scale, x_offset, _patho,
     count_pathological(x_spont_dim, _patho)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
+        # (run, 49): the 41 features, G zeroed, then the 8 valid flags
         training_stats = gen_stats(x_spont_dim.cpu(), None, dt_exp, None, None, None,
-                                   device=device, spontaneous_only=True)   # (run, 41), G zeroed
+                                   device=device, spontaneous_only=True)
     chi_block, chi_mask = gen_chi_block(
         # init_rows, NOT inits: this one is passed POSITIONALLY, which is exactly how
         # it survived the row-slicing sweep -- gen_obs' calls name it `inits=` and were
@@ -1438,15 +1441,15 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
     # PREALLOCATED accumulators, not lists. Both are sized on the first batch, because the
     # conditioning width W is a function of the observation mode and is not known here.
     #
-    # The lists they replace held ~4.35 GiB of finished rows at the production shape (5000 x 2048 x
-    # 114) and then `torch.cat` allocated another 4.35 GiB for the result while the list was still
-    # referenced -- an 8.7 GiB host peak at the very END of a multi-day run, which is the worst
+    # The lists they replace held ~4.65 GiB of finished rows at the production shape (5000 x 2048 x
+    # 122) and then `torch.cat` allocated another 4.65 GiB for the result while the list was still
+    # referenced -- a 9.3 GiB host peak at the very END of a multi-day run, which is the worst
     # possible moment to discover it. Filling a buffer in place also makes a checkpoint shard a
     # contiguous slice copy and a resume a slice fill rather than a list rebuild, which is what the
     # training checkpoint needs; its whole memory story rests on this.
     #
     # torch.empty, not zeros: every row is written before it is read, and only [0, batches_done) is
-    # ever serialised or returned, so zeroing 4.35 GiB would be pure cost.
+    # ever serialised or returned, so zeroing 4.65 GiB would be pure cost.
     x_buf = None
     th_buf = None
 
@@ -1571,14 +1574,16 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                     f"write; free space now.", stacklevel=2)
 
     if _ck_dir is not None:
-        # Before the first commit, on BOTH paths: the state this run starts from commits _start_k
-        # batches (what a resume read, or the zero create() just wrote), so any shard ending past it is
-        # an orphan of a save that stopped before its commit. This run's first commit starts at
-        # _start_k as well, and if the orphan came from a cancel's save it ends elsewhere and has
-        # another name; left among the shards, every load after batches_done passed its end would read
-        # both and refuse the cache. So they are moved aside -- never deleted -- EXCEPT when a resume
-        # read its count from state.prev.pt: that count is a generation old, a read failure of
-        # state.pt may be transient, and state.pt may commit exactly those shards.
+        # Before the first commit, on BOTH paths. On a resume the state read commits _start_k batches,
+        # so a shard ending past it was written by a save that stopped before its commit. On a fresh
+        # start create() has just written a zero state, and any shard already here ends past it: an
+        # orphan of a stopped save or, when neither state file could be read or state.pt could not be
+        # read and state.prev.pt said 0, rows the replaced state.pt had committed. This run's first
+        # commit starts at _start_k, and a shard past it that came from a cancel's save ends elsewhere
+        # and has another name; left among the shards, every load after batches_done passed its end
+        # would read both and refuse the cache. So they are moved aside -- never deleted -- EXCEPT
+        # when a resume read its count from state.prev.pt: that count is a generation old, a read
+        # failure of state.pt may be transient, and state.pt may commit exactly those shards.
         if _ck_resumed is not None and _state.get("_state_file") == "state.prev.pt":
             _left = _tc.uncommitted_shards(_ck_dir, _start_k)
             if _left:

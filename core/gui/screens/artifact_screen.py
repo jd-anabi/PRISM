@@ -380,10 +380,10 @@ class ArtifactScreen(QWidget):
         store = self._resolved_store()
         m = store.get(s.kind, s.id)
         parts = [render_manifest(m)]
-        # NOT for the simulation kind: Manifest.dir_name is the bare digest for a cache
-        # (manifest.py:73-77) and write_simulation_manifest writes into whatever directory it is
-        # handed, so a cache folder named anything else is legitimate -- the note would fire on every
-        # hand-placed cache and report a half-failed rename that never happened.
+        # NOT for the simulation kind: Manifest.dir_name is the bare digest for a cache and
+        # write_simulation_manifest writes into whatever directory it is handed, so a cache folder
+        # named anything else is legitimate -- the note would fire on every hand-placed cache and
+        # report a half-failed rename that never happened.
         if s.kind != "simulation" and s.dir_name != m.dir_name:
             parts += ["", _stale_folder_note(s.dir_name, m.dir_name)]
         text, truncated = store.read_log(s.kind, s.id, max_bytes=LOG_MAX_BYTES)

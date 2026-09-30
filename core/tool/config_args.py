@@ -28,8 +28,8 @@ class UsageError(Refusal):
 
 #: ``--bounds``'s help on every subcommand that states nothing of its own.
 BOUNDS_HELP = ("bounds file: which parameters are inferred, in what order, and the box. It must be the one "
-               "any posterior this command loads was trained with -- the store refuses a mismatch in "
-               "model, order, box or mode.")
+               "any posterior this command loads was trained with -- the store refuses a posterior whose "
+               "model, parameter order, box or mode differs from this file's, among other checks.")
 
 
 def add_config_flags(p, *, chi: bool = True, bounds_help: "str | None" = None) -> None:
@@ -99,7 +99,9 @@ def add_training_flags(p, *, fisher: bool) -> None:
     p.add_argument("--stop-after-epochs", type=int, default=None, metavar="N",
                    help="early-stopping patience, in epochs" + default_clause("stop_after_epochs"))
     p.add_argument("--max-epochs", dest="max_num_epochs", type=int, default=None, metavar="N",
-                   help="hard ceiling on training epochs" + default_clause("max_num_epochs"))
+                   help="epoch ceiling handed to sbi, whose loop counts epochs from 0 and so trains at "
+                        "most N+1; a run the ceiling stops keeps the last epoch's network, not the best, "
+                        "unless the patience ran out on that epoch too" + default_clause("max_num_epochs"))
     if fisher:
         p.add_argument("--fisher-m", type=int, default=None, metavar="N",
                        help="ensemble per latent perturbation for the Fisher rotation"

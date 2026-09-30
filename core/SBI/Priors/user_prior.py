@@ -17,8 +17,10 @@ Differences from the built-ins, by design:
     (spontaneous dynamics; see registry.is_sbi_user_model).
   * The dead ``BoxUniform`` list and the (never-taken) ``steady`` branch from the built-ins are dropped.
 
-``_local_map`` overrides the base's @staticmethod as an INSTANCE method so it can read ``self.spec``;
-any override satisfies the abstractmethod, and ``construct_prior`` calls it as ``self._local_map(...)``.
+``_local_map`` implements the base's abstract INSTANCE method, reading ``self.spec`` and
+``self.sweep_device``; ``construct_prior`` calls it as ``self._local_map(...)``. Unlike the built-ins,
+which return ``sorted(accepted_params)``, it returns its accepted set unsorted, in the set's own order,
+which is the order the GMM's k-means init then sees.
 """
 from collections import deque
 

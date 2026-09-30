@@ -315,7 +315,7 @@ def fisher_eigenbasis(F: torch.Tensor, with_values: bool = False):
     scale is the whole question: a spread of 3x across the 13 directions means the experiment measures
     everything tolerably, while 1e6 means it measures four things and the rest are prior. Recovering
     them after the fact costs a full Fisher re-run (the dominant pre-training cost), so they are now
-    carried out of here and into the posterior's sidecar.
+    carried out of here and into the posterior's manifest (``body.transform.fisher_eigenvalues``).
     """
     F = 0.5 * (F + F.transpose(-1, -2))
     evals, evecs = torch.linalg.eigh(F)
@@ -385,13 +385,14 @@ def posterior_mode(posterior_latent, sidecar: dict | None = None) -> tuple[str, 
     forcing_dim, K or None).
 
     Three tiers, in strict precedence:
-      1. the sidecar's recorded ``mode``/``forcing_dim`` — authoritative, written since this change;
+      1. a caller-supplied record of ``mode``/``forcing_dim`` — authoritative; the store's load passes
+         none, because it compares the mode the manifest records itself;
       2. the trained network itself — our EmbeddedNet stores input_dim/forcing_dim as attributes;
       3. arithmetic on ``condition_shape`` minus the summary width — last resort, and it WARNS,
          because it silently goes wrong the day a 42nd summary feature is added.
 
-    Tier 2/3 decoding is ambiguous in principle (a hypothetical 6-parameter drive is indistinguishable
-    from chi at K=2), which is exactly why tier 1 exists and why the sidecar is now always written.
+    Tier 2/3 decoding is ambiguous in principle (width alone cannot identify a layout), which is why
+    tier 1 exists and why every posterior's manifest records its mode.
     Built-in drives declare at most 5 forcing parameters, so the threshold below is safe for them.
     """
     # The third slot is K_PAD (the network's slot capacity), NOT the probe count -- a chi posterior
@@ -415,33 +416,33 @@ def posterior_mode(posterior_latent, sidecar: dict | None = None) -> tuple[str, 
     if fdim is None:
         cond = getattr(est, "condition_shape", None)
         if cond is None or len(cond) == 0:
-            raise ValueError("Cannot determine this posterior's observation mode: it has no sidecar, "
-                             "no embedding net carrying forcing_dim, and no condition_shape.")
+            raise ValueError("Cannot determine this posterior's observation mode: none is recorded, no "
+                             "embedding net carries forcing_dim, and it has no condition_shape.")
         from core.SBI.statistics import FEATURE_LABELS
         # DELIBERATELY the LEGACY 41+1 width, not statistics.SUMMARY_WIDTH. Tier 3 is reached
-        # only by an artifact with no sidecar AND no embedded forcing_dim, i.e. a pre-reparam
+        # only by an artifact with no recorded mode AND no embedded forcing_dim, i.e. a pre-reparam
         # posterior -- and every one of those was trained before the valid-flag block widened
         # the summary block to 49. Using the current width here would mis-decode exactly the
         # artifacts this branch exists for. (The docstring above anticipated this day.)
         fdim = int(cond[-1]) - (len(FEATURE_LABELS) + 1)
         warnings.warn(
-            f"Posterior has no sidecar and no embedded forcing_dim; inferring forcing_dim={fdim} "
+            f"Posterior has no recorded mode and no embedded forcing_dim; inferring forcing_dim={fdim} "
             f"arithmetically from condition_shape={tuple(cond)}. This breaks silently if the summary "
-            f"feature count ever changes -- retrain or hand-write a sidecar.", stacklevel=2)
+            f"feature count ever changes -- retrain it.", stacklevel=2)
     fdim = int(fdim)
     if fdim == 0:
         return "spontaneous", 0, None
     # NO chi branch here. The old `fdim >= 6 and fdim % 3 == 0 -> chi` numerology is gone: it decoded
     # any 6-parameter drive as chi, and under the set layout width cannot identify a layout anyway
     # (6*K_PAD at K_PAD=5 is exactly 30, the same as the retired 3*K at K=10). A chi posterior is
-    # identified by its sidecar's chi_layout or by the net's own attributes, both handled above; a
+    # identified by a recorded mode or by the net's own chi_layout attribute, both handled above; a
     # width this large with neither is unidentifiable and must say so rather than guess.
     if fdim > 8:
         raise ValueError(
             f"Cannot determine this posterior's observation mode: forcing_dim={fdim} is too wide for "
-            f"any built-in drive (at most 5 parameters), and it carries neither a chi_layout sidecar "
-            f"key nor a chi-aware embedding net. It is most likely a chi posterior from a build that "
-            f"predates layout {config.CHI_LAYOUT}; retrain it.")
+            f"any built-in drive (at most 5 parameters), and it carries neither a recorded mode nor "
+            f"an embedding net that declares its chi_layout. It is most likely a chi posterior from a "
+            f"build that predates layout {config.CHI_LAYOUT}; retrain it.")
     return "forced", fdim, None
 
 
