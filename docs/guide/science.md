@@ -836,8 +836,8 @@ and the test that pins it. The reasoning:
   choosing the best fits applies a second, undeclared likelihood, with the discrepancy measure as a
   hidden setting.
 - **The generous-region rule** (a 99.9 % region, with the truth-outside rate watched): a region too
-  wide costs only simulations, one too tight deletes support for good, and the truths outside are
-  the honest failure rate.
+  wide costs only simulations, one too tight deletes support for good, and how often the truth falls
+  outside is the honest failure rate.
 - **The cost-on-screen rule:** a round is a full simulation campaign, so its budget is on screen
   before it starts.
 - **The region-carries-its-basis rule** (the child reuses the parent's rotation, never recomputes it,
@@ -873,8 +873,9 @@ warning, never a refusal (`core.orchestrator.tsnpe_round`).
 from a cell reports, for every truncated direction, where the truth lies against the interval
 (`core.SBI.truncate.TruncationRegion.containment`), and records the answers in the new posterior's
 `training.truth_containment` ([tsnpe](command-line.md#tsnpe) lists what the round records and warns).
-Each round's answer is kept, and a rate across rounds is not. The round also prints how many of its recorded training targets lie inside the
-region after the t_scale override, beside the fraction the rejection sampler accepted before it.
+Each round's answer is kept, and a rate across rounds is not. The round also prints how many of its
+recorded training targets lie inside the region after the t_scale override, beside the fraction the
+rejection sampler accepted before it.
 
 **The −log P(A) inflation is printed, not corrected.** A narrowed posterior's informativeness is
 still measured against the full prior, so its joint KL is inflated by −log P(A) nats. The
@@ -922,9 +923,9 @@ other and plateau well before the best epoch, the validation loss no longer desc
 its best, say the wide marginals are an identifiability limit, not under-fitting
 (`core.Helpers.visualizers.plot_training_loss`), as in the August 2026 retrain. The epochs between
 the best one and the stop show no improvement by construction, so they are not the plateau to read.
-Not for every
-axis either: for t_scale, T_obs and the probe design, whose effective sample size is probably the
-batch count, a plateau may say nothing about convergence ([Open questions](#open-questions)).
+Not for every axis either: for t_scale, T_obs and the probe design, whose effective sample size is
+probably the batch count, a plateau may say nothing about convergence
+([Open questions](#open-questions)).
 
 ## The August 2026 retrain
 
@@ -933,8 +934,8 @@ rows, 10.24 million simulations, finished on 23 August 2026. It ran on the maste
 inferred, at the chi band, drive and lock-in ceiling that [Chi probe design](#chi-probe-design)
 settles, with six probes supplied into twelve slots. Its artifacts no longer exist, so none of this
 can be re-run; the numbers stand as a record. A second run, 10,000 × 2,048 on the master box with the
-repaired conditioning, completed on 29 August 2026 and was never characterised: no calibration or
-informativeness exists for the repaired features, and its artifacts are gone too.
+repaired conditioning, completed on 29 August 2026 and was never characterised: no full-size
+calibration or informativeness exists for it, and its artifacts are gone too.
 
 - **Calibration was excellent.** The SBC rank histograms were flat on all 13 parameters, t_scale's
   on fewer independent values than the rest
@@ -954,9 +955,9 @@ informativeness exists for the repaired features, and its artifacts are gone too
     ([Identifiability limits](#identifiability-limits)).
   - The eigenvalues were not stored, so this is an ordering and a set of loadings without a scale:
     whether the best direction is ten or a million times better constrained than the worst cannot be
-    recovered. A rotated posterior now records them in its own record, and a simulation cache keeps
-    them in its header under `"fisher_eigenvalues"`, so a resume carries them. One resumed from an
-    older cache, or a narrowing round whose parent has none, records them as unknown.
+    recovered. A rotated posterior now records them in its own record
+    ([identifiability rotation](command-line.md#identifiability-rotation) says when they go
+    unrecorded).
 - **Eigenvectors are columns.** V holds one direction per column (w = z @ V), and
   `core.SBI.reparam.rotation_of` is the one place that convention is decoded. This run's rotation was
   first read from a copy saved transposed, which has the same shape and is just as orthogonal, so
@@ -1028,11 +1029,11 @@ handles in the degeneracy map; a change to the feature set forces a full re-simu
 
 **The strata test.** Every row of a training batch shares one t_scale, T_obs and probe set, so along
 those axes the effective sample size is probably the batch count (5,000 at the August 2026 retrain,
-10,000 at the next), not the row count, which is 2,048 times larger. If so, a clean loss plateau says
-nothing about whether those axes converged. The test: train 5,000 × 2,048 and 10,000 × 1,024, the
-same 10.24 million rows over 5,000 and over 10,000 operating points, and compare t_scale's rank test
-and posterior width ([The solver's physics check](#the-solvers-physics-check) has count against
-width). With today's tool each arm keys its own simulation cache, so the test needs its own
+10,000 at the planned retrain), not the row count, which is 2,048 times larger. If so, a clean loss
+plateau says nothing about whether those axes converged. The test: train 5,000 × 2,048 and
+10,000 × 1,024, the same 10.24 million rows over 5,000 and over 10,000 operating points, and compare
+t_scale's rank test and posterior width ([The solver's physics check](#the-solvers-physics-check)
+has count against width). With today's tool each arm keys its own simulation cache, so the test needs its own
 simulation, although both arms are subsets of a 10,000 × 2,048 cache's rows: a way to train on part
 of a cache would run it without simulating.
 
@@ -1043,8 +1044,9 @@ study.
   ([Chi probe design](#chi-probe-design)), because that wall belongs to a steady-state lock-in.
 - For the parameters that shape the model's nonlinearity (delta_E and beta in the channels' open
   probability, and f_max and s in the motor force and its calcium feedback, which set where on it the
-  bundle sits), two-tone intermodulation at 2ω₁ − ω₂, with both drives inside the sub-resonance band. The measured frequency is not driven, which avoids
-  entrainment, and the product's amplitude reads the nonlinearity directly.
+  bundle sits), two-tone intermodulation at 2ω₁ − ω₂, with both drives inside the sub-resonance
+  band. The measured frequency is not driven, which avoids entrainment, and the product's amplitude
+  reads the nonlinearity directly.
 
 Nothing in the tool measures either. Settling each means simulating the protocol and reading its
 handles in the degeneracy map.
@@ -1148,10 +1150,12 @@ allows one probe, while the window's Config tab refuses fewer than two, and trai
 two per batch (`core.config.CHI_K_MIN_TRAIN`). Training rows do end with a single live probe, since
 half of each batch's rows keep only a random number of their live probes
 (`core.SBI.chi_probes._subset_probe_rows`), and a one-probe simulated observation puts its probe at
-the band's low edge. Whether such an observation is in distribution is not established;
-`sbc --chi-k-fixed 1`, the rank test on one-probe calibration sets, would say
-([sbc](command-line.md#sbc)). If it is not, a floor of 2 in the configuration's check would close
-it; the bench path, which rightly takes a single recording, never re-runs that check.
+the band's low edge. Whether such an observation is in distribution is not established.
+`sbc --chi-k-fixed 1`, the rank test on one-probe calibration sets ([sbc](command-line.md#sbc)),
+would say whether one-probe rows are calibrated at all, but only in part: a calibration set jitters
+its single probe across the band, and the low edge is one placement among many. If such an
+observation is not in distribution, a floor of 2 in the configuration's check would close it; the
+bench path, which rightly takes a single recording, never re-runs that check.
 
 **Truncating every direction.** A round may ask for as many directions as the posterior's latent
 width, and is refused only above that. It then truncates every direction the t_scale rule allows,
