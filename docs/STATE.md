@@ -1,6 +1,33 @@
 # PRISM — state
 
-**Last updated:** 2026-09-30. **Piece 6, "the reference cleanup, retrain readiness, the probe checks and the
+**Last updated:** 2026-09-30 (evening). **The three pre-retrain decisions are SETTLED (owner, 2026-09-30, in chat),
+and the prior's fill is fixed** — commits `2cd8c38`, `0987395`, `6b63d16`, `b2d73c2`, `64109a9` on the local `main`,
+NOT pushed (the owner pushes). (a) **The stop point** is now a **budget: four weeks of the card (672 h) for the retrain
+and its certification round** — about twice the fit plus ~95 h, so each fit ≤ ~290 h: stop above ~16 s per epoch in the
+timing (which now runs ten epochs and also times the 128 × 8 flow; report a 128 × 8 reading above ~7 s), report the
+programme total before the run, and in flight stop above ~2.2 h per full-size epoch or ~290 h of fitting. The 740 h
+figure rested on parameter scaling; the August fit's ~64 ms per 512-row step says a step is overhead-bound, so the likely
+fit is ~110–145 h (upper bound ~340 h; unmeasured on the card). (b) **The masked-probe checks**: pre-flight `probes mask`
+at `--num-runs 100`, pass within 37 ± 8, owner decides within ± 12, stop beyond; gate 3 is read when generation ends,
+against that audit's reading P: |total − P| ≤ 3 go on, ≤ 5 look closer, > 5 stop the fit (the cache is complete). 37 %
+itself is uncertain by ~3 points (smoke-size runs sharing a seed and the fixed probe layout); tier 1 cannot move the
+fraction (the drive is fixed non-dimensionally, so the force scale cancels). The smoke gate keeps ± 12. (c) **The prior
+screen**: the owner chose to fix the fill in code (not "sweep only", not "count first"). The research found a larger flaw
+than the two gaps: the FIFO walk gave each popped point a whole batch of 1,024 steps, so at the defaults only the first
+~72 census points were ever walked and ~20–25 % of the prior's weight sat in ~72 tight clumps (three archived summer
+priors: 77–78 components; a CPU emulation of the old walk: 75 components, 26 % tight weight, 34.5 % of draws near the
+clumps). `0987395` + `b2d73c2`: a shared `Prior._walk` draws parents at random from every kept point, steps each once,
+keeps only in-box finite steps, stops at `n_max` or a round that keeps nothing, returns the set sorted (a user model's
+too), and logs `[prior] stability sweep: …` and `[prior] fill: …`; the census now integrates the full stability duration
+(`t_global_scale` removed). Emulated at production size: 1 or 2 broad components, no tight weight, near-uniform over
+the box; HDBSCAN often logs `No clusters found. Defaulting to 1 cluster` (a warning, expected on the master and tier-1
+boxes). (d) **The solver question** (owner, same chat): the compiled Euler step ignores `state_dep_drift` by design —
+each model's compiled step carries its own noise law; `2cd8c38` pins the registry flag to each compiled step on the CPU
+(Nadrowski and Hopf, live noise) and corrects `euler_compiled`'s docstring; the misleading name ("drift" for noise) is
+on the open list. Guide pages re-stamp only when re-checked against new code (owner, 2026-09-30): `science`, `window`,
+`command-line`, `architecture`, `retrain`, `testing` now read `b2d73c2`; the rest keep `30ff8a3`. The gate table has the
+fast gate; the card smoke gate on this code is pre-flight step 1 of the retrain.
+**Piece 6, "the reference cleanup, retrain readiness, the probe checks and the
 documents", is DONE**: commits `779c73c`..`067eddc` (115, counted by `git log --oneline 779c73c^..067eddc`) plus the
 closing documents commits (`de52b79` and the closing check's fixes after it), on the local `main` branch, PUSHED —
 `origin/main` is `f89088b` (seen 2026-09-30). Its design is `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
@@ -29,17 +56,22 @@ reading paths, a verifier each) found 2 Critical and 39 Important page errors an
 except the runbook's stop point, which waits for the owner (the recordings page's choice of stand-in values is written
 neutrally for the owner to settle), with the checklist closed (103 found, 19 appended, 35 dropped). The final fast
 gate, the slow set and the card judgement are in the gate table below.
-**Next, in order:** rows F1–F5 passed and the owner pushed (both 2026-09-30). (1) Before the retrain, the owner
-settles three items on the open list, answered in the next session's chat: the runbook's stop point (about 740 hours); the
-masked-probe band the retrain's gates read (±12 points was derived for a four-batch smoke run); and whether the prior
-screen's two gaps (the census screens only the first half of the stability duration; the flood-fill walk has no box
-check) are fixed before the retrain prior is built. (2) The retrain ("Owed" item 8) from `docs/guide/retrain.md`. A
-recommendation for the owner, not yet settled: its pre-flight step 1 owes run 4's resume as well (the shard set-aside
-entered the resume path after the 29 September card run, and the 30 September re-run covered runs 1, 2 and 2b only),
-not the diagnostic card (`core/diagnostics` changed only in a docstring since); and it runs on the installed sbi
-0.25.0 unless the owner syncs to the pinned 0.26.1 first, after which the two loop behaviours on the open list are
-re-read before the epoch timing. The load-check audit and the rest of "Owed" item 7 can follow the retrain; do the
-audit before any later change to `core/config.py` or to the features.
+**Next, in order:** (1) ~~The three pre-retrain decisions~~ — settled 2026-09-30 (the paragraph above). (2) The
+retrain ("Owed" item 8) from `docs/guide/retrain.md`, the owner starting and owning the long runs. **Both readings
+below were SETTLED by the owner on 2026-09-30:** the card check is the five smoke runs + run 4's resume + the two
+cheap first readings of the new prior (its `[prior]` lines and component count, and `probes mask --prior
+smoke_prior`); and the retrain runs on **sbi 0.26.1**: sync first (a dry run, then the install), the fast gate and
+the slow set on it, re-read the two loop behaviours (the `--max-epochs` count, which network a ceiling-stopped run
+keeps) and correct the pages and help if either changed, then the card check on 0.26.1; fall back to 0.25.0 if it
+breaks more than trivially. The two readings, as they were put: pre-flight step 1 owes the full card smoke gate on the new prior code (it moves tensors)
+AND run 4's resume (recommended: the shard set-aside entered the resume path after the 29 September card run, and the
+30 September re-run covered runs 1, 2 and 2b only), plus — recommended, cheap — `probes mask --prior smoke_prior` and a
+look at `smoke_prior`'s component count and `[prior]` lines, the first card readings of the new construction; not the
+diagnostic card (`core/diagnostics` unchanged since the last card run but a docstring). And which sbi it runs on: the
+installed 0.25.0, or the pinned 0.26.1 after a sync, after which the two loop behaviours on the open list are re-read
+before the epoch timing. After the card run: re-record testing.md's prior timings and the "about a minute and a half"
+in `README.md` and `docs/guide/command-line.md`. The load-check audit and the rest of "Owed" item 7 can follow the
+retrain; do the audit before any later change to `core/config.py` or to the features.
 **Rows F1–F5 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen,
 reported 2026-09-30: all five pass** (the gate table below).
 **Piece 5, "the secondary analyses", is DONE**: commits
@@ -589,10 +621,12 @@ Piece 3
        draws, `CHI_K_MIN_TRAIN`, so a retrain after changing either reuses a cache simulated under the
        old value. Settle this before any post-retrain change to `core/config.py` or to the features
        (`core/artifacts/store.py`, `core/artifacts/identity.py`).
-     - *From piece 6 — science, for the owner before the retrain.* The prior's stability screen: the
+     - ~~*From piece 6 — science, for the owner before the retrain.* The prior's stability screen: the
        census integrates only the first half of the stability duration, and its accepted points seed the
        flood-fill without a second screen; the flood-fill's walk has no box check, so walked points
-       outside the box are fitted clamped near ±13.8 in the latent coordinate. How many points each
+       outside the box are fitted clamped near ±13.8 in the latent coordinate.~~ — **SETTLED 2026-09-30: the owner
+       chose to fix the fill in code; done in `0987395` + `b2d73c2` (full-length census, an even walk inside the box;
+       the clumps it also removed are in the paragraph at the top).** The struck text, for the record: How many points each
        affects is unmeasured, and the prior's record keeps no census share, so a count needs a throwaway
        script over a full-size tier-1 prior (scratch under Temp). `docs/guide/science.md`'s open
        question "The stability screen's two gaps" gives the census's options (screen it over the full
@@ -600,7 +634,7 @@ Piece 3
        would be a box check. Count first to learn whether either gap matters
        (`core/SBI/prior_screen.py`, `core/SBI/Priors/prior.py`, `core/SBI/reparam.py`).
      - *From piece 6.* A prior rebuild is not reproducible: `prior` seeds nothing (the Sobol scramble,
-       the numpy start points and the flood-fill walk draw from unseeded streams); only the mixture's
+       the numpy start points and the walk's parent picks and steps draw from unseeded streams); only the mixture's
        random state is fixed. A seed flag would make rebuilds repeatable — and would then break the
        runbook's new-cache route, which relies on a rebuilt prior's new fingerprint
        (`core/SBI/prior_screen.py`, `docs/guide/retrain.md`).
@@ -649,13 +683,17 @@ Piece 3
        out. Re-read both in `sbi/inference/trainers/npe/npe_base.py` and `trainers/base.py` when the
        pinned 0.26.1 is installed (the sbi pin item above), and correct the pages and the help if
        either changed (`core/SBI/train.py`, `core/tool/config_args.py`).
-     - *From piece 6's documents review, for the owner before the retrain.* The runbook stops the
-       retrain when the projected fit exceeds about 740 hours, twice the 370 hours expected for the
+     - ~~*From piece 6's documents review, for the owner before the retrain.* The runbook stops the
+       retrain when the projected fit exceeds about 740 hours,~~ — **SETTLED 2026-09-30: a four-week budget for the
+       retrain and its certification round, a ~16 s-per-epoch stop and in-flight limits (`6b63d16`).** The struck
+       text, for the record: twice the 370 hours expected for the
        256 × 10 flow; the plan had set twice about 92 hours (the 128 × 8 fit scaled to the retrain's
        rows), which would stop a normally costed run, and asked the owner to confirm. Confirm 740 hours
        or choose another before pre-flight step 2 (`docs/guide/retrain.md`).
-     - *From piece 6's documents review — science, for the owner before the retrain.* The runbook judges
-       both the 12-batch `probes mask` audit and the 10,000-batch run total against 37 % ± 12 points.
+     - ~~*From piece 6's documents review — science, for the owner before the retrain.* The runbook judges
+       both the 12-batch `probes mask` audit and the 10,000-batch run total against 37 % ± 12 points.~~ — **SETTLED
+       2026-09-30: a 100-batch audit judged against 37 ± 8 / ± 12, and gate 3 read at the end of generation against the
+       audit at 3 / 5 points (`6b63d16`).** The struck text, for the record:
        That band was derived as about two standard deviations of a four-batch smoke run; by the same
        model, with the batch count as the effective sample size, the standard deviation is about 3.5
        points at 12 batches and about 0.12 at 10,000. A systematic shift of the tier-1 prior's masked
@@ -666,7 +704,8 @@ Piece 3
        reading. A change touches `docs/guide/retrain.md` pre-flight step 4 and gate 3, and perhaps
        `docs/guide/science.md`'s chi-probe section. Decide the band for each (`docs/guide/retrain.md`,
        `core/diagnostics/probes.py`).
-     - *From piece 6's documents review.* `UserPrior._local_map` returns its accepted set unsorted
+     - ~~*From piece 6's documents review.* `UserPrior._local_map` returns its accepted set unsorted~~ — closed by
+       `0987395`: every model's fill goes through the shared, sorted `Prior._walk`. The struck text:
        (`list(accepted_params)`) where the built-in models return `sorted(...)`, so a user model's prior
        fit is not reproducible from its accepted points although the mixture's random state is fixed;
        adding `sorted()` is a behaviour change (`core/SBI/Priors/user_prior.py`).
@@ -698,6 +737,24 @@ Piece 3
        amortized posterior's load records none). So an inference on a narrowed posterior's own observation,
        loaded with both flags, records an `other_observation` it did not use. Record only the flags used, or
        keep it (`core/artifacts/store.py`, `core/orchestrator.py`).
+     - *From the 2026-09-30 prior-fill review, parked.* (1) `construct_prior` still defaults `steady=True`, and
+       the built-ins' dead steady branch then crashes the walk on a width mismatch after the census is spent; no
+       caller takes it (`gen_prior` and the stand-ins pass `steady=False`); remove the branch or default it off
+       (`core/SBI/Priors/prior.py`, the three built-in priors). (2) A census that keeps nothing still ends in an
+       opaque broadcast error at the clamp, now after a full-length census; a clear refusal naming the box and the
+       stability duration would replace it (`core/SBI/Priors/prior.py`). (3) *Science.* The walk's step is 0.01 in
+       every parameter's own units (ranges 2 to 290 on the master box), so on the master and tier-1 boxes it adds
+       near-copies of census points; a range-relative step is a decision about the prior's shape (science.md's
+       open question "The walk's step"). (4) HDBSCAN's component count on the master and tier-1 boxes is now an
+       incidental 1 or 2 (all noise, or spurious micro-clusters), logged at warning when none; `allow_single_cluster`
+       would change the prior and is the owner's call. (5) The prior-stage card timing (92 s at the half-length
+       census) and "about a minute and a half" in `README.md` and `docs/guide/command-line.md` are re-recorded at
+       the next card run (the pages now say "a few minutes"). (6) `test_train_and_validate_without_a_loaded_cell`
+       seeds nothing, so its cost follows the random stream (87–248 s seen); seeding it would make the fast gate's
+       time steady (`tests/test_user_sbi.py`).
+     - *From the 2026-09-30 solver question.* `state_dep_drift` names the state dependence of the NOISE (the
+       diffusion), not the drift, and is carried by about 60 call sites and every record's configuration block;
+       a rename changes the record format and is the owner's call (`core/registry.py`, `core/Solvers/sdeint.py`).
    - *From piece 6's whole-code review (Task 25), parked with reasons* (the full list, with each reason and
      cost, is `review/synthesis.md` "Parked" in the gitignored ledger folder):
      - A tier-1 box whose units file declares no force token fails with a bare `ValueError` at the prior's
@@ -766,9 +823,8 @@ Piece 3
      ledger `.superpowers/sdd/2026-09-16-validation-and-logging/progress.md`.
    - The rest of piece 2's final review's 46 "left open" items are test-coverage gaps and cosmetics,
      each with its reason, in the gitignored `.superpowers/sdd/2026-09-12-one-flow/final-review.md`.
-8. **The retrain — NEXT.** From `docs/guide/retrain.md`, after step (1) of "Next, in order" at the
-   top: the owner's three decisions on the open list (the stop point, the masked-probe band, the prior
-   screen's two gaps). Rows F1–F5 passed and the owner pushed, 2026-09-30.
+8. **The retrain — NEXT.** From `docs/guide/retrain.md`. The owner's three decisions are settled
+   (2026-09-30, the paragraph at the top); the two readings in "Next, in order" (2) come first.
 
 ## Clean break — EXECUTED 2026-09-11 (design spec §9 / plan Task 14)
 
@@ -860,6 +916,7 @@ Piece 3
 | slow set of record, `pytest -m slow -q --durations=5` (piece 6) | 2026-09-30 at `067eddc`: **5 passed**, 1173 deselected, 153 warnings, **1 h 15 min 27 s**, exit 0. `test_chi_mode_full_sbi_pipeline` 2618 s — OVER piece 5's 1397 s: its body is unchanged but for a comment, the other slow tests ran faster than Task 25's loaded reading and the card run's GPU stages matched piece 4's, and this test has varied 1181–2618 s across pieces, so it is recorded on the open list rather than chased; `test_smoke_runs_every_stage_on_the_tier1_box` 828 s; `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 619 s; `test_fdt_and_crossval_run_at_tiny_size` 452 s; `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` 7 s. Tree clean afterwards |
 | GPU card run, piece 6 — stands | `git diff --name-only 16e5bae..067eddc -- core conftest.py` lists 41 files, judged: every change is a comment, docstring, help string or message, plus the chi_f0 load comparison (floats read from a manifest), the shard set-aside (file renames) and a return annotation — none creates or moves a tensor, so the card run at `16e5bae` is the piece's card measurement. Insurance, because the set-aside sits in the training resume path: the recipe's runs 1, 2 and 2b re-run on the card on 2026-09-30 at `067eddc` — run 1 exit 0 in 412.8 s (prior 102 s, posterior 196 s, validate 25 s, infer 85 s; training masked probes 260 of 704, 36.9 % — 260 again, where the card run of record read 254: the count moves by one row between processes; cache `856a5f26ce2e`, not the record's `5d89e2242bd2`, with the identity code and `Resources/` unchanged between them — the one identity input a run builds is the fresh prior's fingerprint, so that is the likely difference (not traced; pieces 2–4 read `4d8022b100db` three times), and a card run's cache digest is no fixed expectation); run 2 printed the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 8.7 s, nothing set aside; run 2b exit 1 in 6.6 s naming `n_runs`, no `[fisher]` line, no new cache directory |
 | display walkthrough, piece-6 rows F1–F5 (`docs/checklists/display-walkthrough.md`) | reported 2026-09-30, the user on the real screen (piece 6 as it stands; the code is `30ff8a3`, every later commit being documents only): **rows F1–F5 all pass** — the date and result columns of each row record it |
+| **fast gate after the prior-fill fix**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-30 at `ca9e097` (the fill fix, its review fixes and the pages), quiet but for a read-only audit: **1181 passed, 1 skipped**, 5 deselected, **182 warnings**, **16 min 48 s**, exit 0; tree clean, the real `Artifacts/` gained nothing, no `sbi-logs/`. 48 s over the 16-minute target, all of it one test: `test_train_and_validate_without_a_loaded_cell` 169 s (87 s at `067eddc`; 234, 248 and 200 s in three runs this session). Profiled: its time is simulation of randomly drawn (t_scale, T_obs) operating points (125 s generating rows, 90 s of it the calibration set), so its cost follows the random stream, which the walk's parent draws moved; under `torch.manual_seed(0)` the same stages ran in 110 s on this code and 210 s on `261d10e`. The other slow tests match `067eddc` within ~2 s. Warnings 181 → 182: sklearn's KMeans notice from the new full-duration test's mixture fit. An earlier run at `64109a9` (1181 passed, 21 min 42 s) overlapped a CPU-heavy re-review and is not the record |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the copies identical (the documents review compares them). Run it from the
@@ -1268,3 +1325,25 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
   - **The card run's judgement**: the card run at `16e5bae` stands for the piece (the gate table); run 1's masked
     count is not reproducible across processes on CUDA (§11 row 30).
   - Spec §11 holds 34 rows (1–14 planning, 15–34 execution; row 32 a planning-time departure found at execution).
+- **2026-09-30** — **the three pre-retrain decisions, settled by the owner in chat** (each put as a plain question with a
+  recommendation, after a research workflow — three researchers, two adversarial verifiers each — checked the facts):
+  - **The stop point → the owner's own budget, four weeks of the card for the retrain and its certification round**
+    (the recommendation was a ~400 h stop plus checks). Kept with it, as recommended: a ten-epoch timing, a 128 × 8
+    comparison timing, the programme total reported before the run, and an in-flight pace check. Reason: the 740 h stop
+    came from parameter scaling (3.9×), but the step is overhead-bound, so 740 h was 5–6× the likely fit and would let a
+    threefold slowdown pass; 31 h of "generation" for 10,000 batches was wall clock with a ~15 h gap (the pace is ~16 h).
+  - **The masked-probe band → the recommendation**: a 100-batch audit (37 ± 8 pass, ± 12 owner, beyond stop) and gate 3
+    against the audit at the end of generation (3 / 5 points). ± 0.25 at 10,000 batches was rejected: 37 % is itself
+    uncertain by ~3 points, so it would fail ~9 healthy runs in 10.
+  - **The prior screen → fix the fill in code** (the recommendation was "sweep only", i.e. `--max-sets 1`, no code).
+    Sub-decisions in the brainstorm: the census screens the FULL duration (recommended, taken); the design approved as
+    presented — random parents from every kept point, reject out-of-box steps (not reflect), one shared walk for the four
+    model classes, sorted output for all, two count lines, no new knob; the step size left as it is (open list). A
+    bounded change with an in-chat design, no spec file (announced; the owner did not ask for one).
+  - **Page stamps (owner)**: a guide page is re-stamped only when re-checked against new code.
+  - **The solver's noise flag (owner's question)**: not a physics bug; a CPU test pins the flag to each compiled step and
+    the docstring is corrected; the rename is parked. Execution: the fill's tests were written first and watched fail;
+    every new test was shown to fail on a deliberate mutation (no box check, all steps from one parent, parents from the
+    seeds only, a wrong registry flag). A four-lens review with a verifier per finding found 0 Critical; its Important
+    items (the pinned log-call table the fast gate would have failed on, the guide pages) and its Minors were fixed in
+    `b2d73c2` and `64109a9`, except the five parked on the open list.
