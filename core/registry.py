@@ -60,7 +60,9 @@ def is_user_model(name: str) -> bool:
 
 
 def user_model_has_forcing(name: str) -> bool:
-    """True if any variable of a user model declares a forcing entry (-> Simulate-only in v2)."""
+    """True if any variable of a user model declares a forcing entry. ``register`` still puts such a
+    model in every model list and Simulate runs it, but parameter inference (``is_sbi_user_model``)
+    and FDT (``fdt_support``) both refuse it."""
     spec = get(name)
     return bool(spec and spec.is_user_model and any(v.get("forcing") for v in spec.variables))
 

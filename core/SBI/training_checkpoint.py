@@ -438,13 +438,13 @@ def set_aside_uncommitted(path, batches_done: int) -> tuple:
     one past the highest number already there; return ``(that folder, [the names moved])``, or
     ``(None, [])`` when nothing ends past it.
 
-    Called by every run that uses the cache, a resume or a fresh start, before its first commit. That
-    commit starts at ``batches_done`` and ends on the run's own cadence, so an orphan left by a
-    cancel's save has a different name and, left among the shards, would sit beside it once
-    ``batches_done`` passes the orphan's end. Moved, not deleted: if the count is ever wrong the rows
-    are still on disk. A folder per call, so the files keep their own names -- each x_ beside its th_
-    twin, and moving them back is a plain move -- and a range set aside twice keeps both copies
-    instead of overwriting the first. Nothing at or below ``batches_done`` is touched.
+    Called before its first commit by every run that uses the cache, a fresh start or a resume,
+    except a resume whose count came from state.prev.pt. That commit starts at ``batches_done`` and
+    ends on the run's own cadence, so an orphan left by a cancel's save has a different name and,
+    left among the shards, would sit beside it once ``batches_done`` passes the orphan's end. Moved,
+    not deleted: if the count is ever wrong the rows are still on disk. A folder per call, so the
+    files keep their own names -- each x_ beside its th_ twin, and moving them back is a plain move
+    -- and a range set aside twice keeps both copies instead of overwriting the first. Nothing at or below ``batches_done`` is touched.
 
     A resume must not call this when its ``batches_done`` came from state.prev.pt (``peek``'s
     ``_state_file``): state.pt may commit the shards past it. Silent: the caller reports what moved.

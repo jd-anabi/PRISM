@@ -441,7 +441,7 @@ RANK_GAUSS_KNOTS = 1024
 #   percentile is non-zero would move that 0.0 and silently turn every pad into a phantom probe.
 WINSOR_PCT = (0.001, 0.999)
 
-# === MULTI-FREQUENCY SUSCEPTIBILITY chi(omega) MODE (breaks the information ceiling) ===
+# === MULTI-FREQUENCY SUSCEPTIBILITY chi(omega) MODE (stronger unique handles on t_scale, lam, f_scale) ===
 # When CHI_MODE is on, the forced conditioning is a K-frequency susceptibility CURVE chi(omega)
 # instead of a single-frequency Group-G lock-in. Per observation the drive is K SINGLE-TONE
 # recordings at omega_k = CHI_FREQ_BOUNDS-spaced multipliers * Omega_0, where Omega_0 is the
@@ -495,8 +495,11 @@ CHI_FREQ_BOUNDS = (0.03, 0.3)  # log-spaced multipliers of the measured spontane
                                # cell, T_obs 4.5 s, forced mode against chi at six probes): the band carries
                                # SHAPE as well as magnitude. The phase channels carry lam and f_scale and
                                # the magnitude channel t_scale, and every parameter's unique handle
-                               # improves. It does not separate k from x_scale (|cos| 0.95-0.97 under chi,
-                               # 0.98 forced): both move the trace's mean, which a sub-resonance
+                               # improves, f_scale's in substance though its score falls (forced mode
+                               # barely measures f_scale, so its higher forced score is noise being
+                               # unique). It does not separate k from x_scale (|cos| 0.97 under chi,
+                               # 0.98 forced; 0.95 under chi in an earlier map at another band, probe
+                               # count and T_obs): both move the trace's mean, which a sub-resonance
                                # susceptibility does not touch. Compare such maps only at matched T_obs.
 CHI_K_MAX = 24         # upper bound on CHI_K_PAD accepted by the GUI -- a CAPACITY knob. It used to
                        # bound K itself; under the set layout K is a property of an OBSERVATION and is

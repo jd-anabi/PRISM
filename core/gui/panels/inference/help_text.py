@@ -33,7 +33,8 @@ HELP = {
                   "least-constrained directions, which sit at or near the prior (in the last measured "
                   "retrain n, temp and tau_c, which the recording sees only through noise, dominated "
                   "them), on noise rather than on information. A direction whose t_scale loading is "
-                  "above a fixed threshold is skipped and the next one taken.",
+                  "above 1/√d, d being the latent width (the number of inferred parameters), is "
+                  "skipped and the next one taken.",
     "tsnpe_new_run": "Tick this only after a round has been REFUSED for starting a new simulation "
                      "cache while a committed one sits exactly one setting away. The refusal names the "
                      "setting and both values: if you meant to continue that cache, change the setting "
@@ -135,10 +136,11 @@ HELP = {
                "shown units.",
     "chi_mode": "Multi-frequency susceptibility χ(ω). Instead of conditioning on ONE drive, each "
                 "observation is a passive recording plus K single-tone driven recordings, and the "
-                "conditioning carries the χ(ω) curve. This is the only lever on the information "
-                "ceiling: a single passive trace sees only the PRODUCTS D·A_nd and (λ/k)·τ, whereas "
-                "the shape of χ(ω) adds handles on λ and f_scale (its phase) and on t_scale (its "
-                "magnitude), though it does not separate κ from x_scale. Each training row simulates "
+                "conditioning carries the χ(ω) curve. A single passive trace sees only the PRODUCTS "
+                "D·A_nd and (λ/k)·τ. Measured against forced mode at the same recording length, "
+                "χ(ω) gives t_scale and λ markedly larger unique handles and f_scale a real one (λ "
+                "and f_scale through its phase, t_scale through its magnitude); κ and x_scale gain "
+                "little and stay aliased with each other. Each training row simulates "
                 "1 + K recordings where forced mode simulates 2, with K drawn per batch from 2 to the "
                 "probe slots. Training and inference must both use it.",
     "chi_k": "How many drive frequencies THIS observation is measured at, and therefore how many "
