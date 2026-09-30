@@ -337,15 +337,15 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
      (39 tasks) ready to execute (the paragraph at the top; spec
      `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`). What was
      carried into it, and how the design meets each:
-     - The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes false
-       (`:49,53-54,76,190-191`) — met by writing the reader pages fresh and archiving the file (spec
-       §1.2, §6); the map found many more false lines, none of which may reach a reader page.
-     - A README reference section for the tool — spec §6.3, §6.4 (an ~80-line summary plus a full
-       page checked by a parser-walking test), after the help tidy of §3.
-     - The stale memory figures at `PRISM_HANDOFF.md:2615-2616` against `:6756` (piece 5's design spec
-       §1.3) — `:6756` is right; half of `:2616` is still open (`core/FDT/sanity.py:291`, `:328` keep a
-       view of the whole solution) and joins the open list when the handoff is retired (spec §1.2).
-     - Piece 4's "rest of group M" of the handoff's traps — met by `rules-and-traps.md` (spec §1.2).
+     - ~~The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes false
+       (`:49,53-54,76,190-191`)~~ — met: the reader pages under `docs/guide/`; `PRISM_HANDOFF.md`
+       archived at `bf5dd92`, read back with `git show bf5dd92^:PRISM_HANDOFF.md`.
+     - ~~A README reference section for the tool~~ — met: the root README's command-line summary and
+       `docs/guide/command-line.md`, checked by its parser-walking test.
+     - ~~The stale memory figures at `PRISM_HANDOFF.md:2615-2616` against `:6756`~~ — met: the reader
+       pages carry the right figures; the still-open half (the FDT sanity checks keep a view of the
+       whole solution) is on the open list below.
+     - ~~Piece 4's "rest of group M" of the handoff's traps~~ — met by `docs/guide/rules-and-traps.md`.
      - The *Provenance* open item below (a calibration and a TSNPE child do not record
        `--accept-truncated`; an inference on its posterior's own observation records `accepted: []`)
        — taken into piece 6 as H13 (spec §5.11).
