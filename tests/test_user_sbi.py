@@ -1637,6 +1637,43 @@ def test_nadrowski_compiled_step_matches_eager_and_keeps_its_arity():
         f"compiled step diverged from eager by {(got - want).abs().max().item():g}"
 
 
+def test_each_compiled_step_follows_its_models_registered_noise_flag():
+    """The registry's noise flag and each model's compiled step describe ONE noise law.
+
+    The flag says whether a model's noise depends on its state. The step-by-step solver reads it to
+    decide whether to evaluate the noise once or on every step; the compiled solver ignores it,
+    because each model's compiled step computes its own noise inline. So the two could drift apart
+    unseen: a card run would follow the compiled step and a CPU run the flag. Here both solvers run
+    each built-in model with a compiled step, from one seed and with live noise, and must integrate
+    the same trajectory."""
+    from core.Models.hopf_model import HopfModel
+    from core.Models.nadrowski_model import NadrowskiModel
+
+    B, T = 6, 40
+    col = lambda v: torch.full((B,), float(v))                     # noqa: E731
+    makers = {
+        "NADROWSKI": (lambda: NadrowskiModel(
+            k=col(0.3), lam=col(10.0), f=col(0.5), tau=col(0.05), tau_c=col(0.5), s=col(0.6),
+            delta_e=col(1.0), beta=col(1.5), n=col(50.0), temp=col(1.2),
+            force=torch.zeros(B, 1, T), batch_size=B), 3),
+        "HOPF": (lambda: HopfModel(col(0.2), col(0.5), col(0.3), col(0.4),
+                                   torch.zeros(B, 2, T), batch_size=B), 2),
+    }
+    for name, (make, d) in makers.items():
+        assert hasattr(make(), "compiled_step"), name
+        flag = registry.state_dep_drift(name)
+        x0 = torch.full((B, d), 0.1)
+        torch.manual_seed(7)
+        eager = _sdeint_mod.Solver().euler(make(), x0.clone(), (0.0, 0.2), T, state_dep_drift=flag)
+        torch.manual_seed(7)
+        comp = _sdeint_mod.Solver().euler_compiled(make(), x0.clone(), (0.0, 0.2), T,
+                                                   state_dep_drift=flag)
+        assert float((eager[-1] - eager[0]).abs().max()) > 1e-3, f"{name}: nothing moved"
+        assert torch.allclose(eager, comp, rtol=1e-5, atol=1e-6), (
+            f"{name}: the compiled step and the registry's noise flag disagree, max|diff| "
+            f"{float((eager - comp).abs().max()):.3e}")
+
+
 def test_box_roundtrip_never_yields_a_nonfinite_latent_target():
     """The latent training target must stay finite for ANY physical theta, however extreme.
 

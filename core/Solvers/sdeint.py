@@ -240,7 +240,12 @@ class Solver:
               - `f_pure(x, force_step)`
 
             Diagonal-noise assumption: the compiled step is responsible for computing
-            its own g (constant or state-dependent) internally.
+            its own g (constant or state-dependent) internally. That is why ``state_dep_drift`` is
+            accepted and unused here: it tells the eager loop whether to evaluate ``sde.g`` once or on
+            every step, while each model's compiled step carries its noise law inline.
+            ``test_each_compiled_step_follows_its_models_registered_noise_flag`` runs both solvers
+            with the registry's flag and live noise, so the flag and the compiled step cannot drift
+            apart unseen.
 
             WHY THE GRAPH. TorchScript removes PYTHON overhead; it does not remove kernel-LAUNCH
             overhead, and that is what this loop is bound by -- measured 54.87 us/step eager against
@@ -251,9 +256,11 @@ class Solver:
 
             NOT bit-identical to the eager loop, because the noise is drawn inside the captured
             region and the draw order differs. That is the same licence ``gen_obs`` already takes when
-            it splits a batch. The ARITHMETIC is identical and is pinned bitwise by
-            ``test_the_cuda_graph_step_matches_the_eager_step_bitwise`` (which supplies dW
-            externally, so the comparison isolates the maths from the RNG).
+            it splits a batch. The replay is pinned bitwise against this function's own un-graphed
+            loop by ``test_the_cuda_graph_step_matches_the_eager_step_bitwise`` (noise zeroed, so the
+            comparison isolates the chunking from the RNG); the compiled step's arithmetic is pinned
+            against the eager model's drift and noise by
+            ``test_nadrowski_compiled_step_matches_eager_and_keeps_its_arity``.
             """
             x0 = x0.to(sde.device)
 
