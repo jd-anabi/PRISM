@@ -3,8 +3,11 @@ carries the commit it was checked against, and the command-line page matches the
 
 Nothing here imports torch: the parser and its default table are torch-free by design.
 """
+import argparse
 import re
 from pathlib import Path
+
+from core.tool import build_parser, help_defaults
 
 REPO = Path(__file__).resolve().parents[1]
 GUIDE = REPO / "docs" / "guide"
@@ -166,3 +169,115 @@ def test_the_link_checker_catches_a_missing_file_and_a_missing_anchor(tmp_path):
     assert any(": Other.md: " in p for p in problems)
     assert any(": Sub/inner.md: " in p for p in problems)
     assert any("C:/x.md: a drive-letter path" in p for p in problems)
+
+
+COMMAND_PAGE = GUIDE / "command-line.md"
+_ENTRY = re.compile(r"^[-*] `(--[a-z0-9][a-z0-9-]*)[^`]*`")
+_OPTION = re.compile(r"(?<![\w-])--[a-z][a-z0-9-]*")
+_INVOCATION = re.compile(r"-m core ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?")
+_SWITCHES = (argparse._HelpAction, argparse._StoreTrueAction, argparse._StoreFalseAction,
+             argparse._StoreConstAction, argparse._CountAction)
+
+
+def _tree():
+    """(leaves, families): {path: parser} for every command typed after `python -m core` -- a
+    subcommand with no modes, or `<subcommand> <mode>` -- and {subcommand: {modes}} for a family."""
+    leaves, families = {}, {}
+
+    def walk(path, parser):
+        subs = [a for a in parser._actions if isinstance(a, argparse._SubParsersAction)]
+        if not subs:
+            leaves[path] = parser
+            return
+        families[path] = set(subs[0].choices)
+        for name, child in subs[0].choices.items():
+            walk(f"{path} {name}", child)
+
+    for name, parser in build_parser().subcommands.items():
+        walk(name, parser)
+    return leaves, families
+
+
+def _flags(parser):
+    """{long option string: action} for every flag of a command but -h/--help."""
+    return {next(o for o in a.option_strings if o.startswith("--")): a for a in parser._actions
+            if a.option_strings and not isinstance(a, argparse._HelpAction)}
+
+
+def _headed_sections(text):
+    """[(level, title, body lines)] for every heading of level 1 to 3 outside code fences; a body
+    runs to the next such heading."""
+    out = []
+    for _n, line in _prose_lines(text):
+        m = _HEADING.match(line)
+        if m and len(m.group(1)) <= 3:
+            out.append((len(m.group(1)), m.group(2).strip(), []))
+        elif out:
+            out[-1][2].append(line)
+    return out
+
+
+def _fenced_lines(text):
+    in_fence = False
+    for line in text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+        elif in_fence:
+            yield line
+
+
+def test_the_command_line_page_names_every_subcommand_mode_and_flag_and_no_other():
+    text = COMMAND_PAGE.read_text(encoding="utf-8")
+    leaves, families = _tree()
+    tops = {path.split()[0] for path in leaves}
+    heads = [(lvl, t, body) for lvl, t, body in _headed_sections(text) if t.split()[0] in tops]
+    titles = [t for _l, t, _b in heads]
+    problems = [f"heading '{t}' appears {titles.count(t)} times" for t in set(titles)
+                if titles.count(t) > 1]
+    level = {t: lvl for lvl, t, _b in heads}
+    body = {t: b for _l, t, b in heads}
+    problems += [f"missing '## {fam}'" for fam in families if level.get(fam) != 2]
+    for leaf in leaves:
+        want = 3 if " " in leaf else 2
+        if level.get(leaf) != want:
+            problems.append(f"missing '{'#' * want} {leaf}'")
+    problems += [f"heading '{t}' names no subcommand or mode of the tool" for t in level
+                 if t not in leaves and t not in families]
+    for leaf, parser in leaves.items():
+        listed = [m.group(1) for m in map(_ENTRY.match, body.get(leaf, [])) if m]
+        flags = _flags(parser)
+        problems += [f"{leaf}: {opt} listed {listed.count(opt)} times, want once"
+                     for opt in flags if listed.count(opt) != 1]
+        problems += [f"{leaf}: lists {opt}, which this command does not take"
+                     for opt in sorted(set(listed) - set(flags))]
+    known = {o for p in leaves.values() for a in p._actions for o in a.option_strings}
+    code = "\n".join(_CODE_SPAN.findall(text)) + "\n" + "\n".join(_fenced_lines(text))
+    problems += [f"the page names {opt}, which no command takes"
+                 for opt in sorted(set(_OPTION.findall(code)) - known)]
+    for m in _INVOCATION.finditer(code):
+        sub, mode = m.group(1), m.group(2)
+        if sub not in tops:
+            problems.append(f"the page runs `{m.group(0)}`: no such subcommand")
+        elif mode is not None and mode not in families.get(sub, set()):
+            problems.append(f"the page runs `{m.group(0)}`: {sub} has no mode {mode}")
+    assert not problems, "\n".join(problems)
+
+
+def test_the_command_line_page_states_each_default_as_the_help_does():
+    text = COMMAND_PAGE.read_text(encoding="utf-8")
+    leaves, _families = _tree()
+    body = {t: b for _l, t, b in _headed_sections(text)}
+    problems = []
+    for leaf, parser in leaves.items():
+        entries = {m.group(1): line for line in body.get(leaf, []) if (m := _ENTRY.match(line))}
+        for opt, action in _flags(parser).items():
+            line = entries.get(opt)
+            if line is None:
+                continue                              # the naming test reports a missing entry
+            want = None if isinstance(action, _SWITCHES) else help_defaults.default_for(leaf, action)
+            stated = line.count("(default ")
+            if want is None and stated:
+                problems.append(f"{leaf} {opt}: the help states no default, the page does: {line!r}")
+            elif want is not None and (stated != 1 or want.strip() not in line):
+                problems.append(f"{leaf} {opt}: the help says {want.strip()!r}; the page: {line!r}")
+    assert not problems, "\n".join(problems)
