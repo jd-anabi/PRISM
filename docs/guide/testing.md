@@ -58,7 +58,7 @@ and the session guards).
   minutes. One process, because the session installs its temporary records root once: only a single
   process can catch code that swaps the default store and never puts it back, and a gate split
   across processes hides it.
-- **The full run** is `python -m pytest`; budget about an hour, and log it to a file.
+- **The full run** is `python -m pytest`; budget about an hour and a half, and log it to a file.
   `python -m pytest -m slow --collect-only -q` lists the slow set, the real simulations the fast gate
   leaves out.
 - **The markers**, registered in `pytest.ini` and turned into skips by the root `conftest.py`:

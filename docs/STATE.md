@@ -1,34 +1,35 @@
 # PRISM — state
 
-**Last updated:** 2026-09-28. **Piece 6 is DESIGNED AND PLANNED; execution starts in a new chat.** The owner
-approved the spec (`907098d`) on 2026-09-28. The plan is
-`docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md` (`779c73c`: 39 tasks — 1–9 the reference
-cleanup, 10–11 the help tidy, 12–19 readiness, 20–24 the probe checks, 25–26 the whole-code review and the card run,
-27–36 the documents, 37–39 the documents review, retiring the handoff and the final gates). It was drafted by nine
-parallel drafters against a controller-written skeleton that fixed every cross-task name
-(`.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/plan-skeleton.md`), then pre-flighted by five lenses
-and a judge against the code ("ready with fixes": 95 exact edits and one manual pass, all applied). The planning-time
-departures from the spec are its §11 rows 1–14. The plan's "How to run this plan" section holds the per-task loop, the
-scratch conventions and five open owner questions, each with a default.
-**Earlier the same day:** piece 6 was BRAINSTORMED and its design reviewed.
-Brainstormed with the owner 2026-09-25 in plain-language questions (decisions H1–H13, below and in the
-decisions log). Design: `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
-(`7ad6498` the draft; `907098d` after an independent review against the code — four lenses and a judge,
-"ready with fixes", 19 must-fix and 33 corrections folded in — plus the owner's two answers of
-2026-09-28: H11 revised, H13 added). The piece grew from "the docs split and a README tool reference"
-into five parts, in this order: (1) the reference cleanup — nothing shippable (core/, tests/, the
-launchers, README, requirements, pytest.ini, the new reader pages) may cite the handoff, STATE,
-CLAUDE.md, the specs, plans or their labels, enforced by a new source-scan suite; (2) the help-text
-tidy; (3) retrain-readiness fixes (tier-1 tests, the silent Hopf force-scale fallback closed,
-temperature marked an assumed input, a calibration verdict and a repeatable calibration seed,
-eigenvalues kept across a resume, truth containment reported both ways, the tier-1 constraint recorded,
-acceptances recorded by calibrations and narrowing rounds); (4) `python -m core probes band|mask|drive`,
-a new command-line diagnostic family that re-measures the chi band, drive and masking for a cell or a
-prior; (5) the documents (`docs/guide/`: topic pages with reading paths, the full tool reference, the
-retrain runbook with its science settled), then the handoff moves to `archive/`. The read-only
-reconnaissance and the review report are in the gitignored workspace
-`.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/` (`recon/`, `spec-review.md`).
-**Next:** execute the plan (subagent-driven, in a new chat), Task 1 first.
+**Last updated:** 2026-09-30. **Piece 6, "the reference cleanup, retrain readiness, the probe checks and the
+documents", is DONE**: commits `779c73c`..`067eddc` (115, counted by `git log --oneline 779c73c^..067eddc`) plus this closing
+documents commit, on the local `main` branch, UNPUSHED (the owner pushes). Its design is
+`docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md` (`907098d`; decisions H1–H13 in
+§1.1; §11 now 30 deviations, rows 1–14 ruled at planning and 15–30 during execution, each with what it costs if
+wrong) and its plan `docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md` (`779c73c`, 39
+tasks). **What landed, part by part:** (1) the reference cleanup — nothing shippable (`core/`, `tests/`,
+`conftest.py`, the launchers, `README.md`, `requirements.txt`, `pytest.ini`, `docs/guide/`) cites a working
+document or its labels, and `tests/test_source_hygiene.py` enforces it; (2) the help tidy — one default convention
+in every help line, pinned by `core.tool.help_defaults`; (3) the readiness fixes — the tier-1 path tested end to
+end, the silent Hopf force-scale fallback closed, temperature marked an assumed input, the calibration verdict and a
+repeatable `validate --seed`, the Fisher eigenvalues carried across a resume, truth containment reported both ways,
+the tier-1 constraint and the acceptances recorded; plus two found on the way: loading refuses a chi posterior
+trained at another drive (§11 row 24), and a training run sets aside shards a killed save left uncommitted instead
+of letting them refuse the whole cache at its final load (row 25); (4) `python -m core probes band|mask|drive`,
+measuring the chi band, the masking and how hard a cell can be driven; (5) the reader guide `docs/guide/` (ten
+pages, each stamped with the commit it was checked against) and the root README's command-line summary; the handoff
+archived at `bf5dd92` (read back with `git show bf5dd92^:PRISM_HANDOFF.md`). **Execution (2026-09-28/30, Opus 5.5,
+subagent-driven, controller rulings in the gitignored ledger):** every task had a review and its own one-process
+fast gate, started together; the whole-code review (Task 25: five lenses, each with an adversarial verifier) found 0
+Critical, 2 Important and 23 Minor (+3 from the verifiers) — both Importants and 12 Minors fixed in 25 commits
+`8fef76f`..`04fbe54`, the rest parked with reasons ("Owed" item 7); the card run of record (2026-09-29, at `16e5bae`)
+passed every leg, with the tier-1 run, the narrowing leg, the diagnostic card and the probes (the gate table); the
+documents review (Task 37: an only-record checklist of 157 rows, three accuracy lenses, completeness and reading
+paths, a verifier each) found 2 Critical and 39 Important page errors and 55 false code texts, all fixed, with the
+checklist closed (103 found, 19 appended, 35 dropped). The final fast gate, the slow set and the card judgement are
+in the gate table below.
+**Next:** the owner runs rows F1–F5 of `docs/checklists/display-walkthrough.md` on a real screen; then the retrain
+("Owed" item 8) from `docs/guide/retrain.md` — its stop point (about 740 hours) waits for the owner's confirmation
+(the open list).
 **Piece 5, "the secondary analyses", is DONE**: commits
 `a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus the documents
 commits that close it (this file's `fec2cde`, its review fixes `6c68a22`, and a count correction), on
@@ -117,7 +118,7 @@ gate, the slow set and the GPU smoke gate of record are in the table below; the 
 judged unnecessary (no line under `core/diagnostics` moves a tensor) and that judgement held.
 **Rows D1–D17 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen on
 2026-09-21: all seventeen pass** (the gate table below).
-**Piece 6 is in design** ("Owed" item 7; the paragraph at the top). Piece 3
+Piece 3
 (`3db271e`..`9e2f7ef`) is DONE and pushed, and its rows C1–C11 all pass; piece 2
 (`0016dae`..`d34997c`) is also pushed, and its rows B1–B8 all pass.
 
@@ -194,6 +195,16 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
   budget lines (V6); the Fisher settings recorded only when the rotation ran (V7); a loaded prior
   closes its figure (V8); sbi's summary writer is switched off, and the repository root's `sbi-logs/` tree
   (1359 run directories under `NPE_C`) was deleted (V9).
+- **Piece 6 is DONE** (2026-09-28/30, commits `779c73c`..`067eddc`, on the local `main` branch, unpushed). It follows the
+  design `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md` (§1.1 holds decisions
+  H1–H13; §11 lists 30 deviations, 1–14 ruled at planning and 15–30 during execution) and the 39 tasks of
+  `docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md`. Each task had its brief, an implementer,
+  a review (a workflow of scoped reviewers and adversarial verifiers for every large page and for the whole-code
+  review) and a one-process fast gate started with the review; behaviour changes were test-first. The execution
+  ledger, the pre-flight scan, the reviews and the gate logs are gitignored scratch under
+  `.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/`; their rulings live on in the decisions log
+  below and in spec §11, and what they hand on is in "Owed" item 7's open list. What landed is in the paragraph at
+  the top.
 - **Decision 2026-09-10: CLEAN BREAK.** Every generated artifact is deleted once piece 1 is
   merged (runbook: design spec §9 = plan Task 14). The old runbook's Run A, Run B and the TSNPE
   round (`PRISM_HANDOFF.md` §11.9) are ABANDONED; the retrain restarts from scratch after piece 6.
@@ -257,7 +268,8 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
 6. ~~**The display walkthrough's piece-2 rows B1–B8**~~ — done 2026-09-15 by the USER on the real
    screen: **all eight pass**, recorded in that file's last two columns and in the gate table below.
    B8 re-checked the FDT panel's full run, because `bb22ac4` changed the plots it draws.
-7. **Pieces 3 → (4 ∥ 5) → 6**, each brainstormed → spec → plan → implementation. Carried into them
+7. **Pieces 3 → (4 ∥ 5) → 6 — ALL DONE** (piece 6 closed 2026-09-30), each brainstormed → spec → plan →
+   implementation. Carried into them
    from pieces 2 and 3 (each design spec's §1.3, the final reviews' "left open" lists, and the
    ledgers):
    - **Piece 3** — DONE 2026-09-16/17 (`3db271e`..`9e2f7ef`). Every bullet piece 2 carried into it is
@@ -333,10 +345,10 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
      - ~~Rows E1–E17 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done by the
        USER, reported 2026-09-25: **all seventeen pass**, recorded in that file's last two columns and
        in the gate table below.
-   - **Piece 6** — BRAINSTORMED 2026-09-25, design `907098d` approved 2026-09-28, plan `779c73c`
-     (39 tasks) ready to execute (the paragraph at the top; spec
-     `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`). What was
-     carried into it, and how the design meets each:
+   - **Piece 6** — DONE 2026-09-30 (`779c73c`..`067eddc`; BRAINSTORMED 2026-09-25, design `907098d`, plan
+     `779c73c`, 39 tasks; the paragraph at the top; spec
+     `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`). Everything
+     carried into it is closed:
      - ~~The `docs/` split of the handoff, including the `PRISM_HANDOFF.md` lines D1 makes false
        (`:49,53-54,76,190-191`)~~ — met: the reader pages under `docs/guide/`; `PRISM_HANDOFF.md`
        archived at `bf5dd92`, read back with `git show bf5dd92^:PRISM_HANDOFF.md`.
@@ -346,9 +358,9 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
        pages carry the right figures; the still-open half (the FDT sanity checks keep a view of the
        whole solution) is on the open list below.
      - ~~Piece 4's "rest of group M" of the handoff's traps~~ — met by `docs/guide/rules-and-traps.md`.
-     - The *Provenance* open item below (a calibration and a TSNPE child do not record
-       `--accept-truncated`; an inference on its posterior's own observation records `accepted: []`)
-       — taken into piece 6 as H13 (spec §5.11).
+     - ~~The *Provenance* open item (a calibration and a TSNPE child do not record
+       `--accept-truncated`; an inference on its posterior's own observation records `accepted: []`)~~
+       — closed by H13: calibrations record `results.accepted` and narrowing rounds `training.accepted`.
    - **Open, with no piece owning them yet** (the owner decides each, or where it goes):
      - *Science.* In `identifiability jacobian`, a NaN in a measurable Jacobian column makes the
        least-squares step raise `LinAlgError` after all the simulations are spent (the retired
@@ -357,10 +369,9 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
      - *Science.* Repeat-SBC in chi mode cannot see probe-design variance: `pipeline.py` reseeds the
        chi probe generator to a fixed seed (20260805) on every `gen_training_data` call, so every
        repeat uses the same probe design whatever `--seed` says.
-     - *Provenance.* A calibration and a TSNPE child do not record `--accept-truncated` in
-       `results.accepted` (the spec requires that record only for inferences and diagnostics), and
-       an inference on a non-amortized posterior's own anchor observation records `accepted: []`
-       even when `--accept-truncated` loaded it.
+     - ~~*Provenance.* A calibration and a TSNPE child do not record `--accept-truncated` in
+       `results.accepted`, and an inference on a non-amortized posterior's own anchor observation
+       records `accepted: []` even when `--accept-truncated` loaded it~~ — closed by piece 6, H13.
      - *Spec.* `tsnpe_round` refuses more directions than the latent width but allows exactly as
        many, which truncates every direction. That matches spec §2.5 word for word, so tightening
        it needs a spec decision.
@@ -377,7 +388,8 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
        owner's call. If not, the fix is a floor of 2 in `__post_init__`; the bench path, which
        legitimately takes one probe, never re-runs that check (spec §11).
      - *Provenance (from piece 3, spec §1.3).* A resumed training run records its Fisher settings as
-       "not run" (V7): the checkpoint header carries `V` but not the parent's `m`, `dz` and `points`.
+       "not run" (V7): the checkpoint header carries `V` but not the parent's `m`, `dz` and `points`. Since
+       piece 6 the eigenvalues carry over; the settings still do not.
      - *From piece 4.* The Posterior tab's D8 load dialog (piece 2's consent that fires on loading a
        round's posterior) still says "NON-AMORTIZED" where the three pickers now say "narrowed
        (TSNPE)" (B13) — one fact, two wordings. Changing D8's text touches walkthrough row B1's
@@ -651,6 +663,38 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
        small, because a batch is at least 10 datasets wide (at `n_cal` 40, ceil(40/10) = 4 are drawn),
        so the record misstates what ran. Harmless at the retrain's 2000 / 200 (`core/SBI/analysis.py`,
        `core/orchestrator.py`).
+   - *From piece 6's whole-code review (Task 25), parked with reasons* (the full list, with each reason and
+     cost, is `review/synthesis.md` "Parked" in the gitignored ledger folder):
+     - A tier-1 box whose units file declares no force token fails with a bare `ValueError` at the prior's
+       `store.create`, after the stability sweep — about 9 minutes lost before what should be a pre-spend
+       refusal; not on the card's or the retrain's path, whose units declare a force unit
+       (`core/artifacts/store.py`, `core/sim_config.py`).
+     - `probes drive`: a drive harmonic past Nyquist aliases (detune 1.4's second harmonic, for a peak above
+       about a quarter of Nyquist) and is not flagged — a fast lab cell's check could miss a sub-harmonic
+       caveat (`core/diagnostics/probes.py`).
+     - Band's `_NYQUIST_SHARE = 0.9` is a literal separate from training's `0.9 * nyq` (and eight
+       user-visible "0.9 x Nyquist" strings): after a change to training's share, band masks at the old share
+       until the mask audit flags it (`core/diagnostics/probes.py`, `core/SBI/chi.py`).
+     - The source scan has no `Phase <digit>` pattern, so a new build-phase banner would pass it
+       (`tests/test_source_hygiene.py`).
+     - Inherited Fisher eigenvalues are not checked against the parent's V (an API-only risk); a narrowing
+       child without them records None silently; a non-finite header eigenvalue fails a resume
+       (`core/SBI/training_checkpoint.py`, `core/orchestrator.py`).
+     - The rest are test-coverage gaps (an observer on the resume branch, the mask audit's absorption case
+       at ≥1024 rows, the real-rows too-slow side), wording drift and stale line numbers in comments the
+       documents review later removed.
+   - *From piece 6's documents review (Task 37), parked with reasons* (`docs-review/synthesis.md` §(6) and
+     `docs-review/recheck.md`, gitignored): "sidecar" survives as history mentions of the retired `.rot.pt`
+     file (`core/SBI/reparam.py`, `ArtifactStore.load_posterior`'s docstring), in "so this needs no sidecar"
+     (`core/SBI/run_guards.py`), in `reparam.posterior_mode`'s `sidecar` parameter and in two test names —
+     history and identifiers, not false; a 135-character docstring line in `core/SBI/training_checkpoint.py`;
+     RC3's choice of stand-in values for a preparation whose parameters are unknown is written neutrally on
+     `docs/guide/recordings.md` for the owner to settle.
+   - *From piece 6's final slow set.* The chi full-pipeline slow test ran 2618 s at the piece's close (quiet machine),
+     against 1397 s at piece 5, 1610 at piece 4 and 1181 at piece 3; its body changed only in a comment. The two FDT
+     slow tests also ran longer than at piece 5 (619 s against 562, 452 against 323), though all of them ran faster
+     than at Task 25 on a loaded machine; the card run's GPU stage timings matched piece 4's. Profile it if it grows again
+     (`tests/test_user_sbi.py::test_chi_mode_full_sbi_pipeline`, `core/SBI/pipeline.py`).
    - Piece 3 did not take the optional tidy-up of `decorrelate.py`'s `or` fallbacks and `prior.py`'s
      clamps (spec §1.3 "the plan, if cheap; else none"); it stays unowned.
    - Piece 3's other open minors, each judged not worth a change now: the decorator scan matches only
@@ -666,7 +710,8 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
      ledger `.superpowers/sdd/2026-09-16-validation-and-logging/progress.md`.
    - The rest of piece 2's final review's 46 "left open" items are test-coverage gaps and cosmetics,
      each with its reason, in the gitignored `.superpowers/sdd/2026-09-12-one-flow/final-review.md`.
-8. **The retrain.**
+8. **The retrain — NEXT.** From `docs/guide/retrain.md`, after the owner's rows F1–F5 and the
+   stop-point confirmation (the open list).
 
 ## Clean break — EXECUTED 2026-09-11 (design spec §9 / plan Task 14)
 
@@ -753,6 +798,10 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
 | **GPU smoke gate, piece 5** | 2026-09-24: **judged NOT REQUIRED; the card was not run.** The judgement was re-made against the whole piece, `a0d85da^..c29320c`. The changed lines that create or move a tensor are in `core/FDT/cross_validation.py`, `fdt_pipeline.py` and `sanity.py` — all on the FDT and sweep path, pinned to `cpu_device()` by `cli.make_fdt_config` and `make_param_sweep_config` — in `core/gui/panels/simulate_runner.py` (N17's zero-forcing tensor, on the Live simulation's CPU-pinned path, which the gate does not reach), and in `core/rng.py`: `seeded`'s CUDA branch (fork the device, `torch.manual_seed`) is the base's byte for byte, and its new CPU branch seeds `torch.default_generator`, the CPU half of `manual_seed`, so no CPU draw changes. `core/diagnostics/rng.py` re-exports the same object, and `core/orchestrator.py` only re-imports `PreflightWarning` from `core/refusals.py`. **T28's change to `core/tool/__init__.py` and `core/tool/smoke.py` IS on `smoke`'s path**: it chooses the store root through `temp_store_root` (set by `set_defaults` on smoke's parser) instead of the flag's presence, creates or moves no tensor, and T28's tests pin the root choice; the gate always passes `--store-root` anyway. The fix range `d13ca96..6be832c` touched nothing under `core/SBI`, `core/diagnostics`, `core/orchestrator.py` or `core/tool/smoke.py`, and `core/rng.py` only in its docstring (the re-review verified); nothing under `core/SBI`, `core/Simulator`, `core/Solvers` or `core/Models` changed in the piece. The diagnostic card is not needed either: no line under `core/diagnostics` that moves a tensor changed (only `rng.py`'s re-export). Piece 4's run (`d1f0b98`) remains the last card measurement |
 | display walkthrough, piece-5 rows E1–E17 (`docs/checklists/display-walkthrough.md`) | reported 2026-09-25, the user on the real screen (piece 5 as it stands; the code is `7e51275`, every later commit being documents only): **rows E1–E17 all pass** — the date and result columns of each row record it |
 | **GPU card run, piece 6** (`python -m core smoke`, the five command lines of `CLAUDE.md`, run 4's resume, the narrowing leg, the diagnostic card and the probe checks, at `16e5bae` — the code of the whole-code review's fixed head `04fbe54`; the later commits are documents only) | 2026-09-29, alone on the card (after the drive parity run the same evening: `probes drive` on `master_spont` at window 0.018 over the archived sixteen strengths, exit 0 in 13.8 s, Ω₀ 22.600 Hz, clarity 1.41e+04, strongest free-running **0.02**, weakest captured **0.2** — the 0.02 default window accepted): **run 1** chi `master_spont`: prior 92 s, posterior 194 s, validate 22 s, infer 76 s, exit 0 (piece 4: 92.3/198.5/22.3/85.9), training `[chi] masked probes` 254 of 704 (36.1 %: 79/224, 15/96, 102/192, 58/192), cache `5d89e2242bd2` (the identity format moved it from `4d8022b100db`); **run 2** the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 7.7 s, masked line equal to run 1's; **run 2b** exit 1 in 5.8 s, "differs only in n_runs: this run 2, that cache 4 … (--new-run)", no `[fisher]` line, `simulations/` unchanged; **run 3** forced `master_weak`: 91/60/13/20 s, exit 0 (piece 4: 100.4/63.9/15.0/19.3); **run 4** tier-1, 256 × 10: 92/150/20/45 s, exit 0, both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']`, masked 285 of 704 (40.5 %), T in the posterior's keys, `config.tier1` (`k_b_cell` 0.01380649, `T_range` [280.0, 310.0]) and `assumed_params` ["T"], 13 eigenvalues (7.949e+16 … 0.1652), T marked "(assumed input)" in the calibration table, `[verdict] FAIL` (a result at this size), observation `simulated_f_scale` 46.99; **run 4 resume** exit 0 in 7.8 s, `[checkpoint] the stored rotation's eigenvalues come with it`, eigenvalues carried, Fisher settings null, `resumed_from_batch` 4; **narrowing leg** (`PRISM_ARTIFACTS` at run 4's store) tsnpe 12.6 s exit 0 (direction 0 left full width: t_scale-loaded), truth inside all five truncated directions, `t1_round` carries the parent's eigenvalues; validate 2571 s (the stage's default size on a truncated posterior) exit 0, `[verdict] FAIL` (T's rank test fails at this size, a 5-epoch round), seed 401191828; infer 42 s exit 0; accepted [] (round) / ["truncated"] (calibration) / ["truncated", "other_observation"] (inference); **diagnostic card** sbc 18 s (rank verdict 0/1 repeats), jacobian 85 s, ablation 6 s, laplace 128 s, tier-1 jacobian 85 s with T column (a measurement) ‖g‖ 0.214, unique 0.134, |cos| with n 0.92 (degenerate pair n~T: the force scale is proportional to n·T), with t_scale 0.49, with x_scale 0.44; **probes** band: the configured (0.03, 0.3) and drive 0.15 hold, the 0.6× control captured at every length (own-peak share 0.12–0.18); drive (default grid, the configured 0.15 included): free-running 0.02, captured from 0.15 (0.1 in between); mask over `smoke_prior`: 753 of 2,144 masked (35.1 %), the cycle floor the only cause (too slow at the band's top 31.2 %, shortened by the duration draw 4.0 %), invariants hold, cross-check confirms all 12 row ranges. No OOM line and no Traceback in any run; `warning:` lines only the expected ones (a non-amortized load, three pathological-trajectory notices in the round's calibration). **Run 1's masked count is not reproducible across processes on the card:** pieces 2–4 recorded 260 three times; an export of this piece's first commit gave 260 again, but a bisect over the piece's commits found batch 3 at 108 or 102 (one row's six probes) flipping between TEST-ONLY commits, always together with the Fisher step's eigenvalue spread (≈1.7e+14 with 102; inf or 3.78e+16 with 108) — the Fisher's smallest eigenvalue is near zero and its simulation is not bitwise stable on CUDA, and one borderline row follows it. Either count is inside the ±12 pp band. Scratch stores deleted |
+| `pytest --collect-only -q` after piece 6 | 2026-09-30 at `067eddc`: **1178** collected (the fast gate's 1172 passed and 1 skipped, plus the 5 slow tests), 210 more than the 968 at `7e51275`, against design spec §7's budget of about 80 ± 25 added (above by 105: every behaviour fix was test-first, the probes family and the tier-1 path needed their own, and two new suites landed; §11 row 22). `tests/test_*.py` holds twenty-two suites (new: `test_source_hygiene.py`, `test_tier1.py`, `test_docs.py`) |
+| **final fast gate, piece 6**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-30 at `067eddc`, on a quiet machine: **1172 passed, 1 skipped**, 5 deselected, **181 warnings**, **15 min 24 s** (inside the 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing; no `sbi-logs/`; `Resources/Models` holds only `SHM.json` and `SHM2.json`. Warnings 181 → 181: unchanged. Slowest: `test_train_and_validate_without_a_loaded_cell` 87.2 s, `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 73.7 s, `test_no_forcing_user_model_full_sbi_pipeline` 43.7 s. Every task had its own one-process gate, recorded in the execution ledger |
+| slow set of record, `pytest -m slow -q --durations=5` (piece 6) | 2026-09-30 at `067eddc`: **5 passed**, 1173 deselected, 153 warnings, **1 h 15 min 27 s**, exit 0. `test_chi_mode_full_sbi_pipeline` 2618 s — OVER piece 5's 1397 s: its body is unchanged but for a comment, the other slow tests ran faster than Task 25's loaded reading and the card run's GPU stages matched piece 4's, and this test has varied 1181–2618 s across pieces, so it is recorded on the open list rather than chased; `test_smoke_runs_every_stage_on_the_tier1_box` 828 s; `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 619 s; `test_fdt_and_crossval_run_at_tiny_size` 452 s; `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` 7 s. Tree clean afterwards |
+| GPU card run, piece 6 — stands | `git diff --name-only 16e5bae..067eddc -- core conftest.py` lists 41 files, judged: every change is a comment, docstring, help string or message, plus the chi_f0 load comparison (floats read from a manifest), the shard set-aside (file renames) and a return annotation — none creates or moves a tensor, so the card run at `16e5bae` is the piece's card measurement. Insurance, because the set-aside sits in the training resume path: the recipe's runs 1, 2 and 2b re-run on the card on 2026-09-30 at `067eddc` — run 1 exit 0 in 412.8 s (prior 102 s, posterior 196 s, validate 25 s, infer 85 s; training masked probes 260 of 704, 36.9 % — 260 again, where the card run of record read 254: the count moves by one row between processes); run 2 printed the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 8.7 s, nothing set aside; run 2b exit 1 in 6.6 s naming `n_runs`, no `[fisher]` line, no new cache directory |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the copies identical (the documents review compares them). Run it from the
@@ -1131,3 +1180,31 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     probes' helper (the two copies differ in float32 rounding); the eigenvalue carry-over on a resume
     keeps the fresh value as the Fisher-ran witness (V7 unchanged); the silent Hopf fallback raises
     `RuntimeError` (a programming error), not a Refusal.
+- **2026-09-28/30** — **piece 6's execution** (subagent-driven; the ledger, pre-flight scan and reviews are gitignored
+  under `.superpowers/sdd/2026-09-25-documentation-and-retrain-readiness/`).
+  - **D11, read narrowly (H8), restated at the piece's close.** D11 stays a standing refusal for everything that trains or infers: no flag, box or argument gives a training run, a calibration, an inference or a narrowing round a non-default chi band or drive amplitude; a change is an edit to `core/config.py`. The `probes` family alone takes its own frequency, drive and length grids, because they are measurements: they reach the simulator only as the drive builder's frequency and amplitude inside `core/diagnostics/probes.py`, never through a `SimConfig` field or `gen_training_data`'s `chi_f0`/`chi_freq_bounds`, and every record states the configured band and drive it judged; the measure-only tests in `tests/test_diagnostics.py` and `tests/test_tool.py` pin this. A later piece must not read this as licence for a chi override anywhere else. D12 is unchanged.
+  - **The seed reading widened again.** Piece 2 recorded that only `smoke` and the diagnostics take `--seed`; piece 5 widened it for `fdt` and `crossval`. Piece 6 adds `validate --seed`, and the Validate tab draws one per run (no Seed box, nothing remembered): the calibration set is drawn inside `core.rng.seeded` from `calibration_seed(seed)`, a `numpy.random.SeedSequence([seed, CALIBRATION_TAG])` stream, so a calibration never starts where a training run with the same seed started — the replay `core/rng.py` exists to prevent, whose docstring names this one exception — and `seed=None` leaves the streams alone, so `smoke`'s calibration still follows `smoke`'s seed. The `probes` modes follow the diagnostics' convention (`--seed`, default 0, recorded).
+  - Execution rulings a later piece would otherwise re-litigate (each with its cost if wrong):
+    - **Two readiness fixes outside the plan**, each test-first, reviewed and gated: loading refuses a chi
+      posterior trained at another drive (§11 row 24; cost: none — it fires only after a `CHI_F0` edit); a
+      training run sets aside shards a killed save left uncommitted, never after a fallback read of the
+      previous state file (row 25; cost: a few set-aside files on disk).
+    - **The runbook's stop point** is twice the EXPECTED cost at 256 × 10 (about 740 hours), not twice the
+      92-hour 128 × 8 reference; the owner has not confirmed it (row 26; the open list asks).
+    - **Part 5 changed code texts, not behaviour**: every false or stale help string, tooltip, message,
+      comment and docstring the page reviews found was corrected (rows 23, 27), with the comment-only checker
+      on each commit.
+    - **The load-check audit is NOT done here**: the documents review found recorded keys no loader compares
+      (the feature-set version, the summary flags, an observation's box, drive, band and ceiling, the time
+      grid, the units file) and two constants in no compared record and not in the cache identity (the cycle
+      floor, the smallest training probe count). The pages state the gaps; the open list holds the audit for
+      the owner (cost: a post-retrain change to one of them loads an old record silently until it lands).
+    - **Pre-flight rulings** S-01..S-23 (the scan of all 39 tasks before Task 1) were folded into the tasks
+      they bind; owner questions 2, 3 and 5 took their recommended answers (a fresh tier-1 prior; stratified SBC
+      as a characterisation; the stash note in CLAUDE.md), question 4 its default, question 1 is row 26.
+  - **The whole-code review** (Task 25): 0 Critical, 2 Important (the smoke run labels "run 1"/"the drill" that
+    reached a usage error; the "Phase 2/3" banners), 23 Minor + 3 from the verifiers; one fix dispatch of 25
+    commits (`8fef76f`..`04fbe54`) and a scoped re-review; the rest parked with reasons (the open list).
+  - **The card run's judgement**: the card run at `16e5bae` stands for the piece (the gate table); run 1's masked
+    count is not reproducible across processes on CUDA (§11 row 30).
+  - Spec §11 holds 30 rows (1–14 planning, 15–30 execution).

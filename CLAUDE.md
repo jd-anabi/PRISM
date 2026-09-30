@@ -22,7 +22,7 @@ what is on disk, the last gate). Update it at the end of every session.
   `$env:KMP_DUPLICATE_LIB_OK="TRUE"; & "C:\Users\J\anaconda3\envs\biophys-env\python.exe" -m core.gui`.
   The command-line tool is `python -m core <subcommand>` (`core/tool/`; `--help` lists them): its
   entry sets `KMP_DUPLICATE_LIB_OK` and the Agg backend itself, before any torch or core import, so
-  it needs no environment set up around it. Every tool flag maps 1:1 onto a stage keyword argument;
+  it needs no environment set up around it. Every tool flag maps 1:1 onto a stage argument;
   the tool reads no environment but the two roots and rebinds no module constant. Paths do not
   depend on the working directory: `core/config.py` resolves `RESOURCES_ROOT` (inputs;
   `PRISM_RESOURCES` overrides) and `artifacts_root()` (generated artifacts; `PRISM_ARTIFACTS`
@@ -36,17 +36,16 @@ what is on disk, the last gate). Update it at the end of every session.
 ## Tests
 
 - pytest. Fast gate: `pytest -m "not slow"` (the recorded one-process target is 16 minutes, piece-3
-  spec §8.4). Full: `pytest` (never timed in one process; the two halves at the piece-5 gates were
-  14 min 42 s + 38 min 6 s, so budget about 55 minutes. The slow set is five tests: the chi
-  full-pipeline test `test_chi_mode_full_sbi_pipeline` in `tests/test_user_sbi.py` (1397 s), in
-  `tests/test_tool.py` the Nadrowski sanity-path run
-  `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (562 s) and the FDT/crossval tiny-size run
-  `test_fdt_and_crossval_run_at_tiny_size` (323 s) — 38 min 6 s for those three at `c29320c` — the
-  tier-1 tiny `smoke` `test_smoke_runs_every_stage_on_the_tier1_box` in `tests/test_tier1.py`
-  (timed at the final gate) and the probes twin-cell check
-  `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` in
-  `tests/test_diagnostics.py` (timed at the final gate); the slow set alone is `pytest -m slow`).
-  Count: `pytest --collect-only -q`.
+  spec §8.4). Full: `pytest` (never timed in one process; the two halves at the piece-6 gates were
+  15 min 24 s + 1 h 15 min 27 s, so budget about 95 minutes. The slow set is five tests: the chi
+  full-pipeline test `test_chi_mode_full_sbi_pipeline` in `tests/test_user_sbi.py` (2618 s; 1397 s
+  at piece 5 — the open list), in `tests/test_tool.py` the Nadrowski sanity-path run
+  `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (619 s) and the FDT/crossval tiny-size run
+  `test_fdt_and_crossval_run_at_tiny_size` (452 s), the tier-1 tiny `smoke`
+  `test_smoke_runs_every_stage_on_the_tier1_box` in `tests/test_tier1.py` (828 s) and the probes
+  twin-cell check `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin`
+  in `tests/test_diagnostics.py` (7 s): 1 h 15 min 27 s at `067eddc`; the slow set alone is
+  `pytest -m slow`). Count: `pytest --collect-only -q`.
 - Markers: `slow`; `gpu` (skipped when CUDA is absent); `display` (skipped offscreen). The
   display-marked tests run on the real screen with `QT_QPA_PLATFORM=windows pytest -m display`
   (the root conftest only DEFAULTS the variable); they create hidden native windows, nothing shows.
@@ -70,8 +69,9 @@ what is on disk, the last gate). Update it at the end of every session.
   (`_no_sbi_logs`) — asserted at SETUP too, so a leftover tree makes every pytest run error before
   the first test.
 - A green suite does not certify the GPU path. The gpu-marked tests do run on the card inside every
-  fast gate when CUDA is present (`tests/test_gpu_paths.py`'s CUDA inference run plus six in
-  `tests/test_user_sbi.py`), but they are not a substitute: no checkpoint resume, no real bounds or
+  fast gate when CUDA is present (`tests/test_gpu_paths.py`'s CUDA inference run, six in
+  `tests/test_user_sbi.py` and one in `tests/test_diagnostics.py`), but they are not a substitute: no
+  checkpoint resume, no real bounds or
   cell files. After touching code that moves tensors, run the smoke gate on the card — five command
   lines, from the repo root — and check `$LASTEXITCODE` after each one:
 
@@ -128,7 +128,8 @@ what is on disk, the last gate). Update it at the end of every session.
 
 - Every knob is an ARGUMENT, never a config write. `core/orchestrator.py` binds config constants
   at import (`from .config import X`), so assigning `config.X` at runtime changes nothing and the
-  run silently uses the default. Each tunable travels as a keyword argument; tests pin this.
+  run silently uses the default. Each tunable travels as an argument (some positionally, e.g.
+  `build_prior(cfg, None, True, …)`); tests pin this.
 - No public stage, composition or diagnostic mutates the configuration it is handed:
   `core.runs.public_entry` copies it on entry (piece 3, V1). A caller that wants what a stage
   wrote reads the artifact.
@@ -173,8 +174,10 @@ what is on disk, the last gate). Update it at the end of every session.
   which commits batch by batch and has no writer at all, and an `fdt` record, which is
   PROGRESSIVE — its directory and a first manifest exist from the moment the run starts,
   `refresh()` rewrites them as it goes, and a cancel or a crash keeps the folder, marked unfinished
-  (piece-5 spec §2.2, E2). Save is a rename; loading refuses any verifiable
-  mismatch, and `Accept(truncated, other_observation)` are the only escape hatches (each use is
+  (piece-5 spec §2.2, E2). Save is a rename; loading refuses a mismatch in
+  what it compares (`docs/guide/architecture.md`'s "The artifact store" lists the checks and the keys no
+  loader compares yet — the open list's load-check audit), and `Accept(truncated, other_observation)` are
+  the only escape hatches (each use is
   recorded downstream). No code outside `core/config.py` builds a literal `Resources/` or
   `Artifacts/` path (a test pins it). The old `Resources/{Priors,Posteriors,Checkpoints,Observations,
   Plots,CrossValidation,ReductionMap}` trees were deleted by the clean-break runbook on 2026-09-11

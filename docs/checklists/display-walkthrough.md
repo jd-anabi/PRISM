@@ -213,8 +213,8 @@ How to read the rows below:
   280–310 K, is inferred and the force scale is derived from it) and press "Build / Load prior". On
   the Posterior tab leave the picker at "+  (from scratch)", set 'Batches' to 4 and 'Max rows per
   batch (0 = auto)' to 32 and press "Train / Load posterior". A few minutes; nothing here is a check.
-  (The pickers restore the last session's selection, and a restored record makes the buttons LOAD
-  instead of build.)
+  (The pickers restore the last session's selection, and a restored record makes the buttons load it
+  instead of building a new prior or training a new posterior.)
 - **Order.** F1 and F2 use the model the setup builds, F5 uses F2's observation, and F3 edits F5's
   narrowed posterior by hand: run F1, F2, F4, F5, then F3.
 - **F3 edits a record.** Copy its `manifest.json` outside `Artifacts/` first and put it back
@@ -222,13 +222,14 @@ How to read the rows below:
   byte-order mark, or a different message appears.
 - **Subscripts.** The 'T_obs (s)' row label draws "obs" as a subscript (T with "obs" below it); other
   labels, the tooltips and the log show an underscore as typed, e.g. '(t_scale, T_obs) operating
-  points'. At this tiny size PASS or FAIL are both results; the rows check what is shown, not the
-  verdict.
+  points'.
+- **Verdicts.** At this tiny size PASS or FAIL are both results; the rows check what is shown, not
+  the verdict.
 
 | # | surface | do | expect | date | result |
 |---|---|---|---|---|---|
 | F1 | The Validate tab ends with the calibration verdict | On the Validate tab set 'Calibration datasets' to 40, leave the operating points at their default, and press "Run calibration". | The log pane shows the verdict record, whose head line begins `[verdict] ` and says PASS or FAIL, with no dialog; the run's last line is the tab's own closing line, beginning 'Calibration verdict PASS' or 'Calibration verdict FAIL' and naming the seed the tab drew. It judges every inferred parameter — all 13, temperature included — each KS p against the threshold 0.05 ÷ 13, temperature marked "(assumed input)"; the joint coverage test is judged against 0.05; the caveat that t_scale's test rests on the calibration's operating points is printed with it. | | |
 | F2 | Temperature is marked an assumed input in an inference | On the Infer tab's simulated page pick `master_spont_tier1.txt`, set 'T_obs (s)' to 4.5 and press "Run inference". Note the id on the "Observation recorded as" line. | The posterior summary in the log pane marks temperature as an assumed input, and the corner plot labels temperature "T (assumed input, K)"; the other twelve parameters read as before. | | |
-| F3 | A reworded store message reaches the window as a plain sentence | In Explorer, copy F5's narrowed posterior's `manifest.json` (`Artifacts/posteriors/_unnamed__<id>/`) outside `Artifacts/`; in the original change `"amortized": false` to `"amortized": true` and save. On Home → Artifacts choose the posteriors kind and select that row. Afterwards put the copy back and press "Refresh". | The row is listed as an incomplete directory, which nothing can load; the detail pane's `reason:` line reads "unreadable manifest: posterior body says amortized=True beside a truncation region; a truncated posterior carries its region and an amortized one carries none" — a plain sentence with no parenthesised label. With the copy put back and the list refreshed, the row reads as a narrowed posterior again. | | |
+| F3 | A reworded store message reaches the window as a plain sentence | In Explorer, copy F5's narrowed posterior's `manifest.json` (`Artifacts/posteriors/_unnamed__<id>/`, the posterior the Artifacts screen marks "narrowed (TSNPE)") outside `Artifacts/`; in the original change `"amortized": false` to `"amortized": true` and save. On Home → Artifacts choose the posteriors kind and select that row. Afterwards put the copy back and press "Refresh". | The row is listed as an incomplete directory, which nothing can load; the detail pane's `reason:` line reads "unreadable manifest: posterior body says amortized=True beside a truncation region; a truncated posterior carries its region and an amortized one carries none" — a plain sentence with no parenthesised label. With the copy put back and the list refreshed, the row reads as a narrowed posterior again. | | |
 | F4 | Tooltips: the patience measurement, and T_obs where T meant the recording length | On the Posterior tab hover the help badge beside 'Early-stop patience' in the "Density estimator" group, then the badge beside 'Batches', and read the "Training budget" group's lines; on the Validate tab read the operating-points label and hover its badge. | The patience tooltip gives the measurement — the run stopped at epoch 130 on a patience of 20, its best validation loss at epoch 110 — and names no incident date. The Batches tooltip, the budget group's diversity line and the Validate tab's operating-points label and tooltip all say "(t_scale, T_obs)", never "(t_scale, T)". | | |
 | F5 | A narrowing round reports truth containment per direction | On the TSNPE tab pick F2's observation in 'Observation' (listed as "(unnamed <id>)", the id from F2's "Observation recorded as" line), leave 'HPD level' and 'Directions truncated' at their defaults, set 'Batches' 4 and 'Max rows per batch (0 = auto)' 32, and press "Run TSNPE round". | Before training, the log pane reports for every truncated direction whether the loaded cell's truth lies inside the region — one `[tsnpe] truth ` line per direction, reading inside or outside (an outside direction also keeps the "GROUND TRUTH lies OUTSIDE" warning); the round then trains and writes a narrowed posterior. | | |
