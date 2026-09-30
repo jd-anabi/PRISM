@@ -30,7 +30,7 @@ WHAT TO WATCH, beyond "it finished":
     PreflightWarnings (the GUI shows them at warning severity; here they go to stderr).
   * the mode banner. A width mismatch between the config and the trained net is exactly what this
     run exists to catch before the long one.
-  * ``bounds=`` AND ``rescale order=`` in the config banner, TOGETHER. ``--bounds`` is required on
+  * ``bounds=`` AND ``rescale order:`` in the config banner, TOGETHER. ``--bounds`` is required on
     every SBI subcommand precisely because of this pairing: bounds resolution prefers a same-named
     SIBLING over the shared ``master.txt``, so a cell named ``master_spont`` used to resolve the
     12-dim SPONTANEOUS box while the retrain uses the 13-dim one -- differing only in ``f_scale``,
