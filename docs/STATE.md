@@ -2,8 +2,8 @@
 
 **Last updated:** 2026-09-30. **Piece 6, "the reference cleanup, retrain readiness, the probe checks and the
 documents", is DONE**: commits `779c73c`..`067eddc` (115, counted by `git log --oneline 779c73c^..067eddc`) plus the
-closing documents commits (`de52b79` and the closing check's fixes after it), on the local `main` branch, UNPUSHED
-(the owner pushes). Its design is `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
+closing documents commits (`de52b79` and the closing check's fixes after it), on the local `main` branch, PUSHED —
+`origin/main` is `f89088b` (seen 2026-09-30). Its design is `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
 (`907098d`; decisions H1–H13 in §1.1; §11 now 34 deviations, rows 1–14 ruled at planning and 15–34 during execution,
 each with what it costs if wrong) and its plan `docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md`
 (`779c73c`, 39 tasks). **What landed, part by part:** (1) the reference cleanup — nothing shippable (`core/`, `tests/`,
@@ -29,20 +29,19 @@ reading paths, a verifier each) found 2 Critical and 39 Important page errors an
 except the runbook's stop point, which waits for the owner (the recordings page's choice of stand-in values is written
 neutrally for the owner to settle), with the checklist closed (103 found, 19 appended, 35 dropped). The final fast
 gate, the slow set and the card judgement are in the gate table below.
-**Next, in order:** (1) the owner runs rows F1–F5 of `docs/checklists/display-walkthrough.md` on a real screen and
-reports each result; the next session records them in that table and in the gate table below. (2) The owner pushes
-(`main` is 119 commits ahead of `origin/main` `8556546` at `de52b79`: piece 6's 116 plus its three design commits
-`7ad6498`, `907098d` and `b24973e`; each later commit adds one, and `git status -sb` gives the live count). (3) Before
-the retrain, the owner settles three items on the open list: the runbook's stop point (about 740 hours); the
+**Next, in order:** rows F1–F5 passed and the owner pushed (both 2026-09-30). (1) Before the retrain, the owner
+settles three items on the open list, answered in the next session's chat: the runbook's stop point (about 740 hours); the
 masked-probe band the retrain's gates read (±12 points was derived for a four-batch smoke run); and whether the prior
 screen's two gaps (the census screens only the first half of the stability duration; the flood-fill walk has no box
-check) are fixed before the retrain prior is built. (4) The retrain ("Owed" item 8) from `docs/guide/retrain.md`. A
+check) are fixed before the retrain prior is built. (2) The retrain ("Owed" item 8) from `docs/guide/retrain.md`. A
 recommendation for the owner, not yet settled: its pre-flight step 1 owes run 4's resume as well (the shard set-aside
 entered the resume path after the 29 September card run, and the 30 September re-run covered runs 1, 2 and 2b only),
 not the diagnostic card (`core/diagnostics` changed only in a docstring since); and it runs on the installed sbi
 0.25.0 unless the owner syncs to the pinned 0.26.1 first, after which the two loop behaviours on the open list are
 re-read before the epoch timing. The load-check audit and the rest of "Owed" item 7 can follow the retrain; do the
 audit before any later change to `core/config.py` or to the features.
+**Rows F1–F5 of `docs/checklists/display-walkthrough.md` were run by the OWNER on a real screen,
+reported 2026-09-30: all five pass** (the gate table below).
 **Piece 5, "the secondary analyses", is DONE**: commits
 `a0d85da`..`7e51275` (77, counted by `git log --oneline a0d85da^..7e51275`) plus the documents
 commits that close it (this file's `fec2cde`, its review fixes `6c68a22`, and a count correction), on
@@ -209,7 +208,7 @@ Piece 3
   closes its figure (V8); sbi's summary writer is switched off, and the repository root's `sbi-logs/` tree
   (1359 run directories under `NPE_C`) was deleted (V9).
 - **Piece 6 is DONE** (2026-09-28/30, commits `779c73c`..`de52b79` (116) plus the closing check's fixes, on the local `main`
-  branch, unpushed). It follows the design `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
+  branch, pushed — `origin/main` `f89088b`; its rows F1–F5 all pass, 2026-09-30). It follows the design `docs/superpowers/specs/2026-09-25-documentation-and-retrain-readiness-design.md`
   (§1.1 holds decisions H1–H13; §11 lists 34 deviations, 1–14 ruled at planning and 15–34 during execution) and the 39
   tasks of `docs/superpowers/plans/2026-09-28-documentation-and-retrain-readiness.md`. Each implemented task had its
   brief, an implementer, a review (a workflow of scoped reviewers and adversarial verifiers for every large page and for
@@ -374,6 +373,9 @@ Piece 3
      - ~~The *Provenance* open item (a calibration and a TSNPE child do not record
        `--accept-truncated`; an inference on its posterior's own observation records `accepted: []`)~~
        — closed by H13: calibrations record `results.accepted` and narrowing rounds `training.accepted`.
+     - ~~Rows F1–F5 of `docs/checklists/display-walkthrough.md` on the real screen~~ — done by the
+       USER, reported 2026-09-30: **all five pass**, recorded in that file's last two columns and in the
+       gate table below.
    - **Open, with no piece owning them yet** (the owner decides each, or where it goes):
      - *Science.* In `identifiability jacobian`, a NaN in a measurable Jacobian column makes the
        least-squares step raise `LinAlgError` after all the simulations are spent (the retired
@@ -764,9 +766,9 @@ Piece 3
      ledger `.superpowers/sdd/2026-09-16-validation-and-logging/progress.md`.
    - The rest of piece 2's final review's 46 "left open" items are test-coverage gaps and cosmetics,
      each with its reason, in the gitignored `.superpowers/sdd/2026-09-12-one-flow/final-review.md`.
-8. **The retrain — NEXT.** From `docs/guide/retrain.md`, after steps (1)–(3) of "Next, in order" at
-   the top: the owner's rows F1–F5, the push, and the owner's three decisions on the open list (the
-   stop point, the masked-probe band, the prior screen's two gaps).
+8. **The retrain — NEXT.** From `docs/guide/retrain.md`, after step (1) of "Next, in order" at the
+   top: the owner's three decisions on the open list (the stop point, the masked-probe band, the prior
+   screen's two gaps). Rows F1–F5 passed and the owner pushed, 2026-09-30.
 
 ## Clean break — EXECUTED 2026-09-11 (design spec §9 / plan Task 14)
 
@@ -857,6 +859,7 @@ Piece 3
 | **final fast gate, piece 6**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-30 at `067eddc`, on a quiet machine: **1172 passed, 1 skipped**, 5 deselected, **181 warnings**, **15 min 24 s** (inside the 16-minute target), exit 0. Tree clean; the real `Artifacts/` gained nothing; no `sbi-logs/`; `Resources/Models` holds only `SHM.json` and `SHM2.json`. Warnings 181 → 181: unchanged. Slowest: `test_train_and_validate_without_a_loaded_cell` 87.2 s, `test_calibration_theta_star_lies_inside_the_region_when_one_is_given` 73.7 s, `test_no_forcing_user_model_full_sbi_pipeline` 43.7 s. Every code-changing task had its own one-process gate, recorded in the execution ledger |
 | slow set of record, `pytest -m slow -q --durations=5` (piece 6) | 2026-09-30 at `067eddc`: **5 passed**, 1173 deselected, 153 warnings, **1 h 15 min 27 s**, exit 0. `test_chi_mode_full_sbi_pipeline` 2618 s — OVER piece 5's 1397 s: its body is unchanged but for a comment, the other slow tests ran faster than Task 25's loaded reading and the card run's GPU stages matched piece 4's, and this test has varied 1181–2618 s across pieces, so it is recorded on the open list rather than chased; `test_smoke_runs_every_stage_on_the_tier1_box` 828 s; `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 619 s; `test_fdt_and_crossval_run_at_tiny_size` 452 s; `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` 7 s. Tree clean afterwards |
 | GPU card run, piece 6 — stands | `git diff --name-only 16e5bae..067eddc -- core conftest.py` lists 41 files, judged: every change is a comment, docstring, help string or message, plus the chi_f0 load comparison (floats read from a manifest), the shard set-aside (file renames) and a return annotation — none creates or moves a tensor, so the card run at `16e5bae` is the piece's card measurement. Insurance, because the set-aside sits in the training resume path: the recipe's runs 1, 2 and 2b re-run on the card on 2026-09-30 at `067eddc` — run 1 exit 0 in 412.8 s (prior 102 s, posterior 196 s, validate 25 s, infer 85 s; training masked probes 260 of 704, 36.9 % — 260 again, where the card run of record read 254: the count moves by one row between processes; cache `856a5f26ce2e`, not the record's `5d89e2242bd2`, with the identity code and `Resources/` unchanged between them — the one identity input a run builds is the fresh prior's fingerprint, so that is the likely difference (not traced; pieces 2–4 read `4d8022b100db` three times), and a card run's cache digest is no fixed expectation); run 2 printed the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 8.7 s, nothing set aside; run 2b exit 1 in 6.6 s naming `n_runs`, no `[fisher]` line, no new cache directory |
+| display walkthrough, piece-6 rows F1–F5 (`docs/checklists/display-walkthrough.md`) | reported 2026-09-30, the user on the real screen (piece 6 as it stands; the code is `30ff8a3`, every later commit being documents only): **rows F1–F5 all pass** — the date and result columns of each row record it |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the copies identical (the documents review compares them). Run it from the
