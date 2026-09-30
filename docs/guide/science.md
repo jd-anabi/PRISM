@@ -13,9 +13,13 @@ parameters of the dimensional section:
 - `t_scale` turns the model's time into the cell's time unit (milliseconds);
 - `f_scale` turns a force in the cell's unit into the model's.
 
-They are inferred with the other parameters, not derived from them. The one exception is the tier-1
-box, where `f_scale` is derived from the temperature
-([The tier-1 constraint and temperature](#the-tier-1-constraint-and-temperature)).
+They are inferred with the other parameters, not derived from them, with two exceptions:
+
+- on the tier-1 box `f_scale` is derived from the temperature
+  ([The tier-1 constraint and temperature](#the-tier-1-constraint-and-temperature));
+- a bounds file that declares a drive but neither `f_scale` nor the temperature, as the Hopf
+  model's does, gets `f_scale` = `x_scale` / `t_scale` (`core.forcing.build_nondim_force_tensor`),
+  so its force unit is in effect a length over a time.
 
 **Nothing nondimensionalises automatically.** A value in a bounds or cell file is used as written:
 a non-dimensional one as non-dimensional, a dimensional one in the unit the model's units file
@@ -27,11 +31,12 @@ hand.
 in cell time units, and the summary statistics and the chi lock-in index their spectra with a time
 step in cell time units. So a frequency is cycles per cell time unit everywhere in the simulator,
 the statistics and chi. A drive given in hertz is converted through the time unit alone
-(`core.sim_config.SimConfig.freq_si_to_cell`, 0.001 for a millisecond cell). It is never converted
-by matching the units file's frequency token: against a millisecond cell that match resolves to 1,
-and every drive would be a thousand times too fast. `SimConfig.check_unit_consistency` warns when
-the declared frequency token is not the reciprocal of the declared time token. How to give a
-recording's frequencies is in
+(`core.sim_config.SimConfig.freq_si_to_cell`, 0.001 for a millisecond cell), which gives the right
+factor whatever frequency token the units file declares, or none. It is never converted by matching
+the frequency token: a millisecond cell whose units file declared Hz would resolve that match to 1,
+and every drive would be a thousand times too fast. How the tokens must agree, and where a
+disagreement is reported, is in [Input files](recordings.md#input-files); how to give a recording's
+frequencies is in
 [Recording files and drive frequencies](recordings.md#recording-files-and-drive-frequencies).
 
 **The integration step comes from a prior bound.** The solver's finest non-dimensional step is
@@ -145,9 +150,10 @@ matrix that defines the flow's coordinates. So the rotation, and the degeneracy 
 the observation, with no gradient in the parameters.
 
 **Rank-Gaussianisation, in chi mode.** Under chi the conditioning network standardises its own
-inputs (next paragraph). The summary pathway's 50 columns are rank-Gaussianised
-(`core.SBI.embedded_network.EmbeddedNet.rank_gaussianize`): each column's empirical quantile
-function, sampled at `core.config.RANK_GAUSS_KNOTS` = 1024 levels, mapped through the probit.
+inputs (next paragraph). Each of the summary pathway's 50 columns that varies in training is
+rank-Gaussianised (`core.SBI.embedded_network.EmbeddedNet.rank_gaussianize`): the column's
+empirical quantile function, sampled at `core.config.RANK_GAUSS_KNOTS` = 1024 levels, mapped through
+the probit. A column constant in training, such as Group G's under chi, passes as 0.
 
 - It replaced a mean-and-standard-deviation standardisation that a handful of pathological traces
   had contaminated. Fitted on an earlier training run, `A1_mean`'s standard deviation came out at
@@ -173,19 +179,20 @@ rank as above.
 
 **Per-column winsorisation, in every mode.** Before training, each summary column (the flags and
 log T_obs included) is clipped to its own 0.1 % and 99.9 % percentiles (`core.config.WINSOR_PCT`,
-applied by `core.SBI.summaries.winsorize_summary_block`), and a `[winsor]` line says how many
-elements moved. It replaced a row filter that dropped any row holding a value
-above 1e15. That filter threw a whole row away for one bad value, and the outliers it let through,
-below its threshold, were what dragged `A1_mean`'s fitted standard deviation to 4.19e11; clipping
-each column at its own percentiles removes the leverage without removing a row. The chi block is
-never clipped, for the reason given under the chi block below.
+applied by `core.SBI.summaries.winsorize_summary_block`), and, when any element moves, a `[winsor]`
+line says how many. It replaced a row filter that dropped any row holding a value above 1e15. That
+filter threw a whole row away for one bad value, and the outliers it let through, below its
+threshold, were what dragged `A1_mean`'s fitted standard deviation to 4.19e11; clipping each column
+at its own percentiles removes the leverage without removing a row. The chi block is never clipped,
+for the reason given under the chi block below.
 
 **Pathological trajectories are counted as they are simulated**
 (`core.SBI.summaries.count_pathological`): non-finite, exactly constant, or over 1e15 in magnitude.
-A `[patho]` warning names each batch in which new ones appear, since they cluster in particular
-(`t_scale`, T_obs) strata, and a `[patho]` run total closes the generation. Read it before trusting
-a flag histogram: the statistics map a non-finite value to 0, so a non-finite trace's flags read as
-valid.
+The passive trace is always counted, and the driven trace in forced mode; chi's probe traces are
+not counted. A `[patho]` warning names each batch in which new ones appear, since they cluster in
+particular (`t_scale`, T_obs) strata, and a `[patho]` run total closes the generation. Read it
+before trusting a flag histogram: the statistics map a non-finite value to 0, so a non-finite
+trace's flags read as valid.
 
 **The chi block.** Each slot is six channels: u = log(f/Ω₀), log|χ|, cos, sin, logcyc = log(f × T)
 with T the duration actually locked in over, and a mask. The probe's frequency is carried in u, not
@@ -249,7 +256,7 @@ the same traces over shorter prefixes, separated two different failures:
   lock-in accumulates the wander instead of averaging it away. The mechanism is inferred, not
   established; phase diffusion of the free-running oscillation is the obvious candidate, and it has
   not been tested.
-- **At and above resonance, no shortening helps.** Capped at 20 cycles, probes of the band's first
+- **From half of Ω₀ upward, no shortening helps.** Capped at 20 cycles, probes of the band's first
   setting still failed: at 0.5 × and 2 × Ω₀ the drive entrains the bundle, and at 1 × and 10 × the
   driven response is no larger than the bundle's own activity at that frequency (the driven lock-in
   was 0.12 times the undriven one at 1 ×). Entrainment belongs to the driven trace's spectrum, not
@@ -290,7 +297,8 @@ value was chosen by reproducibility, and it is bounded from both sides:
 - too weak, and |χ| stops being reproducible: at 0.05 × Ω₀ the spread was 0.090 of the mean at a
   drive of 0.05, against 0.026 at 0.15;
 - too strong, and the drive entrains the bundle, which abandons its own rhythm and follows the
-  drive: onset at 0.2, the previous default, measured with the drive at 1.4 × Ω₀.
+  drive. Measured with the drive at 1.4 × Ω₀, on a grid of strengths with no point between 0.1 and
+  0.2, the onset fell between those two and was read as 0.2, the previous default.
 
 0.15 is the strongest drive that stays reproducible across the band and leaves the bundle running
 free: its own peak kept at least 84 % of its undriven power at every probe from 0.05 to 0.2 × Ω₀.
@@ -320,10 +328,11 @@ length (48 runs, in-band probes only, so frequency cannot confound it) brackets 
 - 12 to 16 reproduce slightly better and were not chosen. A shorter lock-in is also less
   frequency-selective, and no experiment here has priced that side of the trade.
 - The ceiling is not a filter: nothing is masked or dropped by it; the segment is shortened. It
-  applies per row, inside `core.SBI.chi_probes.gen_chi_raw`, where every caller goes through it:
-  training, the Fisher rotation, the posterior predictive check and the experimental path. A
-  ceiling applied in only one of them would have the network read an observable it was not trained
-  on, silently.
+  applies per row, inside `core.SBI.chi_probes.gen_chi_raw`, which training, the Fisher rotation,
+  the posterior predictive check and a simulated observation all go through; the experimental path
+  applies the same ceiling to a real recording through `core.SBI.chi.probe_verdict`, which truncates
+  it. A ceiling applied in only one of them would have the network read an observable it was not
+  trained on, silently.
 - A posterior records its ceiling, because the ceiling sets the logcyc channel the encoder weighs a
   probe by. `SimConfig` refuses a ceiling at or under the floor, which would shorten every probe
   below two cycles and mask them all.
@@ -340,23 +349,28 @@ probes. An audit that separated the masking predicates, over a real screened pri
 - **The driver is each row's own Ω₀.** The live fraction was flat across recording lengths and
   across the band's multipliers, and sharp in Ω₀:
 
-  | Ω₀ (Hz) | under 1 | 1 to 3 | 3 to 10 | 10 to 30 | over 30 |
-  |---|---|---|---|---|---|
-  | live probes | 0 % | 0 % | 14 % | 69 % | 98 % |
+  | Ω₀ (Hz) | under 0.3 | 0.3 to 1 | 1 to 3 | 3 to 10 | 10 to 30 | over 30 |
+  |---|---|---|---|---|---|---|
+  | live probes | 0 % | 0 % | 0 % | 14 % | 69 % | 98 % |
+  | median peak power over median power | not measured | 6,202 | 2,378 | 273,350 | 143,863 | 7,516 |
 
-- **The slow draws are real oscillators.** Their spectral peaks stand thousands of times above the
-  median power, so they are not a peak finder's argmax landing on a featureless spectrum, and
-  screening them out of the prior would be wrong. The mask is correct physics: the prior spans about
-  four decades of Ω₀, and a band relative to Ω₀, with recordings of at most 60 s, reaches only its
-  fast end.
+- **Down to 0.3 Hz the slow draws are real oscillators.** Their spectral peaks stand thousands of
+  times above the median power, so they are not a peak finder's argmax landing on a featureless
+  spectrum, and screening them out of the prior would be wrong. The mask is correct physics: the
+  prior spans about four decades of Ω₀, and a band relative to Ω₀, with recordings of at most 60 s,
+  reaches only its fast end.
+- **The slowest bucket is open.** Under 0.3 Hz, about 16 % of rows, the audit returned no
+  measurable peak-to-median ratio, and those rows have not been examined, so whether a prior screen
+  is right for them is an open question.
 - **About a third of rows keep no live probe** even after both fixes below. A row resolves no probe
   at any placement when Ω₀ × T_obs is under 2 / 0.3, about 6.7 cycles. Only a change to the prior
   can reach those rows: restricting its Ω₀ range is defensible if the slow draws lie outside the
   regime of interest, but it changes the question the posterior answers and would have to be
   declared with it.
 - **Raising the longest recording was rejected.** Resolving the whole band on a 0.1 Hz bundle takes
-  two cycles at 0.003 Hz, about 670 s: outside experimental reality, and it would dominate the
-  simulation budget.
+  two cycles at 0.003 Hz, about 670 s (a single probe at the band's top would need about 67 s, still
+  past the longest recording, and would measure no spread): outside experimental reality, and it
+  would dominate the simulation budget.
 
 **Per-row placement** (`core.SBI.chi.resolvable_multipliers`, training only). Each row's multipliers
 are lifted into the sub-band its own Ω₀ can resolve at the recording's length,
@@ -409,10 +423,10 @@ corrected band (31.7 % to 44.9 %). A smoke run's reading is judged against that,
 - every row in a batch shares one (`t_scale`, T_obs) draw and one probe set, so the effective
   sample size is the number of batches, not of probes;
 - per-batch fractions ran from 13.5 % to 57.3 %, a standard deviation of 12.2 points over 12
-  batches, not the 1.8 points a binomial count over one run's 704 probes would suggest;
-- a smoke run has four batches, so its standard deviation is about 12.2 / √4 ≈ 6.1 points, and
-  ±12 points is about two of them. Compare the mean of two or three runs against 37 %; one run
-  inside the band says little.
+  batches;
+- a smoke run has four batches, so its standard deviation is about 12.2 / √4 ≈ 6.1 points, not the
+  1.8 a binomial count over its 704 probes would suggest, and ±12 points is about two of them.
+  Compare the mean of two or three runs against 37 %; one run inside the band says little.
 
 On the GPU a single run's count can also move by one row's probes from process to process (260 and
 254 of 704 have both been read with identical settings), which is one more reason the criterion is a
@@ -435,9 +449,11 @@ cell:
 - [probes drive](command-line.md#probes-drive), with the drive at 1.4 × Ω₀: Ω₀ 22.600 Hz. At the
   original own-peak window of 0.018 over the original sixteen strengths, the strongest free-running
   drive is 0.02 and the weakest captured is 0.2, as first measured. On the check's default grid and
-  window it is free-running at 0.02 and captured from 0.15. That capture is read above resonance
-  and moves with the window, which is why this check does not judge the chi drive and
-  [probes band](command-line.md#probes-band) does.
+  window it is free-running at 0.02 and captured from 0.15. The two readings agree at every
+  strength both grids contain; the original grid has no point between 0.1 and 0.2, and at this
+  detune 0.15 is already captured. Capture is read at 1.4 × Ω₀, above resonance, never at a probe's
+  frequency, and its onset depends on that detune, which is why this check does not judge the chi
+  drive and [probes band](command-line.md#probes-band) does.
 - [probes mask](command-line.md#probes-mask), over a prior built at the smoke run's size: 753 of
   2,144 probes masked (35.1 %), the cycle floor the only cause: 31.2 % too slow even at the band's
   top, 4.0 % shortened below it by the draw of lock-in durations.
@@ -475,10 +491,11 @@ gradients cannot explain: 1 alone, 0 fully aliased.
   magnitude channels are three of `t_scale`'s top five, the top two above `A3_log_fpeak`.
 - **`lam`~`t_scale` was never degenerate on this cell**: their gradients' |cos| is 0.59 in forced
   mode, before chi does anything.
-- **`k`~`x_scale` survives chi**: |cos| 0.98 forced, 0.95 chi (0.97 when measured again), and the
-  two keep the worst unique handles. Both are led by `A1_mean`: stiffness and displacement scale
-  move the trace's mean together, and a sub-resonance susceptibility does not touch the mean. Three
-  measurements agree. Chi will not break this pair, and no retraining will change that.
+- **`k`~`x_scale` survives chi**: |cos| 0.98 forced; 0.95 under chi in the first map and 0.97 in
+  the one tabulated above. The two keep the worst unique handles. Both are led by `A1_mean`:
+  stiffness and displacement scale move the trace's mean together, and a sub-resonance
+  susceptibility does not touch the mean. Three measurements agree. Chi will not break this pair,
+  and no retraining will change that.
 - **The control.** Forced mode's Group G lock-in has no cycle ceiling, so at 4.5 s it ran 142 drive
   cycles, far past the wall of about 31 ([Chi probe design](#chi-probe-design)). That inflates its
   noise and flatters chi. The 1.0 s column (31.6 cycles) is a control on that lock-in, not a chi
@@ -496,20 +513,21 @@ already attacks the degeneracy the rotation targets. The measurement above shows
 
 - Under chi the Fisher builds its Jacobian over 41 + 3K features: the statistics without their
   flags (Group G is then all zero, which costs nothing) and three channels per probe,
-  `core.SBI.chi.CHI_FISHER_CHANNELS` = (logmag, cos, sin). K is the observation's probe count.
-- The other three conditioning channels would each be an amplifier over the 1e-9 floor. u is fixed
-  by the multiplier grid and varies only by rounding. The mask steps between the arms of a central
-  difference. logcyc duplicates `A3_log_fpeak` exactly below the ceiling, and is a quantisation
-  sawtooth where the ceiling binds.
+  `core.SBI.chi.CHI_FISHER_CHANNELS` = (logmag, cos, sin). K is the run's configured probe
+  count, `CHI_N_FREQS` = 6 by default.
+- Each of the other three conditioning channels would corrupt the Jacobian. u is fixed by the
+  multiplier grid and varies only by rounding, so dividing by its spread amplifies that rounding.
+  The mask steps between the arms of a central difference, over the 1e-9 floor. logcyc duplicates
+  `A3_log_fpeak` exactly below the ceiling, and is a quantisation sawtooth where the ceiling binds.
 - The chi simulations are seeded again immediately before the chi block, so the two arms of each
   central difference share their chi noise; without that the derivative is swamped and the rotation
   meaningless. `test_chi_fisher_rotation_builds_over_the_chi_feature_set` pins it.
 - The cost is K + 1 simulations per Fisher evaluation instead of 2.
 
-**Six probes into twelve slots is an untested lever.** An observation supplies `CHI_N_FREQS` = 6
-probes into `CHI_K_PAD` = 12 slots, so half the chi block is padding before anything is masked,
-while training draws its probe count from 2 to 12. Whether more probes, or a slot count matched to
-what is supplied, would buy information has never been measured.
+**Six probes into twelve slots is an untested lever.** A simulated observation supplies
+`CHI_N_FREQS` = 6 probes into `CHI_K_PAD` = 12 slots, so half the chi block is padding before
+anything is masked, while training draws its probe count from 2 to 12. Whether more probes, or a
+slot count matched to what is supplied, would buy information has never been measured.
 
 **Running the comparison.** `identifiability jacobian` measures the map at a cell's ground truth and
 needs no posterior; its flags are in
