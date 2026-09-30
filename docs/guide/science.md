@@ -616,8 +616,9 @@ What the screen does, read from the code:
   accepted. That is why the screen's duration defines what "stable" means.
 - **Every accepted point passed one test.** The census and the walk both integrate the whole
   stability duration, and the walk keeps only steps inside the box, so the clamp before the fit, to
-  10⁻⁶ of the range inside a bound (`core.SBI.reparam.clamp_to_box`), moves only a point lying
-  exactly on a bound. The prior's `log.txt` records both stages' counts:
+  10⁻⁶ of the range inside a bound (`core.SBI.reparam.clamp_to_box`), moves only a point within
+  that distance of a bound, by at most that distance. The prior's `log.txt` records both stages'
+  counts:
   `[prior] stability sweep: kept <n> of <m> candidates over <steps> steps` and
   `[prior] fill: kept <n> new sets from <m> steps (<a> outside the box, <b> unstable); <total> sets in all`.
   The record itself stores its accepted count as unknown.

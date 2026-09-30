@@ -1608,8 +1608,9 @@ def test_nadrowski_compiled_step_matches_eager_and_keeps_its_arity():
 
     euler_compiled splats compiled_params() POSITIONALLY into compiled_step, and every entry is a
     same-shaped tensor -- so an inserted, dropped or reordered parameter mis-binds silently: wrong
-    physics, no error. That path is selected only on CUDA in a real run, and the one other CPU test
-    that calls it (test_each_compiled_step_follows_its_models_registered_noise_flag) compares whole
+    physics, no error. That path is selected only on CUDA in a real run, and the other CPU tests that
+    call it (test_each_compiled_step_follows_its_models_registered_noise_flag here, and
+    test_compiled_step_matches_eager in tests/test_user_models.py for user models) compare whole
     trajectories, not this arity, so a break here would ship straight into a multi-hour GPU run.
     torch.jit.script compiles on CPU, so the contract is checkable here.
     """
@@ -3774,9 +3775,10 @@ def test_the_cuda_graph_step_matches_the_eager_step_bitwise():
     comparisons (eager/eager, graph/graph, graph/eager, replayed-region) are exactly 0.0.
 
     This is CUDA-only and TorchScript-only, so it does not touch the CPU suite's seeded-reproducibility
-    gates: `euler_compiled` is selected only on CUDA in a real run, and the one CPU test that calls it
-    directly (test_each_compiled_step_follows_its_models_registered_noise_flag) compares it with the
-    eager `euler` under one seed, not with a seeded reference.
+    gates: `euler_compiled` is selected only on CUDA in a real run, and the CPU tests that call it
+    directly (test_each_compiled_step_follows_its_models_registered_noise_flag here, and
+    test_compiled_step_matches_eager in tests/test_user_models.py) compare it with the eager `euler`
+    under one seed, not with a seeded reference.
     """
     from core import config as _cfg
     from core.Solvers import sdeint as _sd
