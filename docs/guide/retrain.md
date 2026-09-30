@@ -1,6 +1,6 @@
 # The retrain runbook
 
-Checked against commit 20a3cba.
+Checked against commit 3c4e393.
 
 The next full-size training run: a chi posterior on the tier-1 box, 10,000 batches of 2,048 rows,
 with a flow of 256 hidden features × 10 transforms, followed by one narrowing round that certifies
@@ -93,13 +93,12 @@ tab remembers Batches ([What the window remembers](window.md#what-the-window-rem
 changed since a cache was written, train against a new cache. The drive, the band, the lock-in
 ceiling and the slot count are part of the cache's identity, so a change to one of them re-keys the
 cache (a committed cache exactly one setting away is refused until `--new-run` is given), and the
-store refuses a posterior trained at another value of any of them. Two are in neither the identity
-nor a posterior's record: the cycle floor, `CHI_MIN_CYCLES`, and the smallest probe count training
-draws, `CHI_K_MIN_TRAIN`. After a change to either, a plain `train` finds the old cache and reuses
-rows drawn under the old value.
+store refuses a posterior trained at another value of any of them. Two, the cycle floor
+`CHI_MIN_CYCLES` and the smallest probe count `CHI_K_MIN_TRAIN`, are in neither
+([The artifact store](architecture.md#the-artifact-store)); after a change to either, a plain `train`
+finds the old cache and reuses rows drawn under the old value.
 [The chi probe set and its Fisher](rules-and-traps.md#the-chi-probe-set-and-its-fisher) has the
-general rule, and [The artifact store](architecture.md#the-artifact-store) the other keys a record
-carries that no loader compares. No flag forces a new cache under an unchanged identity:
+general rule. No flag forces a new cache under an unchanged identity:
 `--resume never` refuses when this run's own cache holds batches, and `artifacts rm` refuses a cache
 while any record names it.
 
@@ -117,8 +116,9 @@ command that names it finds the old cache. If one is there, take one of two rout
   difference, as it is after a change to the cycle floor or the smallest probe count, the old cache
   is exactly one setting away (`prior_fingerprint`): the first `train` is refused naming it, and the
   same command with `--new-run` starts the new cache. Otherwise the first `train` starts the new
-  cache at once. A resume needs no `--new-run` once the new cache has committed its first batch
-  ([Resuming](#resuming) covers a first process that committed nothing). Nothing is deleted, and
+  cache at once. A resume needs no `--new-run` once the new cache holds a commit: the first comes at
+  batch 50, or sooner from the rescue save of a crash or an unpiped Ctrl-C ([Resuming](#resuming)
+  covers a first process that committed nothing). Nothing is deleted, and
   every record stays in the real store.
 - **Or delete the old cache.** Delete the records that depend on it from the leaves up (the
   calibrations, inferences, diagnostics and narrowing rounds built on each posterior trained from it,
@@ -137,9 +137,11 @@ build, and again before the run. Nothing here trains the retrain, and any step c
 
 1. **The card smoke gate, run 4 included.** All five command lines of
    [The card smoke gate](testing.md#the-card-smoke-gate) pass, on the code the retrain will run. Run 4
-   matters most here: it runs this box at this network size, end to end. The retrain's checks below
-   lean on the diagnostics too, so if code under `core/diagnostics` has changed since the last card
-   run, [The diagnostic card](testing.md#the-diagnostic-card) passes as well.
+   matters most here: it runs this box at this network size, end to end. If the resume path has
+   changed since the last card run, run 4's resume passes as well
+   ([The card smoke gate](testing.md#the-card-smoke-gate)). The retrain's checks below lean on the
+   diagnostics too, so if code under `core/diagnostics` has changed since the last card run,
+   [The diagnostic card](testing.md#the-diagnostic-card) passes as well.
 
 2. **The epoch timing**, in a scratch store: how long one epoch of the 256 × 10 flow takes on this
    card, before anything costs weeks.
@@ -185,9 +187,11 @@ build, and again before the run. Nothing here trains the retrain, and any step c
      expected to cost about four times that, about 370 hours: sbi's spline flow at 256 × 10 has about
      3.9 times the trainable parameters of the 128 × 8 one (3.7 million against 0.96 million, for
      thirteen parameters), and a training step's work grows with them. The projection covers the
-     fit alone. Generation comes on top: 11.4 hours for the August retrain's 5,000 batches, and about
-     31 for the 10,000-batch run of 29 August 2026. So does the certification round, which costs
-     about as much as the whole retrain again.
+     fit alone. Generation comes on top: 11.4 hours for the August retrain's 5,000 batches
+     (generation was about a fifth of that run, the flow's fit about four fifths), and about 31 for
+     the 10,000-batch run of 29 August 2026. A narrowing round that re-simulated 5,000 batches under
+     a fresh rotation took 8.1 hours (9 September 2026). The certification round comes on top too,
+     and costs about as much as the whole retrain again.
    - **The stop point.** If the projection is more than twice the expected cost, about 740 hours,
      **stop for the owner's decision**.
 
@@ -227,7 +231,8 @@ build, and again before the run. Nothing here trains the retrain, and any step c
      read as they do on `master_spont` ([Chi probe design](science.md#chi-probe-design)); one that
      does not hold stops the retrain until it is understood.
    - `probes mask` must find the masked probes within ±12 points of 37 %, with the cycle floor the
-     only cause, over the retrain's own prior ([probes mask](command-line.md#probes-mask)).
+     only cause, over the retrain's own prior ([Chi probe design](science.md#chi-probe-design) says
+     where the figure and the band come from).
 
    Then delete the scratch folder: `Remove-Item -Recurse -Force $S`.
 
@@ -379,20 +384,26 @@ $LASTEXITCODE
   A resumed process prints no `[fisher]` line, and its record writes the three Fisher settings as
   null ([The Fisher settings on a resumed run](window.md#the-fisher-settings-on-a-resumed-run)).
 - **Keep the prior.** Resume with the same `retrain_prior`: the cache is keyed on its fit, and a
-  rebuilt prior is another fit.
+  rebuilt prior is another fit ([The artifact store](architecture.md#the-artifact-store) says why the
+  fit is part of the key).
 - **The two refusals** ([Training-cache flags](command-line.md#training-cache-flags)):
   - with `--resume require` and no committed batch in this run's own cache,
     `prism train: refused: resume='require' but there is no resumable cache at <dir>.`, followed by
     any committed cache one setting away. Either the first process committed nothing (above), or the
-    command differs from the first run's in the setting a listed cache names. A listed cache that
-    differs in `prior_fingerprint`, on the new-prior route, is the earlier attempt's: never set the
-    prior back to reach it;
+    command differs from the first run's in the setting a listed cache names, or neither state file
+    of the cache can be read. In that last case do not re-run the first command, which would start
+    over from zero: stop for the owner. A listed cache that differs in `prior_fingerprint`, on the
+    new-prior route, is the earlier attempt's: never set the prior back to reach it;
   - without `require`, a run one setting away from a committed cache is refused before the Fisher
     step: `This run would start a NEW simulation cache at <dir> from zero, but a committed cache ONE setting away exists:`,
     a line naming the setting and both values, and a line ending `(--new-run)`. Set the setting back
     to continue that cache, unless it is the earlier attempt's. `--new-run` is right only when that
     one setting was changed on purpose and a new run from zero is what you want; it never forces a
     fresh start over this run's own cache.
+
+  A resume refused because the cache holds two shards that overlap names both: move the one that
+  does not fit the committed run, with its `th_` twin, into the cache's `uncommitted` folder, as the
+  message says, and resume again.
 - **Capture every process, with `-Append`.** The posterior's `log.txt` holds only the last
   process's records, so a resumed run's first process's lines, its `[fisher]` lines among them, exist
   nowhere but in the captured file.
@@ -461,7 +472,8 @@ answers each. A retrained model passes when all four gates hold.
    embedding at least a tenth as far as the median channel, the same order as this run's healthy
    channels.
 3. **The masked total is within ±12 points of 37 %**, read from the training run's
-   `[chi] masked probes` line, the one scoped to every committed batch of the simulation cache.
+   `[chi] masked probes` line, the one scoped to every committed batch of the simulation cache
+   ([Chi probe design](science.md#chi-probe-design) says where the figure and the band come from).
    `validate` logs a line of its own, scoped to its own process, which is not this gate.
 4. **The eigenvalues are recorded.** `retrain_rotation` prints `[eigenvalues] max … min … spread …`
    and the participation ratio; `[eigenvalues] NOT STORED for this artifact.` fails the gate.
@@ -477,7 +489,10 @@ The two readings, written down rather than passed:
   density than the prior does. Temperature's line is marked "(assumed input)", and the total is not
   adjusted for it ([Reading calibration honestly](science.md#reading-calibration-honestly)). No
   earlier posterior exists to compare with, so this is the number later runs are compared against,
-  always on fresh calibration sets.
+  always on fresh calibration sets. Compare two totals with their `sem_nats`. Under one prior, an
+  amortized posterior's calibration set repeats with `validate --seed N` and the same `--n-cal` and
+  `--cal-n-scales`. A narrowed posterior draws its set from its region, so its set is never its
+  parent's.
 
 Dropped, each with its reason:
 
@@ -500,10 +515,17 @@ A narrowing round from `retrain`, drawn around the simulated tier-1 cell at 4.5 
 
 - `<id>` comes from `infer`'s `[prism] observation _unnamed__<id>  <path>` line: the part after
   `_unnamed__`.
+- `cert_parent` logs `[ppc] chi probes: <n> live / <K> slots` (`core.orchestrator.infer_and_visualize`).
+  That is how many of the observation's probe slots the posterior-predictive draws keep live, which
+  reads how well the posterior constrains Ω₀ ([Chi probe design](science.md#chi-probe-design)), not
+  the probe machinery gate 3 checks. The August 2026 retrain kept about four live. Record it; it is
+  not a gate.
 - The round is a second full-size training. It inherits neither its parent's network nor its batch
   count, so both are passed ([tsnpe](command-line.md#tsnpe)). Its region is part of its cache's
-  identity, so it simulates a cache of its own, and it costs about what the whole retrain does, its
-  roughly 31 hours of generation included.
+  identity, so it simulates a cache of its own, and it costs about what the whole retrain does. Its
+  roughly 31 hours of generation is the planning figure, taken from the full-size 10,000-batch run of
+  29 August 2026; the one measured narrowing-round generation is the 8.1 hours for 5,000 batches
+  (pre-flight step 2).
 - Left at their defaults: `infer`'s `--chi-k 6`, the probes the simulated cell is measured at, and
   `--n-samples 1000`; `tsnpe`'s `--chi-k 6`, which the observation's own probe count replaces,
   `--run-size 0`, `--learning-rate 0.001`, `--stop-after-epochs 20`, `--max-epochs` with no ceiling,
@@ -530,6 +552,10 @@ The round passes when both hold:
   left full width, and `[tsnpe] direction <j> NOT truncated: …` says so;
 - its calibration verdict passes: `cert_cal`'s `[verdict] PASS`, with `results.accepted` showing
   `truncated`.
+
+[tsnpe](command-line.md#tsnpe) says what the round prints about its acceptance and the truth's
+containment, and [Narrowing rounds](science.md#narrowing-rounds) why `cert_cal`'s informativeness
+is inflated by −log P(A).
 
 **The widths.** That a round narrows the posterior no more than the data support is not a reading of
 this run. The round's proposal guarantees it: the prior restricted to the region, never the

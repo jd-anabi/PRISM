@@ -1,6 +1,6 @@
 # Architecture
 
-Checked against commit d7f3c17.
+Checked against commit 3c4e393.
 
 This page is for whoever maintains the code: how `core/` is laid out, how a run flows through it,
 and why the load-bearing parts are built the way they are. Code is cited by module and function name.
@@ -70,7 +70,8 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
 - `derived.py`: the force scale derived from temperature on a tier-1 box, and `for_simulation`.
 - `truncate.py`: TSNPE: the truncation region and the truncated latent prior.
 - `training_checkpoint.py`: the simulation cache on disk: its header, state and shards, the resume
-  check (`verify`) and the search for caches one setting away.
+  check (`verify`), the set-aside of uncommitted shards (`set_aside_uncommitted`) and the search for
+  caches one setting away.
 - `run_guards.py`: the checks that stop an expensive run before the spend, and the prior's
   fingerprint.
 - `prior_screen.py`: `gen_prior`, the entry to the stability screen.
@@ -279,14 +280,22 @@ when it holds nothing but a docstring, and so is the reduction map's own test fo
   `chi_probes`, `summaries`, and the sine drive builder from `core.forcing`) are re-imported at the
   end of the module, because tests rebind names on it: a test that rebinds `pipeline.<name>` changes
   what code reads through the module at call time, and nothing else. So every consumer must read
-  these names as `pipeline.<name>`, and the siblings call back through the module object
-  (`_pipeline.<name>`), never through a `from` import. A consumer that bypasses the seam fails
-  silently: the patch stops landing, and tests go slow or quiet, not red. Deleting a re-import
-  outright fails loudly (an `ImportError` or `AttributeError`), with one exception: Settings reads
-  `core/gui/panels/inference_tabs.py`'s `HELP` by string path and skips it when it is absent. The
-  same re-export pattern holds in `core/config.py` (its re-export of `SimConfig`), in
+  these names as `pipeline.<name>`, and the siblings that call back into the façade (`train`,
+  `chi_probes` and `summaries`) do so through the module object (`_pipeline.<name>`), never through a
+  `from` import. A consumer that bypasses the seam fails silently: the patch stops landing, and tests
+  go slow or quiet, not red. Deleting a re-import fails when the name is next read:
+  - a `NameError` from the façade's own code, which uses several as module globals (`gen_stats`,
+    `gen_chi_block`, `count_pathological`, and `_PATHO_MAG` only in its `[patho]` lines, the last of
+    them after generation ends);
+  - an `AttributeError` for a consumer that reads `pipeline.<name>`;
+  - an `ImportError` for one that imports it.
+
+  Two re-imports, `VALID_PRIORS` and `_ZSCORE_CHECK_MAX_ROWS`, are read by nothing through the
+  façade. The same re-export pattern holds in `core/config.py` (its re-export of `SimConfig`), in
   `inference_tabs.py`, at the end of `core/orchestrator.py` (the bench-recording builders, which the
-  suites patch there) and in `core/diagnostics/rng.py`.
+  suites patch there) and in `core/diagnostics/rng.py`. Deleting one of those fails loudly too, with
+  one exception: Settings reads `core/gui/panels/inference_tabs.py`'s `HELP` by string path and skips
+  it when it is absent.
 - **Reduction is not used by inference.** Only the Reduction Map panel imports `core.Reduction`.
 
 ## Stages and compositions
@@ -309,10 +318,12 @@ report whether the truth lies inside the region. The training rows never depend 
 - `build_prior` builds the stability-screened prior over the ND box (`pipeline.gen_prior`) and
   writes a prior record.
 - `build_posterior` trains a neural posterior in latent coordinates and writes a posterior record.
-  With the rotation on, it first computes the Fisher rotation (`decorrelate`). Then
-  `train.train_nn`, handed a `TrainingPlan`, runs `pipeline.gen_training_data` and trains the flow
-  on its rows. Each batch takes one (t_scale, T_obs) pair from a Sobol schedule, shared by every row
-  of the batch, simulates at a fine ND step and downsamples to the experiment's sampling; in chi
+  With the rotation on, a fresh run first computes the Fisher rotation (`decorrelate`). A resume, or
+  a refit of a complete cache, reuses the rotation stored in its simulation cache's header, and a
+  narrowing round reuses the parent's rotation carried in its region, so neither runs the Fisher.
+  Then `train.train_nn`, handed a `TrainingPlan`, runs `pipeline.gen_training_data` and trains the
+  flow on its rows. Each batch takes one (t_scale, T_obs) pair from a Sobol schedule, shared by every
+  row of the batch, simulates at a fine ND step and downsamples to the experiment's sampling; in chi
   mode each batch draws its probe count, placement and lock-in lengths, and
   `chi_probes.gen_chi_block` builds the probe block. `statistics.conditioning_rows` assembles every
   row.
@@ -352,15 +363,13 @@ entries, carries this decorator, and nothing else does
 (`test_the_public_entries_carry_public_entry_and_nothing_else_does` in
 `tests/test_artifact_store.py` pins the set).
 
-- It hands the function a private copy of its configuration (`cfg.copy_for_run()`), so the caller's
-  object is exactly what it was, whether the run succeeds, is refused or crashes. The window builds
+- It hands the function a private copy of its configuration, and no stage mutates what it is handed
+  ([Rules the code keeps](rules-and-traps.md#rules-the-code-keeps) gives the rule). The window builds
   one configuration and runs every stage from it; before the copy, one run's values (a recording's
   probe count, a cell's truth) leaked into the next.
 - It runs the call inside `capture_run()`, which buffers every `core` record and Python warning from
   the moment the outermost entry began; a composition and the stages it calls share one buffer.
   `ArtifactWriter` writes that buffer as the record's `log.txt`.
-- No stage mutates what it is handed. A caller that wants what a stage produced reads the record, or
-  the `Loaded*` wrapper the stage returns.
 
 **Every knob travels as an argument, never as a configuration edit.** `core.orchestrator` imports
 its defaults by name (`from .config import TRAINING_NUM_RUNS, ...`), which binds each one in its
@@ -372,14 +381,10 @@ are read through the module at the moment of use: `config.QUIET_SEGMENT_BAR`, wh
 per-segment progress bar, and `config.SIM_VRAM_CEILING_GIB`, the memory ceiling of
 [Memory planning](#memory-planning-and-out-of-memory-recovery). Neither is a science setting.
 
-**Refusals.** A bad input is refused before anything is spent, as a `core.refusals.Refusal` whose
-`field`, when one setting is at fault, is a key registered in `FIELDS`. The core's message names
-the setting in plain words and never a box, tab, flag or button; each front end appends the control
-or flag that answers the key, from its own table: `core/gui/fields.py` in the window, `FLAG` in
-`core/tool/fields.py` on the command line. A renamed control is renamed in one place. A programming error is a plain exception,
-such as the `RuntimeError` of `forcing.require_simulator_index`, never a refusal. A judgement that
-does not stop the run is a `PreflightWarning`. [Rules and traps](rules-and-traps.md) lists the rules
-the code keeps.
+**Refusals.** A bad input is refused before anything is spent, as a `core.refusals.Refusal` that
+names its setting by a field key each front end maps to its own control or flag
+([Rules the code keeps](rules-and-traps.md#rules-the-code-keeps) gives the rule and its known
+gaps). A judgement that does not stop the run is a `PreflightWarning`.
 
 **Messages** are `logging` records at info, warning or error, on children of the `core` logger, whose
 level `core.runs` sets once. The handlers belong to the front ends: the window's
@@ -457,10 +462,11 @@ is how the store is built, in `core/artifacts/`.
   creates the directory on entry and hands out payload and figure paths (`payload`, `figure_path`);
   at the commit it hashes the payloads, writes `log.txt`, then the manifest, last and atomically. For
   every kind but `fdt`, any exception removes the directory. A directory with no manifest is
-  therefore incomplete by definition, and it is the only record directory a sweep removes; the
-  sweeps also clear loose files inside a kind directory and the legacy `crossval/` directory
-  (`remove_loose`, `remove_legacy`). Anything written in the last five minutes is refused as
-  possibly live (`RECENT_WRITE_SECONDS`).
+  therefore incomplete by definition, and it is the only record directory a sweep removes. Every
+  sweep also clears the loose files inside the kind directories it covers (`remove_loose`); the
+  all-kinds sweep alone also clears the legacy `crossval/` directory, which sits beside the kind
+  directories at the records root (`legacy_dirs`, `remove_legacy`). Anything written in the last
+  five minutes is refused as possibly live (`RECENT_WRITE_SECONDS`).
 - **Saving is a rename.** `ArtifactStore.rename` rewrites the manifest's name, then renames the
   directory. A directory rename that Windows refuses is tolerated, because the manifest is what
   resolves.
@@ -469,15 +475,24 @@ is how the store is built, in `core/artifacts/`.
   rewrites the manifest and the log as the run goes; an exception keeps the directory, marked
   unfinished. The exception is a `Refusal` raised before any payload or figure path was handed out,
   which removes the directory, so a pre-spend refusal leaves no empty record behind.
-- **The simulation cache** has no writer. `training_checkpoint` commits it batch by batch, and
-  `store.write_simulation_manifest` keeps its manifest. `header.pt` is written once: the identity,
+- **The simulation cache** has no writer. `gen_training_data` commits it through
+  `training_checkpoint.save` at its cadence (every 50 batches by default), at the end of generation,
+  and on the way out of a cancel or a crash, and `store.write_simulation_manifest` keeps its
+  manifest. `header.pt` is written once: the identity,
   the (t_scale, T_obs) schedule, the initial conditions, the rotation and its eigenvalues, and a probe
   of the bijection. `state.pt` holds `batches_done` (the commit point), `complete`, the restore point
   and, when the tally covered every batch, `"chi_masked"`. The shards are written once. A commit
   writes and flushes the shards, copies `state.pt` to `state.prev.pt`, then replaces `state.pt`, all
   inside `runs.cancel_deferred()`, so a cancel cannot land between the shards and the state that
-  points at them. A complete cache is kept: it lets the flow be retrained without
-  simulating again.
+  points at them. A complete cache is kept: it lets the flow be retrained without simulating again.
+  A shard that ends past `batches_done` was written by a save that stopped before its commit. Every
+  load skips it (`training_checkpoint.load_rows`). Before its first commit, a training run moves
+  every such shard, `x_` and `th_` alike, into a new numbered folder `uncommitted/<n>/` beside
+  `shards/` (`training_checkpoint.set_aside_uncommitted`), which no load reads; nothing is deleted.
+  The exception is a resume that read its count from `state.prev.pt` (`training_checkpoint.peek`
+  reports which file it read): `state.pt` may commit those shards, so the run moves nothing and
+  warns, if any lie past the count. `load_rows` refuses two shards whose ranges overlap, naming both
+  and the folder to move the stray one into.
 - **The cache's identity** (`core.artifacts.identity.SimulationIdentity`, `FORMAT` =
   `"training-rows/3"`) names its directory by a 12-character digest of these fields: the format; the
   model; the prior's fingerprint; the observation mode; the parameter keys and both boxes; the log-box
@@ -488,6 +503,9 @@ is how the store is built, in `core/artifacts/`.
   fingerprint.
   - Bumping `statistics.FEATURE_SET_VERSION` re-keys every cache: a changed feature definition behind
     an unchanged label would otherwise resume onto rows that meant something else.
+  - The prior's fit (`prior_fingerprint`) is part of the identity because a resume under another
+    prior would splice rows drawn from two priors into one training set, silently changing the
+    proposal the flow trains against.
   - Everything in it is known before the Fisher runs, because the digest names the directory the
     rotation is stored in.
   - The flow's network settings are not in it, nor the Fisher settings, the checkpoint cadence or the
@@ -516,10 +534,13 @@ is how the store is built, in `core/artifacts/`.
       narrowing round can be drawn around an observation made at another drive;
     - a posterior's and an observation's time grid (the configuration block) and units file hash
       (`inputs`); only the simulation cache's identity carries them.
-  - Not recorded at all: the cycle floor below which a probe is masked (`CHI_MIN_CYCLES`, read by
-    `chi_probes.gen_chi_raw` when it runs) is neither part of `SimulationIdentity` nor recorded in a
-    posterior's manifest, so a change to it is not caught at load, and a retrain could reuse a cache
-    simulated at the old floor.
+  - Not recorded at all:
+    - the cycle floor below which a probe is masked (`CHI_MIN_CYCLES`, read by
+      `chi_probes.gen_chi_raw` when it runs);
+    - the smallest probe count training draws (`CHI_K_MIN_TRAIN`, read by `gen_training_data`).
+
+    Neither is part of `SimulationIdentity` or recorded in a posterior's manifest, so a change to
+    either is not caught at load, and a retrain could reuse a cache simulated under the old value.
 - **The two acceptances.** `Accept(truncated, other_observation)` holds the only escape hatches on
   the load path, and a loaded posterior carries the ones it was loaded under (`accepted`). Each use is
   recorded where the number it produced lives: an inference's `results.accepted` (with its own
@@ -681,6 +702,16 @@ stage without freezing, shows its output and stops it.
   54.87 µs became 6.65 µs (8.25×); end to end, a simulator call at a batch of 2,048 and 100,000
   steps went from 5,520 ms to 698 ms, a 7.9× gain. The physics checks on the graphed path are in
   [The solver's physics check](science.md#the-solvers-physics-check).
+- **Rank a speed-up against a production run, not a smoke run.** Of a production retrain's
+  simulation:
+  - training generation is about 97 %;
+  - the calibration about 3 %;
+  - the Fisher rotation 1 to 2 %;
+  - `gen_stats`' 41 features about 0.3 %, about 7.5 minutes over the whole run.
+
+  So the Fisher's call structure and the duplicate FFTs in `core.SBI.statistics` are together worth
+  about 20 minutes of roughly 38 hours. On a four-batch smoke run the Fisher dominates instead, which
+  is why it looks like the target.
 - **The graph path's invariants.**
   - The parameters are static buffers copied in on every call, never captured by reference, which is
     what lets one capture serve every batch; a captured reference would replay one model's physics
@@ -696,10 +727,9 @@ stage without freezing, shows its output and stops it.
   - The state is carried forward inside the graph: its state buffer is both the capture's input and
     its output, so consecutive chunks need no copy between replays.
 - **A capture failure falls back to the ungraphed TorchScript loop**, with a warning, for the rest
-  of the process
-  (`_acquire_graph`): a solver that refuses to run is worse than a slow one. On an out-of-memory path
-  `drop_graph_cache` releases the captured graphs, because the halving retry is about to capture
-  another at the smaller width.
+  of the process (`_acquire_graph`): a solver that refuses to run is worse than a slow one. On an
+  out-of-memory path `drop_graph_cache` releases the captured graphs, because the halving retry is
+  about to capture another at the smaller width.
 - **`Solver()` is built on every call, on purpose.** `Simulator.__sols` constructs it once per
   segment, so resolving `sdeint.Solver` at call time is the seam a test uses to swap the solver out
   (`test_solver_failure_raises_instead_of_killing_the_process`). A solver failure is raised as a
@@ -712,10 +742,10 @@ stage without freezing, shows its output and stops it.
   would see a zero-length step.
 - **Seeding.** `core.rng.seeded(seed, device)` seeds torch and numpy for a block and restores both
   afterwards; `smoke`, every diagnostic that draws (SBC, the Laplace and Jacobian checks, the probe
-  checks), the FDT measurement and a seeded calibration run inside it.
-  A run is seeded once and its streams run on: seeding each stage would start draws that must be
-  independent from the same state. A seeded calibration derives its own seed (`calibration_seed`), so
-  it never replays the strata of a training run seeded with the same number.
+  checks), the FDT measurement and a seeded calibration run inside it. A run is seeded once and its
+  streams run on: seeding each stage would start draws that must be independent from the same state.
+  A seeded calibration derives its own seed (`calibration_seed`), so it never replays the strata of a
+  training run seeded with the same number.
 - **Runs are not bitwise-reproducible on CUDA or across devices.** A kernel's reduction order is not
   fixed; the graphed path draws its noise in a different order from the ungraphed loop; and on a card
   the planner and the halving ladders split a batch by the memory free at that moment, which redraws
@@ -724,8 +754,8 @@ stage without freezing, shows its output and stops it.
 - **TorchScript is not bitwise-reproducible on its first runs.** Its profiling executor runs the first
   calls of a scripted step unoptimised, then fuses them, and the fused kernel differs by about one
   unit in the last place: three ungraphed runs of one deterministic model gave a first run that
-  differed from the second, and a second equal to the third. Warm up, three runs, before any bitwise
-  comparison on the card (`test_the_cuda_graph_step_matches_the_eager_step_bitwise` does). The
+  differed from the second, and a second equal to the third. What that asks of a bitwise comparison
+  is in [Randomness and reproducibility](rules-and-traps.md#randomness-and-reproducibility). The
   TorchScript path runs only on CUDA, so the CPU suite's reproducibility checks are untouched.
 
 ## Memory planning and out-of-memory recovery
@@ -802,7 +832,11 @@ module constants of `core.SBI.pipeline`.
   without a restore point rather than skipping them.
 - **`_we_are_the_holder`.** Waiting helps only when someone else holds the memory. When this process's
   reserved pool is larger than every other process's usage combined, the retry goes straight back to
-  the halving ladders instead of sleeping; a run was once found waiting for memory it held itself.
+  the halving ladders instead of sleeping; a run was once found waiting for memory it held itself,
+  about 15 GiB. The captured graphs could not have been that memory: the cache holds at most eight,
+  whose static buffers come to about 1.7 MB each at 2,048 rows, and even at a generous 20 MB per
+  private pool the total is about 174 MB, so the graph cache cannot be the memory a stalled batch
+  waits for.
 - **WDDM spills into shared memory.** On Windows a batch larger than the card's memory pages into
   shared system memory instead of failing: a 21.67 GiB allocation completed on a 15.92 GiB card,
   9× slower than unpressured. So a slow run is the warning sign, long before any out-of-memory error,
@@ -819,15 +853,17 @@ module constants of `core.SBI.pipeline`.
   it is imported, unless one is exported (the value is under
   [Environment variables](command-line.md#environment-variables)). It recovers about 6 GiB: a
   batch's fine-step count runs from a median of about 40,000 to a 99th percentile of about 283,000,
-  and without the policy one large batch carved segments the smaller ones could not reuse. torch's
-  own deprecation warning names a different variable, which this build ignores silently, so test any
-  allocator experiment with a deliberately invalid value first.
+  and without the policy one large batch carved segments the smaller ones could not reuse. The trap
+  in the variable's name is in [Memory and devices](rules-and-traps.md#memory-and-devices).
 - **Accepted gaps.**
   - The prior's stability sweep simulates through `Simulator.simulate` directly
     (`core/SBI/Priors/*_prior.py`), so no out-of-memory ladder protects it.
   - The Fisher rotation wraps each feature evaluation in `torch.random.fork_rng`, whose exit restores
     the card's generator state, a device call, while an out-of-memory error unwinds; on a starved card
     that restore can fail, and its error then replaces the out-of-memory traceback.
+  - On a resume, copying the stored initial states to the device and restoring the generators run
+    before the generation loop's `try`, so a failure there gets no rescue write; nothing has been
+    generated yet, so it costs only a restart (`core.SBI.pipeline.gen_training_data`).
 
 ## The FDT pipeline
 

@@ -1,6 +1,6 @@
 # Rules and traps
 
-Checked against commit 26ac121.
+Checked against commit 3c4e393.
 
 This page is for whoever changes the code. It holds the rules the code keeps, each with where it is
 enforced; the safety rules of a narrowing round, as a table; and the traps: mistakes that once
@@ -87,14 +87,13 @@ live-looking value. The widths and the reasons are in
 `tests/test_chi_set_encoder.py::test_packer_round_trips_and_masks_failures` and
 `tests/test_chi_set_encoder.py::test_a_failed_probe_is_masked_not_a_phantom`.
 
-**Every setting is an argument, never a configuration edit.** `core.orchestrator` imports its
-defaults by name from `core/config.py`, binding each one when it is first imported, so assigning a
-`core.config` constant afterwards changes nothing the stage reads and the run uses the default
-without a word ([Stages and compositions](architecture.md#stages-and-compositions)). The front ends
-pass every setting to the stage, some by keyword and some by position. The one run setting the
-window writes into `core.config` is the memory ceiling, which the batch planner reads through the
-module every time it plans ([The inference settings](window.md#the-inference-settings)); the
-simulation pipeline also reads two environment variables of its own
+**Every setting is an argument, never a configuration edit.** The front ends pass every setting to
+the stage, because assigning a `core.config` constant after the stages are imported changes nothing
+they read ([Stages and compositions](architecture.md#stages-and-compositions) says why). The one
+run setting the window writes into `core.config` is the memory ceiling, which the batch planner
+reads through the module every time it plans
+([The inference settings](window.md#the-inference-settings)); the simulation pipeline also reads
+two environment variables of its own
 ([Environment variables](command-line.md#environment-variables)). Pinned by
 `tests/test_user_sbi.py::test_build_posterior_takes_the_budget_as_arguments_because_the_constants_are_snapshotted`
 and
@@ -147,10 +146,9 @@ the cycle floor below which a probe is masked come only from `core/config.py` (`
   ([The inference settings](window.md#the-inference-settings)).
 - `ArtifactStore.load_posterior` refuses a chi posterior whose band, drive, lock-in ceiling or slot
   count differs from the loading configuration's.
-- The cycle floor is neither recorded with a posterior nor part of the simulation cache's identity
-  (`core.artifacts.identity.SimulationIdentity`), so a change to it is not caught at load, and a
-  plain retrain can reuse a cache simulated at the old floor
-  ([The chi probe set and its Fisher](#the-chi-probe-set-and-its-fisher)).
+- The cycle floor is outside the cache's identity and every record
+  ([The artifact store](architecture.md#the-artifact-store)); see
+  [The chi probe set and its Fisher](#the-chi-probe-set-and-its-fisher).
 - The `probes` checks may take their own frequency, drive and ceiling grids because they only
   measure: none of their grids reaches a configuration or the training generator
   ([probes](command-line.md#probes)).
@@ -317,9 +315,9 @@ The design is in [The window](architecture.md#the-window); these are the rules i
 - **The overall bar is the live row with the largest total above 1.** The outermost bar wraps a
   single step, and the deepest, the segment bar, would sweep the overall bar from 0 to 100 % every
   few seconds. When nothing reports a percentage, the caption falls back to the deepest row whose
-  total is not 1, sbi's epoch counter during training; without it the longest phase shows a blank
-  bar.
-  Guard: `core.gui.widgets.progress_pane.ProgressPane._retarget` and `_paint_caption`. Pinned by
+  total is not 1, sbi's epoch counter during training; without it the longest phase shows an
+  indeterminate bar with no caption. Guard: `core.gui.widgets.progress_pane.ProgressPane._retarget`
+  and `_paint_caption`. Pinned by
   `tests/test_vt_progress.py::test_the_overall_bar_follows_the_largest_non_degenerate_total` and
   `tests/test_vt_progress.py::test_the_caption_falls_back_to_the_sbi_epoch_counter`.
 - **The solver meter reads the step counter, never the bar's text.** A solver call shorter than its
@@ -364,8 +362,8 @@ What the window remembers, and why, is in
   and `ArtifactPicker.restore_key`. Pinned by
   `tests/test_settings_persistence.py::test_missing_picker_key_restores_to_default_not_blank`.
 - **The gating table, TSNPE included.** Validate and TSNPE gate on the prior loaded on the Prior tab,
-  never on the drive prior, which is None for every bounds file without a Forcing section and would
-  leave both tabs unreachable for every such model. Guard: `InferenceScreen.refresh_gates`, re-run
+  never on the drive prior ([The Parameter Inference tabs](window.md#the-parameter-inference-tabs)
+  says why). Guard: `InferenceScreen.refresh_gates`, re-run
   after every stage, and `TSNPEPanel.refresh_local_gates` for the TSNPE button's observation. Pinned
   by
   `tests/test_nav_and_gating.py::test_inference_tab_gates_follow_the_session` and
@@ -447,8 +445,9 @@ These are conventions, and no guard enforces them.
 The rules themselves are in
 [Defining a model of your own](recordings.md#defining-a-model-of-your-own); these are their guards.
 
-- **Numbers are stripped before parameter names are found.** Otherwise a mantissa's tail becomes a
-  dead parameter that shifts every positional binding after it. Guard:
+- **Numbers are stripped before parameter names are found.** Otherwise the `e` of a number's
+  exponent (`1e-3`) or the `x1F` of a hex literal becomes a dead parameter that shifts every
+  positional binding after it. Guard:
   `core.Models.user_model._identifiers`.
 - **`E` is an ordinary parameter; `pi` is the only constant.** Guard: `user_model._CONSTANTS`.
 - **The model's parameter order must equal its bounds file's.** Otherwise every value binds to the
@@ -523,9 +522,9 @@ seconds with no simulation: run it first after touching anything chi.
   `tests/test_user_sbi.py::test_lock_in_per_row_durations_match_locking_each_row_alone`,
   `tests/test_user_sbi.py::test_lock_in_duration_is_capped_at_chi_max_cycles` and
   `tests/test_user_sbi.py::test_chi_max_cycles_must_clear_the_min_cycles_floor`.
-- **Hertz go through `SimConfig.freq_si_to_cell`.** Matching a declared "Hz" token gives 1.0
-  against a millisecond cell, a thousand-fold error that lands as a valid χ far off resonance.
-  Guard: `chi.probe_verdict` and the bench-recording builders
+- **Hertz go through `SimConfig.freq_si_to_cell`.** Matching a declared "Hz" token instead is a
+  thousand-fold error on a millisecond cell that lands as a valid χ far off resonance
+  ([Nondimensionalisation](science.md#nondimensionalisation) says why). Guard: `chi.probe_verdict` and the bench-recording builders
   (`core.SBI.observations.build_experiment_obs`, `build_experiment_obs_chi`) convert through it, and
   `SimConfig.check_unit_consistency` warns when the units file's frequency token is not the
   reciprocal of its time token.
@@ -550,22 +549,29 @@ seconds with no simulation: run it first after touching anything chi.
   chi mask is left out of the Fisher set for the same reason.
 - **After changing a constant or a feature definition that no loader compares, retrain against a
   new simulation cache, and reuse neither the old cache nor the posteriors and observations made
-  before the change.** The cycle floor comes first: it is neither part of the cache's identity nor
-  recorded with a posterior, so a plain retrain finds the old cache under the same identity and
-  reuses rows simulated at the old floor, while an old posterior, or a chi observation whose probes
-  were masked at the old floor, loads beside the new configuration without a word. The prior is
-  unaffected: its stability screen does not read the floor. Two routes:
+  before the change.** The cycle floor comes first: it is outside the cache's identity and every
+  record ([The artifact store](architecture.md#the-artifact-store)), so a plain retrain finds the
+  old cache under the same identity and reuses rows simulated at the old floor, while an old
+  posterior, or a chi observation whose probes were masked at the old floor, loads beside the new
+  configuration without a word. The prior is unaffected: its stability screen does not read the
+  floor. Three routes:
+  - Build a new prior. A new fit changes `prior_fingerprint`, so the cache is keyed afresh. When the
+    prior is the only difference, the first training run is refused as one setting away from the old
+    cache and goes ahead on consent (`--new-run`, or the Posterior tab's question).
+    [The retrain runbook](retrain.md#decisions) takes this route.
   - Remove the old cache. `--resume never` refuses rather than start over it
     ([Training-cache flags](command-line.md#training-cache-flags)), and
     [artifacts rm](command-line.md#artifacts-rm) refuses while any record names it as a parent, so
     delete from the leaves up: the calibrations, inferences, diagnostics and narrowing rounds built
     on each posterior trained from the cache, then those posteriors, then
-    `artifacts rm simulation <ref>`. Each refusal names the next record in the way. In the window,
-    this is the only route.
+    `artifacts rm simulation <ref>`. Each refusal lists the records that still name it as a parent.
   - Keep the old records, and train with `train --checkpoint-every 0`, which reads and writes no
     simulation cache. The run then cannot be resumed, `--resume require` and `--resume never` are
     refused beside it, and the posterior names no cache as a parent. The window has no control for
-    the checkpoint cadence.
+    the checkpoint cadence. The old cache stays on disk: a later run at the default cadence with the
+    same identity finds it and reuses its rows, so remove it, or build a new prior, before that run.
+
+  The window offers the first two routes, through the Prior tab and a delete on the Artifacts screen.
 
   A feature change must also bump `core.SBI.statistics.FEATURE_SET_VERSION`, which re-keys every
   cache but is not compared when a posterior or an observation loads. No guard stands here yet:
@@ -601,7 +607,8 @@ The planner, the ladders and the recovery order are in
 - **Never wait on memory you hold yourself.** A run once waited indefinitely for memory its own
   process held. Guard: `pipeline._we_are_the_holder`, on which the batch-level retry goes straight
   back to the halving ladders and `pipeline.retry_on_oom` retries at once, instead of waiting. Pinned
-  by `tests/test_user_sbi.py::test_retry_on_oom_notices_releases_and_honours_the_holder_gate`.
+  by `tests/test_user_sbi.py::test_the_retry_does_not_wait_when_THIS_process_holds_the_card` and
+  `tests/test_user_sbi.py::test_retry_on_oom_notices_releases_and_honours_the_holder_gate`.
 - **The allocator variable is `PYTORCH_CUDA_ALLOC_CONF`.** On this build (torch 2.9.0) the name
   torch's own deprecation warning recommends is ignored without a word. Guard: `core.config` sets
   this one with `setdefault` at import, so an operator's export wins. Test any allocator experiment
@@ -630,9 +637,10 @@ What a seed buys, and on which devices, is in
   a seeded run reproduces needs both seeded. Guard: `core.rng.seeded` seeds both, and a resume reads
   the initial states from the cache's header rather than drawing them again. Pinned by
   `tests/test_user_sbi.py::test_gen_training_data_is_reproducible_from_a_seed_in_every_mode`.
-- **Warm TorchScript up before a bitwise comparison.** On CUDA a scripted step's first runs are not
-  bitwise-reproducible against later ones, so an unwarmed comparison measures the compiler, not the
-  change: ask whether the baseline reproduces against itself before concluding a change broke it.
+- **Warm TorchScript up, three runs, before a bitwise comparison.** On CUDA a scripted step's first
+  runs are not bitwise-reproducible against later ones, so an unwarmed comparison measures the
+  compiler, not the change: ask whether the baseline reproduces against itself before concluding a
+  change broke it.
   No guard in the code; the warm-up is shown in
   `tests/test_user_sbi.py::test_the_cuda_graph_step_matches_the_eager_step_bitwise`.
 - **The rotation is not reproducible across processes, so a resume reuses the stored one.** The
@@ -698,14 +706,14 @@ The narrowing-round rules themselves are in the table above.
 
 ### Module layout
 
-- **The façade re-imports are load-bearing.** `core.SBI.pipeline` re-imports its extracted siblings
-  at its end because tests rebind names on it; a consumer that bypasses that seam fails silently, as
-  the patch stops landing. No guard: the façade note under [Module map](architecture.md#module-map)
-  gives the rule and the other modules that follow it.
-- **`core/config.py`'s constants are snapshotted at import.** `from .config import NAME` binds the
-  value when the importing module loads, so assigning `config.NAME` later is a silent no-op for that
-  module, and moving a constant can change which value a caller sees. No guard; the three fixes in
-  use are not interchangeable: read through the module at the moment of use, for a process-wide
+- **The façade re-imports are load-bearing.** A consumer that bypasses `core.SBI.pipeline`'s
+  re-imports fails silently, as the patch stops landing. No guard:
+  [Two notes](architecture.md#two-notes) gives the rule and the other modules that follow it.
+- **`core/config.py`'s constants are snapshotted at import**, so assigning `config.NAME` later is a
+  silent no-op for a module that imported it by name, and moving a constant can change which value
+  a caller sees ([Stages and compositions](architecture.md#stages-and-compositions) has the
+  mechanism). No guard; the three fixes in use are not interchangeable: read through the module at
+  the moment of use, for a process-wide
   switch (`config.QUIET_SEGMENT_BAR`, `config.SIM_VRAM_CEILING_GIB`); carry it on the configuration,
   for anything a trained record must describe (the chi fields, `reparam_rotate`); or take it as an
   argument that defaults to the constant, for a per-run setting (the stages' arguments).
@@ -716,16 +724,12 @@ How to read each test is in
 [Reading calibration honestly](science.md#reading-calibration-honestly). No guard enforces these
 readings; the calibration verdict's caveat line states the third on every run.
 
-- **A flat SBC is not informativeness.** A posterior that returns the prior is flat by
-  construction; read the informativeness `validate` reports.
-- **The best-fit table is not recovery.** `core.SBI.overlay.rank_by_stats` standardises each
-  feature by the spread of the posterior's own draws, not by measurement noise, so its score says a
-  draw sits inside the predictive cloud, not that it matches the truth; and it weights every feature
-  equally, so along a degenerate direction, where the features barely move, the best fit is close to
-  a free draw.
-- **The calibration's operating points are t_scale's effective sample size.** Every dataset in a
-  calibration batch shares its batch's t_scale, so lowering the operating-point count does not buy
-  the same calibration faster: it buys a different, weaker one
+- **A flat SBC is not informativeness**: a posterior that returns the prior is flat by
+  construction.
+- **The best-fit table is not recovery**: its score says a draw sits inside the predictive cloud,
+  not that it matches the truth.
+- **The calibration's operating points are t_scale's effective sample size**, so lowering their
+  count buys a different, weaker calibration, not the same one faster
   ([Settings that are not speed dials](window.md#settings-that-are-not-speed-dials)).
-- **A pooled SBC over mixed probe counts can hide a miscalibration** that differs by count; hold the
-  count with `sbc --chi-k-fixed` ([sbc](command-line.md#sbc)).
+- **A pooled SBC over mixed probe counts can hide a miscalibration** that differs by count
+  ([sbc](command-line.md#sbc) holds the count).

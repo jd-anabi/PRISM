@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit 95745d2.
+Checked against commit 3c4e393.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -42,9 +42,9 @@ is who sets which, for a check.
   `core.artifacts.use_store`, to keep a check's records out of the real `Artifacts/`. Inside a running
   process, the default store keeps the root it was first built with, so set the variable before
   anything builds it, or use `core.artifacts.use_store`.
-- `PRISM_VRAM_CEILING_GIB` is read afresh for every batch plan.
-- `PRISM_MEM_LOG_EVERY` is read once, when `core.SBI.pipeline` is first imported, so setting it
-  inside a running window changes nothing.
+- `PRISM_VRAM_CEILING_GIB` and `PRISM_MEM_LOG_EVERY` are set by nothing here: export them yourself.
+  [Environment variables](command-line.md#environment-variables) says when each is read, which is
+  why setting the second inside a running window changes nothing.
 - `PYTORCH_CUDA_ALLOC_CONF` is given an allocator policy by `core/config.py` when it is imported,
   unless one is already exported ([Memory and devices](rules-and-traps.md#memory-and-devices)).
 
@@ -90,14 +90,14 @@ and the session guards).
   - `_no_sbi_logs`: `<repo>/sbi-logs` must not exist, checked at setup as well as teardown, so a
     leftover tree makes every run error before its first test.
 - **The source scans**, which read files rather than run code:
-  - `tests/test_source_hygiene.py`: no code file, test or guide page cites a working document or a
-    label one coined ([Rules the code keeps](rules-and-traps.md#rules-the-code-keeps) has the comment
-    policy);
+  - `tests/test_source_hygiene.py`: no scanned file cites a working document or a label one coined
+    ([Rules the code keeps](rules-and-traps.md#rules-the-code-keeps) lists what it scans, under the
+    comment policy);
   - `tests/test_artifact_store.py::test_no_literal_resource_paths_outside_config`: no code outside
     `core/config.py` builds a literal `Resources/` or `Artifacts/` path;
-  - `tests/test_docs.py`: every relative link in this guide resolves, every page opens with its
-    commit stamp, and the command-line page names every subcommand and flag, with each default as its
-    `--help` states it.
+  - `tests/test_docs.py`: every relative link in this guide and the root `README.md` resolves, every
+    page opens with its commit stamp, and the command-line page names every subcommand and flag, with
+    each default as its `--help` states it.
 
 ## The card smoke gate
 
@@ -264,9 +264,8 @@ Then delete the scratch folder, as the recipe says.
   `tests/test_user_sbi.py` and `tests/test_diagnostics.py`) run on it inside every fast gate. But they
   resume no simulation cache and read no real bounds or cell file: a tiny test model stands in. The
   card smoke gate covers those.
-- **TorchScript's first runs.** On CUDA a scripted step's first calls run unoptimised and later ones
-  fused, and the two differ by about one unit in the last place, so they are not bitwise-reproducible;
-  warm up before any bitwise comparison
+- **TorchScript's first runs** are not bitwise-reproducible on CUDA; warm up before any bitwise
+  comparison
   ([The solver, CUDA graphs and reproducibility](architecture.md#the-solver-cuda-graphs-and-reproducibility)).
 - **A seeded run on CUDA or across devices.** A seed repeats an experiment on one device and gives a
   bitwise repeat on the CPU only; the suites' reproducibility checks run on the CPU (same link).
@@ -299,6 +298,9 @@ Then delete the scratch folder, as the recipe says.
   and pump the events first (`qt_app` and `pump` in `tests/_fixtures.py`).
 - **Assert order, not adjacency.** `src.index(a) < src.index(b)` survives a line inserted between the
   two; a check that they are neighbours does not.
+- **Do not edit a test to make a refactor pass.** When a behaviour test fails under a change that
+  should not change behaviour, decide which of the two is right, and suspect the change first. A test
+  that reads source, below, is the one kind a rename breaks by design.
 - **A test that reads source must keep seeing the words it looks for.** Several tests read the source
   of a function, so a rename or a rewording fails them by design; change the test in the same commit.
   Assert on code through `code_only` (`tests/_fixtures.py`), which strips comments and docstrings: a
