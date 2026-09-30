@@ -28,17 +28,20 @@ suite does not certify, and notes for writing tests. What each flag means is on
 What each variable sets is under [Environment variables](command-line.md#environment-variables); this
 is who sets which, for a check.
 
-- `KMP_DUPLICATE_LIB_OK=TRUE` is needed by anything that imports torch: torch and MKL ship two
-  OpenMP runtimes, and without it the first simulation aborts with OMP Error #15 and no traceback.
-  The root `conftest.py` defaults it for pytest, the tool's entry (`core.__main__`) sets it before
-  torch is imported, and `run.bat` and `run.sh` set it for the window. A bare `python -c` or a script
-  sets neither this nor the next one: set them yourself there.
+- `KMP_DUPLICATE_LIB_OK=TRUE` is needed by anything that imports torch
+  ([Launching PRISM](getting-started.md#launching-prism) says why). The root `conftest.py` defaults
+  it for pytest, the tool's entry (`core.__main__`) sets it before torch is imported, and `run.bat`
+  and `run.sh` set it for the window. A bare `python -c` or a script sets neither this nor the next
+  one: set them yourself there.
 - `QT_QPA_PLATFORM=offscreen` is for headless checks that import PySide6, and only those. The root
   `conftest.py` defaults it; the launchers do not set it, because the window needs a real platform
   plugin.
 - `PRISM_RESOURCES` and `PRISM_ARTIFACTS` move the inputs root and the records root. Point
   `PRISM_ARTIFACTS` at a scratch folder, or wrap the code in `core.artifacts.use_store`, to keep a
-  check's records out of the real `Artifacts/`.
+  check's records out of the real `Artifacts/`. `PRISM_RESOURCES` is read once, when `core.config`
+  is imported, and `PRISM_ARTIFACTS` when a process first builds its default store (the tool reads it
+  as each command starts), so inside a running process set them before importing `core`, or use
+  `core.artifacts.use_store`.
 - `PRISM_VRAM_CEILING_GIB` is read afresh for every batch plan.
 - `PRISM_MEM_LOG_EVERY` is read once, when `core.SBI.pipeline` is first imported, so setting it
   inside a running window changes nothing.
@@ -62,9 +65,10 @@ and the session guards).
   - `slow`: left out of the fast gate;
   - `gpu`: needs CUDA, and is skipped when `torch.cuda.is_available()` is false; with a card
     present, the gpu-marked tests run on it inside every fast gate;
-  - `display`: needs a real screen, and is skipped offscreen. `QT_QPA_PLATFORM=windows python -m
-    pytest -m display` runs these on the real screen, since the root `conftest.py` only defaults the
-    variable; they create hidden native windows, and nothing shows.
+  - `display`: needs a real screen, and is skipped offscreen. In PowerShell,
+    `$env:QT_QPA_PLATFORM = "windows"; python -m pytest -m display; Remove-Item Env:QT_QPA_PLATFORM`
+    runs these on the real screen, since the root `conftest.py` only defaults the variable; they
+    create hidden native windows, and nothing shows.
 - **Counting.** `python -m pytest --collect-only -q` counts the tests. Count them; never trust a
   number written down.
 - **One pytest process at a time.** Two would share the card and the test model the fixtures install
@@ -180,10 +184,12 @@ What each run checks, and what passing looks like:
 & $py -m core smoke --chi --t-obs 4.5 --bounds Resources/Bounds/nadrowski/master_tier1.txt --cell Resources/Cells/nadrowski/master_spont_tier1.txt --hidden-features 256 --num-transforms 10 --checkpoint --store-root "$S/smoke_t1" --prior smoke_prior --stages prior,posterior --resume require
 ```
 
-**Why `--bounds` names the master box.** `master_spont.txt` has a bounds file of its own name, the
-12-parameter spontaneous box, and a cell given alone finds that one
-([How a cell finds its bounds file](recordings.md#how-a-cell-finds-its-bounds-file)). In chi mode
-that box reports the same mode and the same conditioning width, and drops `f_scale` without a word.
+**Why `--bounds` names the master box.** `smoke` always takes `--bounds`, and the choice matters:
+the cell `master_spont.txt` also has a bounds file of its own name, the 12-parameter spontaneous box,
+which the runs that find a bounds file from the cell alone would pick
+([How a cell finds its bounds file](recordings.md#how-a-cell-finds-its-bounds-file)). Named here, that
+box would, in chi mode, report the same mode and the same conditioning width, and drop `f_scale`
+without a word.
 
 **The masked-probe criterion.** The training run's `[chi] masked probes` run-total line, the one
 scoped to every committed batch of the simulation cache, must be within ±12 points of 37 %; the
@@ -238,9 +244,8 @@ The last line puts the shell back on the real records root. What each should sho
   datasets has no power, and a flow trained on four batches has no channel table worth reading.
 - The two `identifiability jacobian` maps print the probe budget and the recording-length line
   ([identifiability jacobian](command-line.md#identifiability-jacobian)). The tier-1 map has a
-  temperature column: it is a measurement, not a failure. The last card run read a gradient norm of
-  0.214 per kelvin and a |cos| of 0.92 with n, the near-degenerate pair the tier-1 constraint
-  predicts ([The tier-1 constraint and temperature](science.md#the-tier-1-constraint-and-temperature)).
+  temperature column: it is a measurement, not a failure
+  ([The tier-1 constraint and temperature](science.md#the-tier-1-constraint-and-temperature)).
 - `identifiability laplace` prints its table of standard deviations at the cell's truth and at
   draws from the smoke prior; at this size it shows that the forced-mode path runs.
 - `probes band`: the configured band (0.03, 0.3) and the configured drive 0.15 both hold for the
@@ -283,12 +288,15 @@ Then delete the scratch folder, as the recipe says.
   (`tests/_fixtures.py`), which `build_tiny_run` and `tests/test_tool.py`'s module fixture call,
   writes a one-variable model, SBITEST, into `Resources/Bounds/sbitest/`, `Resources/Cells/sbitest/`,
   `Resources/Units/sbitest/` and `Resources/Models/SBITEST.json`, so that the tool can be driven with
-  real `--bounds` and `--cell` files; its teardown removes them in a `finally`. A killed run never
-  reaches the `finally` and leaves them behind, where `git status` shows them: delete those four by
-  hand. They are not inputs.
-- **Offscreen, a widget that was never shown** reports a 640×480 placeholder from `width()`. Assert
-  on `sizeHint()`, `minimumSizeHint()` or `maximumWidth()`, or show it, resize it and pump the events
-  first (`qt_app` and `pump` in `tests/_fixtures.py`).
+  real `--bounds` and `--cell` files; its teardown removes them in a `finally`. Other suites write
+  throwaway models there the same way: `tests/test_user_models.py`'s UMTEST models, and
+  `tests/test_user_sbi.py`'s full user-model pipeline. A killed run never reaches the `finally` and
+  leaves them behind: delete whatever `git status` lists as untracked under `Resources/`. They are not
+  inputs.
+- **A widget that was never shown** reports a placeholder size from `width()`: 640×480 for one built
+  without a parent, 100×30 for one built inside another. The suites run offscreen and show nothing,
+  so assert on `sizeHint()`, `minimumSizeHint()` or `maximumWidth()`, or show the widget, resize it
+  and pump the events first (`qt_app` and `pump` in `tests/_fixtures.py`).
 - **Assert order, not adjacency.** `src.index(a) < src.index(b)` survives a line inserted between the
   two; a check that they are neighbours does not.
 - **A test that reads source must keep seeing the words it looks for.** Several tests read the source
