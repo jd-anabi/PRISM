@@ -210,7 +210,8 @@ class InferPanel(_StagePanel, _CellPreviewMixin):
         _CellPreviewMixin.on_config_built(self, cfg)
         self._on_cell_changed()                       # re-validate against the newly built config
         self._rebuild_forcing_fields(cfg)
-        # A no-forcing (passive) model has no forced recording and no drive params: hide the forced row.
+        # A bounds file with no Forcing section makes a passive config: no forced recording and no drive
+        # params, so hide the forced row.
         # _rebuild_forcing_fields already produces no forcing fields for an empty force_params_dict.
         self.exp_form.setRowVisible(self.exp_forced, cfg.has_forcing)
         self._rebuild_chi_fields(cfg)

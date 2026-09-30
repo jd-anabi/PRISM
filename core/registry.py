@@ -6,8 +6,11 @@ positionally, so user models are APPENDED IN PLACE to those live lists -- the bu
 core.gui.app.build_app and core.tool.main), never an import side effect: the GUI test suite constructs
 MainWindow directly and must keep seeing pristine registries.
 
-User models are Simulate-only in v1: they carry no Prior/INIT_SHAPES entries and the FDT/Inference
-panels gate them out; ``is_user_model`` is the single source of truth for that gate.
+``register`` puts a user model into every model list, and Simulate runs any of them. The other uses
+gate on their own predicates: inference, in the window and on the command line, takes only a model
+``is_sbi_user_model`` admits (no forcing, at least one ND parameter), and FDT only one ``fdt_support``
+admits (no forcing, and additive, non-zero noise on the observable). A user model has no INIT_SHAPES
+row: its initial conditions come from its cell file.
 """
 from dataclasses import dataclass, field
 from pathlib import Path
