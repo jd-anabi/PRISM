@@ -44,9 +44,13 @@ ORDERING, which is what makes a crash safe:
     1. write + fsync the shards for [prev, k)     (write-once names; a crash leaves orphans)
     2. copy state.pt -> state.prev.pt
     3. atomically replace state.pt with batches_done = k
-Resume only ever loads shards covered by ``batches_done``, so orphans from step 1 are ignored. Shards
-are durable before the state that references them, so no commit can point at data still in the page
-cache.
+A load skips every shard that ends past ``batches_done``, so orphans from step 1 are never read as
+rows. A run that continues the cache also REMOVES them before it commits anything
+(``remove_uncommitted``): its own first commit starts at ``batches_done`` too, and when the orphan
+came from a cancel's save -- which ends at the batch the cancel reached, off the cadence -- that
+commit has another name, so once ``batches_done`` passed the orphan's end a load would read both.
+Shards are durable before the state that references them, so no commit can point at data still in
+the page cache.
 
 Do not ``print()`` or log between steps 1 and 3 under the GUI: every write funnels through
 ``gui.streams._SignalStream.write`` and every record through ``gui.streams._PumpLogHandler.emit``,
@@ -391,6 +395,29 @@ def mark_complete(path, batch_k: int, rows=None) -> None:
         _refresh_manifest(path, batches_done=batch_k, complete=True, rows=rows)
 
 
+def remove_uncommitted(path, batches_done: int) -> list:
+    """Delete every shard that ends past ``batches_done``; return the ``(from, to)`` batch range of each
+    file removed.
+
+    Every committed shard ends at or before ``batches_done``, so a shard that ends past it was written
+    by a save that stopped between its shard write and its state replace (steps 1 and 3 above). Called
+    by the run that continues the cache, before its first commit: that commit starts at
+    ``batches_done`` and ends on the run's own cadence, so an orphan left by a cancel's save has a
+    different name and would otherwise sit beside it once ``batches_done`` passes the orphan's end.
+    Nothing at or below ``batches_done`` is touched. Silent: the caller reports what was removed.
+    """
+    shards = Path(path) / _SHARDS
+    removed = []
+    if not shards.is_dir():
+        return removed
+    for f in sorted([*shards.glob("x_*.pt"), *shards.glob("th_*.pt")]):
+        a, b = (int(p) for p in f.stem.split("_")[1:3])
+        if b > batches_done:
+            f.unlink()
+            removed.append((a, b))
+    return removed
+
+
 def _refresh_manifest(path: Path, *, batches_done: int, complete: bool = False, rows=None) -> None:
     """Best-effort: the manifest is the store's view of the cache, never its commit point (that is
     state.pt). Read the identity back from the header rather than threading it through save()."""
@@ -405,9 +432,13 @@ def _refresh_manifest(path: Path, *, batches_done: int, complete: bool = False, 
 
 def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
               max_rows: int | None = None):
-    """Every committed row, in batch order, as ``(x, thetas)``. Orphan shards past ``batches_done``
-    (a crash between the shard write and the state commit) are ignored by construction: this walks
-    the recorded ranges, not the directory.
+    """Every committed row, in batch order, as ``(x, thetas)``.
+
+    This globs the shard directory and walks it in name order. A shard that ends past
+    ``batches_done`` is an orphan (a crash between the shard write and the state commit) and is
+    skipped; the run that continues the cache removes such shards before it commits
+    (``remove_uncommitted``). Two shards that overlap are refused, naming both, even under a row cap:
+    reading both would repeat their shared batches' rows.
 
     :param x_only: skip the ``th_`` shards entirely and return ``(x, None)``. The conditioning-channel
                    diagnostics read only x, and the targets are half the bytes on disk.
@@ -420,12 +451,21 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
     """
     path = Path(path)
     xs, ths = [], []
-    got = rows = 0
+    got = rows = end = last_a = 0            # [last_a, end): the range of the last shard read
+    last = None
     capped = False
     for f in sorted((path / _SHARDS).glob("x_*.pt")):
         a, b = (int(p) for p in f.stem.split("_")[1:3])
         if b > batches_done:
             continue
+        if a < end:
+            # Names sort by their start, so this shard begins inside the last one read.
+            raise ValueError(
+                f"Training checkpoint at {path} holds two shards that overlap: {last.name} covers "
+                f"batches [{last_a}, {end}) and {f.name} covers [{a}, {b}), so reading both would "
+                f"repeat rows. The committed shards run end to end from batch 0 to {batches_done}; "
+                f"the one of these two that does not fit that run was written by a save that stopped "
+                f"before its commit. Move it out of the shards folder and load again.")
         th_part = None
         if not x_only:
             th = _shard(path, "th", a, b)
@@ -444,9 +484,12 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
             ths.append(th_part)
         got += b - a
         rows += x_part.shape[0]
+        last, last_a, end = f, a, b
         if max_rows is not None and rows >= max_rows:
             capped = True
             break
+    # The shards read end at or before batches_done and never overlap, so their count can only fall
+    # short of it here.
     if not capped and got != batches_done:
         raise ValueError(f"Training checkpoint at {path} commits {batches_done} batches but only "
                          f"{got} are present on disk. Delete the directory to start fresh.")

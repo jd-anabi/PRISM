@@ -1564,6 +1564,20 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
                     f"{_need / 2 ** 30:.1f} GiB. The run will fail partway through a checkpoint "
                     f"write; free space now.", stacklevel=2)
 
+    if _ck_dir is not None:
+        # Before the first commit, on BOTH paths: the state this run starts from commits _start_k
+        # batches (what a resume read, or the zero create() just wrote), so any shard ending past it is
+        # an orphan of a save that stopped before its commit. This run's first commit starts at
+        # _start_k as well, and if the orphan came from a cancel's save it ends elsewhere and has
+        # another name; left in place, every load after batches_done passed its end would read both
+        # shards and refuse the cache.
+        _orphans = _tc.remove_uncommitted(_ck_dir, _start_k)
+        if _orphans:
+            log.info(f"[checkpoint] removed {len(_orphans)} uncommitted shard "
+                     f"file{'' if len(_orphans) == 1 else 's'} past batch {_start_k} (batches "
+                     f"{', '.join(f'[{a}, {b})' for a, b in sorted(set(_orphans)))}): a save wrote "
+                     f"{'it' if len(_orphans) == 1 else 'them'} and stopped before its commit")
+
     # The batch probe tally, chi mode only: each batch's masked and simulated probe counts, committed
     # beside its rows and stored in the cache beside batches_done, so the run total at the end covers
     # a resumed run's earlier batches too. A stored list is trusted only when it describes exactly the

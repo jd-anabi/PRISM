@@ -2178,6 +2178,63 @@ def test_a_complete_checkpoint_short_circuits_generation_entirely():
     assert torch.equal(got_x, ref_x) and torch.equal(got_th, ref_th)
 
 
+@pytest.mark.parametrize("every, kill, resume", [(2, 3, "require"), (4, 1, "auto")],
+                         ids=["after_a_commit", "before_any_commit"])
+def test_a_continued_cache_removes_the_shards_a_stopped_save_never_committed(every, kill, resume,
+                                                                              caplog, monkeypatch):
+    """A save writes its shards and then replaces state.pt, so a process killed between the two leaves
+    shards that end past batches_done. The save a cancel makes on the way out ends at the batch the
+    cancel reached, off the cadence, so the continued run's own first commit from the same batch has
+    another name. Left on disk, the orphan joins every load once batches_done passes its end, and the
+    load reads its batches twice and refuses the whole cache -- at the end of a run that took weeks.
+
+    So the run that continues the cache removes every shard past the batch it starts from, before it
+    commits: when it resumes committed batches, and when none were committed yet and it starts the
+    cache over. Driven through the production path -- a cancel's save, the state put back one
+    generation as the kill leaves it, the continued run to completion, and the load a later call makes
+    of the complete cache (the flow retrained from it, say)."""
+    import shutil
+    import tempfile
+    from core.SBI import training_checkpoint as tc
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    d = Path(tempfile.mkdtemp()) / "c"
+    n_runs, run_size = 6, 4
+    committed = kill // every * every            # the last cadence commit before the cancel
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        real, spy = _kill_at(kill)
+        monkeypatch.setattr(pipeline_mod, "gen_stats", spy)
+        with pytest.raises(_KillRun):
+            _gen_td("chi", seed=11, n_runs=n_runs, run_size=run_size,
+                    checkpoint=_ck(d, every=every, resume="never"))
+        monkeypatch.setattr(pipeline_mod, "gen_stats", real)
+        assert tc.peek(d)["batches_done"] == kill, "the cancel's save did not commit"
+        # The kill lands after that save renamed its shards and before its state replace: state.pt is
+        # still the generation before, which the save had already copied to state.prev.pt.
+        shutil.copyfile(d / "state.prev.pt", d / "state.pt")
+        assert tc.peek(d)["batches_done"] == committed
+        orphan = [d / "shards" / f"{p}_{committed:06d}_{kill:06d}.pt" for p in ("x", "th")]
+        assert all(f.exists() for f in orphan), orphan
+
+        caplog.clear()
+        x, th = _gen_td("chi", seed=11, n_runs=n_runs, run_size=run_size,
+                        checkpoint=_ck(d, every=every, resume=resume))
+        assert tc.peek(d)["complete"] is True and tc.peek(d)["batches_done"] == n_runs
+        x2, th2 = _gen_td("chi", seed=11, n_runs=n_runs, run_size=run_size,
+                          checkpoint=_ck(d, every=every, resume="require"))
+    assert torch.equal(x2, x) and torch.equal(th2, th), "the complete cache reads back other rows"
+    assert not any(f.exists() for f in orphan), "the uncommitted shards are still on disk"
+    ranges = sorted(tuple(int(v) for v in f.stem.split("_")[1:3]) for f in (d / "shards").glob("x_*.pt"))
+    assert [a for a, _ in ranges] == [0] + [b for _, b in ranges[:-1]] and ranges[-1][1] == n_runs, \
+        f"the shards left do not run end to end from 0 to {n_runs}: {ranges}"
+    said = [r for r in caplog.records if r.getMessage().startswith("[checkpoint] removed")]
+    assert len(said) == 1 and said[0].levelname == "INFO", [r.getMessage() for r in said]
+    for part in ("removed 2 uncommitted shard files", f"past batch {committed}",
+                 f"[{committed}, {kill})"):
+        assert part in said[0].getMessage(), (part, said[0].getMessage())
+
+
 def test_checkpointing_off_writes_nothing_and_changes_nothing(store):
     """checkpoint=None is the whole backward-compatibility story: every caller that wants no cache
     (``analysis.gen_cal_data`` among them) passes nothing and must be untouched -- same bytes out,
@@ -3321,7 +3378,7 @@ def test_checkpoint_shards_do_not_serialize_the_whole_accumulator():
 
 
 def test_a_checkpoint_round_trips_its_rows_and_ignores_orphan_shards():
-    """load_rows walks the COMMITTED ranges, not the directory, so shards written just before a crash
+    """load_rows skips every shard that ends past batches_done, so shards written just before a crash
     (step 1 of the commit order, with the state commit in step 3 never reached) are ignored rather
     than silently appended as extra training rows."""
     import tempfile
@@ -3350,6 +3407,29 @@ def test_a_checkpoint_round_trips_its_rows_and_ignores_orphan_shards():
 
     tc.mark_complete(d, n_runs)
     assert tc.peek(d)["complete"] is True and tc.peek(d)["batches_done"] == n_runs
+
+
+def test_overlapping_shards_are_refused_by_name_and_never_read_twice(tmp_path):
+    """Two shards whose ranges overlap would repeat rows, so the read refuses -- also when a row cap
+    would have stopped the walk after the second of them, which is the read the conditioning-channel
+    diagnostics make. The refusal names both shards and the committed count; it does not claim that
+    batches are missing, and it does not advise deleting the directory, because the committed rows are
+    all on disk. A cap that stops before the overlap still reads."""
+    from core.SBI import training_checkpoint as tc
+    d = tmp_path / "cache"
+    (d / "shards").mkdir(parents=True)
+    for a, b in ((0, 2), (2, 3), (2, 4), (4, 6)):
+        torch.save(torch.full(((b - a) * 5, 3), float(a)), d / "shards" / f"x_{a:06d}_{b:06d}.pt")
+        torch.save(torch.full(((b - a) * 5, 2), float(a)), d / "shards" / f"th_{a:06d}_{b:06d}.pt")
+    for kw in ({}, {"x_only": True}, {"x_only": True, "max_rows": 20}):
+        with pytest.raises(ValueError) as e:
+            tc.load_rows(d, 6, 5, **kw)
+        msg = str(e.value)
+        for part in ("overlap", "x_000002_000003.pt", "x_000002_000004.pt", "batch 0 to 6"):
+            assert part in msg, (kw, part, msg)
+        assert "present on disk" not in msg and "Delete the directory" not in msg, (kw, msg)
+    x, _ = tc.load_rows(d, 6, 5, x_only=True, max_rows=10)
+    assert tuple(x.shape) == (10, 3) and x.eq(0.0).all()
 
 
 def test_a_checkpoint_refuses_a_config_it_was_not_written_for():
@@ -4485,6 +4565,7 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
             ("[checkpoint] resuming at batch", "INFO"),
             ("{note}", "WARNING"),                                # describe_siblings' near-miss account
             ("[checkpoint] writing to", "INFO"),
+            ("[checkpoint] removed", "INFO"),                     # uncommitted shards, before the first commit
             ("batch FAILED after both halving retries", "ERROR"),
             ("restart the run (it resumes from its checkpoint)", "WARNING"),
             ("new pathological trajectorie(s)", "WARNING"),
@@ -4515,7 +4596,7 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
         ),
         _sdeint_mod: (("[solver] CUDA graph capture unavailable", "WARNING"),),
     }
-    assert sum(len(rows) for rows in table.values()) == 36
+    assert sum(len(rows) for rows in table.values()) == 37
 
     def _template(node) -> str:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):

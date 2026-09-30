@@ -1282,8 +1282,7 @@ def test_a_cancel_raised_by_anything_the_manifest_refresh_reaches_is_carried_thr
     cancel raised there is NOT harmless. WorkerCancelled is a BaseException, so the refresh's
     ``except Exception`` does not catch it: it escapes save() AFTER state.pt says batches_done = k but
     BEFORE the pipeline advances its own counter, so the next save re-commits a range overlapping the
-    shard already on disk -- and load_rows then refuses the whole cache ("commits N batches but only
-    M are present on disk").
+    shard already on disk -- and load_rows then refuses the whole cache, the two shards overlapping.
 
     Nothing the refresh reaches logs or prints today, and the source-reading silence test only reads
     ``_refresh_manifest``'s OWN body, so this pins it the way the fault would arrive: the store's
