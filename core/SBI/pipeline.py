@@ -257,6 +257,12 @@ def _cache_size_bytes(n_runs: int, run_size: int, *, chi_mode: bool, chi_k_pad: 
     return n_runs * run_size * (width + n_targets) * 4
 
 
+def _shard_ranges_text(names) -> str:
+    """The distinct batch ranges some shard file names declare, as ``[a, b), [c, d)``."""
+    from core.SBI.training_checkpoint import shard_range
+    return ", ".join(f"[{a}, {b})" for a, b in sorted({shard_range(n) for n in names}))
+
+
 # 21 lines over a 5000-batch run. PRISM_MEM_LOG_EVERY overrides it for a diagnostic run: when a run
 # is dying at batch 93, a line every 250 batches has told you nothing at all.
 _MEM_LOG_EVERY = int(os.environ.get("PRISM_MEM_LOG_EVERY") or 250)
@@ -1569,14 +1575,31 @@ def gen_training_data(model: str, prior: torch.distributions.Distribution, forci
         # batches (what a resume read, or the zero create() just wrote), so any shard ending past it is
         # an orphan of a save that stopped before its commit. This run's first commit starts at
         # _start_k as well, and if the orphan came from a cancel's save it ends elsewhere and has
-        # another name; left in place, every load after batches_done passed its end would read both
-        # shards and refuse the cache.
-        _orphans = _tc.remove_uncommitted(_ck_dir, _start_k)
-        if _orphans:
-            log.info(f"[checkpoint] removed {len(_orphans)} uncommitted shard "
-                     f"file{'' if len(_orphans) == 1 else 's'} past batch {_start_k} (batches "
-                     f"{', '.join(f'[{a}, {b})' for a, b in sorted(set(_orphans)))}): a save wrote "
-                     f"{'it' if len(_orphans) == 1 else 'them'} and stopped before its commit")
+        # another name; left among the shards, every load after batches_done passed its end would read
+        # both and refuse the cache. So they are moved aside -- never deleted -- EXCEPT when a resume
+        # read its count from state.prev.pt: that count is a generation old, a read failure of
+        # state.pt may be transient, and state.pt may commit exactly those shards.
+        if _ck_resumed is not None and _state.get("_state_file") == "state.prev.pt":
+            _left = _tc.uncommitted_shards(_ck_dir, _start_k)
+            if _left:
+                _names = [f.name for f in _left]
+                log.warning(
+                    f"[checkpoint] state.pt could not be read, so this run resumes from state.prev.pt, "
+                    f"a generation back, at batch {_start_k}. It leaves {len(_names)} shard "
+                    f"file{'' if len(_names) == 1 else 's'} that end past batch {_start_k} in "
+                    f"{_left[0].parent}, because state.pt may commit them: {', '.join(_names)} "
+                    f"(batches {_shard_ranges_text(_names)}). Stop this run while it is still on its "
+                    f"first batch, where a stop commits nothing, and resume: if state.pt reads then, "
+                    f"nothing is lost. Only if state.pt is really damaged, copy state.prev.pt over it "
+                    f"before resuming, and that resume sets these files aside. Left to run, this run "
+                    f"simulates those batches again, and a later load may refuse the leftovers as "
+                    f"overlapping shards, naming the pair to move.")
+        else:
+            _aside, _moved = _tc.set_aside_uncommitted(_ck_dir, _start_k)
+            if _moved:
+                log.info(f"[checkpoint] moved {len(_moved)} uncommitted shard "
+                         f"file{'' if len(_moved) == 1 else 's'} past batch {_start_k} (batches "
+                         f"{_shard_ranges_text(_moved)}) aside to {_aside}, which no load reads")
 
     # The batch probe tally, chi mode only: each batch's masked and simulated probe counts, committed
     # beside its rows and stored in the cache beside batches_done, so the run total at the end covers

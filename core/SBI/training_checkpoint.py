@@ -34,6 +34,8 @@ LAYOUT.  ``<Artifacts>/simulations/<digest12>/``   (core.artifacts.store.KIND_DI
                    absent when a batch was committed without them, so readers use ``.get``
     state.prev.pt  one generation back, a few KB, for the case where state.pt is lost mid-write
     shards/x_<from>_<to>.pt, th_<from>_<to>.pt    write-once row blocks, never mutated after commit
+    uncommitted/<n>/   shards a continuing run set aside because they end past the commit (see
+                   below), one numbered folder per set-aside; never read
 
 The directory NAME is a digest of the declared identity, so "same config" resolves to the same place by
 construction and two different configs can never share one. The digest is only a ROUTER: ``verify``
@@ -45,10 +47,12 @@ ORDERING, which is what makes a crash safe:
     2. copy state.pt -> state.prev.pt
     3. atomically replace state.pt with batches_done = k
 A load skips every shard that ends past ``batches_done``, so orphans from step 1 are never read as
-rows. A run that continues the cache also REMOVES them before it commits anything
-(``remove_uncommitted``): its own first commit starts at ``batches_done`` too, and when the orphan
+rows. A run that continues the cache also MOVES them out of ``shards/`` before it commits anything
+(``set_aside_uncommitted``): its own first commit starts at ``batches_done`` too, and when the orphan
 came from a cancel's save -- which ends at the batch the cancel reached, off the cadence -- that
 commit has another name, so once ``batches_done`` passed the orphan's end a load would read both.
+They are moved, never deleted, and not at all when ``batches_done`` was read from state.prev.pt:
+that count is a generation old, and state.pt may commit what lies past it.
 Shards are durable before the state that references them, so no commit can point at data still in
 the page cache.
 
@@ -78,6 +82,7 @@ _HEADER = "header.pt"
 _STATE = "state.pt"
 _STATE_PREV = "state.prev.pt"
 _SHARDS = "shards"
+_UNCOMMITTED = "uncommitted"       # a sibling of _SHARDS, so no shard glob can reach it
 
 
 # ── identity ─────────────────────────────────────────────────────────────────────────────────────
@@ -152,7 +157,12 @@ def bijection_probe(theta_transform, dim: int, n: int = 7, device=None) -> torch
 def peek(path) -> dict | None:
     """The committed state, cheaply: ``{batches_done, complete, ...}``. None when there is no usable
     checkpoint here. Never raises -- a corrupt or half-written state falls back to ``state.prev.pt``,
-    and if that is unreadable too the caller simply starts fresh."""
+    and if that is unreadable too the caller simply starts fresh.
+
+    The result also carries ``_state_file``, the name of the file it was read from: ``state.pt``, or
+    ``state.prev.pt`` after a fallback. After a fallback ``batches_done`` is a generation old, and a
+    read failure may be transient, so a caller that acts on the shards past ``batches_done`` checks it
+    first (see ``set_aside_uncommitted``)."""
     path = Path(path)
     for name in (_STATE, _STATE_PREV):
         f = path / name
@@ -363,8 +373,9 @@ def save(path, *, from_batch: int, batch_k: int, rng: dict, x_buf, th_buf, run_s
     # although the manifest is never the commit point: WorkerCancelled is a BaseException, so its
     # `except Exception` would not stop a cancel raised by anything it reaches, and that raise would
     # escape save() AFTER state.pt moved to batch_k but BEFORE the caller advanced its own counter --
-    # the next save would re-commit a range overlapping the shard already written, and load_rows
-    # would refuse the whole cache.
+    # the rescue save on the way out would then commit again from the same start and end a batch
+    # short, stranding the shard just written past the commit: the next run would have to set it
+    # aside and simulate that batch again.
     with cancel_deferred():
         if hi > lo:
             atomic_torch_save(x_buf[lo:hi].clone(), _shard(path, "x", from_batch, batch_k))
@@ -395,27 +406,55 @@ def mark_complete(path, batch_k: int, rows=None) -> None:
         _refresh_manifest(path, batches_done=batch_k, complete=True, rows=rows)
 
 
-def remove_uncommitted(path, batches_done: int) -> list:
-    """Delete every shard that ends past ``batches_done``; return the ``(from, to)`` batch range of each
-    file removed.
+def shard_range(name) -> tuple:
+    """``(from, to)``, the batch range a shard file's name (x_ or th_) declares."""
+    a, b = (int(p) for p in Path(name).stem.split("_")[1:3])
+    return a, b
 
-    Every committed shard ends at or before ``batches_done``, so a shard that ends past it was written
-    by a save that stopped between its shard write and its state replace (steps 1 and 3 above). Called
-    by the run that continues the cache, before its first commit: that commit starts at
-    ``batches_done`` and ends on the run's own cadence, so an orphan left by a cancel's save has a
-    different name and would otherwise sit beside it once ``batches_done`` passes the orphan's end.
-    Nothing at or below ``batches_done`` is touched. Silent: the caller reports what was removed.
+
+def uncommitted_shards(path, batches_done: int) -> list:
+    """Every shard file, x_ and th_ alike, that ends past ``batches_done``, in name order. Reads
+    names only; touches nothing.
+
+    Every shard the state that reported ``batches_done`` commits ends at or before it. A shard that
+    ends past it was written by a save that stopped between its shard write and its state replace
+    (steps 1 and 3 above) -- or, when ``batches_done`` came from state.prev.pt, it may be committed by
+    a state.pt that could not be read.
     """
     shards = Path(path) / _SHARDS
-    removed = []
     if not shards.is_dir():
-        return removed
-    for f in sorted([*shards.glob("x_*.pt"), *shards.glob("th_*.pt")]):
-        a, b = (int(p) for p in f.stem.split("_")[1:3])
-        if b > batches_done:
-            f.unlink()
-            removed.append((a, b))
-    return removed
+        return []
+    return sorted(f for f in (*shards.glob("x_*.pt"), *shards.glob("th_*.pt"))
+                  if shard_range(f)[1] > batches_done)
+
+
+def set_aside_uncommitted(path, batches_done: int) -> tuple:
+    """Move every shard that ends past ``batches_done`` into a new folder ``uncommitted/<n>/``, ``n``
+    one past the highest number already there; return ``(that folder, [the names moved])``, or
+    ``(None, [])`` when nothing ends past it.
+
+    Called by the run that continues the cache, before its first commit. That commit starts at
+    ``batches_done`` and ends on the run's own cadence, so an orphan left by a cancel's save has a
+    different name and, left among the shards, would sit beside it once ``batches_done`` passes the
+    orphan's end. Moved, not deleted: if the count is ever wrong the rows are still on disk. A folder
+    per call, so the files keep their own names -- each x_ beside its th_ twin, and moving them back
+    is a plain move -- and a range set aside twice keeps both copies instead of overwriting the
+    first. Nothing at or below ``batches_done`` is touched.
+
+    The caller must not call this when ``batches_done`` came from state.prev.pt (``peek``'s
+    ``_state_file``): state.pt may commit the shards past it. Silent: the caller reports what moved.
+    """
+    files = uncommitted_shards(path, batches_done)
+    if not files:
+        return None, []
+    root = Path(path) / _UNCOMMITTED
+    root.mkdir(exist_ok=True)
+    taken = [int(p.name) for p in root.iterdir() if p.is_dir() and p.name.isdigit()]
+    dest = root / str(max(taken, default=0) + 1)
+    dest.mkdir()
+    for f in files:
+        f.rename(dest / f.name)          # a new, empty folder: nothing there to overwrite
+    return dest, [f.name for f in files]
 
 
 def _refresh_manifest(path: Path, *, batches_done: int, complete: bool = False, rows=None) -> None:
@@ -436,9 +475,9 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
 
     This globs the shard directory and walks it in name order. A shard that ends past
     ``batches_done`` is an orphan (a crash between the shard write and the state commit) and is
-    skipped; the run that continues the cache removes such shards before it commits
-    (``remove_uncommitted``). Two shards that overlap are refused, naming both, even under a row cap:
-    reading both would repeat their shared batches' rows.
+    skipped; the run that continues the cache moves such shards to ``uncommitted/`` before it
+    commits (``set_aside_uncommitted``), and nothing reads that folder. Two shards that overlap are
+    refused, naming both, even under a row cap: reading both would repeat their shared batches' rows.
 
     :param x_only: skip the ``th_`` shards entirely and return ``(x, None)``. The conditioning-channel
                    diagnostics read only x, and the targets are half the bytes on disk.
@@ -463,9 +502,12 @@ def load_rows(path, batches_done: int, run_size: int, *, x_only: bool = False,
             raise ValueError(
                 f"Training checkpoint at {path} holds two shards that overlap: {last.name} covers "
                 f"batches [{last_a}, {end}) and {f.name} covers [{a}, {b}), so reading both would "
-                f"repeat rows. The committed shards run end to end from batch 0 to {batches_done}; "
-                f"the one of these two that does not fit that run was written by a save that stopped "
-                f"before its commit. Move it out of the shards folder and load again.")
+                f"repeat rows. The committed shards run end to end from batch 0 to {batches_done}, "
+                f"and the one of these two that does not fit that run is not committed; if both "
+                f"could, move either, and a later load names anything still left. Move it and its "
+                f"targets ({_shard(path, 'th', last_a, end).name} or {_shard(path, 'th', a, b).name}) "
+                f"out of the shards folder into {path / _UNCOMMITTED}, where set-aside shards are "
+                f"kept, and load again.")
         th_part = None
         if not x_only:
             th = _shard(path, "th", a, b)

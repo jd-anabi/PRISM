@@ -2180,19 +2180,22 @@ def test_a_complete_checkpoint_short_circuits_generation_entirely():
 
 @pytest.mark.parametrize("every, kill, resume", [(2, 3, "require"), (4, 1, "auto")],
                          ids=["after_a_commit", "before_any_commit"])
-def test_a_continued_cache_removes_the_shards_a_stopped_save_never_committed(every, kill, resume,
-                                                                              caplog, monkeypatch):
+def test_a_continued_cache_sets_aside_the_shards_a_stopped_save_never_committed(every, kill, resume,
+                                                                                caplog, monkeypatch):
     """A save writes its shards and then replaces state.pt, so a process killed between the two leaves
     shards that end past batches_done. The save a cancel makes on the way out ends at the batch the
     cancel reached, off the cadence, so the continued run's own first commit from the same batch has
-    another name. Left on disk, the orphan joins every load once batches_done passes its end, and the
-    load reads its batches twice and refuses the whole cache -- at the end of a run that took weeks.
+    another name. Left among the shards, the orphan joins every load once batches_done passes its end,
+    and the load reads its batches twice and refuses the whole cache -- at the end of a run that took
+    weeks.
 
-    So the run that continues the cache removes every shard past the batch it starts from, before it
-    commits: when it resumes committed batches, and when none were committed yet and it starts the
-    cache over. Driven through the production path -- a cancel's save, the state put back one
-    generation as the kill leaves it, the continued run to completion, and the load a later call makes
-    of the complete cache (the flow retrained from it, say)."""
+    So the run that continues the cache moves every shard past the batch it starts from out of the
+    shards folder, before it commits: when it resumes committed batches, and when none were committed
+    yet and it starts the cache over. Moved, not deleted -- the files are kept, byte for byte, in a
+    numbered folder beside the shards that no load reads. Driven through the production path -- a
+    cancel's save, the state put back one generation as the kill leaves it, the continued run to
+    completion, and the load a later call makes of the complete cache (the flow retrained from it,
+    say)."""
     import shutil
     import tempfile
     from core.SBI import training_checkpoint as tc
@@ -2216,6 +2219,7 @@ def test_a_continued_cache_removes_the_shards_a_stopped_save_never_committed(eve
         assert tc.peek(d)["batches_done"] == committed
         orphan = [d / "shards" / f"{p}_{committed:06d}_{kill:06d}.pt" for p in ("x", "th")]
         assert all(f.exists() for f in orphan), orphan
+        orphan_bytes = [f.read_bytes() for f in orphan]
 
         caplog.clear()
         x, th = _gen_td("chi", seed=11, n_runs=n_runs, run_size=run_size,
@@ -2224,15 +2228,66 @@ def test_a_continued_cache_removes_the_shards_a_stopped_save_never_committed(eve
         x2, th2 = _gen_td("chi", seed=11, n_runs=n_runs, run_size=run_size,
                           checkpoint=_ck(d, every=every, resume="require"))
     assert torch.equal(x2, x) and torch.equal(th2, th), "the complete cache reads back other rows"
-    assert not any(f.exists() for f in orphan), "the uncommitted shards are still on disk"
+    assert not any(f.exists() for f in orphan), "the uncommitted shards are still among the shards"
+    aside = d / "uncommitted" / "1"
+    assert [(aside / f.name).read_bytes() for f in orphan] == orphan_bytes, \
+        "the uncommitted shards were not kept, byte for byte, in the set-aside folder"
+    assert sorted(p.name for p in aside.iterdir()) == sorted(f.name for f in orphan)
     ranges = sorted(tuple(int(v) for v in f.stem.split("_")[1:3]) for f in (d / "shards").glob("x_*.pt"))
     assert [a for a, _ in ranges] == [0] + [b for _, b in ranges[:-1]] and ranges[-1][1] == n_runs, \
         f"the shards left do not run end to end from 0 to {n_runs}: {ranges}"
-    said = [r for r in caplog.records if r.getMessage().startswith("[checkpoint] removed")]
+    said = [r for r in caplog.records if r.getMessage().startswith("[checkpoint] moved")]
     assert len(said) == 1 and said[0].levelname == "INFO", [r.getMessage() for r in said]
-    for part in ("removed 2 uncommitted shard files", f"past batch {committed}",
-                 f"[{committed}, {kill})"):
+    for part in ("moved 2 uncommitted shard files", f"batches [{committed}, {kill})", str(aside),
+                 f"past batch {committed}"):
         assert part in said[0].getMessage(), (part, said[0].getMessage())
+
+
+def test_a_resume_from_the_fallback_state_file_moves_nothing_and_warns(caplog, monkeypatch):
+    """peek falls back to state.prev.pt when state.pt cannot be read, and then the count it reports
+    is one generation old: the shards past it may be COMMITTED by state.pt, and a read failure can be
+    transient. So a resume that read the fallback moves nothing aside. It says so at warning level,
+    naming the files it left and the repair, and the committed rows are all still there once state.pt
+    reads again. The resumed run is stopped inside its first batch, where a stop commits nothing."""
+    import tempfile
+    from core.SBI import training_checkpoint as tc
+    from tests._fixtures import stand_in_gen_obs
+    monkeypatch.setattr(pipeline_mod, "gen_obs", stand_in_gen_obs)
+    d = Path(tempfile.mkdtemp()) / "c"
+    n_runs, run_size = 6, 4
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        real, spy = _kill_at(3)
+        monkeypatch.setattr(pipeline_mod, "gen_stats", spy)
+        with pytest.raises(_KillRun):
+            _gen_td("chi", seed=11, n_runs=n_runs, run_size=run_size,
+                    checkpoint=_ck(d, every=2, resume="never"))
+        monkeypatch.setattr(pipeline_mod, "gen_stats", real)
+        assert tc.peek(d)["batches_done"] == 3        # [0, 2) at the cadence, [2, 3) on the way out
+        good_state = (d / "state.pt").read_bytes()
+        (d / "state.pt").write_bytes(b"\x00\x01 unreadable for now")
+        assert tc.peek(d)["_state_file"] == "state.prev.pt" and tc.peek(d)["batches_done"] == 2
+        committed_past = [d / "shards" / f"{p}_000002_000003.pt" for p in ("x", "th")]
+
+        real, spy = _kill_at(0)
+        monkeypatch.setattr(pipeline_mod, "gen_stats", spy)
+        caplog.clear()
+        with pytest.raises(_KillRun):
+            _gen_td("chi", seed=11, n_runs=n_runs, run_size=run_size,
+                    checkpoint=_ck(d, every=2, resume="require"))
+        monkeypatch.setattr(pipeline_mod, "gen_stats", real)
+    assert all(f.exists() for f in committed_past), "a resume from the fallback moved committed rows"
+    assert not (d / "uncommitted").exists()
+    assert not [r for r in caplog.records if r.getMessage().startswith("[checkpoint] moved")]
+    said = [r for r in caplog.records if r.getMessage().startswith("[checkpoint] state.pt could not be read")]
+    assert len(said) == 1 and said[0].levelname == "WARNING", [r.getMessage() for r in caplog.records]
+    for part in ("x_000002_000003.pt", "th_000002_000003.pt", "batches [2, 3)", str(d / "shards"),
+                 "copy state.prev.pt over it"):
+        assert part in said[0].getMessage(), (part, said[0].getMessage())
+
+    (d / "state.pt").write_bytes(good_state)          # the read failure passes
+    x, th = tc.load_rows(d, tc.peek(d)["batches_done"], run_size)
+    assert x.shape[0] == 3 * run_size and th.shape[0] == 3 * run_size, "committed rows were lost"
 
 
 def test_checkpointing_off_writes_nothing_and_changes_nothing(store):
@@ -3425,11 +3480,46 @@ def test_overlapping_shards_are_refused_by_name_and_never_read_twice(tmp_path):
         with pytest.raises(ValueError) as e:
             tc.load_rows(d, 6, 5, **kw)
         msg = str(e.value)
-        for part in ("overlap", "x_000002_000003.pt", "x_000002_000004.pt", "batch 0 to 6"):
+        for part in ("overlap", "x_000002_000003.pt", "x_000002_000004.pt", "batch 0 to 6",
+                     "th_000002_000003.pt", "th_000002_000004.pt", str(d / "uncommitted")):
             assert part in msg, (kw, part, msg)
         assert "present on disk" not in msg and "Delete the directory" not in msg, (kw, msg)
     x, _ = tc.load_rows(d, 6, 5, x_only=True, max_rows=10)
     assert tuple(x.shape) == (10, 3) and x.eq(0.0).all()
+
+
+def test_setting_shards_aside_twice_keeps_both_and_no_load_reads_them(tmp_path):
+    """Each set-aside gets a numbered folder of its own under ``uncommitted``, so the same range set
+    aside twice -- a second cancel's save killed at the same batch -- keeps both copies under their
+    own names instead of overwriting the first, each x_ file beside its th_ twin. The folder is a
+    sibling of the shards folder, so a load never reads it: a later commit over the same batches
+    loads without an overlap."""
+    from core.SBI import training_checkpoint as tc
+    d = tmp_path / "cache"
+    (d / "shards").mkdir(parents=True)
+
+    def _write(a, b, value):
+        for p, w in (("x", 3), ("th", 2)):
+            torch.save(torch.full(((b - a) * 5, w), float(value)), d / "shards" / f"{p}_{a:06d}_{b:06d}.pt")
+
+    _write(0, 2, 0)
+    _write(2, 3, 7)
+    first = [f.read_bytes() for f in sorted((d / "shards").glob("*_000002_000003.pt"))]
+    assert tc.set_aside_uncommitted(d, 2) == (d / "uncommitted" / "1",
+                                              ["th_000002_000003.pt", "x_000002_000003.pt"])
+    _write(2, 3, 8)
+    assert tc.set_aside_uncommitted(d, 2) == (d / "uncommitted" / "2",
+                                              ["th_000002_000003.pt", "x_000002_000003.pt"])
+    assert [(d / "uncommitted" / "1" / n).read_bytes()
+            for n in ("th_000002_000003.pt", "x_000002_000003.pt")] == first, "the first copy was overwritten"
+    assert torch.load(str(d / "uncommitted" / "2" / "x_000002_000003.pt")).eq(8.0).all()
+    assert tc.set_aside_uncommitted(d, 2) == (None, []), "nothing is past the commit now"
+    assert sorted(p.name for p in (d / "uncommitted").iterdir()) == ["1", "2"]
+
+    _write(2, 4, 2)
+    x, th = tc.load_rows(d, 4, 5)
+    assert tuple(x.shape) == (20, 3) and tuple(th.shape) == (20, 2)
+    assert not (x.eq(7.0).any() or x.eq(8.0).any()), "a load read a set-aside shard"
 
 
 def test_a_checkpoint_refuses_a_config_it_was_not_written_for():
@@ -4565,7 +4655,8 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
             ("[checkpoint] resuming at batch", "INFO"),
             ("{note}", "WARNING"),                                # describe_siblings' near-miss account
             ("[checkpoint] writing to", "INFO"),
-            ("[checkpoint] removed", "INFO"),                     # uncommitted shards, before the first commit
+            ("[checkpoint] moved", "INFO"),                       # uncommitted shards set aside
+            ("[checkpoint] state.pt could not be read", "WARNING"),   # ...or left, after a fallback read
             ("batch FAILED after both halving retries", "ERROR"),
             ("restart the run (it resumes from its checkpoint)", "WARNING"),
             ("new pathological trajectorie(s)", "WARNING"),
@@ -4596,7 +4687,7 @@ def test_every_sbi_message_is_a_record_at_its_level_and_nothing_prints():
         ),
         _sdeint_mod: (("[solver] CUDA graph capture unavailable", "WARNING"),),
     }
-    assert sum(len(rows) for rows in table.values()) == 37
+    assert sum(len(rows) for rows in table.values()) == 38
 
     def _template(node) -> str:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
