@@ -67,7 +67,7 @@ what is on disk, the last gate). Update it at the end of every session.
 - A green suite does not certify the GPU path. The gpu-marked tests do run on the card inside every
   fast gate when CUDA is present (`tests/test_gpu_paths.py`'s CUDA inference run plus six in
   `tests/test_user_sbi.py`), but they are not a substitute: no checkpoint resume, no real bounds or
-  cell files. After touching code that moves tensors, run the smoke gate on the card — four command
+  cell files. After touching code that moves tensors, run the smoke gate on the card — five command
   lines, from the repo root — and check `$LASTEXITCODE` after each one:
 
   ```powershell
@@ -83,22 +83,37 @@ what is on disk, the last gate). Update it at the end of every session.
   & $py -m core smoke --chi --t-obs 4.5 @B @C --checkpoint --store-root "$S/smoke" --prior smoke_prior --stages prior,posterior --num-runs 2
   # run 3: forced mode, its own store
   & $py -m core smoke --no-chi --t-obs 4.5 @B --cell Resources/Cells/nadrowski/master_weak.txt --checkpoint --save --store-root "$S/smoke_chi0"
+  # run 4: the tier-1 box (temperature inferred, the force scale derived) at the larger network, its own store
+  & $py -m core smoke --chi --t-obs 4.5 --bounds Resources/Bounds/nadrowski/master_tier1.txt --cell Resources/Cells/nadrowski/master_spont_tier1.txt --hidden-features 256 --num-transforms 10 --checkpoint --save --store-root "$S/smoke_t1"
   ```
 
   Pass criteria, read off `$LASTEXITCODE` and the printed lines after each command:
-  - run 1 and run 3: `$LASTEXITCODE` 0, no OOM lines, stage timings near the last recorded gate in
-    `docs/STATE.md`, masked-probe counts within ±12 pp of 37 %;
+  - runs 1, 3 and 4: `$LASTEXITCODE` 0, no OOM lines, stage timings near the last recorded card
+    run; on the two chi runs (1 and 4) the training `[chi] masked probes` run-total line (the one
+    scoped to every committed batch of the simulation cache; the calibration stage logs a second
+    one, scoped to this process only, which is not the criterion) within ±12 pp of 37 %;
   - run 2: prints `Reusing the Fisher rotation stored with the training checkpoint` and
     `[checkpoint] resuming at batch 4/4`, `$LASTEXITCODE` 0;
   - run 2b: `$LASTEXITCODE` 1, the refusal names `n_runs`, no `[fisher]` line, no new directory
-    under `$S/smoke/simulations/`.
+    under `$S/smoke/simulations/`;
+  - run 4, also: both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']` in the banner,
+    and `smoke_posterior`'s `manifest.json` lists `T` in `body.transform.param_keys` and carries a
+    `config.tier1` block.
 
   `--bounds` is required: the same-named sibling rule would otherwise resolve the 12-dim
   spontaneous box. After a change under `core/diagnostics` that moves tensors, also run the
-  diagnostic card (`sbc`, `identifiability jacobian`, `ablation` against `$S/smoke` with
-  `$env:PRISM_ARTIFACTS` set; `identifiability laplace` against `$S/smoke_chi0`), as recorded in
-  `docs/STATE.md`'s piece-2 GPU gate row. Delete `$S` afterwards; the last result is in
-  `docs/STATE.md`.
+  diagnostic card, each command with `$env:PRISM_ARTIFACTS` set to the store named. Against
+  `$S/smoke`: `sbc --chi @B --posterior smoke_posterior --repeats 1 --n-cal 20`,
+  `identifiability jacobian --chi @B @C --t-obs 4.5` and `ablation --chi @B --posterior
+  smoke_posterior`. Against `$S/smoke_chi0`: `identifiability laplace --no-chi @B --posterior
+  smoke_posterior --cell Resources/Cells/nadrowski/master_weak.txt --t-obs 4.5`. Against
+  `$S/smoke_t1`: `identifiability jacobian --chi --bounds Resources/Bounds/nadrowski/master_tier1.txt
+  --cell Resources/Cells/nadrowski/master_spont_tier1.txt --t-obs 4.5` (its temperature column is a
+  measurement, not a failure). Against an empty scratch store: `probes band @B @C` and `probes drive
+  @B @C`. Against `$S/smoke`: `probes mask @B --prior smoke_prior`. Each exits 0 and writes one
+  record under `diagnostics/`. Delete `$S` afterwards.
+  The last result, with its stage timings, is in `docs/STATE.md`'s gate table; STATE carries this
+  block verbatim under that table ("The GPU gate, as command lines").
 - A foreground `python` check that imports torch and touches the prior or checkpoint machinery
   can hang the tool call for good. Write such checks to a script and run them with a timeout.
 - Do not pipe large Python or Markdown through a bash heredoc (`cat <<EOF`); it dies on

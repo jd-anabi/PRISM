@@ -601,10 +601,12 @@ judged unnecessary (no line under `core/diagnostics` moves a tensor) and that ju
 | slow set of record, `pytest -m slow -q --durations=5` (piece 5) | 2026-09-24 at `c29320c` (the same code as `7e51275`, which changed documents and two docstrings only), beside the read-only Task 41 document review: **3 passed**, 965 deselected, 102 warnings, **38 min 6 s** (2286.51 s; wall 38 min 8 s), exit 0, against design spec §9's ~45-minute budget. `test_user_sbi.py::test_chi_mode_full_sbi_pipeline` 1396.87 s (piece 4: 1610 s); **new**, `test_tool.py::test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` (Task 33) 562.38 s; `test_tool.py::test_fdt_and_crossval_run_at_tiny_size`, rewritten by Task 34 to assert records and on the fixed seed 20260925 since the review's N40, 322.93 s (302 s solo at Task 36). Afterwards no `Resources/*/sbitest` (the two slow tool tests no longer request `tool_env`, which installed SBITEST into the real `Resources/`; they set `PRISM_ARTIFACTS` themselves, N38), no `sbi-logs/`, tree clean, the real `Artifacts/` unchanged |
 | **GPU smoke gate, piece 5** | 2026-09-24: **judged NOT REQUIRED; the card was not run.** The judgement was re-made against the whole piece, `a0d85da^..c29320c`. The changed lines that create or move a tensor are in `core/FDT/cross_validation.py`, `fdt_pipeline.py` and `sanity.py` — all on the FDT and sweep path, pinned to `cpu_device()` by `cli.make_fdt_config` and `make_param_sweep_config` — in `core/gui/panels/simulate_runner.py` (N17's zero-forcing tensor, on the Live simulation's CPU-pinned path, which the gate does not reach), and in `core/rng.py`: `seeded`'s CUDA branch (fork the device, `torch.manual_seed`) is the base's byte for byte, and its new CPU branch seeds `torch.default_generator`, the CPU half of `manual_seed`, so no CPU draw changes. `core/diagnostics/rng.py` re-exports the same object, and `core/orchestrator.py` only re-imports `PreflightWarning` from `core/refusals.py`. **T28's change to `core/tool/__init__.py` and `core/tool/smoke.py` IS on `smoke`'s path**: it chooses the store root through `temp_store_root` (set by `set_defaults` on smoke's parser) instead of the flag's presence, creates or moves no tensor, and T28's tests pin the root choice; the gate always passes `--store-root` anyway. The fix range `d13ca96..6be832c` touched nothing under `core/SBI`, `core/diagnostics`, `core/orchestrator.py` or `core/tool/smoke.py`, and `core/rng.py` only in its docstring (the re-review verified); nothing under `core/SBI`, `core/Simulator`, `core/Solvers` or `core/Models` changed in the piece. The diagnostic card is not needed either: no line under `core/diagnostics` that moves a tensor changed (only `rng.py`'s re-export). Piece 4's run (`d1f0b98`) remains the last card measurement |
 | display walkthrough, piece-5 rows E1–E17 (`docs/checklists/display-walkthrough.md`) | reported 2026-09-25, the user on the real screen (piece 5 as it stands; the code is `7e51275`, every later commit being documents only): **rows E1–E17 all pass** — the date and result columns of each row record it |
+| **GPU card run, piece 6** (`python -m core smoke`, the five command lines of `CLAUDE.md`, run 4's resume, the narrowing leg, the diagnostic card and the probe checks, at `16e5bae` — the code of the whole-code review's fixed head `04fbe54`; the later commits are documents only) | 2026-09-29, alone on the card (after the drive parity run the same evening: `probes drive` on `master_spont` at window 0.018 over the archived sixteen strengths, exit 0 in 13.8 s, Ω₀ 22.600 Hz, clarity 1.41e+04, strongest free-running **0.02**, weakest captured **0.2** — the 0.02 default window accepted): **run 1** chi `master_spont`: prior 92 s, posterior 194 s, validate 22 s, infer 76 s, exit 0 (piece 4: 92.3/198.5/22.3/85.9), training `[chi] masked probes` 254 of 704 (36.1 %: 79/224, 15/96, 102/192, 58/192), cache `5d89e2242bd2` (the identity format moved it from `4d8022b100db`); **run 2** the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 7.7 s, masked line equal to run 1's; **run 2b** exit 1 in 5.8 s, "differs only in n_runs: this run 2, that cache 4 … (--new-run)", no `[fisher]` line, `simulations/` unchanged; **run 3** forced `master_weak`: 91/60/13/20 s, exit 0 (piece 4: 100.4/63.9/15.0/19.3); **run 4** tier-1, 256 × 10: 92/150/20/45 s, exit 0, both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']`, masked 285 of 704 (40.5 %), T in the posterior's keys, `config.tier1` (`k_b_cell` 0.01380649, `T_range` [280.0, 310.0]) and `assumed_params` ["T"], 13 eigenvalues (7.949e+16 … 0.1652), T marked "(assumed input)" in the calibration table, `[verdict] FAIL` (a result at this size), observation `simulated_f_scale` 46.99; **run 4 resume** exit 0 in 7.8 s, `[checkpoint] the stored rotation's eigenvalues come with it`, eigenvalues carried, Fisher settings null, `resumed_from_batch` 4; **narrowing leg** (`PRISM_ARTIFACTS` at run 4's store) tsnpe 12.6 s exit 0 (direction 0 left full width: t_scale-loaded), truth inside all five truncated directions, `t1_round` carries the parent's eigenvalues; validate 2571 s (the stage's default size on a truncated posterior) exit 0, `[verdict] FAIL` (T's rank test fails at this size, a 5-epoch round), seed 401191828; infer 42 s exit 0; accepted [] (round) / ["truncated"] (calibration) / ["truncated", "other_observation"] (inference); **diagnostic card** sbc 18 s (rank verdict 0/1 repeats), jacobian 85 s, ablation 6 s, laplace 128 s, tier-1 jacobian 85 s with T column (a measurement) ‖g‖ 0.214, unique 0.134, |cos| with n 0.92 (degenerate pair n~T: the force scale is proportional to n·T), with t_scale 0.49, with x_scale 0.44; **probes** band: the configured (0.03, 0.3) and drive 0.15 hold, the 0.6× control captured at every length (own-peak share 0.12–0.18); drive (default grid, the configured 0.15 included): free-running 0.02, captured from 0.15 (0.1 in between); mask over `smoke_prior`: 753 of 2,144 masked (35.1 %), the cycle floor the only cause (too slow at the band's top 31.2 %, shortened by the duration draw 4.0 %), invariants hold, cross-check confirms all 12 row ranges. No OOM line and no Traceback in any run; `warning:` lines only the expected ones (a non-amortized load, three pathological-trajectory notices in the round's calibration). **Run 1's masked count is not reproducible across processes on the card:** pieces 2–4 recorded 260 three times; an export of this piece's first commit gave 260 again, but a bisect over the piece's commits found batch 3 at 108 or 102 (one row's six probes) flipping between TEST-ONLY commits, always together with the Fisher step's eigenvalue spread (≈1.7e+14 with 102; inf or 3.78e+16 with 108) — the Fisher's smallest eigenvalue is near zero and its simulation is not bitwise stable on CUDA, and one borderline row follows it. Either count is inside the ±12 pp band. Scratch stores deleted |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
-copied verbatim; keep the two copies identical. Run it from the repository root, with `$S` set to
-an empty scratch directory. `PRISM_ARTIFACTS` is not needed for the four `smoke` runs, which touch
+copied verbatim; keep the copies identical (the documents review compares them). Run it from the
+repository root, with `$S` set to an empty scratch directory. `PRISM_ARTIFACTS` is not needed for
+the five `smoke` runs, which touch
 only `--store-root`; the diagnostic card runs need it pointed at the same store.
 
 ````markdown
@@ -621,22 +623,35 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
   & $py -m core smoke --chi --t-obs 4.5 @B @C --checkpoint --store-root "$S/smoke" --prior smoke_prior --stages prior,posterior --num-runs 2
   # run 3: forced mode, its own store
   & $py -m core smoke --no-chi --t-obs 4.5 @B --cell Resources/Cells/nadrowski/master_weak.txt --checkpoint --save --store-root "$S/smoke_chi0"
+  # run 4: the tier-1 box (temperature inferred, the force scale derived) at the larger network, its own store
+  & $py -m core smoke --chi --t-obs 4.5 --bounds Resources/Bounds/nadrowski/master_tier1.txt --cell Resources/Cells/nadrowski/master_spont_tier1.txt --hidden-features 256 --num-transforms 10 --checkpoint --save --store-root "$S/smoke_t1"
   ```
 
   Pass criteria, read off `$LASTEXITCODE` and the printed lines after each command:
-  - run 1 and run 3: `$LASTEXITCODE` 0, no OOM lines, stage timings near the last recorded gate in
-    `docs/STATE.md`, masked-probe counts within ±12 pp of 37 %;
+  - runs 1, 3 and 4: `$LASTEXITCODE` 0, no OOM lines, stage timings near the last recorded card
+    run; on the two chi runs (1 and 4) the training `[chi] masked probes` run-total line (the one
+    scoped to every committed batch of the simulation cache; the calibration stage logs a second
+    one, scoped to this process only, which is not the criterion) within ±12 pp of 37 %;
   - run 2: prints `Reusing the Fisher rotation stored with the training checkpoint` and
     `[checkpoint] resuming at batch 4/4`, `$LASTEXITCODE` 0;
   - run 2b: `$LASTEXITCODE` 1, the refusal names `n_runs`, no `[fisher]` line, no new directory
-    under `$S/smoke/simulations/`.
+    under `$S/smoke/simulations/`;
+  - run 4, also: both `[tier1]` lines, `rescale order: ['x_scale', 't_scale', 'T']` in the banner,
+    and `smoke_posterior`'s `manifest.json` lists `T` in `body.transform.param_keys` and carries a
+    `config.tier1` block.
 
   `--bounds` is required: the same-named sibling rule would otherwise resolve the 12-dim
   spontaneous box. After a change under `core/diagnostics` that moves tensors, also run the
-  diagnostic card (`sbc`, `identifiability jacobian`, `ablation` against `$S/smoke` with
-  `$env:PRISM_ARTIFACTS` set; `identifiability laplace` against `$S/smoke_chi0`), as recorded in
-  `docs/STATE.md`'s piece-2 GPU gate row. Delete `$S` afterwards; the last result is in
-  `docs/STATE.md`.
+  diagnostic card, each command with `$env:PRISM_ARTIFACTS` set to the store named. Against
+  `$S/smoke`: `sbc --chi @B --posterior smoke_posterior --repeats 1 --n-cal 20`,
+  `identifiability jacobian --chi @B @C --t-obs 4.5` and `ablation --chi @B --posterior
+  smoke_posterior`. Against `$S/smoke_chi0`: `identifiability laplace --no-chi @B --posterior
+  smoke_posterior --cell Resources/Cells/nadrowski/master_weak.txt --t-obs 4.5`. Against
+  `$S/smoke_t1`: `identifiability jacobian --chi --bounds Resources/Bounds/nadrowski/master_tier1.txt
+  --cell Resources/Cells/nadrowski/master_spont_tier1.txt --t-obs 4.5` (its temperature column is a
+  measurement, not a failure). Against an empty scratch store: `probes band @B @C` and `probes drive
+  @B @C`. Against `$S/smoke`: `probes mask @B --prior smoke_prior`. Each exits 0 and writes one
+  record under `diagnostics/`. Delete `$S` afterwards.
 ````
 
 ## Decisions log
