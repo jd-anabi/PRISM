@@ -34,8 +34,9 @@ fabricated tail the off-grid fix removed. A target point whose bracketing sample
 is blank, and the record says how many there were, in its notices and on the axis.
 
 LIGHT ON PURPOSE: nothing here imports ``core.diagnostics``, ``core.orchestrator`` or an ``sbi``
-submodule. A comparison draws saved numbers; the inference stack would cost every run about two
-seconds and two false pytensor "g++" lines (tests/test_fdt_compare.py pins it in a fresh interpreter).
+submodule. A comparison draws saved numbers; the inference stack would cost every run seconds
+(and, under sbi 0.25, two false pytensor "g++" lines; tests/test_fdt_compare.py pins it in a fresh
+interpreter).
 """
 from __future__ import annotations
 

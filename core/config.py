@@ -280,6 +280,11 @@ SBC_N_CAL = 2000       # calibration datasets for SBC in validate(). n_cal=1000 
                        # the K=10 repeat study (`python -m core sbc --repeats 10`) showed mild marginal
                        # miscalibration only surfaces reliably at n_cal>=2000 (KS power grows with n_cal).
 TRAINING_NUM_RUNS = 5000  # number of (t_scale_k, T_k) batches per training round (data budget)
+TARP_NUM_BINS = 30     # bins of the calibration's joint coverage test (TARP), FIXED. Part of the verdict
+                       # rule, not a knob: its KS p-value compares the binned coverage curve with the
+                       # diagonal point by point, so more bins make the same miscalibration fail harder.
+                       # sbi 0.26's own default grows with the set (n // 10: 200 bins at n_cal 2000, and 0,
+                       # a crash, below ten datasets), which would tie the pass mark to n_cal.
 
 # --- Training-data checkpointing ------------------------------------------------------------------
 # Write a resumable checkpoint every N training batches; 0 disables it entirely.

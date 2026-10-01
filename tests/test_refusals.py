@@ -1209,7 +1209,7 @@ def test_the_root_sink_takes_exactly_what_no_handler_below_the_root_has_emitted(
         sink instead of vanishing, and renders in the tool's own shape: ``warning: ...``, never
         ``library:``; an information record renders bare;
     (b) the same record with a ``core`` handler attached (a run) does NOT reach the sink;
-    (c) a library with a handler of its OWN (pytensor adds one at import) is emitted once, by that
+    (c) a library with a handler of its OWN (pytensor added one at import) is emitted once, by that
         handler, and not a second time by the sink -- while a ``NullHandler``, which emits nothing,
         does not count, so a library that added only that (pint does) still reaches the sink once;
     (d) a library's ``log.exception`` carries its traceback, with ``library:`` on the first line only.
@@ -1227,7 +1227,7 @@ def test_the_root_sink_takes_exactly_what_no_handler_below_the_root_has_emitted(
         def emit(self, record):
             own_seen.append(record.getMessage())
 
-    chatty = logging.getLogger("a_chatty_library")          # installs its own, as pytensor does
+    chatty = logging.getLogger("a_chatty_library")          # installs its own, as pytensor did
     polite = logging.getLogger("a_polite_library")          # installs a NullHandler, as pint does
     lib = logging.getLogger("a_library")
     chatty_own, polite_null = _Own(), logging.NullHandler()

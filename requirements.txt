@@ -1,12 +1,12 @@
 # Pins the clean, installable matched pair: sbi 0.26.1 + torch 2.9.0+cu130. sbi 0.25.0 declares
 # torch<2.6.0, so sbi and torch move together -- 0.26.1 is the version that pairs with torch 2.9.
 #
-# This env currently RUNS sbi 0.25.0 against torch 2.9.0+cu130 (an unofficial pair sbi 0.25 does not
-# sanction but tolerates at runtime). So `pip install -r requirements.txt` bumps ONLY sbi (0.25.0 ->
-# 0.26.1); torch is already 2.9.0+cu130. After the bump, re-verify: (1) sbi still prints its per-epoch
-# counter (the GUI cancel checkpoint -- grep sbi for _maybe_show_progress / "Epochs trained");
-# (2) the calibration numbers (0.26's TARP changes make them non-comparable to numbers recorded
-# before the upgrade).
+# The env has run this pair since 1 October 2026 (it ran sbi 0.25.0 against torch 2.9.0+cu130 before,
+# an unofficial pair). sbi 0.26.1 brought two new dependencies, skorch and tabulate, pinned below at
+# the versions pip resolved. Its joint coverage test (TARP) scales its reference points like the samples
+# and reports ATC as an area, so calibration TARP numbers recorded under 0.25 are not comparable with
+# later ones; PRISM fixes TARP's bin count itself (core.config.TARP_NUM_BINS). A posterior pickled under
+# sbi 0.25 (its manifest's env block says so) is covered by no test since: rebuild it rather than reuse it.
 
 --extra-index-url https://download.pytorch.org/whl/cu130
 
@@ -29,6 +29,8 @@ torchvision==0.24.0+cu130 ; platform_system != "Darwin"
 torchvision==0.24.0 ; platform_system == "Darwin"
 pint==0.25
 sbi==0.26.1
+skorch==1.4.0
+tabulate==0.10.0
 antropy==0.1.9
 pybispectra==1.2.4
 scikit-learn==1.7.2

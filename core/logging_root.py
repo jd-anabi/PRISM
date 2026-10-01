@@ -27,9 +27,9 @@ one rule covers every case, where a rule by logger NAME lost records:
     a thread other than the run's owner (that buffer is per thread and drops it) -- reaches the sink
     instead of vanishing; ``render`` gives it the tool's own shape (bare for information,
     ``warning: `` and so on above), never ``library:``;
-  * a library that installed a handler of its OWN (pytensor does, at import, when no handler is
-    found above its logger -- which is before the window is built) has already printed its record,
-    so the sink does not print it a second time;
+  * a library that installed a handler of its OWN (pytensor, which sbi 0.25 imported, did so at
+    import when no handler was found above its logger -- which is before the window is built) has
+    already printed its record, so the sink does not print it a second time;
   * a handler that EMITS NOWHERE does not count. A ``logging.NullHandler`` is the standard case:
     Python's logging HOWTO tells a library to add one so it stays quiet UNTIL the application
     configures logging; this root handler is that configuration, so such a library's warning

@@ -1801,7 +1801,10 @@ def test_calibration_writes_results_ranks_figures_and_refuses_a_foreign_prior(ti
     assert m.parents == {"posterior": r.posterior.id, "prior": r.prior.id} and m.config["n_cal"] == 8
     assert [r["name"] for r in res["sbc"]["per_param"]] == keys
     assert set(res["sbc"]["per_param"][0]) == {"name", "ks_p", "c2st_ranks", "c2st_dap"}
-    assert set(res["tarp"]) == {"atc", "ks_p"} and res["num_posterior_samples"] == 40 and res["kept_fraction"] is None
+    assert set(res["tarp"]) == {"atc", "ks_p", "num_bins"} and res["num_posterior_samples"] == 40 and res["kept_fraction"] is None
+    # The joint test's bin count is fixed, so its pass mark means the same at every calibration size (sbi's own
+    # default grows with the set, n // 10, and is 0 -- a crash -- below ten datasets, as here).
+    assert res["tarp"]["num_bins"] == orchestrator.TARP_NUM_BINS == 30
     assert res["informativeness"] is None or "total_nats" in res["informativeness"]
     assert set(m.payloads) == {"ranks.npz", "results.json"}
     assert sorted(m.figures) == ["figures/sbc_ranks_cdf.png", "figures/sbc_ranks_histogram.png", "figures/tarp_coverage.png"]

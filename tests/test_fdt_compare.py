@@ -445,8 +445,9 @@ def test_an_interrupted_comparison_keeps_its_record_unfinished(tmp_path, monkeyp
 
 def test_the_compare_path_loads_no_inference_machinery(tmp_path):
     """As for an FDT run, so for the comparison: importing any ``core.diagnostics`` submodule runs
-    that package's ``__init__``, which loads the SBI stack and prints two false pytensor "g++" lines
-    at the head of the run. A comparison draws saved numbers and needs none of it. RUN in a fresh
+    that package's ``__init__``, which loads the SBI stack (and, under sbi 0.25, printed two false
+    pytensor "g++" lines at the head of the run). A comparison draws saved numbers and needs none of
+    it. RUN in a fresh
     interpreter -- this process holds the orchestrator through the session fixtures, so a
     ``sys.modules`` check here would pass vacuously -- over records this process wrote. The bare
     ``sbi`` package is the store's (``provenance.env_info`` reads its version into every manifest);

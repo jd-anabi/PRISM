@@ -3,9 +3,10 @@ run inside.
 
 Here, at the top of ``core``, and not in ``core/diagnostics`` where it started: importing ANY
 submodule of a package runs the package's ``__init__``, and ``core/diagnostics/__init__.py`` imports
-the five diagnostics and through them ``core.orchestrator``, sbi's inference modules and
-``pytensor``. An FDT run needs none of that, and paid about two seconds and two false pytensor "g++"
-lines on stderr for it at the head of every ``python -m core fdt``. This module imports only
+the five diagnostics and through them ``core.orchestrator`` and sbi's inference modules. An FDT
+run needs none of that; under sbi 0.25, which also loaded ``pytensor``, it paid about two seconds and
+two false pytensor "g++" lines on stderr for it at the head of every ``python -m core fdt``. This
+module imports only
 ``contextlib`` and the stdlib-only ``core.refusals``; torch and numpy are imported when the context
 is entered, and numpy when ``calibration_seed`` is called. ``core.diagnostics.rng`` re-exports the
 same object, so every diagnostics import keeps working.

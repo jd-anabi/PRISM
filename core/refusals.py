@@ -48,7 +48,7 @@ class Refusal(ValueError):
 # The refusal's counterpart: what is judged rather than refused. It lives HERE, beside Refusal, and not
 # in core.orchestrator (which re-exports this same class), because the FDT path raises it too and
 # must not pay for the SBI stack to do so: importing the orchestrator for one class cost every
-# fdt/crossval tool run about two seconds and two false pytensor warnings.
+# fdt/crossval tool run about two seconds (and, under sbi 0.25, two false pytensor warnings).
 class PreflightWarning(UserWarning):
     """A judgement reported before or instead of refusing: out-of-distribution truth, a truth outside a
     non-amortized posterior's region, T_obs outside the training range, an HPD tighter than recommended,

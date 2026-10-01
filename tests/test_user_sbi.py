@@ -1438,51 +1438,75 @@ def test_gen_training_data_recovers_from_an_oom_outside_the_simulator():
     assert torch.isfinite(data).all(), "a retried batch produced non-finite conditioning"
 
 
-def test_zscore_check_is_capped_and_reaches_sbis_own_binding():
-    """sbi calls warn_if_zscoring_changes_data UNCONDITIONALLY on the full training tensor.
-
-    At the retrain's size (10.24M x 122 float32) that is torch.unique(x, dim=0), then a full z-score,
-    then torch.unique AGAIN -- about 14 GiB, on the GPU, at the END of a multi-day generation run.
-    Capping it to a strided subsample keeps the diagnostic (it is a PROPORTION test with a 10%
-    tolerance) at a fraction of the cost.
-
-    The patch has to reach npe_base's OWN binding: it does `from sbi.utils import
-    warn_if_zscoring_changes_data`, so its call resolves against npe_base's globals and patching
-    sbi.utils.sbiutils alone would change nothing. That is the half of this most likely to rot -- sbi
-    has already moved the module once -- so it is asserted directly.
-    """
+def _zscore_recorder(monkeypatch):
+    """Stand a recorder in for sbi's z-scoring check in every place the cap looks for it: sbiutils,
+    npe_base's own binding and the train module's import-time resolution. All three, because the cap
+    finds its targets by IDENTITY against that resolution, so a recorder in only some of them would
+    make the test fail for its own reasons rather than the code's."""
     import sbi.utils.sbiutils as sbiutils
     from sbi.inference.trainers.npe import npe_base
+    from core.SBI import train as train_mod
 
-    original = sbiutils.warn_if_zscoring_changes_data
-    assert npe_base.warn_if_zscoring_changes_data is original, \
-        "npe_base no longer holds its own binding; re-check how the patch must reach it"
-
-    # Stand a recorder in for the real function in BOTH modules before entering the block. Both,
-    # because the contextmanager finds its targets by object IDENTITY against sbiutils' current
-    # binding -- so a recorder installed in only one place would make the scan miss the other and the
-    # test would fail for its own reasons rather than the code's.
+    name = train_mod._ZSCORE_CHECK_NAME
+    assert getattr(npe_base, name) is getattr(sbiutils, name) is train_mod._ZSCORE_CHECK,         "npe_base no longer holds its own binding of the check; re-check how the cap must reach it"
     seen = []
-    recorder = lambda x, *a, **k: seen.append(x.shape[0])            # noqa: E731
-    sbiutils.warn_if_zscoring_changes_data = recorder
-    npe_base.warn_if_zscoring_changes_data = recorder
-    try:
+
+    def recorder(x, *args, **kwargs):
+        seen.append((x.shape[0], args, kwargs))
+
+    for mod in (sbiutils, npe_base):
+        monkeypatch.setattr(mod, name, recorder)
+    monkeypatch.setattr(train_mod, "_ZSCORE_CHECK", recorder)
+    return npe_base, name, seen
+
+
+def test_zscore_check_is_capped_and_reaches_sbis_own_binding(monkeypatch):
+    """sbi calls its z-scoring check UNCONDITIONALLY on the full training tensor.
+
+    In sbi 0.26 it is ``warn_if_invalid_for_zscoring``: a per-column standard deviation, then
+    ``torch.quantile`` over the whole table and a full boolean outlier mask. At the retrain's size
+    (20.48M x 122) that is a sorted copy of the table on a host already holding the training data,
+    and torch refuses the quantile outright beyond 2**24 rows, after the whole generation. A strided
+    subsample keeps the check at a fraction of the cost.
+
+    The cap has to reach npe_base's OWN binding: it imports the function by name, so its call resolves
+    against npe_base's globals and patching sbiutils alone would change nothing. It must also pass on
+    exactly what sbi passed: a positional default forwarded by mistake would land in the check's
+    outlier factor and flag almost every column.
+    """
+    npe_base, name, seen = _zscore_recorder(monkeypatch)
+    recorder = getattr(npe_base, name)
+    with pipeline_mod._capped_zscore_check(max_rows=1000):
+        assert getattr(npe_base, name) is not recorder,             "the cap did not reach npe_base's binding -- it would be a no-op in the real call"
+        getattr(npe_base, name)(torch.zeros(10_000, 4))
+        getattr(npe_base, name)(torch.zeros(10_000, 4), outlier_iqr_factor=5.0)
+    assert seen == [(1000, (), {}), (1000, (), {"outlier_iqr_factor": 5.0})], seen
+    # Restored even when the block raises -- otherwise one failed run leaves sbi monkeypatched for
+    # every later panel and script in the process.
+    with pytest.raises(RuntimeError):
         with pipeline_mod._capped_zscore_check(max_rows=1000):
-            assert npe_base.warn_if_zscoring_changes_data is not original, \
-                "the patch did not reach npe_base's binding -- it would be a no-op in the real call"
-            npe_base.warn_if_zscoring_changes_data(torch.zeros(10_000, 4))
-        assert seen == [1000], f"expected a 1000-row subsample, got {seen}"
-        # Restored even when the block raises -- otherwise one failed run leaves sbi monkeypatched
-        # for every later panel and script in the process.
-        try:
-            with pipeline_mod._capped_zscore_check(max_rows=1000):
-                raise RuntimeError("boom")
-        except RuntimeError:
-            pass
-        assert npe_base.warn_if_zscoring_changes_data is sbiutils.warn_if_zscoring_changes_data
-    finally:
-        sbiutils.warn_if_zscoring_changes_data = original
-        npe_base.warn_if_zscoring_changes_data = original
+            raise RuntimeError("boom")
+    assert getattr(npe_base, name) is recorder
+
+
+def test_zscore_check_is_skipped_when_the_embedding_owns_its_standardization(monkeypatch):
+    """In chi mode the embedding standardizes its own input and sbi z-scores nothing
+    (``z_score_x="none"``), so sbi's check is inapplicable there: its constant-column and outlier
+    warnings would describe a scaling that never happens. The retrain trains in chi mode."""
+    npe_base, name, seen = _zscore_recorder(monkeypatch)
+    with pipeline_mod._capped_zscore_check(skip=True):
+        getattr(npe_base, name)(torch.zeros(10_000, 4))
+    assert seen == [], seen
+
+
+def test_zscore_check_is_resolved_when_the_pipeline_is_imported():
+    """The check's name is looked up when ``core.SBI.train`` is imported, so an sbi that renamed it
+    again fails when the pipeline loads, before any simulation, not at the end of a generation."""
+    import sbi.utils.sbiutils as sbiutils
+    from core.SBI import train as train_mod
+    assert train_mod._ZSCORE_CHECK_NAME == "warn_if_invalid_for_zscoring"
+    assert train_mod._ZSCORE_CHECK is getattr(sbiutils, train_mod._ZSCORE_CHECK_NAME)
+    assert train_mod._ZSCORE_CHECK_MAX_ROWS <= 2 ** 24
 
 
 def test_split_gen_obs_concatenates_correctly():
@@ -5114,23 +5138,11 @@ def test_the_mem_and_wait_lines_reach_the_window_plain_and_the_wait_still_checks
     assert token.fired and elapsed < 4.0, f"the wait line stopped being a cancel checkpoint ({elapsed:.1f}s)"
 
 
-def test_training_creates_no_sbi_logs_directory(tmp_path, monkeypatch):
-    """Unless it is handed a writer, sbi's trainer builds a TensorBoard SummaryWriter under
-    <cwd>/sbi-logs/NPE_C/<timestamp>/ the moment SNPE(...) is constructed. That is one directory per
-    training, left in whatever directory the process started from: 1359 of them had piled up at the
-    repo root before this was stopped (1360 directories with NPE_C), none ever read. The curves
-    PRISM keeps are the ones train_nn returns in its diagnostics, which build_posterior writes into
-    the posterior artifact (loss.npz and the "Training loss" figure). train_nn now hands sbi
-    core.SBI.train._NoSummary, which discards them.
-
-    This is the cheapest REAL train_nn. gen_training_data is replaced by 64 rows of a 2-parameter toy
-    (train.py calls it through the pipeline module object, so the monkeypatch takes effect). Everything
-    from SNPE construction through sbi's fit loop and _summarize runs for real, with the working
-    directory at tmp_path, so the repository's own state cannot confuse the check. The second call
-    passes a recording writer. It shows the parameter is forwarded and that sbi really reports its
-    curves through add_scalar(tag=, scalar_value=, global_step=) and flush(): the stub has the shape
-    sbi calls, and the absence after the first call is not vacuous. About a second on the CPU."""
-    from sbi.inference import DirectPosterior
+def _toy_training(tmp_path, monkeypatch):
+    """The cheapest REAL train_nn: gen_training_data is replaced by 64 rows of a 2-parameter toy
+    (train.py calls it through the pipeline module object, so the monkeypatch takes effect), and
+    everything from the trainer's construction through sbi's fit loop runs for real, with the working
+    directory at tmp_path. Returns ``run(**kwargs)``, which trains once. About a second on the CPU."""
     from sbi.utils import BoxUniform
 
     monkeypatch.chdir(tmp_path)
@@ -5148,31 +5160,83 @@ def test_training_creates_no_sbi_logs_directory(tmp_path, monkeypatch):
                                      t_max_exp=1.0, t_scale_bounds=(1.0, 1.0), dtype=torch.float32,
                                      device=torch.device("cpu"))
     knobs = dict(hidden_features=8, num_transforms=1, stop_after_epochs=1, max_num_epochs=1, batch_size=16)
-    logs = tmp_path / "sbi-logs"
 
-    post = pipeline_mod.train_nn(plan, "nsf", prior, torch.nn.Identity(), None, 2, {}, {}, **knobs)
+    def run(**kwargs):
+        return pipeline_mod.train_nn(plan, "nsf", prior, torch.nn.Identity(), None, 2, {}, {},
+                                     **knobs, **kwargs)
+    return run
+
+
+def test_training_creates_no_sbi_logs_directory(tmp_path, monkeypatch):
+    """Unless it is handed a tracker, sbi's trainer builds a TensorBoard writer under
+    <cwd>/sbi-logs/NPE_C/<timestamp>/ the moment the trainer is constructed. That is one directory per
+    training, left in whatever directory the process started from: 1359 of them had piled up at the
+    repo root before this was stopped (1360 directories with NPE_C), none ever read. The curves
+    PRISM keeps are the ones train_nn returns in its diagnostics, which build_posterior writes into
+    the posterior artifact (loss.npz and the "Training loss" figure). train_nn hands sbi
+    core.SBI.train._NoTracker, which discards them.
+
+    sbi 0.26 takes a ``tracker``; its older ``summary_writer`` argument still works but warns on every
+    construction, so no warning naming it may appear. The second call passes a recording tracker: it
+    shows the argument is forwarded and that sbi really reports its curves through
+    ``log_metric(name, value, step)`` and ``flush()``, so the absence after the first call is not
+    vacuous."""
+    from sbi.inference import DirectPosterior
+
+    run = _toy_training(tmp_path, monkeypatch)
+    logs = tmp_path / "sbi-logs"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        post = run()
     assert isinstance(post, DirectPosterior), type(post)
     assert not logs.exists(), f"train_nn created {logs}: {sorted(p.name for p in logs.iterdir())}"
+    said = [str(w.message) for w in caught if "summary_writer" in str(w.message)]
+    assert not said, f"train_nn still hands sbi the deprecated summary_writer: {said}"
 
     class Recording:
-        def __init__(self):
-            self.tags, self.flushed = [], 0
+        log_dir = None
 
-        def add_scalar(self, *, tag, scalar_value, global_step=None):
-            self.tags.append(tag)
+        def __init__(self):
+            self.names, self.flushed = [], 0
+
+        def log_metric(self, name, value, step=None):
+            self.names.append(name)
+
+        def log_metrics(self, metrics, step=None):
+            self.names.extend(metrics)
+
+        def log_params(self, params):
+            pass
+
+        def add_figure(self, name, figure, step=None):
+            pass
 
         def flush(self):
             self.flushed += 1
 
-        def close(self):
-            pass
+    tracker = Recording()
+    run(tracker=tracker)
+    assert {"training_loss", "validation_loss", "epochs_trained"} <= set(tracker.names), tracker.names
+    assert tracker.flushed >= 1, "sbi's _summarize ends with flush(); the recorder must have seen it"
+    assert not logs.exists(), f"an explicit tracker must be used instead of sbi's default: {logs}"
 
-    writer = Recording()
-    pipeline_mod.train_nn(plan, "nsf", prior, torch.nn.Identity(), None, 2, {}, {},
-                          summary_writer=writer, **knobs)
-    assert {"training_loss", "validation_loss", "epochs_trained"} <= set(writer.tags), writer.tags
-    assert writer.flushed >= 1, "sbi's _summarize ends with flush(); the recorder must have seen it"
-    assert not logs.exists(), f"an explicit writer must be used instead of sbi's default: {logs}"
+
+def test_a_non_finite_loss_during_the_fit_is_a_failure_not_a_refusal(tmp_path, monkeypatch):
+    """sbi 0.26 reports a non-finite training loss as a ValueError ("NPE loss"). The command-line tool
+    reads a ValueError as a refusal made before anything was spent and prints one 'refused:' line, but
+    this one arrives after the whole generation and part of the fit. train_nn re-raises any error from
+    the fit as a RuntimeError, which the tool reports as a failure with its traceback."""
+    from sbi.inference import SNPE
+
+    run = _toy_training(tmp_path, monkeypatch)
+
+    def blow_up(self, *args, **kwargs):
+        raise ValueError("NPE loss")
+
+    monkeypatch.setattr(SNPE, "train", blow_up)
+    with pytest.raises(RuntimeError, match="the flow's fit failed") as err:
+        run()
+    assert isinstance(err.value.__cause__, ValueError), repr(err.value.__cause__)
 
 
 def _crash_batch_3_with_a_cancel_pending(monkeypatch, crash):

@@ -30,8 +30,8 @@ import torch
 
 from ..config import FDTConfig
 # core.rng, never core.diagnostics.rng: importing anything under core.diagnostics runs its __init__,
-# which loads the orchestrator, sbi and pytensor -- two seconds and two false "g++" lines on every
-# sweep, for a context manager that needs none of them.
+# which loads the orchestrator and sbi (under sbi 0.25 also pytensor, with two false "g++" lines)
+# on every sweep, for a context manager that needs none of them.
 from ..refusals import Refusal, describe
 from ..rng import require_seed, seeded
 from ..runs import public_entry

@@ -26,7 +26,7 @@ from tqdm import tqdm
 from .config import (
     SimConfig,
     T_MIN_EXP_S, T_MAX_EXP_S,
-    CHUNK_LEN, N_ND_MAX, SBC_N_CAL, STABILITY_SWEEP_ND_UNITS, TRAINING_NUM_RUNS,
+    CHUNK_LEN, N_ND_MAX, SBC_N_CAL, STABILITY_SWEEP_ND_UNITS, TARP_NUM_BINS, TRAINING_NUM_RUNS,
     PRIOR_SWEEP_ITERATIONS, PRIOR_SWEEP_BATCH, TRAINING_RUN_SIZE, TRAINING_CHECKPOINT_EVERY,
     PRIOR_SWEEP_MAX_SETS, PRIOR_SWEEP_STEP, PRIOR_CLUSTER_MIN_SIZE, PRIOR_CLUSTER_MIN_SAMPLES,
     REPARAM_FISHER_M, REPARAM_FISHER_DZ, REPARAM_FISHER_POINTS, CAL_N_SCALES,
@@ -2023,15 +2023,21 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             sink("SBC ranks (histogram)", f_hist)
 
             # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
+            # The bin count is fixed (config.TARP_NUM_BINS): the KS p-value's strictness grows with the
+            # number of bins, and the verdict's threshold must mean the same at every n_cal. Since sbi
+            # 0.26 the reference points are scaled to the box like the samples and the truths, so the
+            # test weighs all parameters equally, and ATC is the area between the coverage curve and the
+            # diagonal -- about a thirtieth of the unweighted sum sbi 0.25 reported, hence 3 significant
+            # figures rather than 3 decimals.
             ecp, alpha_grid = run_tarp(
                 thetas=theta_star_dev, xs=x_cal_dev, posterior=post,
-                num_posterior_samples=nps, use_batched_sampling=True,
+                num_posterior_samples=nps, num_bins=TARP_NUM_BINS, use_batched_sampling=True,
                 z_score_theta=True, show_progress_bar=True,
             )
             atc, tarp_kspval = check_tarp(ecp.cpu(), alpha_grid.cpu())
-            log.info(f"TARP: ATC={atc:.3f}  KS p={tarp_kspval:.3f}")
+            log.info(f"TARP: ATC={atc:.3g}  KS p={tarp_kspval:.3f}")
             plot_tarp(ecp.cpu(), alpha_grid.cpu(),
-                      title=f"TARP (ATC={atc:.3f}, KS p={tarp_kspval:.3f})")
+                      title=f"TARP (ATC={atc:.3g}, KS p={tarp_kspval:.3f})")
             sink("TARP coverage", plt.gcf())
 
             # --- Informativeness --------------------------------------------------------------------------
@@ -2061,7 +2067,7 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             "sbc": {"per_param": [{"name": k, "ks_p": _num(sbc_stats["ks_pvals"][j]),
                                    "c2st_ranks": _num(sbc_stats["c2st_ranks"][j]),
                                    "c2st_dap": _num(sbc_stats["c2st_dap"][j])} for j, k in enumerate(keys)]},
-            "tarp": {"atc": _num(atc), "ks_p": _num(tarp_kspval)},
+            "tarp": {"atc": _num(atc), "ks_p": _num(tarp_kspval), "num_bins": TARP_NUM_BINS},
             "informativeness": None if info is None else {
                 "total_nats": _num(info["total_nats"]), "sem_nats": _num(info["sem_nats"]),
                 "per_param": None if info["per_param"] is None else [_num(v) for v in info["per_param"]],

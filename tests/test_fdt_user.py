@@ -1542,8 +1542,8 @@ def test_the_thin_notice_is_the_one_judgement_class_and_names_the_stages_caller(
 
 def test_the_thin_notice_loads_no_sbi_and_keeps_its_always_filter():
     """An FDT or sweep run needs no inference machinery, and importing it cost
-    every ``fdt``/``crossval`` tool run about two seconds plus two false pytensor "g++ not
-    available" warnings at the head of its output, thin settings or not. Checked in a FRESH
+    every ``fdt``/``crossval`` tool run about two seconds (plus, under sbi 0.25, two false pytensor
+    "g++ not available" warnings at the head of its output), thin settings or not. Checked in a FRESH
     interpreter, because this process holds the orchestrator through the session fixtures, so a
     sys.modules check here would pass vacuously.
 
@@ -2105,8 +2105,9 @@ def test_both_stages_name_the_record_they_write_before_anything_else(store, monk
 def test_an_fdt_run_loads_no_inference_machinery(tmp_path):
     """The seeding context used to live in core/diagnostics/rng.py, and importing ANY submodule runs
     its package's __init__ -- which imports the five diagnostics and through them core.orchestrator,
-    sbi and pytensor: about two seconds and two false pytensor "g++" lines on stderr at the head of
-    every `python -m core fdt`, refused runs included. It lives in core/rng.py now. The import-time
+    sbi (and, under sbi 0.25, pytensor): about two seconds, and two false pytensor "g++" lines on
+    stderr, at the head of every `python -m core fdt`, refused runs included. It lives in core/rng.py
+    now. The import-time
     probe above cannot see a cost paid when the run STARTS, so this one RUNS run_fdt in a fresh
     interpreter -- campaigns and figures stubbed, a temp store -- and then looks. A fresh
     interpreter because this process holds the orchestrator through the session fixtures, so a

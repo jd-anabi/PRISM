@@ -68,95 +68,116 @@ class TrainingPlan:
     checkpoint: dict = None
 
 
+import sbi
+import sbi.utils.sbiutils as _sbiutils
+
+# sbi's check on the training data before it z-scores it, which append_simulations calls on the WHOLE
+# training tensor. Resolved when this module is IMPORTED, so an sbi that renamed it again (0.26 replaced
+# warn_if_zscoring_changes_data with this one) fails when the pipeline loads, before any simulation, not
+# at the end of a generation run.
+_ZSCORE_CHECK_NAME = "warn_if_invalid_for_zscoring"
+_ZSCORE_CHECK = getattr(_sbiutils, _ZSCORE_CHECK_NAME, None)
+if _ZSCORE_CHECK is None:
+    raise ImportError(
+        f"sbi {sbi.__version__} has no sbi.utils.sbiutils.{_ZSCORE_CHECK_NAME}, the check PRISM caps "
+        f"before a training run; install the sbi requirements.txt pins.")
+
+# A strided subsample of at most this many rows. Far under the 2**24 rows torch.quantile accepts along
+# the reduced dimension, which the full 20.48M-row retrain table exceeds.
 _ZSCORE_CHECK_MAX_ROWS = 200_000
 
 
 @contextlib.contextmanager
-def _capped_zscore_check(max_rows: int = _ZSCORE_CHECK_MAX_ROWS):
-    """Run sbi's ``warn_if_zscoring_changes_data`` on a SUBSAMPLE for the duration of this block.
+def _capped_zscore_check(max_rows: int = _ZSCORE_CHECK_MAX_ROWS, *, skip: bool = False):
+    """Run sbi's z-scoring check on a SUBSAMPLE for the duration of this block, or not at all.
 
-    WHY IT HAS TO BE CAPPED AT ALL. append_simulations calls it UNCONDITIONALLY on the full training
-    tensor (sbi/inference/trainers/npe/npe_base.py:189). At the chi retrain's size -- 5000 x 2048 =
-    10.24M rows x 122 columns float32, 4.65 GiB -- it runs ``torch.unique(x, dim=0)``, then builds
-    ``zx = (x - x.mean(0)) / x.std(0)``, then runs ``torch.unique`` AGAIN. That is about 14 GiB, and
-    since unique over dim=0 is a lexicographic sort of 10.24M rows by 122 keys it is also minutes of
-    single-threaded work. On a 16 GB card it is a guaranteed OOM at the END of a multi-day generation
-    run -- the worst possible moment: when checkpointing is on the simulation cache keeps the rows,
-    but the fit never starts. It fires on ANY successful run, chi or not, and no retry can help
-    because it is one indivisible allocation.
+    WHY IT HAS TO BE CAPPED. append_simulations calls the check UNCONDITIONALLY on the full training
+    tensor. In sbi 0.26 it takes a per-column standard deviation, then ``torch.quantile`` over the
+    whole table and a full (rows, columns) boolean outlier mask. At the retrain's size -- 10,000 x
+    2,048 = 20.48M rows x 122 columns float32, 10 GB -- that is a sorted copy of the table plus several
+    GB of temporaries on a host already holding the training data, and torch refuses the quantile
+    outright beyond 2**24 rows: a failure at the END of a multi-week generation, when checkpointing
+    keeps the rows but the fit never starts. A strided subsample answers the same question at a fraction
+    of the cost, though a single outlier the stride skips goes unreported. STRIDED, not a prefix: rows
+    are grouped by batch and each batch shares one (t_scale, T) stratum, so a prefix would sample a few
+    strata while ``x[::n]`` spans all of them.
 
-    WHY CAPPING RATHER THAN DISABLING. In chi mode the check is inapplicable: train_nn sets
-    ``z_score_x="none"`` whenever the embedding owns its standardization, and sbi's own warning text
-    ends "if you have already set z_score_x=False, this warning will still be displayed, but you can
-    ignore it." But spontaneous and forced modes DO train under ``z_score_x="independent"``, where a
-    collapse under z-scoring is a real finding worth hearing about. It is also a PROPORTION test with
-    a 10 % tolerance (``duplicate_tolerance``), so a 200k-row sample answers it to well within its own
-    resolution. STRIDED, not a prefix: rows are grouped by batch and each batch shares one
-    (t_scale, T) stratum, so ``x[:200_000]`` would sample ~98 of 5000 strata while ``x[::n]`` spans
-    all of them.
+    ``skip`` makes it a no-op, for a run whose embedding standardizes its own input: sbi z-scores
+    nothing then (``z_score_x="none"``), so the check's constant-column and outlier warnings would
+    describe a scaling that never happens. The chi encoder is such an embedding.
 
-    PATCHED BY REBINDING IN EVERY MODULE THAT HOLDS THE NAME, not just in sbiutils. npe_base does
-    ``from sbi.utils import ... warn_if_zscoring_changes_data``, so its call resolves against
-    npe_base's OWN globals -- patching sbi.utils.sbiutils alone changes nothing. Rather than hard-code
-    that module path (sbi has already moved it once: sbi.inference.snpe -> sbi.inference.trainers.npe)
-    this finds every module whose attribute IS the original function object. A few ms, once per round,
-    and it cannot rot.
+    sbi's own arguments are passed on exactly as given: the check's second positional parameter is its
+    outlier factor, and forwarding anything else there would flag almost every column.
+
+    PATCHED BY REBINDING IN EVERY MODULE THAT HOLDS THE NAME, not just in sbiutils. npe_base imports the
+    function by name, so its call resolves against npe_base's OWN globals -- patching sbiutils alone
+    changes nothing. Rather than hard-code that module path (sbi has moved it before), this finds every
+    module whose attribute IS the resolved function object. A few ms, once per round, and it cannot rot.
 
     SCOPED AND RESTORING, including on an exception: the patch is live only across append_simulations,
     so nothing else in the process -- another panel, a script that imported sbi, a later round -- ever
     sees a monkeypatched sbi.
     """
-    import sbi.utils.sbiutils as _sbiutils
-    original = _sbiutils.warn_if_zscoring_changes_data
+    original = _ZSCORE_CHECK
+    rows = min(int(max_rows), 2 ** 24)
 
-    def _capped(x, duplicate_tolerance: float = 0.1):
-        stride = max(1, math.ceil(x.shape[0] / max_rows))
-        # .contiguous() explicitly: unique would materialise the strided view anyway, and doing it
-        # here keeps the copy's size obvious (<= max_rows x n_features) rather than implicit.
-        return original(x[::stride].contiguous(), duplicate_tolerance)
+    def _replacement(x, *args, **kwargs):
+        if skip:
+            return None
+        stride = max(1, math.ceil(x.shape[0] / rows))
+        # .contiguous() explicitly: the check would materialise the strided view anyway, and doing it
+        # here keeps the copy's size obvious (<= rows x n_features) rather than implicit.
+        return original(x[::stride].contiguous(), *args, **kwargs)
 
     targets = []
     for mod in list(sys.modules.values()):
         try:
-            if getattr(mod, "warn_if_zscoring_changes_data", None) is original:
+            if getattr(mod, _ZSCORE_CHECK_NAME, None) is original:
                 targets.append(mod)
         except Exception:            # noqa: BLE001 -- a lazy module's __getattr__ must not break this
             continue
     try:
         for mod in targets:
-            mod.warn_if_zscoring_changes_data = _capped
+            setattr(mod, _ZSCORE_CHECK_NAME, _replacement)
         yield
     finally:
         for mod in targets:
-            mod.warn_if_zscoring_changes_data = original
+            setattr(mod, _ZSCORE_CHECK_NAME, original)
 
 
-class _NoSummary:
-    """The summary writer train_nn hands sbi by default: it discards the training curves.
+class _NoTracker:
+    """The tracker train_nn hands sbi by default: it discards the training curves.
 
-    Given no writer, sbi's trainer builds a TensorBoard ``SummaryWriter`` under
-    ``<cwd>/sbi-logs/NPE_C/<timestamp>/`` when ``SNPE(...)`` is CONSTRUCTED
-    (``NeuralInference._default_summary_writer`` over ``sbi.utils.io.get_log_root``). Every training
-    therefore left a directory behind in whatever directory the process was started from: 1359 of
-    them had piled up at the repo root (1360 directories with NPE_C), none ever read. The curves PRISM
-    keeps are the ones train_nn returns in its diagnostics, which build_posterior writes into the
-    posterior artifact.
+    Given no tracker, sbi's trainer builds a TensorBoard writer under
+    ``<cwd>/sbi-logs/NPE_C/<timestamp>/`` when the trainer is CONSTRUCTED (``_default_tracker`` over
+    ``sbi.utils.io.get_log_root``). Every training therefore left a directory behind in whatever
+    directory the process was started from: 1359 of them had piled up at the repo root (1360 directories
+    with NPE_C), none ever read. The curves PRISM keeps are the ones train_nn returns in its
+    diagnostics, which build_posterior writes into the posterior artifact.
 
-    These three methods are the whole surface sbi 0.25 touches. ``_summarize`` calls
-    ``add_scalar(tag=, scalar_value=, global_step=)`` and ``flush()``
-    (``sbi/inference/trainers/base.py:932-1000``), ``__init__`` stores the object with no isinstance
-    check (``:212-214``), and ``close`` is there for a caller that tidies up. Only the trainer's
-    unpickling path (``__setstate__``) still builds sbi's default writer, and PRISM never pickles a
-    trainer. tests/conftest.py::_no_sbi_logs fails the test session if the directory comes back.
+    This is sbi's ``Tracker`` protocol (``sbi.sbi_types.Tracker``). Its trainer calls ``log_metric`` and
+    ``flush``; the rest are there because the protocol names them. sbi's older ``summary_writer``
+    argument still works but warns on every construction. Only the trainer's unpickling path
+    (``__setstate__``, also reached by a deep copy) still builds sbi's default tracker, and PRISM never
+    pickles or copies a trainer. tests/conftest.py::_no_sbi_logs fails the test session if the
+    directory comes back.
     """
 
-    def add_scalar(self, *, tag, scalar_value, global_step=None):
+    log_dir = None
+
+    def log_metric(self, name, value, step=None):
+        pass
+
+    def log_metrics(self, metrics, step=None):
+        pass
+
+    def log_params(self, params):
+        pass
+
+    def add_figure(self, name, figure, step=None):
         pass
 
     def flush(self):
-        pass
-
-    def close(self):
         pass
 
 
@@ -168,7 +189,7 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
              learning_rate: float = 5e-4, stop_after_epochs: int = 20, max_num_epochs: int = 2_147_483_647,
              show_train_summary: bool = False,
              batch_size: int = 128, device: torch.device = torch.device('cpu'),
-             summary_writer=None) -> DirectPosterior | tuple[DirectPosterior, dict]:
+             tracker=None) -> DirectPosterior | tuple[DirectPosterior, dict]:
     """
     Generate training data and fit the NPE flow (SNPE when ``num_rounds > 1``).
 
@@ -184,9 +205,10 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
         count; ``num_bins`` the spline bins (NSF only); ``learning_rate`` /
         ``stop_after_epochs`` / ``max_num_epochs`` / ``batch_size`` sbi's fit-loop knobs;
         ``show_train_summary`` prints sbi's per-epoch loss table.
-    :param summary_writer: what sbi reports its per-epoch curves to; None (every PRISM caller) =
-        ``_NoSummary``, which discards them instead of letting sbi write ``<cwd>/sbi-logs``. Any object
-        with ``add_scalar(*, tag, scalar_value, global_step)`` and ``flush()`` is handed to sbi as is.
+    :param tracker: what sbi reports its per-epoch curves to; None (every PRISM caller) =
+        ``_NoTracker``, which discards them instead of letting sbi write ``<cwd>/sbi-logs``. Any object
+        following sbi's ``Tracker`` protocol (``log_metric(name, value, step)``, ``flush()`` and the
+        rest) is handed to sbi as is.
     :return: the trained ``DirectPosterior`` -- ``(posterior, diagnostics)`` when
         ``return_diagnostics``.
     """
@@ -214,10 +236,10 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
                                     z_score_x=("none" if _owns else "independent"),
                                     hidden_features=hidden_features, num_transforms=num_transforms,
                                     num_bins=num_bins)
-    # summary_writer: sbi's default builds a TensorBoard writer under <cwd>/sbi-logs at THIS line (see
-    # _NoSummary). The loss curve PRISM keeps is the one returned in the diagnostics below.
+    # tracker: sbi's default builds a TensorBoard writer under <cwd>/sbi-logs at THIS line (see
+    # _NoTracker). The loss curve PRISM keeps is the one returned in the diagnostics below.
     infer = SNPE(prior=prior, density_estimator=neural_posterior, device=str(device),
-                 summary_writer=_NoSummary() if summary_writer is None else summary_writer)
+                 tracker=_NoTracker() if tracker is None else tracker)
 
     proposal = None # set up initial proposal distribution
     posterior = None
@@ -328,13 +350,20 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
         # CPU-resident dataset costs one host-to-device copy of (training_batch_size, 122) float32 --
         # tens of KB -- against a flow forward+backward that dominates it by orders of magnitude. It
         # hands 4.65 GiB of VRAM back to the flow, which is a straight win.
-        with _capped_zscore_check():
+        with _capped_zscore_check(skip=_owns):
             infer.append_simulations(thetas, data, proposal=proposal, data_device="cpu")
-        density_estimator = infer.train(
-            training_batch_size=batch_size, learning_rate=learning_rate,
-            stop_after_epochs=stop_after_epochs, max_num_epochs=max_num_epochs,
-            show_train_summary=show_train_summary,
-        )
+        # Plain Python numbers: sbi 0.26 type-checks these strictly, and a numpy or tensor scalar would
+        # be refused here, after the generation. Any error from the fit is a FAILURE, not a refusal:
+        # sbi reports a non-finite loss as a ValueError, which the front ends read as a check made before
+        # anything was spent, but this one arrives after the generation and part of the fit.
+        try:
+            density_estimator = infer.train(
+                training_batch_size=int(batch_size), learning_rate=float(learning_rate),
+                stop_after_epochs=int(stop_after_epochs), max_num_epochs=int(max_num_epochs),
+                show_train_summary=bool(show_train_summary),
+            )
+        except ValueError as e:
+            raise RuntimeError(f"the flow's fit failed after the training data was generated: {e}") from e
         posterior = infer.build_posterior(density_estimator)
         assert isinstance(posterior, DirectPosterior), f"Expected DirectPosterior, got {type(posterior)}"
 
