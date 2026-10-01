@@ -200,26 +200,32 @@ calibration stage logs a line of its own, scoped to its own process, which is no
 wide. A single run's count can also move by one row's probes from process to process on the card, so
 an exact count is never the criterion.
 
-**The last card run**, on 29 September 2026, for the timings, in seconds per stage:
+**The last card run**, on 1 October 2026 (sbi 0.26.1, the prior's current construction), for the
+timings, in seconds per stage:
 
 | run | prior | posterior | validate | infer | masked probes |
 |---|---|---|---|---|---|
-| 1 | 92 | 194 | 22 | 76 | 254 of 704 (36.1 %) |
-| 3 | 91 | 60 | 13 | 20 | |
-| 4 | 92 | 150 | 20 | 45 | 285 of 704 (40.5 %) |
+| 1 | 118 | 139 | 23 | 56 | 230 of 704 (32.7 %) |
+| 3 | 117 | 41 | 10 | 21 | |
+| 4 | 117 | 227 | 28 | 65 | 227 of 704 (32.2 %) |
 
-Run 2 exited 0 in 7.7 s, its masked line equal to run 1's, and run 2b exited 1 in 5.8 s.
+Run 2 exited 0 in 7 s and run 2b exited 1 in 5 s; run 4's resume exited 0 in 7 s. The posterior
+stage's time is mostly the Fisher step, whose cost follows its operating points, draws from the
+prior: run 4's took 209 s of its 227, run 1's 119 of 139. Each run's prior logged
+`[prior] stability sweep: kept 101779 of 102400 candidates over 40000 steps` and
+`[prior] fill: kept 73939 new sets from 74752 steps (680 outside the box, 133 unstable); 175718 sets in all`
+(`smoke` seeds the build, so the three agree) and `Found 2 clusters (in latent space)`.
 
 sbi 0.26 warns when its calibration tests get fewer than 100 datasets, so runs 1, 3 and 4, which
 calibrate on 40, each log `Number of TARP samples should be on the order of 100s to give reliable results.`
 beside the SBC-count warnings; at that size the calibration means nothing anyway
 ([smoke](command-line.md#smoke)).
 
-The prior column predates the prior's current construction (30 September 2026): its census now
-integrates the whole stability duration instead of the first half, so the prior stage runs longer
-than these figures, and on the master and tier-1 boxes, where nearly the whole box is stable, it may
+On the master and tier-1 boxes, where nearly the whole box is stable, the prior stage may instead
 log `warning: No clusters found. Defaulting to 1 cluster`, which is expected there
-([The prior](science.md#the-prior)).
+([The prior](science.md#the-prior)). Run 3, in forced mode, also logs sbi's report of the training
+data's constant columns (`Data has constant values in dimension(s) …`), which is accurate and
+harmless: those columns carry nothing.
 
 Delete the scratch folder when the gate, and the diagnostic card if you run it, are done:
 `Remove-Item -Recurse -Force $S`.
@@ -267,7 +273,8 @@ The last line puts the shell back on the real records root. What each should sho
   which contains 0.15. On the original sixteen-strength grid, which has no point between 0.1 and 0.2,
   capture reads 0.2; [Chi probe design](science.md#chi-probe-design) has both readings.
 - `probes mask` over `smoke_prior`: masked probes within ±12 points of 37 %, the cycle floor the
-  only cause (35.1 % on the last card run).
+  only cause (38.8 % on the last card run, 1 October 2026; 35.1 % on 29 September, over a prior of
+  the older construction).
 
 Then delete the scratch folder, as the recipe says.
 

@@ -209,7 +209,7 @@ Exit codes ([details](docs/guide/command-line.md#exit-codes)): `0` success, and 
 
 Three examples, run from the repository root in one shell. The first line points `PRISM_ARTIFACTS` at a scratch folder, so the real `Artifacts/` gains nothing; delete that folder when you are done.
 
-**A stage chain.** The prior builds at its full default size, a few minutes on the card and longer on the CPU; training, calibration and inference run at sizes that show the chain working and mean nothing more. The last line prints the inference's lineage back to the prior.
+**A stage chain.** The prior builds at its full default size, about two minutes on the card and longer on the CPU; training, calibration and inference run at sizes that show the chain working and mean nothing more. The last line prints the inference's lineage back to the prior.
 
 ```bash
 export PRISM_ARTIFACTS="$HOME/prism-scratch"    # PowerShell: $env:PRISM_ARTIFACTS = "$HOME\prism-scratch"

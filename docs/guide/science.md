@@ -490,7 +490,10 @@ cell:
   drive and [probes band](command-line.md#probes-band) does.
 - [probes mask](command-line.md#probes-mask), over a prior built at the smoke run's size: 753 of
   2,144 probes masked (35.1 %), the cycle floor the only cause: 31.2 % too slow even at the band's
-  top, 4.0 % shortened below it by the draw of lock-in durations.
+  top, 4.0 % shortened below it by the draw of lock-in durations. On 1 October 2026, over the
+  smoke prior of the current construction ([The prior](#the-prior)), the first reading on it: 831
+  of 2,144 (38.8 %), again the cycle floor alone (35.5 % too slow, 3.2 % shortened), the per-batch
+  standard deviation 11.8 points over 12 batches.
 
 ## What chi buys
 

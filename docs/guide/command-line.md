@@ -1226,8 +1226,8 @@ The three examples write into whatever records root is current when they run, so
 points `PRISM_ARTIFACTS` at a scratch folder. Run all three in that same shell, so it stays set and
 the real store gains nothing.
 
-**A stage chain at small sizes.** The prior builds at its full default size, which takes a few
-minutes on the graphics card and longer on the CPU. Training, calibration and inference
+**A stage chain at small sizes.** The prior builds at its full default size, which takes about
+two minutes on the graphics card and longer on the CPU. Training, calibration and inference
 run at sizes that show the chain working and mean nothing more.
 
 ```bash
