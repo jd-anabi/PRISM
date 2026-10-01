@@ -1,6 +1,6 @@
 # The retrain runbook
 
-Checked against commit b2d73c2.
+Checked against commit ae1b21c.
 
 The next full-size training run: a chi posterior on the tier-1 box, 10,000 batches of 2,048 rows,
 with a flow of 256 hidden features × 10 transforms, followed by one narrowing round that certifies
@@ -173,7 +173,8 @@ build, and again before the run. Nothing here trains the retrain, and any step c
      the record, whose directory is created as the writing starts
      (`core.artifacts.store.ArtifactWriter`), so the directory's creation time marks the fit's end to
      within about a second.
-   - sbi 0.25's loop runs while its epoch count, counted from zero, is at most the ceiling, so
+   - sbi's loop (0.26.1, as 0.25 before it) runs while its epoch count, counted from zero, is at most
+     the ceiling, so
      `--max-epochs 9` trains ten epochs. Divide by the count the record keeps,
      `training.epochs_trained`, never by `--max-epochs`.
 

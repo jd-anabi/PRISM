@@ -1,6 +1,6 @@
 # The science behind the settings
 
-Checked against commit b2d73c2.
+Checked against commit ae1b21c.
 
 ## Nondimensionalisation
 
@@ -767,7 +767,19 @@ data. Both are open, and so is the alternative of fixing T at 300 K for a 12-dim
 
 - every inferred parameter's rank-uniformity test (SBC) reaches KS p ≥ 0.05 ÷ the number of inferred
   parameters, temperature included, which keeps one 5 % false-alarm rate across all of them;
-- the joint coverage test (TARP) reaches KS p ≥ 0.05.
+- the joint coverage test (TARP) reaches KS p ≥ 0.05, over a coverage curve of a fixed 30 bins
+  (`core.config.TARP_NUM_BINS`).
+
+The bin count is fixed because the test's KS p-value compares the binned coverage curve with the
+diagonal point by point: more bins make the same miscalibration fail harder, and sbi's own default
+grows with the number of calibration datasets, which would tie the pass mark to that number. Since
+sbi 0.26 the test scales its reference points to the box as it does the samples and the truths, so
+every parameter weighs equally and the test is a genuine joint one; under sbi 0.25 the references
+were left unscaled, and the test was dominated by the parameters with the widest raw ranges (n, from
+10 to 300), which their own rank tests already cover. Its ATC is now the area between the coverage
+curve and the diagonal, about a thirtieth of the number sbi 0.25 reported. TARP figures recorded
+before 1 October 2026, under sbi 0.25 (a record's `env` block names its sbi), are not comparable with
+later ones.
 
 Three things follow:
 
@@ -794,8 +806,9 @@ Three things follow:
   one conditional. An earlier chi posterior was flat on 12 of its 13 parameters, with a TARP KS p of
   1.000, and had every non-dimensional marginal at the prior.
 - **A TARP KS p of 1.000 is not "perfectly calibrated".** It sits at the ceiling partly because a
-  wide, conservative posterior lands there, and the joint coverage test is less sensitive than the
-  marginal rank tests. The honest claim is "no detectable overconfidence".
+  wide, conservative posterior lands there, and partly, for readings under sbi 0.25 such as the one
+  above, because that version's unscaled references made the joint test lopsided and less sensitive
+  than the marginal rank tests. The honest claim is "no detectable overconfidence".
 
 **The best-fit table is not a recovery measurement.** Inference draws a figure, "Best fit — summary
 stats": the posterior draw whose simulated summary statistics lie closest to the observation's, with

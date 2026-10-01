@@ -6,7 +6,8 @@ what is on disk, the last gate). Update it at the end of every session.
 ## Environment
 
 - Interpreter: the conda env `biophys-env`, `C:\Users\J\anaconda3\envs\biophys-env\python.exe`
-  (Python 3.12, torch 2.9.0+cu130, PySide6 6.9.3, sbi 0.25.0 installed while 0.26.1 is pinned).
+  (Python 3.12, torch 2.9.0+cu130, PySide6 6.9.3, sbi 0.26.1 as pinned since 2026-10-01, with skorch
+  and tabulate; 0.25.0 before).
   The `python` on PATH is NOT this env and has none of the dependencies.
 - Anything that imports torch needs `KMP_DUPLICATE_LIB_OK=TRUE` (torch + MKL ship two OpenMP
   runtimes; without it the first simulation aborts with OMP Error #15 and no traceback), and any

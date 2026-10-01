@@ -1,6 +1,6 @@
 # Testing
 
-Checked against commit b2d73c2.
+Checked against commit ae1b21c.
 
 This page is for whoever changes the code: the interpreter and the environment a check needs, the
 test gates and their markers, the two runs on the graphics card that no suite replaces, what a green
@@ -14,11 +14,13 @@ suite does not certify, and notes for writing tests. What each flag means is on
   `C:\Users\J\anaconda3\envs\biophys-env\python.exe`: Python 3.12, torch 2.9.0+cu130 and PySide6
   6.9.3. The `python` on PATH is a different interpreter, with none of the dependencies. Every
   `python` on this page means `biophys-env`'s; the card's command lines below call it `$py`.
-- sbi 0.25.0 is installed, while `requirements.txt` pins 0.26.1. An upgrade must check again that
-  sbi's per-epoch print still fires: the window's cooperative cancel hooks into it, and without it a
-  Cancel pressed while the flow trains waits for the whole fit instead of one epoch
-  ([The window](architecture.md#the-window)). `requirements.txt` names the other thing to check
-  after that upgrade: calibration numbers from before it are not comparable with those after it.
+- sbi 0.26.1 is installed, as `requirements.txt` pins it, with its two new dependencies, skorch and
+  tabulate (since 1 October 2026; sbi 0.25.0 before). A later upgrade must check again that sbi's
+  per-epoch print still fires: the window's cooperative cancel hooks into it, and without it a Cancel
+  pressed while the flow trains waits for the whole fit instead of one epoch
+  ([The window](architecture.md#the-window)). Calibration TARP numbers from before the 0.26.1 upgrade
+  are not comparable with those after it
+  ([Reading calibration honestly](science.md#reading-calibration-honestly)).
 - Run every check from the repository root. The code finds its two roots from its own location
   ([Inputs and records](getting-started.md#inputs-and-records)), but the command lines here give their
   input files as paths relative to the root.
@@ -207,6 +209,11 @@ an exact count is never the criterion.
 | 4 | 92 | 150 | 20 | 45 | 285 of 704 (40.5 %) |
 
 Run 2 exited 0 in 7.7 s, its masked line equal to run 1's, and run 2b exited 1 in 5.8 s.
+
+sbi 0.26 warns when its calibration tests get fewer than 100 datasets, so runs 1, 3 and 4, which
+calibrate on 40, each log `Number of TARP samples should be on the order of 100s to give reliable results.`
+beside the SBC-count warnings; at that size the calibration means nothing anyway
+([smoke](command-line.md#smoke)).
 
 The prior column predates the prior's current construction (30 September 2026): its census now
 integrates the whole stability duration instead of the first half, so the prior stage runs longer
