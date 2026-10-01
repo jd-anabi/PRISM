@@ -1,6 +1,24 @@
 # PRISM — state
 
-**Last updated:** 2026-09-30 (evening). **The three pre-retrain decisions are SETTLED (owner, 2026-09-30, in chat),
+**Last updated:** 2026-10-01. **sbi is UPGRADED to 0.26.1 (owner, 2026-10-01)** — `ae1b21c`, `750d58f`,
+`3ec5bf6`, `771a460`, NOT pushed. A read-only audit (58 agents: an inventory, seven areas, a verifier per finding)
+found the upgrade breaks more than trivially, and the owner chose to upgrade properly rather than fall back:
+sbi 0.26 renamed the z-scoring check PRISM caps (every training failed at `append_simulations`; its replacement runs
+`torch.quantile` over the whole table, which torch refuses beyond 2**24 rows — after a 20.48M-row generation), and its
+TARP grows its bins with n_cal (n // 10: 200 at 2,000, a crash below 10) and now scales its references (0.25 left
+them raw, so its "joint" test was dominated by f_scale on the master box and T on the tier-1 box). Fixed test-first:
+the cap retargeted and resolved at import (an ImportError naming the version if missing), skipped in chi mode,
+otherwise a strided ≤200k-row subsample with sbi's own arguments forwarded, clamped to 2**24; TARP's bins fixed at 30
+(`config.TARP_NUM_BINS`, recorded as `results.tarp.num_bins`), ATC printed with significant figures; a do-nothing
+`tracker` in place of the deprecated `summary_writer`; any error from the fit re-raised as a RuntimeError (the tool
+prints FAILED, not "refused"); plain numbers at sbi's door; `train_nn` frees its own ~9.3 GiB copy of the training
+data before the fit; skorch 1.4.0 and tabulate 0.10.0 pinned. The two loop behaviours the runbook relies on are
+unchanged (read in 0.26.1's source: `--max-epochs N` trains N + 1, the best network is restored only when early
+stopping fires; sbi's printed lines are identical). TARP at 30 bins stays weak against a flaw in ONE parameter (a
+simulated posterior 3× too narrow in one of 13 read KS p 1.000 under either sbi): the rank tests carry that. TARP
+figures from before the upgrade are not comparable (science.md says so). Reviewed by three lenses with a verifier each
+(0 Critical; the fixes are `3ec5bf6`, `771a460`). Gate rows below. NEXT: the card check on 0.26.1.
+**The three pre-retrain decisions are SETTLED (owner, 2026-09-30, in chat),
 and the prior's fill is fixed** — commits `2cd8c38`, `0987395`, `6b63d16`, `b2d73c2`, `64109a9` on the local `main`,
 NOT pushed (the owner pushes). (a) **The stop point** is now a **budget: four weeks of the card (672 h) for the retrain
 and its certification round** — about twice the fit plus ~95 h, so each fit ≤ ~290 h: stop above ~16 s per epoch in the
@@ -56,7 +74,9 @@ reading paths, a verifier each) found 2 Critical and 39 Important page errors an
 except the runbook's stop point, which waits for the owner (the recordings page's choice of stand-in values is written
 neutrally for the owner to settle), with the checklist closed (103 found, 19 appended, 35 dropped). The final fast
 gate, the slow set and the card judgement are in the gate table below.
-**Next, in order:** (1) ~~The three pre-retrain decisions~~ — settled 2026-09-30 (the paragraph above). (2) The
+**Next, in order:** (1) ~~The three pre-retrain decisions~~ — settled 2026-09-30 (the paragraph above);
+~~the sbi upgrade~~ — done 2026-10-01 (the paragraph at the top). (2) The card check on sbi 0.26.1 (below), then the
+pre-flight from step 2. (3) The
 retrain ("Owed" item 8) from `docs/guide/retrain.md`, the owner starting and owning the long runs. **Both readings
 below were SETTLED by the owner on 2026-09-30:** the card check is the five smoke runs + run 4's resume + the two
 cheap first readings of the new prior (its `[prior]` lines and component count, and `probes mask --prior
@@ -483,7 +503,8 @@ Piece 3
        - `Resources/Cells/nadrowski/master_spont_tier1.txt` resolves to `master.txt` and is refused
          (it lacks `f_scale`), yet both FDT pickers offer it: fix the cell, add a same-named bounds
          file, or remove it.
-       - sbi 0.25.0 is installed while 0.26.1 is pinned; syncing would let provenance read the
+       - ~~sbi 0.25.0 is installed while 0.26.1 is pinned~~ — the env runs 0.26.1 since 2026-10-01 (the
+         paragraph at the top). The struck text: syncing would let provenance read the
          version with `importlib.metadata.version` and settle a warning whitelist (review items
          L573, L576).
        - The fix sentences everywhere else still quote a control's raw label; piece 5 relabelled
@@ -676,8 +697,9 @@ Piece 3
        card: 260 and 254 of 704 have both been read with identical settings, one borderline row
        flipping together with the Fisher's near-zero eigenvalue. The gate reads a ±12-point band, so it
        passes either way (`core/SBI/pipeline.py`, `core/SBI/decorrelate.py`).
-     - *From piece 6's documents review.* Two sbi behaviours the guide and the `--max-epochs` help now
-       state were read in the installed sbi 0.25.0 only: its loop counts the ceiling inclusively, so
+     - ~~*From piece 6's documents review.* Two sbi behaviours the guide and the `--max-epochs` help now
+       state were read in the installed sbi 0.25.0 only~~ — re-read in 0.26.1 on 2026-10-01: both unchanged
+       (the loop moved to `trainers/base.py`; `_converged` is identical). The struck text: its loop counts the ceiling inclusively, so
        `--max-epochs N` trains up to N + 1 epochs; and a run the ceiling stops keeps its LAST epoch's
        network, not its best, because sbi restores the best only when the early-stop patience runs
        out. Re-read both in `sbi/inference/trainers/npe/npe_base.py` and `trainers/base.py` when the
@@ -752,6 +774,16 @@ Piece 3
        the next card run (the pages now say "a few minutes"). (6) `test_train_and_validate_without_a_loaded_cell`
        seeds nothing, so its cost follows the random stream (87–248 s seen); seeding it would make the fast gate's
        time steady (`tests/test_user_sbi.py`).
+     - *From the 2026-10-01 sbi 0.26.1 audit and review, parked.* (1) Multi-round SNPE only (PRISM trains one round
+       per `train_nn` call): 0.26.1 resets `self.val_loss` rather than `self._val_loss` between rounds, and deep-copies
+       the proposal per minibatch. (2) `build_posterior` no longer deep-copies, so a pickled posterior's prior is the
+       live `SBIPriorWrapper`. (3) sbi now refuses a non-finite observation in `sample`/`log_prob`/`set_default_x`
+       with a raw ValueError (PRISM cleans its rows first). (4) No test loads a posterior pickled under 0.25 (none
+       exists; requirements.txt says to rebuild one). (5) In spontaneous and forced trainings sbi's new check reports
+       constant columns as a UserWarning (and then skips its outlier test); accurate, so kept — the fast gate's
+       warning count rose 182 → 203 with these and the TARP sample-count warning. (6) `docs/guide/retrain.md`'s host
+       memory line (~50 of 63 GiB) is now a safe overestimate by about 9 GiB, since `train_nn` frees its copy. (7) The
+       comment over `append_simulations` cites sbi line numbers of 0.25 (`core/SBI/train.py`).
      - *From the 2026-09-30 solver question.* `state_dep_drift` names the state dependence of the NOISE (the
        diffusion), not the drift, and is carried by about 60 call sites and every record's configuration block;
        a rename changes the record format and is the owner's call (`core/registry.py`, `core/Solvers/sdeint.py`).
@@ -917,6 +949,8 @@ Piece 3
 | GPU card run, piece 6 — stands | `git diff --name-only 16e5bae..067eddc -- core conftest.py` lists 41 files, judged: every change is a comment, docstring, help string or message, plus the chi_f0 load comparison (floats read from a manifest), the shard set-aside (file renames) and a return annotation — none creates or moves a tensor, so the card run at `16e5bae` is the piece's card measurement. Insurance, because the set-aside sits in the training resume path: the recipe's runs 1, 2 and 2b re-run on the card on 2026-09-30 at `067eddc` — run 1 exit 0 in 412.8 s (prior 102 s, posterior 196 s, validate 25 s, infer 85 s; training masked probes 260 of 704, 36.9 % — 260 again, where the card run of record read 254: the count moves by one row between processes; cache `856a5f26ce2e`, not the record's `5d89e2242bd2`, with the identity code and `Resources/` unchanged between them — the one identity input a run builds is the fresh prior's fingerprint, so that is the likely difference (not traced; pieces 2–4 read `4d8022b100db` three times), and a card run's cache digest is no fixed expectation); run 2 printed the reuse line and `[checkpoint] resuming at batch 4/4`, exit 0 in 8.7 s, nothing set aside; run 2b exit 1 in 6.6 s naming `n_runs`, no `[fisher]` line, no new cache directory |
 | display walkthrough, piece-6 rows F1–F5 (`docs/checklists/display-walkthrough.md`) | reported 2026-09-30, the user on the real screen (piece 6 as it stands; the code is `30ff8a3`, every later commit being documents only): **rows F1–F5 all pass** — the date and result columns of each row record it |
 | **fast gate after the prior-fill fix**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-09-30 at `ca9e097` (the fill fix, its review fixes and the pages), quiet but for a read-only audit: **1181 passed, 1 skipped**, 5 deselected, **182 warnings**, **16 min 48 s**, exit 0; tree clean, the real `Artifacts/` gained nothing, no `sbi-logs/`. 48 s over the 16-minute target, all of it one test: `test_train_and_validate_without_a_loaded_cell` 169 s (87 s at `067eddc`; 234, 248 and 200 s in three runs this session). Profiled: its time is simulation of randomly drawn (t_scale, T_obs) operating points (125 s generating rows, 90 s of it the calibration set), so its cost follows the random stream, which the walk's parent draws moved; under `torch.manual_seed(0)` the same stages ran in 110 s on this code and 210 s on `261d10e`. The other slow tests match `067eddc` within ~2 s. Warnings 181 → 182: sklearn's KMeans notice from the new full-duration test's mixture fit. An earlier run at `64109a9` (1181 passed, 21 min 42 s) overlapped a CPU-heavy re-review and is not the record |
+| **fast gate on sbi 0.26.1**, ONE process, `pytest -m "not slow" -q --durations=15` | 2026-10-01 at `771a460` (the upgrade, its review fixes and the pages), quiet machine: **1188 passed, 1 skipped**, 5 deselected, **203 warnings**, **16 min 44 s**, exit 0; tree clean, the real `Artifacts/` unchanged, no `sbi-logs/`. Warnings 182 → 203: two new sbi 0.26.1 classes only (TARP's sample-count warning below 100 datasets; the z-scoring check's constant-column report in non-chi trainings), checked by diffing the warning classes against `ca9e097`. 44 s over target, the same stochastic test (170 s). The red baseline on 0.26.1 before any fix: 5 failed + 26 errors, all the renamed z-scoring check. An earlier green run at `750d58f` (1184 passed, 18 min 30 s) overlapped the review |
+| **slow set on sbi 0.26.1**, `pytest -m slow -q --durations=5` | 2026-10-01 at `771a460`, quiet, straight after the fast gate: **5 passed**, 1189 deselected, 147 warnings, **1 h 4 min 15 s**, exit 0. `test_chi_mode_full_sbi_pipeline` 1840 s (2618 s at `067eddc`); `test_smoke_runs_every_stage_on_the_tier1_box` 1176 s (828 s; its prior's census now runs the full duration and its stochastic stages vary); `test_fdt_runs_the_nadrowski_sanity_checks_end_to_end` 527 s; `test_fdt_and_crossval_run_at_tiny_size` 301 s; `test_probes_band_gives_the_same_criteria_on_the_master_cell_and_its_tier1_twin` 6 s |
 
 **The GPU gate, as command lines.** This is `CLAUDE.md`'s recipe of record (its Tests section),
 copied verbatim; keep the copies identical (the documents review compares them). Run it from the
@@ -1347,3 +1381,10 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
     seeds only, a wrong registry flag). A four-lens review with a verifier per finding found 0 Critical; its Important
     items (the pinned log-call table the fast gate would have failed on, the guide pages) and its Minors were fixed in
     `b2d73c2` and `64109a9`, except the five parked on the open list.
+- **2026-10-01** — **sbi 0.26.1.** The owner chose to upgrade (for an environment `requirements.txt` can rebuild),
+  with a fallback rule (back to 0.25.0 if it broke more than trivially). The audit showed it did, and also that 0.25's
+  TARP was lopsided; put plainly, the owner chose to upgrade properly. The design was approved in chat (a bounded
+  change, no spec file): the six items in the paragraph at the top. TARP's 30 bins were chosen over sbi's n // 10 so the
+  verdict's threshold means the same at every n_cal; 0.26.1's reference scaling was accepted. Execution: installed with
+  pip's dependency resolution after a dry run (sbi, skorch, tabulate only); the red baseline on 0.26.1 with no fix was
+  5 failed + 26 errors, all the renamed check; tests first; every characterization test shown to fail on a mutation.
