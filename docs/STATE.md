@@ -76,10 +76,23 @@ neutrally for the owner to settle), with the checklist closed (103 found, 19 app
 gate, the slow set and the card judgement are in the gate table below.
 **Next, in order:** (1) ~~The three pre-retrain decisions~~ — settled 2026-09-30 (the paragraph above);
 ~~the sbi upgrade~~ — done 2026-10-01 (the paragraph at the top); ~~the card check on sbi 0.26.1~~ — PASSED
-2026-10-01 (the gate table). (2) The retrain's pre-flight from step 2 (`docs/guide/retrain.md`): close every program that
-uses the card (browsers, Steam, Discord) first; the epoch timing (ten epochs, 256 × 10 and 128 × 8; stop above ~16 s);
-the recording-length check; the retrain prior INTO THE REAL STORE (`retrain_prior`), `probes band` and the 100-batch
-`probes mask` (37 ± 8); the console capture; then the run. (3) The
+2026-10-01 (the gate table). ~~(2) The retrain's pre-flight steps 2–4~~ — ALL PASSED 2026-10-01, run by Claude at the
+owner's request with the card cleared (1.2 GiB in use, the NVIDIA overlay left open by the owner's choice; host 45.7 of
+63.4 GiB free; 1.5 TB free on C:). **Step 2, the epoch timing** (`timing_prior`, then 20 batches × 2,048, ten epochs, in a
+scratch store): 256 × 10 **6.2 s per epoch** (62.1 s span ÷ 10), 128 × 8 **4.8 s** (48.0 ÷ 10; August's 5.1 s, so the
+card is as fast) — a ratio of 1.29, the overhead-bound step the research predicted, not the 3.9× parameter ratio.
+Projection 6.2 × 18.06 ≈ **112 h of fit** (at 130 epochs); programme total ≈ 2 × 112 + 95 ≈ **319 h, about 13 days**,
+against the owner's 672 h budget; the 16 s stop and the 7 s flag both far off. The two timing trainings masked 40.8 % and
+38.1 % of probes over 20 full-width batches. **Step 3**: T* = **2.91 s** on both boxes (< 4.5 s), the two maps agreeing.
+**Step 4, into the real store**: `retrain_prior__20261001T222935` (sweep kept 101,777 of 102,400; fill kept 73,960 of
+74,752 steps, 675 outside the box, 117 unstable; 2 clusters); `retrain_band__20261001T222941`: the band (0.03, 0.3) and
+the drive 0.15 hold for the tier-1 cell, the 0.6× control captured at every length (own-peak share 0.12–0.18);
+`retrain_mask__20261001T223011`, 100 batches: **P = 37.9 %** (8,390 of 22,144; inside 37 ± 8), the cycle floor the
+only cause (32.6 % too slow, 5.3 % shortened), invariants hold, the cross-check confirms all 100 row ranges, per-batch
+sd 14.4 points (so gate 3's 3 and 5 points are ~2.1 and ~3.5 sd). **Gate 3 reads the training total against P = 37.9 %.**
+Scratch store deleted. (3) **NEXT, the owner's: pre-flight step 5 again just before the run (card and host clear),
+step 6 (the console capture), and the run** — `docs/guide/retrain.md` "The run"; Claude reads the watch lines and
+judges gate 3 when generation ends (~16–31 h in), and the in-flight pace (≤ 2.2 h per epoch). (4) The
 retrain ("Owed" item 8) from `docs/guide/retrain.md`, the owner starting and owning the long runs. **Both readings
 below were SETTLED by the owner on 2026-09-30:** the card check is the five smoke runs + run 4's resume + the two
 cheap first readings of the new prior (its `[prior]` lines and component count, and `probes mask --prior
