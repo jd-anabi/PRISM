@@ -3546,7 +3546,7 @@ def test_the_validate_tab_summary_names_the_verdict_and_the_seed():
     vp._on_calibration(SimpleNamespace(name="c1", id="x", results={
         "tarp": {"atc": 0.01, "ks_p": 0.4}, "informativeness": None, "verdict": {"passed": False},
         "seed": 11}))
-    assert lines[-1].startswith("Calibration verdict FAIL (seed 11), recorded as c1: TARP ATC=0.01, KS p=0.4")
+    assert lines[-1].startswith("Calibration verdict FAIL (seed 11), recorded as c1: TARP ATC=0.01, KS p=0.400")
 
 
 def test_the_tsnpe_tab_refuses_bad_boxes_at_the_click_and_dispatches_nothing(monkeypatch):

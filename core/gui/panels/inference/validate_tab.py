@@ -80,10 +80,13 @@ class ValidatePanel(_StagePanel):
         res = payload.results
         info = res.get("informativeness") or {}
         passed = (res.get("verdict") or {}).get("passed")
+        tarp = res.get("tarp") or {}
+        # As the stage's own log line prints them: ATC is a small area, so significant figures.
+        atc = "n/a" if tarp.get("atc") is None else f"{tarp['atc']:.3g}"
+        ks_p = "n/a" if tarp.get("ks_p") is None else f"{tarp['ks_p']:.3f}"
         self.log_pane.append_line(
             f"Calibration verdict {'PASS' if passed else 'FAIL'} (seed {res.get('seed')}), recorded as "
-            f"{payload.name or '(unnamed, id ' + payload.id + ')'}: TARP ATC="
-            f"{res['tarp']['atc']}, KS p={res['tarp']['ks_p']}"
+            f"{payload.name or '(unnamed, id ' + payload.id + ')'}: TARP ATC={atc}, KS p={ks_p}"
             + (f"; informativeness {info['total_nats']:.2f} nats" if info.get("total_nats") is not None else ""))
 
     def refresh_local_gates(self):

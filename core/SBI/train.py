@@ -314,9 +314,10 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
                 stacklevel=2,
             )
         # Only pay for the gather when it actually drops something. `data[valid_idx]` is a boolean
-        # gather: it allocates a SECOND full-size tensor while the first is still live, which at the
-        # production shape is another 4.65 GiB and reinstates exactly the 9.3 GiB host peak
-        # gen_training_data's preallocated accumulators were introduced to remove. The mask is
+        # gather: it allocates a SECOND full-size tensor while the first is still live -- about 0.45 GiB
+        # per million rows, another ~9.3 GiB at the retrain's 20.48M -- and reinstates exactly the
+        # doubled host peak that gen_training_data's preallocated accumulators were introduced to
+        # remove. The mask is
         # all-true in practice (the box round-trip cannot produce a non-finite latent on torch 2.9;
         # SigmoidTransform._inverse clamps internally), so this is behaviour-identical and is what
         # makes that preallocation pay.
@@ -337,21 +338,26 @@ def train_nn(training_params: TrainingPlan, model: str, prior: torch.distributio
             assert embedding_net.standardization_fitted, "chi standardization silently did not fit"
 
         # data_device="cpu": sbi otherwise defaults it to the TRAINING device (npe_base.py:174-175)
-        # and moves the whole conditioning tensor onto the GPU -- 10.24M x 122 float32 = 4.65 GiB
-        # resident, a 9.3 GiB transient for the `x = x[is_valid_x]` filter, two (10.24M,) bool masks
-        # from handle_invalid_x, and later a ~4.2 GiB gather when it slices the training split. All of
+        # and moves the whole conditioning tensor onto the GPU -- at the retrain's 20.48M x 122 float32,
+        # ~9.3 GiB resident, a ~18.6 GiB transient for the `x = x[is_valid_x]` filter, two (20.48M,)
+        # bool masks from handle_invalid_x, and later a ~8.4 GiB gather when it slices the training
+        # split (about 0.45 GiB per million rows for each full copy). All of
         # that on the same card that has to hold the flow, and all of it AFTER a multi-day generation
         # run (whose rows the simulation cache keeps when checkpointing is on). The data is ALREADY on
         # the CPU here (gen_training_data appends .cpu() tensors), so this also silences
-        # validate_theta_and_x's "Moving x to the data_device" warning, which describes a 4.65 GiB
+        # validate_theta_and_x's "Moving x to the data_device" warning, which describes a ~9.3 GiB
         # copy nobody asked for.
         #
         # Training does not care: sbi's loop moves each minibatch to the training device itself, so a
         # CPU-resident dataset costs one host-to-device copy of (training_batch_size, 122) float32 --
         # tens of KB -- against a flow forward+backward that dominates it by orders of magnitude. It
-        # hands 4.65 GiB of VRAM back to the flow, which is a straight win.
+        # hands ~9.3 GiB of VRAM back to the flow, which is a straight win.
         with _capped_zscore_check(skip=_owns):
             infer.append_simulations(thetas, data, proposal=proposal, data_device="cpu")
+        # sbi copies what it is handed (its `x[is_valid_x]` filter always does) and keeps its copies
+        # through the fit, so this round's own reference is dead weight from here on: ~9.3 GiB of the
+        # host's 63 at the retrain's size. Nothing below reads either name; the next round rebinds them.
+        del data, thetas
         # Plain Python numbers: sbi 0.26 type-checks these strictly, and a numpy or tensor scalar would
         # be refused here, after the generation. Any error from the fit is a FAILURE, not a refusal:
         # sbi reports a non-finite loss as a ValueError, which the front ends read as a check made before

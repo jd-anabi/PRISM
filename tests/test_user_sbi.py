@@ -1448,7 +1448,8 @@ def _zscore_recorder(monkeypatch):
     from core.SBI import train as train_mod
 
     name = train_mod._ZSCORE_CHECK_NAME
-    assert getattr(npe_base, name) is getattr(sbiutils, name) is train_mod._ZSCORE_CHECK,         "npe_base no longer holds its own binding of the check; re-check how the cap must reach it"
+    assert getattr(npe_base, name) is getattr(sbiutils, name) is train_mod._ZSCORE_CHECK, \
+        "npe_base no longer holds its own binding of the check; re-check how the cap must reach it"
     seen = []
 
     def recorder(x, *args, **kwargs):
@@ -1477,7 +1478,8 @@ def test_zscore_check_is_capped_and_reaches_sbis_own_binding(monkeypatch):
     npe_base, name, seen = _zscore_recorder(monkeypatch)
     recorder = getattr(npe_base, name)
     with pipeline_mod._capped_zscore_check(max_rows=1000):
-        assert getattr(npe_base, name) is not recorder,             "the cap did not reach npe_base's binding -- it would be a no-op in the real call"
+        assert getattr(npe_base, name) is not recorder, \
+            "the cap did not reach npe_base's binding -- it would be a no-op in the real call"
         getattr(npe_base, name)(torch.zeros(10_000, 4))
         getattr(npe_base, name)(torch.zeros(10_000, 4), outlier_iqr_factor=5.0)
     assert seen == [(1000, (), {}), (1000, (), {"outlier_iqr_factor": 5.0})], seen
@@ -1507,6 +1509,77 @@ def test_zscore_check_is_resolved_when_the_pipeline_is_imported():
     assert train_mod._ZSCORE_CHECK_NAME == "warn_if_invalid_for_zscoring"
     assert train_mod._ZSCORE_CHECK is getattr(sbiutils, train_mod._ZSCORE_CHECK_NAME)
     assert train_mod._ZSCORE_CHECK_MAX_ROWS <= 2 ** 24
+
+
+def test_zscore_check_refuses_to_load_without_the_function_it_caps():
+    """Run in a FRESH interpreter, with the check deleted from sbi before ``core.SBI.train`` loads:
+    the import must fail at once, naming the function and sbi's version. Without the guard the cap's
+    scan would find nothing to patch and the full-size check would run, and fail, after a generation."""
+    import subprocess
+    code = ("import sbi, sbi.utils.sbiutils as s\n"
+            "del s.warn_if_invalid_for_zscoring\n"
+            "import core.SBI.pipeline\n")
+    env = dict(os.environ, KMP_DUPLICATE_LIB_OK="TRUE")
+    r = subprocess.run([sys.executable, "-c", code], cwd=str(Path(__file__).resolve().parents[1]),
+                       env=env, capture_output=True, text=True, timeout=300)
+    assert r.returncode != 0, "core.SBI.train loaded without the check it caps"
+    assert "ImportError" in r.stderr and "warn_if_invalid_for_zscoring" in r.stderr, r.stderr[-2000:]
+    import sbi
+    assert sbi.__version__ in r.stderr, r.stderr[-2000:]
+
+
+def test_zscore_check_never_hands_sbi_more_than_two_to_the_24_rows(monkeypatch):
+    """torch.quantile refuses a reduced dimension longer than 2**24 rows, so the cap clamps any larger
+    ``max_rows`` to that. A zero-width tensor carries the row count at no memory cost."""
+    npe_base, name, seen = _zscore_recorder(monkeypatch)
+    with pipeline_mod._capped_zscore_check(max_rows=2 ** 30):
+        getattr(npe_base, name)(torch.empty(2 ** 24 + 1, 0))
+    assert len(seen) == 1 and seen[0][0] <= 2 ** 24, seen
+
+
+class _OwnsStandardization(torch.nn.Identity):
+    """An embedding that standardizes its own input, as the chi encoder does: sbi then z-scores
+    nothing. One parameter, so sbi's device check has something to read."""
+    owns_standardization = True
+    standardization_fitted = True
+
+    def __init__(self):
+        super().__init__()
+        self.anchor = torch.nn.Parameter(torch.zeros(1))
+
+
+def test_train_nn_skips_the_zscore_check_exactly_when_the_embedding_owns_its_standardization(
+        tmp_path, monkeypatch):
+    """The skip is wired at train_nn's call, not only in the context manager: a plain embedding runs
+    the check once, on the toy's 64 rows; an owning one, as in chi mode, never reaches it."""
+    run = _toy_training(tmp_path, monkeypatch)
+    _npe_base, _name, seen = _zscore_recorder(monkeypatch)
+    run()
+    assert [c[0] for c in seen] == [64], seen
+    seen.clear()
+    run(embedding=_OwnsStandardization())
+    assert seen == [], seen
+
+
+def test_train_nn_releases_its_own_copy_of_the_training_data_before_the_fit(tmp_path, monkeypatch):
+    """sbi copies the training data when it is handed it, and keeps its copies through the fit. At the
+    retrain's size each copy is about 9.3 GiB on a 63 GiB host, so train_nn drops its own reference as
+    soon as sbi has the data: by the time the fit starts, the generated tensor must be gone."""
+    import gc
+    from sbi.inference import SNPE
+
+    run = _toy_training(tmp_path, monkeypatch)
+    alive_at_fit = []
+    real_train = SNPE.train
+
+    def watching_train(self, *args, **kwargs):
+        gc.collect()
+        alive_at_fit.append(any(ref() is not None for ref in run.generated))
+        return real_train(self, *args, **kwargs)
+
+    monkeypatch.setattr(SNPE, "train", watching_train)
+    run()
+    assert alive_at_fit == [False], "train_nn still holds the generated training data during the fit"
 
 
 def test_split_gen_obs_concatenates_correctly():
@@ -5149,9 +5222,13 @@ def _toy_training(tmp_path, monkeypatch):
     torch.manual_seed(0)
     prior = BoxUniform(torch.zeros(2), torch.ones(2))
 
+    import weakref
+    generated = []
+
     def fake_gen(*args, **kwargs):
         theta = prior.sample((64,))
         x = torch.cat([theta, theta.sum(1, keepdim=True)], 1) + 0.05 * torch.randn(64, 3)
+        generated.append(weakref.ref(x))
         return x, theta
 
     monkeypatch.setattr(pipeline_mod, "gen_training_data", fake_gen)
@@ -5161,9 +5238,10 @@ def _toy_training(tmp_path, monkeypatch):
                                      device=torch.device("cpu"))
     knobs = dict(hidden_features=8, num_transforms=1, stop_after_epochs=1, max_num_epochs=1, batch_size=16)
 
-    def run(**kwargs):
-        return pipeline_mod.train_nn(plan, "nsf", prior, torch.nn.Identity(), None, 2, {}, {},
-                                     **knobs, **kwargs)
+    def run(embedding=None, **kwargs):
+        net = torch.nn.Identity() if embedding is None else embedding
+        return pipeline_mod.train_nn(plan, "nsf", prior, net, None, 2, {}, {}, **knobs, **kwargs)
+    run.generated = generated
     return run
 
 

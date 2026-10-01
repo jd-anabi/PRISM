@@ -2025,10 +2025,11 @@ def validate_calibration(cfg: SimConfig, posterior: LoadedPosterior, prior: Load
             # --- Expected coverage (TARP, Lemos 2023) via sbi.diagnostics ---
             # The bin count is fixed (config.TARP_NUM_BINS): the KS p-value's strictness grows with the
             # number of bins, and the verdict's threshold must mean the same at every n_cal. Since sbi
-            # 0.26 the reference points are scaled to the box like the samples and the truths, so the
-            # test weighs all parameters equally, and ATC is the area between the coverage curve and the
-            # diagonal -- about a thirtieth of the unweighted sum sbi 0.25 reported, hence 3 significant
-            # figures rather than 3 decimals.
+            # 0.26 the reference points are scaled to the calibration set's parameter range like the
+            # samples and the truths, so no parameter dominates by the size of its raw values, and ATC
+            # is the signed area over the upper half of the coverage grid -- the old sum times the grid
+            # spacing, at most a thirtieth of it at 30 bins -- hence 3 significant figures rather than
+            # 3 decimals.
             ecp, alpha_grid = run_tarp(
                 thetas=theta_star_dev, xs=x_cal_dev, posterior=post,
                 num_posterior_samples=nps, num_bins=TARP_NUM_BINS, use_batched_sampling=True,
