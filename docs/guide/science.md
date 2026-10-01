@@ -773,13 +773,15 @@ data. Both are open, and so is the alternative of fixing T at 300 K for a 12-dim
 The bin count is fixed because the test's KS p-value compares the binned coverage curve with the
 diagonal point by point: more bins make the same miscalibration fail harder, and sbi's own default
 grows with the number of calibration datasets, which would tie the pass mark to that number. Since
-sbi 0.26 the test scales its reference points to the box as it does the samples and the truths, so
-every parameter weighs equally and the test is a genuine joint one; under sbi 0.25 the references
-were left unscaled, and the test was dominated by the parameters with the widest raw ranges (n, from
-10 to 300), which their own rank tests already cover. Its ATC is now the area between the coverage
-curve and the diagonal, about a thirtieth of the number sbi 0.25 reported. TARP figures recorded
-before 1 October 2026, under sbi 0.25 (a record's `env` block names its sbi), are not comparable with
-later ones.
+sbi 0.26 the test scales its reference points to the range the calibration set's parameters span, as
+it does the samples and the truths, so no parameter dominates by the size of its raw values. Under
+sbi 0.25 the references were left unscaled and each parameter weighed in proportion to its raw
+values, so the test was dominated by f_scale (1 to 1,000) on the master box and by temperature (280
+to 310 K) on the tier-1 box, parameters whose own rank tests already cover them. Its ATC is now the
+signed area between the coverage curve and the diagonal over the upper half of the grid: the old sum
+times the grid spacing, at most a thirtieth of it at 30 bins. The references changed as well, so an
+old ATC cannot be converted: TARP figures recorded before 1 October 2026, under sbi 0.25 (a record's
+`env` block names its sbi), are not comparable with later ones.
 
 Three things follow:
 
@@ -805,10 +807,14 @@ Three things follow:
   is flat by construction, because calibration is a property of the joint distribution, not of any
   one conditional. An earlier chi posterior was flat on 12 of its 13 parameters, with a TARP KS p of
   1.000, and had every non-dimensional marginal at the prior.
-- **A TARP KS p of 1.000 is not "perfectly calibrated".** It sits at the ceiling partly because a
-  wide, conservative posterior lands there, and partly, for readings under sbi 0.25 such as the one
-  above, because that version's unscaled references made the joint test lopsided and less sensitive
-  than the marginal rank tests. The honest claim is "no detectable overconfidence".
+- **A TARP KS p of 1.000 is not "perfectly calibrated".** A calibrated posterior and a wide,
+  conservative one both sit at the ceiling, and the test has little power against a flaw in one
+  parameter: it compares the coverage curve's 31 points with the diagonal's as two samples, and the
+  flaw is spread over every parameter's distance. A simulated posterior over three times too narrow
+  in one of 13 parameters still read 1.000, under either sbi. Under sbi 0.25, as for the reading
+  above, the unscaled references also tilted the test toward the parameters with the largest raw
+  values. The honest claim is "no detectable overconfidence shared by many parameters"; a flaw in one
+  parameter is its rank test's to find.
 
 **The best-fit table is not a recovery measurement.** Inference draws a figure, "Best fit — summary
 stats": the posterior draw whose simulated summary statistics lie closest to the observation's, with
