@@ -223,7 +223,8 @@ what is on disk, the last gate). Update it at the end of every session.
   `docs/superpowers/notes/` — findings a later chat starts from (2026-10-05: what the stopped
   retrain measured and what the window cannot yet do for a days-long run; and where the models'
   math lives, with the reproduced time-stride lead, for the audit of the math against the
-  owner's PDF).
+  owner's PDF; and the window as read for the redesign — the owner's decisions so far, the
+  checked findings W001–W198 and the inventory of the window, in a summary and two appendices).
   `docs/superpowers/prompts/` — the hand-off prompts for the chats that follow (2026-10-05: the
   UI/UX redesign, then the code audit).
 - `.superpowers/sdd/<date>-<slug>/` — a piece's gitignored execution workspace: the ledger

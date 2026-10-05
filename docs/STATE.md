@@ -1,6 +1,7 @@
 # PRISM — state
 
-**Last updated:** 2026-10-05. **THE CONSOLE RETRAIN IS STOPPED AND THE ORDER OF WORK HAS CHANGED (owner,
+**Last updated:** 2026-10-05 (evening: the redesign chat has started; its paragraph is the one that begins "THE REDESIGN
+CHAT HAS STARTED", below). **THE CONSOLE RETRAIN IS STOPPED AND THE ORDER OF WORK HAS CHANGED (owner,
 2026-10-05).** The retrain started from PowerShell on 1 October reached a COMPLETE simulation cache (10,000 batches;
 gate 3 passed, 40.1 % against P = 37.9 %) and 62 epochs of the fit (61–63 minutes each; the capture's last count is 61,
 one behind) before the owner stopped it on
@@ -75,6 +76,55 @@ prompts say to leave it off. Claude read its installed files only (the design sk
 description) and never invoked a skill or called the lookup. What it would have added, and what the redesign chat is
 told to do instead: none of the design plugins knows Qt, so what a widget, a layout or a style sheet can do is checked
 against Qt's public documentation or the installed PySide6, with a scratch script.
+**THE REDESIGN CHAT HAS STARTED (2026-10-05, evening), from `docs/superpowers/prompts/2026-10-05-ui-ux-redesign.md`;
+it is at the brainstorming stage and NOTHING under `core/` or `tests/` has changed.** What it has so far is in three
+new notes: `docs/superpowers/notes/2026-10-05-the-window-as-read-for-the-redesign.md` (the summary: read it first) and
+its two appendices, `…-the-window-as-read-findings.md` (198 entries, ids W001–W198, each with what a person would see,
+the second reader's correction and the code it rests on) and `…-the-window-as-read-inventory.md` (the window screen by
+screen, what each stage accepts against what the window offers, where a long run could attach, what the tests pin).
+**The owner's decisions so far (in chat):** what is disliked — Home ("5 buttons just slapped in the center"), the
+cluttered and hard-to-read screens under each tab, getting around the whole program, the progress bars ("cluttered and
+not interpretable"), the console text shown by default (people "need to only see what they need to by default"), and
+the design language, with no direction in mind; above all "extreme clarity"; **the window may be RELEASED**, so
+strangers will open it; **the toolkit stays PySide6 unless an approved design is blocked by it** (then stop and bring
+the blockage and the cost); **the scope is the look, layout and flow PLUS everything the engine can already do that the
+window does not offer or say, PLUS the small engine changes** (loss per epoch while fitting, a guard so that closing the
+window cannot destroy a finished result, every differing setting named); **saving the fit as it goes is to come as a
+separate design, to accept or leave.** **How it was read:** ten readers over `core/gui/`, the engine side, the pages,
+the walkthrough and the earlier designs; seven second readers told to refute every new fault; two sizing the tests; all
+reading, nothing executed. Of the first note's re-checked claims 127 held, 30 held with a correction, 5 could not be
+settled by reading; of the 174 entries the second readers took, 167 hold (70 corrected), 1 is wrong, 6 unsettled. The
+corrections that matter: only each tab's LEFT column is locked during a run (navigation, figures, the log, Artifacts
+reading stay live); most of what the first note lists as missing is a change to the WINDOW ONLY (every stage takes a
+name and a note; training and the narrowing round take an epoch ceiling, a cadence, a resume policy, the round its own
+network; the calibration a seed; every diagnostic is a public entry writing a record; a run's lines can be written to a
+file at the window's pump); during the fit's whole first epoch the progress pane shows nothing and then "no output".
+**ONE EXPERIMENT WAS RUN (no card, no store): "Quit anyway" does not do what it says.** With PRISM's own worker, stream
+redirect and figure sink in a bare window that exits as `core/gui/__main__.py` does: after the window closes the process
+stays alive and the run goes on unseen to its end, then the figure hand-over raises `RuntimeError: Signal source has
+been deleted` — in PRISM that hand-over is inside the posterior's writer, which removes its folder on any exception, and
+the worker swallows the report (read, not run). "Cancel task & quit" stopped the run at its next line and the process
+waited for it to unwind (so the rescue save during generation can finish). With a popped-out figure window open,
+closing the main window does not end the program at all. A real check on a scratch store is owed as a walkthrough row.
+**Faults that can cost days (all within the chosen scope):** the close dialog's default cancels the run and never says
+a fit would be lost (W001); Cancel during a fit is one click with no question; the screen can show one bounds file
+while the run uses another (W002, W003, W138); the rotation tick is remembered, and a run without it says nothing
+(W008, W142); the narrowing round keeps the earlier observation selected and always trains 128 × 8 (W009); nothing
+keeps Windows awake, and closing the launcher's console kills the run (W004, W139); a second window can delete a cache
+a run is writing (W137, W140). **The tests:** about 279 of the 322 window tests would pass if only the arrangement
+changed under the same names, labels and dialogs; a real redesign breaks many more (the inventory lists the names the
+tests reach for and each pin it collides with). **Under way when this was written:** a first round of pictures for the
+owner — three ways of getting around, as wireframes, and three looks on one sample screen — built as web pages in the
+chat's scratch folder (`%TEMP%\claude\…\scratchpad\prism-redesign\mockups`, which may not outlive the chat; nothing is
+published and nothing is in the repository). **Still to ask the owner:** which way of getting around and which look;
+what a long run should look like on screen; which command-line checks get screens; whether a run's settings should be
+easier to get right (science settings are still never remembered); what to do about failures in a days-long run; and
+whether the design plugins' own files are committed or kept out (until then their methods are applied by hand: impeccable's
+program has not been run and nothing of any plugin's is in the repository). **Engine changes so far: none. Gates: none
+run — documents only; the fast gate has not run since `771a460`.** To look at the window without touching the owner's
+settings: `core.gui.settings.use_ini_file(<scratch .ini>)` and `PRISM_ARTIFACTS=<scratch dir>` before `build_app`, then
+`window.grab()`; `QT_QPA_PLATFORM=windows` with `Qt.WA_DontShowOnScreen` gives the real text rendering (the offscreen
+platform substitutes fonts), and `os._exit` afterwards avoids the close event.
 **Earlier, 2026-10-01: sbi is UPGRADED to 0.26.1 (owner)** — `ae1b21c`, `750d58f`,
 `3ec5bf6`, `771a460`, NOT pushed. A read-only audit (58 agents: an inventory, seven areas, a verifier per finding)
 found the upgrade breaks more than trivially, and the owner chose to upgrade properly rather than fall back:
