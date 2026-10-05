@@ -68,7 +68,13 @@ repository root (git ignores none of them: the owner's call), can edit the proje
 contacts its website (its draw of design directions, an anonymous usage ping, a version check). ui-ux-pro-max can save a
 `design-system/` folder into the repository (unwanted) and its logo and icon generators send prompts to outside services
 (no key is set). claude-mem is switched off and claude-mem-cowork cannot run (no Node, not paired; once paired it would
-upload prompts and the contents of files): its hook fails harmlessly on every prompt.
+upload prompts and the contents of files): its hook fails harmlessly on every prompt. **Qt Development Skills 1.7.1
+(Qt Group) was installed by the owner on the evening of 2026-10-05 and then SWITCHED OFF: its README says that using its
+skills or its hosted documentation lookup accepts Qt's AI Services terms, and the owner does not accept them.** Both
+prompts say to leave it off. Claude read its installed files only (the design skill, the README, the lookup's
+description) and never invoked a skill or called the lookup. What it would have added, and what the redesign chat is
+told to do instead: none of the design plugins knows Qt, so what a widget, a layout or a style sheet can do is checked
+against Qt's public documentation or the installed PySide6, with a scratch script.
 **Earlier, 2026-10-01: sbi is UPGRADED to 0.26.1 (owner)** — `ae1b21c`, `750d58f`,
 `3ec5bf6`, `771a460`, NOT pushed. A read-only audit (58 agents: an inventory, seven areas, a verifier per finding)
 found the upgrade breaks more than trivially, and the owner chose to upgrade properly rather than fall back:

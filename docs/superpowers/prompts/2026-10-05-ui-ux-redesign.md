@@ -114,6 +114,12 @@ the test suites, and tiny ones in the rows I run on screen, are fine.
   paired, and once paired they send my prompts and the contents of files to an outside service.
   Do not rely on them and do not set them up yourself. If a hook error from them appears on each
   prompt, ignore it.
+- The Qt Development Skills plugin is installed but switched off: using its skills or its
+  documentation lookup means accepting Qt's AI Services terms, and I do not accept them. Do not
+  enable it and do not use any part of it. None of the design plugins knows the toolkit this
+  window is built on, so do not take their word for what the window can do: to check what a
+  widget, a layout or a style sheet can actually do, read Qt's public documentation or the PySide6
+  installed here, and try it in a small scratch script before you build on it.
 - Ask early whether the window stays on PySide6. Everything here is built on it, and changing the
   toolkit would be a far larger project than a redesign; I have not asked for that, so say what it
   would cost before proposing it.

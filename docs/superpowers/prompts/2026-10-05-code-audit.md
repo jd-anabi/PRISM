@@ -188,7 +188,8 @@ anything deletes, renames, rewrites or trains on them.
 - Three design plugins and a memory plugin are installed on this machine, and their hooks run in
   every chat. They are not for this audit: ignore their hook messages, do not let a design plugin
   write into the repository, and do not set up the memory plugin, which would send my prompts and
-  the contents of files, my PDF among them, to an outside service.
+  the contents of files, my PDF among them, to an outside service. A Qt plugin is installed too but
+  switched off, because I do not accept its terms: leave it off and do not use any part of it.
 
 **What needs me.** Questions come one at a time, in plain language, with a short background first
 and no code names. The checks on the real screen are mine to run; write the rows for me in
