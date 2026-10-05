@@ -186,6 +186,24 @@ what is on disk, the last gate). Update it at the end of every session.
 - The narrowing-round safety rules (where each is enforced and the test that pins it) and the traps
   that still bite are in `docs/guide/rules-and-traps.md`; the reasoning behind the science settings
   is in `docs/guide/science.md`. The handoff they were written from is archived (see `docs/STATE.md`).
+- Long PRISM runs — a training, a narrowing round, a full-size calibration: hours or days on the
+  card — are started from the window, by the owner (the owner, 2026-10-05, who stopped a
+  console-run retrain about 63 hours into its fit rather than finish it there). This is not about
+  pytest runs or the card gates, which stay command lines. Before any long run, assume the window
+  and confirm it with the owner; give a run's steps as on-screen controls (tab, field, button);
+  use the command line only for what the window cannot do, and say so when that is the case.
+  `docs/guide/retrain.md` is still a command-line runbook until it is rewritten as the window
+  route. A long run has the card to itself: while one is live, no pytest (the fast gate runs its
+  gpu-marked tests on the card), no card gate and no second window (opening the window touches the
+  card). A full-size generation on this card needs the VRAM ceiling set (with none the 1 October
+  run died at batch 237; at 6 GiB 9,500 batches went through), and the window's field opens at 0
+  unless `PRISM_VRAM_CEILING_GIB` is set in the environment the window starts in. While a long run
+  is live, edit no file under `core/` (whether an import late in a run can read an edited file is
+  not established), and note `git rev-parse HEAD` when it starts: a posterior stamps the
+  checkout's git revision and dirty flag when it is written at the end, so a commit of any file
+  during the run, documents included, moves that stamp. A fit is not checkpointed: any stop during
+  it loses the whole fit. The simulated rows survive in the simulation cache, which the window and
+  `train` keep by default (a commit every 50 batches).
 - Git: work directly on the local `main` branch — no feature branches, no worktrees (decided
   2026-09-11 after piece 1's merge). Claude makes the local commits, one per logical step, never
   amended, ending with the Co-Authored-By line the harness provides. Commit messages are SHORT:
@@ -202,6 +220,10 @@ what is on disk, the last gate). Update it at the end of every session.
 
 - `docs/STATE.md` — the moving state. Read first, update last.
 - `docs/superpowers/specs/` — approved designs. `docs/superpowers/plans/` — implementation plans.
+  `docs/superpowers/notes/` — findings a later chat starts from (2026-10-05: what the stopped
+  retrain measured and what the window cannot yet do for a days-long run).
+  `docs/superpowers/prompts/` — the hand-off prompts for the chats that follow (2026-10-05: the
+  UI/UX redesign, then the code audit).
 - `.superpowers/sdd/<date>-<slug>/` — a piece's gitignored execution workspace: the ledger
   (`progress.md`), the task briefs and reports, the review reports and the per-task gate logs.
   Piece 2 is `2026-09-12-one-flow`, piece 3 `2026-09-16-validation-and-logging`, piece 5
