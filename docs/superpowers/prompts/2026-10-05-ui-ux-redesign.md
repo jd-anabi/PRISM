@@ -118,9 +118,8 @@ the headings.
   never remembered between launches, because a remembered one once trained a five-day run on a
   retired value, and the memory ceiling is never remembered by a rule of its own (a forgotten
   ceiling slows every later run with nothing to say why). If a run's settings should be easier to
-  get right,
-  ask me what would help, lay out the options with what each costs and risks, and let me decide.
-  Do not quietly start remembering them.
+  get right, ask me what would help, lay out the options with what each costs and risks, and let
+  me decide. Do not quietly start remembering them.
 - *Watching a long run.* No lasting file of the run's lines, a 5,000-line pane, an epoch counter
   with no clock and no loss curve until the end, a "no output" notice that stands for an hour, and
   the whole window locked for days.
