@@ -37,6 +37,38 @@ The standing rule that follows is in `CLAUDE.md` ("Long PRISM runs … are start
 `09557cf`, edited `README.md` and the guide's `command-line.md`, `science.md` and `testing.md`, which the docs suite and
 the source scan read; no fast gate has run since `771a460`, but the two suites that read those pages
 (`tests/test_docs.py`, `tests/test_source_hygiene.py`) passed on 2026-10-05 after the stop (11 passed, 7.6 s). `main` was 25 ahead of `origin/main` (`f89088b`) before today's last documents commit, NOT pushed.
+**Later on 2026-10-05 (owner): the redesign chat is to use the plugins installed that day, and the audit also covers
+the MATH, against a PDF of the models that the owner will supply.** Both prompts were revised for it, and the math has a
+note of its own, `docs/superpowers/notes/2026-10-05-where-the-models-math-lives.md` (one reader's map, not checked by a
+second: where each equation is implemented, where it is written more than once, the conventions to pin down, the checks
+that do not trust the code, what to ask the owner about the PDF). Nothing in the repository or its archive states the
+models today, and the tests pin the code's copies of each equation against each other, never against an independent
+statement. **A FINDING from that mapping, REPRODUCED the same day with the program's own functions on the CPU
+(`core.forcing`, `core.Helpers.helpers`, `core.SBI.chi`, float64): model time is put on the recording's clock by a
+whole-number stride** (`subsample_factor = max(1, round(dt_nd_k / dt_nd_min))`, `core/SBI/pipeline.py:1654-1657`), and
+every later step treats the kept points as exactly `dt_exp` apart. So (1) a simulated trace is that of a cell at
+`t_scale_hi / stride` (40, 20, 13.3, 10, 8, 6.67, … on the master boxes) while the row is labelled with the continuous
+`t_scale` it was drawn at (at 25 the trace is a cell at 20; at 30, a cell at 40), and (2) the drive, built with the
+continuous `t_scale` (`core/forcing.py:171`), is detuned from the lock-in that measures the response
+(`core/SBI/chi.py:463`). A response equal to its drive, whose true answer is 1, read |χ| = 0.625 after 20 drive cycles
+at the master cell's t_scale 3.73 (0.029 after 40), 0.180 at 7.215, 0.168 at 13.9, 0.000 at 25 and at 30 — and 1.000
+wherever 40 / t_scale is whole, or when the lock-in is given the true spacing of the kept points. NOT yet shown: an
+end-to-end training batch, the size of the effect on a real bundle's response, whether forced mode's features and the
+FDT path share it, or what "the model at t_scale" is meant to be (the owner's to say); no fix is designed. If it stands,
+the finished cache cannot be trained on (its key does not change with the code), the stopped fit was training on
+affected rows, and no calibration on simulated data could have shown it. It may be the cause of the unexplained "wall"
+at 32–36 drive cycles in `docs/guide/science.md` (the null at the master cell is at ~39 cycles); that link is an
+inference. Two more leads from the mapping are unreproduced: the drive's clock starts before the discarded transient,
+so simulated phases carry an offset a bench recording does not; and the solver's float32 step differs between segments
+by +0.10 % / −0.39 %. **The plugins** (read from their files, not run): impeccable 4.5.0, ui-ux-pro-max 2.13.0 and
+frontend-design are design aids built for web pages and phone apps; none knows Qt, so they serve for direction,
+mock-up pages, critique and the design record, not for building the window. impeccable's three hooks run in EVERY chat
+on this machine (after each edit and at each stop); it writes `PRODUCT.md`, `DESIGN.md` and `.impeccable/` at the
+repository root (git ignores none of them: the owner's call), can edit the project's `.claude/settings.local.json`, and
+contacts its website (its draw of design directions, an anonymous usage ping, a version check). ui-ux-pro-max can save a
+`design-system/` folder into the repository (unwanted) and its logo and icon generators send prompts to outside services
+(no key is set). claude-mem is switched off and claude-mem-cowork cannot run (no Node, not paired; once paired it would
+upload prompts and the contents of files): its hook fails harmlessly on every prompt.
 **Earlier, 2026-10-01: sbi is UPGRADED to 0.26.1 (owner)** — `ae1b21c`, `750d58f`,
 `3ec5bf6`, `771a460`, NOT pushed. A read-only audit (58 agents: an inventory, seven areas, a verifier per finding)
 found the upgrade breaks more than trivially, and the owner chose to upgrade properly rather than fall back:
@@ -112,9 +144,11 @@ except the runbook's stop point, which waits for the owner (the recordings page'
 neutrally for the owner to settle), with the checklist closed (103 found, 19 appended, 35 dropped). The final fast
 gate, the slow set and the card judgement are in the gate table below.
 **Next, in order (since 2026-10-05):** (1) **The UI/UX redesign of the window** — another chat, from
-`docs/superpowers/prompts/2026-10-05-ui-ux-redesign.md`; it ends by listing here every change it made to the engine.
-(2) **The code audit** — another chat after it, from `docs/superpowers/prompts/2026-10-05-code-audit.md`; it starts
-from that list, the note's part 3 and the open list ("Owed" item 7), and ends with `docs/guide/retrain.md` rewritten as
+`docs/superpowers/prompts/2026-10-05-ui-ux-redesign.md`, using the design plugins the owner installed (impeccable,
+ui-ux-pro-max, frontend-design); it ends by listing here every change it made to the engine.
+(2) **The code audit** — another chat after it, from `docs/superpowers/prompts/2026-10-05-code-audit.md`, with the
+owner's PDF of the models attached: it audits the math against that PDF as well as the code, and takes the time-stride
+finding first; it starts from that list, the two notes and the open list ("Owed" item 7), and ends with `docs/guide/retrain.md` rewritten as
 the window route and a statement of readiness. (3) **The retrain, from the window** — the owner starts it; the
 pre-flight on the final code first, step by step from the runbook's list: the owner's choice between training on the
 finished cache and simulating afresh (reuse is off the table if any fix changed what a simulated row holds: the cache's
@@ -935,8 +969,11 @@ Piece 3
    questions, none a decision of the owner's); the owner's own wishes for the look, the layout and the flow, and whether
    the redesign closes those gaps or leaves some to the audit or the command line, are asked for in its brainstorming
    and are not recorded anywhere yet.
-10. **The code audit**, in another chat after the redesign (`docs/superpowers/prompts/2026-10-05-code-audit.md`). It
-    owns, from 1 October and never done because no source could be edited while the run was live: fail fast when an
+10. **The code audit, of the math too**, in another chat after the redesign
+    (`docs/superpowers/prompts/2026-10-05-code-audit.md`). The owner supplies a PDF of the models and the audit checks
+    that the code implements them correctly, starting from
+    `docs/superpowers/notes/2026-10-05-where-the-models-math-lives.md` and its reproduced first lead (the whole-number
+    time stride; the paragraph at the top). It owns, from 1 October and never done because no source could be edited while the run was live: fail fast when an
     out-of-memory failure leaves `empty_cache` and `mem_get_info` failing; a per-process memory fraction as an
     argument, after a card measurement; `empty_cache` and the graph drop swapped in `_release_device_memory`. It also
     owns the note's part 3 and the triage of the open list above, the unseeded test
@@ -1493,3 +1530,9 @@ only `--store-root`; the diagnostic card runs need it pointed at the same store.
   written note and prompts) is summarised in
   `docs/superpowers/notes/2026-10-05-the-stopped-retrain-and-the-window-route.md`; its questions for the owner are in
   that note's part 4 and are not answered.
+- **2026-10-05, later** — the owner added two instructions for the next chats: the redesign chat uses the plugins and
+  skills installed that day, and the audit also audits the math, against a PDF of the models the owner will supply.
+  Five more readers went through the plugins' own files and mapped where the models' math lives. The mapping surfaced
+  the time-stride lead; because it bore on everything simulated so far, Claude reproduced it at once with the program's
+  own functions on the CPU (a scratch script, no source touched) rather than hand an unverified alarm to the owner. What
+  the model at a given time scale is meant to be, and any fix, are the owner's to decide in the audit.

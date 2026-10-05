@@ -1,8 +1,9 @@
 # Prompt for the next chat — the UI/UX redesign
 
 Paste everything below the line into a new chat opened on this repository. It is written in the
-owner's voice. One sentence in it agrees to multi-agent workflows in that chat (under "How to
-work"); delete that sentence if that is not wanted.
+owner's voice. Under "How to work", one sentence agrees to multi-agent workflows in that chat, and
+the paragraphs on the plugins say what they may write and send; change either if it is not what is
+wanted.
 
 ---
 
@@ -19,7 +20,7 @@ them to the audit or to the command line, is one of the first things to ask me.
 **Read first, in this order.**
 
 1. `docs/STATE.md` — from the top down to the line that begins "**Earlier, 2026-10-01" (about
-   thirty lines), and the short paragraph that begins "**Next, in order (since 2026-10-05):**",
+   sixty lines), and the short paragraph that begins "**Next, in order (since 2026-10-05):**",
    only. The file is about 1,500 very long lines with no blank line between those blocks; search
    the rest when you need it, do not read it through.
 2. `docs/superpowers/notes/2026-10-05-the-stopped-retrain-and-the-window-route.md` — all of it.
@@ -77,11 +78,45 @@ the test suites, and tiny ones in the rows I run on screen, are fine.
   only on the command line I want in the window. One question at a time, in plain language, with a
   short background first and no code names. Show me options as pictures when a picture is clearer
   than a description.
+- Use the design plugins and skills I installed for this: **impeccable**, **ui-ux-pro-max** and
+  **frontend-design**. Read each one's instructions before your first design question, and use
+  them for real, not as decoration: impeccable's way of finding out what the product is for and
+  who uses it, its guidance for working tools as opposed to marketing pages, its design
+  directions, its scored critique of each screen, and its written record of the design system;
+  ui-ux-pro-max's lookups of usability and accessibility rules, palettes, typefaces and chart
+  choices; frontend-design's short plan for the visual direction and its rules for wording. Tell
+  me which plugin a suggestion came from when it matters to my choice.
+- All three were written for web pages and phone apps, and none of them knows the toolkit this
+  window is built on: their scanners, impeccable's live browser mode and its picture-to-page build
+  only understand web pages, and some of their checklists (touch targets, screen breakpoints,
+  hover effects) are wrong for a desktop tool. So: where a picture would help me choose, build
+  small web-page mock-ups in a scratch folder and let the plugins work on those in full; then
+  carry the colours, type, spacing and control shapes I approve into the window's own look by
+  hand; and critique the real window from pictures of it, saying which of a plugin's steps could
+  not be run on it.
+- Where a plugin's own routine and this prompt disagree, this prompt wins. Its questions come
+  several at a time and in its own terms; mine come one at a time in plain words. It treats a
+  redesign as replacing the look; I have not said the current look should go, so ask me. It builds
+  boldly and without tests; here every change is test-first and gated, and a working tool keeps
+  standard controls. Do not let ui-ux-pro-max's one-shot design-system generator choose the design,
+  and leave its logo, icon, banner, brand, slides and web-styling skills alone.
+- Tell me once, before the first time it happens, what a plugin is about to write into this
+  repository and what it sends outside this machine. As far as the plugins' own files show:
+  impeccable writes a product file and a design-system file at the top of the repository and a
+  hidden working folder beside them (git does not ignore any of them, so ask me whether to commit
+  them or keep them out), can change the project's hook settings, and fetches its design
+  directions from its website, sending an anonymous usage note when I choose one; ui-ux-pro-max
+  can save a design-system folder into the repository, which I do not want. Keep the plugins'
+  labels and file names out of the code, the tests and the guide, and keep their scratch work out
+  of the repository's code folders.
+- claude-mem and claude-mem-cowork are installed as well, but they cannot work on this machine
+  until I set them up: they need a program that is not installed and an account that is not
+  paired, and once paired they send my prompts and the contents of files to an outside service.
+  Do not rely on them and do not set them up yourself. If a hook error from them appears on each
+  prompt, ignore it.
 - Ask early whether the window stays on PySide6. Everything here is built on it, and changing the
   toolkit would be a far larger project than a redesign; I have not asked for that, so say what it
-  would cost before proposing it. The design skills installed here are written mostly for web
-  pages: use them for direction, hierarchy, type, colour, wording and critique, and for mock-ups I
-  can react to, not as a source of components.
+  would cost before proposing it.
 - You can look at the window yourself: render a screen or a panel off-screen to an image and read
   the image. Do that before and after a change. When you do, give the window a scratch settings
   file and a scratch record store, the way the test suites do: a window built on the real ones

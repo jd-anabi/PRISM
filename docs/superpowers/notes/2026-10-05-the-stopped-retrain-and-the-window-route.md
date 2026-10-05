@@ -7,8 +7,9 @@ days-long run, and the leads the audit should start from. `docs/STATE.md` holds 
 the two hand-off prompts are in `docs/superpowers/prompts/`.
 
 **How this was established.** Part 1 and leads 1–5 of part 3A are from the run itself: the console
-capture, the records on disk, `nvidia-smi` and the process readings taken while it ran. Part 2,
-lead 6 of part 3A and parts 3B–3C are from a read-only check of the code and the reader pages on
+capture, the records on disk, `nvidia-smi` and the process readings taken while it ran (lead 8 was
+added later the same day and has its own note). Part 2,
+leads 6 and 7 of part 3A and parts 3B–3C are from a read-only check of the code and the reader pages on
 2026-10-05: four readers (cache reuse, a long run in the window, the post-fit steps in the window,
 what the project's pages say), three of them followed by a second reader told to refute the first.
 All three verdicts were "partly": the main conclusions held, and the corrections are folded in.
@@ -290,6 +291,12 @@ threshold, the red box after a training crash, a resume of a large cache after a
 7. **The cache's key knows nothing about the code.** A fix that changes what a simulated row holds
    and leaves the settings alone leaves the key alone, and a training started with the same
    settings then resumes the finished cache and fits rows the old code made, without a word.
+8. **Model time is put on the recording's clock by a whole-number stride** — found the same day
+   while mapping where the models' math lives, and reproduced with the program's own functions:
+   each simulated trace is that of a cell with a different time scale from its label, and the
+   drive is detuned from the lock-in that measures the response. It is lead 1 of
+   `docs/superpowers/notes/2026-10-05-where-the-models-math-lives.md`, the note the audit's math
+   check starts from; if it stands, the finished cache cannot be trained on.
 
 ### 3B. From the window's code (read, not run)
 
@@ -348,6 +355,6 @@ None is answered. They belong to the redesign's brainstorming or to the audit.
 - When the retrain is run again: train on the complete cache (the window does so by itself when the
   settings match, and gate 3 has already passed on it) or simulate afresh (a new prior, or deleting
   the cache)? On 5 October the owner said reuse is not required. If a fix changes what a simulated
-  row holds, reuse is off the table (3A, lead 7).
+  row holds, reuse is off the table (3A, leads 7 and 8).
 - Does the four-week budget of 30 September stand as it was? The stopped run spent about 90 hours
   of the card (27 of generation, 63 of fit).

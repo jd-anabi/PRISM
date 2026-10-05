@@ -221,7 +221,9 @@ what is on disk, the last gate). Update it at the end of every session.
 - `docs/STATE.md` — the moving state. Read first, update last.
 - `docs/superpowers/specs/` — approved designs. `docs/superpowers/plans/` — implementation plans.
   `docs/superpowers/notes/` — findings a later chat starts from (2026-10-05: what the stopped
-  retrain measured and what the window cannot yet do for a days-long run).
+  retrain measured and what the window cannot yet do for a days-long run; and where the models'
+  math lives, with the reproduced time-stride lead, for the audit of the math against the
+  owner's PDF).
   `docs/superpowers/prompts/` — the hand-off prompts for the chats that follow (2026-10-05: the
   UI/UX redesign, then the code audit).
 - `.superpowers/sdd/<date>-<slug>/` — a piece's gitignored execution workspace: the ledger
