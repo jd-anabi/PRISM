@@ -240,3 +240,38 @@ marked so in the text and in the part's closing list.
     reference to another part's section number against that part's file as it now stands; the
     idle sentence at the rail's foot is "Only one run at a time."; five keys are added to the
     mock-up's (Ctrl+7, Ctrl+8, Ctrl+9, F1, Shift+F6).
+
+## D. The controller's last rulings (after the cross-check of all eleven parts)
+
+Later than part C; they win where they differ.
+
+1. **C20's dashed repeat is withdrawn.** The figure settings' line cycle is the look's colours and
+   nothing else. E12 changes the plotting files' line colours only and edits no line style (B18,
+   U4). A figure with more unnamed lines than colours repeats colours, as any cycle does; telling
+   many curves apart by style is not designed in. The rest of C20 stands.
+2. **One label for one key, everywhere.** The cell's file is "Cell file" on every page that has it.
+   The length of an observation is "Recording length" on every page that has it, Live simulation
+   included; that page's sentence says the settling-in time is simulated before it and is shown
+   marked.
+3. **The order of the build, stages 4 and 5.** Stage 4 delivers the pages of steps 1 to 3 (Model
+   and options, Prior, Training) with plans, "This computer" and applied against pending, so the
+   plan picker has its page and a fill reaches steps 1 to 3. Stage 5 delivers Checks, Inference and
+   the Narrowing round, whose forms join the fill then; the test that one press fills every step
+   is completed in stage 5. (unseen: U19 put all steps but Training in stage 5)
+4. **Every modal dialog the window opens is the shared dialog class or the one file-chooser
+   function.** "Save as a plan…" and "Rename…" are the shared dialog in its form that asks for one
+   line of text; part 4 defines that form, parts 7 and 10 use it, and part 13's guard covers the
+   class, so no dialog can stall a run of the suites.
+5. **The run history is read for the records folder in use.** Each history file names the records
+   folder its run wrote to; Home, the first-time opening and "Continue from batch N" count only
+   the files of the folder in use.
+6. **"Fit again on the saved simulations"** stays on offer until a later run of that kind starts or
+   the saved simulation set is removed.
+7. **A figure the window draws itself.** Part 13 lists, as a task of stage 3 before the loss curve
+   is built, a test that renders such a figure on the window's thread many times while another
+   thread builds and saves a figure. If they can collide, the loss curve is drawn from its numbers
+   by a painted widget and no figure library runs on the window's thread.
+8. **A run ended by "shut down anyway"** counts as stopped by the user: its simulations are saved
+   as far as Windows allowed, and Home shows the ordinary next step.
+9. **A comma typed as the decimal sign** is refused in words when editing ends ("Use a point as the
+   decimal sign."); the key is not silently swallowed.

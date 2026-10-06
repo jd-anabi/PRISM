@@ -168,12 +168,29 @@ until it is pressed; U25 during a run saved effective-temperature runs can be br
 earlier "browsable and comparable"; nothing computes beside a live run); U26 **one PRISM at a time** (a second start
 brings the open window forward); U27 while a run is live PRISM registers a reason with Windows against a sign-out or
 shutdown. **The engine changes are therefore E1–E12.** The owner was also told that E1 and E6 change text the command
-line prints, with no flag or behaviour changed. **Under way when this was last updated:** each drafted part (about
-85,000 words in all, in the chat's scratch folder) is being revised against those rulings and checked by an
-independent reader against the decisions and the code; it is then assembled and written to
-`docs/superpowers/specs/2026-10-05-window-redesign-design.md` with the parts beside it, for the owner's review, the
-choices the owner has not seen listed at the top. **Still owed to the owner:** the written design to review; then the
-separate design for saving the fit as it goes; then the plan.
+line prints, with no flag or behaviour changed. **THE DESIGN IS WRITTEN AND AWAITS THE OWNER'S REVIEW (2026-10-06):
+`docs/superpowers/specs/2026-10-05-window-redesign-design.md` is the file to review** — the decisions, seventeen
+choices to look at first, the design in brief, the twelve engine changes, what becomes of the findings, the nine
+stages, and an appendix of every choice made in drafting that the owner has not seen (272 lines, part by part).
+Beside it, `2026-10-05-window-redesign-design/` holds the eleven parts (`03-shell.md` … `13-tests-stages-docs.md`,
+about 108,000 words), which are the exact design the plan is written from. **How it was made:** eleven drafters
+against the locked record; a revision of each part against the owner's seven further decisions and the seam rulings;
+an independent reader per part who checked its claims about today's code against the code and corrected the text
+(1,351 claims checked, 103 corrected); a second and a third round of controller's rulings (parts C and D of the
+rulings file) on what those readers and a cross-check of all eleven parts handed up; no "Seam:" line is left. Nothing
+was executed in any of it. **What the owner must still see, beyond approving:** the seventeen at the top of the
+design — first among them that a posterior trained without the frequency response reads "n of 3 deciding checks"; that
+the window's own tries follow only an out-of-memory failure; that loads, a Live simulation and a video export leave no
+run-history file; that E10 changes what a COMMAND-LINE run does at its last write (a failed final figure no longer
+fails the run) and E11 rewords 218 sentences in 20 files; how a plan is filled and kept; and that a figure with more
+curves than the look's five colours repeats them (the calibration's rank figure has thirteen) unless the cycle is
+lengthened to eight. **Seven things are owed to a small experiment before they are built** (text size following
+Windows; the one-PRISM lock when its holder dies; what Windows does with a shutdown reason; whether a try in the same
+program can succeed after the card runs out of memory; PRISM with no console; a window-drawn figure against one the
+run is building; staging a failed save). **The audit's list has grown to nineteen items** (part 5 of the design).
+**Next, in order:** the owner reviews the written design; then the separate design for saving the fit as it goes;
+then the plan, written and approved one stage at a time (the design recommends it); then the build. **No file under
+`core/` or `tests/` has changed; engine changes built so far: none; gates run: none (documents only).**
 **Engine changes so far: none built; those the design will need are the three small ones of the scope and the card
 test as an engine step. Gates: none run — documents only; the fast gate has not run since `771a460`.** To look at the window without touching the owner's
 settings: `core.gui.settings.use_ini_file(<scratch .ini>)` and `PRISM_ARTIFACTS=<scratch dir>` before `build_app`, then
